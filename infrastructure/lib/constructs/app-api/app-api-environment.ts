@@ -454,6 +454,11 @@ export function buildAppApiEnvironment(
     // never makes the extraction call.
     DOCUMENT_EXTRACT_ENABLED: config.documentExtract.enabled ? 'true' : 'false',
 
+    // Field-set authoring (docs/specs/field-set-authoring.md §7): the
+    // `/skills/mine/{id}/field-sets` routes. app-api only; the Runtime resolves
+    // field sets the same way either way. In development, so only "true" enables.
+    FIELD_SET_AUTHORING_ENABLED: config.fieldSetAuthoring.enabled ? 'true' : 'false',
+
     // Assistant KB full-context mode. app-api never sends a knowledge base to a
     // model; its share is `GET /assistants/{id}/knowledge-base/mode`, which tells
     // an Agent's author which mode the Runtime runs it in, and so must see the

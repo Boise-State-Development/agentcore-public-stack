@@ -21,7 +21,9 @@ from apis.shared.extraction.field_sets import (
     Field,
     FieldSet,
     FieldSetError,
+    FieldSetLayout,
     parse_field_set,
+    read_field_set_file,
     serialize_field_set,
     validate_field_set_upload,
 )
@@ -83,6 +85,16 @@ title: Budget
 |---|---|
 | total > 0 | error |
 """,
+    "other_frontmatter_lines": """---
+title: Award
+owner: Research Office
+# reviewed 2026-10
+version: 4
+---
+| name | find |
+|---|---|
+| amount | The award amount |
+""",
     "pipe_separated_enum": """---
 title: Review
 version: 1
@@ -137,6 +149,68 @@ class TestSemanticRoundTrip:
         assert serialize_field_set(parse_field_set(once, name="set")) == once
 
 
+class TestLayoutRoundTrip:
+    """``read → serialize(layout) → read`` gives back the file's set **and** what
+    it ignores, so a structured save never deletes an author's note column,
+    their prose or their frontmatter (field-set authoring §5.4)."""
+
+    @pytest.mark.parametrize("key", sorted(FOREIGN_FORMATS))
+    def test_set_and_layout_both_survive(self, key):
+        field_set, layout = read_field_set_file(FOREIGN_FORMATS[key], name="set")
+
+        text = serialize_field_set(field_set, layout=layout)
+
+        assert read_field_set_file(text, name="set") == (field_set, layout)
+
+    def test_a_note_column_is_reported_and_kept(self):
+        field_set, layout = read_field_set_file(
+            FOREIGN_FORMATS["note_column_and_no_frontmatter"], name="set"
+        )
+
+        assert layout.unmanaged_columns == ("note",)
+        assert layout.unmanaged_cells == (("ask Dana before changing",), ("",))
+        assert "| ask Dana before changing |" in serialize_field_set(field_set, layout=layout)
+
+    def test_prose_around_the_table_is_reported(self):
+        _, layout = read_field_set_file(
+            FOREIGN_FORMATS["aliases_and_reordered_columns"], name="set"
+        )
+
+        assert layout.preamble == "Fields the office reads off every intake."
+        assert layout.postscript == "Trailing prose an author left for colleagues."
+        assert layout.unmanaged_columns == ()
+
+    def test_other_frontmatter_lines_are_reported_as_written(self):
+        field_set, layout = read_field_set_file(
+            FOREIGN_FORMATS["other_frontmatter_lines"], name="set"
+        )
+
+        assert layout.frontmatter == ("owner: Research Office", "# reviewed 2026-10")
+        assert (field_set.title, field_set.version) == ("Award", "4")
+
+    def test_an_overridden_alias_column_is_unmanaged(self):
+        """``row[column] = cell`` keeps the last of two aliases, so the earlier
+        column is one the parser does not read."""
+        _, layout = read_field_set_file(
+            "| field | name | find |\n|---|---|---|\n| old | amount | The award |\n",
+            name="set",
+        )
+
+        assert layout.unmanaged_columns == ("field",)
+        assert layout.unmanaged_cells == (("old",),)
+
+    def test_the_layout_never_changes_the_set(self):
+        """The extraction path reads :class:`FieldSet` alone; the layout must
+        not be able to alter what it sees, or its schema."""
+        for key, text in FOREIGN_FORMATS.items():
+            field_set, layout = read_field_set_file(text, name="set")
+            saved = serialize_field_set(field_set, layout=layout)
+
+            assert field_set_fingerprint(parse_field_set(saved, name="set")) == (
+                field_set_fingerprint(field_set)
+            ), key
+
+
 class TestExactBytes:
     def test_canonical_output_is_pinned(self):
         assert serialize_field_set(parse_field_set(CANONICAL, name="nsf")) == CANONICAL
@@ -160,7 +234,7 @@ class TestExactBytes:
 
     def test_preamble_sits_between_frontmatter_and_table(self):
         parsed = parse_field_set(CANONICAL, name="nsf")
-        text = serialize_field_set(parsed, preamble="  Read me first.\n")
+        text = serialize_field_set(parsed, layout=FieldSetLayout(preamble="  Read me first.\n"))
 
         assert text.startswith("---\ntitle: NSF Solicitation\nversion: 3\n---\n\nRead me first.\n\n| name |")
         assert parse_field_set(text, name="nsf") == parsed
@@ -210,7 +284,37 @@ class TestRefusals:
         parsed = parse_field_set(CANONICAL, name="nsf")
 
         with pytest.raises(FieldSetError, match="cannot be written as a file that reads back"):
-            serialize_field_set(parsed, preamble="| name | find |\n|---|---|\n| x | y |")
+            serialize_field_set(
+                parsed, layout=FieldSetLayout(preamble="| name | find |\n|---|---|\n| x | y |")
+            )
+
+    def test_a_pipe_in_the_text_after_the_table(self):
+        parsed = parse_field_set(CANONICAL, name="nsf")
+
+        with pytest.raises(FieldSetError, match="after the table cannot contain"):
+            serialize_field_set(parsed, layout=FieldSetLayout(postscript="a | b"))
+
+    def test_an_extra_column_headed_like_a_real_one(self):
+        fs = _one_field_set()
+        layout = FieldSetLayout(unmanaged_columns=("Label",), unmanaged_cells=(("x",),))
+
+        with pytest.raises(FieldSetError, match="reads as the 'title' column"):
+            serialize_field_set(fs, layout=layout)
+
+    def test_extra_cells_that_do_not_line_up(self):
+        fs = _one_field_set()
+
+        with pytest.raises(FieldSetError, match="0 rows for 1 fields"):
+            serialize_field_set(fs, layout=FieldSetLayout(unmanaged_columns=("note",)))
+        with pytest.raises(FieldSetError, match="2 extra cells for 1 extra columns"):
+            serialize_field_set(
+                fs,
+                layout=FieldSetLayout(unmanaged_columns=("note",), unmanaged_cells=(("a", "b"),)),
+            )
+
+    def test_a_frontmatter_line_that_sets_the_title(self):
+        with pytest.raises(FieldSetError, match="its title would read back as 'Other'"):
+            serialize_field_set(_one_field_set(), layout=FieldSetLayout(frontmatter=("title: Other",)))
 
     def test_no_fields(self):
         with pytest.raises(FieldSetError, match="no rows"):

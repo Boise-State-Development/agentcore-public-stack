@@ -27,6 +27,9 @@ export const environment = {
         attachmentPlan: true,
         // The `development` GitHub environment sets CDK_DOCUMENT_EXTRACT_ENABLED=true.
         documentExtract: true,
+        // Off until the `development` GitHub environment sets
+        // CDK_FIELD_SET_AUTHORING_ENABLED=true and the editor ships.
+        fieldSetAuthoring: false,
         // The `development` GitHub environment sets CDK_HANDOFFS_ENABLED=true.
         handoffs: true,
         // The `development` GitHub environment sets CDK_HANDOFF_BRIEF_ENABLED=true.

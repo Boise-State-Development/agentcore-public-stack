@@ -24,6 +24,7 @@ export const environment = {
         sourceProvenance: false,
         attachmentPlan: false,
         documentExtract: false,
+        fieldSetAuthoring: false,
         handoffs: false,
         handoffBrief: false,
         sessionRewind: false,

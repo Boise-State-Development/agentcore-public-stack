@@ -1,8 +1,9 @@
 # Field set authoring
 
-**Status:** PR 1 implemented (§8): `serialize_field_set`, its two pinned tests, and
-the unconditional check on every skill-file write. PR 2 (routes, flag) and PR 3 (the
-editor) not built.
+**Status:** PRs 1 and 2 implemented (§8): `serialize_field_set` and the unconditional
+check on every skill-file write (PR 1); the app-api routes, the parser's
+`FieldSetLayout` and the `FIELD_SET_AUTHORING_ENABLED` flag (PR 2). PR 3 (the editor)
+not built.
 **Closes:** `docs/specs/structured-extraction.md` §4, "what is given up" #1.
 **Depends on:** structured extraction (`DOCUMENT_EXTRACT_ENABLED`), in development.
 
@@ -144,6 +145,33 @@ the existing `UserSkillService`. No new table, no new GSI, no new RBAC noun.
 A `GET` of a set whose stored file does not parse returns **400 with the parser's
 message and the raw markdown**, never a 500 and never a silent empty form. A file that
 is already broken is exactly the file someone needs to open.
+
+**As built (PR 2)**, in `apis/app_api/skills/routes.py` with the wire models and
+conversions in `apis/app_api/skills/field_sets.py`:
+
+* **The routes 404 while the flag is off, after authentication** (`require_field_set_author`).
+  The §4.2 check on upload does not depend on the flag.
+* **`GET …/field-sets`** returns `{skillId, fieldSets: [{name, filename, size, contentHash}], maxFields}`,
+  read from the manifest. It counts only `reference` files, the only kind the resolver reads.
+  It carries no title, field count or version, because those need the file. §3's list
+  section therefore either opens each set or shows names only; PR 3 decides which.
+* **`GET …/field-sets/{name}`** returns the set's fields, `title`, `version`, `rules`,
+  `markdown` and `maxFields` (the parser's 14, so the editor's "7 of 14" can't disagree
+  with Save). It also returns what the form can't show: `preamble`, `postscript`,
+  `frontmatter`, `unmanagedColumns`, and `unmanagedValues` on each field. A broken
+  stored file answers `400 {detail, markdown}`; a non-UTF-8 one answers `400 {detail, markdown: null}`.
+* **`PUT …/field-sets/{name}`** takes the structured set or `{markdown}`. Sending both, or
+  neither, is a 422.
+  * Structured: every string is trimmed at its ends and nothing else. An empty title or
+    version gets the default the parser would read, and the file is written by
+    `serialize_field_set(set, layout=…)`.
+  * Markdown: the bytes are stored as sent once they parse.
+  * `?validate=true` returns the response, `markdown` included, and writes nothing.
+  * A file byte-identical to the stored one is not written, so a no-op save leaves
+    the skill row, its version history and the grammar alone (§6).
+  * An existing `asset` or `script` of that filename is a 409 rather than replaced.
+  * A set name the resolver would skip is a 400 with the naming rule.
+  * The write is the ordinary `UserSkillService.add_resource`, so the §4.2 check runs on it too.
 
 ### 4.2 Validation on write, unconditionally
 
@@ -335,21 +363,33 @@ would be inventing a permission for a capability the user demonstrably has.
 | PR | Contents |
 |---|---|
 | **1** ✅ | `serialize_field_set` in `apis.shared.extraction.field_sets`, both pinned tests (§6), validate-on-write in `SkillBundleFiles` (§4.2) |
-| **2** | The four app-api routes (§4.1), the flag, CDK config + ceilings entry, docs-site row. Also the parser reporting unknown columns, so the structured `PUT` can carry them (below) |
+| **2** ✅ | The app-api routes (§4.1), the flag, CDK config + ceilings entry, docs-site row. Also the parser reporting what it ignores (`FieldSetLayout`, below), so the structured `PUT` can carry it |
 | **3** | The SPA: route, list section on the skill form, the card editor, markdown mode |
 
 PR 1 is useful on its own: it stops a malformed field set being storable at all, through
 any path, whether or not the editor is ever turned on.
 
-**What PR 1's serializer carries, and what waits for PR 2.** `serialize_field_set(set,
-preamble=…)` writes the frontmatter, optional prose before the table, the table in
-authored order with the canonical column names, and `## Rules` verbatim. It parses its
-own output before returning and refuses, by name, any value the format cannot carry (a
-`|` or a line break in a cell, a comma inside one enum value, a title the frontmatter
-would strip), so it never saves a set that reads back as a different one. It does not
-yet carry **unknown columns** or prose *after* the table: the parser drops both, so
-there is nothing to hand the serializer until PR 2 makes the parser report them as
-`unmanagedColumns`. Neither affects the schema, so the semantic round trip holds today.
+**What the serializer carries.** `serialize_field_set(set, layout=…)` writes the
+frontmatter, the table in authored order with the canonical column names, and
+`## Rules` verbatim. It parses its own output before returning and refuses, by name,
+any value the format can't carry: a `|` or a line break in a cell, a comma inside one
+enum value, or a title the frontmatter would strip. So it never saves a set that reads
+back as a different one.
+
+Since PR 2 it also carries the `FieldSetLayout` that `read_field_set_file` reports: the
+parts of the file the set ignores.
+
+* **Prose before the table.**
+* **Prose after it.** Prose written between table rows is written back after the table:
+  its words survive, but not its position.
+* **Frontmatter lines** other than `title` and `version`.
+* **Columns the parser does not read**, written after the six canonical ones. That
+  includes an earlier alias that a later one overrides, e.g. `field` before `name`.
+
+The serializer checks the layout's round trip as strictly as the set's. It refuses an
+extra column headed with an alias, which would read as a real column, and a `|` in the
+text after the table, which would read as a row. The layout is a separate object from
+`FieldSet`, so extraction, its schema and its grammar-cache key are unchanged.
 
 ---
 

@@ -275,6 +275,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // like source provenance it is here for the environment-variable ceilings
     // and for the flag-coverage test below, not for the resource count.
     documentExtract: { ...base.documentExtract, enabled: true },
+    // Field-set authoring: one app-api variable and routes, no resources.
+    fieldSetAuthoring: { enabled: true },
     // Web Search's result default is one Runtime variable, written only while
     // on: here for the environment-variable ceilings and flag coverage.
     webSearchDefaultMaxResults: { enabled: true },

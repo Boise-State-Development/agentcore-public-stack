@@ -1533,6 +1533,35 @@ def document_extract_model_id() -> str:
     return os.environ.get("DOCUMENT_EXTRACT_MODEL_ID", "").strip()
 
 
+def field_set_authoring_enabled() -> bool:
+    """Whether a user can write field sets through the structured routes
+    (``docs/specs/field-set-authoring.md`` §7, D8).
+
+    On, app-api serves ``/skills/mine/{skill_id}/field-sets`` (list, read, write
+    and validate one set on a skill the caller owns), which 404 after
+    authentication while off. The SPA's matching switch is
+    ``features.fieldSetAuthoring``.
+
+    Its own switch rather than ``DOCUMENT_EXTRACT_ENABLED``: "may this
+    deployment run extractions" and "may users write their own extraction
+    schemas" are different decisions, and a deployment can want admin-authored
+    sets with no user editor.
+
+    **app-api only.** The Runtime gets no variable, because how a turn resolves
+    a field set does not change. Nor does what this guards: the check that a
+    field-set file parses runs on every skill-file write whether or not this is
+    on (§4.2, D6), so turning it off removes an editor, never a safeguard.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on app-api from ``config.fieldSetAuthoring.enabled``.
+
+    A **feature switch**, not a rollout switch, and therefore permanent: turning
+    it off takes an editor away from people, which is a product choice.
+    """
+    return os.environ.get("FIELD_SET_AUTHORING_ENABLED", "").strip().lower() == "true"
+
+
 def release_ledger_enabled() -> bool:
     """Whether each model call's cost row also bumps the version-keyed ledger
     rollups (``docs/specs/release-ledger.md`` §5.2, D3, D8).
