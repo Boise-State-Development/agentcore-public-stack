@@ -25,7 +25,9 @@ from apis.shared.security.error_handler import (
     register_validation_error_handler,
 )
 from apis.shared.security.python_ast_policy import (
+    ALLOWED_IMPORT_ROOTS,
     PolicyError,
+    policy_violation,
     validate_diagram_code,
 )
 from apis.shared.security.log_sanitize import scrub_log
@@ -43,7 +45,9 @@ __all__ = [
     "register_aws_client_error_handler",
     "register_safe_500_handler",
     "register_validation_error_handler",
+    "ALLOWED_IMPORT_ROOTS",
     "PolicyError",
+    "policy_violation",
     "validate_diagram_code",
     "scrub_log",
 ]
