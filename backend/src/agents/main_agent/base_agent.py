@@ -455,6 +455,14 @@ class BaseAgent(ABC):
         self.tool_census_hook = ToolCensusHook()
         hooks.append(self.tool_census_hook)
 
+        # A call the provider declined (stop reason content_filtered or
+        # guardrail_intervened, no text) gets a platform notice in its message
+        # before Strands appends it, so history and a reload are never blank.
+        # After the model answers only; the coordinator streams the same notice.
+        from agents.main_agent.session.hooks.declined_answer import DeclinedAnswerHook
+
+        hooks.append(DeclinedAnswerHook())
+
         # Per-model-call context ledger: the conversation window's cumulative
         # trim count and the compaction decisions taken since the previous
         # call. Same shape and lifecycle as the census — read per call at

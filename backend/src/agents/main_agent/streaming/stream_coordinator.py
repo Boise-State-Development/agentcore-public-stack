@@ -36,6 +36,8 @@ from apis.shared.errors import (
 )
 from apis.shared.observability.emf import emit_model_read_timeout
 from apis.shared.sessions.ledger_rollups import TURN_OUTCOMES
+from agents.main_agent.session.hooks.declined_answer import DECLINED_NOTICE
+from agents.main_agent.session.hooks.declined_answer import needs_notice as needs_declined_notice
 
 from .history_count import HistoryCount, count_created_before
 from .stream_processor import process_agent_stream
@@ -844,6 +846,16 @@ class StreamCoordinator:
                         per_message_metadata[current_assistant_message_index]["end_time"] = time.time()
                         per_message_metadata[current_assistant_message_index]["has_text"] = call_streamed_text
                         logger.debug(f"📝 Assistant message {current_assistant_message_index} ended")
+                    # The provider declined this call and it said nothing: show
+                    # the notice DeclinedAnswerHook also writes into the message,
+                    # before this message_stop goes out, so the bubble is never
+                    # blank (declined_answer.py).
+                    if needs_declined_notice(event.get("data", {}).get("stopReason"), call_streamed_text):
+                        if 0 <= current_assistant_message_index < len(per_message_metadata):
+                            per_message_metadata[current_assistant_message_index]["declined"] = True
+                        yield 'event: content_block_start\ndata: {"contentBlockIndex": 0, "type": "text"}\n\n'
+                        yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': DECLINED_NOTICE})}\n\n"
+                        yield 'event: content_block_stop\ndata: {"contentBlockIndex": 0}\n\n'
 
                 # Track individual metadata events (per assistant message)
                 if event.get("type") == "metadata":
@@ -2050,7 +2062,9 @@ class StreamCoordinator:
         if interrupt_state is not None and getattr(interrupt_state, "activated", False) is True:
             return "paused", False
         final_call = per_message_metadata[-1] if per_message_metadata else None
-        empty = final_call is not None and not final_call.get("has_text")
+        # A call the provider declined is not the empty-answer defect: the
+        # user saw the declined notice, and the model chose not to answer.
+        empty = final_call is not None and not final_call.get("has_text") and not final_call.get("declined")
         return "completed", empty
 
     @staticmethod

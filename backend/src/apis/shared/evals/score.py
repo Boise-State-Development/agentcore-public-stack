@@ -34,6 +34,9 @@ REFUSAL_PATTERNS: Tuple[str, ...] = (
     r"\bI(?:'d| would) (?:rather not|prefer not to)\b",
     r"\b(?:can(?:not|'t)|won't) (?:help|assist) with (?:that|this)\b",
     r"\bnot something I (?:can|will) (?:help|assist) with\b",
+    # The platform's notice when the provider declines the call
+    # (agents/main_agent/session/hooks/declined_answer.py): what the user sees.
+    r"\bThe model declined to respond to this request\b",
 )
 _REFUSAL_RE = re.compile("|".join(REFUSAL_PATTERNS), re.IGNORECASE)
 

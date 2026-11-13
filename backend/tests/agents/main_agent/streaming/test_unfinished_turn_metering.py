@@ -19,6 +19,7 @@ and the user cost-summary update are fakes that record what reached them.
 """
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -173,6 +174,7 @@ class _Recorded:
         self.cost_summary = AsyncMock()
         self.activity = AsyncMock(return_value=True)
         self.synthetic_writes = MagicMock()
+        self.sse: List[str] = []
 
     @property
     def cost_rows(self) -> List[Dict[str, Any]]:
@@ -236,7 +238,7 @@ async def _run(
                 user_id=USER_ID,
                 main_agent_wrapper=_wrapper(caching),
             ):
-                pass
+                recorded.sse.append(_sse)
 
         if expect is not None:
             with pytest.raises(expect):
@@ -997,3 +999,53 @@ async def test_output_chars_ride_the_cost_diagnostics_switch(monkeypatch):
     monkeypatch.setenv("COST_DIAGNOSTICS_ENABLED", "false")
     recorded = await _run([*_final_answer("Here it is.")], monkeypatch)
     assert not any("outputChars" in row for row in recorded.cost_rows)
+
+
+# ---------------------------------------------------------------------------
+# A call the provider declined (stop reason content_filtered, no text) shows
+# the declined notice instead of a blank bubble, and is not an empty answer
+# (agents/main_agent/session/hooks/declined_answer.py).
+# ---------------------------------------------------------------------------
+
+
+def _declined_call(stop_reason: str = "content_filtered") -> List[Dict[str, Any]]:
+    return [
+        {"event": {"messageStart": {"role": "assistant"}}},
+        {"event": {"messageStop": {"stopReason": stop_reason}}},
+        {"event": {"metadata": {"usage": {"inputTokens": 1000, "outputTokens": 0, "totalTokens": 1000},
+                                "metrics": {"latencyMs": 100}}}},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_reason", ["content_filtered", "guardrail_intervened"])
+async def test_a_declined_call_streams_the_notice_before_its_stop(stop_reason, monkeypatch):
+    from agents.main_agent.session.hooks.declined_answer import DECLINED_NOTICE
+
+    recorded = await _run(_declined_call(stop_reason), monkeypatch)
+
+    stream = "".join(recorded.sse)
+    assert json.dumps(DECLINED_NOTICE) in stream
+    assert stream.index(json.dumps(DECLINED_NOTICE)) < stream.index("event: message_stop")
+    (row,) = recorded.cost_rows
+    assert row["outcome"] == "completed" and "emptyAnswer" not in row
+
+
+@pytest.mark.asyncio
+async def test_a_declined_call_that_already_said_something_gets_no_notice(monkeypatch):
+    from agents.main_agent.session.hooks.declined_answer import DECLINED_NOTICE
+
+    events = [
+        {"event": {"messageStart": {"role": "assistant"}}},
+        {"event": {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "The guardrail's own message."}}}},
+        {"event": {"messageStop": {"stopReason": "guardrail_intervened"}}},
+        {"event": {"metadata": {"usage": dict(CALL_USAGE), "metrics": {"latencyMs": 100}}}},
+    ]
+    recorded = await _run(events, monkeypatch)
+    assert json.dumps(DECLINED_NOTICE) not in "".join(recorded.sse)
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_empty_final_call_is_still_an_empty_answer(monkeypatch):
+    recorded = await _run([*_completed_call("looking"), *_empty_call()], monkeypatch)
+    assert recorded.cost_rows[-1].get("emptyAnswer") is True
