@@ -12,7 +12,6 @@ import { Construct } from 'constructs';
 import { CLOUDFRONT_ORIGIN_KEEPALIVE_SECONDS } from '../network/alb-construct';
 import {
   AppConfig,
-  buildCorsOrigins,
   getRemovalPolicy,
   getResourceName,
   getTruncatedResourceName,
@@ -99,7 +98,6 @@ export interface SpaDistributionConstructProps {
  * SSM publications:
  *   /{prefix}/frontend/distribution-id
  *   /{prefix}/frontend/url
- *   /{prefix}/frontend/cors-origins        (only when corsOrigins is non-empty)
  */
 export class SpaDistributionConstruct extends Construct {
   public readonly distribution: cloudfront.Distribution;
@@ -520,13 +518,5 @@ function handler(event) {
       description: 'Frontend website URL',
       tier: ssm.ParameterTier.STANDARD,
     });
-
-    const corsOrigins = buildCorsOrigins(
-      config,
-      config.frontend.additionalCorsOrigins,
-    ).join(',');
-
-    if (corsOrigins) {
-    }
   }
 }

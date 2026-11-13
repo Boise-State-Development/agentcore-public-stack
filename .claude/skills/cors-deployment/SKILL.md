@@ -1,33 +1,40 @@
 ---
 name: cors-deployment
-description: CORS configuration across all CDK stacks, GitHub Actions workflows, and Python backends. Use when modifying CORS origins, adding new stacks that need CORS, debugging CORS errors in deployed environments, or touching any workflow env vars related to CDK_DOMAIN_NAME or CDK_CORS_ORIGINS.
+description: The deployment's allowed-origins list (CORS_ORIGINS, built by buildCorsOrigins) across the CDK PlatformStack, GitHub Actions workflows, and Python backends — S3 bucket CORS for presigned uploads, local-dev CORS, and the origin allowlists for voice, OAuth callbacks and the SKIP_AUTH guard. Use when modifying allowed origins, adding a construct or check that needs them, debugging a CORS or "origin not allowed" error, considering removing CORS config after the BFF move, or touching any workflow env vars related to CDK_DOMAIN_NAME or CDK_CORS_ORIGINS.
 ---
 
-# CORS Deployment Configuration
+# Allowed origins (`CORS_ORIGINS`)
 
-## Architecture
+## What it is for now
 
-CORS is configured via a two-layer model applied identically to every stack:
+The deployed SPA calls app-api same-origin: `appApiUrl: '/api'` in
+`environment.development.ts` / `environment.production.ts`, routed by
+CloudFront's `/api/*` behavior to the app-api ALB. Same-origin is what lets the
+BFF Token Handler's `__Host-` session cookies work, and it means the browser
+never makes a cross-origin call to app-api in a deployed environment. It never
+calls the AgentCore Runtime at all: app-api proxies chat to it
+(`apis/app_api/chat/proxy_routes.py`).
 
-1. `CDK_DOMAIN_NAME` → auto-applied as `https://{value}` (always)
+So the list is less about CORS than its name suggests. It has four live jobs:
+
+| Job | Where | Breaks without it |
+|---|---|---|
+| S3 bucket CORS for presigned uploads straight from the browser | `constructs/data/file-upload-construct.ts`, `constructs/rag/rag-data-construct.ts` (+ `spa/rag-cors-updater-construct.ts`), `constructs/fine-tuning/fine-tuning-data-construct.ts` | Uploads fail in the browser with a CORS error |
+| Local dev: `ng serve` on `:4200` calls `http://localhost:8000` (`environment.ts`), a real cross-origin request | `CORSMiddleware` in `apis/app_api/main.py` | Every local request fails preflight |
+| Origin allowlists that reuse the variable | voice WebSocket origin check (`apis/app_api/voice/routes.py`), `OAuth2CallbackUrl` validation (`apis/shared/middleware/agentcore_context.py`), the `SKIP_AUTH` guard in `apis/app_api/main.py` | Voice and MCP OAuth consent reject legitimate origins; the guard against `SKIP_AUTH` on a non-local deployment loses its input |
+| `CORSMiddleware` on app-api and inference-api in deployed environments | `apis/app_api/main.py`, `apis/inference_api/main.py` | Nothing today — no browser calls them cross-origin. Harmless; keep it for local dev and for any future cross-origin client |
+
+Do not remove or empty `CORS_ORIGINS` as "CORS cleanup after the BFF move": the
+allowlists in the third row depend on it.
+
+## How the list is built
+
+1. `CDK_DOMAIN_NAME` → always applied as `https://{value}`, first
 2. `CDK_CORS_ORIGINS` → additional global origins (optional, comma-separated)
-3. Per-section `CDK_*_CORS_ORIGINS` → stack-specific extras (optional)
+3. Per-section `CDK_*_CORS_ORIGINS` → extras for one construct (optional)
 
-localhost is NEVER auto-included. Use `CDK_CORS_ORIGINS=http://localhost:4200` for local dev.
-
-## The Helper
-
-Every stack uses `buildCorsOrigins(config, additionalOrigins?)` from `infrastructure/lib/config.ts`. This returns a deduplicated `string[]`.
-
-```typescript
-// Container env var (Fargate / AgentCore Runtime)
-CORS_ORIGINS: buildCorsOrigins(config, config.appApi.additionalCorsOrigins).join(','),
-
-// S3 bucket CORS rule
-cors: [{ allowedOrigins: buildCorsOrigins(config, config.fileUpload?.additionalCorsOrigins) }]
-```
-
-## Config Derivation (config.ts)
+localhost is never auto-included. Use `CDK_CORS_ORIGINS=http://localhost:4200`
+for an environment local dev must reach.
 
 ```
 CDK_DOMAIN_NAME → domainName → "https://{domainName}"  (always first)
@@ -35,53 +42,58 @@ CDK_CORS_ORIGINS → extraCorsOrigins                     (appended)
 Result: config.corsOrigins = "https://{domainName},{extras}"
 ```
 
-Both are joined into `config.corsOrigins`. The helper then splits, deduplicates, and optionally appends section extras.
+Every consumer calls `buildCorsOrigins(config, additionalOrigins?)` from
+`infrastructure/lib/config.ts`, which splits, deduplicates and appends the
+section extras:
 
-## Python Backend
+```typescript
+// Container env var (Fargate / AgentCore Runtime)
+CORS_ORIGINS: buildCorsOrigins(config, config.appApi.additionalCorsOrigins).join(','),
 
-Both `app_api/main.py` and `inference_api/main.py` read `CORS_ORIGINS` env var:
-
-```python
-_cors_origins = os.environ.get("CORS_ORIGINS", "").split(",")
+// S3 bucket CORS rule
+cors: [{ allowedOrigins: buildCorsOrigins(config, config.ragIngestion.additionalCorsOrigins) }]
 ```
 
-No hardcoded fallback. If `CORS_ORIGINS` is empty, no origins are allowed.
+The Python services read `CORS_ORIGINS` with no hardcoded fallback: an empty
+value allows no origins.
 
-## Workflow Requirements
+Section extras exist on `AppApiConfig`, `InferenceApiConfig`,
+`RagIngestionConfig` and `FineTuningConfig`. The file-upload bucket takes none
+(`buildCorsOrigins(config)`), and neither does the SPA distribution, which
+serves the app rather than calling anything cross-origin.
 
-`CDK_DOMAIN_NAME` and `CDK_CORS_ORIGINS` MUST be in the **job-level** `env:` block (not workflow-level) because they use `vars.*` which requires `environment:` on the job.
+## Workflow requirements
 
-Every workflow that runs synth or deploy must include:
+`CDK_DOMAIN_NAME` and `CDK_CORS_ORIGINS` go in the **job-level** `env:` block,
+not workflow-level, because they read `vars.*`, which needs `environment:` on
+the job (at workflow level they resolve to empty strings). Every workflow that
+runs synth or deploy needs:
+
 ```yaml
 env:
   CDK_DOMAIN_NAME: ${{ vars.CDK_DOMAIN_NAME }}
   CDK_CORS_ORIGINS: ${{ vars.CDK_CORS_ORIGINS }}
 ```
 
-## Per-Section Config Interfaces
+## Adding a consumer
 
-Every config section that consumes CORS has `additionalCorsOrigins?: string`:
-- `AppApiConfig.additionalCorsOrigins`
-- `InferenceApiConfig.additionalCorsOrigins`
-- `FrontendConfig.additionalCorsOrigins`
-- `FileUploadConfig.additionalCorsOrigins`
-- `RagIngestionConfig.additionalCorsOrigins`
-- `AssistantsConfig.additionalCorsOrigins`
-- `FineTuningConfig.additionalCorsOrigins`
+First ask whether the browser really makes a cross-origin request to it. A new
+app-api route doesn't: it is same-origin through `/api`. Something the browser
+reaches directly — a new bucket with presigned uploads, a new WebSocket — does.
 
-## Adding CORS to a New Stack
-
-1. Import `buildCorsOrigins` from `./config`
+1. Import `buildCorsOrigins` from `infrastructure/lib/config.ts` (relative to the construct's folder under `lib/constructs/<area>/`)
 2. Call `buildCorsOrigins(config, config.mySection.additionalCorsOrigins)`
-3. Add `additionalCorsOrigins?: string` to the section's config interface
-4. Load it in `loadConfig()`: `additionalCorsOrigins: process.env.CDK_MY_SECTION_CORS_ORIGINS || ...`
-5. Add `CDK_DOMAIN_NAME` and `CDK_CORS_ORIGINS` to the workflow job env
-6. Add a test in `infrastructure/test/cors.test.ts`
+3. If it needs its own extras: add `additionalCorsOrigins?: string` to the section's config interface and load it in `loadConfig()` from `CDK_MY_SECTION_CORS_ORIGINS`
+4. Add `CDK_DOMAIN_NAME` and `CDK_CORS_ORIGINS` to the workflow job env
+5. Add a test beside the existing `buildCorsOrigins` cases in `infrastructure/test/config.test.ts`
 
-## Common Mistakes
+A new backend origin check reads `CORS_ORIGINS` at request time, as
+`_allowed_callback_origins()` does, so tests can monkeypatch it.
 
-- Putting `vars.*` in workflow-level `env:` → resolves to empty string
-- Hardcoding `http://localhost:4200` in buildCorsOrigins or Python fallback
-- Forgetting to add `CDK_DOMAIN_NAME` to a new workflow's synth/deploy jobs
+## Common mistakes
+
+- Putting `vars.*` in workflow-level `env:`
+- Hardcoding `http://localhost:4200` in `buildCorsOrigins` or a Python fallback
 - Using `config.domainName` directly instead of `buildCorsOrigins()`
 - Setting `corsOrigins` in `cdk.context.json` (overrides domain derivation)
+- Debugging a deployed "CORS error" on an app-api call: in a deployed environment it is almost always something else (a CloudFront behavior, a redirect to another origin, or a 5xx without CORS headers), because the call is same-origin

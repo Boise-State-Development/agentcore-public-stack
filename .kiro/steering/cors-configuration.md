@@ -22,7 +22,6 @@ Each stack can optionally append additional origins via section-specific env var
 |---|---|---|
 | `CDK_APP_API_CORS_ORIGINS` | App API | `appApi.additionalCorsOrigins` |
 | `CDK_INFERENCE_API_CORS_ORIGINS` | Inference API | `inferenceApi.additionalCorsOrigins` |
-| `CDK_FRONTEND_CORS_ORIGINS` | Frontend | `frontend.additionalCorsOrigins` |
 | `CDK_FILE_UPLOAD_CORS_ORIGINS` | Infrastructure (file upload S3) | `fileUpload.additionalCorsOrigins` |
 | `CDK_RAG_CORS_ORIGINS` | RAG Ingestion (S3) | `ragIngestion.additionalCorsOrigins` |
 | `CDK_ASSISTANTS_CORS_ORIGINS` | Assistants | `assistants.additionalCorsOrigins` |
