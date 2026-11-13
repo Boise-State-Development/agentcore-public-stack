@@ -9,6 +9,7 @@ caller's RBAC grant (enables, never grants) and sticky across the session so
 the agent-cache key does not flip between the attach turn and the follow-up.
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -464,3 +465,77 @@ class TestPresentationSharedLookup:
             assert await _real_session_has_presentation_files("u1", "s1")
             rows.pop()  # only the other user's deck and a PDF remain
             assert not await _real_session_has_presentation_files("u1", "s1")
+
+
+async def _ready(value):
+    return value
+
+
+class TestSharedFileHints:
+    """A spreadsheet or deck a handoff or delivery carries in (handoffs spec §4.9).
+
+    Its reference row is written during the stream, after these gates ran, so the session query
+    can't see it on that first turn. Without the hint the gate answered no on turn 1 and yes on
+    turn 2: the tools changed between the two turns, which re-wrote the whole cached prefix once
+    (measured on dev, 2026-11-13), and the model could not analyze the file on the turn it
+    arrived.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_shared_spreadsheet_enables_the_tools_on_its_first_turn(self, _no_spreadsheet_in_session):
+        hint = asyncio.ensure_future(_ready(True))
+        assert await routes._session_has_tabular("s1", "u1", tabular_hint=hint)
+        _no_spreadsheet_in_session.assert_awaited_once()  # the query still runs, beside the hint
+        assert routes._TABULAR_SESSIONS.get("s1") is True
+
+    @pytest.mark.asyncio
+    async def test_a_hint_that_says_no_leaves_the_answer_to_the_query(self):
+        with patch("apis.shared.files.document_read.session_has_tabular_files", new=AsyncMock(return_value=True)):
+            assert await routes._session_has_tabular("s1", "u1", tabular_hint=asyncio.ensure_future(_ready(False)))
+        routes._TABULAR_SESSIONS.clear()
+        assert not await routes._session_has_tabular("s2", "u1", tabular_hint=asyncio.ensure_future(_ready(False)))
+
+    @pytest.mark.asyncio
+    async def test_a_failed_hint_is_no_and_never_fails_the_turn(self):
+        async def boom():
+            raise RuntimeError("ddb")
+
+        assert not await routes._session_has_tabular("s1", "u1", tabular_hint=asyncio.ensure_future(boom()))
+
+    @pytest.mark.asyncio
+    async def test_an_unbound_agent_reads_the_hint_beside_its_knowledge_base(self):
+        with patch(
+            "apis.shared.assistants.kb_tabular.assistant_kb_has_tabular_documents", new=AsyncMock(return_value=False)
+        ):
+            assert await routes._session_has_tabular(
+                "s1", "u1", kb_assistant_id="a1", tabular_hint=asyncio.ensure_future(_ready(True))
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_shared_deck_enables_the_powerpoint_tools_on_its_first_turn(self, _no_deck_in_session):
+        assert await routes._session_has_presentation(
+            "s1", "u1", presentation_hint=asyncio.ensure_future(_ready(True))
+        )
+        _no_deck_in_session.assert_awaited_once()
+        assert routes._PRESENTATION_SESSIONS.get("s1") is True
+
+    @pytest.mark.asyncio
+    async def test_turn_one_with_the_hint_carries_the_ids_turn_two_finds_by_query(self):
+        """The property that keeps the prefix: the same tool ids before and after the rows exist."""
+        allowed = set(SPREADSHEET_TOOL_IDS) | set(POWERPOINT_PRESENTATION_TOOL_IDS)
+        with patch.object(routes, "get_app_role_service", return_value=_role_service(allowed)):
+            first = await routes._apply_attachment_tool_autoenable(
+                [], USER, "s1", "u1",
+                tabular_hint=asyncio.ensure_future(_ready(True)),
+                presentation_hint=asyncio.ensure_future(_ready(True)),
+            )
+            routes._TABULAR_SESSIONS.clear()
+            routes._PRESENTATION_SESSIONS.clear()  # a fresh process: only the rows answer now
+            with patch(
+                "apis.shared.files.document_read.session_has_tabular_files", new=AsyncMock(return_value=True)
+            ), patch(
+                "apis.shared.files.document_read.session_has_presentation_files", new=AsyncMock(return_value=True)
+            ):
+                second = await routes._apply_attachment_tool_autoenable([], USER, "s1", "u1")
+        assert first == second
+        assert set(first) == allowed

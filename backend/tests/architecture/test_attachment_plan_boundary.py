@@ -84,11 +84,15 @@ _KNOWN: Dict[str, str] = {
     "src/apis/shared/files/attachment_preview.py": "which card preview to write (a display choice, written at upload off the turn path; never a delivery mode)",
     "src/agents/builtin_tools/spreadsheet_analysis/analyze_tool.py": "the spreadsheet tool finding its file",
     "src/agents/builtin_tools/spreadsheet_analysis/list_spreadsheets_tool.py": "the spreadsheet tool listing its files",
+    "src/apis/shared/files/file_kinds.py": (
+        "which tool gates a handoff's shared files open, by the predicates the session gates query with"
+    ),
 }
 
 #: Modules on ``_KNOWN`` held to a narrower set of names than ``_DELIVERY_INPUTS``.
 _ONLY: Dict[str, Set[str]] = {
     "src/apis/app_api/files/service.py": {"is_reference_document"},
+    "src/apis/shared/files/file_kinds.py": {"is_presentation_file", "is_tabular_file"},
 }
 
 #: Environment variables that set an upload limit. Read in the planner
