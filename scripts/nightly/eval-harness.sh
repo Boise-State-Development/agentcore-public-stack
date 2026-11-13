@@ -37,12 +37,14 @@ set -euo pipefail
 #                           run directory is eval-harness-run-<model>
 #   EVAL_MODEL_IDS        — comma-separated models under test, run one after
 #                           another (default below: Haiku 5.5, the catalog
-#                           default on dev since 2026-11-04, and Opus 5.5, about
-#                           a quarter of prod spend). A model needs a catalog row
+#                           default on dev since 2026-11-04; Opus 5.5, about a
+#                           quarter of prod spend; and Sonnet 5.5, which replaces
+#                           Sonnet 5, about 70% of prod spend). A model needs a catalog row
 #                           on the target (an uncataloged id is refused) and a
 #                           committed baseline (otherwise its run is not scored
 #                           or published). Per night at k=1: Haiku 5.5 ~$0.09,
-#                           Opus 5.5 ~$3.13, measured from 2026-11-13's k=3 runs.
+#                           Opus 5.5 ~$3.13, Sonnet 5.5 ~$1.17, measured from
+#                           2026-11-13's k=3 runs.
 #   EVAL_MODEL_ID         — a single model; overrides EVAL_MODEL_IDS
 #   EVAL_FAMILIES         — comma-separated families (default below)
 #   EVAL_PUBLISH          — "true" to also write the score as a LEDGER#EVAL row
@@ -101,7 +103,7 @@ main() {
     local base_url
     base_url=$(get_base_url) || exit 2
     local api_url="${base_url}/api"
-    local models_csv="${EVAL_MODEL_ID:-${EVAL_MODEL_IDS:-us.anthropic.claude-haiku-5-5,us.anthropic.claude-opus-5-5}}"
+    local models_csv="${EVAL_MODEL_ID:-${EVAL_MODEL_IDS:-us.anthropic.claude-haiku-5-5,us.anthropic.claude-opus-5-5,us.anthropic.claude-sonnet-5-5}}"
     local families="${EVAL_FAMILIES:-tool_selection,document_qa,attachment_tools,project_kb,agent_harness,project_memory,skill_outcome,terminal,usage_patterns,retention,instruction_following,refusal,skill_selection}"
     local report="${EVAL_REPORT:-${PROJECT_ROOT}/eval-harness-report.json}"
     local models=()
