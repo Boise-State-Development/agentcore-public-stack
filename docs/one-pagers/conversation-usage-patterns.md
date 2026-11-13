@@ -80,6 +80,10 @@ What this run settled:
 | Bound the protected tail by tokens: offload the tail's big tool results so cuts reach the floor | the 400+ floor-missing cuts; not yet priced | Neutral if offloaded content stays one tool call away |
 | Stub superseded artifact bodies + patch edits (from run 1, scaled) | ~$120 + part of $70 | Neutral with `read_artifact` |
 
+## Idle returns, re-sized (28 days ending 2026-11-13)
+
+[`idle-return-context.md`](idle-return-context.md) splits the $940 of `miss_ttl_expired` calls by context, gap, model and what is in the prompt. About $30–90 of it is removable without losing context. Over returns alone, the parked artifact and tool-result levers are a few dollars each: cold restores already truncate both, and big results are offloaded when they arrive. The largest lossless slice is large pastes ($15–55), so that lever moves to the top. Half the spend returns inside the Runtime's 15-minute idle window, on a warm agent where no restore-time transformation runs.
+
 ## Data to collect next
 
 Gaps where the classifier has to estimate. Each is a content-free field on the `C#` cost row or the session row:
@@ -88,7 +92,8 @@ Gaps where the classifier has to estimate. Each is a content-free field on the `
 - ~~**Tool-result tokens per tool.**~~ **Collected from 2026-11-06** (release ledger PR-2): each census entry on a `C#` row now carries `resultChars` (text and JSON characters, plus a fixed 1,500 per image), `inputChars` and `durationMs`, so tool-result growth is a stored length per tool, not a context delta. Tokens are `resultChars / 4`, labelled an estimate. Rows written before then have no size; a 30-day scan is fully covered from 2026-12-06. The spec cost of each tool's schema is the committed `backend/evals/tool_spec_tokens.json`.
 - **Artifact size per write.** The artifact's bytes per version, to price superseded copies and patch-edit savings without using output tokens as a proxy.
 - **Pasted characters on the user message.** A count only, to replace the paste heuristic.
-- **Warm vs restored agent per turn.** This decides whether tool-result aging already happened on that turn.
+- ~~**Warm vs restored agent per turn.**~~ **Inferable:** a gap under the Runtime's 900 s `idleRuntimeSessionTimeout` is a warm agent (only 43 of 2,166 such returns logged a restore `truncation_anchor`); see `idle-return-context.md`.
+- **`documentTokens` accuracy.** It exceeds the whole prompt on 28% of document-carrying returns, so clip it to the prompt before sizing a document lever.
 - ~~**Census accuracy.**~~ **Collected once this ships:** a failed tool call also counts under `toolCalls[<tool>].errorKinds` (`auth` / `timeout` / `exception` / `result_error`), so the OAuth 401 retry that inflates `search_files`' error rate is separable (`errors` minus `errorKinds.auth`) without changing what `errors` means.
 - **Output composition.** `outputChars` on each cost row (`text` / `reasoning` / `reasoningSignature`) says how much of a call's output was answer and how much was thinking.
 
