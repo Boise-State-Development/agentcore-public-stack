@@ -115,9 +115,16 @@ export class ErrorService {
       let userMessage: string | undefined;
       let technicalDetails: string | undefined;
 
-      if (errorBody && typeof errorBody === 'object') {
+      // A request that never got a response carries the transport's failure
+      // instead of a server body: a ProgressEvent from the XHR backend, the
+      // thrown TypeError ("Failed to fetch") from the fetch backend. Neither
+      // is a message for the user, so both fall through to the status-based
+      // text below and the toast reads the same whichever backend sent it.
+      const isTransportFailure = errorBody instanceof Error || errorBody instanceof Event;
+
+      if (errorBody && typeof errorBody === 'object' && !isTransportFailure) {
         const errorObj = errorBody as Record<string, unknown>;
-        
+
         // Priority 1: Check for error.detail (direct detail field) - most common case
         if ('detail' in errorObj && typeof errorObj['detail'] === 'string') {
           userMessage = errorObj['detail'] as string;
@@ -387,7 +394,12 @@ export class ErrorService {
     // HttpErrorResponse.message reads "Http failure response for <url>: ...",
     // so strip the URL from it as well.
     const message = error.url ? error.message?.split(error.url).join('[redacted]') : error.message;
-    if (message) {
+    if (error.error instanceof Error) {
+      // The fetch backend has no status text for a request that never got a
+      // response, so Angular's message ends "0 undefined". The thrown error
+      // says what actually happened ("Failed to fetch", "NetworkError…").
+      details.push(`Network error: ${error.error.message}`);
+    } else if (message) {
       details.push(`HTTP Message: ${message}`);
     }
 

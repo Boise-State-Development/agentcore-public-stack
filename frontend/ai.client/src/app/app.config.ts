@@ -7,7 +7,7 @@ import {
 } from '@angular/router';
 
 import { routes } from './app.routes';
-import { provideHttpClient, withInterceptors, withXhr } from '@angular/common/http';
+import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { csrfInterceptor } from './auth/csrf.interceptor';
 import { errorInterceptor } from './auth/error.interceptor';
 import { gatewayRetryInterceptor } from './auth/retry.interceptor';
@@ -51,11 +51,11 @@ function markedOptionsFactory(config: ConfigService): MarkedOptions {
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
+    // Angular 22's default backend is FetchBackend. Nothing here needs XHR:
+    // uploads that report progress use XMLHttpRequest directly, and the one
+    // shape that differs (a network failure's `error` is the thrown TypeError
+    // rather than a ProgressEvent) is normalised in ErrorService.
     provideHttpClient(
-      // Angular 22 made FetchBackend the default. Keep XHR until the switch is
-      // tested on its own: errorInterceptor and gatewayRetryInterceptor branch
-      // on HttpErrorResponse shapes, which differ between the two backends.
-      withXhr(),
       // withCredentialsInterceptor flips the cookie-attaching flag on app-api
       // requests (cross-origin in local dev; no-op same-origin in prod).
       // csrfInterceptor attaches the X-CSRF-Token header on unsafe-method
