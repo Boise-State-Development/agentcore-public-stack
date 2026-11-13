@@ -137,6 +137,30 @@ describe('ChatContainerComponent — a project conversation', () => {
       expect(composer().voiceAgentId()).toBe('ast-1');
     });
 
+    it('hides voice while the agent named in the URL is still loading', () => {
+      // The bug this guards: voice started as a plain chat before the Agent loaded.
+      render({ boundAgentId: 'ast-1', hasUrlBinding: true, isLoadingAssistant: true });
+      expect(composer().showVoiceControl()).toBe(false);
+      expect(composer().voiceAgentId()).toBe('ast-1');
+    });
+
+    it('hides voice when the agent in the URL failed to load', () => {
+      render({ boundAgentId: 'ast-1', hasUrlBinding: true, assistantError: 'Agent unavailable' });
+      expect(composer().showVoiceControl()).toBe(false);
+    });
+
+    it('decides by the agent the URL names, not one still loaded from before a switch', () => {
+      render({ assistant: { ...AGENT, voiceEnabled: true }, boundAgentId: 'ast-2', hasUrlBinding: true });
+      expect(composer().showVoiceControl()).toBe(false);
+      expect(composer().voiceAgentId()).toBe('ast-2');
+    });
+
+    it('offers voice once the URL agent has loaded with voice on', () => {
+      render({ assistant: { ...AGENT, voiceEnabled: true }, boundAgentId: 'ast-1', hasUrlBinding: true });
+      expect(composer().showVoiceControl()).toBe(true);
+      expect(composer().voiceAgentId()).toBe('ast-1');
+    });
+
     it('hides voice in a project conversation', () => {
       render({ assistant: { ...HARNESS, voiceEnabled: true }, project: PROJECT });
       expect(composer().showVoiceControl()).toBe(false);

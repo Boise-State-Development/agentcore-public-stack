@@ -100,7 +100,8 @@ export class ConversationPage implements OnDestroy {
   private toast = inject(ToastService);
   private features = inject(FEATURES);
   private agentHandoff = inject(AgentHandoffService);
-  private binding = inject(ConversationBindingService);
+  /** Protected: the template hands the URL binding to the composer's voice control (#625). */
+  protected readonly binding = inject(ConversationBindingService);
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
 
