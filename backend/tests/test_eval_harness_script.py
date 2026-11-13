@@ -626,3 +626,42 @@ def test_a_baseline_from_before_efficiency_scores_as_before(tmp_path, golden, ca
     assert eval_harness.main(flags + ["score", "--out", str(new)]) == 0
     out = capsys.readouterr().out
     assert "no baseline efficiency" in out and "moved:" not in out
+
+
+# --------------------------------------------------------------------------- publish
+
+
+def test_publish_refuses_an_incomplete_run(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000)
+    lines = (run / "results.jsonl").read_text().splitlines()
+    (run / "results.jsonl").write_text("\n".join(lines[:-1]) + "\n")
+    out = tmp_path / "public.json"
+    assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out), "--no-cost-rows"]) == 2
+    assert "fewer than k=3" in capsys.readouterr().err and not out.exists()
+
+
+def test_publish_refuses_samples_without_a_metered_cost(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000)  # calls.json has no costUsd
+    out = tmp_path / "public.json"
+    assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out), "--no-cost-rows"]) == 2
+    assert "no metered cost" in capsys.readouterr().err and not out.exists()
+
+
+def test_publish_writes_the_document_and_the_headline(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000, failing="a")
+    calls = json.loads((run / "calls.json").read_text())
+    (run / "calls.json").write_text(json.dumps({s: {**c, "costUsd": 0.002} for s, c in calls.items()}))
+    out, headline = tmp_path / "public.json", tmp_path / "headline.md"
+    assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out),
+                                      "--markdown", str(headline), "--no-cost-rows"]) == 0
+    document = json.loads(out.read_text())
+    (family,) = document["runs"][0]["families"]
+    assert family["failing"] == ["tool_selection.a"] and family["passing"] == 7
+    assert "7 of 8 (k=3)" in headline.read_text()
+    assert "eval-" not in out.read_text()

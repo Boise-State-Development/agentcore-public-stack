@@ -164,6 +164,8 @@ RATES: Dict[str, Tuple[float, float]] = {
     "us.anthropic.claude-haiku-5-5": (0.11, 0.55),
     "us.anthropic.claude-sonnet-4-6": (3.30, 16.50),
     "us.anthropic.claude-sonnet-5": (2.20, 11.00),
+    # Regional (CRIS) list price, from curated-models.ts.
+    "us.anthropic.claude-opus-5-5": (4.40, 22.00),
 }
 FALLBACK_RATE_MODEL = "us.anthropic.claude-sonnet-4-6"
 #: Base-rate-equivalent tokens per turn, measured: the first full k=3 run on dev
@@ -1053,7 +1055,8 @@ async def _record_calls(
     as it was and the token measures read as absent.
     """
     recorded = _read_calls(out)
-    wanted = [s for row in rows for s in sample_sessions(row) if s not in recorded]
+    # An entry written before ``costUsd`` existed is read again rather than left incomplete.
+    wanted = [s for row in rows for s in sample_sessions(row) if "costUsd" not in recorded.get(s, {})]
     if not wanted:
         return recorded
     found = await _session_calls(meta, wanted)
@@ -1226,6 +1229,64 @@ def cmd_score(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_publish(args: argparse.Namespace) -> int:
+    """Write complete runs as the public benchmark document (eval-harness spec §19).
+
+    Refuses a run that does not cover every case of the default families at
+    its full k, a run with a sample whose costs could not be read, and any
+    document that fails :func:`public_report.assert_publishable`.
+    """
+    from apis.shared.evals import public_report
+
+    try:
+        golden = load_cases(Path(args.cases_dir), families=list(DEFAULT_FAMILIES),
+                            fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)
+    except CaseError as exc:
+        print(f"invalid case set: {exc}", file=sys.stderr)
+        return 2
+    golden_ids = {c.id for c in golden}
+    runs, forbidden = [], []
+    for out in map(Path, args.out):
+        try:
+            meta = _read_meta(out)
+        except ReportError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        rows = read_rows(out / RESULTS_FILE)
+        k = int(meta.get("k") or 0)
+        outcomes = case_outcomes(rows)
+        short = sorted(cid for cid in golden_ids if cid not in outcomes or outcomes[cid].samples < k)
+        if short:
+            print(f"{out}: {len(short)} golden-set case(s) have fewer than k={k} samples, e.g. {short[0]}; "
+                  "publish only complete runs", file=sys.stderr)
+            return 2
+        rows = [r for r in rows if str(r.get("case_id")) in golden_ids]
+        calls = _read_calls(out) if args.no_cost_rows else asyncio.run(_record_calls(out, meta, rows))
+        missing = [r["case_id"] for r in rows
+                   if not all("costUsd" in calls.get(s, {}) for s in sample_sessions(r))]
+        if missing:
+            print(f"{out}: {len(missing)} sample(s) have no metered cost, e.g. {missing[0]}; "
+                  "run without --no-cost-rows with access to the run's account", file=sys.stderr)
+            return 2
+        runs.append(public_report.run_document(meta, rows, calls))
+        forbidden += [meta.get("user_id"), meta.get("member2_user_id"), meta.get("prefix"), meta.get("target")]
+        forbidden += [s for r in rows for s in sample_sessions(r)]
+    document = public_report.build_document(runs, generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    try:
+        public_report.assert_publishable(document, known_case_ids=golden_ids, forbidden=forbidden)
+    except public_report.PublishError as exc:
+        print(f"not published: {exc}", file=sys.stderr)
+        return 2
+    Path(args.json).write_text(public_report.dumps(document), encoding="utf-8")
+    print(f"wrote {args.json}: {len(runs)} run(s)")
+    headline = public_report.headline_markdown(document)
+    if args.markdown:
+        Path(args.markdown).write_text(headline + "\n", encoding="utf-8")
+        print(f"wrote {args.markdown}")
+    print("\n" + headline)
+    return 0
+
+
 def cmd_baseline(args: argparse.Namespace) -> int:
     out = Path(args.out)
     try:
@@ -1376,6 +1437,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--json", help="also write the readout as JSON to this path")
     s.add_argument("--no-cost-rows", action="store_true", help="skip reading the samples' C# rows (no AWS)")
 
+    s = sub.add_parser("publish", help="write complete runs as the public benchmark document (spec §19)")
+    s.add_argument("--out", required=True, action="append",
+                   help="a complete run directory; repeat for each model to publish")
+    s.add_argument("--json", required=True, help="write the published document here")
+    s.add_argument("--markdown", help="also write the README's headline table here")
+    s.add_argument("--no-cost-rows", action="store_true",
+                   help="use each run's calls.json as it is (no AWS); refused if any sample's costs are missing")
+
     s = sub.add_parser("cleanup", help="delete the sessions and fixture uploads a run recorded")
     s.add_argument("--out", help="the run directory whose sessions and uploads to delete")
     s.add_argument("--region", default=os.environ.get("AWS_REGION", "us-west-2"))
@@ -1416,6 +1485,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return cmd_baseline(args)
     if args.command == "readout":
         return cmd_readout(args)
+    if args.command == "publish":
+        return cmd_publish(args)
     return asyncio.run(cmd_cleanup(args))
 
 

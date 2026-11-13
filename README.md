@@ -151,6 +151,18 @@ Every model call is metered to the token and attributed to a user, a session, an
 
 **Coming next: quota requests and chargeback.** A user who hits a limit will request more from inside the conversation. An administrator grants a timed extension, funded centrally or charged back to a funding source your deployment defines (a cost center, a grant, a department code), and closed months roll up into a chargeback report by fund, organization, user and approver. Power users who should never have to ask get a standing allocation against their fund. The backend and user-facing half have landed on the development branch; the admin surface and the report are in progress.
 
+### 📊 Measured in the open
+
+Every release runs the platform's whole evaluation golden set, three samples per case, on each model below, and publishes the results: quality, speed and cost, failing cases included. The cases are synthetic, so nothing is withheld, and on the Benchmarks page every number links back to the case and commit that produced it.
+
+| Model | Cases passing | Cost per task | Median task time | Median first token | Measured |
+|---|---:|---:|---:|---:|---|
+| `us.anthropic.claude-haiku-5-5` | 142 of 143 (k=3) | $0.0006 | 6.8 s | 2.7 s | 2026-11-13, v1.35.0 |
+| `us.anthropic.claude-sonnet-5` | 139 of 143 (k=3) | $0.0101 | 6.3 s | 1.5 s | 2026-11-13, v1.35.0 |
+| `us.anthropic.claude-opus-5-5` | 138 of 143 (k=3) | $0.0219 | 7.4 s | 2.2 s | 2026-11-13, v1.35.0 |
+
+Cost per task is what the platform metered for every model call of a task, at Regional rates on the development deployment. Full tables by workflow, the methodology and the command that reruns the benchmark on your own deployment are on the [Benchmarks](https://boise-state-development.github.io/agentcore-public-stack/benchmarks/) page.
+
 ### 🧪 Fine-tuning
 
 Users with admin-granted access upload datasets, launch **SageMaker training jobs** on open models, and run batch inference on the result, with progress tracking, compute-hour quotas and automatic artifact retention. No ML infrastructure to set up.

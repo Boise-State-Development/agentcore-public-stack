@@ -394,6 +394,28 @@ best-effort and never changes the exit code.
 Re-promote the baseline (`eval_harness.py baseline`) only on purpose — after a
 deliberate model or prompt change — in its own PR with the score output.
 
+**Publish the benchmark.** The docs site's Benchmarks page and the README's
+headline table are cut from the release run, so publishing them is part of the
+release, not a marketing chore. Run the full set at `--k 3` (the default) for
+each model the page lists, today Haiku 5.5, Sonnet 5 and Opus 5.5, one after
+another so no run's timings carry another's load (about $14 and 70 minutes in
+all on 2026-11-13: Haiku 5.5 $0.27, Sonnet 5 $4.34, Opus 5.5 $9.39). Then:
+
+```bash
+cd backend
+AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py publish \
+    --out /tmp/eval-release-x.y.z-us.anthropic.claude-haiku-5-5 \
+    --out /tmp/eval-release-x.y.z-us.anthropic.claude-sonnet-5 \
+    --out /tmp/eval-release-x.y.z-us.anthropic.claude-opus-5-5 \
+    --json ../docs-site/src/data/benchmarks.json --markdown /tmp/headline.md
+```
+
+Commit `benchmarks.json` on the release branch and replace the README's
+**Measured in the open** table with `headline.md`. `publish` refuses an
+incomplete run and anything that would carry a session id, user id or the
+deployment prefix; never hand-edit the JSON. A failing case stays in the table
+with its id: hiding one is the thing the page exists not to do.
+
 **Ledger readout of the outgoing release.** The smoke pass and the eval say
 whether this branch works; the release ledger says whether the release *now
 being replaced* quietly cost more or answered worse than the one before it,
