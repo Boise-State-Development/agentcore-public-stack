@@ -159,7 +159,11 @@ def load_session_documents(
         rows = repo.list_session_files_sync(sid, status=FileStatus.READY)
         out.extend(
             meta for meta in rows
-            if (not user_id or meta.user_id == user_id) and is_document_class(meta.mime_type, meta.filename)
+            if (not user_id or meta.user_id == user_id)
+            and is_document_class(meta.mime_type, meta.filename)
+            # A file shared from a linked conversation is never inlined (handoffs spec §4.9 rule
+            # 6), so no history block is its, and its derived state is its original's.
+            and getattr(meta, "linked_from", None) is None
         )
     return out
 
@@ -193,6 +197,9 @@ def digest_for(meta: Any, raw: Optional[bytes]) -> Optional[Any]:
         raw = stored_bytes(meta)
     digest = extract_outline(fmt, raw)
     digest.tokens = estimate_tokens(render_digest(digest, filename=meta.filename, upload_id=meta.upload_id))
+    if getattr(meta, "linked_from", None) is not None:
+        # Derived state lives on the original only (handoffs spec §4.9 rule 4).
+        return digest
     try:
         get_file_upload_repository().update_file_digest_sync(meta.user_id, meta.upload_id, digest.to_item())
     except Exception:  # noqa: BLE001 - the digest still serves this restore

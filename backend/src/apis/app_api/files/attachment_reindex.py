@@ -26,6 +26,7 @@ import logging
 import os
 
 from apis.shared.feature_flags import attachment_kb_enabled
+from apis.shared.files.models import is_linked_reference
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +80,11 @@ async def requeue_evicted_attachments(
             ancestor_session_ids = await _ancestor_session_ids(session_id, user_id)
         session_ids = list(dict.fromkeys(s for s in (session_id, *ancestor_session_ids) if s))
         per_session = await asyncio.gather(*(repository.list_session_files(s) for s in session_ids))
-        upload_ids = list(dict.fromkeys(
-            evicted_upload_ids(f for rows in per_session for f in rows if f.user_id == user_id)
-        ))
+        rows = [f for group in per_session for f in group if f.user_id == user_id]
+        rows = [f for f in rows if not is_linked_reference(f)] + await _originals_of_references(
+            repository, user_id, [f for f in rows if is_linked_reference(f)]
+        )
+        upload_ids = list(dict.fromkeys(evicted_upload_ids(rows)))
         if not upload_ids:
             return 0
         await asyncio.to_thread(_send_all, queue_url, user_id, upload_ids)
@@ -90,3 +93,16 @@ async def requeue_evicted_attachments(
     except Exception:  # noqa: BLE001 - a re-index is never worth a failed page load
         logger.warning("Evicted attachments not re-queued", exc_info=True)
         return 0
+
+
+async def _originals_of_references(repository, user_id: str, references: list) -> list:
+    """The originals of a conversation's reference rows (handoffs spec §4.9 rule 4): a shared
+    file's index state is its original's, so opening the receiving conversation re-queues an
+    evicted original as opening its own would. One batched read, only when there are references."""
+    if not references:
+        return []
+    found = await asyncio.to_thread(
+        repository.batch_get_files_sync, user_id, [r.linked_from.upload_id for r in references]
+    )
+    keys = {r.s3_key for r in references}
+    return [m for m in found.values() if m.s3_key in keys]

@@ -43,9 +43,11 @@ from apis.shared.handoff import (
     render_excerpt,
     wrap_handoff_context,
 )
+from apis.shared.files.linked_files import DELIVERY_MAX_FILES
 from apis.shared.handoff.delivery import (
     DELIVERY_MAX_ARTIFACTS,
     DeliveryArtifact,
+    DeliveryFileView,
     DeliveryStore,
     get_delivery_store,
 )
@@ -57,6 +59,7 @@ from apis.shared.handoff.send_back import (
     LinkedPair,
     load_linked_pair,
     offered_artifacts,
+    offered_files,
     prepare_delivery,
     render_return_excerpt,
     write_delivery,
@@ -182,6 +185,7 @@ async def create_handoff(
         excerpt_hash=context_hash(excerpt.text),
         excerpt_tokens=excerpt.estimated_tokens,
         turns_covered=turns,
+        source_project_id=_source_project_id(source),
         created_at=now,
         updated_at=now,
     )
@@ -204,6 +208,12 @@ async def create_handoff(
         source_message_index=row.source_message_index,
         source_title=source_title,
     )
+
+
+def _source_project_id(source: Any) -> Optional[str]:
+    """The Shared Project the source conversation is a task of, if any (§4.9: no file leaves one)."""
+    prefs = getattr(source, "preferences", None)
+    return getattr(prefs, "project_id", None) or None
 
 
 @router.get(
@@ -375,6 +385,17 @@ class CreateSendBackRequest(BaseModel):
         None, alias="messageIndex", ge=0, description="The assistant message to send back; the last one when absent"
     )
     deliver: bool = Field(False, description="Make the delivery now (Bring back result) instead of opening a review")
+    file_ids: Optional[List[str]] = Field(
+        None,
+        alias="fileIds",
+        max_length=DELIVERY_MAX_FILES,
+        description="With deliver, the files to bring back instead of the ones offered (§4.9)",
+    )
+    files_only: bool = Field(
+        False,
+        alias="filesOnly",
+        description="With deliver and fileIds: bring back just these files, without the answer (the row's per-file Bring back)",
+    )
 
 
 class CreateSendBackResponse(BaseModel):
@@ -390,6 +411,9 @@ class CreateSendBackResponse(BaseModel):
     artifacts: List[DeliveryArtifact] = Field(
         default_factory=list, description="Artifacts the message produced, offered with it"
     )
+    files: List[DeliveryFileView] = Field(
+        default_factory=list, description="This conversation's own files, newest first, offered with it (§4.9)"
+    )
     delivery_id: Optional[str] = Field(None, alias="deliveryId", description="Set when the delivery was made")
 
 
@@ -400,6 +424,7 @@ class DeliverSendBackRequest(BaseModel):
 
     text: str = Field("", max_length=200_000)
     artifact_ids: List[str] = Field(default_factory=list, alias="artifactIds", max_length=DELIVERY_MAX_ARTIFACTS)
+    file_ids: List[str] = Field(default_factory=list, alias="fileIds", max_length=DELIVERY_MAX_FILES)
 
 
 class DeliverSendBackResponse(BaseModel):
@@ -417,6 +442,8 @@ _REFUSAL_STATUS = {
     "not_linked": status.HTTP_404_NOT_FOUND,
     "same_conversation": status.HTTP_404_NOT_FOUND,
     "artifact_not_in_sender": status.HTTP_404_NOT_FOUND,
+    "file_not_in_sender": status.HTTP_404_NOT_FOUND,
+    "too_many_files": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "project_task": status.HTTP_409_CONFLICT,
     "empty": status.HTTP_422_UNPROCESSABLE_ENTITY,
     "too_many_artifacts": status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -428,6 +455,7 @@ def _refused(exc: DeliveryRefused) -> HTTPException:
         "project_task": "Results can't be sent into or out of a shared project",
         "empty": "There is nothing to send",
         "too_many_artifacts": f"A result carries at most {DELIVERY_MAX_ARTIFACTS} artifacts",
+        "too_many_files": f"A result carries at most {DELIVERY_MAX_FILES} files",
     }.get(exc.reason, "Conversation not found")
     return HTTPException(status_code=_REFUSAL_STATUS.get(exc.reason, status.HTTP_404_NOT_FOUND), detail=detail)
 
@@ -465,10 +493,18 @@ async def create_send_back(
     except DeliveryRefused as exc:
         raise _refused(exc)
 
-    message, index = await _send_back_message(session_id, user.user_id, body.message_index)
-    excerpt = render_return_excerpt(message)
-    artifacts = await asyncio.to_thread(offered_artifacts, user.user_id, session_id, index)
-    if not excerpt and not artifacts:
+    files = await asyncio.to_thread(offered_files, user.user_id, session_id)
+    if body.files_only:
+        if not body.deliver or not body.file_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="filesOnly needs deliver and fileIds"
+            )
+        message, index, excerpt, artifacts = {}, -1, "", []
+    else:
+        message, index = await _send_back_message(session_id, user.user_id, body.message_index)
+        excerpt = render_return_excerpt(message)
+        artifacts = await asyncio.to_thread(offered_artifacts, user.user_id, session_id, index)
+    if not excerpt and not artifacts and not files:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="That answer has nothing to send")
 
     now = utc_now_iso()
@@ -496,8 +532,16 @@ async def create_send_back(
 
     delivery_id: Optional[str] = None
     if body.deliver:
+        file_ids = body.file_ids if body.file_ids is not None else [f.upload_id for f in files]
         delivery_id = await _deliver(
-            store, user, row, pair, excerpt, [a.artifact_id for a in artifacts], origin_surface="row"
+            store,
+            user,
+            row,
+            pair,
+            excerpt,
+            [a.artifact_id for a in artifacts],
+            file_ids,
+            origin_surface="row",
         )
     return CreateSendBackResponse(
         handoff_id=row.handoff_id,
@@ -508,6 +552,7 @@ async def create_send_back(
         excerpt=excerpt,
         excerpt_hash=row.excerpt_hash or "",
         artifacts=artifacts,
+        files=[DeliveryFileView.from_file(f) for f in files],
         delivery_id=delivery_id,
     )
 
@@ -537,7 +582,9 @@ async def deliver_send_back(
         pair = await load_linked_pair(user.user_id, session_id, row.target_session_id)
     except DeliveryRefused as exc:
         raise _refused(exc)
-    delivery_id = await _deliver(store, user, row, pair, body.text, body.artifact_ids, origin_surface="target")
+    delivery_id = await _deliver(
+        store, user, row, pair, body.text, body.artifact_ids, body.file_ids, origin_surface="target"
+    )
     return DeliverSendBackResponse(
         delivery_id=delivery_id,
         source_session_id=row.target_session_id,
@@ -579,6 +626,7 @@ async def _deliver(
     pair: LinkedPair,
     text: str,
     artifact_ids: List[str],
+    file_ids: List[str],
     *,
     origin_surface: str,
 ) -> str:
@@ -595,6 +643,7 @@ async def _deliver(
             text=text,
             handoff_id=row.handoff_id,
             artifact_ids=artifact_ids,
+            file_ids=file_ids,
             pair=pair,
         )
     except DeliveryRefused as exc:

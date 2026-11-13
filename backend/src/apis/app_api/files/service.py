@@ -25,6 +25,7 @@ from apis.shared.files.models import (
     Delivery,
     FileMetadata,
     FileStatus,
+    is_linked_reference,
     PresignRequest,
     PresignResponse,
     CompleteUploadResponse,
@@ -589,6 +590,10 @@ class FileUploadService:
             FileNotFoundError: the row is gone or no longer READY
             FileUploadError: the object could not be stored
         """
+        if is_linked_reference(file_meta):
+            # Read-only (handoffs spec §4.9 rule 3): new bytes at a reference's key would
+            # overwrite another conversation's file.
+            raise FileNotFoundError("A file shared from another conversation can't be replaced")
         size_bytes = len(content)
         size_limit = self.max_size_for(file_meta.filename, file_meta.mime_type)
         if size_bytes > size_limit:
@@ -844,7 +849,7 @@ class FileUploadService:
         Raises:
             FileNotFoundError: If file not found, not owned by user, or not ready
         """
-        file_meta = await self.repository.get_file(user_id, upload_id)
+        file_meta = await self._readable_file(user_id, upload_id)
         if not file_meta:
             raise FileNotFoundError(f"File {upload_id} not found")
 
@@ -902,7 +907,7 @@ class FileUploadService:
         Raises:
             FileNotFoundError: If file not found, not owned by user, or not ready
         """
-        file_meta = await self.repository.get_file(user_id, upload_id)
+        file_meta = await self._readable_file(user_id, upload_id)
         if not file_meta:
             raise FileNotFoundError(f"File {upload_id} not found")
 
@@ -948,7 +953,7 @@ class FileUploadService:
         Raises:
             FileNotFoundError: If file not found, not owned, or not ready
         """
-        file_meta = await self.repository.get_file(user_id, upload_id)
+        file_meta = await self._readable_file(user_id, upload_id)
         if not file_meta:
             raise FileNotFoundError(f"File {upload_id} not found")
 
@@ -1025,7 +1030,7 @@ class FileUploadService:
             WorkbookTooLargeError: past the reader's byte cap
             WorkbookUnreadableError: corrupt, encrypted, or not OOXML
         """
-        file_meta = await self.repository.get_file(user_id, upload_id)
+        file_meta = await self._readable_file(user_id, upload_id)
         if not file_meta:
             raise FileNotFoundError(f"File {upload_id} not found")
 
@@ -1108,7 +1113,7 @@ class FileUploadService:
             ThumbnailPending: Not rendered yet; the prepare Lambda has been asked.
             ThumbnailRenderError: The file was unreadable / corrupt / encrypted.
         """
-        file_meta = await self.repository.get_file(user_id, upload_id)
+        file_meta = await self._readable_file(user_id, upload_id)
         if not file_meta:
             raise FileNotFoundError(f"File {upload_id} not found")
 
@@ -1512,6 +1517,24 @@ class FileUploadService:
     # File Management
     # =========================================================================
 
+    async def _readable_file(self, user_id: str, upload_id: str) -> Optional[FileMetadata]:
+        """The row whose bytes a preview, download, snippet or thumbnail of ``upload_id`` reads.
+
+        The row itself, or for a reference (handoffs spec §4.9) its original, so a thumbnail is
+        queued and rendered under the original's ids and derived state is read from there. A
+        reference whose original is gone raises ``FileNotFoundError`` saying so (rule 5), never a
+        presigned URL that 404s at S3.
+        """
+        file_meta = await self.repository.get_file(user_id, upload_id)
+        if file_meta is None or not is_linked_reference(file_meta):
+            return file_meta
+        from apis.shared.files.linked_files import linked_file_gone_message, resolve_linked_file
+
+        original = await resolve_linked_file(file_meta, self.repository)
+        if original is None:
+            raise FileNotFoundError(linked_file_gone_message(file_meta))
+        return original
+
     async def get_file(self, user_id: str, upload_id: str) -> Optional[FileMetadata]:
         """
         Get a file's metadata.
@@ -1546,6 +1569,13 @@ class FileUploadService:
         file_meta = await self.repository.get_file(user_id, upload_id)
         if not file_meta:
             return False
+
+        if is_linked_reference(file_meta):
+            # A reference shares its original's bytes, thumbnail and sidecars, and was never
+            # counted against quota (handoffs spec §4.9 rules 1–2): remove the row and nothing else.
+            await self.repository.delete_file(user_id, upload_id)
+            logger.info("Deleted file reference")
+            return True
 
         # Delete S3 object
         try:
@@ -1647,18 +1677,37 @@ class FileUploadService:
         files = self._sort_files(files, sort_by, sort_order)
 
         # Apply pagination for session-based queries (already paginated for user queries)
+        page = files[:limit] if session_id else files
+        responses = await self._file_responses(page)
         if session_id:
             return FileListResponse(
-                files=[FileResponse.from_metadata(f) for f in files[:limit]],
+                files=responses,
                 next_cursor=None if len(files) <= limit else "more",
                 total_count=len(files),
             )
         else:
             return FileListResponse(
-                files=[FileResponse.from_metadata(f) for f in files],
+                files=responses,
                 next_cursor=next_cursor,
                 total_count=None,  # Not available with pagination
             )
+
+    async def _file_responses(self, files: List[FileMetadata]) -> List[FileResponse]:
+        """The listing's rows, each reference marked with whether its original still exists.
+
+        One batched read, and only when the page holds a reference (handoffs spec §4.9 rule 5),
+        so the Files panel can say "No longer available (deleted from {title})".
+        """
+        responses = [FileResponse.from_metadata(f) for f in files]
+        if not any(is_linked_reference(f) for f in files):
+            return responses
+        from apis.shared.files.linked_files import originals_available
+
+        available = await asyncio.to_thread(originals_available, files, self.repository)
+        for response in responses:
+            if response.upload_id in available:
+                response.original_available = available[response.upload_id]
+        return responses
 
     def _sort_files(
         self,
@@ -1740,6 +1789,13 @@ class FileUploadService:
 
         for file_meta in files:
             try:
+                if is_linked_reference(file_meta):
+                    # Row only: the bytes, thumbnail and sidecars are the original's, and a
+                    # reference never counted against quota (handoffs spec §4.9 rules 1–2).
+                    if await self.repository.delete_file(file_meta.user_id, file_meta.upload_id):
+                        deleted_count += 1
+                    continue
+
                 # Delete S3 object
                 try:
                     self._s3_client.delete_object(

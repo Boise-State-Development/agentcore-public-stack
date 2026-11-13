@@ -11,6 +11,9 @@ why, unless:
 - every artifact was made by the caller **in the sending conversation**. Artifacts are keyed by
   user, not by conversation, so without the second half a delivery could carry any artifact the user
   owns from an unrelated conversation (§4.8, "Only the sender's own artifacts")
+- every file is the caller's, ``READY``, and a row of the sending conversation (§4.9). A reference
+  the sender holds is carried as its original, so the receiver's row is one hop from the bytes and
+  a file handed back to where it came from needs no row at all
 
 **The return excerpt** is one assistant message's text, bounded at ``SEND_BACK_MAX_TOKENS`` and cut
 at a paragraph break (``cap_delivery_text``). Tool calls and reasoning are left out: what comes back
@@ -26,10 +29,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from apis.shared.handoff.context import context_hash
+from apis.shared.files.linked_files import DELIVERY_MAX_FILES, linkable_refusal, original_of
 from apis.shared.handoff.delivery import (
     DELIVERY_MAX_ARTIFACTS,
     Delivery,
     DeliveryArtifact,
+    DeliveryFile,
     DeliveryOrigin,
     DeliveryStore,
     cap_delivery_text,
@@ -84,11 +89,34 @@ async def load_linked_pair(user_id: str, sender_id: str, receiver_id: str) -> Li
     )
     if sender.row is None or receiver.row is None:
         raise DeliveryRefused("not_found")
-    if sender.row.get("projectId") or receiver.row.get("projectId"):
+    if project_of(sender.row) or project_of(receiver.row):
         raise DeliveryRefused("project_task")
     if not (_spawned_from(sender.row) == receiver_id or _spawned_from(receiver.row) == sender_id):
         raise DeliveryRefused("not_linked")
     return LinkedPair(sender=sender.row, receiver=receiver.row)
+
+
+def offered_files(user_id: str, session_id: str) -> List[DeliveryFile]:
+    """The files a send-back from ``session_id`` offers: its own ``READY`` files, newest first.
+
+    A handoff's target is a brand-new conversation, so every file of its own was made after the
+    handoff was accepted, which is the boundary §4.9 draws. Reference rows are left out: they came
+    from elsewhere, and a file handed back is offered where it was made.
+    """
+    from apis.shared.files.models import FileStatus, is_linked_reference
+    from apis.shared.files.repository import get_file_upload_repository
+
+    try:
+        rows = get_file_upload_repository().list_session_files_sync(session_id, FileStatus.READY)
+    except Exception:  # noqa: BLE001 - an offer, never a failed send-back
+        logger.warning("send-back: listing the conversation's files failed; none offered", exc_info=True)
+        return []
+    own = sorted(
+        (m for m in rows if m.user_id == user_id and not is_linked_reference(m)),
+        key=lambda m: m.created_at,
+        reverse=True,
+    )
+    return [_delivery_file(m, holder_title="") for m in own[:DELIVERY_MAX_FILES]]
 
 
 def offered_artifacts(user_id: str, session_id: str, message_index: int) -> List[DeliveryArtifact]:
@@ -108,6 +136,7 @@ async def create_delivery(
     origin: DeliveryOrigin = "user",
     handoff_id: Optional[str] = None,
     artifact_ids: Sequence[str] = (),
+    file_ids: Sequence[str] = (),
     pair: Optional[LinkedPair] = None,
     store: Optional[DeliveryStore] = None,
 ) -> Delivery:
@@ -123,6 +152,7 @@ async def create_delivery(
         origin=origin,
         handoff_id=handoff_id,
         artifact_ids=artifact_ids,
+        file_ids=file_ids,
         pair=pair,
     )
     return await write_delivery(row, store=store)
@@ -137,6 +167,8 @@ async def write_delivery(row: Delivery, *, store: Optional[DeliveryStore] = None
         emit_handoff_metric(
             "DeliveryArtifacts", "send_back", session_id=row.to_session_id, detail=str(len(row.artifacts))
         )
+    if row.files:
+        emit_handoff_metric("DeliveryFiles", "send_back", session_id=row.to_session_id, count=len(row.files))
     return row
 
 
@@ -149,6 +181,7 @@ async def prepare_delivery(
     origin: DeliveryOrigin = "user",
     handoff_id: Optional[str] = None,
     artifact_ids: Sequence[str] = (),
+    file_ids: Sequence[str] = (),
     pair: Optional[LinkedPair] = None,
 ) -> Delivery:
     """Every check ``create_delivery`` makes, and the row it would write, without writing it.
@@ -170,8 +203,10 @@ async def prepare_delivery(
             raise DeliveryRefused("artifact_not_in_sender")
         artifacts = [_artifact(heads[a]) for a in wanted]
 
+    files = await _sender_files(user_id, from_session_id, file_ids, sender_title=str(pair.sender.get("title") or ""))
+
     body = cap_delivery_text(text)
-    if not body and not artifacts:
+    if not body and not artifacts and not files:
         raise DeliveryRefused("empty")
 
     now = utc_now_iso()
@@ -186,10 +221,69 @@ async def prepare_delivery(
         text=body,
         text_hash=context_hash(body) if body else "",
         artifacts=artifacts,
+        files=files,
         status="pending",
         created_at=now,
         updated_at=now,
     )
+
+
+async def _sender_files(
+    user_id: str, sender_session_id: str, file_ids: Sequence[str], *, sender_title: str
+) -> List[DeliveryFile]:
+    """The files a delivery carries, each checked against the sender and resolved to its original.
+
+    One ``BatchGetItem``. Any file that fails §4.8's sender rule refuses the whole delivery, as an
+    artifact does: the user picked it, so dropping it silently would send less than they chose.
+    """
+    wanted = list(dict.fromkeys(f for f in file_ids if f))
+    if not wanted:
+        return []
+    if len(wanted) > DELIVERY_MAX_FILES:
+        raise DeliveryRefused("too_many_files")
+    from apis.shared.files.repository import get_file_upload_repository
+
+    rows = await asyncio.to_thread(get_file_upload_repository().batch_get_files_sync, user_id, wanted)
+    files: List[DeliveryFile] = []
+    for upload_id in wanted:
+        meta = rows.get(upload_id)
+        reason = linkable_refusal(meta, user_id=user_id, sender_session_id=sender_session_id)
+        if reason is not None:
+            raise DeliveryRefused("file_not_in_sender")
+        assert meta is not None
+        files.append(_delivery_file(meta, holder_title=sender_title))
+    return files
+
+
+def _delivery_file(meta: Any, *, holder_title: str) -> DeliveryFile:
+    original = original_of(meta, holder_title=holder_title)
+    return DeliveryFile(
+        upload_id=original.upload_id,
+        session_id=original.session_id,
+        from_title=original.from_title,
+        filename=original.filename,
+        mime_type=original.mime_type,
+        size_bytes=original.size_bytes,
+        s3_key=original.s3_key,
+        s3_bucket=original.s3_bucket,
+        ttl=original.ttl,
+    )
+
+
+def project_of(row: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """The Shared Project a ``META`` row's conversation is a task of, or ``None``.
+
+    The session row keeps it under ``preferences.projectId``; a top-level ``projectId`` is read
+    too, so a row written either way is refused.
+    """
+    if not row:
+        return None
+    top = row.get("projectId")
+    if isinstance(top, str) and top:
+        return top
+    prefs = row.get("preferences")
+    nested = prefs.get("projectId") if isinstance(prefs, Mapping) else None
+    return nested if isinstance(nested, str) and nested else None
 
 
 def _spawned_from(row: Mapping[str, Any]) -> Optional[str]:
@@ -224,7 +318,9 @@ __all__ = [
     "create_delivery",
     "load_linked_pair",
     "offered_artifacts",
+    "offered_files",
     "prepare_delivery",
+    "project_of",
     "render_return_excerpt",
     "write_delivery",
 ]

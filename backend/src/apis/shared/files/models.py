@@ -281,6 +281,47 @@ MAX_FILES_PER_MESSAGE = int(
 )
 
 
+# A file shared into a linked conversation by reference (handoffs spec §4.9).
+# The reference row is an ordinary file row in the receiving conversation with
+# ``source = "linked"`` and ``linkedFrom`` naming the original; it shares the
+# original's ``s3Key`` and never owns bytes, quota or derived state.
+SOURCE_LINKED = "linked"
+
+
+class LinkedFrom(BaseModel):
+    """The original a reference row points at (``linkedFrom`` on the row)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId", description="The conversation the original lives in")
+    upload_id: str = Field(..., alias="uploadId", description="The original's upload id")
+    from_title: str = Field("", alias="fromTitle", description="That conversation's title when the reference was made")
+
+    def to_item(self) -> dict:
+        return {"sessionId": self.session_id, "uploadId": self.upload_id, "fromTitle": self.from_title}
+
+    @classmethod
+    def from_item(cls, value: Any) -> Optional["LinkedFrom"]:
+        if not isinstance(value, dict):
+            return None
+        session_id, upload_id = value.get("sessionId"), value.get("uploadId")
+        if not (isinstance(session_id, str) and session_id and isinstance(upload_id, str) and upload_id):
+            return None
+        title = value.get("fromTitle")
+        return cls(session_id=session_id, upload_id=upload_id, from_title=title if isinstance(title, str) else "")
+
+
+def is_linked_reference(meta: "FileMetadata") -> bool:
+    """Whether ``meta`` is a reference to a file in another conversation (handoffs spec §4.9).
+
+    The one predicate the reference rules key on: deleting such a row removes the row only (never
+    the shared S3 object, thumbnail or ``_derived/`` sidecars) and touches no quota; a tool that
+    would change a file in place writes a new file instead; and a reader that needs derived state
+    first resolves it to the original with ``resolve_linked_file``.
+    """
+    return getattr(meta, "linked_from", None) is not None
+
+
 # =============================================================================
 # Database Models (stored in DynamoDB)
 # =============================================================================
@@ -383,6 +424,11 @@ class FileMetadata(BaseModel):
     # under the ``legacy`` profile, and when the count could not be read.
     page_count: Optional[int] = Field(None, description="PDF page count read at admission")
 
+    # A reference to a file in another of the user's conversations (handoffs
+    # spec §4.9), set only on a ``source = "linked"`` row. ``None`` on every
+    # file that owns its bytes. See ``is_linked_reference``.
+    linked_from: Optional[LinkedFrom] = Field(None, description="The original this row references, when it is a reference")
+
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -439,6 +485,8 @@ class FileMetadata(BaseModel):
             item["modelImage"] = self.model_image
         if self.page_count is not None:
             item["pageCount"] = int(self.page_count)
+        if self.linked_from is not None:
+            item["linkedFrom"] = self.linked_from.to_item()
         return item
 
     @classmethod
@@ -477,6 +525,7 @@ class FileMetadata(BaseModel):
             facts=item.get("facts") if isinstance(item.get("facts"), dict) else None,
             model_image=item.get("modelImage") if isinstance(item.get("modelImage"), dict) else None,
             page_count=_optional_int(item.get("pageCount")),
+            linked_from=LinkedFrom.from_item(item.get("linkedFrom")),
         )
 
 
@@ -708,6 +757,11 @@ class FileResponse(BaseModel):
     session_id: str = Field(..., alias="sessionId")
     status: str
     created_at: str = Field(..., alias="createdAt")
+    # A reference to a file in another of the user's conversations (handoffs
+    # spec §4.9): the Files panel marks it "From {fromTitle}". Absent otherwise.
+    linked_from: Optional[LinkedFrom] = Field(None, alias="linkedFrom")
+    # For a reference: whether its original still exists. ``None`` for every other file.
+    original_available: Optional[bool] = Field(None, alias="originalAvailable")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -722,6 +776,7 @@ class FileResponse(BaseModel):
             session_id=meta.session_id,
             status=meta.status if isinstance(meta.status, str) else meta.status.value,
             created_at=to_iso(meta.created_at),
+            linked_from=meta.linked_from,
         )
 
 

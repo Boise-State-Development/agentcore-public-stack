@@ -49,6 +49,7 @@ from agents.builtin_tools.office._storage import (
     _ci_write_bytes,
     _download_card,
     _download_s3_bytes,
+    note_linked_read,
     _error,
     _get_code_interpreter_id,
     _NO_CI_MESSAGE,
@@ -234,6 +235,7 @@ async def _find_excel_spreadsheet(
             and meta.mime_type == _XLSX_MIME
             and meta.filename.lower() == target.lower()
         ):
+            note_linked_read(meta, "spreadsheet")
             return meta
     return None
 

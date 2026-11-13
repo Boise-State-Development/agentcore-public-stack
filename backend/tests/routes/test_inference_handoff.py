@@ -45,6 +45,12 @@ class _FakeHandoffTurn:
         self.observed: List[str] = []
         self.status_calls: List[bool] = []
 
+    def prefetch(self) -> None:
+        self.log.append("handoff.prefetch")
+
+    def document_hint(self):
+        return None
+
     def start(self) -> None:
         self.log.append("handoff.start")
 
@@ -100,7 +106,9 @@ def test_acceptance_starts_before_the_build_and_is_awaited_after_it(client):
     resp = turn.post(client, {"handoff_context": {"handoffId": "h1", "text": "ctx"}})
 
     assert resp.status_code == 200
-    assert turn.log == ["handoff.start", "agent.build", "handoff.context_block"]
+    # The read-only prefetch (§4.9) comes first, before the lease; acceptance still starts beside
+    # the build and is awaited after it.
+    assert turn.log == ["handoff.prefetch", "handoff.start", "agent.build", "handoff.context_block"]
 
 
 def test_the_block_is_prepended_and_the_bubble_shows_only_what_was_typed(client):

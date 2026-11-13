@@ -225,3 +225,84 @@ def test_everything_is_404_while_the_flag_is_off(client, monkeypatch):
 
     assert c.post("/sessions/tgt/handoffs/send-back", json={"deliver": True}).status_code == 404
     assert c.post("/sessions/src/deliveries/d1/dismiss").status_code == 404
+
+
+# --- Files by reference (§4.9, PR-0.4a) --------------------------------------------------------
+
+
+def _file(upload_id: str, session_id: str = "tgt", **kw):
+    from apis.shared.files.models import FileMetadata, FileStatus
+
+    return FileMetadata(
+        upload_id=upload_id,
+        user_id=kw.get("user_id", "alice"),
+        session_id=session_id,
+        filename=kw.get("filename", f"{upload_id}.docx"),
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size_bytes=2048,
+        s3_key=f"user-files/alice/{session_id}/{upload_id}/{upload_id}.docx",
+        s3_bucket="b",
+        status=kw.get("status", FileStatus.READY),
+        linked_from=kw.get("linked_from"),
+    )
+
+
+@pytest.fixture()
+def files(monkeypatch):
+    """The user-files repository over a dict: ``list_session_files_sync`` and ``batch_get_files_sync``."""
+    rows = {
+        "rubric": _file("rubric"),
+        "notes": _file("notes"),
+        "elsewhere": _file("elsewhere", session_id="plain"),
+    }
+
+    class Repo:
+        def list_session_files_sync(self, session_id, status=None):
+            return [r for r in rows.values() if r.session_id == session_id]
+
+        def batch_get_files_sync(self, user_id, upload_ids):
+            return {u: rows[u] for u in upload_ids if u in rows and rows[u].user_id == user_id}
+
+    monkeypatch.setattr("apis.shared.files.repository.get_file_upload_repository", lambda: Repo())
+    return rows
+
+
+def test_a_send_back_offers_the_targets_own_files_and_bring_back_carries_them(client, stores, files):
+    from apis.shared.files.models import LinkedFrom
+
+    files["shared-in"] = _file("shared-in", linked_from=LinkedFrom(session_id="src", upload_id="orig", from_title="x"))
+
+    review = client().post("/sessions/tgt/handoffs/send-back", json={}).json()
+    assert sorted(f["uploadId"] for f in review["files"]) == ["notes", "rubric"]  # never the reference
+
+    sent = client().post("/sessions/tgt/handoffs/send-back", json={"deliver": True}).json()
+    card = stores.deliveries.get("alice", sent["deliveryId"])
+    assert sorted(f.upload_id for f in card.files) == ["notes", "rubric"]
+    assert all(f.session_id == "tgt" for f in card.files)
+
+
+def test_the_rows_per_file_bring_back_sends_just_that_file(client, stores, files):
+    sent = client().post(
+        "/sessions/tgt/handoffs/send-back", json={"deliver": True, "fileIds": ["rubric"], "filesOnly": True}
+    ).json()
+
+    card = stores.deliveries.get("alice", sent["deliveryId"])
+    assert (card.text, card.artifacts, [f.upload_id for f in card.files]) == ("", [], ["rubric"])
+
+
+def test_send_to_title_sends_the_files_the_user_kept_and_refuses_a_foreign_one(client, stores, files):
+    review = client().post("/sessions/tgt/handoffs/send-back", json={}).json()
+
+    refused = client().post(
+        f"/sessions/tgt/handoffs/{review['handoffId']}/deliver", json={"text": "x", "fileIds": ["elsewhere"]}
+    )
+    assert refused.status_code == 404
+    kept = client().post(
+        f"/sessions/tgt/handoffs/{review['handoffId']}/deliver", json={"text": "x", "fileIds": ["notes"]}
+    ).json()
+
+    assert [f.upload_id for f in stores.deliveries.get("alice", kept["deliveryId"]).files] == ["notes"]
+
+
+def test_files_only_needs_deliver_and_file_ids(client, files):
+    assert client().post("/sessions/tgt/handoffs/send-back", json={"filesOnly": True}).status_code == 422

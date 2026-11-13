@@ -163,6 +163,27 @@ export interface DeliveryArtifact {
 }
 
 /**
+ * A file a card or a handoff shares by reference (§4.9): always the original, and where it lives.
+ * The receiving conversation reads it through a reference row (`referenceUploadId`), or, for a
+ * file handed back to the conversation it came from, through the original itself.
+ */
+export interface DeliveryFile {
+  uploadId: string;
+  sessionId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+/** One `<file …/>` line: the id the receiving model reads, and what the file is. */
+export interface FileLine {
+  uploadId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+/**
  * A card waiting on a conversation's composer (`deliveries` on `GET /messages`, handoffs spec §4.8):
  * text from another of the user's conversations that the next send there carries.
  */
@@ -174,6 +195,8 @@ export interface DeliveryView {
   origin: 'user' | 'agent';
   text: string;
   artifacts: DeliveryArtifact[];
+  /** Files the card shares by reference (§4.9). Absent from rows written before PR-0.4a. */
+  files?: DeliveryFile[];
   createdAt: string;
 }
 
@@ -188,6 +211,8 @@ export interface CreateSendBackResponse {
   excerpt: string;
   excerptHash: string;
   artifacts: DeliveryArtifact[];
+  /** The target's own files, newest first, offered with the result (§4.9). */
+  files?: DeliveryFile[];
   /** Present when the delivery was made at once (Bring back result). */
   deliveryId?: string;
 }
@@ -209,6 +234,8 @@ export interface SendBackReview {
   text: string;
   /** The offered artifacts the user is sending (unticking one leaves it behind). */
   artifactIds: string[];
+  /** The offered files the user is sending (§4.9). */
+  fileIds: string[];
 }
 
 /** One delivery block read back out of a user message the model received (the sent bubble's card). */
@@ -216,4 +243,6 @@ export interface DeliveryBlock {
   fromTitle: string;
   text: string;
   artifacts: DeliveryArtifact[];
+  /** The block's `<file …/>` lines (§4.9). */
+  files: FileLine[];
 }

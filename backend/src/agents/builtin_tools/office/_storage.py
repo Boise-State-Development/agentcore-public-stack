@@ -297,10 +297,40 @@ def _ci_write_bytes(code_interpreter, path: str, data: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 
+class StoredFileGone(Exception):
+    """The file's bytes are gone: a file shared from another conversation whose original was
+    deleted there (handoffs spec §4.9 rule 5). Its message is what the tool tells the model."""
+
+
+_GONE_MESSAGE = (
+    "this file is no longer available. It was shared from another conversation, "
+    "and it has been deleted there"
+)
+
+
 def _download_s3_bytes(bucket: str, key: str) -> bytes:
-    """Read an object's bytes from S3 (blocking — use ``asyncio.to_thread``)."""
-    resp = _s3().get_object(Bucket=bucket, Key=key)
+    """Read an object's bytes from S3 (blocking — use ``asyncio.to_thread``).
+
+    A missing object raises ``StoredFileGone`` rather than ``NoSuchKey``: the only file row that
+    can outlive its bytes is a reference whose original was deleted.
+    """
+    try:
+        resp = _s3().get_object(Bucket=bucket, Key=key)
+    except Exception as exc:  # noqa: BLE001 - re-raised unless it is a missing object
+        code = getattr(exc, "response", {}).get("Error", {}).get("Code") if hasattr(exc, "response") else None
+        if code in ("NoSuchKey", "404"):
+            raise StoredFileGone(_GONE_MESSAGE) from exc
+        raise
     return resp["Body"].read()
+
+
+def note_linked_read(meta, reader: str) -> None:
+    """Count a read of a shared file by an office tool (``LinkedFileRead`` by reader, §4.7)."""
+    if getattr(meta, "linked_from", None) is None:
+        return
+    from apis.shared.files.linked_files import emit_linked_file_metric
+
+    emit_linked_file_metric("LinkedFileRead", reader=reader, session_id=getattr(meta, "session_id", None))
 
 
 async def _store_document(

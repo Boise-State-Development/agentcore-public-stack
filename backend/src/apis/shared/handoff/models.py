@@ -140,6 +140,11 @@ class Handoff(BaseModel):
         None, alias="briefCacheStatus", description="The brief call's cacheStatus on the source: hit, partial_miss or miss"
     )
     turns_covered: Optional[TurnsCovered] = Field(None, alias="turnsCovered")
+    source_project_id: Optional[str] = Field(
+        None,
+        alias="sourceProjectId",
+        description="Set when the source is a Shared Project task: no file crosses out of one (§4.9)",
+    )
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
     target_session_id: Optional[str] = Field(None, alias="targetSessionId")

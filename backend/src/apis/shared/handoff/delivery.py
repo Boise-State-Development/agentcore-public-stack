@@ -69,6 +69,49 @@ class DeliveryArtifact(BaseModel):
     content_type: str = Field("", alias="contentType")
 
 
+class DeliveryFile(BaseModel):
+    """A file the delivery carries back, by reference (spec §4.9): always the **original**.
+
+    ``sessionId`` is where the original lives, so a file handed back to the conversation it came
+    from is recognised and gets no row. ``s3Key`` / ``s3Bucket`` / ``ttl`` let the attach write the
+    reference row without reading the original first; they are never shown (``DeliveryView``).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    upload_id: str = Field(..., alias="uploadId")
+    session_id: str = Field(..., alias="sessionId")
+    from_title: str = Field("", alias="fromTitle")
+    filename: str
+    mime_type: str = Field("", alias="mimeType")
+    size_bytes: int = Field(0, alias="sizeBytes")
+    s3_key: str = Field("", alias="s3Key")
+    s3_bucket: str = Field("", alias="s3Bucket")
+    ttl: Optional[int] = None
+
+
+class DeliveryFileView(BaseModel):
+    """A delivery's file as the card shows it: the original, and where it lives."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    upload_id: str = Field(..., alias="uploadId")
+    session_id: str = Field(..., alias="sessionId")
+    filename: str
+    mime_type: str = Field(..., alias="mimeType")
+    size_bytes: int = Field(..., alias="sizeBytes")
+
+    @classmethod
+    def from_file(cls, f: DeliveryFile) -> "DeliveryFileView":
+        return cls(
+            upload_id=f.upload_id,
+            session_id=f.session_id,
+            filename=f.filename,
+            mime_type=f.mime_type,
+            size_bytes=f.size_bytes,
+        )
+
+
 class Delivery(BaseModel):
     """One ``DELIVERY#<deliveryId>`` row, keyed under its owner and indexed by its receiving session."""
 
@@ -84,6 +127,7 @@ class Delivery(BaseModel):
     text: str = ""
     text_hash: str = Field("", alias="textHash")
     artifacts: List[DeliveryArtifact] = Field(default_factory=list)
+    files: List[DeliveryFile] = Field(default_factory=list)
     status: DeliveryStatus = "pending"
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
@@ -105,6 +149,7 @@ class DeliveryView(BaseModel):
     origin: DeliveryOrigin
     text: str
     artifacts: List[DeliveryArtifact]
+    files: List[DeliveryFileView] = Field(default_factory=list)
     created_at: str = Field(..., alias="createdAt")
 
     @classmethod
@@ -117,6 +162,7 @@ class DeliveryView(BaseModel):
             origin=row.origin,
             text=row.text,
             artifacts=row.artifacts,
+            files=[DeliveryFileView.from_file(f) for f in row.files],
             created_at=row.created_at,
         )
 
@@ -243,6 +289,24 @@ class DeliveryStore:
             raise
         return _from_item(resp["Attributes"])
 
+    def batch_get(self, user_id: str, delivery_ids: List[str]) -> List[Delivery]:
+        """This user's rows for ``delivery_ids``, read-only, in one ``BatchGetItem``. Never raises.
+
+        Only to classify a send's cards before its lease (§4.9's document hint); attaching still
+        goes through ``attach``'s conditional write, which is the only exactly-once step.
+        """
+        if self._table is None or not delivery_ids:
+            return []
+        keys = [{"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{d}"} for d in dict.fromkeys(delivery_ids)]
+        try:
+            # A resource's client (de)serializes attribute values itself.
+            resp = self._table.meta.client.batch_get_item(RequestItems={self._table.name: {"Keys": keys}})
+            items = resp.get("Responses", {}).get(self._table.name, [])
+        except Exception:  # noqa: BLE001 - a hint, never a failure
+            logger.warning("delivery store: batch read failed", exc_info=True)
+            return []
+        return [_from_item(item) for item in items if item.get("userId") == user_id]
+
     def mark_edited(self, user_id: str, delivery_id: str) -> None:
         """Record that the card was edited before it was attached. Off the turn path."""
         table = self._require_table()
@@ -318,6 +382,13 @@ def _from_item(item: Dict[str, Any]) -> Delivery:
     artifacts = data.get("artifacts")
     if isinstance(artifacts, list):
         data["artifacts"] = [{**a, "version": int(a.get("version", 1))} for a in artifacts if isinstance(a, dict)]
+    files = data.get("files")
+    if isinstance(files, list):
+        data["files"] = [
+            {**f, "sizeBytes": int(f.get("sizeBytes", 0)), "ttl": int(f["ttl"]) if f.get("ttl") is not None else None}
+            for f in files
+            if isinstance(f, dict)
+        ]
     return Delivery.model_validate(data)
 
 
@@ -342,6 +413,8 @@ __all__ = [
     "DELIVERY_MAX_PER_TURN",
     "Delivery",
     "DeliveryArtifact",
+    "DeliveryFile",
+    "DeliveryFileView",
     "DeliveryOrigin",
     "DeliveryStatus",
     "DeliveryStore",

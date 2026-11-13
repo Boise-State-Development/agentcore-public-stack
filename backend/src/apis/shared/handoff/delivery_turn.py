@@ -19,6 +19,13 @@ renders the cards from the persisted message itself.
 beside the agent build, each in its own worker thread; the route awaits them only where it
 assembles the message. A send without the field pays nothing.
 
+**Files** (§4.9, PR-0.4a). A card's ``files`` become reference rows in this conversation, written in
+the same worker thread right after that card's conditional flip succeeds, so only the request that
+attached it writes them and two tabs write one set. A file whose original already lives here (one
+handed back to where it came from) gets no row; its line names the original. ``prefetch`` reads the
+cards read-only before the lease so the ``document_read`` gate can see a document coming
+(``document_hint``).
+
 **Never refused** (§6): an unknown, foreign, already-attached or dismissed id is skipped with a
 warning and the turn runs, so a stale tab can't brick a thread. The same goes for the whole field
 with ``HANDOFFS_ENABLED`` off, on a resume, on a continuation, and on a preview session. **Nothing
@@ -37,10 +44,12 @@ from typing import Any, List, Optional, Sequence, Set
 from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.feature_flags import handoffs_enabled
+from apis.shared.files.linked_files import OriginalRef, line_for, rows_for, write_reference_rows
 from apis.shared.handoff.context import context_hash, render_delivery_block
 from apis.shared.handoff.delivery import (
     DELIVERY_MAX_PER_TURN,
     Delivery,
+    DeliveryFile,
     DeliveryStore,
     cap_delivery_text,
     get_delivery_store,
@@ -86,6 +95,7 @@ class DeliveryTurn:
     store: DeliveryStore = field(default_factory=get_delivery_store)
     _attaching: Optional["asyncio.Task[List[AttachedDelivery]]"] = None
     _attach_ms: float = 0.0
+    _hint: Optional["asyncio.Task[bool]"] = None
 
     @classmethod
     def for_turn(
@@ -119,6 +129,32 @@ class DeliveryTurn:
         if store is not None:
             turn.store = store
         return turn
+
+    def prefetch(self) -> None:
+        """Read this send's cards, read-only, to classify their files for the gate (§4.9).
+
+        Before the lease and with no write, so a send that then answers 409 has attached nothing.
+        """
+        if self._hint is not None:
+            return
+        ids = [r.delivery_id for r in self.requests]
+
+        async def classify() -> bool:
+            from apis.shared.files.document_read import is_document_class
+
+            rows = await asyncio.to_thread(self.store.batch_get, self.user_id, ids)
+            return any(
+                is_document_class(f.mime_type, f.filename)
+                for row in rows
+                if row.status == "pending" and row.to_session_id == self.session_id
+                for f in row.files
+            )
+
+        self._hint = asyncio.create_task(classify())
+
+    def document_hint(self) -> Optional["asyncio.Task[bool]"]:
+        """Whether a card carries a document ``document_read`` reads; ``None`` before ``prefetch``."""
+        return self._hint
 
     def start(self) -> None:
         """Begin the attaches. Call once, at the head of the stream, beside the agent build."""
@@ -182,7 +218,27 @@ class DeliveryTurn:
             sent = cap_delivery_text(request.text)
             edited = (context_hash(sent) if sent else "") != row.text_hash
             text = sent
-        return AttachedDelivery(row=row, block=render_delivery_block(text, row.from_title, row.artifacts), edited=edited)
+        lines = self._share_files(row)
+        return AttachedDelivery(
+            row=row, block=render_delivery_block(text, row.from_title, row.artifacts, lines), edited=edited
+        )
+
+    def _share_files(self, row: Delivery) -> list:
+        """The card's files as reference rows here, and their lines. Runs only after this request
+        won the card's flip. A failed write drops the lines: the model is never told about a file
+        it can't open."""
+        if not row.files:
+            return []
+        originals = [_original(f) for f in row.files]
+        rows = rows_for(
+            originals, user_id=self.user_id, receiving_session_id=self.session_id, link_id=row.delivery_id
+        )
+        try:
+            write_reference_rows(rows)
+        except Exception:  # noqa: BLE001 - the card's text still goes
+            logger.warning("delivery %s: writing its files failed; sent without them", row.delivery_id, exc_info=True)
+            return []
+        return [line_for(o, receiving_session_id=self.session_id, link_id=row.delivery_id) for o in originals]
 
     def _after_attach(self, item: AttachedDelivery) -> None:
         """Counts, and the ``edited`` flag on the row, in the background: nothing here waits."""
@@ -194,6 +250,20 @@ class DeliveryTurn:
             )
             _background.add(task)
             task.add_done_callback(_mark_edited_done)
+
+
+def _original(f: DeliveryFile) -> OriginalRef:
+    return OriginalRef(
+        upload_id=f.upload_id,
+        session_id=f.session_id,
+        from_title=f.from_title,
+        filename=f.filename,
+        mime_type=f.mime_type,
+        size_bytes=f.size_bytes,
+        s3_key=f.s3_key,
+        s3_bucket=f.s3_bucket,
+        ttl=f.ttl,
+    )
 
 
 def _mark_edited_done(task: "asyncio.Task[Any]") -> None:

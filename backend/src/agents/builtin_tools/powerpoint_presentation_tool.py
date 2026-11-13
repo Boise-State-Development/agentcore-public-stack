@@ -48,6 +48,7 @@ from agents.builtin_tools.office._storage import (
     _ci_write_bytes,
     _download_card,
     _download_s3_bytes,
+    note_linked_read,
     _error,
     _get_code_interpreter_id,
     _NO_CI_MESSAGE,
@@ -299,6 +300,7 @@ async def _find_powerpoint_presentation(
             and meta.mime_type == _PPTX_MIME
             and meta.filename.lower() == target.lower()
         ):
+            note_linked_read(meta, "powerpoint")
             return meta
     return None
 

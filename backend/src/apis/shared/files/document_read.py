@@ -47,6 +47,7 @@ touches the agent layer — the tool does that.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
 import logging
 import os
@@ -380,6 +381,20 @@ def clamp_max_pages(max_pages: Any) -> int:
     return max(1, min(requested, DOCUMENT_READ_HARD_MAX_PAGES))
 
 
+async def _read_through(meta: FileMetadata, *, reader: str) -> FileMetadata:
+    """``meta``, or a shared file read through to its original (handoffs spec §4.9 rule 4).
+
+    A reference whose original was deleted answers "No longer available (deleted from …)"
+    as a ``DocumentReadError`` the tool relays, never as ``NoSuchKey`` (rule 5).
+    """
+    from .linked_files import linked_file_gone_message, readable_view
+
+    view = await readable_view(meta, reader=reader)
+    if view is None:
+        raise DocumentReadError(linked_file_gone_message(meta))
+    return view
+
+
 async def read_document(
     user_id: str,
     session_id: str,
@@ -410,7 +425,7 @@ async def read_document(
     if offset < 0:
         raise WorkspaceValidationError("offset must be >= 0")
 
-    meta = await _get_owned_ready_file(user_id, upload_id)
+    meta = await _read_through(await _get_owned_ready_file(user_id, upload_id), reader="document_read")
     fmt = document_format_for(meta.mime_type, meta.filename)
     if fmt is None:
         raise DocumentReadError(
@@ -551,6 +566,15 @@ async def search_documents(
             if document_format_for(m.mime_type, m.filename) is not None:
                 candidates.append(m)
 
+    # A shared file is searched as its original, which is what the attachments KB indexed
+    # (handoffs spec §4.9 rule 4). A reference whose original is gone reads as unavailable.
+    from .linked_files import readable_view
+
+    linked: Dict[str, Optional[FileMetadata]] = {}
+    for m in candidates:
+        if m.linked_from is not None:
+            linked[m.upload_id] = await readable_view(m, reader="document_read")
+    candidates = [linked.get(m.upload_id) or m for m in candidates]
     statuses = {m.upload_id: search_status(m, kb_enabled=kb_enabled) for m in candidates}
     searchable = [m for m in candidates if statuses[m.upload_id] == SEARCH_SEARCHABLE]
     not_searchable = [
@@ -584,13 +608,30 @@ async def search_documents(
         return DocumentReadResult(mode="query", payload=payload)
 
     try:
-        hits = await search_attachments(
-            user_id,
-            session_id,
-            query_text,
-            upload_id=upload_id or None,
-            ancestor_session_ids=session_ids[1:],
+        own = [m for m in searchable if m.linked_from is None]
+        hits = (
+            await search_attachments(
+                user_id,
+                session_id,
+                query_text,
+                upload_id=upload_id or None,
+                ancestor_session_ids=session_ids[1:],
+            )
+            if own
+            else []
         )
+        # Each shared file is searched where its original was indexed, narrowed to that one
+        # document, so a reference reaches only the file that was shared and nothing else in
+        # the conversation it came from. Its hits are reported under the reference's id.
+        for m in (m for m in searchable if m.linked_from is not None):
+            assert m.linked_from is not None
+            found = await search_attachments(
+                user_id, m.linked_from.session_id, query_text, upload_id=m.linked_from.upload_id
+            )
+            hits.extend(dataclasses.replace(hit, upload_id=m.upload_id) for hit in found)
+        if len(searchable) > len(own):
+            hits.sort(key=lambda hit: hit.score if hit.score is not None else 0.0, reverse=True)
+            hits = hits[: _attachment_top_k()]
     except Exception as exc:  # noqa: BLE001 - a failed search degrades to pattern, never to an error
         logger.warning("attachment search failed (%s); suggesting pattern", type(exc).__name__)
         payload.update(
@@ -626,6 +667,12 @@ async def search_documents(
         bytes_returned=sum(len(r["text"].encode("utf-8")) for r in results),
         hits=len(results),
     )
+
+
+def _attachment_top_k() -> int:
+    from .attachment_search import DEFAULT_TOP_K
+
+    return DEFAULT_TOP_K
 
 
 async def _text_read(user_id: str, upload_id: str, offset: int, base: Dict[str, Any], fmt: str) -> DocumentReadResult:
@@ -1511,7 +1558,7 @@ async def document_provenance_units(
     if not upload_id:
         raise WorkspaceValidationError("upload_id is required")
 
-    meta = await _get_owned_ready_file(user_id, upload_id)
+    meta = await _read_through(await _get_owned_ready_file(user_id, upload_id), reader="document_read")
     fmt = document_format_for(meta.mime_type, meta.filename)
     if fmt is None:
         raise DocumentReadError(

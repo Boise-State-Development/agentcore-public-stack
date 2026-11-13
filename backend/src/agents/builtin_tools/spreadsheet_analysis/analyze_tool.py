@@ -723,7 +723,18 @@ async def _download_file(file_info: Dict[str, Any]) -> bytes:
 
     def _get() -> bytes:
         s3 = boto3.client("s3", region_name=region)
-        response = s3.get_object(Bucket=bucket, Key=file_info["s3_key"])
+        try:
+            response = s3.get_object(Bucket=bucket, Key=file_info["s3_key"])
+        except Exception as exc:  # noqa: BLE001 - re-raised unless the object is gone
+            code = getattr(exc, "response", {}).get("Error", {}).get("Code") if hasattr(exc, "response") else None
+            if code in ("NoSuchKey", "404"):
+                # The only file row that outlives its bytes is a shared file whose original was
+                # deleted in the conversation it came from (handoffs spec §4.9 rule 5).
+                raise FileNotFoundError(
+                    f"'{file_info.get('filename', 'This file')}' is no longer available: it was shared "
+                    "from another conversation and has been deleted there"
+                ) from exc
+            raise
         return response["Body"].read()
 
     return await asyncio.to_thread(_get)
