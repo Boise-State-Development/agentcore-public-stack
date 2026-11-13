@@ -535,6 +535,17 @@ def make_analyze_tool(
 
         CSV files keep their name unchanged in the sandbox.
 
+        What the code may use
+        ---------------------
+        The file is already in the working directory under that name, so
+        there is nothing to look up or open: read it with ``pd.read_csv``.
+        Imports are limited to pandas, numpy, scipy, matplotlib, seaborn and
+        the stdlib modules math, statistics, json, datetime, random,
+        collections, itertools, functools, re, decimal, fractions, csv and
+        io. ``open()``, ``os``, ``glob``, ``sys`` and ``openpyxl`` are
+        blocked, and so is ``re.compile``: pass the pattern to
+        ``re.search``, ``re.sub`` or ``Series.str.contains`` directly.
+
         Handling leading metadata rows
         ------------------------------
         Some exports have metadata rows above the real header. The tool
@@ -563,8 +574,7 @@ def make_analyze_tool(
                 the original name (``.xlsx`` or ``.csv``), not the sandbox
                 form.
             python_code: Python to execute. For XLSX sources, use the exact
-                CSV names from the "Available sheets" footer. Available
-                libraries: pandas, numpy, matplotlib, seaborn, openpyxl.
+                CSV names from the "Available sheets" footer.
             output_filename: Optional PNG filename if generating a chart.
                 Must end with ``.png``. Example: ``"chart.png"``.
 
@@ -584,11 +594,8 @@ def make_analyze_tool(
 
         try:
             validate_diagram_code(python_code)
-        except PolicyError:
-            return {
-                "content": [{"text": "❌ Analysis code rejected by policy."}],
-                "status": "error",
-            }
+        except PolicyError as exc:
+            return _error(_policy_rejection(exc, filename))
 
         # 2. Find the file in accessible sources
         file_info = await _find_file(filename, assistant_id, session_id)
@@ -911,6 +918,60 @@ async def _stat_files(
 
 def _error(text: str) -> Dict[str, Any]:
     return {"content": [{"text": text}], "status": "error"}
+
+
+# What the model reached for when it went looking for the file itself. In prod
+# (28 days to 2026-11-13) these were two thirds of the policy rejections, and
+# policy rejections were 63% of this tool's errors: the model did not know the
+# file was already in the working directory, so it listed or opened it.
+_FILE_LOOKUP_MODULES = frozenset({"os", "glob", "pathlib", "shutil", "sys"})
+
+
+def _policy_rejection(exc: Exception, filename: str) -> str:
+    """The policy rejection, named, with what to write instead.
+
+    It used to say only "rejected by policy", so the retry guessed: after an
+    ``import glob`` was refused, the next call often tried ``os.listdir``.
+    """
+    from apis.shared.security import ALLOWED_IMPORT_ROOTS, policy_violation
+
+    label, name = policy_violation(exc)
+    csv_name = _csv_name_for(filename, filename.lower().endswith(".xlsx"))
+    read_it = f"Read it directly: `pd.read_csv('{csv_name}', low_memory=False)`."
+    root = name.split(".", 1)[0]
+    if (label == "forbidden import" and root in _FILE_LOOKUP_MODULES) or (
+        label == "forbidden name" and name == "open"
+    ):
+        reason = (
+            f"`{name}` is blocked. You don't need to find or open the file: it is already "
+            f"in the working directory as `{csv_name}`. {read_it}"
+        )
+    elif label == "forbidden import" and root == "openpyxl":
+        reason = (
+            "`openpyxl` is blocked. Workbooks are already converted to CSV, one file per "
+            f"sheet; the first sheet is `{csv_name}`. {read_it} The response lists every sheet's CSV name."
+        )
+    elif label == "forbidden attribute" and name == "compile":
+        reason = (
+            "`re.compile` is blocked. Pass the pattern to `re.search`, `re.sub`, `re.findall` "
+            "or `Series.str.contains(pattern, regex=True)` directly."
+        )
+    elif label == "forbidden import":
+        allowed = ", ".join(sorted(ALLOWED_IMPORT_ROOTS))
+        reason = f"`{name}` can't be imported. Allowed imports: {allowed}."
+    elif label == "syntax error":
+        cause = exc.__cause__
+        where = f" (line {cause.lineno}: {cause.msg})" if isinstance(cause, SyntaxError) and cause.lineno else ""
+        reason = f"The code has a syntax error{where}."
+    elif label == "source too large":
+        reason = "The code is over 32 KiB. Send a shorter program."
+    elif label == "empty source":
+        reason = "`python_code` is empty."
+    elif name:
+        reason = f"`{name}` is blocked in the analysis sandbox ({label})."
+    else:
+        reason = f"The code uses a construct the analysis sandbox blocks ({label})."
+    return f"❌ Analysis code rejected by policy, so nothing ran. {reason}"
 
 
 def _csv_name_for(filename: str, is_xlsx: bool) -> str:

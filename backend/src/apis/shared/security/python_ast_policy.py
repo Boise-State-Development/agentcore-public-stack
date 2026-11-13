@@ -188,6 +188,23 @@ class PolicyError(ValueError):
     """Raised when ``python_code`` violates the diagram-tool policy."""
 
 
+#: The import allowlist, for callers that tell the model what it may import.
+#: The policy is public code, so naming it gives a caller nothing it could not
+#: read, while a model told only "rejected" guesses at what to change.
+ALLOWED_IMPORT_ROOTS: frozenset[str] = _ALLOWED_IMPORT_ROOTS
+
+
+def policy_violation(exc: PolicyError) -> tuple[str, str]:
+    """``(label, name)`` of a :class:`PolicyError` this module raised.
+
+    ``label`` is the short structural label (``"forbidden import"``,
+    ``"forbidden name"``, ``"syntax error"`` …) and ``name`` the module,
+    builtin or attribute it names, or ``""`` when the label names none.
+    """
+    label, _, name = str(exc).partition(": ")
+    return label.strip(), name.strip()
+
+
 def _root_package(dotted_name: str) -> str:
     """Return the leftmost segment of a dotted import name."""
     return dotted_name.split(".", 1)[0]

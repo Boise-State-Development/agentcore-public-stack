@@ -901,3 +901,84 @@ def test_a_rename_whose_new_name_is_taken_before_it_commits_overwrites_nothing(p
     assert refused["status"] == "error" and "already exists" in _text(refused), refused
     assert "The owner's file." in runtime.read_entry(space, OWNER.user_id, OWNER.email, NEW_TEAM)
     assert "bsu_devs team" in runtime.read_entry(space, OWNER.user_id, OWNER.email, "team/bsu_devs")
+
+
+# ── an index save never conflicts with the conversation's own lines ─────
+
+
+def _links(index: str, slug: str) -> int:
+    return sum(1 for line in index.split("\n") if line.lstrip("-* ").startswith(f"[[{slug}]]"))
+
+
+def test_an_index_save_after_its_own_file_save_rebases_onto_that_line(projects, runtime):
+    """Read the index, save a file (which adds its line), then save the index: it used to be refused."""
+    project = _team(projects)
+    tools, ctx = _tools(project, EDITOR), _in("a")
+    index = _text(_call(tools["memory_read"], scope="project", slug="MEMORY.md", tool_context=ctx))
+    _call(tools["memory_save"], scope="project", slug="vendors", text=ITEMS, description="Vendors", tool_context=ctx)
+    saved = _call(
+        tools["memory_save"], scope="project", slug="MEMORY.md",
+        text=index.rstrip("\n") + "\n- [[vendors]] — Vendors we use\n", description="", tool_context=ctx,
+    )
+    assert saved["status"] == "success", saved
+    assert "they are kept" in _text(saved)
+    now = _index(runtime, project.shared_space_id)
+    assert "- [[vendors]] — Vendors we use" in now and _links(now, "vendors") == 1
+
+
+def test_a_rebased_index_keeps_the_line_the_model_left_out(projects, runtime):
+    project = _team(projects)
+    tools, ctx = _tools(project, EDITOR), _in("a")
+    index = _text(_call(tools["memory_read"], scope="project", slug="MEMORY.md", tool_context=ctx))
+    _call(tools["memory_save"], scope="project", slug="vendors", text=ITEMS, description="Vendors", tool_context=ctx)
+    saved = _call(
+        tools["memory_save"], scope="project", slug="MEMORY.md",
+        text=index.rstrip("\n") + "\n- Ask the PM before changing scope.\n", description="", tool_context=ctx,
+    )
+    assert saved["status"] == "success", saved
+    now = _index(runtime, project.shared_space_id)
+    assert "Ask the PM before changing scope" in now
+    assert "- [[vendors]] — Vendors" in now
+
+
+@pytest.mark.parametrize("index_first", [False, True])
+def test_a_file_and_its_index_saved_in_one_batch_both_land(projects, runtime, index_first):
+    """The dev pattern: two parallel saves, exactly one refused, then a re-read.
+
+    Whichever runs first, it failed: the index first linked a file that did not exist
+    yet, and the file first added the line the index save then conflicted with.
+    """
+    project = _team(projects)
+    tools, ctx = _tools(project, EDITOR), _in("a")
+    index = _text(_call(tools["memory_read"], scope="project", slug="MEMORY.md", tool_context=ctx))
+
+    def raw(tool):
+        return getattr(tool, "__wrapped__", None) or tool
+
+    async def batch():
+        calls = [
+            raw(tools["memory_save"])(scope="project", slug="vendors", text=ITEMS, description="Vendors", tool_context=ctx),
+            raw(tools["memory_save"])(
+                scope="project", slug="MEMORY.md", text=index.rstrip("\n") + "\n- [[vendors]] — Vendors\n",
+                description="", tool_context=ctx,
+            ),
+        ]
+        return await asyncio.gather(*(reversed(calls) if index_first else calls))
+
+    results = asyncio.run(batch())
+    assert [r["status"] for r in results] == ["success", "success"], results
+    assert _links(_index(runtime, project.shared_space_id), "vendors") == 1
+
+
+def test_a_teammates_line_beside_our_own_is_still_a_conflict(projects, runtime):
+    project = _team(projects)
+    tools, ctx = _tools(project, EDITOR), _in("a")
+    index = _text(_call(tools["memory_read"], scope="project", slug="MEMORY.md", tool_context=ctx))
+    _call(tools["memory_save"], scope="project", slug="vendors", text=ITEMS, description="Vendors", tool_context=ctx)
+    _call(_tools(project, OWNER)["memory_save"], scope="project", slug="budget", text=ITEMS, description="Budget", tool_context=_in("b"))
+    refused = _call(
+        tools["memory_save"], scope="project", slug="MEMORY.md",
+        text=index.rstrip("\n") + "\n- [[vendors]] — Vendors\n", description="", tool_context=ctx,
+    )
+    assert refused["status"] == "error" and "changed since you read it" in _text(refused)
+    assert "[[budget]] — Budget" in _index(runtime, project.shared_space_id)
