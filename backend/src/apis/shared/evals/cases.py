@@ -31,6 +31,7 @@ FAMILIES: Tuple[str, ...] = (
     "project_memory",
     "skill_outcome",
     "terminal",
+    "usage_patterns",
     "retention",
     "instruction_following",
     "refusal",
@@ -41,7 +42,10 @@ JUDGED_FAMILIES = frozenset({"general_chat"})
 #: Families that report but never fail a run: the judged ones, and a
 #: deterministic family under D18's ten-case floor (``terminal``), which gates
 #: once it reaches ten.
-ADVISORY_FAMILIES = JUDGED_FAMILIES | frozenset({"terminal", "attachment_delivery"})
+#: ``usage_patterns`` (spec §18) measures what the costliest production usage
+#: patterns cost to answer; it reports, and gates once its baselines have
+#: settled across models.
+ADVISORY_FAMILIES = JUDGED_FAMILIES | frozenset({"terminal", "attachment_delivery", "usage_patterns"})
 
 #: The delivery measurement family (unified-attachment-delivery spec §8.4).
 #: Advisory: its gating set is the cells where two arms are both legal for a
@@ -105,6 +109,8 @@ PROVISIONED_TOOLS: Dict[str, Optional[str]] = {
     "memory_query": None,
     "memory_save": None,
     "memory_propose": None,
+    # One catalog id provisions both artifact tools (``apis/shared/tools/injected.py``).
+    "update_artifact": "create_artifact",
     "list_powerpoint_presentations": "create_powerpoint_presentation",
     "read_powerpoint_presentation": "create_powerpoint_presentation",
 }

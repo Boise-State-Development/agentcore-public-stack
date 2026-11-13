@@ -12,6 +12,7 @@
     "project_memory",
     "skill_outcome",
     "terminal",
+    "usage_patterns",
     "retention",
     "instruction_following",
     "refusal",
@@ -1120,6 +1121,156 @@
       "passes": 3,
       "samples": 3,
       "answer": "CC-25686"
+    },
+    "usage_patterns.draft_small_edit_updates_in_place": {
+      "family": "usage_patterns",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "I've changed the date to Saturday, April 18 and left everything else as it was. The announcement is saved as version 2 of the same document. April 18 is also a Saturday, so the day of the week still matches.",
+      "efficiency": {
+        "modelCalls": 4.0,
+        "outputTokens": 1712.0,
+        "inputTokens": 29059.0,
+        "toolCalls": 2.0,
+        "durationMs": 13873.0,
+        "firstTokenMs": 3158.0
+      }
+    },
+    "usage_patterns.draft_third_revision_updates_in_place": {
+      "family": "usage_patterns",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "I added a parking line to the welcome note (now version 3): \"Parking is free in Lot C.\" It appears under the orientation time and location.",
+      "efficiency": {
+        "modelCalls": 6.0,
+        "outputTokens": 1862.0,
+        "inputTokens": 43653.0,
+        "toolCalls": 3.0,
+        "durationMs": 18247.0,
+        "firstTokenMs": 2955.0
+      }
+    },
+    "usage_patterns.draft_question_does_not_rewrite": {
+      "family": "usage_patterns",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "2:00 p.m.",
+      "efficiency": {
+        "modelCalls": 3.0,
+        "outputTokens": 1524.0,
+        "inputTokens": 21657.0,
+        "toolCalls": 1.0,
+        "durationMs": 12503.0,
+        "firstTokenMs": 2885.0
+      }
+    },
+    "usage_patterns.page_question_takes_one_fetch": {
+      "family": "usage_patterns",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "According to example.com, the domain is meant for use in documentation examples without needing permission, and it should not be relied on for testing or monitoring.",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 102.0,
+        "inputTokens": 10552.0,
+        "toolCalls": 1.0,
+        "durationMs": 5359.0,
+        "firstTokenMs": 1360.0
+      }
+    },
+    "usage_patterns.two_pages_take_two_fetches": {
+      "family": "usage_patterns",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**Yes.** Both pages use the main heading **\"Example Domain.\"**",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 266.0,
+        "inputTokens": 10811.0,
+        "toolCalls": 2.0,
+        "durationMs": 6160.0,
+        "firstTokenMs": 1393.0
+      }
+    },
+    "usage_patterns.followup_reuses_the_fetched_page": {
+      "family": "usage_patterns",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Example Domain",
+      "efficiency": {
+        "modelCalls": 3.0,
+        "outputTokens": 111.0,
+        "inputTokens": 15957.0,
+        "toolCalls": 1.0,
+        "durationMs": 5935.0,
+        "firstTokenMs": 1399.0
+      }
+    },
+    "usage_patterns.spreadsheet_cross_sheet_lookup": {
+      "family": "usage_patterns",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "The largest Equipment line is **EXP-0041 at $2,400**, and its approver code is **AP-51**.\n\nAnalyzed `grant_expenses.xlsx` (Expenses and Approvals sheets). The other Equipment lines are EXP-0044 ($1,500), EXP-0047 ($1,180), and EXP-0046 ($640).",
+      "efficiency": {
+        "modelCalls": 4.0,
+        "outputTokens": 991.0,
+        "inputTokens": 28884.0,
+        "toolCalls": 3.0,
+        "durationMs": 16351.0,
+        "firstTokenMs": 3238.0
+      }
+    },
+    "usage_patterns.spreadsheet_two_answers_one_pass": {
+      "family": "usage_patterns",
+      "passed": true,
+      "passes": 2,
+      "samples": 3,
+      "answer": "Analyzed `grant_expenses.xlsx`, Expenses sheet (9 expense lines):\n\n- **Supplies total:** $405 (2 lines: EXP-0043 at $310 and EXP-0048 at $95)\n- **Travel lines:** 3 (EXP-0040, EXP-0042, and EXP-0045)",
+      "efficiency": {
+        "modelCalls": 4.0,
+        "outputTokens": 963.0,
+        "inputTokens": 28832.0,
+        "toolCalls": 3.0,
+        "durationMs": 17797.0,
+        "firstTokenMs": 1329.0
+      }
+    },
+    "usage_patterns.spreadsheet_followup_builds_on_the_answer": {
+      "family": "usage_patterns",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Travel is **44%** of all expenses on the Expenses sheet.\n\nThe sheet totals $10,940 across 9 lines, and Travel accounts for $4,815 of that ($4,815 ÷ $10,940 ≈ 44.0%).",
+      "efficiency": {
+        "modelCalls": 4.0,
+        "outputTokens": 1052.0,
+        "inputTokens": 29435.0,
+        "toolCalls": 3.0,
+        "durationMs": 16557.0,
+        "firstTokenMs": 1335.0
+      }
+    },
+    "usage_patterns.csv_question_answers_without_a_loop": {
+      "family": "usage_patterns",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "The file has 9 rows: three sensors (S-1, S-2, S-3), each with readings at 08:00, 09:00, and 10:00. Here is the highest reading for each sensor:\n\n| Sensor | Highest Reading | Hour |\n|---|---|---|\n| S-2 | 46.3 | 09:00 |\n| S-3 | 41.7 | 09:00 |\n| S-1 | 40.4 | 10:00 |\n\nAnalyzed `sensor_readings.csv`. The units aren't stated in the file, so I've reported the values as given.",
+      "efficiency": {
+        "modelCalls": 3.0,
+        "outputTokens": 611.0,
+        "inputTokens": 20122.0,
+        "toolCalls": 2.0,
+        "durationMs": 12813.0,
+        "firstTokenMs": 1361.0
+      }
     }
   },
   "judgeModel": "us.anthropic.claude-sonnet-4-6",
@@ -1304,6 +1455,18 @@
         "imageTags": {
           "inference-api": "dc8d00fd7731b316",
           "app-api": "09c23f04ccbdcc09"
+        }
+      }
+    },
+    "usage_patterns": {
+      "promotedAt": "2026-11-13T01:38:37.022022Z",
+      "source": {
+        "startedAt": "2026-11-13T01:36:11.100874Z",
+        "target": "runtime:dev-boisestateai-v2",
+        "gitCommit": "680eceef0362c780748d9e3937be62c44836af18",
+        "imageTags": {
+          "inference-api": "acb66ec29d5e93bf",
+          "app-api": "ba5307ffa6118431"
         }
       }
     }

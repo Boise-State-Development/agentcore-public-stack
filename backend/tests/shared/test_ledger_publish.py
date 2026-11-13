@@ -140,6 +140,16 @@ class TestEvalRow:
         assert row["cases"] == cases and row["track"] == "nightly"
         lp.assert_content_free(row, lp.EVAL_ROW_FIELDS, forbidden=[SESSION, USER])
 
+    def test_carries_what_the_passing_cases_cost_and_passes_the_guard(self):
+        efficiency = {"tool_selection": {
+            "run": {"outputTokens": {"n": 8, "sum": 1600.0}},
+            "vsBaseline": {"paired": 8, "outputTokens": {"n": 8, "base": 1500.0, "run": 1600.0}},
+        }}
+        row = _eval_row(call_rows=[_call()], efficiency=efficiency)
+        assert row["efficiency"] == efficiency
+        lp.assert_content_free(row, lp.EVAL_ROW_FIELDS, forbidden=[SESSION, USER])
+        assert "efficiency" not in _eval_row()
+
     def test_an_unknown_track_is_refused(self):
         with pytest.raises(lp.PublishError):
             _eval_row(track="hourly")

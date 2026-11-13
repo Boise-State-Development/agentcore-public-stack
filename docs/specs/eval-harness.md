@@ -516,3 +516,66 @@ The page is read-only. Starting a run from the page is still open (§12); it is 
 - **EH-10 — page. BUILT 2026-11-08.** `GET /admin/costs/ledger/evals` on the ledger router (`require_ledger_admin`, so `admin.costs` before the flag), returning the rows newest first through `export_row`, the models and tracks in range counted before the filters, and the build bands from `LEDGER#VERSION`. `track=untracked` names a row published before `--track` existed, so it is never folded into a track. The page is `frontend/ai.client/src/app/admin/evaluations/`; the pure derivations (gate grid, flip matrix, the noisy rule, trends) are in `evaluations.util.ts`, with specs. Two choices the punch list did not settle: the bands drawn are only those of builds a plotted run ran on, because on dev a day holds several builds and the full set stacks a band per merge over each run; and the noisy rule groups by build before counting flips, so a change of build is never a flip. The link from `release-quality-panel.component.ts` opens the page on the run's model, track and build, with the run selected. **Not done:** verification against ten nightly rows. On 2026-11-08 dev held two `LEDGER#EVAL` rows (one `manual`, one from before `--track`) and no `nightly` row, because the scheduled nightly runs from `main` and had failed four nights running. The page was checked on dev's two real rows and on a local fixture overlay for history. **To check once nightly rows accumulate:** on dev nearly every nightly run is on a new build (develop merges most days), so "three flips in ten runs on one build" will rarely fire there; whether the rule should read across builds on the nightly track is a decision for when there is history to look at.
 
 A trend needs history, so EH-9 should land as soon as possible: every nightly run before it publishes a row without per-case outcomes, and that history cannot be backfilled. The run directories that would hold it go with the nightly runner.
+
+## 17. Efficiency beside outcome
+
+**Status:** Built 2026-11-12. Advisory only.
+
+### 17.1 Problem
+
+`score` says whether a run kept the baseline's quality. It cannot say what the run paid for that quality. A change that makes every answer twice as slow, or twice as long, passes as long as the answers stay right, and a change meant to make turns cheaper (a model route, a smaller default, patch-style edits) has nowhere to show that quality held while cost or time fell. The weekly efficiency review (`.claude/skills/efficiency-review/`) ranks exactly those trades and until now could only say "needs an eval".
+
+### 17.2 Decisions
+
+**D22 — Six measures per sample.** `modelCalls`, `outputTokens` and `inputTokens` (uncached, cache-read and cache-written together) are summed over every model call of every session the sample ran in, from the sessions' `C#` cost rows; `toolCalls` over every turn, `durationMs` (every turn's Runtime duration, summed, and unknown if any turn has none) and `firstTokenMs` of the first turn come from the result row. A case is its median sample. Tokens, not dollars: concurrent samples share cache writes, so the same work can be billed differently between runs.
+
+**Why the tokens are not the result row's `usage`.** The stream's usage is the turn's *last* model call: the coordinator keeps it as the current context size for the badge and the compaction trigger, and does not forward Strands' turn-cumulative totals. A turn that rewrites a document through `update_artifact` and then says "done" reports the "done". Measured on dev (Sonnet 5, 2026-11-12): the draft-edit case's stream said 224 output tokens; its four cost rows said 1,017. Every case under-counted by two to five times. So `run` writes each sample session's totals to `calls.json` in the run directory once the run ends (cost rows survive the run's session cleanup), `score` fills in any session it is missing unless `--no-cost-rows`, and `baseline` reads the file. Without it the three token measures are absent, never a guess.
+
+**D23 — Only cases that pass on both sides are compared.** A wrong answer is often a short one. Pairing a failed case would report lost quality as gained efficiency, so a family's efficiency is summed over the cases that pass in the baseline and in the run and that both measured.
+
+**D24 — It never gates.** Timing follows the day's load, and the nightly run has one sample per case. `score` prints the table after the gate table and marks a measure with `*` only when at least 5 paired cases back it and it moved 20% or more. The exit code is the gate's alone.
+
+**D25 — The baseline carries it; an older baseline says so.** `baseline` writes `efficiency` on each case entry, so `baseline --family` carries it with the family. A baseline promoted before this prints "no baseline efficiency" for its families, never "no change". The committed baselines gain it the next time each is promoted.
+
+**D26 — The ledger row carries the run's own numbers too.** `LEDGER#EVAL` gains `efficiency: {family: {run: {metric: {n, sum}}, vsBaseline?: {paired, metric: {n, base, run}}}}`. `run` is over the cases the run passed and needs no baseline, so two runs on the same model and track compare from the day this ships. Counts and sums only; `assert_content_free` gains the one field name.
+
+### 17.3 Code
+
+`apis/shared/evals/efficiency.py` (pure): `call_totals`, `sample_efficiency`, `case_efficiency`, `compare_efficiency`, `run_efficiency`, `format_efficiency_table`, `moved`. `report.build_baseline` records it; `eval_harness.py score` prints it, writes it under `efficiency` in `--json`, and passes it to `eval_ledger_row`.
+
+### 17.4 Not done
+
+- The Evaluations page does not draw it.
+- No baseline exists for the models that carry most production spend; an efficiency comparison is only as useful as the model it ran on.
+- No case family covers iterative drafting, browsing loops or spreadsheet loops, the costliest usage patterns in `docs/one-pagers/conversation-usage-patterns.md`.
+
+## 18. The `usage_patterns` family
+
+**Status:** Built 2026-11-12. Advisory.
+
+### 18.1 Why
+
+§17 made efficiency measurable, but the golden set had no case shaped like the usage that carries production spend. The weekly efficiency review classifies prod conversations by pattern (`docs/one-pagers/conversation-usage-patterns.md`); the three costliest engineerable ones are iterative drafting (an artifact revised over several turns, `update_artifact` full-replace), browsing loops (many fetches per turn, each re-reading the context) and spreadsheet loops (`analyze_spreadsheet` probe-and-retry, about 15% of calls failing in prod). A lever aimed at one of them (patch-style edits, a step budget, a clearer spreadsheet policy error) had no eval that showed both that answers held and that the turn got cheaper.
+
+### 18.2 The cases
+
+Ten cases, sixteen turns, all on tools the eval role already grants plus `create_artifact` (which provisions `update_artifact`; `PROVISIONED_TOOLS` maps the one to the other):
+
+| Pattern | Cases | Quality check | What efficiency shows |
+|---|---|---|---|
+| Iterative drafting | one-detail edit; third revision; a question about the draft | the edit lands, the same artifact is updated (`must_call update_artifact`, `must_not_call create_artifact`), a question rewrites nothing | output tokens per edit (a whole document today), input growth from superseded copies |
+| Browsing loops | one named page; two named pages; a follow-up the first fetch answers | the fact is right; `max_calls` equals the pages named; the follow-up fetches nothing | model calls and input per turn |
+| Spreadsheet loops | a cross-sheet lookup; two questions on one sheet; a follow-up that builds on an answer; a small CSV | exact values, a lookalike `forbidden`; `max_calls` allows one listing and one retry | model calls, failed analyses before the right one |
+
+Each case is scored on its last turn (§6.2); efficiency counts every turn, so a drafting case's setup draft is part of what it cost.
+
+### 18.3 Decisions
+
+**D27 — Advisory until its baselines settle.** Loop length is the behaviour under test, and it is what models differ on most: Sonnet 5's first run on dev failed `spreadsheet_two_answers_one_pass` on five calls (a policy rejection, two wrong file-name guesses, then the right `load:` line), which is the prod pattern, not a bad case. A family whose failures are partly a platform's friction should report before it gates. It joins `ADVISORY_FAMILIES` and the nightly run's default families.
+
+**D28 — Pages and fixtures are pinned in the notes.** The browsing cases depend on example.com and example.org. Both changed in 2026-11 (example.com no longer links anywhere), so each case's notes say what the page held when it was written, and a failure that reads "the page is different" is fixed in the case, not the model.
+
+### 18.4 Not done
+
+- Batch items, pasted corpora and long idle conversations have no case: the first two need fixtures sized like prod (tens of thousands of tokens), and the third is a cache-TTL effect the eval cannot pay for at k=3.
+- `create_artifact` leaves artifacts behind for the eval user; session cleanup does not delete them.
