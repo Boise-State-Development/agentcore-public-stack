@@ -152,7 +152,27 @@ export interface HandoffReview {
   cardRemoved: boolean;
   /** Present when a brief was requested (`features.handoffBrief`). */
   brief?: HandoffBrief;
+  /** The source conversation's files the sheet lists (§4.9); absent until the listing lands. */
+  files?: ShareableFile[];
+  /** The listed files the user is sharing, in list order. */
+  fileIds: string[];
 }
+
+/** A file the review sheet can share, as the source's file listing returned it. */
+export interface ShareableFile {
+  uploadId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  /** Set when the source's file is itself shared from elsewhere: the line names its original. */
+  linkedFrom?: { sessionId: string; uploadId: string; fromTitle: string } | null;
+}
+
+/** Files one handoff or one delivery shares (`HANDOFF_MAX_FILES` / `DELIVERY_MAX_FILES`). */
+export const MAX_SHARED_FILES = 5;
+
+/** User turns whose attachments the review sheet ticks by default (§4.9). */
+export const SHARED_FILES_RECENT_TURNS = 5;
 
 /** A reference to an artifact the sending conversation made, pinned at the version sent (§4.8). */
 export interface DeliveryArtifact {

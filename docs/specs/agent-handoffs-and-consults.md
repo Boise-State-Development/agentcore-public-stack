@@ -2183,6 +2183,26 @@ has started", and the only one that spends money while nobody is watching.
     `handoff_context.filesUnticked`, sent by the review sheet; `LinkedFileRead` / `LinkedFileGone` by reader from
     `readable_view` and the office tools' finders.
   - **The wrapper defuses `<file` too**, opening and closing, in both copies.
+
+  *SPA built (2026-11-13).*
+  - **Review sheet.** The sheet lists the source's ready files (`GET /files?sessionId=`, read when it opens),
+    each a checkbox. Files attached to the source's last five user messages are ticked, up to five, and a sixth
+    box is disabled. The preview wraps the ticked files' `<file>` lines exactly as the server will
+    (`referenceUploadId` on the original's id, so a file the source itself holds by reference names its
+    original). Send carries `fileIds` and `filesUnticked`. A source file whose original is gone isn't offered.
+  - **Send to *{title}*** lists the target's own files as checkboxes, all ticked. **Bring back result** carries
+    them.
+  - **Cards and bubbles.** Delivery cards and sent bubbles show each file as a chip
+    (`DeliveryFileChipsComponent`). The chip downloads through the durable `/files/{id}/download` path: the
+    original's id on a pending card, and the reference row's id in a sent bubble (read back from its `<file>`
+    line).
+  - **The handoff row** lists the target's own files (`HandoffTargetFilesService`, re-read each time the row
+    settles into a new state, never while it streams), each with its own Bring back (`filesOnly`). These are
+    sibling controls, never inside the row's link.
+  - **The Files panel** (`/files`) marks a reference "From *{title}*", or "No longer available (deleted from
+    *{title}*)" when `originalAvailable` is false.
+  - **Not browser-checked** before merge: the local stack has no PR-0.4a backend. The dev check after both
+    merge is §10's dev item: a PDF and a `.docx` out, a Word document back, and the `toolConfigHash` count.
 - **PR-0.5 — `suggest_handoff`.** Tool, `handoff_suggested` event, chip UI that opens the review sheet, replay,
   `CLAUDE.md` SSE table. Marginal CountTokens measured and recorded in the PR.
 - **Dev validation.**

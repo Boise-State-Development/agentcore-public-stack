@@ -6,6 +6,8 @@ import { heroArrowRight, heroChevronRight, heroPaperClip, heroXMark } from '@ng-
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { AgentHandoffService } from '../../services/handoff/agent-handoff.service';
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
+import { formatFileSize } from '../../services/handoff/handoff-prompt';
+import { MAX_SHARED_FILES } from '../../services/handoff/handoff.models';
 
 /**
  * The review sheet a mid-thread `@`-mention opens (handoffs spec §4.2, step 2).
@@ -149,7 +151,7 @@ import { HandoffStateService } from '../../services/handoff/handoff-state.servic
               @if (r.brief?.status === 'fallback' && !r.cardRemoved && r.card) {
                 <p class="mt-1 text-xs text-gray-600 dark:text-gray-400">{{ fallbackNote() }}</p>
               }
-              @if (previewOpen() && !r.cardRemoved && r.card && r.brief?.status !== 'writing') {
+              @if (previewOpen() && ((!r.cardRemoved && r.card) || r.fileIds.length) && r.brief?.status !== 'writing') {
                 <div [id]="previewId" class="mt-2">
                   <p class="text-xs font-medium text-gray-700 dark:text-gray-300">What {{ r.draft.agentName }} will receive</p>
                   <pre tabindex="0" role="region" [attr.aria-label]="'Full prompt ' + r.draft.agentName + ' will receive'" class="mt-1 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-2 font-mono text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-gray-800 dark:text-gray-200">{{ prompt() }}</pre>
@@ -158,6 +160,34 @@ import { HandoffStateService } from '../../services/handoff/handoff-state.servic
             }
           }
         </div>
+
+        @if (r.files?.length) {
+          <fieldset class="mt-3">
+            <legend class="text-xs font-medium text-gray-700 dark:text-gray-300">
+              Files from this conversation
+            </legend>
+            <p [id]="filesHintId" class="text-xs text-gray-600 dark:text-gray-400">
+              {{ r.draft.agentName }} can open the ones you tick. Up to {{ maxFiles }}.
+            </p>
+            <ul class="mt-1 space-y-1" [attr.aria-describedby]="filesHintId">
+              @for (file of r.files; track file.uploadId) {
+                <li>
+                  <label class="flex items-center gap-2 text-sm/6 text-gray-800 dark:text-gray-200">
+                    <input
+                      type="checkbox"
+                      class="size-4 rounded-sm border-gray-300 text-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600"
+                      [checked]="r.fileIds.includes(file.uploadId)"
+                      [disabled]="r.phase === 'sending' || (!r.fileIds.includes(file.uploadId) && r.fileIds.length >= maxFiles)"
+                      (change)="toggleFile(file.uploadId, $event)"
+                    />
+                    <span class="min-w-0 truncate">{{ file.filename }}</span>
+                    <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400">{{ sizeLabel(file.sizeBytes) }}</span>
+                  </label>
+                </li>
+              }
+            </ul>
+          </fieldset>
+        }
 
         @if (attachmentCount() > 0) {
           <p class="mt-2 flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400">
@@ -201,6 +231,8 @@ export class HandoffReviewSheetComponent {
   protected readonly cardId = `handoff-card-${this.uid}`;
   protected readonly cardEditorId = `handoff-card-editor-${this.uid}`;
   protected readonly previewId = `handoff-preview-${this.uid}`;
+  protected readonly filesHintId = `handoff-files-hint-${this.uid}`;
+  protected readonly maxFiles = MAX_SHARED_FILES;
 
   protected readonly cardOpen = signal(false);
   protected readonly editing = signal(false);
@@ -273,6 +305,14 @@ export class HandoffReviewSheetComponent {
 
   protected cancel(): void {
     this.handoff.cancel(this.sessionId());
+  }
+
+  protected toggleFile(uploadId: string, event: Event): void {
+    this.handoff.setFileShared(this.sessionId(), uploadId, (event.target as HTMLInputElement).checked);
+  }
+
+  protected sizeLabel(sizeBytes: number): string {
+    return formatFileSize(sizeBytes);
   }
 
   protected send(): void {

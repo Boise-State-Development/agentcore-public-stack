@@ -269,6 +269,20 @@ export interface FileMetadata {
   sessionId: string;
   status: FileStatus;
   createdAt: string;
+  /**
+   * Set on a file shared from another of the user's conversations by a handoff or a result
+   * brought back (handoffs spec §4.9): the original, and that conversation's title then.
+   */
+  linkedFrom?: LinkedFrom | null;
+  /** For a shared file: whether its original still exists. Absent for every other file. */
+  originalAvailable?: boolean | null;
+}
+
+/** The original a shared file points at (`linkedFrom` on the row). */
+export interface LinkedFrom {
+  sessionId: string;
+  uploadId: string;
+  fromTitle: string;
 }
 
 /**

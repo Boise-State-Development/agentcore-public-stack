@@ -5,13 +5,15 @@ import { firstValueFrom } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
 
 import { ConfigService } from '../../../services/config.service';
+import { FileUploadService } from '../../../services/file-upload/file-upload.service';
 import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ChatRequestService } from '../chat/chat-request.service';
 import { ChatStateService } from '../chat/chat-state.service';
 import { ComposerDraftService } from '../session/composer-draft.service';
+import { MessageMapService } from '../session/message-map.service';
 import { BindingQueryParams, ConversationBindingService } from '../session/conversation-binding.service';
-import { buildHandoffMessage, normalizeContextText, wrapHandoffContext } from './handoff-prompt';
+import { buildHandoffMessage, normalizeContextText, referenceUploadId, wrapHandoffContext } from './handoff-prompt';
 import {
   BriefFallbackReason,
   CreateHandoffResponse,
@@ -19,6 +21,10 @@ import {
   HandoffDraft,
   HandoffReview,
   HandoffView,
+  FileLine,
+  MAX_SHARED_FILES,
+  SHARED_FILES_RECENT_TURNS,
+  ShareableFile,
 } from './handoff.models';
 import { HandoffBriefService } from './handoff-brief.service';
 import { HandoffNotificationService, answeredInSource } from './handoff-notification.service';
@@ -67,6 +73,8 @@ export class AgentHandoffService {
   private readonly features = inject(FEATURES);
   private readonly briefs = inject(HandoffBriefService);
   private readonly notifications = inject(HandoffNotificationService);
+  private readonly fileUpload = inject(FileUploadService);
+  private readonly messageMap = inject(MessageMapService);
 
   /** Targets seen streaming, so a falling edge is a finish and not a row that never started. */
   private readonly streamingTargets = new Set<string>();
@@ -123,8 +131,10 @@ export class AgentHandoffService {
       request: draft.request,
       card: '',
       cardRemoved: false,
+      fileIds: [],
     };
     this.state.setReview(sourceSessionId, review);
+    void this.loadShareableFiles(sourceSessionId);
     try {
       const created = await firstValueFrom(
         this.http.post<CreateHandoffResponse>(this.handoffsUrl(sourceSessionId), {
@@ -171,12 +181,92 @@ export class AgentHandoffService {
   previewPrompt(review: HandoffReview): string {
     const created = review.created;
     if (!created) return review.request.trim();
-    const block = review.cardRemoved
-      ? ''
-      : normalizeContextText(review.card) === normalizeContextText(created.excerpt)
-        ? created.contextBlock
-        : wrapHandoffContext(review.card, created.sourceTitle);
+    const lines = this.sharedFileLines(review);
+    const block = lines.length
+      ? wrapHandoffContext(review.cardRemoved ? '' : review.card, created.sourceTitle, lines)
+      : review.cardRemoved
+        ? ''
+        : normalizeContextText(review.card) === normalizeContextText(created.excerpt)
+          ? created.contextBlock
+          : wrapHandoffContext(review.card, created.sourceTitle);
     return buildHandoffMessage(block, review.request);
+  }
+
+  /** Tick or untick one of the source's files. At most `MAX_SHARED_FILES` go. */
+  setFileShared(sourceSessionId: string, uploadId: string, shared: boolean): void {
+    const review = this.state.reviewFor(sourceSessionId);
+    if (!review) return;
+    const rest = review.fileIds.filter((id) => id !== uploadId);
+    if (shared && rest.length >= MAX_SHARED_FILES) return;
+    const order = (review.files ?? []).map((f) => f.uploadId);
+    const next = shared ? [...rest, uploadId] : rest;
+    this.state.updateReview(sourceSessionId, {
+      fileIds: next.sort((a, b) => order.indexOf(a) - order.indexOf(b)),
+    });
+  }
+
+  /**
+   * The `<file>` lines the target's first message will carry (§4.9), as the server writes them:
+   * one per ticked file, named by its reference row's id in the target.
+   */
+  private sharedFileLines(review: HandoffReview): FileLine[] {
+    const handoffId = review.created?.handoffId;
+    if (!handoffId || !review.fileIds.length) return [];
+    const byId = new Map((review.files ?? []).map((f) => [f.uploadId, f]));
+    return review.fileIds.flatMap((id) => {
+      const file = byId.get(id);
+      if (!file) return [];
+      const original = file.linkedFrom?.uploadId ?? file.uploadId;
+      return [
+        {
+          uploadId: referenceUploadId(original, handoffId),
+          filename: file.filename,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+        },
+      ];
+    });
+  }
+
+  /**
+   * List the source's files for the sheet's checkboxes, ticking those attached in its last
+   * `SHARED_FILES_RECENT_TURNS` user turns (up to `MAX_SHARED_FILES`). A failed listing leaves
+   * the sheet without files, as before PR-0.4a.
+   */
+  private async loadShareableFiles(sourceSessionId: string): Promise<void> {
+    let files: ShareableFile[];
+    try {
+      const listed = await this.fileUpload.listSessionFiles(sourceSessionId);
+      files = listed
+        .filter((f) => f.status === 'ready' && f.originalAvailable !== false)
+        .map((f) => ({
+          uploadId: f.uploadId,
+          filename: f.filename,
+          mimeType: f.mimeType,
+          sizeBytes: f.sizeBytes,
+          linkedFrom: f.linkedFrom ?? null,
+        }));
+    } catch {
+      return;
+    }
+    if (!this.state.reviewFor(sourceSessionId)) return;
+    const recent = this.recentlyAttached(sourceSessionId);
+    const ticked = files.filter((f) => recent.has(f.uploadId)).slice(0, MAX_SHARED_FILES);
+    this.state.updateReview(sourceSessionId, { files, fileIds: ticked.map((f) => f.uploadId) });
+  }
+
+  /** Upload ids attached to the source's last few user messages. */
+  private recentlyAttached(sourceSessionId: string): Set<string> {
+    const messages = untracked(this.messageMap.getMessagesForSession(sourceSessionId));
+    const users = messages.filter((m) => m.role === 'user').slice(-SHARED_FILES_RECENT_TURNS);
+    const ids = new Set<string>();
+    for (const message of users) {
+      for (const block of message.content ?? []) {
+        const id = block.fileAttachment?.uploadId;
+        if (id) ids.add(id);
+      }
+    }
+    return ids;
   }
 
   /** Stop waiting for the brief and keep the excerpt in the card. */
@@ -247,6 +337,8 @@ export class AgentHandoffService {
         message: request,
         handoffId: created.handoffId,
         contextText: review.cardRemoved ? undefined : review.card,
+        sharedFileIds: review.fileIds,
+        filesUnticked: Math.max(0, (review.files?.length ?? 0) - review.fileIds.length),
         fileUploadIds: review.draft.fileUploadIds,
         invokedSkillIds: review.draft.invokedSkillIds,
         folders: review.draft.folders,

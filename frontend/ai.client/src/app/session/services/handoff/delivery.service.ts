@@ -9,6 +9,7 @@ import { DeliveryStateService } from './delivery-state.service';
 import {
   CreateSendBackResponse,
   DeliverSendBackResponse,
+  DeliveryFile,
   DeliveryView,
   HandoffView,
 } from './handoff.models';
@@ -54,7 +55,10 @@ export class DeliveryService {
         this.http.post<CreateSendBackResponse>(`${this.sessionsUrl(target)}/handoffs/send-back`, { deliver: true }),
       );
       if (!created.deliveryId) return;
-      this.state.add(row.sessionId, toCard(created, target, created.deliveryId, created.excerpt, created.artifacts));
+      this.state.add(
+        row.sessionId,
+        toCard(created, target, created.deliveryId, created.excerpt, created.artifacts, created.files ?? []),
+      );
       this.broughtBack.update((s) => new Set(s).add(row.handoffId));
       this.toast.success('Result added to your next message');
     } catch (error) {
@@ -66,6 +70,48 @@ export class DeliveryService {
         return next;
       });
     }
+  }
+
+  /**
+   * Bring back one of the target's files on its own (§4.9): the handoff row's per-file Bring back.
+   * A files-only card on this (the source's) composer; nothing reaches the model until a send.
+   */
+  async bringBackFile(row: HandoffView, file: DeliveryFile): Promise<void> {
+    const target = row.targetSessionId;
+    const key = `${row.handoffId}:${file.uploadId}`;
+    if (!target || this.isBringingBack(key)) return;
+    this.bringing.update((s) => new Set(s).add(key));
+    try {
+      const created = await firstValueFrom(
+        this.http.post<CreateSendBackResponse>(`${this.sessionsUrl(target)}/handoffs/send-back`, {
+          deliver: true,
+          fileIds: [file.uploadId],
+          filesOnly: true,
+        }),
+      );
+      if (!created.deliveryId) return;
+      this.state.add(row.sessionId, toCard(created, target, created.deliveryId, '', [], [file]));
+      this.broughtBack.update((s) => new Set(s).add(key));
+      this.toast.success(`${file.filename} added to your next message`);
+    } catch (error) {
+      this.toast.error('The file couldn’t be brought back', describe(error));
+    } finally {
+      this.bringing.update((s) => {
+        const next = new Set(s);
+        next.delete(key);
+        return next;
+      });
+    }
+  }
+
+  /** A per-file Bring back for this handoff's file is in flight. */
+  isBringingBackFile(handoffId: string, uploadId: string): boolean {
+    return this.isBringingBack(`${handoffId}:${uploadId}`);
+  }
+
+  /** This file was put on the composer in this tab. */
+  wasFileBroughtBack(handoffId: string, uploadId: string): boolean {
+    return this.wasBroughtBack(`${handoffId}:${uploadId}`);
   }
 
   /** Remove a card from a composer. It is dismissed on the server, so a reload doesn't bring it back. */
@@ -113,6 +159,13 @@ export class DeliveryService {
     this.state.updateReview(targetSessionId, { text });
   }
 
+  toggleSendBackFile(targetSessionId: string, uploadId: string, included: boolean): void {
+    const review = this.state.reviewFor(targetSessionId);
+    if (!review) return;
+    const rest = review.fileIds.filter((id) => id !== uploadId);
+    this.state.updateReview(targetSessionId, { fileIds: included ? [...rest, uploadId] : rest });
+  }
+
   toggleSendBackArtifact(targetSessionId: string, artifactId: string, included: boolean): void {
     const review = this.state.reviewFor(targetSessionId);
     if (!review) return;
@@ -130,12 +183,16 @@ export class DeliveryService {
       const sent = await firstValueFrom(
         this.http.post<DeliverSendBackResponse>(
           `${this.sessionsUrl(targetSessionId)}/handoffs/${encodeURIComponent(created.handoffId)}/deliver`,
-          { text: review.text, artifactIds: review.artifactIds },
+          { text: review.text, artifactIds: review.artifactIds, fileIds: review.fileIds },
         ),
       );
       this.state.clearReview(targetSessionId);
       const artifacts = created.artifacts.filter((a) => review.artifactIds.includes(a.artifactId));
-      this.state.add(sent.sourceSessionId, toCard(created, targetSessionId, sent.deliveryId, review.text, artifacts));
+      const files = (created.files ?? []).filter((f) => review.fileIds.includes(f.uploadId));
+      this.state.add(
+        sent.sourceSessionId,
+        toCard(created, targetSessionId, sent.deliveryId, review.text, artifacts, files),
+      );
       this.toast.success(`Sent to ${sent.sourceTitle || 'the original conversation'}`, undefined, {
         action: { label: 'Open', handler: () => void this.router.navigate(['/s', sent.sourceSessionId]) },
       });
@@ -177,6 +234,7 @@ function toCard(
   deliveryId: string,
   text: string,
   artifacts: DeliveryView['artifacts'],
+  files: DeliveryFile[] = [],
 ): DeliveryView {
   return {
     deliveryId,
@@ -186,6 +244,7 @@ function toCard(
     origin: 'user',
     text,
     artifacts,
+    files,
     createdAt: new Date().toISOString(),
   };
 }
