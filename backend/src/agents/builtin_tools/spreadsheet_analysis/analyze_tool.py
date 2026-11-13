@@ -541,8 +541,8 @@ def make_analyze_tool(
         there is nothing to look up or open: read it with ``pd.read_csv``.
         Imports are limited to pandas, numpy, scipy, matplotlib, seaborn and
         the stdlib modules math, statistics, json, datetime, random,
-        collections, itertools, functools, re, decimal, fractions, csv and
-        io. ``open()``, ``os``, ``glob``, ``sys`` and ``openpyxl`` are
+        collections, itertools, functools, re, decimal, fractions, csv, io
+        and time. ``open()``, ``os``, ``glob``, ``sys`` and ``openpyxl`` are
         blocked, and so is ``re.compile``: pass the pattern to
         ``re.search``, ``re.sub`` or ``Series.str.contains`` directly.
 
