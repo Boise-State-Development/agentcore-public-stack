@@ -6,12 +6,12 @@
   "baselineTokens": 558,
   "tools": {
     "analyze_spreadsheet": {
-      "tokens": 1161,
+      "tokens": 1164,
       "tools": {
-        "analyze_spreadsheet": 1161
+        "analyze_spreadsheet": 1164
       },
-      "chars": 3795,
-      "specHash": "d4de2c57db58973e"
+      "chars": 3801,
+      "specHash": "445f032a07bd6494"
     },
     "ask_user_question": {
       "tokens": 678,
