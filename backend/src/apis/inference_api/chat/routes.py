@@ -50,6 +50,7 @@ from apis.shared.feature_flags import (
     skills_enabled,
 )
 from apis.shared.files.document_read import is_document_class
+from apis.shared.files.file_kinds import KIND_DOCUMENT, KIND_PRESENTATION, KIND_TABULAR, any_hint
 from apis.shared.files.file_resolver import get_file_resolver, model_image_source
 from apis.shared.files.inline_persist import get_inline_attachment_persister
 from apis.shared.files.attachment_handle import (
@@ -1449,22 +1450,19 @@ async def _document_tools_gate(
     )
 
 
-def _turn_document_hint(handoff_turn: Optional[HandoffTurn], delivery_turn: Optional[DeliveryTurn]):
-    """One hint for the gate from whichever of the two carries files, or ``None``."""
-    hints = [h for h in (
-        handoff_turn.document_hint() if handoff_turn is not None else None,
-        delivery_turn.document_hint() if delivery_turn is not None else None,
-    ) if h is not None]
-    if not hints:
-        return None
-    if len(hints) == 1:
-        return hints[0]
+def _turn_file_hint(
+    handoff_turn: Optional[HandoffTurn], delivery_turn: Optional[DeliveryTurn], kind: str
+) -> Optional["asyncio.Task[bool]"]:
+    """Whether this send's handoff or deliveries carry a file of ``kind``, or ``None`` (§4.9)."""
+    return any_hint(
+        handoff_turn.kind_hint(kind) if handoff_turn is not None else None,
+        delivery_turn.kind_hint(kind) if delivery_turn is not None else None,
+    )
 
-    async def _any() -> bool:
-        answers = await asyncio.gather(*hints, return_exceptions=True)
-        return any(a is True for a in answers)
 
-    return asyncio.ensure_future(_any())
+async def _optional_hint(hint: Optional["asyncio.Task[bool]"]) -> bool:
+    """``_hint_answer`` for a hint that may be absent."""
+    return False if hint is None else await _hint_answer(hint)
 
 
 def _resolved_files_include_a_document(resolved_files: list | None) -> bool:
@@ -1572,6 +1570,7 @@ async def _session_has_tabular(
     user_id: str,
     turn_has_tabular: bool = False,
     kb_assistant_id: Optional[str] = None,
+    tabular_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> bool:
     """Whether this session's turns need the Spreadsheet Analysis tools.
 
@@ -1584,6 +1583,10 @@ async def _session_has_tabular(
     ``enabled_tools`` and therefore the agent-cache key, so it must not flip
     between the attach turn and the follow-up. Fail-closed on error: a turn
     without the tools is today's behavior, never a broken turn.
+
+    ``tabular_hint`` is a spreadsheet a handoff or delivery carries in (handoffs spec §4.9): its
+    reference row is written during the stream, so the query can't see it on this turn. Awaited
+    beside the query, never before it, so the gate costs what it did.
     """
     if turn_has_tabular:
         _remember_tabular_session(session_id)
@@ -1600,11 +1603,17 @@ async def _session_has_tabular(
 
             # Both reads at once: neither waits on the other, and the gate sits on the
             # path to the first token.
-            in_session, in_kb = await asyncio.gather(
+            in_session, in_kb, hinted = await asyncio.gather(
                 session_has_tabular_files(user_id, session_id),
                 assistant_kb_has_tabular_documents(kb_assistant_id),
+                _optional_hint(tabular_hint),
             )
-            present = in_session or in_kb
+            present = in_session or in_kb or hinted
+        elif tabular_hint is not None:
+            in_session, hinted = await asyncio.gather(
+                session_has_tabular_files(user_id, session_id), _hint_answer(tabular_hint)
+            )
+            present = in_session or hinted
         else:
             present = await session_has_tabular_files(user_id, session_id)
     except Exception:  # noqa: BLE001 - the gate must never fail a turn
@@ -1632,6 +1641,7 @@ async def _session_has_presentation(
     session_id: str,
     user_id: str,
     turn_has_presentation: bool = False,
+    presentation_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> bool:
     """Whether this session's turns need the PowerPoint tools to read a deck.
 
@@ -1639,7 +1649,8 @@ async def _session_has_presentation(
     attaches a .pptx (already partitioned, no query), when the session was
     seen holding one earlier in this process, or when the session's READY
     uploads include one. Sticky for the same reason (the answer feeds the
-    agent-cache key) and fail-closed on error.
+    agent-cache key) and fail-closed on error. ``presentation_hint`` is a deck a handoff or
+    delivery carries in, exactly as ``tabular_hint`` is for ``_session_has_tabular``.
     """
     if turn_has_presentation:
         _remember_presentation_session(session_id)
@@ -1651,7 +1662,13 @@ async def _session_has_presentation(
     try:
         from apis.shared.files.document_read import session_has_presentation_files
 
-        present = await session_has_presentation_files(user_id, session_id)
+        if presentation_hint is not None:
+            in_session, hinted = await asyncio.gather(
+                session_has_presentation_files(user_id, session_id), _hint_answer(presentation_hint)
+            )
+            present = in_session or hinted
+        else:
+            present = await session_has_presentation_files(user_id, session_id)
     except Exception:  # noqa: BLE001 - the gate must never fail a turn
         logger.warning("presentation auto-enable lookup failed; tools not injected this turn", exc_info=True)
         return False
@@ -1679,6 +1696,8 @@ async def _auto_enabled_attachment_tool_ids(
     kb_assistant_id: Optional[str] = None,
     turn_has_presentation: bool = False,
     enabled_tools: list | None = None,
+    tabular_hint: Optional["asyncio.Task[bool]"] = None,
+    presentation_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> list[str]:
     """The attachment-driven tool ids this turn should carry regardless of the
     picker, in a fixed order: the Spreadsheet Analysis ids for a session that
@@ -1699,10 +1718,10 @@ async def _auto_enabled_attachment_tool_ids(
         return []
     spreadsheet_ids, presentation_ids = await asyncio.gather(
         _auto_enabled_spreadsheet_tool_ids(
-            current_user, session_id, user_id, turn_has_tabular, kb_assistant_id
+            current_user, session_id, user_id, turn_has_tabular, kb_assistant_id, tabular_hint
         ),
         _auto_enabled_presentation_tool_ids(
-            current_user, session_id, user_id, turn_has_presentation, enabled_tools
+            current_user, session_id, user_id, turn_has_presentation, enabled_tools, presentation_hint
         ),
     )
     return spreadsheet_ids + presentation_ids
@@ -1714,6 +1733,7 @@ async def _auto_enabled_presentation_tool_ids(
     user_id: str,
     turn_has_presentation: bool,
     enabled_tools: list | None,
+    presentation_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> list[str]:
     """``POWERPOINT_PRESENTATION_TOOL_IDS`` the caller's grant admits, when the
     session holds a deck.
@@ -1738,7 +1758,7 @@ async def _auto_enabled_presentation_tool_ids(
             logger.warning("RBAC check for %s failed; not auto-enabling", tool_id, exc_info=True)
     if not allowed:
         return []
-    if not await _session_has_presentation(session_id, user_id, turn_has_presentation):
+    if not await _session_has_presentation(session_id, user_id, turn_has_presentation, presentation_hint):
         return []
     logger.info(
         "Auto-enabled %s for a session with a presentation attachment (session=%s)",
@@ -1753,11 +1773,12 @@ async def _auto_enabled_spreadsheet_tool_ids(
     user_id: str,
     turn_has_tabular: bool,
     kb_assistant_id: Optional[str],
+    tabular_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> list[str]:
     """Every id in ``SPREADSHEET_TOOL_IDS`` the caller's RBAC grant admits,
     when the session holds a spreadsheet (or, given ``kb_assistant_id``, when
     that assistant's knowledge base does)."""
-    if not await _session_has_tabular(session_id, user_id, turn_has_tabular, kb_assistant_id):
+    if not await _session_has_tabular(session_id, user_id, turn_has_tabular, kb_assistant_id, tabular_hint):
         return []
     role_service = get_app_role_service()
     allowed: list[str] = []
@@ -1783,6 +1804,8 @@ async def _apply_attachment_tool_autoenable(
     turn_has_tabular: bool = False,
     kb_assistant_id: Optional[str] = None,
     turn_has_presentation: bool = False,
+    tabular_hint: Optional["asyncio.Task[bool]"] = None,
+    presentation_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> list | None:
     """``enabled_tools`` for this turn with the attachment auto-enable applied.
 
@@ -1798,6 +1821,8 @@ async def _apply_attachment_tool_autoenable(
         kb_assistant_id=kb_assistant_id,
         turn_has_presentation=turn_has_presentation,
         enabled_tools=enabled_tools,
+        tabular_hint=tabular_hint,
+        presentation_hint=presentation_hint,
     )
     return _with_auto_enabled_tools(enabled_tools, auto_ids)
 
@@ -4373,6 +4398,8 @@ async def _resolve_effective_tools(
     *,
     turn_has_tabular: bool,
     turn_has_presentation: bool = False,
+    tabular_hint: Optional["asyncio.Task[bool]"] = None,
+    presentation_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> Optional[list]:
     """Map stage B11 (in ``tools``): the tool ids this turn actually carries.
 
@@ -4425,6 +4452,8 @@ async def _resolve_effective_tools(
         turn_has_tabular=turn_has_tabular,
         kb_assistant_id=input_data.rag_assistant_id if agent_unbound else None,
         turn_has_presentation=turn_has_presentation,
+        tabular_hint=tabular_hint,
+        presentation_hint=presentation_hint,
     )
 
     # Tools an admin pinned are unioned in for users whose roles grant
@@ -6491,6 +6520,9 @@ async def _run_invocation(
                 or _folders_have(attachments.folders, lambda n, m: file_class(n, m) == CLASS_TABULAR),
                 turn_has_presentation=bool(attachments.diverted_presentations)
                 or _folders_have(attachments.folders, lambda n, m: file_class(n, m) == CLASS_PRESENTATION),
+                # A spreadsheet or deck a handoff or delivery carries in (handoffs spec §4.9).
+                tabular_hint=_turn_file_hint(handoff_turn, delivery_turn, KIND_TABULAR),
+                presentation_hint=_turn_file_hint(handoff_turn, delivery_turn, KIND_PRESENTATION),
             )
 
             # Reassigning these function-scope locals here (before the main-turn
@@ -6514,7 +6546,7 @@ async def _run_invocation(
                 document_ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
                 # Files a handoff or delivery carries in (handoffs spec §4.9), classified from
                 # rows read before the lease; None when the send carries neither.
-                document_hint=_turn_document_hint(handoff_turn, delivery_turn),
+                document_hint=_turn_file_hint(handoff_turn, delivery_turn, KIND_DOCUMENT),
             )
             # Client-executed tools (terminal only; the SPA never declares any).
             # Key-described by construction: the digest is a cache-key element,

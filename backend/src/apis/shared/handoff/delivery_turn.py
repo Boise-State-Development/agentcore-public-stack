@@ -39,11 +39,12 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Sequence, Set
+from typing import Any, FrozenSet, List, Optional, Sequence, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.feature_flags import handoffs_enabled
+from apis.shared.files.file_kinds import KIND_DOCUMENT, FileKindHints, file_kinds
 from apis.shared.files.linked_files import OriginalRef, line_for, rows_for, write_reference_rows
 from apis.shared.handoff.context import context_hash, render_delivery_block
 from apis.shared.handoff.delivery import (
@@ -95,7 +96,7 @@ class DeliveryTurn:
     store: DeliveryStore = field(default_factory=get_delivery_store)
     _attaching: Optional["asyncio.Task[List[AttachedDelivery]]"] = None
     _attach_ms: float = 0.0
-    _hint: Optional["asyncio.Task[bool]"] = None
+    _kinds: Optional[FileKindHints] = None
 
     @classmethod
     def for_turn(
@@ -131,30 +132,32 @@ class DeliveryTurn:
         return turn
 
     def prefetch(self) -> None:
-        """Read this send's cards, read-only, to classify their files for the gate (§4.9).
+        """Read this send's cards, read-only, to classify their files for the tool gates (§4.9).
 
         Before the lease and with no write, so a send that then answers 409 has attached nothing.
         """
-        if self._hint is not None:
+        if self._kinds is not None:
             return
         ids = [r.delivery_id for r in self.requests]
 
-        async def classify() -> bool:
-            from apis.shared.files.document_read import is_document_class
-
+        async def classify() -> FrozenSet[str]:
             rows = await asyncio.to_thread(self.store.batch_get, self.user_id, ids)
-            return any(
-                is_document_class(f.mime_type, f.filename)
+            return file_kinds(
+                (f.mime_type, f.filename)
                 for row in rows
                 if row.status == "pending" and row.to_session_id == self.session_id
                 for f in row.files
             )
 
-        self._hint = asyncio.create_task(classify())
+        self._kinds = FileKindHints(asyncio.ensure_future(classify()))
+
+    def kind_hint(self, kind: str) -> Optional["asyncio.Task[bool]"]:
+        """Whether a card carries a file of ``kind`` (``file_kinds.KIND_*``); ``None`` before ``prefetch``."""
+        return self._kinds.hint(kind) if self._kinds is not None else None
 
     def document_hint(self) -> Optional["asyncio.Task[bool]"]:
         """Whether a card carries a document ``document_read`` reads; ``None`` before ``prefetch``."""
-        return self._hint
+        return self.kind_hint(KIND_DOCUMENT)
 
     def start(self) -> None:
         """Begin the attaches. Call once, at the head of the stream, beside the agent build."""

@@ -48,7 +48,7 @@ class _FakeHandoffTurn:
     def prefetch(self) -> None:
         self.log.append("handoff.prefetch")
 
-    def document_hint(self):
+    def kind_hint(self, kind: str):
         return None
 
     def start(self) -> None:

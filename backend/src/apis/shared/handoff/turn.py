@@ -45,10 +45,11 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apis.shared.files.file_kinds import KIND_DOCUMENT, FileKindHints, file_kinds
 from apis.shared.feature_flags import handoffs_enabled
 from apis.shared.files.linked_files import (
     HANDOFF_MAX_FILES,
@@ -185,7 +186,7 @@ class HandoffTurn:
     observer: HandoffTurnObserver = field(default_factory=HandoffTurnObserver)
     _acceptance: Optional["asyncio.Task[Tuple[Optional[Handoff], str]]"] = None
     _prefetch: Optional["asyncio.Task[Tuple[Optional[Handoff], Dict[str, Any]]]"] = None
-    _hint: Optional["asyncio.Task[bool]"] = None
+    _kinds: Optional[FileKindHints] = None
     #: The target is a Shared Project task (its row names a project): no file crosses into it.
     target_is_project_task: bool = False
 
@@ -275,23 +276,28 @@ class HandoffTurn:
 
         self._prefetch = asyncio.create_task(read())
 
-    def document_hint(self) -> Optional["asyncio.Task[bool]"]:
-        """Whether the shared files include one ``document_read`` reads; ``None`` without files."""
+    def kind_hint(self, kind: str) -> Optional["asyncio.Task[bool]"]:
+        """Whether the shared files include ``kind`` (``file_kinds.KIND_*``); ``None`` without files.
+
+        Each tool gate that reads the conversation's files awaits its own kind beside its query:
+        the reference rows are written during the stream, after the gates ran (§4.9).
+        """
         if self._prefetch is None:
             return None
-        if self._hint is None:
-            from apis.shared.files.document_read import is_document_class
+        if self._kinds is None:
 
-            async def classify() -> bool:
+            async def classify() -> FrozenSet[str]:
                 row, files = await self._prefetch  # type: ignore[misc]
                 if row is None:
-                    return False
-                return any(
-                    is_document_class(o.mime_type, o.filename) for o in self._shareable(row, files)
-                )
+                    return frozenset()
+                return file_kinds((o.mime_type, o.filename) for o in self._shareable(row, files))
 
-            self._hint = asyncio.create_task(classify())
-        return self._hint
+            self._kinds = FileKindHints(asyncio.ensure_future(classify()))
+        return self._kinds.hint(kind)
+
+    def document_hint(self) -> Optional["asyncio.Task[bool]"]:
+        """Whether the shared files include one ``document_read`` reads; ``None`` without files."""
+        return self.kind_hint(KIND_DOCUMENT)
 
     def _shareable(self, row: Handoff, files: Dict[str, Any]) -> List[OriginalRef]:
         """The source files that may cross, as originals, in the order the user listed them.

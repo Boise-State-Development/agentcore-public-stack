@@ -2201,8 +2201,31 @@ has started", and the only one that spends money while nobody is watching.
     sibling controls, never inside the row's link.
   - **The Files panel** (`/files`) marks a reference "From *{title}*", or "No longer available (deleted from
     *{title}*)" when `originalAvailable` is false.
-  - **Not browser-checked** before merge: the local stack has no PR-0.4a backend. The dev check after both
-    merge is §10's dev item: a PDF and a `.docx` out, a Word document back, and the `toolConfigHash` count.
+  - **Browser-checked on dev after both merged**; see *Dev-validated* below.
+
+  *Found on dev and fixed after merge.*
+  - **Every tool gate that reads the conversation's files gets a hint, not only `document_read`'s** (found on
+    dev). The Spreadsheet Analysis and PowerPoint auto-enables query the conversation's READY uploads too, and a
+    shared CSV's reference row did not exist yet when they ran. So a target that received a spreadsheet got
+    `analyze_spreadsheet` on turn 2, not turn 1: the model could not read the file on the turn it arrived, and
+    `toolConfigHash` changed between the two turns, which re-wrote the whole cached prefix once (21,371 tokens
+    on the measured target). The prefetch now classifies the shared files into kinds (`apis/shared/files/file_kinds.py`:
+    document, tabular, presentation, by the same predicates the session queries use), and `_session_has_tabular` /
+    `_session_has_presentation` await their kind's hint beside their query, exactly as the document gate does.
+
+  *Dev-validated (2026-11-13), and TTFT accepted.* Twelve handoffs carried 0, 1, 3 and 5 files.
+  - **TTFT.** `document_hint gateMs` was 4.4–6.8 ms, with `readyAtGate` false every time but never extending
+    past the query. `handoff_files writeMs` was 8.8–10.6 ms whatever the count. The warm `tools` stage was
+    241–267 ms with no files and 254–316 ms with files, which is noise. The developer accepted this.
+  - **Correctness.** The target's wrapper carried the `<file>` lines under deterministic ids, with
+    `originalAvailable` set on the rows. `document_read` quoted the original PDF and .docx.
+  - **SPA, checked in the browser.** The review sheet listed the source's files ticked, and an unticked CSV did
+    not cross. The handoff row listed only the target's own file. Bring back put a card with a download chip on
+    the composer, and the model read the file on send. The sent bubble rebuilt its chip on reload. The Files
+    panel showed "From *{title}*".
+  - **Contrast.** Text contrast passed AA in both themes on the sheet, the row, the card and the Files label;
+    the lowest was 4.84:1. axe itself was not run on dev: the page can't load it from a CDN, and the repo has no
+    `axe-core` installed.
 - **PR-0.5 — `suggest_handoff`.** Tool, `handoff_suggested` event, chip UI that opens the review sheet, replay,
   `CLAUDE.md` SSE table. Marginal CountTokens measured and recorded in the PR.
 - **Dev validation.**

@@ -19,6 +19,8 @@ from moto import mock_aws
 
 from apis.app_api.files.service import FileUploadService
 from apis.shared.files import repository as repository_module
+from apis.shared.files.document_read import is_document_class
+from apis.shared.files.file_kinds import KIND_DOCUMENT, KIND_PRESENTATION, KIND_TABULAR
 from apis.shared.files.linked_files import (
     HANDOFF_MAX_FILES,
     linked_file_gone_message,
@@ -710,6 +712,44 @@ def test_two_concurrent_sends_attaching_one_delivery_write_one_set_of_rows(aws, 
     assert sorted([len(first), len(second)]) == [0, 1]
     assert len(writes) == 1
     assert len([r for r in asyncio.run(aws.repo.list_session_files("src")) if r.linked_from]) == 1
+
+
+@pytest.mark.parametrize(
+    "filename, mime, kinds",
+    [
+        ("grades.csv", "text/csv", {KIND_TABULAR}),
+        ("budget.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", {KIND_TABULAR}),
+        ("deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", {KIND_PRESENTATION}),
+        ("rubric.docx", DOCX, {KIND_DOCUMENT}),
+    ],
+)
+def test_a_handoff_hints_each_gate_that_reads_its_kind_of_file(aws, handoffs, filename, mime, kinds):
+    """The spreadsheet and deck gates get a hint too, not only document_read: on dev a shared
+    CSV switched the analysis tools on at turn 2, re-writing the cached prefix (2026-11-13)."""
+    put(aws, original("orig-x", filename=filename, mime=mime))
+    turn = _first_turn(handoffs, ["orig-x"])
+
+    async def run():
+        turn.prefetch()
+        return {k: await turn.kind_hint(k) for k in (KIND_DOCUMENT, KIND_TABULAR, KIND_PRESENTATION)}
+
+    answers = asyncio.run(run())
+    # A CSV is also a readable document; the other kinds are each exactly their own.
+    assert {k for k, v in answers.items() if v} - {KIND_DOCUMENT} == kinds - {KIND_DOCUMENT}
+    assert answers[KIND_DOCUMENT] == is_document_class(mime, filename)
+
+
+def test_a_card_with_a_spreadsheet_hints_the_spreadsheet_gate(aws, linked):
+    put(aws, original("sheet", session_id="tgt", filename="grades.csv", mime="text/csv"), objects=False)
+    store = DeliveryStore(table=aws.sessions)
+    row = _send(aws, file_ids=["sheet"], store=store)
+    turn = _attach_turn(store, row.delivery_id)
+
+    async def run():
+        turn.prefetch()
+        return await turn.kind_hint(KIND_TABULAR), await turn.kind_hint(KIND_PRESENTATION)
+
+    assert asyncio.run(run()) == (True, False)
 
 
 def test_a_card_with_a_document_hints_the_gate_before_it_is_attached(aws, linked):
