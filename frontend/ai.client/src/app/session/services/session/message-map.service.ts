@@ -11,6 +11,7 @@ import { UserQuestionService } from '../../../services/user-question/user-questi
 import { validateUserQuestions } from '../../../shared/utils/stream-parser';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { ToolInsightService } from '../chat/tool-insight.service';
+import { DeliveryStateService } from '../handoff/delivery-state.service';
 import { HandoffStateService } from '../handoff/handoff-state.service';
 import { normalizeSteeringMessages } from '../chat/steering';
 import { matchToolResultsToToolUses } from './tool-results';
@@ -102,6 +103,7 @@ export class MessageMapService {
   private mcpAppState = inject(McpAppStateService);
   private toolInsight = inject(ToolInsightService);
   private handoffState = inject(HandoffStateService);
+  private deliveryState = inject(DeliveryStateService);
   private injector = inject(Injector);
   private chatStateService = inject(ChatStateService);
 
@@ -235,6 +237,12 @@ export class MessageMapService {
     content: string,
     fileAttachments?: FileAttachmentData[],
     folderAttachments?: FolderAttachmentData[],
+    /**
+     * What the model receives when it differs from what was typed (cards from another conversation
+     * before it, handoffs spec §4.8). The bubble then shows `content` as `displayText`, the shape a
+     * reload returns, so the two render alike.
+     */
+    modelText?: string,
   ): Message {
     const messageIndex = this.nextMessageIndex(sessionId);
 
@@ -261,12 +269,13 @@ export class MessageMapService {
     }
 
     // Add text content block
-    contentBlocks.push({ type: 'text', text: content });
+    contentBlocks.push({ type: 'text', text: modelText ?? content });
 
     const message: Message = {
       id: messageId,
       role: 'user',
-      content: contentBlocks
+      content: contentBlocks,
+      ...(modelText !== undefined ? { metadata: { displayText: content } } : {}),
     };
 
     this.messageMap.update(map => {
@@ -604,6 +613,8 @@ export class MessageMapService {
         messagesResponse.handoffs,
         messagesResponse.spawnedFrom,
       );
+      // Cards sent back into this conversation (spec §4.8), for its composer.
+      this.deliveryState.hydrate(sessionId, messagesResponse.deliveries);
     } finally {
       if (showLoading) {
         this._isLoadingSession.set(null);

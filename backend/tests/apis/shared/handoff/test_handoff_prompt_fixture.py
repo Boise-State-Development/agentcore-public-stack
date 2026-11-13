@@ -40,3 +40,19 @@ def test_the_server_still_builds_what_the_fixture_says(case):
     assert block == case["contextBlock"]
     assert build_handoff_message(block, case["request"]) == case["prompt"]
     assert (context_hash(case["card"]) if case["card"] else None) == case["hash"]
+
+
+def _delivery_cases():
+    if not FIXTURE.exists():
+        pytest.skip("frontend package not in this checkout")
+    return json.loads(FIXTURE.read_text())["deliveryCases"]
+
+
+@pytest.mark.parametrize("case", _delivery_cases(), ids=lambda c: c["name"])
+def test_the_server_still_renders_the_delivery_blocks_the_fixture_says(case):
+    from apis.shared.handoff.context import render_delivery_block
+    from apis.shared.handoff.delivery import DeliveryArtifact
+
+    artifacts = [DeliveryArtifact.model_validate(a) for a in case["artifacts"]]
+
+    assert render_delivery_block(case["text"], case["fromTitle"], artifacts) == case["block"]
