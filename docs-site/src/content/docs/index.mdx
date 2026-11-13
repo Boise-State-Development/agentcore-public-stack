@@ -1,25 +1,25 @@
 ---
 title: AgentCore Public Stack
-description: The open-source AI platform for universities and state and local government. Chat, agents, tools, knowledge and governance on AWS Bedrock AgentCore and Strands Agents, deployed into an AWS account you control.
+description: The AI platform for public institutions on AWS. Chat, agents, tools and connectors on Amazon Bedrock AgentCore, governed in code, measured in public, and deployed into an AWS account you control.
 template: splash
 hero:
   title: |
-    <span class="hero-kicker">Strands · AgentCore · Open source</span>
-    Own your AI platform,
-    <span class="hero-accent">on your own cloud.</span>
-  tagline: The open-source AI platform for universities and state and local government. Chat, agents, tools, knowledge and governance, deployed into an AWS account you control. Built by Boise State University, designed for every public institution.
+    <span class="hero-kicker">Amazon Bedrock AgentCore · Source-available</span>
+    Governed in code,
+    <span class="hero-accent">measured in public.</span>
+  tagline: The AI platform for public institutions on AWS, deployed into your own AWS account. Every model, tool and connector is a role grant your admins control, every model call is metered to the token, and every release publishes its quality, speed and cost. Source-available, and free for universities, public research and government. Built by Boise State University.
   actions:
-    - text: Get started
-      link: /agentcore-public-stack/getting-started/introduction/
+    - text: Deploy it
+      link: /agentcore-public-stack/getting-started/quick-start/
       icon: right-arrow
       variant: primary
-    - text: See the roadmap
-      link: /agentcore-public-stack/roadmap/
-      icon: rocket
+    - text: See the benchmarks
+      link: /agentcore-public-stack/benchmarks/
+      icon: list-format
       variant: minimal
-    - text: View on GitHub
-      link: https://github.com/Boise-State-Development/agentcore-public-stack
-      icon: external
+    - text: Read the governance model
+      link: /agentcore-public-stack/configuration/governance/
+      icon: approve-check
       variant: minimal
 ---
 
@@ -60,6 +60,31 @@ import adminCosts from '../../assets/screenshots/admin-cost-analytics.png';
 	<span class="lp-chip">Audit log</span>
 </div>
 
+{/* ── Four pillars ───────────────────────────────────────────────────── */}
+
+<section id="pillars" class="lp-section lp-reveal">
+	<p class="lp-eyebrow"><span class="lp-eyebrow-num">◆</span> what sets it apart</p>
+	<h2 class="lp-h2">four things a rented platform <span class="lp-accent">can't give you.</span></h2>
+	<div class="lp-manifesto-grid lp-manifesto-grid--four">
+		<div class="lp-manifesto-item">
+			<h3>Governance you can read.</h3>
+			<p>Every model, tool and connector is a role grant, decided by one access rule you can read and test. Admin areas are delegated from a closed list with no wildcard, the audit log keeps before-and-after values and denied escalation attempts, and new capabilities ship switched off. <a href="/agentcore-public-stack/configuration/governance/">The governance model</a>.</p>
+		</div>
+		<div class="lp-manifesto-item">
+			<h3>Your models, tools and connectors.</h3>
+			<p>Choose Claude, Nova, Llama and Mistral from Bedrock, plus GPT and Gemini. Register any MCP server from the admin console. Sign-in to 25 providers is built in, among them Google, Microsoft, Canvas, GitHub, Slack, Zoom, Salesforce, Atlassian and Okta, so each user connects with their own account.</p>
+		</div>
+		<div class="lp-manifesto-item">
+			<h3>Results in public.</h3>
+			<p>Every release runs 143 synthetic cases on each model we list and publishes what passed, the cost per task and the time per task, failures included. Every number links to the case and commit behind it, and one command reruns it on your deployment. <a href="/agentcore-public-stack/benchmarks/">The benchmarks</a>.</p>
+		</div>
+		<div class="lp-manifesto-item">
+			<h3>Built for AWS.</h3>
+			<p>Model usage bills through your AWS account and agreement. Data stays in your account and region, under your IAM, CloudTrail and service control policies. AgentCore Runtime, Memory, Gateway, Identity, Browser and Code Interpreter, composed in one CDK stack and deployed from GitHub Actions in under an hour.</p>
+		</div>
+	</div>
+</section>
+
 {/* ── Why this exists ───────────────────────────────────────────────── */}
 
 <section id="why" class="lp-section lp-reveal">
@@ -70,7 +95,7 @@ import adminCosts from '../../assets/screenshots/admin-cost-analytics.png';
 			Per-seat subscriptions do not scale to a campus or a workforce. Student, employee and
 			resident data has to stay under institutional control. And the vendor landscape changes
 			every quarter, while each vendor pitches its own ecosystem as the safe place to wait it
-			out. At 30,000 users, commercial subscriptions would cost upwards of $7.2M a year. This
+			out. At 30,000 users, commercial subscriptions at $20 a seat per month would cost $7.2M a year. This
 			platform delivers the same capabilities for the cost of the AWS resources people
 			actually use.
 		</p>
@@ -81,7 +106,7 @@ import adminCosts from '../../assets/screenshots/admin-cost-analytics.png';
 		<div class="lp-manifesto-grid">
 			<div class="lp-manifesto-item">
 				<h3>The harness is yours.</h3>
-				<p>The chat surface, agents, tools and governance are open-source code deployed in your AWS account: infrastructure you control, not a subscription you rent. The only harness truly separate from the model is one you can read, fork and run yourself.</p>
+				<p>The chat surface, agents, tools and governance are source-available code deployed in your AWS account: infrastructure you control, not a subscription you rent. The only harness truly separate from the model is one you can read, fork and run yourself.</p>
 			</div>
 			<div class="lp-manifesto-item">
 				<h3>Models are swappable.</h3>
@@ -374,8 +399,8 @@ Deployed. Your models, your data, your bill.`}</pre>
 		<details>
 			<summary>Is this an official AWS product?</summary>
 			<p>
-				No. It is the <em>unofficial</em> frontend for Strands and AgentCore: an independent
-				open-source project that builds on those AWS services and tracks them closely.
+				No. It is the <em>unofficial</em> frontend for Strands and AgentCore: an independent,
+				source-available project that builds on those AWS services and tracks them closely.
 			</p>
 		</details>
 		<details>

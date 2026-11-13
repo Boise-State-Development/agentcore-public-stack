@@ -831,6 +831,13 @@ site-search button[data-open-modal] kbd {
 	}
 }
 
+/* Four items read as a 2×2 block, not three and an orphan. */
+@media (min-width: 48rem) {
+	.lp-manifesto-grid.lp-manifesto-grid--four {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
 .lp-manifesto-item {
 	padding: 1.15rem 1.3rem;
 	border: 1px solid color-mix(in oklab, var(--brand) 22%, transparent);
