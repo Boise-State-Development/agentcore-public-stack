@@ -220,6 +220,12 @@ interface Message {
    * message text, so it is always exactly what the thread will show.
    */
   invokedSkillIds?: string[];
+  /**
+   * How many characters of `content` were pasted rather than typed. A count only, sent so
+   * the turn's cost row can tell a large paste from context the server added
+   * (docs/one-pagers/idle-return-context.md). Absent when nothing was pasted.
+   */
+  pastedChars?: number;
 }
 
 /**
@@ -253,6 +259,8 @@ interface QueuedMessage {
   storedFolders?: StoredFolder[];
   mentionAgentId?: string;
   invokedSkillIds?: string[];
+  /** Characters of `content` that were pasted, counted when it was queued. */
+  pastedChars?: number;
   /**
    * True once the backend has confirmed this entry is armed against the
    * running turn, so it may land at the agent's next tool boundary rather than
@@ -376,6 +384,11 @@ export class ChatInputComponent {
   private readonly steering = inject(SteeringService);
   private readonly chatState = inject(ChatStateService);
   private readonly sessionPrewarm = inject(SessionPrewarmService);
+  /**
+   * Characters pasted into the composer since the last send. Not state the
+   * template reads, so a plain field; reset when the text is emptied or sent.
+   */
+  private pastedChars = 0;
   private readonly composerDraft = inject(ComposerDraftService);
   private readonly draftStorage = inject(ComposerDraftStorageService);
   private readonly toolService = inject(ToolService);
@@ -1585,6 +1598,7 @@ export class ChatInputComponent {
         folders: next.folders,
         mentionAgentId: next.mentionAgentId,
         invokedSkillIds: next.invokedSkillIds,
+        pastedChars: next.pastedChars,
       });
     });
 
@@ -1877,6 +1891,7 @@ export class ChatInputComponent {
       storedFolders: folders.length > 0 ? this.folderDraft() : undefined,
       mentionAgentId: this.mentionedAgent()?.agentId,
       invokedSkillIds: this.invokedSkillIds(),
+      pastedChars: this.takePastedChars(content),
     };
     this.queuedMessages.update(queue => [...queue, entry]);
 
@@ -2029,6 +2044,7 @@ export class ChatInputComponent {
       folders: folders.length > 0 ? folders : undefined,
       mentionAgentId: this.mentionedAgent()?.agentId,
       invokedSkillIds: this.invokedSkillIds(),
+      pastedChars: this.takePastedChars(content),
     });
 
     // Clear input and pending uploads. The mention clears with them: it belongs to the
@@ -2375,6 +2391,24 @@ export class ChatInputComponent {
     }
   }
 
+  /**
+   * Count what the user pastes. Only the length is kept — never the text — and
+   * the composer's own handling of the paste is untouched.
+   */
+  onTextareaPaste(event: ClipboardEvent): void {
+    this.pastedChars += event.clipboardData?.getData('text/plain').length ?? 0;
+  }
+
+  /**
+   * The paste count for a send of `content`, and reset it. Capped at the sent
+   * text's length: a paste the user then trimmed must not outgrow the message.
+   */
+  private takePastedChars(content: string): number | undefined {
+    const count = Math.min(this.pastedChars, content.length);
+    this.pastedChars = 0;
+    return count > 0 ? count : undefined;
+  }
+
   onTextareaInput(event: Event) {
     // First keystroke or paste in an existing conversation: start its Runtime
     // microVM while the user finishes typing (session prewarm). A no-op unless
@@ -2382,6 +2416,8 @@ export class ChatInputComponent {
     this.sessionPrewarm.noteTyping();
     this.settleHints();
     const textarea = event.target as HTMLTextAreaElement;
+    // Text cleared by hand: whatever was pasted into it is gone too.
+    if (!textarea.value) this.pastedChars = 0;
     this.userInput.set(textarea.value);
     this.dropStaleMention(textarea.value);
     this.autoResize(textarea);

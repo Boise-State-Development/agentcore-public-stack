@@ -433,6 +433,57 @@ describe('ChatInputComponent — the `/` skill-command menu', () => {
     expect(payload?.invokedSkillIds).toBeUndefined();
   });
 
+  describe('paste count (a length only, never the text)', () => {
+    function paste(text: string): void {
+      // jsdom has no DataTransfer, so the event carries a stub with the one
+      // method the composer reads.
+      const event = new Event('paste', { bubbles: true });
+      Object.defineProperty(event, 'clipboardData', {
+        value: { getData: (type: string) => (type === 'text/plain' ? text : '') },
+      });
+      textarea.dispatchEvent(event);
+      type(textarea.value + text);
+    }
+
+    function sent(): { pastedChars?: number } | undefined {
+      let payload: { pastedChars?: number } | undefined;
+      component.messageSubmitted.subscribe((event) => (payload = event));
+      component.submitChatRequest();
+      return payload;
+    }
+
+    it('sends how many characters were pasted', () => {
+      type('Summarise this: ');
+      paste('x'.repeat(5_000));
+      expect(sent()?.pastedChars).toBe(5_000);
+    });
+
+    it('omits the field when nothing was pasted', () => {
+      type('typed by hand');
+      expect(sent()?.pastedChars).toBeUndefined();
+    });
+
+    it('never counts more than the message holds', () => {
+      paste('y'.repeat(400));
+      type('short');
+      expect(sent()?.pastedChars).toBe(5);
+    });
+
+    it('forgets a paste once the text is cleared', () => {
+      paste('z'.repeat(300));
+      type('');
+      type('fresh message');
+      expect(sent()?.pastedChars).toBeUndefined();
+    });
+
+    it('starts again from zero after a send', () => {
+      paste('a'.repeat(50));
+      sent();
+      type('next one, typed');
+      expect(sent()?.pastedChars).toBeUndefined();
+    });
+  });
+
   it('tints the command in place, and deleting it un-invokes, because the text is the binding', () => {
     type('/brand-deck make me a deck');
     const marked = component['highlightSegments']()?.filter((segment) => segment.mark);

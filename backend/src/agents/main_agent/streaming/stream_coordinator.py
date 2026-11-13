@@ -346,6 +346,7 @@ class StreamCoordinator:
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
         turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
         poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
@@ -379,6 +380,9 @@ class StreamCoordinator:
                 class, tokens, reason, upload id; ``docs/specs/unified-attachment-delivery.md``
                 §8.2), or None for a turn with no attachments. Written as ``attachmentPlan``
                 on the turn's last cost row, after the stream. Per turn, like turn_agent_id.
+            turn_pasted_chars: Characters of the user's message the composer counted as
+                pasted, or None. Written as ``pastedChars`` on the turn's last cost row,
+                beside ``attachmentPlan``; never reaches the prompt.
             turn_lease: This turn's single-flight ``SessionLease``, which doubles as the
                 mid-turn steering inbox. Stamped onto the session manager for the life of
                 the turn so ``SteeringHook`` can read it at each tool boundary — and
@@ -1470,6 +1474,7 @@ class StreamCoordinator:
                         turn_agent_id=turn_agent_id,
                         turn_project_id=turn_project_id,
                         turn_attachment_plan=turn_attachment_plan,
+                        turn_pasted_chars=turn_pasted_chars,
                     )
 
                     # Skip the original error event and exit the loop - we've handled the error
@@ -1729,6 +1734,7 @@ class StreamCoordinator:
                     turn_agent_id=turn_agent_id,
                     turn_project_id=turn_project_id,
                     turn_attachment_plan=turn_attachment_plan,
+                    turn_pasted_chars=turn_pasted_chars,
                     outcome=turn_outcome,
                     empty_answer=empty_answer,
                 )
@@ -1868,6 +1874,7 @@ class StreamCoordinator:
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
                 turn_attachment_plan=turn_attachment_plan,
+                turn_pasted_chars=turn_pasted_chars,
                 meter_usage=meter_usage,
                 model_retries=model_retries_seen,
             )
@@ -1920,6 +1927,7 @@ class StreamCoordinator:
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
                 turn_attachment_plan=turn_attachment_plan,
+                turn_pasted_chars=turn_pasted_chars,
                 meter_usage=meter_usage,
                 model_retries=model_retries_seen,
             )
@@ -1998,6 +2006,7 @@ class StreamCoordinator:
                     turn_agent_id=turn_agent_id,
                     turn_project_id=turn_project_id,
                     turn_attachment_plan=turn_attachment_plan,
+                    turn_pasted_chars=turn_pasted_chars,
                 )
         finally:
             # The first model output was the stream's last event (or the turn
@@ -2215,6 +2224,7 @@ class StreamCoordinator:
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
         turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
         meter_usage: bool = True,
         model_retries: int = 0,
         original_message: Optional[str] = None,
@@ -2455,6 +2465,7 @@ class StreamCoordinator:
                             turn_agent_id=turn_agent_id,
                             turn_project_id=turn_project_id,
                             turn_attachment_plan=turn_attachment_plan,
+                            turn_pasted_chars=turn_pasted_chars,
                             # The breakdown describes the call in flight, so
                             # only a row for that call may carry it.
                             attach_context_breakdown=metered[-1] == in_flight_idx,
@@ -4204,6 +4215,7 @@ class StreamCoordinator:
         turn_agent_id: Optional[str],
         turn_project_id: Optional[str],
         turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
         attach_context_breakdown: bool = True,
         outcome: Optional[str] = None,
         empty_answer: bool = False,
@@ -4313,6 +4325,8 @@ class StreamCoordinator:
                     turn_project_id=turn_project_id,
                     # The turn's attachment plan, on its last row only (a turn counts once there).
                     turn_attachment_plan=turn_attachment_plan if is_last else None,
+                    # How much of the user's message was pasted, on the same row (a count only).
+                    turn_pasted_chars=turn_pasted_chars if is_last else None,
                     turn_outcome=outcome,
                     empty_answer=empty_answer and is_last,
                     tool_calls=(
@@ -4357,6 +4371,7 @@ class StreamCoordinator:
         turn_agent_id: Optional[str],
         turn_project_id: Optional[str],
         turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
     ) -> None:
         """Meter the model calls a failed turn made before it failed.
 
@@ -4421,6 +4436,7 @@ class StreamCoordinator:
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
                 turn_attachment_plan=turn_attachment_plan,
+                turn_pasted_chars=turn_pasted_chars,
                 attach_context_breakdown=False,
                 outcome="error",
             )
@@ -4497,6 +4513,7 @@ class StreamCoordinator:
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
         turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
         tool_calls: Optional[Dict[str, Dict[str, int]]] = None,
         context_ledger: Optional[Dict[str, Any]] = None,
         turn_duration_ms: Optional[int] = None,
@@ -4761,6 +4778,11 @@ class StreamCoordinator:
                 # the first token.
                 if turn_attachment_plan:
                     metadata_kwargs["attachmentPlan"] = turn_attachment_plan
+                # Characters of the user's message that were pasted, as the composer
+                # counted them (docs/one-pagers/idle-return-context.md). A number,
+                # never text; on the turn's last row, like the attachment plan.
+                if turn_pasted_chars:
+                    metadata_kwargs["pastedChars"] = int(turn_pasted_chars)
 
                 # Content-free tool census for this call (tool name → calls /
                 # errors), another extra field. Read by the admin session

@@ -7,7 +7,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from apis.shared.client_tools import ClientToolSpec, validate_client_tools
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
 from apis.shared.browser_takeover import coerce_frame_height
@@ -153,6 +153,21 @@ class InvocationRequest(BaseModel):
     # event, the client runs it and resumes with the result. Absent for every
     # web turn — the SPA has nothing to execute. See `apis.shared.client_tools`.
     client_tools: Optional[List[ClientToolSpec]] = None
+    # How many characters of `message` the user pasted rather than typed, as
+    # the composer counted them. A number only, never the text: it is written
+    # as `pastedChars` on the turn's last cost row so a large paste can be told
+    # apart from context the server injected (docs/one-pagers/idle-return-context.md).
+    # Measurement only: nothing reaches the prompt. Clamped to the message length
+    # on validation; absent from clients that don't count (the terminal, the API).
+    pasted_chars: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _bound_pasted_chars(self) -> "InvocationRequest":
+        # A count from the client is a hint: a bad one is dropped rather than
+        # failing the turn, and it never exceeds the message it describes.
+        count = self.pasted_chars
+        self.pasted_chars = min(count, len(self.message)) if count and count > 0 and self.message else None
+        return self
 
     @field_validator("client_tools")
     @classmethod

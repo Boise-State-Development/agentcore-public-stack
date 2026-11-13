@@ -6951,6 +6951,9 @@ async def _run_invocation(
                 # for the turn's cost row. Ids, codes and numbers only; the
                 # coordinator writes it after the stream.
                 turn_attachment_plan=attachments.plan.to_row() if attachments.plan else None,
+                # Characters of the message the composer counted as pasted, for the
+                # same row (a count, never text; clamped to the message on validation).
+                turn_pasted_chars=input_data.pasted_chars,
                 # This turn's lease doubles as the mid-turn steering inbox
                 # (docs/specs/mid-turn-steering.md). Passed per turn for the
                 # same reason as turn_agent_id — the agent is cached, the lease
