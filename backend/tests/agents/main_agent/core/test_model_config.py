@@ -397,7 +397,7 @@ class TestThinkingBinding:
         monkeypatch.setenv("AGENTCORE_MCP_APPS_HOST_ENABLED", "false")
 
     @pytest.mark.parametrize(
-        "model_id", ["us.anthropic.claude-haiku-5-5", "us.anthropic.claude-opus-5-5"]
+        "model_id", ["us.anthropic.claude-haiku-5-5", "us.anthropic.claude-opus-5-5", "us.anthropic.claude-sonnet-5-5"]
     )
     def test_default_request_gets_summarized_adaptive_thinking_with_drop_block(self, model_id):
         arf = ModelConfig(
@@ -413,7 +413,7 @@ class TestThinkingBinding:
         assert arf["output_config"] == {"effort": "medium"}
 
     @pytest.mark.parametrize(
-        "model_id", ["global.anthropic.claude-haiku-5-5", "global.anthropic.claude-opus-5-5"]
+        "model_id", ["global.anthropic.claude-haiku-5-5", "global.anthropic.claude-opus-5-5", "global.anthropic.claude-sonnet-5-5"]
     )
     def test_global_profile_is_covered_too(self, model_id):
         arf = ModelConfig(model_id=model_id).to_bedrock_config()["additional_request_fields"]

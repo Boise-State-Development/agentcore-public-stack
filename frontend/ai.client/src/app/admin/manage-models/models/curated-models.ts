@@ -254,6 +254,52 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
     },
   },
   {
+    key: 'claude-sonnet-5-5',
+    tagline: 'Anthropic\'s Sonnet 5.5 — a smarter Sonnet for coding, agents and knowledge work.',
+    capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Long context', 'Prompt caching'],
+    pricingTier: 'regional',
+    template: {
+      ...claude4xDefaults(),
+      // `us.` because dev's SCP denies every `global.*` profile: the `us.`
+      // profile now exists in us-west-2 (it did not at launch, 2026-09-28, when
+      // this model was Global-only) and dev invoked it 2026-11-13. Prod has no
+      // SCP: `global.anthropic.claude-sonnet-5-5` at $2.00 / $10.00 is the
+      // cheaper id there, as for Opus 5.5.
+      modelId: 'us.anthropic.claude-sonnet-5-5',
+      modelName: 'Claude Sonnet 5.5',
+      shortDescription: 'Strong reasoning, mid quota use',
+      // Card: 1M context, 128K output, June 2026 cutoff. The 128K output cap is
+      // the endpoint's own (128,001 400s, 2026-11-13).
+      maxInputTokens: 1_000_000,
+      maxOutputTokens: 128_000,
+      // Regional (CRIS): $2.20 / $11.00, cache write $2.75 (1.25x) — Price List
+      // API, `AmazonBedrockFoundationModels`, us-west-2, 2026-11-13. Cache READ
+      // is $0.11, **0.05x** input like Opus 5.5, not the 0.1x default; the
+      // Global rows ($2.00 / $10.00, read $0.10) show the same ratio.
+      ...ratesWithDerivedCache(2.2, 11.0, 0.05),
+      knowledgeCutoffDate: '2026-06-01',
+      // Measured against `us.anthropic.claude-sonnet-5-5` 2026-11-13, the same
+      // contract as Opus 5.5: a non-default temperature and any top_p 400
+      // ("deprecated for this model"), `thinking.type.disabled` 400s (the floor
+      // is `between_tools`) and `enabled` 400s, so no sampling or `thinking`
+      // param is declared; the backend sends the summarized adaptive dict and
+      // the drop_block binding itself (`_apply_thinking_binding`). The effort
+      // enum is the endpoint's own 400 on a bogus level; `medium` matches every
+      // other effort-based row here. max_tokens defaults to 64K for the reason
+      // given on the Opus 5.5 row; a capped call costs ~$0.70 at $11/MTok.
+      supportedParams: {
+        params: {
+          max_tokens: { supported: true, min: 1, max: 128_000, default: 64_000 },
+          effort: {
+            supported: true,
+            allowed: ['low', 'medium', 'high', 'xhigh', 'max'],
+            default: 'medium',
+          },
+        },
+      },
+    },
+  },
+  {
     key: 'claude-sonnet-5',
     tagline: 'Anthropic\'s Sonnet 5 — 1M-token context with effort-based reasoning.',
     capabilities: ['Effort control', 'Vision', 'Long context', 'Prompt caching'],
@@ -263,6 +309,8 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       modelId: 'global.anthropic.claude-sonnet-5',
       modelName: 'Claude Sonnet 5',
       shortDescription: 'Strong reasoning over very long context',
+      // Superseded by Claude Sonnet 5.5 at the same rates.
+      isFeatured: false,
       maxInputTokens: 1_000_000,
       maxOutputTokens: 128_000,
       // Global: $2.00 / $10.00 — correct as declared, this id really is

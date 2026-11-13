@@ -267,6 +267,8 @@ describe('ModelCatalogPage', () => {
       const WRITE_MULTIPLIER: Record<string, number> = { 'gpt-5-5': 0 };
       const READ_MULTIPLIER: Record<string, number> = {
         'claude-opus-5-5': 0.05,
+        // Price List, 2026-11-13: $0.11 read on $2.20 input.
+        'claude-sonnet-5-5': 0.05,
         'gpt-6-1-sol': 0.05,
       };
       for (const model of tieredModels) {
@@ -595,6 +597,8 @@ describe('ModelCatalogPage', () => {
     // now catches. A template default cannot assume what else gets added.
     const DEMOTED = [
       'claude-opus-4-7',
+      // Superseded by Claude Sonnet 5.5 at the same rates.
+      'claude-sonnet-5',
       'claude-sonnet-4-6',
       'qwen3-coder-30b',
       'gpt-5-5',

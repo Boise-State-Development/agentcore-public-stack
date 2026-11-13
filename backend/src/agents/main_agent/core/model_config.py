@@ -56,7 +56,10 @@ _FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
 # without it.
 _THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
 _THINKING_BINDING_DROP_BLOCK = {"prefix_mismatch_behavior": "drop_block"}
-_BEDROCK_THINKING_BINDING_MARKERS = ("claude-haiku-5-5", "claude-opus-5-5")
+# Sonnet 5.5 probed 2026-11-13 the same way: the binding 400s without the beta
+# and is accepted with it, and a replayed signed block bills while the prefix
+# ahead of it is byte-identical and 0 once the system prompt changes.
+_BEDROCK_THINKING_BINDING_MARKERS = ("claude-haiku-5-5", "claude-opus-5-5", "claude-sonnet-5-5")
 
 
 class ModelProvider(str, Enum):
@@ -172,6 +175,9 @@ _BEDROCK_ADAPTIVE_THINKING_MARKERS = (
     # Adaptive is always on; no curated row declares `thinking`, so this only
     # shapes an admin-set budget the way Haiku 5.5's is shaped.
     "claude-opus-5-5",
+    # Probed 2026-11-13: `enabled` 400s ("not supported for this model. Use
+    # thinking.type.adaptive"), as on Haiku 5.5.
+    "claude-sonnet-5-5",
 )
 
 
@@ -186,7 +192,7 @@ def _bedrock_uses_adaptive_thinking(model_id: Optional[str]) -> bool:
 #: stripped, everything else identical), at the thinking config each model's
 #: turns run under:
 #:
-#: - ``"bound"`` — Haiku 5.5 and Opus 5.5 with the ``drop_block`` binding
+#: - ``"bound"`` — Haiku 5.5, Opus 5.5 and Sonnet 5.5 (probed 2026-11-13) with the ``drop_block`` binding
 #:   (``_apply_thinking_binding``): a block is billed, on every later turn,
 #:   while the system prompt and the history ahead of it are byte-identical to
 #:   when it was produced; once either changes (a compaction cut prepends the

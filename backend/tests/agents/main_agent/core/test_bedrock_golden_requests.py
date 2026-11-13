@@ -50,6 +50,16 @@ CASES = [
         "",
         "true",
     ),
+    # Same contract as Opus 5.5 (probed 2026-11-13); its curated row is the
+    # `us.` id and the 64K default.
+    (
+        "sonnet55-thinking",
+        "us.anthropic.claude-sonnet-5-5",
+        {"max_tokens": 64000, "effort": "medium"},
+        True,
+        "",
+        "true",
+    ),
     (
         "opus47-thinking",
         "us.anthropic.claude-opus-4-7",
