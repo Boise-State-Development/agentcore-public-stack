@@ -50,6 +50,7 @@ SONNET46 = "us.anthropic.claude-sonnet-4-6"
 OPUS47 = "us.anthropic.claude-opus-4-7"
 HAIKU55 = "us.anthropic.claude-haiku-5-5"
 OPUS55 = "us.anthropic.claude-opus-5-5"
+SONNET55 = "us.anthropic.claude-sonnet-5-5"
 
 #: (signature characters, billed tokens) measured on dev, 2026-11-11.
 MEASURED_SIGNATURES = [
@@ -81,6 +82,7 @@ class TestReplayMode:
         [
             (HAIKU55, REASONING_REPLAY_BOUND),
             (OPUS55, REASONING_REPLAY_BOUND),
+            (SONNET55, REASONING_REPLAY_BOUND),
             (SONNET46, REASONING_REPLAY_PRESERVED),
             (OPUS47, REASONING_REPLAY_PRESERVED),
             (HAIKU45, REASONING_REPLAY_STRIPPED),

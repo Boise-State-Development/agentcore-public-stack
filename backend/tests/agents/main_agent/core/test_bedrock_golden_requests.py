@@ -50,6 +50,17 @@ CASES = [
         "",
         "true",
     ),
+    # Same contract as Opus 5.5 (probed 2026-11-13): the curated row's `us.` id
+    # and params, so the summarized dict, binding and beta come from
+    # model_config._apply_thinking_binding.
+    (
+        "sonnet55-thinking",
+        "us.anthropic.claude-sonnet-5-5",
+        {"max_tokens": 128000, "effort": "medium"},
+        True,
+        "",
+        "true",
+    ),
     (
         "opus47-thinking",
         "us.anthropic.claude-opus-4-7",

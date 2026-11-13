@@ -54,9 +54,16 @@ _FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
 # Probed on dev (Haiku 5.5 2026-11-03, Opus 5.5 2026-11-06): accepted with the
 # beta, and "thinking.adaptive.block_binding: Extra inputs are not permitted"
 # without it.
+#
+# Sonnet 5.5 probed on dev 2026-11-13 (`us.anthropic.claude-sonnet-5-5`):
+# the same two answers, and `{type: "disabled"}` 400s ("send between_tools
+# instead"), so it thinks by default like the other two. Anthropic's contract
+# gives it the same "omitted" default display and history-editing check. A
+# second probe the same day, at effort `max` with this binding, did think: the
+# call returned a summarized reasoning block (2,348 signature characters).
 _THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
 _THINKING_BINDING_DROP_BLOCK = {"prefix_mismatch_behavior": "drop_block"}
-_BEDROCK_THINKING_BINDING_MARKERS = ("claude-haiku-5-5", "claude-opus-5-5")
+_BEDROCK_THINKING_BINDING_MARKERS = ("claude-haiku-5-5", "claude-opus-5-5", "claude-sonnet-5-5")
 
 
 class ModelProvider(str, Enum):
@@ -172,6 +179,8 @@ _BEDROCK_ADAPTIVE_THINKING_MARKERS = (
     # Adaptive is always on; no curated row declares `thinking`, so this only
     # shapes an admin-set budget the way Haiku 5.5's is shaped.
     "claude-opus-5-5",
+    # Same as Opus 5.5: `budget_tokens` is a 400 on this model.
+    "claude-sonnet-5-5",
 )
 
 
@@ -186,7 +195,9 @@ def _bedrock_uses_adaptive_thinking(model_id: Optional[str]) -> bool:
 #: stripped, everything else identical), at the thinking config each model's
 #: turns run under:
 #:
-#: - ``"bound"`` — Haiku 5.5 and Opus 5.5 with the ``drop_block`` binding
+#: - ``"bound"`` — Haiku 5.5, Opus 5.5 and Sonnet 5.5 (measured 2026-11-13:
+#:   the replayed block billed 706 input tokens with the system prompt
+#:   unchanged and 0 once it changed) with the ``drop_block`` binding
 #:   (``_apply_thinking_binding``): a block is billed, on every later turn,
 #:   while the system prompt and the history ahead of it are byte-identical to
 #:   when it was produced; once either changes (a compaction cut prepends the

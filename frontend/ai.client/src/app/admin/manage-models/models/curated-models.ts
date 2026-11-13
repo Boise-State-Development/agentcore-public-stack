@@ -254,6 +254,53 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
     },
   },
   {
+    key: 'claude-sonnet-5-5',
+    tagline: 'Anthropic\'s current Sonnet — speed and capability for everyday coding, agent and knowledge work.',
+    capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Long context', 'Prompt caching'],
+    pricingTier: 'regional',
+    template: {
+      ...claude4xDefaults(),
+      // `us.` because dev's SCP denies every `global.*` profile. Bedrock
+      // shipped this model `global.*`-only (2026-09-28); the `us.` profile
+      // appeared later (seen in us-west-2 2026-11-13). Prod has no SCP:
+      // `global.anthropic.claude-sonnet-5-5` at $2.00 / $10.00 (cache read
+      // $0.10) is the cheaper id there.
+      modelId: 'us.anthropic.claude-sonnet-5-5',
+      modelName: 'Claude Sonnet 5.5',
+      shortDescription: 'Strong reasoning over very long context',
+      // Card: 1M context, 128K output, June 2026 cutoff.
+      maxInputTokens: 1_000_000,
+      maxOutputTokens: 128_000,
+      // Regional (CRIS): $2.20 / $11.00, cache write $2.75 (1.25x) — Sonnet
+      // 5's rates. Cache READ is $0.11, **0.05x** input (half Sonnet 5's
+      // ratio): Price List API, `AmazonBedrockFoundationModels`, us-west-2,
+      // 2026-11-13. The Global rows ($2.00 / $0.10) show the same ratio.
+      ...ratesWithDerivedCache(2.2, 11.0, 0.05),
+      knowledgeCutoffDate: '2026-06-01',
+      // Measured against `us.anthropic.claude-sonnet-5-5` 2026-11-13:
+      // temperature 400s ("deprecated for this model") and
+      // `thinking.type.disabled` 400s (it asks for `between_tools` instead),
+      // so no sampling or `thinking` param is declared, exactly like Opus
+      // 5.5. The effort enum is the endpoint's own 400 on a bogus level. The backend
+      // sends the thinking dict itself (summarized display + the drop_block
+      // binding, `_apply_thinking_binding` in model_config.py). The card's
+      // default effort is `high`; `medium` is Anthropic's starting point for
+      // agentic tool use on this model and matches the other effort rows.
+      // max_tokens defaults to Sonnet 5's 128K, since this row replaces it at
+      // the same output rate; a call bills only the tokens it writes.
+      supportedParams: {
+        params: {
+          max_tokens: { supported: true, min: 1, max: 128_000, default: 128_000 },
+          effort: {
+            supported: true,
+            allowed: ['low', 'medium', 'high', 'xhigh', 'max'],
+            default: 'medium',
+          },
+        },
+      },
+    },
+  },
+  {
     key: 'claude-sonnet-5',
     tagline: 'Anthropic\'s Sonnet 5 — 1M-token context with effort-based reasoning.',
     capabilities: ['Effort control', 'Vision', 'Long context', 'Prompt caching'],
@@ -262,7 +309,9 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       ...claude4xDefaults(),
       modelId: 'global.anthropic.claude-sonnet-5',
       modelName: 'Claude Sonnet 5',
-      shortDescription: 'Strong reasoning over very long context',
+      shortDescription: 'Previous-generation Sonnet',
+      // Superseded by Claude Sonnet 5.5 at the same rates (cheaper cache reads).
+      isFeatured: false,
       maxInputTokens: 1_000_000,
       maxOutputTokens: 128_000,
       // Global: $2.00 / $10.00 — correct as declared, this id really is
