@@ -1,0 +1,195 @@
+---
+// The published eval results (backend/scripts/eval_harness.py publish, spec §19).
+// Reads src/data/benchmarks.json, which the release process regenerates, and
+// renders a summary per model and a per-workflow table across models.
+// Every failing case links to the file that defines it, so a reader can see
+// exactly what was asked and what counted as a pass.
+import results from '../data/benchmarks.json';
+
+interface Family {
+	family: string;
+	kind: 'gating' | 'advisory' | 'judged';
+	cases: number;
+	passing: number;
+	failing: string[];
+	samples: number;
+	costPerSampleUsd: number | null;
+	modelCalls: number | null;
+	outputTokens: number | null;
+	inputTokens: number | null;
+	turnMs: number | null;
+	turnMsP90: number | null;
+	firstTokenMs: number | null;
+}
+interface Run {
+	model: string;
+	k: number;
+	date: string;
+	appVersion: string;
+	gitCommit: string;
+	runtimeImage: string;
+	environment: string;
+	totals: {
+		cases: number;
+		passing: number;
+		samples: number;
+		measuredSamples: number;
+		costUsd: number;
+		modelCalls: number;
+		outputTokens: number;
+		inputTokens: number;
+		turnMs: number | null;
+		firstTokenMs: number | null;
+	};
+	families: Family[];
+}
+
+const runs = results.runs as Run[];
+const repo = 'https://github.com/Boise-State-Development/agentcore-public-stack';
+const caseFile = (family: string) => `${repo}/blob/develop/backend/evals/cases/${family}.json`;
+const commit = (sha: string) => `${repo}/commit/${sha}`;
+
+const label: Record<string, string> = {
+	tool_selection: 'Tool selection',
+	document_qa: 'Document Q&A',
+	attachment_tools: 'Attachments: tools',
+	project_kb: 'Project knowledge base',
+	agent_harness: 'Custom agents',
+	project_memory: 'Project memory',
+	skill_outcome: 'Skills: outcome',
+	terminal: 'Terminal client',
+	usage_patterns: 'Costly workflows',
+	retention: 'Long conversations',
+	instruction_following: 'Instruction following',
+	refusal: 'Refusals',
+	skill_selection: 'Skills: selection',
+	general_chat: 'General chat',
+};
+const families = [...new Set(runs.flatMap((r) => r.families.map((f) => f.family)))];
+const cell = (run: Run, family: string) => run.families.find((f) => f.family === family);
+const money = (v: number | null) => (v === null ? '—' : `$${v < 0.01 ? v.toFixed(4) : v.toFixed(3)}`);
+const secs = (v: number | null) => (v === null ? '—' : `${(v / 1000).toFixed(1)} s`);
+const shortModel = (m: string) => m.replace(/^(us|global)\.anthropic\./, '').replace(/^(us|global)\./, '');
+const perTask = (r: Run) => (r.totals.measuredSamples ? r.totals.costUsd / r.totals.measuredSamples : null);
+---
+
+<div class="bench">
+	<div class="scroll" tabindex="0" role="region" aria-label="Every model, the whole golden set">
+	<table>
+		<caption>Every model, the whole golden set</caption>
+		<thead>
+			<tr>
+				<th scope="col">Model</th>
+				<th scope="col">Cases passing</th>
+				<th scope="col">Cost per task</th>
+				<th scope="col">Median task time</th>
+				<th scope="col">Median first token</th>
+				<th scope="col">Run</th>
+			</tr>
+		</thead>
+		<tbody>
+			{runs.map((r) => (
+				<tr>
+					<th scope="row"><code>{shortModel(r.model)}</code></th>
+					<td>{r.totals.passing} of {r.totals.cases} <span class="muted">(k={r.k})</span></td>
+					<td>{money(perTask(r))}</td>
+					<td>{secs(r.totals.turnMs)}</td>
+					<td>{secs(r.totals.firstTokenMs)}</td>
+					<td>
+						{r.date}, v{r.appVersion},{' '}
+						<a href={commit(r.gitCommit)}><code>{r.gitCommit.slice(0, 9)}</code></a>
+					</td>
+				</tr>
+			))}
+		</tbody>
+	</table>
+	</div>
+
+	<div class="scroll" tabindex="0" role="region" aria-label="By workflow">
+	<table>
+		<caption>By workflow: cases passing, cost per task and median task time</caption>
+		<thead>
+			<tr>
+				<th scope="col">Workflow</th>
+				{runs.map((r) => <th scope="col"><code>{shortModel(r.model)}</code></th>)}
+			</tr>
+		</thead>
+		<tbody>
+			{families.map((family) => (
+				<tr>
+					<th scope="row">
+						<a href={caseFile(family)}>{label[family] ?? family}</a>
+						{cell(runs[0], family)?.kind !== 'gating' && (
+							<span class="muted"> · {cell(runs[0], family)?.kind}</span>
+						)}
+					</th>
+					{runs.map((r) => {
+						const f = cell(r, family);
+						return f ? (
+							<td>
+								<strong>{f.passing}/{f.cases}</strong> · {money(f.costPerSampleUsd)} · {secs(f.turnMs)}
+							</td>
+						) : (
+							<td>—</td>
+						);
+					})}
+				</tr>
+			))}
+		</tbody>
+	</table>
+	</div>
+
+	<h3>Every failing case</h3>
+	<p>A case fails when most of its samples fail. Each links to the file that defines what was asked and what counts as a pass.</p>
+	<ul>
+		{runs.map((r) => (
+			<li>
+				<code>{shortModel(r.model)}</code>:{' '}
+				{r.families.flatMap((f) => f.failing).length === 0
+					? 'none'
+					: r.families.flatMap((f) =>
+							f.failing.map((id) => (
+								<>
+									<a href={caseFile(f.family)}><code>{id}</code></a>{' '}
+								</>
+							)),
+						)}
+			</li>
+		))}
+	</ul>
+	<p class="muted">
+		Measured on a {runs[0]?.environment}. Generated {results.generatedAt} by
+		<code>eval_harness.py publish</code>; the raw document is
+		<a href={`${repo}/blob/develop/docs-site/src/data/benchmarks.json`}>benchmarks.json</a>.
+	</p>
+</div>
+
+<style>
+	.bench .scroll {
+		overflow-x: auto;
+		margin-block: 1rem;
+	}
+	.bench .scroll:focus-visible {
+		outline: 2px solid var(--sl-color-accent);
+		outline-offset: 2px;
+	}
+	.bench table {
+		display: table;
+		width: max-content;
+		min-width: 100%;
+		margin: 0;
+		font-size: var(--sl-text-sm);
+	}
+	.bench caption {
+		text-align: start;
+		font-weight: 600;
+		padding-block-end: 0.5rem;
+	}
+	.bench td,
+	.bench th {
+		white-space: nowrap;
+	}
+	.bench .muted {
+		color: var(--sl-color-gray-3);
+	}
+</style>

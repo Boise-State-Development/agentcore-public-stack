@@ -52,9 +52,9 @@ def test_call_totals_sum_every_call_however_input_was_billed():
     rows = [
         {"tokenUsage": {"inputTokens": Decimal("2"), "cacheReadInputTokens": Decimal("900"),
                         "cacheWriteInputTokens": Decimal("50"), "outputTokens": Decimal("1200")}},
-        {"tokenUsage": {"inputTokens": 3, "outputTokens": 30}},
+        {"tokenUsage": {"inputTokens": 3, "outputTokens": 30}, "cost": {"total": Decimal("0.0021")}},
     ]
-    assert call_totals(rows) == {"modelCalls": 2.0, "outputTokens": 1230.0, "inputTokens": 955.0}
+    assert call_totals(rows) == {"modelCalls": 2.0, "outputTokens": 1230.0, "inputTokens": 955.0, "costUsd": 0.0021}
 
 
 def _baseline(cases):

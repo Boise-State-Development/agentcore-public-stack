@@ -240,3 +240,34 @@ class TestFailureCode:
     def test_an_unknown_sentence_is_other_never_an_error(self):
         assert failure_code("a check nobody mapped") == ("other", None)
         assert failure_code("") == ("other", None)
+
+
+# --------------------------------------------------------------------------- forbidden_in_code
+
+
+def test_code_blocks_are_the_fenced_bodies_only():
+    from apis.shared.evals.score import code_blocks
+
+    text = "Use `calculator` here.\n```python\nresult = calculator()\n```\nThen\n~~~\nsecond\n~~~\n"
+    assert "result = calculator()" in code_blocks(text) and "second" in code_blocks(text)
+    assert "Use" not in code_blocks(text)
+    assert code_blocks("no code at all, just `inline`") == ""
+    assert "tail" in code_blocks("start\n```\ntail never closed")
+
+
+def test_forbidden_in_code_ignores_prose_and_inline_code():
+    from apis.shared.evals.cases import Expect
+    from apis.shared.evals.score import score_sample
+
+    expect = Expect(forbidden_in_code=("calculator",))
+    prose = "I won't write that. It would call `calculator`, which I can explain instead."
+    assert score_sample(expect, final_message=prose, tool_calls=[]).passed
+    code = "Here you go:\n```python\ncalculator()\n```"
+    scored = score_sample(expect, final_message=code, tool_calls=[])
+    assert not scored.passed and scored.failures == ("code contains a forbidden value",)
+
+
+def test_forbidden_in_code_failures_have_a_code():
+    from apis.shared.evals.score import failure_code
+
+    assert failure_code("code contains a forbidden value") == ("forbidden_value", None)

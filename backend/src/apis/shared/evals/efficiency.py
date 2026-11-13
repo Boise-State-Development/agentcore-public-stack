@@ -66,11 +66,16 @@ def _number(value: Any) -> Optional[float]:
 def call_totals(rows: Sequence[Mapping[str, Any]]) -> Dict[str, float]:
     """One session's totals over every model call, from its ``C#`` rows.
 
-    ``{modelCalls, outputTokens, inputTokens}``; input is uncached, cache-read
-    and cache-written together. Numbers only: this is what ``calls.json`` holds.
+    ``{modelCalls, outputTokens, inputTokens, costUsd}``; input is uncached,
+    cache-read and cache-written together, and ``costUsd`` is what the platform
+    metered for the calls at its catalog rates. Numbers only: this is what
+    ``calls.json`` holds.
     """
-    totals = {"modelCalls": 0.0, "outputTokens": 0.0, "inputTokens": 0.0}
+    totals = {"modelCalls": 0.0, "outputTokens": 0.0, "inputTokens": 0.0, "costUsd": 0.0}
     for row in rows:
+        cost = row.get("cost")
+        total = cost.get("total") if isinstance(cost, Mapping) else cost
+        totals["costUsd"] = round(totals["costUsd"] + (_number(_plain_number(total)) or 0.0), 8)
         usage = row.get("tokenUsage") if isinstance(row.get("tokenUsage"), Mapping) else {}
         totals["modelCalls"] += 1
         totals["outputTokens"] += _number(_plain_number(usage.get("outputTokens"))) or 0.0

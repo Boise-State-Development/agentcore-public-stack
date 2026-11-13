@@ -1,0 +1,27 @@
+---
+title: Benchmarks
+description: Quality, speed and cost of every workflow in the golden set, measured on each release and published with the cases that produced them.
+sidebar:
+  order: 1
+---
+
+import BenchmarkResults from '../../../components/BenchmarkResults.astro';
+
+These are the platform's own eval results, published as they come out of the release run. Every number here can be checked: each workflow links to the cases that produced it, each run links to the commit it measured, and [one command](./reproduce/) runs the same benchmark on your own deployment.
+
+The cases are synthetic by design. Every prompt, document and expected answer was written for the benchmark, so the results carry no user's data and nothing is withheld, including the cases a model fails.
+
+Three measurements, for each model and each workflow:
+
+- **Quality.** Cases passing out of cases run. Each case runs three times, and a case passes when most of its samples pass. Failing cases are listed by name.
+- **Speed.** Median time for the whole task, every turn of it, as the deployed runtime measured it, and the median time to the first streamed token.
+- **Cost.** Mean dollars per task, as the platform metered the model calls at its catalog rates, passing and failing samples alike.
+
+<BenchmarkResults />
+
+## Reading the numbers
+
+- **Families are small.** Most have 8 to 24 cases, so one case is several points. The counts are shown rather than percentages for that reason.
+- **"Costly workflows"** reproduces the usage patterns that carry the most cost in production: revising a document over several turns, fetching pages, and analysing spreadsheets. Its cases also cap how many tool calls a task may take, so a model that loops fails there even when its final answer is right.
+- **Advisory** families report without gating a release; **judged** ones are scored by a model rather than a fixed check. See [Methodology](./methodology/) for what each measurement does and does not tell you.
+- **Prices are the development deployment's.** It runs Regional (`us.*`) inference profiles, about 10% above the Global ones a production deployment can use. Tokens and times compare across the two; dollars scale.

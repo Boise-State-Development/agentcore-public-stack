@@ -626,3 +626,74 @@ def test_a_baseline_from_before_efficiency_scores_as_before(tmp_path, golden, ca
     assert eval_harness.main(flags + ["score", "--out", str(new)]) == 0
     out = capsys.readouterr().out
     assert "no baseline efficiency" in out and "moved:" not in out
+
+
+# --------------------------------------------------------------------------- publish
+
+
+def test_publish_refuses_an_incomplete_run(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000)
+    lines = (run / "results.jsonl").read_text().splitlines()
+    (run / "results.jsonl").write_text("\n".join(lines[:-1]) + "\n")
+    out = tmp_path / "public.json"
+    assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out), "--no-cost-rows"]) == 2
+    assert "fewer than k=3" in capsys.readouterr().err and not out.exists()
+
+
+def test_publish_refuses_samples_without_a_metered_cost(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000)  # calls.json has no costUsd
+    out = tmp_path / "public.json"
+    assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out), "--no-cost-rows"]) == 2
+    assert "no metered cost" in capsys.readouterr().err and not out.exists()
+
+
+def test_publish_writes_the_document_and_the_headline(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000, failing="a")
+    calls = json.loads((run / "calls.json").read_text())
+    (run / "calls.json").write_text(json.dumps({s: {**c, "costUsd": 0.002} for s, c in calls.items()}))
+    out, headline = tmp_path / "public.json", tmp_path / "headline.md"
+    assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out),
+                                      "--markdown", str(headline), "--no-cost-rows"]) == 0
+    document = json.loads(out.read_text())
+    (family,) = document["runs"][0]["families"]
+    assert family["failing"] == ["tool_selection.a"] and family["passing"] == 7
+    assert "7 of 8 (k=3)" in headline.read_text()
+    assert "eval-" not in out.read_text()
+
+
+# --------------------------------------------------------------------------- rescore
+
+
+def test_rescore_reapplies_the_current_checks_without_touching_answers(tmp_path, golden, capsys):
+    """Stored outcomes that disagree with the cases' checks are corrected both ways; answers stay."""
+    flags, _ = golden
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "meta.json").write_text(json.dumps({"model_id": MODEL, "k": 1, "startedAt": "t"}), encoding="utf-8")
+    rows = [
+        # Called the calculator, but stored as a failure: the check now passes it.
+        {"case_id": "tool_selection.a", "family": "tool_selection", "sample": 0, "passed": False,
+         "failures": ["stale"], "final_message": "42", "tool_calls": [{"name": "calculator"}]},
+        # Never called it, but stored as a pass: the check now fails it.
+        {"case_id": "tool_selection.b", "family": "tool_selection", "sample": 0, "passed": True,
+         "failures": [], "final_message": "42", "tool_calls": []},
+    ]
+    original = "".join(json.dumps(r) + "\n" for r in rows)
+    (run / "results.jsonl").write_text(original, encoding="utf-8")
+
+    assert eval_harness.main(flags + ["rescore", "--out", str(run)]) == 0
+    after = {r["case_id"]: r for r in map(json.loads, (run / "results.jsonl").read_text().splitlines())}
+    assert after["tool_selection.a"]["passed"] is True and after["tool_selection.a"]["failures"] == []
+    assert after["tool_selection.b"]["passed"] is False
+    assert after["tool_selection.b"]["failures"] == ["did not call calculator"]
+    assert all(r["final_message"] == "42" for r in after.values())
+    assert (run / "results.jsonl.bak").read_text() == original
+    assert "rescoredAt" in json.loads((run / "meta.json").read_text())
+    out = capsys.readouterr().out
+    assert "2 sample(s) changed" in out and "tool_selection.a, tool_selection.b" in out
