@@ -271,8 +271,9 @@ first look, not the whole proof.
   the long-lived dev deployment, not an ephemeral stack, through
   `scripts/nightly/eval-harness.sh`: it re-seeds the eval user
   (`backend/scripts/seed_eval_user.py`, idempotent), runs the six gating
-  families once per case as that user, and scores them against the committed
-  Haiku baseline. `document_qa` stages its eight large documents first and
+  families once per case as that user on each model in `EVAL_MODEL_IDS`
+  (Haiku 5.5 and Opus 5.5 by default), and scores each against its own
+  committed baseline; a model that fails never stops the next one. `document_qa` stages its eight large documents first and
   waits for them to become searchable (about 3 minutes on dev). The step is `continue-on-error`, shows a regression as
   "partial" in the nightly summary, and uploads `eval-harness-report-dev`
   (kept 90 days); one sample per case is a smoke signal, and the gate is the
