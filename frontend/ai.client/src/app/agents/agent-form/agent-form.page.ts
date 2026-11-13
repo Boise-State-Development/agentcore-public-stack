@@ -7,6 +7,7 @@ import {
   ElementRef,
   OnInit,
   OnDestroy,
+  Injector,
 } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import {
@@ -32,6 +33,7 @@ import {
   heroCheck,
   heroAdjustmentsHorizontal,
   heroChevronDown,
+  heroMicrophone,
 } from '@ng-icons/heroicons/outline';
 import { Dialog } from '@angular/cdk/dialog';
 import { PickerComponent } from '@ctrl/ngx-emoji-mart';
@@ -68,6 +70,7 @@ import {
   ShareAgentDialogData,
 } from '../components/share-agent-dialog.component';
 import { KnowledgeBaseSectionComponent } from '../../knowledge-base/knowledge-base-section.component';
+import { KnowledgeModeService, VoiceKnowledgeModeStatus } from '../../knowledge-base/knowledge-mode.service';
 import { ToolService, retirementDetail } from '../../services/tool/tool.service';
 import { modelRetirementDetail } from '../../shared/utils/retirement';
 import { AGENT_TEMPLATE_DRAFT_KEY, TemplateDraft } from './agent-templates';
@@ -149,6 +152,7 @@ const AUTHOR_HIDDEN_PARAMS: ReadonlySet<string> = new Set(['max_tokens']);
       heroCheck,
       heroAdjustmentsHorizontal,
       heroChevronDown,
+      heroMicrophone,
     }),
   ],
 })
@@ -163,6 +167,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
   private dialog = inject(Dialog);
   private host = inject(ElementRef<HTMLElement>);
   private toolService = inject(ToolService);
+  private injector = inject(Injector);
 
   form!: FormGroup;
   private formSub?: Subscription;
@@ -338,6 +343,67 @@ export class AgentFormPage implements OnInit, OnDestroy {
     },
   ];
 
+  /** #625: mirrors the voiceEnabled control so the voice section's notices show only when it is on. */
+  readonly liveVoiceEnabled = signal(false);
+  /** #625: how the saved knowledge base would reach a voice conversation. Null until read. */
+  readonly voiceKnowledge = signal<VoiceKnowledgeModeStatus | null>(null);
+
+  /**
+   * #625: one sentence about the knowledge base in voice, or null when there is nothing
+   * to say. Voice has no search step, so a knowledge base reaches it whole or not at all.
+   */
+  readonly voiceKnowledgeNotice = computed<{ tone: 'warning' | 'info'; text: string } | null>(() => {
+    const kb = this.voiceKnowledge();
+    if (!this.liveVoiceEnabled() || !kb) return null;
+    const tokens = (n: number) => `about ${n.toLocaleString()} tokens`;
+    switch (kb.mode) {
+      case 'large':
+        return {
+          tone: 'warning',
+          text:
+            `This knowledge base is ${tokens(kb.estimatedTokens)}. Voice sends all of it to each conversation, ` +
+            `so voice sessions may take longer to start, cost more and miss details. Voice works best under ` +
+            `${kb.largeTokens.toLocaleString()} tokens.`,
+        };
+      case 'too_large':
+        return {
+          tone: 'warning',
+          text:
+            kb.estimatedTokens > 0
+              ? `This knowledge base is too large for a voice conversation (${tokens(kb.estimatedTokens)}; the limit ` +
+                `is ${kb.budgetTokens.toLocaleString()}). Voice won't use it.`
+              : "This knowledge base's files are too large for a voice conversation. Voice won't use it.",
+        };
+      case 'unreadable':
+        return {
+          tone: 'warning',
+          text:
+            kb.reason === 'no_text_layer'
+              ? "Voice can't read one of these documents (a scan with no text), so it won't use this knowledge base."
+              : "Voice can only read text documents (PDF, Word, text, Markdown, HTML), so it won't use this knowledge base.",
+        };
+      case 'off':
+        return { tone: 'info', text: "Knowledge bases aren't available in voice mode on this deployment." };
+      case 'whole':
+        return kb.skippedDocuments.length
+          ? { tone: 'info', text: `Voice can't read spreadsheets or presentations: ${kb.skippedDocuments.join(', ')}.` }
+          : null;
+      default:
+        return null;
+    }
+  });
+
+  /**
+   * #625: the selected tools voice mode leaves out. A tool loads in voice only when an
+   * admin marked it as available in voice (fast, and useful to a listener).
+   */
+  readonly toolsNotInVoice = computed<string[]>(() =>
+    this.tools()
+      .filter((t) => this.isToolSelected(t.ref) && t.meta?.['voiceAvailable'] !== true)
+      .map((t) => t.label)
+      .sort((a, b) => a.localeCompare(b)),
+  );
+
   /** Model/params/bindings resolve from the SAVED record, so the preview needs a
    * save to reflect changes to them. Persona/instructions preview live. `form.dirty`
    * covers the persona fields; this flag covers the out-of-form binding signals. */
@@ -370,6 +436,15 @@ export class AgentFormPage implements OnInit, OnDestroy {
       allowDocumentDownload: [true],
       // #112: 'balanced' is today's behavior.
       responseStrictness: ['balanced'],
+      // #625: voice is opt-in per agent; when on, it uses only the agent's instructions
+      // unless the author adds the built-in voice guidelines.
+      voiceEnabled: [false],
+      voiceInstructionsOnly: [true],
+    });
+
+    // #625: read how the knowledge base reaches voice when the author turns voice on.
+    this.form.get('voiceEnabled')!.valueChanges.subscribe((on: boolean) => {
+      if (on) void this.refreshVoiceKnowledge();
     });
 
     // #111 dependency: downloads are only meaningful when citations are shown. When the
@@ -420,6 +495,17 @@ export class AgentFormPage implements OnInit, OnDestroy {
     this.liveFormStarters.set(this.starters.value || []);
     this.liveShowCitations.set(this.form.get('showCitations')?.value !== false);
     this.liveResponseStrictness.set(this.form.get('responseStrictness')?.value ?? 'balanced');
+    this.liveVoiceEnabled.set(this.form.get('voiceEnabled')?.value === true);
+  }
+
+  /** #625: re-read the knowledge base's voice mode. Needs a saved agent; editors only. */
+  private async refreshVoiceKnowledge(): Promise<void> {
+    const id = this.agentId();
+    if (!id || this.isViewer()) return;
+    // Resolved on first use: it is only needed once an author turns voice on, and the
+    // knowledge-base section already owns the HTTP-backed mode reads on this page.
+    const knowledgeMode = this.injector.get(KnowledgeModeService);
+    this.voiceKnowledge.set(await knowledgeMode.getVoiceMode(id));
   }
 
   /**
@@ -591,6 +677,9 @@ export class AgentFormPage implements OnInit, OnDestroy {
       showCitations: agent.showCitations ?? true,
       allowDocumentDownload: agent.allowDocumentDownload ?? true,
       responseStrictness: agent.responseStrictness ?? 'balanced',
+      // #625: absent (legacy agent or template draft) ⇒ voice off, instructions only.
+      voiceEnabled: agent.voiceEnabled ?? false,
+      voiceInstructionsOnly: agent.voiceInstructionsOnly ?? true,
     });
     // Reflect the citations→downloads dependency for the freshly loaded values.
     this.syncDownloadToggleEnabled(agent.showCitations ?? true);
@@ -1015,6 +1104,8 @@ export class AgentFormPage implements OnInit, OnDestroy {
       showCitations: v.showCitations !== false,
       allowDocumentDownload: v.showCitations !== false ? v.allowDocumentDownload !== false : false,
       responseStrictness: v.responseStrictness ?? 'balanced',
+      voiceEnabled: v.voiceEnabled === true,
+      voiceInstructionsOnly: v.voiceInstructionsOnly !== false,
     };
 
     this.saving.set(true);

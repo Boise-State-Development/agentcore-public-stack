@@ -111,3 +111,63 @@ class TestGates:
         setup.assessment = RuntimeError("S3 is down")
         response = _get(setup)
         assert response.status_code == 200 and response.json()["mode"] == "unknown"
+
+
+# ─────────────────────────────────────────────────────────────── voice mode (#625)
+@pytest.fixture
+def voice(setup, monkeypatch):
+    monkeypatch.delenv(fc.VOICE_MAX_TOKENS_ENV, raising=False)
+    app = FastAPI()
+    app.include_router(km.voice_router)
+    app.dependency_overrides[get_current_user_from_session] = lambda: USER
+    setup.client = TestClient(app)
+    return setup
+
+
+def _voice_get(state):
+    return state.client.get(f"/assistants/{AGENT}/knowledge-base/voice-mode")
+
+
+class TestVoiceVerdicts:
+    def test_within_the_text_budget_is_whole(self, voice):
+        body = _voice_get(voice).json()
+        assert body["mode"] == "whole"
+        assert body["estimatedTokens"] == 12_000
+        assert body["largeTokens"] == 50_000
+        assert body["budgetTokens"] == fc.DEFAULT_VOICE_MAX_TOKENS
+        # Assessed under voice's ceiling, not the text budget.
+        assert voice.calls == [(AGENT, fc.DEFAULT_VOICE_MAX_TOKENS)]
+
+    def test_over_the_text_budget_is_large(self, voice):
+        voice.assessment = _assessment(eligible=True, document_count=9, text_chars=400_000)
+        body = _voice_get(voice).json()
+        assert body["mode"] == "large" and body["estimatedTokens"] == 100_000
+
+    @pytest.mark.parametrize("reason", [fc.REASON_OVER_BUDGET, fc.REASON_DOCUMENT_OVER_BUDGET, fc.REASON_RAW_BYTES])
+    def test_over_the_voice_ceiling_is_too_large(self, voice, reason):
+        voice.assessment = _assessment(reason=reason, text_chars=4_000_000)
+        body = _voice_get(voice).json()
+        assert body["mode"] == "too_large" and body["reason"] == reason
+
+    @pytest.mark.parametrize("reason", [fc.REASON_NO_TEXT_LAYER, fc.REASON_NO_TEXT_DOCUMENTS])
+    def test_nothing_readable_is_unreadable(self, voice, reason):
+        voice.assessment = _assessment(reason=reason, skipped=("grades.xlsx",))
+        body = _voice_get(voice).json()
+        assert body["mode"] == "unreadable" and body["skippedDocuments"] == ["grades.xlsx"]
+
+    def test_empty(self, voice):
+        voice.assessment = _assessment(reason=fc.REASON_EMPTY)
+        assert _voice_get(voice).json()["mode"] == "empty"
+
+    def test_a_zero_ceiling_keeps_knowledge_bases_out_of_voice(self, voice, monkeypatch):
+        monkeypatch.setenv(fc.VOICE_MAX_TOKENS_ENV, "0")
+        assert _voice_get(voice).json()["mode"] == "off"
+        assert voice.calls == []
+
+    def test_a_failure_is_unknown(self, voice):
+        voice.assessment = RuntimeError("s3 down")
+        assert _voice_get(voice).json()["mode"] == "unknown"
+
+    def test_a_viewer_is_refused(self, voice):
+        voice.permission.return_value = (SimpleNamespace(assistant_id=AGENT), "viewer")
+        assert _voice_get(voice).status_code == 403

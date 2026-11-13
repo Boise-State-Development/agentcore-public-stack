@@ -423,6 +423,8 @@ export class ChatInputComponent {
   // Input: show voice mode toggle (defaults to true). Disabled where voice
   // is not meaningful, e.g. the assistant editor preview.
   readonly showVoiceControl = input<boolean>(true);
+  /** The conversation's Agent, sent with a voice connect so voice runs it (#625). */
+  readonly voiceAgentId = input<string | null>(null);
 
   // Input: show the Dictate (speech-to-text) button (defaults to true). Unlike
   // voice, dictation only fills this composer, so it stays on in the preview
@@ -2151,7 +2153,7 @@ export class ChatInputComponent {
       await this.voiceChatService.disconnect();
     } else {
       try {
-        await this.voiceChatService.connect(this.sessionId() || undefined);
+        await this.voiceChatService.connect(this.sessionId() || undefined, this.voiceAgentId());
       } catch (err) {
         this.toastService.error('Voice Error', describeAudioError(err, 'Failed to start voice'));
       }

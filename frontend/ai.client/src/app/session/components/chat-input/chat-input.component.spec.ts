@@ -2596,7 +2596,8 @@ describe('ChatInputComponent voice mode options', () => {
     const voice = TestBed.inject(VoiceChatService);
     await openMenu();
     (menu()!.querySelector('[data-testid="voice-menu-start"]') as HTMLButtonElement).click();
-    expect(voice.connect).toHaveBeenCalledWith('s1');
+    // No Agent on this chat, so voice names none (#625).
+    expect(voice.connect).toHaveBeenCalledWith('s1', null);
   });
 });
 

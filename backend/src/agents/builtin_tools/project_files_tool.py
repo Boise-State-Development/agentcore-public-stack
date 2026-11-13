@@ -66,9 +66,8 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from strands import tool
 
-from apis.shared.assistants.kb_documents import kb_document_text, list_kb_documents
+from apis.shared.assistants.kb_documents import kb_document_format, kb_document_text, list_kb_documents
 from apis.shared.auth.models import User
-from apis.shared.files.document_read import document_format_for
 from apis.shared.files.workspace import WORKSPACE_READ_MAX_BYTES
 
 logger = logging.getLogger(__name__)
@@ -279,7 +278,7 @@ def member_emails(project_id: str) -> Dict[str, str]:
 def _type_label(doc: Mapping[str, Any]) -> str:
     """What kind of document a listing says this is: its text format, else its kind."""
     name = str(doc.get("filename") or "")
-    fmt = document_format_for(str(doc.get("contentType") or ""), name)
+    fmt = kb_document_format(doc)
     if fmt:
         return fmt
     kind = _kind(name)
@@ -394,8 +393,7 @@ def read_project_file(
             "status": status,
             "message": message.format(name=name, status=status),
         }
-    content_type = str(doc.get("contentType") or "")
-    fmt = document_format_for(content_type, name)
+    fmt = kb_document_format(doc)
     if fmt is None:
         raise ProjectFilesError(NOT_TEXT.format(name=name, kind=_kind(name)))
     text = kb_document_text(doc, fmt, PROJECT_FILE_TEXT_MAX_CHARS)

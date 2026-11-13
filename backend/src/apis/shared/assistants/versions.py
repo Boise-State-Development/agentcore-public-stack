@@ -54,6 +54,8 @@ SNAPSHOT_FIELDS: Tuple[str, ...] = (
     "model_settings",
     "bindings",
     "response_strictness",
+    "voice_enabled",
+    "voice_instructions_only",
 )
 
 # Snapshot fields that change what the Agent *does*. The review diff, the listing edit
@@ -63,6 +65,8 @@ BEHAVIOR_SNAPSHOT_FIELDS: Tuple[str, ...] = (
     "bindings",
     "model_settings",
     "response_strictness",
+    "voice_enabled",
+    "voice_instructions_only",
 )
 
 # Snapshot fields a version always overlays, even when it predates them. Unlike the
@@ -70,7 +74,14 @@ BEHAVIOR_SNAPSHOT_FIELDS: Tuple[str, ...] = (
 # ``balanced`` before #112, so a version approved then was approved as ``balanced``.
 # Leaving the live value in place instead would let an owner change the strictness of a
 # published Agent without review.
-VERSION_DEFAULTED_FIELDS: Tuple[str, ...] = ("response_strictness",)
+#
+# The voice fields (#625) follow the same rule: voice never ran an Agent before them, so a
+# version approved then was approved with voice off, and turning it on goes through review.
+VERSION_DEFAULTED_FIELDS: Tuple[str, ...] = (
+    "response_strictness",
+    "voice_enabled",
+    "voice_instructions_only",
+)
 
 # Snapshot fields that live on the ``listing`` block rather than on the Agent itself.
 LISTING_SNAPSHOT_FIELDS: Tuple[str, ...] = ("category", "publisher_id")
@@ -89,6 +100,8 @@ DIFF_FIELD_ORDER: Tuple[str, ...] = (
     "bindings",
     "model_settings",
     "response_strictness",
+    "voice_enabled",
+    "voice_instructions_only",
     "name",
     "description",
     "tagline",
@@ -160,6 +173,8 @@ def snapshot_of(
         model_settings=assistant.model_settings,
         bindings=assistant.bindings,
         response_strictness=assistant.response_strictness,
+        voice_enabled=assistant.voice_enabled,
+        voice_instructions_only=assistant.voice_instructions_only,
         category=listing.category if listing else None,
         publisher_id=listing.publisher_id if listing else None,
     )

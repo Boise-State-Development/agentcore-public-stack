@@ -169,6 +169,7 @@ class ToolCatalogService:
                     enabled_by_default=tool.enabled_by_default,
                     hidden=tool.hidden,
                     always_on=row_always_on,
+                    voice_available=tool.voice_available,
                     user_enabled=user_enabled,
                     is_enabled=is_enabled,
                     server_tools=server_tools,

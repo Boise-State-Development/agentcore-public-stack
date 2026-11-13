@@ -149,6 +149,9 @@ async def _list_tools(user: User, svc: ToolCatalogService) -> List[BindableItem]
                 "retirementNote": t.retirement_note,
                 "retiresOn": t.retires_on,
                 "requiresOauthProvider": t.requires_oauth_provider,
+                # Display only: the Designer's voice section names the bound tools
+                # voice mode leaves out (#625). The voice route decides for itself.
+                "voiceAvailable": t.voice_available,
                 "serverTools": [
                     {
                         "name": st.name,

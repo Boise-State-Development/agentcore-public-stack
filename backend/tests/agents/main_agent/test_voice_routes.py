@@ -461,3 +461,243 @@ class TestVoiceSystemPrompt:
         assert kwargs["memory_retrieval"] is False
         assert kwargs["memory_extraction"] is False
         assert kwargs["system_prompt"].endswith("Call me Captain.")
+
+
+class TestVoiceRunsTheConversationsAgent:
+    """#625: a voice session on an Agent's conversation runs that Agent."""
+
+    @staticmethod
+    def _websocket(config: dict) -> MagicMock:
+        ws = MagicMock()
+        ws.headers = {"authorization": f"Bearer {_token('owner', email='o@example.edu')}"}
+        ws.accept = AsyncMock()
+        ws.send_json = AsyncMock()
+        ws.close = AsyncMock()
+        ws.receive_json = AsyncMock(return_value={"type": "config", "session_id": "s-1", **config})
+        return ws
+
+    @staticmethod
+    def _patches(voice_routes, **overrides):
+        from apis.inference_api.chat import role_instructions
+
+        extra = [patch.object(role_instructions, "resolve_role_instructions", new=AsyncMock(return_value=[]))]
+        values = dict(
+            session_owned_by_other_user=AsyncMock(return_value=False),
+            _read_session_metadata=AsyncMock(return_value=None),
+            _always_on_tool_ids_for_voice=AsyncMock(return_value=["pinned_tool"]),
+            drop_disabled_tools=AsyncMock(side_effect=lambda ids: ids),
+            keep_voice_tools=AsyncMock(side_effect=lambda ids: [i for i in (ids or []) if i != "slow_tool"]),
+            _voice_session_incognito=AsyncMock(return_value=False),
+            _load_voice_settings=AsyncMock(return_value={"personalInstructions": "Call me Captain."}),
+            _ensure_session_metadata=AsyncMock(),
+        )
+        values.update(overrides)
+        return extra + [patch.object(voice_routes, name, new=value) for name, value in values.items()]
+
+    @pytest.mark.asyncio
+    async def test_a_refused_agent_ends_the_session_with_a_message(self):
+        from contextlib import ExitStack
+
+        from apis.inference_api.chat import voice_routes
+        from apis.inference_api.chat.voice_agent_plan import AGENT_VOICE_UNAVAILABLE_CODE, VoiceAgentRefused
+
+        ws = self._websocket({"agent_id": "ast-1"})
+        agent_class = MagicMock()
+        resolve = AsyncMock(side_effect=VoiceAgentRefused("This agent isn't available in voice mode."))
+        with ExitStack() as stack:
+            for p in self._patches(voice_routes, resolve_voice_agent=resolve):
+                stack.enter_context(p)
+            stack.enter_context(patch.object(voice_routes, "_get_voice_agent_class", return_value=agent_class))
+            await voice_routes.voice_stream(ws)
+
+        assert resolve.await_args.args[2] == "ast-1"
+        agent_class.assert_not_called()
+        ws.send_json.assert_awaited_once_with({
+            "type": "bidi_error",
+            "code": AGENT_VOICE_UNAVAILABLE_CODE,
+            "message": "This agent isn't available in voice mode.",
+        })
+        assert ws.close.await_args.kwargs["code"] == 4003
+
+    @pytest.mark.asyncio
+    async def test_the_agents_prompt_knowledge_and_tools_reach_the_voice_agent(self):
+        from contextlib import ExitStack
+
+        from apis.inference_api.chat import voice_routes
+        from apis.inference_api.chat.voice_agent_plan import VoiceAgentPlan
+
+        class _Stop(Exception):
+            pass
+
+        plan = VoiceAgentPlan(
+            assistant_id="ast-1",
+            system_prompt="You are Captain Ahab.",
+            knowledge_context="<knowledge_base>whales</knowledge_base>",
+            voice_guidelines=False,
+            tool_ids=["calculator", "slow_tool"],
+            owns_toolset=True,
+        )
+        ws = self._websocket({"agent_id": "ast-1"})
+        always_on = AsyncMock(return_value=[])
+        agent_class = MagicMock(side_effect=_Stop)
+        with ExitStack() as stack:
+            resolve_mock = AsyncMock(return_value=plan)
+            for p in self._patches(
+                voice_routes, resolve_voice_agent=resolve_mock, _always_on_tool_ids_for_voice=always_on
+            ):
+                stack.enter_context(p)
+            stack.enter_context(patch.object(voice_routes, "_get_voice_agent_class", return_value=agent_class))
+            try:
+                await voice_routes.voice_stream(ws)
+            except _Stop:
+                pass
+
+        # Personal instructions go to the Agent resolver, below the Agent's (#2020).
+        assert resolve_mock.await_args.kwargs["personal_instructions"] == "Call me Captain."
+        kwargs = agent_class.call_args.kwargs
+        assert kwargs["system_prompt"] == "You are Captain Ahab."
+        assert kwargs["knowledge_context"] == "<knowledge_base>whales</knowledge_base>"
+        assert kwargs["voice_guidelines"] is False
+        # The Agent's bindings replace the request's tools; voice keeps only voice tools.
+        assert kwargs["enabled_tools"] == ["calculator"]
+        # An Agent conversation never touches long-term memory.
+        assert kwargs["memory_retrieval"] is False
+        assert kwargs["memory_extraction"] is False
+        # An Agent that binds its own tools takes no admin pins.
+        assert always_on.await_args.kwargs["include_always_on"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_plain_voice_chat_keeps_todays_prompt_and_only_voice_tools(self):
+        from contextlib import ExitStack
+
+        from apis.inference_api.chat import voice_routes
+
+        class _Stop(Exception):
+            pass
+
+        ws = self._websocket({})
+        resolve = AsyncMock()
+        agent_class = MagicMock(side_effect=_Stop)
+        with ExitStack() as stack:
+            for p in self._patches(
+                voice_routes,
+                resolve_voice_agent=resolve,
+                _always_on_tool_ids_for_voice=AsyncMock(return_value=["pinned_tool", "slow_tool"]),
+            ):
+                stack.enter_context(p)
+            stack.enter_context(patch.object(voice_routes, "_get_voice_agent_class", return_value=agent_class))
+            try:
+                await voice_routes.voice_stream(ws)
+            except _Stop:
+                pass
+
+        resolve.assert_not_awaited()
+        kwargs = agent_class.call_args.kwargs
+        # A plain chat composes the user's own sections (#2020), not an Agent's.
+        assert kwargs["system_prompt"].endswith("Call me Captain.")
+        assert kwargs["voice_guidelines"] is True
+        assert kwargs["enabled_tools"] == ["pinned_tool"]
+
+    @pytest.mark.asyncio
+    async def test_bedrock_at_capacity_ends_the_session_with_the_capacity_message(self):
+        from contextlib import ExitStack
+
+        from apis.inference_api.chat import voice_routes
+
+        class ThrottlingException(Exception):
+            pass
+
+        voice_agent = MagicMock()
+        voice_agent.voice_id = "tiffany"
+        voice_agent.start = AsyncMock(side_effect=ThrottlingException("Too many concurrent sessions"))
+        voice_agent.stop = AsyncMock()
+        voice_agent.drain_remaining_events = AsyncMock()
+        ws = self._websocket({})
+        with ExitStack() as stack:
+            for p in self._patches(voice_routes, resolve_voice_agent=AsyncMock()):
+                stack.enter_context(p)
+            stack.enter_context(
+                patch.object(voice_routes, "_get_voice_agent_class", return_value=MagicMock(return_value=voice_agent))
+            )
+            stack.enter_context(patch.object(voice_routes, "_finalize_voice_session", new=AsyncMock()))
+            await voice_routes.voice_stream(ws)
+
+        ws.send_json.assert_any_await({
+            "type": "bidi_error",
+            "code": voice_routes.VOICE_CAPACITY_CODE,
+            "message": voice_routes.VOICE_CAPACITY_MESSAGE,
+        })
+        assert any(c.kwargs.get("code") == 4029 for c in ws.close.await_args_list)
+        assert "s-1" not in voice_routes._active_sessions
+
+
+class TestCapacityErrorDetection:
+    def test_matches_bedrock_throttling_by_type_name(self):
+        from apis.inference_api.chat.voice_routes import _is_capacity_error
+
+        class ThrottlingException(Exception):
+            pass
+
+        assert _is_capacity_error(ThrottlingException("x"))
+
+    def test_matches_a_wrapped_quota_error(self):
+        from apis.inference_api.chat.voice_routes import _is_capacity_error
+
+        class ServiceQuotaExceededException(Exception):
+            pass
+
+        try:
+            try:
+                raise ServiceQuotaExceededException("limit")
+            except ServiceQuotaExceededException as inner:
+                raise RuntimeError("stream failed") from inner
+        except RuntimeError as outer:
+            assert _is_capacity_error(outer)
+
+    def test_ignores_other_failures(self):
+        from apis.inference_api.chat.voice_routes import _is_capacity_error
+
+        assert not _is_capacity_error(RuntimeError("model not started"))
+        assert not _is_capacity_error(ValueError("Unsupported sample rate"))
+
+
+class TestSessionMetadataRecordsTheAgent:
+    @pytest.mark.asyncio
+    async def test_a_new_voice_session_records_its_agent(self):
+        from apis.inference_api.chat import voice_routes
+
+        store = AsyncMock()
+        with patch.object(voice_routes, "get_session_metadata", new=AsyncMock(return_value=None)), \
+                patch.object(voice_routes, "store_session_metadata", new=store):
+            await voice_routes._ensure_session_metadata("s-1", "u1", assistant_id="ast-1")
+        meta = store.await_args.kwargs["session_metadata"]
+        assert meta.preferences.assistant_id == "ast-1"
+        assert not meta.preferences.incognito
+
+    @pytest.mark.asyncio
+    async def test_an_unbound_existing_session_is_bound(self):
+        from apis.inference_api.chat import voice_routes
+        from apis.shared.sessions.models import SessionMetadata, SessionPreferences
+
+        existing = SessionMetadata(
+            session_id="s-1", user_id="u1", title="t", status="active", created_at="2026-01-01T00:00:00Z",
+            last_message_at="2026-01-01T00:00:00Z", message_count=0, starred=False, tags=[],
+            preferences=SessionPreferences(incognito=True),
+        )
+        store = AsyncMock()
+        with patch.object(voice_routes, "get_session_metadata", new=AsyncMock(return_value=existing)), \
+                patch.object(voice_routes, "store_session_metadata", new=store):
+            await voice_routes._ensure_session_metadata("s-1", "u1", assistant_id="ast-1")
+        prefs = store.await_args.kwargs["session_metadata"].preferences
+        assert prefs.assistant_id == "ast-1"
+        assert prefs.incognito is True
+
+    @pytest.mark.asyncio
+    async def test_a_plain_session_with_metadata_is_left_alone(self):
+        from apis.inference_api.chat import voice_routes
+
+        store = AsyncMock()
+        with patch.object(voice_routes, "get_session_metadata", new=AsyncMock(return_value=MagicMock())), \
+                patch.object(voice_routes, "store_session_metadata", new=store):
+            await voice_routes._ensure_session_metadata("s-1", "u1")
+        store.assert_not_awaited()
