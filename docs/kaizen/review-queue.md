@@ -115,24 +115,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Notes**: the only imports are `tool_registry.py:93` and `warmup.py:59`. Upstream's migration maps `calculator` to `vended_tools.shell` running `python3 -c`, which isn't acceptable. Keep the tool name and input schema identical so `toolConfig` doesn't change, and check it against `tests/fixtures/bedrock_golden_requests.json`.
 - **Status**: open
 
-### [2026-11-06] Nightly: delete the orphaned ALB access-log bucket that last week's teardown fix leaves behind
-- **Source**: research/2026-11-06.md ▸ Top 5 #2; nightly runs 41804576559, 41999548718, 42192443357; `b717c10da`
-- **Surface**: CI (`scripts/nightly/teardown.sh`, `scripts/nightly/clear-failed-stack.sh`)
-- **Effort × Impact**: L × M
-- **Subtracts**: yes: red nights 11-04 → 11-06 and the next manual unstick
-- **Notes**: 11-04 teardown ended with `DELETE_FAILED … [AlbAlbAccessLogBucketA14538BD]`; 11-05 and 11-06 deploys failed on "`nightly-develop-alb-access-logs` already exists" (fixed name, `alb-construct.ts:166`). Hypothesis, asserted: the ALB keeps delivering logs after the bucket is emptied, so the retained bucket's Cloud Control delete also fails. Fix: re-empty right before `delete_retained_resource` and retry once; have `clear-failed-stack.sh` delete a stackless bucket with the fixed name. Also seen in the window: three different time-dependent test failures (`test_spent_rate_degrades_to_lexical`, device-grant `test_concurrent_authorizes_all_succeed` for the third time, `test_ttfb_under_200ms_with_x_accel_buffering`).
-- **Status**: open
-
-### [2026-11-06] Spike AgentCore Web Answer against our WebSearch connector
-- **Source**: research/2026-11-06.md ▸ Top 5 #3; https://aws.amazon.com/about-aws/whats-new/2026/11/web-answer-amazon-bedrock/
-- **Surface**: backend + catalog (Gateway connector config, metering, `WebSearchDefaultsHook`)
-- **Effort × Impact**: M × M
-- **Subtracts**: possibly: multi-round search-read-synthesize loops on research questions. Addition only until measured.
-- **Unlocks**:
-  - a bounded, cited web answer in one Gateway tool call
-- **Notes**: GA 11-05, us-east-1 only, per-call price unpublished. Measure about 10 prompts on tokens, model rounds, final-answer latency and citations. Find out how it bills (it needs a catalog row or `UnmeteredModelCall` fires).
-- **Status**: open
-
 ### [2026-11-06] Design note: single-iframe MCP Apps hosting, so Apps no longer require the mcp-sandbox stack
 - **Source**: research/2026-11-06.md ▸ Top 5 #4; https://github.com/modelcontextprotocol/ext-apps/pull/717
 - **Surface**: frontend + infrastructure (App frame component, `ui_resource.sandboxOrigin`, mcp-sandbox construct)
@@ -181,22 +163,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: L × L
 - **Subtracts**: yes: a "doesn't exist yet" claim and a staleness row that's now settled
 - **Notes**: `:97` "Today ~450 lines inline", `:236`, `:278`. Evidence: `apis/inference_api/chat/routes.py:4073`, `7891266fc`.
-- **Status**: open
-
-### [2026-11-06] Spec sync: agent-handoffs-and-consults.md header (Phase 0 built through PR-0.3c)
-- **Source**: research/2026-11-06.md ▸ Spec sync row 5
-- **Surface**: docs
-- **Effort × Impact**: L × L
-- **Subtracts**: yes: "Draft proposal. Not scheduled."
-- **Notes**: PR-0.3a `7c5e3fd59`/`585960efc`, PR-0.3b `759cba8b6`, PR-0.3c `0356ea594` merged. Supersedes [2026-10-23] *Spec sync: agent-handoffs-and-consults.md header (Status line)*.
-- **Status**: open
-
-### [2026-11-06] Spec sync: multi-agent-patterns.md §8 sequence step 1 (Phase 0 merged)
-- **Source**: research/2026-11-06.md ▸ Spec sync row 6
-- **Surface**: docs
-- **Effort × Impact**: L × L
-- **Subtracts**: yes: a stale "as specced"
-- **Notes**: `:235`. Supersedes [2026-10-23] *Spec sync: multi-agent-patterns.md §8 (sequence step 1)*.
 - **Status**: open
 
 ### [2026-11-03] Opus 5.5: the drop-block recovery cannot engage for us, so a binding 400 still fails the turn on an enforcing account
@@ -251,55 +217,13 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Notes**: candidates found in the wheel diff, none evaluated: `Model.model_info` / `model_info.json` as a second source for catalog limits and capabilities (with the caveat that its Sonnet 4.6 output limit is wrong, so never authoritative); native structured output as the extraction path on models that support it; request-wide Graph/Swarm limits (harness-sdk#5306) against the [2026-07-17] headless `Limits` item and handoffs §9.5; the public `strands.middleware` module against hooks we wrote as workarounds; `vended_tools` `read`/`write`/`edit`/`stop`; `InvocationContext` usage (request-wide, across sub-agents) against our per-call usage aggregation. Read the 1.62.0 and 1.63.0 release notes end to end, with both lenses
 - **Status**: open
 
-### [2026-11-03] Take Strands 1.63.0 with a written readout, then curate Haiku 5.5
-- **Source**: research/2026-11-03.md
-- **Surface**: backend
-- **Effort × Impact**: M × H
-- **Subtracts**: yes — the preserved-thinking probe item and the stale caching comment in `model_config.py`
-- **Unlocks**: Haiku 5.5 as the cheap default
-- **Status**: open
-- **Status 2026-11-03**: bump in review as #1850 (`feature/strands-1.63.0`). Readout: (a) #5645 would send `maxTokens` from Strands' `model_info.json`, which gives Sonnet 4.6 128K against a 64K card, so `to_bedrock_config` and the extractor opt out with `max_tokens=None`; (b) the cache predicate is unchanged for every id we run; (c) #4618 not shipped, `metrics.py` byte-identical. `model_info` re-resolves on every read (upstream `format_request` 22 → 102 µs), memoized in `CountTokensBedrockModel` (ours: 22 µs on both). Open: the Haiku 5.5 row, and our Opus 4.7 row's 64K output cap (card says 128K).
-- **Status 2026-11-03 (later)**: bump **shipped** in #1850 (merge `570fee9f`) and dev-validated on Runtime version 796.
-  - **Smoke matrix:** 12 PASS / 0 FAIL / 5 SKIP before and after, with every row the same status.
-  - **Cache:** `second_turn_cache` read 5,571 / wrote 3,097 tokens on both runs, so the prefix is identical on the real wire.
-  - **Timing:** server `turn_prelude` median 1,131 → 1,094 ms, and `agent_build.strands_agent` 6 → 6 ms.
-  - **Logs:** no Runtime errors after the update.
-  - **Still open:** the bump half of this entry is done. The Haiku 5.5 row is not, and see the [2026-11-03] Opus 5.5 drop-block entry above.
-
-### [2026-11-03] Find out why Nightly Build & Test has failed on `main` for seven nights
-- **Source**: research/2026-11-03.md
-- **Surface**: cross-cutting
-- **Effort × Impact**: L × M
-- **Subtracts**: yes — a permanently red check
-- **Status**: open
-
-### [2026-11-03] Sync the multi-agent patterns doc to the 1.61.1 pin and decide #1748
-- **Source**: research/2026-11-03.md
-- **Surface**: cross-cutting
-- **Effort × Impact**: L × M
-- **Subtracts**: yes — stale pin claims
-- **Status**: open
-
 ### [2026-11-03] Spike idle-time compaction after the cache TTL
 - **Source**: research/2026-11-03.md
 - **Surface**: backend
 - **Effort × Impact**: M × M
 - **Subtracts**: no — addition only; justified only if `C#` rows show material post-gap re-write spend
 - **Status**: open — **cost gate PASSED 2026-11-04** (`scoping/2026-11-04-idle-compaction-cost-replay.md`). Post-gap re-writes are 32.4% of prod spend; replaying 30 days through `backend/scripts/compaction_cost_replay.py`, an idle job at TTL expiry cutting 50k → 20k saves ~$268/month (−8.1%) and stays positive at 4× job cost, while a 1h TTL loses 3.1%. **Quality veto PASSED 2026-11-04** (same doc §5.2–5.3, ~$14 total): with production's summarizer, neither idle arm is worse than production in any family (paired McNemar, every p ≥ 0.25); `idle_50_30` is out (thrashes, 11.8 cuts/session). **Candidate: 75k trigger, 25k floor, ~$227/month (−6.9%).** Next is the build: an off-turn-path idle job behind an in-development flag.
-
-### [2026-11-03] Plan the MCP SDK path past Strands' `mcp<2.2` cap
-- **Source**: research/2026-11-03.md
-- **Surface**: backend
-- **Effort × Impact**: L × L
-- **Subtracts**: yes — avoids two successive MCP upgrades
-- **Status**: open
-
-### [2026-11-03] Spec sync: multi-agent-patterns.md §3, §4.2 and staleness table (pin is 1.61.1, not 1.57.2)
-- **Source**: research/2026-11-03.md
-- **Surface**: docs
-- **Effort × Impact**: L × L
-- **Subtracts**: yes — stale version claims
-- **Status**: open
+- **Status 2026-11-13 (review)**: not built. #2039 (`docs/one-pagers/idle-return-context.md`) re-sized the lossless share of the $940/28d post-expiry spend to **~$30–90**, below this entry's $227/month candidate, and found **51% of that spend returns in 5–15 minutes**. reviews/2026-11-13.md ▸ #5 prices TTL-timed cache warming against the same replay before any build. Re-size this entry to #2039's range first.
 
 ### [2026-11-03] Spec sync: multi-agent-patterns.md §4 (Strands 1.63.0 request-wide Graph/Swarm limits, #5306)
 - **Source**: research/2026-11-03.md
@@ -307,18 +231,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: L × L
 - **Subtracts**: yes — notes upstream coverage of the hop-budget idea
 - **Status**: open
-
-### [2026-10-23] Take Strands 1.62.0, then curate Claude Haiku 5.5 at a 100K effective window — the probe becomes a check of #5171
-- **Source**: research/2026-10-23.md ▸ Top 5 #1
-- **Surface**: backend + catalog (`pyproject.toml`, `uv.lock`, Lambda requirements; `curated-models.ts`; `probe_bedrock_cache_point_support.py`)
-- **Effort × Impact**: M × H
-- **Subtracts**: yes — retires the preserved-thinking probe as a standing item (supersedes [2026-10-16] Haiku 5.5 and [2026-10-09] probe entries); no hand-built thinking-binding handling; starts Haiku 4.5's retirement path (never a hard delete)
-- **Unlocks**:
-  - a default ~7.7× cheaper than Haiku 4.5 on the same text below 100K (card + Price List now agree: $0.11 / $0.55 Regional; tokenizer ~30% heavier)
-  - safe compaction on every preserved-thinking model (Opus 5.5 is curated today): Strands #5171 retries the Bedrock "block is bound to a different conversation" 400 with `drop_block`
-- **Notes**: bump strands alone (hold strands-agents-tools 0.8.10, possible `bedrock-agentcore<1.24` conflict). Verify on dev: compact an Opus 5.5 thinking conversation, send one more turn, record 400/recovery, `cacheStatus`, and add a metric when `drop_block` engages. Row: `maxInputTokens: 100_000`, no sampling params, bracket the 512-token cache minimum, note CountTokens is unsupported on bedrock-runtime. Not the default in the same PR.
-- **Status**: open
-- **Status 2026-11-03 (review)**: not started. Widened by [2026-11-03] *Take Strands 1.63.0 with a written readout* (in #1833): the bump is now 1.61.1 → 1.63.0 and adds the #5645 `maxTokens` default and the `model_info` caching predicate to the readout. One PR for both entries. reviews/2026-11-03.md ▸ #3.
 
 ### [2026-10-23] Require the test checks, on an up-to-date branch (or a merge queue), before merging into `develop`
 - **Source**: research/2026-10-23.md ▸ Top 5 #2
@@ -346,22 +258,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Notes**: allowlist schemas can go stale; check freshness after consent, on first use. Measure TTFT and one consent → resume on dev before deciding.
 - **Status**: open
 
-### [2026-10-23] Correct `CLAUDE.md`'s Price List note (GPT-6 Astra is listed) and record Astra's rates beside the 10-03 decision
-- **Source**: research/2026-10-23.md ▸ Top 5 #5
-- **Surface**: docs (`CLAUDE.md:49`, `decisions.md` ▸ [2026-10-03] Astra)
-- **Effort × Impact**: L × L
-- **Subtracts**: yes — a false "cards are the only source" rule for the OpenAI family
-- **Notes**: 16 Astra SKUs in `AmazonBedrockFoundationModels` (us-west-2): $11 / $55 Regional, 30m write $13.75, read $1.10, long-context $22 / $82.50. Re-check GPT-5.6 and `openai.gpt-5.4` in the same query.
-- **Status**: open
-
-### [2026-10-23] Spec sync: agent-handoffs-and-consults.md header (Status line)
-- **Source**: research/2026-10-23.md ▸ Spec sync
-- **Surface**: docs
-- **Effort × Impact**: L × L
-- **Subtracts**: yes — a stale "Draft proposal. Not scheduled." (`:3`)
-- **Notes**: → "Phase 0 in progress (PR-0.1 and PR-0.2 merged 2026-10-22, behind `HANDOFFS_ENABLED`). Phases 1 and 2 not scheduled." Evidence `90b461fc`, `fed88f5a`.
-- **Status**: open
-
 ### [2026-10-23] Spec sync: agent-handoffs-and-consults.md §4.2 step 1 (create response shape)
 - **Source**: research/2026-10-23.md ▸ Spec sync
 - **Surface**: docs
@@ -376,14 +272,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: L × L
 - **Subtracts**: yes — "`[tool: list_assignments → 14 items]`" (`:606`) and "User and assistant text blocks go in verbatim." (`:612`)
 - **Notes**: → "`[tool: list_assignments]`"; add that a user message's `displayText` wins over its model text. Evidence `apis/shared/handoff/excerpt.py:14-15,218`.
-- **Status**: open
-
-### [2026-10-23] Spec sync: multi-agent-patterns.md §8 (sequence step 1)
-- **Source**: research/2026-10-23.md ▸ Spec sync
-- **Surface**: docs
-- **Effort × Impact**: L × L
-- **Subtracts**: yes — "1. **Handoffs Phase 0** as specced." (`:235`) with no progress
-- **Notes**: → "(PR-0.1 and PR-0.2 merged 2026-10-22; PR-0.3 in review as #1748)."
 - **Status**: open
 
 ### [2026-10-20] Evaluate Strands Decider as a measurement instrument first, starting with the §17.8 grader
@@ -551,15 +439,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - **Gated on something else**: `AGENT_BUILD_SHARED_SESSION_ENABLED` (Runtime V2 plus a clean snapshot restore, see the V2 entries below), `COMPACTION_SUMMARY_EXTRACT_ENABLED` (prod quality readout), `DOCUMENT_OFFLOAD_ENABLED` / `_REHYDRATE_` / `_DIGEST_` (the quality check waived in `docs/specs/document-offload-evaluation.md`, see [2026-09-21] *The cheap quality veto does not exist*).
 - **Status 2026-10-16 (review)**: no pass yet. All four eligible readers are still in `feature_flags.py` (:439, :471, :554, :644). 1.28.0 (#1628) is the third release since #1420 without the cleanup. reviews/2026-10-16.md ▸ #6.
 - **Status 2026-11-03 (review)**: no pass yet. All four eligible readers are still in `feature_flags.py` (:494, :527, :600, :716). No retirement in 1.28.0 → 1.32.0. reviews/2026-11-03.md ▸ #1 asks for Ship or an explicit decline of the rule; no further defer.
-
-### [2026-10-02] Make the nightly teardown survive an AgentCore Runtime that won't delete
-- **Source**: research/2026-10-02.md
-- **Surface**: CI / scripts
-- **Effort × Impact**: L × M
-- **Subtracts**: no. Addition, justified because the nightly is the only E2E signal and it has been red since 10-01. The Runtime delete hit `NotStabilized`, and the stack has stayed in `DELETE_FAILED` since.
-- **Status**: open. (a) One-off unstick of `nightly-develop-PlatformStack` (ops, no review needed). (b) Delete the Runtime out of band before `delete-stack`, retry and then retain on a Runtime-only `DELETE_FAILED`, and have the deploy step clear a `DELETE_FAILED` predecessor.
-- **Status 2026-10-09**: the one-off unstick (a) happened; nightly green 10-03 → 10-09. The durable step (b) is not wired (no `recover` call in `nightly*.yml`). reviews/2026-10-09.md ▸ Retirement Candidates recommends declining (b) and re-opening on the next `DELETE_FAILED`.
-- **Status 2026-11-03 (review)**: **re-open condition met.** Nightly run 41291532029 (11-01) failed in Teardown with `DELETE_FAILED` on `RagDataRagAssistantsTable5D0DEB95`, and run 41418111769 (11-02) failed in Deploy PlatformStack because `nightly-develop-PlatformStack` was still `DELETE_FAILED`. Green again on 11-03. reviews/2026-11-03.md ▸ #2.
 
 ### [2026-10-02] Headless runs never pause for a human: withhold interactive tools or classify the pause
 - **Source**: research/2026-10-02.md
@@ -1173,6 +1052,170 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
 ## Resolved
+
+### [2026-11-06] Nightly: delete the orphaned ALB access-log bucket that last week's teardown fix leaves behind → RESOLVED — **SUPERSEDED**
+- **Decision**: by [2026-11-13] *Escalation: delete the orphaned ALB access-log bucket and make the nightly self-heal*.
+- **Reasoning**: Same fix; the newer entry carries ten nights of evidence. No review ran for 11-06.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-06.md ▸ Top 5 #2; nightly runs 41804576559, 41999548718, 42192443357; `b717c10da`
+- **Surface**: CI (`scripts/nightly/teardown.sh`, `scripts/nightly/clear-failed-stack.sh`)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: red nights 11-04 → 11-06 and the next manual unstick
+- **Notes**: 11-04 teardown ended with `DELETE_FAILED … [AlbAlbAccessLogBucketA14538BD]`; 11-05 and 11-06 deploys failed on "`nightly-develop-alb-access-logs` already exists" (fixed name, `alb-construct.ts:166`). Hypothesis, asserted: the ALB keeps delivering logs after the bucket is emptied, so the retained bucket's Cloud Control delete also fails. Fix: re-empty right before `delete_retained_resource` and retry once; have `clear-failed-stack.sh` delete a stackless bucket with the fixed name. Also seen in the window: three different time-dependent test failures (`test_spent_rate_degrades_to_lexical`, device-grant `test_concurrent_authorizes_all_succeed` for the third time, `test_ttfb_under_200ms_with_x_accel_buffering`).
+- **Status**: open
+
+### [2026-11-06] Spike AgentCore Web Answer against our WebSearch connector → RESOLVED — **SUPERSEDED**
+- **Decision**: by [2026-11-13] *One web-search spike, three arms*.
+- **Reasoning**: Web Answer is one arm of the three-arm spike.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-06.md ▸ Top 5 #3; https://aws.amazon.com/about-aws/whats-new/2026/11/web-answer-amazon-bedrock/
+- **Surface**: backend + catalog (Gateway connector config, metering, `WebSearchDefaultsHook`)
+- **Effort × Impact**: M × M
+- **Subtracts**: possibly: multi-round search-read-synthesize loops on research questions. Addition only until measured.
+- **Unlocks**:
+  - a bounded, cited web answer in one Gateway tool call
+- **Notes**: GA 11-05, us-east-1 only, per-call price unpublished. Measure about 10 prompts on tokens, model rounds, final-answer latency and citations. Find out how it bills (it needs a catalog row or `UnmeteredModelCall` fires).
+- **Status**: open
+
+### [2026-11-06] Spec sync: agent-handoffs-and-consults.md header (Phase 0 built through PR-0.3c) → RESOLVED — **SUPERSEDED**
+- **Decision**: by [2026-11-13] *Spec sync: agent-handoffs-and-consults.md header (Phase 0 built through PR-0.4a)*.
+- **Reasoning**: Newer text, same line.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-06.md ▸ Spec sync row 5
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: "Draft proposal. Not scheduled."
+- **Notes**: PR-0.3a `7c5e3fd59`/`585960efc`, PR-0.3b `759cba8b6`, PR-0.3c `0356ea594` merged. Supersedes [2026-10-23] *Spec sync: agent-handoffs-and-consults.md header (Status line)*.
+- **Status**: open
+
+### [2026-11-06] Spec sync: multi-agent-patterns.md §8 sequence step 1 (Phase 0 merged) → RESOLVED — **SUPERSEDED**
+- **Decision**: by [2026-11-13] *Spec sync: multi-agent-patterns.md §8 step 1 and staleness table*.
+- **Reasoning**: Newer text, same line.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-06.md ▸ Spec sync row 6
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: a stale "as specced"
+- **Notes**: `:235`. Supersedes [2026-10-23] *Spec sync: multi-agent-patterns.md §8 (sequence step 1)*.
+- **Status**: open
+
+### [2026-11-03] Take Strands 1.63.0 with a written readout, then curate Haiku 5.5 → RESOLVED — **SHIPPED**
+- **Decision**: bump shipped as #1850 (`aff220f63`, dev-validated on Runtime version 796); Haiku 5.5 curated in #1853 (merged 2026-11-04); the Opus/Haiku 5.5 thinking binding followed in #1890 (`641f8168a`).
+- **Reasoning**: Both halves are on `develop`. The open follow-ups live in their own entries ([2026-11-03] Opus 5.5 drop-block attribution half, `document_extract` mechanism).
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-03.md
+- **Surface**: backend
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — the preserved-thinking probe item and the stale caching comment in `model_config.py`
+- **Unlocks**: Haiku 5.5 as the cheap default
+- **Status**: open
+- **Status 2026-11-03**: bump in review as #1850 (`feature/strands-1.63.0`). Readout: (a) #5645 would send `maxTokens` from Strands' `model_info.json`, which gives Sonnet 4.6 128K against a 64K card, so `to_bedrock_config` and the extractor opt out with `max_tokens=None`; (b) the cache predicate is unchanged for every id we run; (c) #4618 not shipped, `metrics.py` byte-identical. `model_info` re-resolves on every read (upstream `format_request` 22 → 102 µs), memoized in `CountTokensBedrockModel` (ours: 22 µs on both). Open: the Haiku 5.5 row, and our Opus 4.7 row's 64K output cap (card says 128K).
+- **Status 2026-11-03 (later)**: bump **shipped** in #1850 (merge `570fee9f`) and dev-validated on Runtime version 796.
+  - **Smoke matrix:** 12 PASS / 0 FAIL / 5 SKIP before and after, with every row the same status.
+  - **Cache:** `second_turn_cache` read 5,571 / wrote 3,097 tokens on both runs, so the prefix is identical on the real wire.
+  - **Timing:** server `turn_prelude` median 1,131 → 1,094 ms, and `agent_build.strands_agent` 6 → 6 ms.
+  - **Logs:** no Runtime errors after the update.
+  - **Still open:** the bump half of this entry is done. The Haiku 5.5 row is not, and see the [2026-11-03] Opus 5.5 drop-block entry above.
+
+### [2026-11-03] Find out why Nightly Build & Test has failed on `main` for seven nights → RESOLVED — **SHIPPED**
+- **Decision**: diagnosed and fixed in `b717c10da` (2026-11-03): teardown retries a failed delete, then retains and deletes what's stuck.
+- **Reasoning**: The fix left one retained resource behind (the ALB access-log bucket), which is a new failure, tracked as [2026-11-13] *Escalation: delete the orphaned ALB access-log bucket*.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-03.md
+- **Surface**: cross-cutting
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — a permanently red check
+- **Status**: open
+
+### [2026-11-03] Sync the multi-agent patterns doc to the 1.61.1 pin and decide #1748 → RESOLVED — **SUPERSEDED**
+- **Decision**: the pin half by [2026-11-06] *Spec sync: multi-agent-patterns.md §3, §4.2 and staleness table (pin is 1.63.0)*; #1748 merged 2026-11-03.
+- **Reasoning**: Nothing left to decide; the newer pin row carries the docs edit.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-03.md
+- **Surface**: cross-cutting
+- **Effort × Impact**: L × M
+- **Subtracts**: yes — stale pin claims
+- **Status**: open
+
+### [2026-11-03] Plan the MCP SDK path past Strands' `mcp<2.2` cap → RESOLVED — **SHIPPED**
+- **Decision**: #1666 was rebased and merged 2026-11-10 at mcp 2.3.0 (`e21e194cf`), one upgrade rather than two.
+- **Reasoning**: Better than the 11-03 recommendation (close #1666): the cap moved, and the PR went straight to 2.3.0.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-03.md
+- **Surface**: backend
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — avoids two successive MCP upgrades
+- **Status**: open
+
+### [2026-11-03] Spec sync: multi-agent-patterns.md §3, §4.2 and staleness table (pin is 1.61.1, not 1.57.2) → RESOLVED — **SUPERSEDED**
+- **Decision**: by [2026-11-06] pin-is-1.63.0 row.
+- **Reasoning**: Newer text, same lines.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-03.md
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — stale version claims
+- **Status**: open
+
+### [2026-10-23] Take Strands 1.62.0, then curate Claude Haiku 5.5 at a 100K effective window — the probe becomes a check of #5171 → RESOLVED — **SHIPPED**
+- **Decision**: shipped through its successor, [2026-11-03] *Take Strands 1.63.0* (#1850, #1853).
+- **Reasoning**: The 11-03 review folded both entries into one PR; it merged.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-10-23.md ▸ Top 5 #1
+- **Surface**: backend + catalog (`pyproject.toml`, `uv.lock`, Lambda requirements; `curated-models.ts`; `probe_bedrock_cache_point_support.py`)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes — retires the preserved-thinking probe as a standing item (supersedes [2026-10-16] Haiku 5.5 and [2026-10-09] probe entries); no hand-built thinking-binding handling; starts Haiku 4.5's retirement path (never a hard delete)
+- **Unlocks**:
+  - a default ~7.7× cheaper than Haiku 4.5 on the same text below 100K (card + Price List now agree: $0.11 / $0.55 Regional; tokenizer ~30% heavier)
+  - safe compaction on every preserved-thinking model (Opus 5.5 is curated today): Strands #5171 retries the Bedrock "block is bound to a different conversation" 400 with `drop_block`
+- **Notes**: bump strands alone (hold strands-agents-tools 0.8.10, possible `bedrock-agentcore<1.24` conflict). Verify on dev: compact an Opus 5.5 thinking conversation, send one more turn, record 400/recovery, `cacheStatus`, and add a metric when `drop_block` engages. Row: `maxInputTokens: 100_000`, no sampling params, bracket the 512-token cache minimum, note CountTokens is unsupported on bedrock-runtime. Not the default in the same PR.
+- **Status**: open
+- **Status 2026-11-03 (review)**: not started. Widened by [2026-11-03] *Take Strands 1.63.0 with a written readout* (in #1833): the bump is now 1.61.1 → 1.63.0 and adds the #5645 `maxTokens` default and the `model_info` caching predicate to the readout. One PR for both entries. reviews/2026-11-03.md ▸ #3.
+
+### [2026-10-23] Correct `CLAUDE.md`'s Price List note (GPT-6 Astra is listed) and record Astra's rates beside the 10-03 decision → RESOLVED — **SUPERSEDED**
+- **Decision**: `b33649a9b` (#2037, 2026-11-13) dropped the Price List research narrative from `CLAUDE.MD`, including the "genuinely absent from both offer files" sentence.
+- **Reasoning**: The false sentence is gone; recording Astra's rates beside the 10-03 decision is not worth an entry of its own.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-10-23.md ▸ Top 5 #5
+- **Surface**: docs (`CLAUDE.md:49`, `decisions.md` ▸ [2026-10-03] Astra)
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — a false "cards are the only source" rule for the OpenAI family
+- **Notes**: 16 Astra SKUs in `AmazonBedrockFoundationModels` (us-west-2): $11 / $55 Regional, 30m write $13.75, read $1.10, long-context $22 / $82.50. Re-check GPT-5.6 and `openai.gpt-5.4` in the same query.
+- **Status**: open
+
+### [2026-10-23] Spec sync: agent-handoffs-and-consults.md header (Status line) → RESOLVED — **SUPERSEDED**
+- **Decision**: by [2026-11-13] header row (via [2026-11-06]).
+- **Reasoning**: Newer text, same line.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — a stale "Draft proposal. Not scheduled." (`:3`)
+- **Notes**: → "Phase 0 in progress (PR-0.1 and PR-0.2 merged 2026-10-22, behind `HANDOFFS_ENABLED`). Phases 1 and 2 not scheduled." Evidence `90b461fc`, `fed88f5a`.
+- **Status**: open
+
+### [2026-10-23] Spec sync: multi-agent-patterns.md §8 (sequence step 1) → RESOLVED — **SUPERSEDED**
+- **Decision**: by [2026-11-13] §8 step 1 row (via [2026-11-06]).
+- **Reasoning**: Newer text, same line.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-10-23.md ▸ Spec sync
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes — "1. **Handoffs Phase 0** as specced." (`:235`) with no progress
+- **Notes**: → "(PR-0.1 and PR-0.2 merged 2026-10-22; PR-0.3 in review as #1748)."
+- **Status**: open
+
+### [2026-10-02] Make the nightly teardown survive an AgentCore Runtime that won't delete → RESOLVED — **SHIPPED**
+- **Decision**: `b717c10da` (2026-11-03), from reviews/2026-11-03.md ▸ #2.
+- **Reasoning**: Same fix as above; its side effect is the [2026-11-13] escalation.
+- **Reviewed in**: reviews/2026-11-13.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-10-02.md
+- **Surface**: CI / scripts
+- **Effort × Impact**: L × M
+- **Subtracts**: no. Addition, justified because the nightly is the only E2E signal and it has been red since 10-01. The Runtime delete hit `NotStabilized`, and the stack has stayed in `DELETE_FAILED` since.
+- **Status**: open. (a) One-off unstick of `nightly-develop-PlatformStack` (ops, no review needed). (b) Delete the Runtime out of band before `delete-stack`, retry and then retain on a Runtime-only `DELETE_FAILED`, and have the deploy step clear a `DELETE_FAILED` predecessor.
+- **Status 2026-10-09**: the one-off unstick (a) happened; nightly green 10-03 → 10-09. The durable step (b) is not wired (no `recover` call in `nightly*.yml`). reviews/2026-10-09.md ▸ Retirement Candidates recommends declining (b) and re-opening on the next `DELETE_FAILED`.
+- **Status 2026-11-03 (review)**: **re-open condition met.** Nightly run 41291532029 (11-01) failed in Teardown with `DELETE_FAILED` on `RagDataRagAssistantsTable5D0DEB95`, and run 41418111769 (11-02) failed in Deploy PlatformStack because `nightly-develop-PlatformStack` was still `DELETE_FAILED`. Green again on 11-03. reviews/2026-11-03.md ▸ #2.
 
 ### [2026-10-16] Take Strands 1.61.1: delete our reasoning projection and the cache-write shim, port voice → RESOLVED — **SHIPPED**
 - **Decision**: shipped 2026-10-20 as `961b8f7a` (#1694, strands-agents 1.61.1 + bedrock-agentcore 1.24.2) and `71c24232` (#1683, cache-write shim). `signed_reasoning.py` is gone.
