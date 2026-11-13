@@ -1,13 +1,13 @@
 ---
 name: cors-deployment
-description: CORS configuration across all CDK stacks, GitHub Actions workflows, and Python backends. Use when modifying CORS origins, adding new stacks that need CORS, debugging CORS errors in deployed environments, or touching any workflow env vars related to CDK_DOMAIN_NAME or CDK_CORS_ORIGINS.
+description: CORS configuration across the CDK PlatformStack, GitHub Actions workflows, and Python backends. Use when modifying CORS origins, adding a construct that needs CORS, debugging CORS errors in deployed environments, or touching any workflow env vars related to CDK_DOMAIN_NAME or CDK_CORS_ORIGINS.
 ---
 
 # CORS Deployment Configuration
 
 ## Architecture
 
-CORS is configured via a two-layer model applied identically to every stack:
+CORS is configured via a layered model applied identically to every construct in `PlatformStack`:
 
 1. `CDK_DOMAIN_NAME` → auto-applied as `https://{value}` (always)
 2. `CDK_CORS_ORIGINS` → additional global origins (optional, comma-separated)
@@ -17,7 +17,7 @@ localhost is NEVER auto-included. Use `CDK_CORS_ORIGINS=http://localhost:4200` f
 
 ## The Helper
 
-Every stack uses `buildCorsOrigins(config, additionalOrigins?)` from `infrastructure/lib/config.ts`. This returns a deduplicated `string[]`.
+Every construct uses `buildCorsOrigins(config, additionalOrigins?)` from `infrastructure/lib/config.ts`. This returns a deduplicated `string[]`.
 
 ```typescript
 // Container env var (Fargate / AgentCore Runtime)
@@ -61,22 +61,22 @@ env:
 ## Per-Section Config Interfaces
 
 Every config section that consumes CORS has `additionalCorsOrigins?: string`:
+- `FrontendConfig.additionalCorsOrigins`
 - `AppApiConfig.additionalCorsOrigins`
 - `InferenceApiConfig.additionalCorsOrigins`
-- `FrontendConfig.additionalCorsOrigins`
-- `FileUploadConfig.additionalCorsOrigins`
 - `RagIngestionConfig.additionalCorsOrigins`
-- `AssistantsConfig.additionalCorsOrigins`
 - `FineTuningConfig.additionalCorsOrigins`
 
-## Adding CORS to a New Stack
+The file-upload bucket has no section extra: it uses `buildCorsOrigins(config)`.
 
-1. Import `buildCorsOrigins` from `./config`
+## Adding CORS to a New Construct
+
+1. Import `buildCorsOrigins` from `infrastructure/lib/config.ts` (relative to the construct's folder under `lib/constructs/<area>/`)
 2. Call `buildCorsOrigins(config, config.mySection.additionalCorsOrigins)`
 3. Add `additionalCorsOrigins?: string` to the section's config interface
 4. Load it in `loadConfig()`: `additionalCorsOrigins: process.env.CDK_MY_SECTION_CORS_ORIGINS || ...`
 5. Add `CDK_DOMAIN_NAME` and `CDK_CORS_ORIGINS` to the workflow job env
-6. Add a test in `infrastructure/test/cors.test.ts`
+6. Add a test beside the existing `buildCorsOrigins` cases in `infrastructure/test/config.test.ts`
 
 ## Common Mistakes
 

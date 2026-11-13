@@ -371,9 +371,9 @@ harness's full golden set as the eval user, then paste the `score` table into th
 PR body. A `GATE: FAIL` is a release blocker until `--explain` shows why.
 
 Run it once for **each model that is the catalog default in some environment**.
-Each has its own committed baseline in `backend/evals/baselines/`. Haiku 5.5 has
-been dev's default since 2026-11-04, and prod stays on Haiku 4.5 until a release
-carries the Haiku 5.5 row and an admin makes it the default there:
+Each has its own committed baseline in `backend/evals/baselines/`. Read each
+environment's default from Admin → Models (the row marked default) rather than
+assuming it, and drop a model from the loop once no environment defaults to it:
 
 ```bash
 cd backend

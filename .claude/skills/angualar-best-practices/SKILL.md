@@ -116,7 +116,7 @@ export class ExampleComponent {}
 
 ## Styling
 
-- Use Tailwind 4.1 for CSS (see tailwind skill if available)
+- Use Tailwind v4 for CSS (see tailwind skill if available)
 - Angular CDK is available when needed
 
 ## Accessibility

@@ -1,6 +1,6 @@
 ---
 name: tailwind-ui
-description: Tailwind CSS v4.1 best practices with WCAG 2.1 AA accessibility, theming, and dark mode support. Use when working with HTML, CSS, styling components, accessibility (a11y), WCAG compliance, color contrast, focus states, screen readers, theming, light mode, dark mode, or building accessible UI patterns like buttons, forms, cards, and navigation. Complements the angular-best-practices skill for Angular frontends.
+description: Tailwind CSS v4 best practices with WCAG 2.1 AA accessibility, theming, and dark mode support. Use when working with HTML, CSS, styling components, accessibility (a11y), WCAG compliance, color contrast, focus states, screen readers, theming, light mode, dark mode, or building accessible UI patterns like buttons, forms, cards, and navigation. Complements the angular-best-practices skill for Angular frontends.
 ---
 
 # Tailwind UI Skill
