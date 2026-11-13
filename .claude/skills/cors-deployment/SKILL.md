@@ -59,8 +59,8 @@ value allows no origins.
 
 Section extras exist on `AppApiConfig`, `InferenceApiConfig`,
 `RagIngestionConfig` and `FineTuningConfig`. The file-upload bucket takes none
-(`buildCorsOrigins(config)`). `FrontendConfig.additionalCorsOrigins`
-(`CDK_FRONTEND_CORS_ORIGINS`) is loaded but has no consumer.
+(`buildCorsOrigins(config)`), and neither does the SPA distribution, which
+serves the app rather than calling anything cross-origin.
 
 ## Workflow requirements
 
