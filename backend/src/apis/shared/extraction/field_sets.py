@@ -431,6 +431,170 @@ def parse_field_set(text: str, *, name: str) -> FieldSet:
     )
 
 
+# ---------------------------------------------------------------------------
+# Serializing
+# ---------------------------------------------------------------------------
+
+#: The columns the serializer writes, in this order. Canonical names, never the
+#: aliases: an editor that saved ``field`` one week and ``name`` the next would
+#: turn every save into a whole-file diff.
+_SERIALIZED_COLUMNS = ("name", "title", "type", "find", "enum", "optional")
+
+
+def _single_line(value: str, *, what: str, name: str) -> str:
+    """``value`` with its ends trimmed, refused if it cannot sit on one line."""
+    text = value.strip()
+    if "\n" in text or "\r" in text:
+        raise FieldSetError(
+            f"field set '{name}': {what} cannot contain a line break, because "
+            "each field is one row of the table"
+        )
+    return text
+
+
+def _cell(value: str, *, what: str, name: str) -> str:
+    text = _single_line(value, what=what, name=name)
+    if "|" in text:
+        raise FieldSetError(
+            f"field set '{name}': {what} cannot contain '|', which ends a table "
+            "cell"
+        )
+    return text
+
+
+def _row(cells: Sequence[str]) -> str:
+    return "|" + "|".join(f" {cell} " if cell else " " for cell in cells) + "|"
+
+
+def serialize_field_set(field_set: FieldSet, *, preamble: Optional[str] = None) -> str:
+    """The markdown file for ``field_set`` — the inverse of :func:`parse_field_set`.
+
+    ``docs/specs/field-set-authoring.md`` §4 (D2): the backend owns the format in
+    both directions, so the editor never parses or writes it. The output is one
+    fixed shape — frontmatter, the optional ``preamble`` prose, the table in
+    authored order with canonical column names, then ``## Rules`` verbatim — so
+    two saves of one set are byte-identical (D5, the diff property).
+
+    The guarantee that matters is the semantic one: parsing the output gives
+    back exactly ``field_set``. Rather than trust that every value survives the
+    table, the result is parsed and compared before it is returned, so a value
+    the format cannot carry (a ``|`` in a phrase, a comma inside one enum value,
+    a title the frontmatter would strip) is refused here, by name, instead of
+    being saved as a different set from the one the author wrote.
+
+    Raises:
+        FieldSetError: the set cannot be written as a file that reads back as
+            itself, or is not a valid set (no fields, more than
+            :data:`MAX_FIELDS`, and every other rule :func:`parse_field_set`
+            enforces).
+    """
+    name = field_set.name
+    title = _single_line(field_set.title, what="the title", name=name)
+    version = _single_line(field_set.version, what="the version", name=name)
+
+    lines = ["---", f"title: {title}", f"version: {version}", "---", ""]
+
+    prose = (preamble or "").strip()
+    if prose:
+        lines.extend([prose, ""])
+
+    lines.append(_row(_SERIALIZED_COLUMNS))
+    lines.append("|" + "---|" * len(_SERIALIZED_COLUMNS))
+    for item in field_set.fields:
+        label = f"field {item.name!r}"
+        values = [
+            _cell(value, what=f"{label}: allowed value {value!r}", name=name)
+            for value in item.enum
+        ]
+        for value in values:
+            if "," in value:
+                raise FieldSetError(
+                    f"field set '{name}', {label}: allowed value {value!r} "
+                    "cannot contain a comma, which separates allowed values"
+                )
+        lines.append(
+            _row(
+                [
+                    _cell(item.name, what=f"{label}: the name", name=name),
+                    _cell(item.title, what=f"{label}: the title", name=name),
+                    _cell(item.type, what=f"{label}: the type", name=name),
+                    _cell(item.find, what=f"{label}: 'find'", name=name),
+                    ", ".join(values),
+                    "yes" if item.optional else "no",
+                ]
+            )
+        )
+
+    rules = (field_set.rules or "").strip()
+    if rules:
+        lines.extend(["", "## Rules", "", rules])
+
+    text = "\n".join(lines) + "\n"
+
+    reparsed = parse_field_set(text, name=name)
+    if reparsed != field_set:
+        raise FieldSetError(
+            f"field set '{name}' cannot be written as a file that reads back "
+            "the same: " + _first_difference(field_set, reparsed)
+        )
+    return text
+
+
+def _first_difference(expected: FieldSet, actual: FieldSet) -> str:
+    """A sentence naming the first thing that did not survive the round trip."""
+    for attribute in ("title", "version", "rules"):
+        if getattr(expected, attribute) != getattr(actual, attribute):
+            return f"its {attribute} would read back as {getattr(actual, attribute)!r}"
+    if len(expected.fields) != len(actual.fields):
+        return (
+            f"{len(expected.fields)} fields would read back as "
+            f"{len(actual.fields)}"
+        )
+    for want, got in zip(expected.fields, actual.fields):
+        if want != got:
+            for attribute in ("name", "title", "type", "find", "enum", "optional"):
+                if getattr(want, attribute) != getattr(got, attribute):
+                    return (
+                        f"field {want.name!r}: {attribute} would read back as "
+                        f"{getattr(got, attribute)!r}"
+                    )
+    return "the parsed set differs"  # pragma: no cover - every attribute is checked
+
+
+def validate_field_set_upload(filename: str, content: bytes) -> Optional[FieldSet]:
+    """Parse a bundle file that claims to be a field set, or return ``None``.
+
+    The check every skill-file write path runs (field-set-authoring §4.2, D6),
+    unconditionally: a file stored invalid would fail later, mid-turn, in front
+    of someone who did not write it. Only the filename decides whether a file is
+    a field set, so every other file passes through untouched.
+
+    A file named ``field-set.<something>.md`` whose ``<something>`` is not a valid
+    set name is refused too, rather than stored: :func:`field_set_name_for`
+    reads it as no field set at all, so the resolver would skip it silently and
+    the author would never learn why their set does not appear.
+
+    Raises:
+        FieldSetError: the file is not UTF-8, its name is not a valid set name,
+            or its contents do not parse.
+    """
+    tail = (filename or "").strip().rsplit("/", 1)[-1]
+    if not tail.startswith(FIELD_SET_PREFIX) or not tail.endswith(FIELD_SET_SUFFIX):
+        return None
+    name = field_set_name_for(tail)
+    if name is None:
+        raw = tail[len(FIELD_SET_PREFIX) : -len(FIELD_SET_SUFFIX)]
+        raise FieldSetError(
+            f"field-set name {raw!r} in '{tail}' must be lowercase words joined "
+            "by hyphens, e.g. 'field-set.nsf-solicitation.md'"
+        )
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise FieldSetError(f"field set '{name}' is not UTF-8 text") from None
+    return parse_field_set(text, name=name)
+
+
 __all__ = [
     "Field",
     "FieldSet",
@@ -449,4 +613,6 @@ __all__ = [
     "TYPE_LIST",
     "field_set_name_for",
     "parse_field_set",
+    "serialize_field_set",
+    "validate_field_set_upload",
 ]
