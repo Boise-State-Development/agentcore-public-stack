@@ -26,7 +26,9 @@ import { ConversationForkService } from '../../../services/session/conversation-
 import { TooltipDirective } from '../../../../components/tooltip';
 import { parseIso } from '../../../../utils/date';
 import { HandoffStateService } from '../../../services/handoff/handoff-state.service';
-import { extractHandoffContext } from '../../../services/handoff/handoff-prompt';
+import { extractDeliveryBlocks, extractHandoffContext } from '../../../services/handoff/handoff-prompt';
+import { DeliveryBlock } from '../../../services/handoff/handoff.models';
+import { DeliveryArtifactChipsComponent } from '../../handoff/delivery-artifact-chips.component';
 import { SessionService } from '../../../services/session/session.service';
 
 function isImageMimeType(mimeType: string): boolean {
@@ -44,7 +46,7 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, MessageAttachmentsComponent, NgIcon, RouterLink, TooltipDirective],
+  imports: [DeliveryArtifactChipsComponent, FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, MessageAttachmentsComponent, NgIcon, RouterLink, TooltipDirective],
   viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath, heroArrowUturnLeft, heroCheck, heroSquare2Stack, appFork: FORK_ICON })],
   template: `
     @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
@@ -83,6 +85,33 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
             </span>
             @if (contextOpen() && handoffContext(); as context) {
               <pre tabindex="0" role="region" aria-label="Context carried by this handoff" class="max-h-64 w-full overflow-auto whitespace-pre-wrap rounded-lg bg-gray-100 p-2 text-left font-mono text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200">{{ context }}</pre>
+            }
+          </div>
+        }
+
+        <!-- Results this message carried from other conversations (handoffs spec §4.8). -->
+        @for (block of deliveryBlocks(); track $index; let i = $index) {
+          <div class="flex max-w-[80%] flex-col items-end gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
+            <span class="flex items-center gap-1">
+              <ng-icon name="heroArrowUturnLeft" class="size-3.5" aria-hidden="true" />
+              From <span class="font-medium text-gray-700 dark:text-gray-300">{{ block.fromTitle }}</span>
+              @if (block.text) {
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  class="font-medium text-gray-700 underline-offset-2 hover:underline dark:text-gray-300"
+                  [attr.aria-expanded]="openDelivery() === i"
+                  (click)="toggleDelivery(i)"
+                >
+                  {{ openDelivery() === i ? 'Hide result' : 'Show result' }}
+                </button>
+              }
+            </span>
+            @if (openDelivery() === i) {
+              <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + block.fromTitle" class="max-h-64 w-full overflow-auto whitespace-pre-wrap rounded-lg bg-gray-100 p-2 text-left text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200">{{ block.text }}</pre>
+            }
+            @if (block.artifacts.length > 0) {
+              <app-delivery-artifact-chips [artifacts]="block.artifacts" [label]="'Artifacts from ' + block.fromTitle" />
             }
           </div>
         }
@@ -316,6 +345,23 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
     const text = this.message().content.find((block) => block.type === 'text' && block.text)?.text;
     return text ? extractHandoffContext(text) : null;
   });
+
+  /**
+   * Results from other conversations this message carried (handoffs spec §4.8): the delivery
+   * blocks its stored text opens with. Read from the message itself, so a live bubble and a
+   * reloaded one show the same cards. Never on a handoff's first message, whose block is its context.
+   */
+  protected readonly deliveryBlocks = computed((): DeliveryBlock[] => {
+    if (this.handoffOrigin() || !this.message().metadata?.['displayText']) return [];
+    const text = this.message().content.find((block) => block.type === 'text' && block.text)?.text;
+    return text ? extractDeliveryBlocks(text).blocks : [];
+  });
+
+  protected readonly openDelivery = signal<number | null>(null);
+
+  protected toggleDelivery(index: number): void {
+    this.openDelivery.set(this.openDelivery() === index ? null : index);
+  }
 
   /** Offered only while a resend could start a turn — see FailedSendService. */
   canRetry = computed(() => this.failedSends.canRetry(this.message().id));

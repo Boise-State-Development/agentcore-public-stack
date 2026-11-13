@@ -38,6 +38,9 @@ import { isPreviewSession } from '../../../shared/constants/session.constants';
 import { HttpErrorResponse } from '@angular/common/http';
 import { HandoffRelayService, ResumeOutcome } from '../handoff/handoff-relay.service';
 import { RelayedPromptKind } from '../handoff/handoff.models';
+import { ComposerCard, DeliveryAttach, DeliveryStateService } from '../handoff/delivery-state.service';
+import { joinDeliveryBlocks, renderDeliveryBlock } from '../handoff/handoff-prompt';
+import { FEATURES } from '../../../services/features';
 
 /**
  * How long a send will wait for the tool/skill lists before giving up and
@@ -85,6 +88,8 @@ export class ChatRequestService implements OnDestroy {
   private readonly binding = inject(ConversationBindingService);
   private readonly incognitoChat = inject(IncognitoChatService);
   private readonly handoffRelay = inject(HandoffRelayService);
+  private readonly deliveryState = inject(DeliveryStateService);
+  private readonly features = inject(FEATURES);
   // TODO: Inject proper logging service
 
   constructor() {
@@ -191,8 +196,22 @@ export class ChatRequestService implements OnDestroy {
     // Get file attachment metadata for display in user message
     const fileAttachments = this.getFileAttachments(fileUploadIds);
 
+    // Cards waiting on this composer ride this send (handoffs spec §4.8). The bubble's text is what
+    // the server will store, the blocks then what was typed, so it renders the same after a reload.
+    const cards: { attach: DeliveryAttach[]; cards: ComposerCard[] } = isNewSession || !this.features.handoffs
+      ? { attach: [], cards: [] }
+      : this.deliveryState.takeForSend(sessionId);
+    const modelText = cards.cards.length
+      ? joinDeliveryBlocks(
+          cards.cards.map((c) => renderDeliveryBlock(c.editedText ?? c.text, c.fromTitle, c.artifacts)),
+          userInput,
+        )
+      : undefined;
+
     // Create and add user message with file attachments
-    const userMessage = this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments, folders);
+    const userMessage = modelText === undefined
+      ? this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments, folders)
+      : this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments, folders, modelText);
     // If this send is the retry a down-thumb asked for, link it to the thumb
     // (an index on the feedback row — never the text).
     this.messageFeedbackService.consumePendingRetry(sessionId, userMessage);
@@ -221,6 +240,7 @@ export class ChatRequestService implements OnDestroy {
         invokedSkillIds,
         (folders ?? []).flatMap((folder) => (folder.folderAttachId ? [folder.folderAttachId] : [])),
       );
+      if (cards.attach.length) requestObject['deliveries'] = cards.attach;
       this.turnTiming.describe(sessionId, {
         // The selected model even when the request omits it as the default.
         modelId: this.modelService.getSelectedModel()?.modelId ?? null,
@@ -235,6 +255,9 @@ export class ChatRequestService implements OnDestroy {
       this.chatStateService.setChatLoading(sessionId, false);
       this.messageMapService.endStreaming(sessionId);
       if (error instanceof StreamNotStartedError) {
+        // Refused before the server took anything: the cards go back on the composer, and a retry
+        // takes them again.
+        this.deliveryState.restore(sessionId, cards.cards);
         this.markNotSent(sessionId, userMessage.id, error.reason, () =>
           this.submitChatRequest(
             userInput,

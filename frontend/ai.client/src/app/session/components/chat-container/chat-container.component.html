@@ -353,6 +353,11 @@
                only while one is open for this conversation. -->
           @if (sessionId(); as sid) {
             <app-handoff-review-sheet [sessionId]="sid" />
+            <!-- Send to {title}'s review, in a conversation a handoff started (§4.3), and the
+                 results waiting to ride this conversation's next send (§4.8). Each renders
+                 only while it has something to show. -->
+            <app-send-back-sheet [sessionId]="sid" />
+            <app-delivery-cards [sessionId]="sid" />
           }
           <app-chat-input
             [showAnnouncements]="showAnnouncements()"
