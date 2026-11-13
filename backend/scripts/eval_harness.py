@@ -1229,6 +1229,57 @@ def cmd_score(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_rescore(args: argparse.Namespace) -> int:
+    """Re-score every stored sample of a run against the cases as they are now.
+
+    For a case whose *check* was wrong, not its answer: the stored final
+    message and last turn's tool calls are scored again by ``score_sample``,
+    nothing is sent to a model, and the answers are untouched. The previous
+    file is kept as ``results.jsonl.bak``. Prints only case ids whose outcome
+    changed, never an answer.
+    """
+    from apis.shared.evals.score import score_sample
+
+    out = Path(args.out)
+    try:
+        meta = _read_meta(out)
+        cases = {c.id: c for c in load_cases(Path(args.cases_dir), families=list(FAMILIES),
+                                             fixtures_dir=Path(args.fixtures_dir), generated=GENERATED)}
+    except (ReportError, CaseError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    results_path = out / RESULTS_FILE
+    rows = read_rows(results_path)
+    if not rows:
+        print(f"no results in {results_path}", file=sys.stderr)
+        return 2
+    before = {cid: o.passed for cid, o in case_outcomes(rows).items()}
+    rescored = 0
+    for row in rows:
+        case = cases.get(str(row.get("case_id")))
+        if case is None:
+            continue
+        scored = score_sample(
+            case.expect,
+            final_message=str(row.get("final_message") or ""),
+            tool_calls=row.get("tool_calls") or [],
+            status=str(row.get("status") or "completed"),
+            memory_state=row.get("memory"),
+        )
+        if (scored.passed, list(scored.failures)) != (bool(row.get("passed")), list(row.get("failures") or [])):
+            rescored += 1
+        row["passed"], row["failures"] = scored.passed, list(scored.failures)
+    after = case_outcomes(rows)
+    backup = results_path.with_suffix(".jsonl.bak")
+    backup.write_text(results_path.read_text(encoding="utf-8"), encoding="utf-8")
+    results_path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    meta["rescoredAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    (out / META_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    flipped = sorted(cid for cid, o in after.items() if before.get(cid) != o.passed)
+    print(f"rescored {out}: {rescored} sample(s) changed; case outcomes flipped: {', '.join(flipped) or 'none'}")
+    return 0
+
+
 def cmd_publish(args: argparse.Namespace) -> int:
     """Write complete runs as the public benchmark document (eval-harness spec §19).
 
@@ -1437,6 +1488,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--json", help="also write the readout as JSON to this path")
     s.add_argument("--no-cost-rows", action="store_true", help="skip reading the samples' C# rows (no AWS)")
 
+    s = sub.add_parser("rescore", help="re-apply the current case checks to a run's stored answers (no AWS, no spend)")
+    s.add_argument("--out", required=True)
+
     s = sub.add_parser("publish", help="write complete runs as the public benchmark document (spec §19)")
     s.add_argument("--out", required=True, action="append",
                    help="a complete run directory; repeat for each model to publish")
@@ -1487,6 +1541,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return cmd_readout(args)
     if args.command == "publish":
         return cmd_publish(args)
+    if args.command == "rescore":
+        return cmd_rescore(args)
     return asyncio.run(cmd_cleanup(args))
 
 

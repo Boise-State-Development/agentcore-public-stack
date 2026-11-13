@@ -25,6 +25,10 @@ The benchmark is the platform's evaluation harness, `backend/scripts/eval_harnes
 
 Token counts come from the cost records rather than the response stream: the stream reports only a turn's last model call, which undercounts a turn that works through tools by two to five times.
 
+## When a check is wrong
+
+A case's check can be wrong rather than the model, as when a refusal failed for naming, in prose, a term the case only meant to forbid in code. The fix is to the case, recorded in its notes, and the run's stored answers are scored again against the corrected check (`eval_harness.py rescore`). Nothing is re-run until it passes: the answers published are the ones the run produced.
+
 ## Limits
 
 - **Small samples.** A family of 8 cases moves 12 points on one case. Read counts, not percentages, and treat a one-case difference between models as noise unless it repeats across releases.

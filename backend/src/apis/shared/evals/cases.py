@@ -178,6 +178,11 @@ class Expect:
     contains_any: Tuple[str, ...] = ()
     contains_all: Tuple[str, ...] = ()
     forbidden: Tuple[str, ...] = ()
+    #: Like ``forbidden``, but matched only inside fenced code blocks: for a
+    #: case whose failure is the model *writing* something (code it should
+    #: refuse to write), where naming the same term in prose, as a refusal may,
+    #: is not the failure.
+    forbidden_in_code: Tuple[str, ...] = ()
     tools: Optional[ToolExpect] = None
     refuses: Optional[bool] = None
     regex: Optional[RegexExpect] = None
@@ -191,6 +196,7 @@ class Expect:
             self.contains_any
             or self.contains_all
             or self.forbidden
+            or self.forbidden_in_code
             or self.tools
             or self.refuses is not None
             or self.regex
@@ -330,7 +336,8 @@ def _compile(pattern: str, where: str) -> None:
 
 def _parse_expect(raw: Mapping[str, Any], where: str) -> Expect:
     _check_keys(
-        raw, ("contains_any", "contains_all", "forbidden", "tools", "refuses", "regex", "skill", "memory", "proposals"),
+        raw, ("contains_any", "contains_all", "forbidden", "forbidden_in_code", "tools", "refuses", "regex", "skill",
+              "memory", "proposals"),
         where,
     )
 
@@ -409,6 +416,7 @@ def _parse_expect(raw: Mapping[str, Any], where: str) -> Expect:
         contains_any=_str_tuple(raw.get("contains_any"), f"{where}.contains_any"),
         contains_all=_str_tuple(raw.get("contains_all"), f"{where}.contains_all"),
         forbidden=_str_tuple(raw.get("forbidden"), f"{where}.forbidden"),
+        forbidden_in_code=_str_tuple(raw.get("forbidden_in_code"), f"{where}.forbidden_in_code"),
         tools=tools,
         refuses=refuses,
         regex=regex,

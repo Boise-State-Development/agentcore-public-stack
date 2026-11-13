@@ -665,3 +665,35 @@ def test_publish_writes_the_document_and_the_headline(tmp_path, golden, capsys):
     assert family["failing"] == ["tool_selection.a"] and family["passing"] == 7
     assert "7 of 8 (k=3)" in headline.read_text()
     assert "eval-" not in out.read_text()
+
+
+# --------------------------------------------------------------------------- rescore
+
+
+def test_rescore_reapplies_the_current_checks_without_touching_answers(tmp_path, golden, capsys):
+    """Stored outcomes that disagree with the cases' checks are corrected both ways; answers stay."""
+    flags, _ = golden
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "meta.json").write_text(json.dumps({"model_id": MODEL, "k": 1, "startedAt": "t"}), encoding="utf-8")
+    rows = [
+        # Called the calculator, but stored as a failure: the check now passes it.
+        {"case_id": "tool_selection.a", "family": "tool_selection", "sample": 0, "passed": False,
+         "failures": ["stale"], "final_message": "42", "tool_calls": [{"name": "calculator"}]},
+        # Never called it, but stored as a pass: the check now fails it.
+        {"case_id": "tool_selection.b", "family": "tool_selection", "sample": 0, "passed": True,
+         "failures": [], "final_message": "42", "tool_calls": []},
+    ]
+    original = "".join(json.dumps(r) + "\n" for r in rows)
+    (run / "results.jsonl").write_text(original, encoding="utf-8")
+
+    assert eval_harness.main(flags + ["rescore", "--out", str(run)]) == 0
+    after = {r["case_id"]: r for r in map(json.loads, (run / "results.jsonl").read_text().splitlines())}
+    assert after["tool_selection.a"]["passed"] is True and after["tool_selection.a"]["failures"] == []
+    assert after["tool_selection.b"]["passed"] is False
+    assert after["tool_selection.b"]["failures"] == ["did not call calculator"]
+    assert all(r["final_message"] == "42" for r in after.values())
+    assert (run / "results.jsonl.bak").read_text() == original
+    assert "rescoredAt" in json.loads((run / "meta.json").read_text())
+    out = capsys.readouterr().out
+    assert "2 sample(s) changed" in out and "tool_selection.a, tool_selection.b" in out

@@ -57,6 +57,25 @@ def contains_any(text: str, values: Iterable[str]) -> bool:
     return False
 
 
+_FENCE = re.compile(r"^[ \t]*(```|~~~)[^\n]*\n(.*?)^[ \t]*\1[ \t]*$", re.MULTILINE | re.DOTALL)
+_OPEN_FENCE = re.compile(r"^[ \t]*(```|~~~)[^\n]*\n(.*)\Z", re.MULTILINE | re.DOTALL)
+
+
+def code_blocks(text: str) -> str:
+    """Every fenced code block's body, joined; an unclosed final fence runs to the end.
+
+    Inline code (single backticks) is prose for this purpose: it is how an
+    answer names a term, not how it writes a program.
+    """
+    text = text or ""
+    bodies = [m.group(2) for m in _FENCE.finditer(text)]
+    rest = _FENCE.sub("", text)
+    unclosed = _OPEN_FENCE.search(rest)
+    if unclosed:
+        bodies.append(unclosed.group(2))
+    return "\n".join(bodies)
+
+
 def is_correct(answer: str, expected: Sequence[str], forbidden: Sequence[str] = ()) -> bool:
     return contains_any(answer, expected) and not contains_any(answer, forbidden)
 
@@ -151,6 +170,8 @@ def score_sample(
             failures.append(f"missing {value!r}")
     if expect.forbidden and contains_any(answer, expect.forbidden):
         failures.append("contains a forbidden value")
+    if expect.forbidden_in_code and contains_any(code_blocks(answer), expect.forbidden_in_code):
+        failures.append("code contains a forbidden value")
 
     names = [str(call.get("name") or "") for call in tool_calls]
     tools = expect.tools
@@ -251,6 +272,7 @@ _FAILURE_PATTERNS: Tuple[Tuple["re.Pattern[str]", str, bool], ...] = (
     (re.compile(r"^missing expected value$"), "missing_value", False),
     (re.compile(r"^missing "), "missing_value", False),
     (re.compile(r"^contains a forbidden value$"), "forbidden_value", False),
+    (re.compile(r"^code contains a forbidden value$"), "forbidden_value", False),
     (re.compile(r"^did not call (?P<name>\S+)$"), "tool_missing", True),
     (re.compile(r"^called (?P<name>\S+)$"), "tool_forbidden", True),
     (re.compile(r"^tools out of order: "), "tool_order", False),

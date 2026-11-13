@@ -158,7 +158,7 @@ Every release runs the platform's whole evaluation golden set, three samples per
 | Model | Cases passing | Cost per task | Median task time | Median first token | Measured |
 |---|---:|---:|---:|---:|---|
 | `us.anthropic.claude-haiku-5-5` | 142 of 143 (k=3) | $0.0006 | 6.8 s | 2.7 s | 2026-11-13, v1.35.0 |
-| `us.anthropic.claude-sonnet-5` | 139 of 143 (k=3) | $0.0101 | 6.3 s | 1.5 s | 2026-11-13, v1.35.0 |
+| `us.anthropic.claude-sonnet-5` | 140 of 143 (k=3) | $0.0101 | 6.3 s | 1.5 s | 2026-11-13, v1.35.0 |
 | `us.anthropic.claude-opus-5-5` | 138 of 143 (k=3) | $0.0219 | 7.4 s | 2.2 s | 2026-11-13, v1.35.0 |
 
 Cost per task is what the platform metered for every model call of a task, at Regional rates on the development deployment. Full tables by workflow, the methodology and the command that reruns the benchmark on your own deployment are on the [Benchmarks](https://boise-state-development.github.io/agentcore-public-stack/benchmarks/) page.
