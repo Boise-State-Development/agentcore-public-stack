@@ -759,6 +759,8 @@ class StreamCoordinator:
                         # Capture the partial for interruption persistence.
                         assistant_text_acc.append(event_data["text"])
                         if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
+                            text_slot = per_message_metadata[current_assistant_message_index]
+                            text_slot["text_chars"] = text_slot.get("text_chars", 0) + len(event_data["text"])
                             if per_message_metadata[current_assistant_message_index]["first_token_time"] is None:
                                 per_message_metadata[current_assistant_message_index]["first_token_time"] = time.time()
                                 logger.info(
@@ -767,6 +769,13 @@ class StreamCoordinator:
                                 # Also update global first_token_time for the first message (backward compatibility)
                                 if current_assistant_message_index == 0 and first_token_time is None:
                                     first_token_time = per_message_metadata[0]["first_token_time"]
+
+                # What this call's output was made of, as lengths only
+                # (`outputChars` on the cost row): the reasoning the model
+                # streamed and the signature that tracks what it was billed.
+                elif event.get("type") == "reasoning":
+                    if 0 <= current_assistant_message_index < len(per_message_metadata):
+                        self._count_reasoning(per_message_metadata[current_assistant_message_index], event.get("data"))
 
                 # Note whether the agent invoked an artifact authoring
                 # tool this turn. Gates the post-turn artifacts query so
@@ -2060,7 +2069,46 @@ class StreamCoordinator:
             "first_token_time": None,  # When first token was received
             "end_time": None,  # When this message ended
             "call_index": call_index,
+            # Lengths of what the call streamed, for `outputChars`.
+            "text_chars": 0,
+            "reasoning_chars": 0,
+            "reasoning_signature_chars": 0,
         }
+
+    @staticmethod
+    def _count_reasoning(slot: Dict[str, Any], data: Any) -> None:
+        """Add one reasoning event's lengths to its call slot. Lengths only."""
+        if not isinstance(data, dict):
+            return
+        text = data.get("reasoningText")
+        if isinstance(text, str):
+            slot["reasoning_chars"] = slot.get("reasoning_chars", 0) + len(text)
+        signature = data.get("reasoning_signature")
+        if isinstance(signature, str):
+            slot["reasoning_signature_chars"] = slot.get("reasoning_signature_chars", 0) + len(signature)
+
+    @staticmethod
+    def _output_chars(slot: Any) -> Optional[Dict[str, int]]:
+        """``outputChars`` for a call's cost row, or ``None`` when it streamed
+        nothing measurable or the cost diagnostics are off.
+
+        ``text`` is the answer the call streamed and ``reasoning`` the thinking
+        it streamed. ``reasoningSignature`` is the length of the reasoning
+        block's signature: with summarized thinking the streamed text is a
+        short summary while the signature carries the full thinking, so its
+        length is what tracks the reasoning share of the billed output tokens
+        (see ``REASONING_SIGNATURE_CHARS_PER_TOKEN`` in the compaction policy).
+        What the model wrote to call tools is the census's ``inputChars``.
+        """
+        if not isinstance(slot, dict) or not cost_diagnostics_enabled():
+            return None
+        chars = {
+            "text": slot.get("text_chars", 0),
+            "reasoning": slot.get("reasoning_chars", 0),
+            "reasoningSignature": slot.get("reasoning_signature_chars", 0),
+        }
+        chars = {name: count for name, count in chars.items() if isinstance(count, int) and count > 0}
+        return chars or None
 
     @staticmethod
     def _last_persisted_role(agent: Any) -> Optional[str]:
@@ -4707,6 +4755,14 @@ class StreamCoordinator:
                 # no tools or COST_DIAGNOSTICS_ENABLED=false.
                 if tool_calls:
                     metadata_kwargs["toolCalls"] = tool_calls
+
+                # What the call's output was made of: characters of answer
+                # text, of streamed reasoning, and of the reasoning signature.
+                # Lengths counted as the stream passed, never the text. Absent
+                # when the call streamed neither or COST_DIAGNOSTICS_ENABLED=false.
+                output_chars = self._output_chars(accumulated_metadata)
+                if output_chars:
+                    metadata_kwargs["outputChars"] = output_chars
 
                 # Context ledger for this call: the conversation window's
                 # cumulative trim count (a rise between consecutive rows is a
