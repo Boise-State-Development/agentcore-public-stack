@@ -89,7 +89,8 @@ Gaps where the classifier has to estimate. Each is a content-free field on the `
 - **Artifact size per write.** The artifact's bytes per version, to price superseded copies and patch-edit savings without using output tokens as a proxy.
 - **Pasted characters on the user message.** A count only, to replace the paste heuristic.
 - **Warm vs restored agent per turn.** This decides whether tool-result aging already happened on that turn.
-- **Census accuracy.** Don't count the OAuth 401 retry as a tool error; it inflates `search_files`' 58%.
+- ~~**Census accuracy.**~~ **Collected once this ships:** a failed tool call also counts under `toolCalls[<tool>].errorKinds` (`auth` / `timeout` / `exception` / `result_error`), so the OAuth 401 retry that inflates `search_files`' error rate is separable (`errors` minus `errorKinds.auth`) without changing what `errors` means.
+- **Output composition.** `outputChars` on each cost row (`text` / `reasoning` / `reasoningSignature`) says how much of a call's output was answer and how much was thinking.
 
 Process:
 - Re-run the skill weekly and watch the discovery queue (unclassified conversations over $1, 66 at baseline).

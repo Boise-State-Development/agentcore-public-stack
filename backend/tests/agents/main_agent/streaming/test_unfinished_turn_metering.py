@@ -949,3 +949,51 @@ async def test_a_row_the_live_ledger_counts_is_marked_on_its_own_put(monkeypatch
 
     assert len(recorded.cost_rows) == 2
     assert [row.get("ledgered") for row in recorded.cost_rows] == ([True, True] if marked else [None, None])
+
+
+# ---------------------------------------------------------------------------
+# What a call's output was made of (`outputChars` on the cost row): characters
+# of answer text, of streamed reasoning and of the reasoning signature, per
+# call. Lengths only.
+# ---------------------------------------------------------------------------
+
+
+def _thinking_answer(reasoning: str, signature: str, text: str) -> List[Dict[str, Any]]:
+    return [
+        {"event": {"messageStart": {"role": "assistant"}}},
+        {"reasoning": True, "reasoningText": reasoning},
+        {"reasoning_signature": signature},
+        {"event": {"contentBlockDelta": {"contentBlockIndex": 1, "delta": {"text": text}}}},
+        {"event": {"messageStop": {"stopReason": "end_turn"}}},
+        {"event": {"metadata": {"usage": dict(CALL_USAGE), "metrics": {"latencyMs": 100}}}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_each_row_carries_what_its_own_call_streamed(monkeypatch):
+    recorded = await _run(
+        [*_completed_call("looking"), *_thinking_answer("weighing it", "s" * 62, "Here it is.")],
+        monkeypatch,
+    )
+
+    rows = recorded.cost_rows
+    assert rows[0]["outputChars"] == {"text": len("looking")}
+    assert rows[1]["outputChars"] == {
+        "text": len("Here it is."),
+        "reasoning": len("weighing it"),
+        "reasoningSignature": 62,
+    }
+    assert "weighing" not in repr(rows) and "Here it is" not in repr(rows)
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_streamed_nothing_has_no_output_chars(monkeypatch):
+    recorded = await _run([*_completed_call("looking"), *_empty_call()], monkeypatch)
+    assert "outputChars" not in recorded.cost_rows[-1]
+
+
+@pytest.mark.asyncio
+async def test_output_chars_ride_the_cost_diagnostics_switch(monkeypatch):
+    monkeypatch.setenv("COST_DIAGNOSTICS_ENABLED", "false")
+    recorded = await _run([*_final_answer("Here it is.")], monkeypatch)
+    assert not any("outputChars" in row for row in recorded.cost_rows)
