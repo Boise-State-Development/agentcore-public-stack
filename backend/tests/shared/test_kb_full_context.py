@@ -335,3 +335,40 @@ class TestVoiceBudget:
     def test_the_voice_budget_still_needs_the_grant(self, kb):
         kb.add("d1", "vocab.txt", "palabra")
         assert asyncio.run(fc.load_full_kb_context(ASSISTANT_ID, access=None, budget_tokens=1_000)) is None
+
+
+class TestGenericContentType:
+    """A .md uploaded without a browser-known type is stored as application/octet-stream
+    (the SPA's upload fallback). It must still read as Markdown, in text chat and voice."""
+
+    def test_markdown_stored_as_octet_stream_is_sent_whole(self, kb):
+        kb.add("d1", "vocabulary.md", "# Vocabulario\n\n- hola: hello\n", content_type="application/octet-stream")
+
+        block = _load()
+        assert block is not None and "hola: hello" in block
+        found = fc.assess_full_context(ASSISTANT_ID, 50_000)
+        assert found.eligible and found.reason is None
+
+    def test_a_blank_content_type_falls_back_to_the_extension(self, kb):
+        kb.add("d1", "notes.md", "alpha", content_type="")
+        assert _load() is not None
+
+    def test_a_spreadsheet_stored_as_octet_stream_is_still_skipped(self, kb):
+        kb.add("d1", "grades.xlsx", b"PK\x03\x04", content_type="application/octet-stream")
+        found = fc.assess_full_context(ASSISTANT_ID, 50_000)
+        assert found.reason == fc.REASON_NO_TEXT_DOCUMENTS
+
+    def test_an_unknown_extension_stays_unreadable(self, kb):
+        kb.add("d1", "data.bin", b"\x00\x01", content_type="application/octet-stream")
+        found = fc.assess_full_context(ASSISTANT_ID, 50_000)
+        assert found.reason == fc.REASON_NO_TEXT_DOCUMENTS
+
+
+def test_kb_document_format_prefers_a_known_content_type():
+    from apis.shared.assistants.kb_documents import kb_document_format
+
+    assert kb_document_format({"filename": "a.md", "contentType": "text/markdown"}) == "md"
+    assert kb_document_format({"filename": "a.md", "contentType": "application/octet-stream"}) == "md"
+    assert kb_document_format({"filename": "a.txt", "contentType": "binary/octet-stream"}) == "txt"
+    # A specific, non-generic type is trusted: no guessing from the name.
+    assert kb_document_format({"filename": "a.md", "contentType": "image/png"}) is None

@@ -74,6 +74,36 @@ def list_kb_documents(assistant_id: str) -> List[Dict[str, Any]]:
         query["ExclusiveStartKey"] = last
 
 
+#: Content types a browser sends when it does not know a file's type. The SPA's
+#: knowledge-base upload passes ``file.type || "application/octet-stream"``, and
+#: browsers commonly leave ``.md`` (and other extensions the OS has no type for)
+#: blank, so these documents were stored as ``application/octet-stream``.
+_GENERIC_CONTENT_TYPES = frozenset({"", "application/octet-stream", "binary/octet-stream"})
+
+
+def kb_document_format(doc: Mapping[str, Any]) -> Optional[str]:
+    """The text format a knowledge-base document can be read as, or ``None``.
+
+    :func:`apis.shared.files.document_read.document_format_for` decides from the
+    content type alone. A document stored with a generic content type falls
+    back to the type its filename extension maps to in the upload allowlist,
+    so a ``.md`` uploaded as ``application/octet-stream`` reads as Markdown.
+    Spreadsheets and decks still return ``None``.
+    """
+    from apis.shared.files.document_read import document_format_for
+    from apis.shared.files.models import ALLOWED_EXTENSIONS
+
+    filename = str(doc.get("filename") or "")
+    content_type = str(doc.get("contentType") or "")
+    fmt = document_format_for(content_type, filename)
+    if fmt is None and content_type.lower().split(";")[0].strip() in _GENERIC_CONTENT_TYPES:
+        ext = os.path.splitext(filename)[1].lower()
+        guessed = ALLOWED_EXTENSIONS.get(ext)
+        if guessed:
+            fmt = document_format_for(guessed, filename)
+    return fmt
+
+
 def text_cache_key(doc: Mapping[str, Any]) -> Tuple[Any, ...]:
     return (
         doc.get("documentId"),
@@ -133,6 +163,7 @@ __all__ = [
     "TEXT_CACHE_MAX_ENTRIES",
     "KbDocumentText",
     "kb_document_extract",
+    "kb_document_format",
     "kb_document_text",
     "list_kb_documents",
     "reset_text_cache_for_tests",

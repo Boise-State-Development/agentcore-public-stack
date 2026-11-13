@@ -140,6 +140,13 @@ class TestRead:
         payload = _payload(_call(filename="process.txt"))
         assert payload["mode"] == "text" and payload["filename"] == "Process.txt" and payload["content"] == "Step 1."
 
+    def test_reads_markdown_stored_as_octet_stream(self, knowledge):
+        """A .md the browser sent without a type is still a Markdown document (#625)."""
+        knowledge.add(
+            _doc("d1", "vocabulary.md", content_type="application/octet-stream"), **{"vocabulary.md": "hola: hello"}
+        )
+        assert "hola: hello" in str(_payload(_call(filename="vocabulary.md")))
+
     def test_a_read_is_never_offloaded(self, knowledge):
         # Same bound and the same exemption as project_files: one voice must not offload what the other keeps.
         from agents.main_agent.core.tool_result_offload import OFFLOAD_EXEMPT_TOOLS

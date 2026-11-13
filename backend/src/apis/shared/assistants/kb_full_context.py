@@ -70,6 +70,7 @@ from typing import List, Optional, Sequence, Tuple
 from apis.shared.assistants.kb_access import KbAccess
 from apis.shared.assistants.kb_documents import (
     kb_document_extract as _document_extract,
+    kb_document_format,
     list_kb_documents as _list_documents,
     reset_text_cache_for_tests,
 )
@@ -228,7 +229,6 @@ def assess_full_context(assistant_id: str, budget_tokens: int) -> FullContextAss
     Neither checks access nor reads the feature flag: :func:`load_full_kb_context`
     and the app-api mode endpoint do both before calling it.
     """
-    from apis.shared.files.document_read import document_format_for
 
     started = time.perf_counter()
     docs = [d for d in _list_documents(assistant_id) if d.get("status") == "complete" and d.get("s3Key")]
@@ -246,7 +246,7 @@ def assess_full_context(assistant_id: str, budget_tokens: int) -> FullContextAss
     readable: List[Tuple[dict, str]] = []
     skipped_docs: List[dict] = []
     for doc in docs:
-        fmt = document_format_for(str(doc.get("contentType") or ""), str(doc.get("filename") or ""))
+        fmt = kb_document_format(doc)
         if fmt is None:
             # A spreadsheet, a deck, an image: no text layer to send whole. Left
             # to retrieval and the spreadsheet tools, as it always was.
