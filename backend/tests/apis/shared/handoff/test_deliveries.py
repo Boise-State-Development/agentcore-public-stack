@@ -7,6 +7,7 @@ own conditions. Session ``META`` reads and the artifact index are stubbed.
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -126,8 +127,17 @@ def test_attach_is_exactly_once_and_only_into_its_own_conversation(store):
     assert store.dismiss("alice", "d1", "src") is None
 
 
-def test_two_concurrent_sends_attach_one_card_once(store):
+def test_two_concurrent_sends_attach_one_card_once(store, monkeypatch):
     store.create(delivery())
+    # moto's table is not thread-safe; DynamoDB's conditional update is atomic per item.
+    lock = threading.Lock()
+    real = store.attach
+
+    def attach(*args, **kwargs):
+        with lock:
+            return real(*args, **kwargs)
+
+    monkeypatch.setattr(store, "attach", attach)
 
     async def both() -> List[List[str]]:
         turns = [
