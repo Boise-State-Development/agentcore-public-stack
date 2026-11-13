@@ -50,12 +50,15 @@ is live.
 - **Tools.** Voice does not use the composer's tool selection. It gets the
   tools an admin has pinned always-on and the platform's system tools, filtered
   by your roles, minus any tool that is disabled.
-- **Prompt.** The system prompt adds short voice guidelines (be concise, avoid
-  lists and heavy formatting) and one line naming the voice, so languages that
-  mark the speaker's gender use the matching form.
-- **Not applied:** personal instructions, and the chat model picker. Voice
-  always runs on the Nova 2 Sonic model (`NOVA_SONIC_MODEL_ID` on the Runtime
-  overrides the id).
+- **Instructions.** Your role instructions and personal instructions apply,
+  in the same order and with the same precedence as a text chat. They are
+  read once, when the voice session connects.
+- **Prompt.** After those, the system prompt adds short voice guidelines (be
+  concise, avoid lists and heavy formatting) and one line naming the voice, so
+  languages that mark the speaker's gender use the matching form.
+- **Not applied:** the active conversation mode, and the chat model picker.
+  Voice always runs on the Nova 2 Sonic model (`NOVA_SONIC_MODEL_ID` on the
+  Runtime overrides the id).
 
 Voice is not offered inside the Agent Designer's preview or the marketplace
 review test drive.

@@ -372,6 +372,16 @@ class TestVoiceSystemPrompt:
         prompt = agent._build_voice_system_prompt()
         assert "Base prompt here." in prompt
 
+    def test_guidelines_follow_the_personal_instructions(self):
+        """#2020: the voice guidelines come after the user's own sections."""
+        from agents.main_agent.voice_agent import VoiceAgent
+
+        agent = VoiceAgent.__new__(VoiceAgent)
+        agent.system_prompt = "Base.\n\n## Personal Instructions\n\nCall me Captain."
+
+        prompt = agent._build_voice_system_prompt()
+        assert prompt.index("Call me Captain.") < prompt.index("Voice Interaction Guidelines")
+
 
 class TestPyAudioMock:
     """Req VA-6: PyAudio mock is in place."""
