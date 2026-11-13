@@ -2880,6 +2880,36 @@
   "output_tokens_with_composition": 0.0
  },
  "output": [],
+ "evals": {
+  "runs": 9,
+  "models": [
+   {
+    "model": "claude-haiku-5-5",
+    "runs": 9,
+    "gate_failures": 1,
+    "latest": "2026-11-12",
+    "latest_gate_failed": false,
+    "families": 12,
+    "spend_share": 0.0
+   }
+  ],
+  "spend_share_with_eval": 0.0,
+  "models_without_eval": [
+   {
+    "model": "claude-sonnet-5",
+    "spend_share": 0.721
+   },
+   {
+    "model": "claude-opus-5-5",
+    "spend_share": 0.23
+   },
+   {
+    "model": "openai.gpt-6-sol",
+    "spend_share": 0.027
+   }
+  ],
+  "efficiency": []
+ },
  "leads": [
   "tool `analyze_spreadsheet` failed 15% of 699 calls in the last 7 days",
   "tool `read_sheet_range` failed 10% of 69 calls in the last 7 days",
@@ -2891,6 +2921,7 @@
   "6% of conversations ended on an error, a stop, an empty answer or a failed tool",
   "calls after the cache expired are 28% of spend ($967.47)",
   "unexplained cache waste is $103, over 2% of spend",
+  "only 0% of spend is on a model with an eval run; none for claude-sonnet-5 (72%), claude-opus-5-5 (23%), openai.gpt-6-sol (3%)",
   "turns with 2+ model calls carry 47% of all turn time"
  ]
 }

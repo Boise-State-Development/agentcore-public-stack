@@ -62,10 +62,18 @@ The scan grows with traffic (about 250 MB for 80K calls); run it in the
 background with a 10-minute timeout. If `/usage-patterns-dashboard` ran today,
 its scan lacks `latency`, `outputChars` and the feedback rows; scan again.
 
+Eval runs, from the deployment the eval harness publishes to (dev: profile
+`dev-ai`, prefix `dev-boisestateai-v2`). A small query; skip it only if that
+deployment is unreachable, and say so in the report:
+
+```bash
+aws dynamodb query --profile <DEV PROFILE> --table-name <DEV PREFIX>-system-cost-rollup --key-condition-expression "PK = :p AND SK >= :d" --projection-expression "SK,modelId,track,k,gateFailed,families,efficiency,appVersion" --expression-attribute-values '{":p":{"S":"LEDGER#EVAL"},":d":{"S":"<START>"}}' --output json > $RAW/evals.json
+```
+
 ## 2. Build
 
 ```bash
-python3 -I .claude/skills/efficiency-review/scripts/efficiency_review.py --rows $RAW/rows.json --window-start <START> --window-end <END> --previous docs/efficiency-reviews/<previous end>.json --out $OUT
+python3 -I .claude/skills/efficiency-review/scripts/efficiency_review.py --rows $RAW/rows.json --evals $RAW/evals.json --window-start <START> --window-end <END> --previous docs/efficiency-reviews/<previous end>.json --out $OUT
 ```
 
 Omit `--previous` on a first run. It prints `review.md`; `summary.json` holds
@@ -86,7 +94,15 @@ the same numbers. Neither carries a session or user id.
    - *Model time*: the share of turn time spent inside model calls. The rest is tool execution and the pre-stream build, so it says whether a speed lever is "fewer or shorter model calls" or "faster tools".
    - *Output composition*: how much of the output was thinking. An estimate (signature characters over 3.1 per token), and only for calls that recorded it; use it to size an effort or thinking lever, never to bill.
    - *Copied* and *how conversations ended*: the two quality signals that exist on turns nobody thumbed. A copy is weak positive evidence. An ending on an error, a stop, an empty answer or a failed tool is weak negative evidence: a satisfied user also goes quiet, so compare shares between slices rather than reading one as a failure rate.
-4. **Cache.** `miss_ttl_expired` is human pace and is only reduced by smaller
+4. **Evals.** The share of spend on a model with an eval run is how much of
+   the fleet a quality claim can cover. A candidate that trades quality for
+   cost or speed on a model with no eval run cannot be settled; rank the
+   missing eval coverage ahead of it. Eval efficiency (tokens, tool calls and
+   time per passing case, `docs/specs/eval-harness.md` §17) is the bench for a
+   trade: the outcome gate says quality held, this says what it cost. A
+   nightly run has one sample per case, so read a change across several runs,
+   never one.
+5. **Cache.** `miss_ttl_expired` is human pace and is only reduced by smaller
    contexts (a longer TTL was replayed and loses money; see
    `docs/one-pagers/conversation-usage-patterns.md`). `partial_miss` and
    `miss_avoidable` waste is the unexplained part; rule out `agentSwitched`

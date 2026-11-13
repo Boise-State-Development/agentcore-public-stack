@@ -49,11 +49,14 @@ def _cost(row: Row, part: str = "total") -> float:
     return _num(cost.get("M", {}).get(part))
 
 
-def _model(row: Row) -> str:
-    model_id = _text(row.get("modelInfo", {}).get("M", {}).get("modelId")) or "unknown"
+def _short_model(model_id: str) -> str:
     for prefix in ("us.", "global.", "anthropic."):
         model_id = model_id.removeprefix(prefix)
     return model_id.removeprefix("anthropic.")
+
+
+def _model(row: Row) -> str:
+    return _short_model(_text(row.get("modelInfo", {}).get("M", {}).get("modelId")) or "unknown")
 
 
 def _is_premium(model: str) -> bool:
@@ -357,6 +360,82 @@ def _output_composition(turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return table
 
 
+def _plain(attr: Any) -> Any:
+    """A DynamoDB attribute value as plain JSON."""
+    if not isinstance(attr, dict) or len(attr) != 1:
+        return attr
+    kind, value = next(iter(attr.items()))
+    if kind == "M":
+        return {name: _plain(inner) for name, inner in value.items()}
+    if kind == "L":
+        return [_plain(inner) for inner in value]
+    if kind == "N":
+        return float(value)
+    return value
+
+
+def eval_coverage(eval_rows: List[Row], model_costs: Dict[str, float]) -> Dict[str, Any]:
+    """What the published eval runs can vouch for, against where the spend is.
+
+    ``eval_rows`` are ``LEDGER#EVAL`` rows (usually from the dev deployment,
+    where the nightly run publishes). A trade on a model with no eval run has
+    nothing to prove quality held, so the share of spend on such models is the
+    headline. Efficiency compares the newest run with the oldest run of the
+    same model and track that recorded it, as a mean per passing case.
+    """
+    runs = sorted(({name: _plain(value) for name, value in row.items()} for row in eval_rows), key=lambda r: r.get("SK", ""))
+    by_model: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for run in runs:
+        by_model[_short_model(str(run.get("modelId") or "unknown"))].append(run)
+    total = sum(model_costs.values()) or 1.0
+    covered = sum(cost for model, cost in model_costs.items() if model in by_model)
+
+    models = []
+    for model, model_runs in by_model.items():
+        latest = model_runs[-1]
+        models.append({
+            "model": model,
+            "runs": len(model_runs),
+            "gate_failures": sum(1 for r in model_runs if r.get("gateFailed")),
+            "latest": str(latest.get("SK", ""))[:10],
+            "latest_gate_failed": bool(latest.get("gateFailed")),
+            "families": len(latest.get("families") or {}),
+            "spend_share": round(model_costs.get(model, 0.0) / total, 3),
+        })
+
+    efficiency = []
+    groups: Dict[tuple, List[Dict[str, Any]]] = defaultdict(list)
+    for run in runs:
+        if run.get("efficiency"):
+            groups[(_short_model(str(run.get("modelId"))), str(run.get("track") or "untracked"))].append(run)
+    for (model, track), group in groups.items():
+        first, last = group[0], group[-1]
+        for family, numbers in sorted((last.get("efficiency") or {}).items()):
+            entry: Dict[str, Any] = {"model": model, "track": track, "family": family, "runs": len(group)}
+            earlier = ((first.get("efficiency") or {}).get(family) or {}).get("run") or {}
+            for metric, now in (numbers.get("run") or {}).items():
+                before = earlier.get(metric)
+                mean_now = now["sum"] / now["n"] if now.get("n") else None
+                mean_before = before["sum"] / before["n"] if before and before.get("n") and first is not last else None
+                entry[metric] = {
+                    "mean": _round(mean_now),
+                    "change": _round((mean_now - mean_before) / mean_before, 3) if mean_now is not None and mean_before else None,
+                    "n": int(now.get("n", 0)),
+                }
+            efficiency.append(entry)
+    return {
+        "runs": len(runs),
+        "models": sorted(models, key=lambda m: -m["spend_share"]),
+        "spend_share_with_eval": round(covered / total, 3),
+        "models_without_eval": sorted(
+            ({"model": model, "spend_share": round(cost / total, 3)} for model, cost in model_costs.items()
+             if model not in by_model and cost / total >= 0.01),
+            key=lambda m: -m["spend_share"],
+        ),
+        "efficiency": efficiency,
+    }
+
+
 def _leads(summary: Dict[str, Any]) -> List[str]:
     """Mechanical leads only. Ranking them is the reader's job."""
     leads: List[str] = []
@@ -397,6 +476,20 @@ def _leads(summary: Dict[str, Any]) -> List[str]:
             f"premium models on short, tool-free conversations: ${sessions['premium_light_usd']} "
             f"across {sessions['premium_light_conversations']}"
         )
+    evals = summary.get("evals")
+    if evals and evals["spend_share_with_eval"] < 0.5:
+        uncovered = ", ".join(f"{m['model']} ({m['spend_share']:.0%})" for m in evals["models_without_eval"][:3])
+        leads.append(
+            f"only {evals['spend_share_with_eval']:.0%} of spend is on a model with an eval run; none for {uncovered}"
+        )
+    for entry in (evals or {}).get("efficiency", ()):
+        for metric in ("outputTokens", "inputTokens", "toolCalls", "durationMs", "firstTokenMs"):
+            value = entry.get(metric)
+            if value and value["change"] is not None and value["n"] >= 5 and abs(value["change"]) >= 0.20:
+                leads.append(
+                    f"eval {entry['family']} on {entry['model']} ({entry['track']}): {metric} {value['change']:+.0%} "
+                    f"per passing case across {entry['runs']} runs"
+                )
     multi = [band for band in summary["turn_shape"] if band["key"] != "1"]
     multi_share = sum(band["time_share"] or 0 for band in multi)
     if multi_share >= 0.40:
@@ -404,7 +497,9 @@ def _leads(summary: Dict[str, Any]) -> List[str]:
     return leads
 
 
-def build(items: List[Row], start: str, end: str, previous: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def build(
+    items: List[Row], start: str, end: str, previous: Optional[Dict[str, Any]], eval_rows: Optional[List[Row]] = None
+) -> Dict[str, Any]:
     rows, feedback = split_rows(items)
     rows = [r for r in rows if start <= (_text(r.get("timestamp")) or "")[:10] <= end]
     turns = build_turns(rows)
@@ -494,6 +589,11 @@ def build(items: List[Row], start: str, end: str, previous: Optional[Dict[str, A
         },
         "output": _output_composition(turns),
     }
+    if eval_rows is not None:
+        model_costs: Dict[str, float] = defaultdict(float)
+        for turn in turns:
+            model_costs[turn["model"]] += turn["cost"]
+        summary["evals"] = eval_coverage(eval_rows, model_costs)
     summary["leads"] = _leads(summary)
     if previous:
         summary["previous_run"] = {"window": previous.get("window"), "this_week": previous.get("this_week")}
@@ -566,6 +666,32 @@ def render(summary: Dict[str, Any]) -> str:
         f"{_cell(t['result_chars_per_call'])} | ${t['cost_of_turns_usd']} | {_pct(t['down_rate'])} |"
         for t in summary["tools"]
     ]
+    evals = summary.get("evals")
+    if evals:
+        lines += [
+            "", "## Evals (what can vouch for a trade)", "",
+            f"{evals['runs']} published runs. {evals['spend_share_with_eval']:.0%} of this window's spend is on a model "
+            "with an eval run.", "",
+            "| Model | Share of spend | Runs | Gate failures | Latest | Latest gate | Families |", "|---|---:|---:|---:|---|---|---:|",
+        ]
+        lines += [
+            f"| {m['model']} | {m['spend_share']:.1%} | {m['runs']} | {m['gate_failures']} | {m['latest']} | "
+            f"{'FAIL' if m['latest_gate_failed'] else 'pass'} | {m['families']} |"
+            for m in evals["models"]
+        ]
+        lines += [f"| {m['model']} | {m['spend_share']:.1%} | 0 | | | no eval run | |" for m in evals["models_without_eval"]]
+        lines += ["", "Eval efficiency, mean per passing case (change is newest run vs oldest of the same model and track):", ""]
+        if evals["efficiency"]:
+            lines += ["| Model | Track | Family | Runs | Out tok | In tok | Tools | Dur ms | First token ms |", "|---|---|---|---:|---:|---:|---:|---:|---:|"]
+            for entry in evals["efficiency"]:
+                cells = []
+                for metric in ("outputTokens", "inputTokens", "toolCalls", "durationMs", "firstTokenMs"):
+                    value = entry.get(metric)
+                    change = "" if not value or value["change"] is None else f" ({value['change']:+.0%})"
+                    cells.append("—" if not value else f"{_cell(value['mean'])}{change}")
+                lines.append(f"| {entry['model']} | {entry['track']} | {entry['family']} | {entry['runs']} | " + " | ".join(cells) + " |")
+        else:
+            lines.append("- no published run records efficiency yet")
     lines += ["", "## Output composition (estimate; only calls that recorded it)", ""]
     lines += ["| Model | Turns | Output tokens | Text chars | Reasoning chars | Signature chars | Est. reasoning share |", "|---|---:|---:|---:|---:|---:|---:|"]
     lines += [
@@ -594,13 +720,15 @@ def main() -> None:
     parser.add_argument("--rows", required=True, nargs="+", help="DynamoDB scan JSON of C# and F# rows (one file or several)")
     parser.add_argument("--window-start", required=True)
     parser.add_argument("--window-end", required=True)
+    parser.add_argument("--evals", help="DynamoDB query JSON of LEDGER#EVAL rows (the deployment the eval harness publishes to)")
     parser.add_argument("--previous", help="the previous run's summary.json")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
     items = [row for path in args.rows for row in _load_items(path)]
     previous = json.loads(Path(args.previous).read_text()) if args.previous else None
-    summary = build(items, args.window_start, args.window_end, previous)
+    eval_rows = _load_items(args.evals) if args.evals else None
+    summary = build(items, args.window_start, args.window_end, previous, eval_rows)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
