@@ -5,6 +5,108 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-11-13] Escalation: delete the orphaned ALB access-log bucket and make the nightly self-heal (10 red nights)
+- **Source**: research/2026-11-13.md ▸ Top 5 #1; nightly runs 41804576559 → 43398420487
+- **Surface**: CI (`scripts/nightly/teardown.sh`, `scripts/nightly/clear-failed-stack.sh`)
+- **Effort × Impact**: L × H
+- **Subtracts**: yes: red nightlies every night 11-04 → 11-13 (135 PRs merged without the nightly pass) and every future manual unstick
+- **Notes**: **Supersedes [2026-11-06] "Nightly: delete the orphaned ALB access-log bucket…"**, which was never reviewed because no review-prep ran for the 11-06 research. Every deploy fails at change-set validation: "`nightly-develop-alb-access-logs` already exists". Delete the bucket by hand once. Then have `clear-failed-stack.sh` delete a fixed-name bucket that exists without a stack, and have `teardown.sh` re-empty the bucket before deleting it.
+- **Status**: open
+
+### [2026-11-13] Curate Claude Fable 5.2 (Global-first, 0.025× cache read now double-sourced)
+- **Source**: research/2026-11-13.md ▸ Top 5 #2; https://www.anthropic.com/claude-fable-and-mythos-5-2; https://github.com/anthropics/claude-code/releases/tag/v2.1.321; https://github.com/pydantic/pydantic-ai/pull/13037
+- **Surface**: catalog (`curated-models.ts`) + backend (`interrupted_usage.py:85-88`)
+- **Effort × Impact**: L × M
+- **Subtracts**: no: addition, justified because it costs $8/$40 (cheaper than 5.1), is refused until curated (PR 2016), and leads Opus 5.5 on agentic benchmarks
+- **Unlocks**:
+  - the strongest available agentic model for Agent Designer agents and long research turns
+- **Notes**: confirm rates in the Price List API (`AmazonBedrockFoundationModels`, match `servicename`). Run `probe_bedrock_cache_point_support.py` for the real cache minimum. Add `(fable|mythos, 5, 2)` keys to `interrupted_usage.py`. AWS lists it as a "covered model" with required data retention, so the governance owner decides that against #1845 before it's on in prod. Fable 5.2 binds thinking on every account, so re-check #1890's `drop_block`.
+- **Status**: open
+
+### [2026-11-13] Spike the AgentCore Runtime V2 build-warmup hook in place of holding `/ping`
+- **Source**: research/2026-11-13.md ▸ Top 5 #3; https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-lifecycle-hooks.html; https://aws.amazon.com/about-aws/whats-new/2026/11/new-agentcore-runtime-default/
+- **Surface**: infrastructure (`inference-agentcore-construct.ts`, backend.yml `UpdateAgentRuntime`) + backend (`apis/inference_api/warmup.py`, a hook route)
+- **Effort × Impact**: M × M
+- **Subtracts**: yes, on V2: the "hold `/ping` until warm" ordering contract (`warmup.py:14-21`), and warm-up failures that show up on a user's first turn instead of at deploy
+- **Unlocks**:
+  - a `disk` phase for pre-reading files into the snapshot
+- **Notes**: V2 only (a `ValidationException` on V1, and prod is V1). The hooks share a fixed 120 s limit. An update that omits `hooksConfiguration` removes the hooks. Run it as part of the V2 readout, not alone. V2 is now AWS's default for new Runtimes; our default is still `'V1'` (`config.ts:1275`).
+- **Status**: open
+
+### [2026-11-13] One web-search spike, three arms: Gateway WebSearch vs. direct `InvokeWebSearch` vs. Web Answer
+- **Source**: research/2026-11-13.md ▸ Top 5 #4; https://aws.amazon.com/about-aws/whats-new/2026/11/amazon-bedrock-agentcore-web-search-api/; https://github.com/aws/bedrock-agentcore-sdk-python/releases/tag/v1.26.0
+- **Surface**: backend + infrastructure (Gateway WebSearch target, `WebSearchDefaultsHook`, a candidate direct tool, IAM, catalog metering)
+- **Effort × Impact**: M × M
+- **Subtracts**: yes, if direct wins: a Gateway target and an MCP hop per search. **Supersedes [2026-11-06] "Spike AgentCore Web Answer against our WebSearch connector".**
+- **Unlocks**:
+  - domain and date filters enforced by the client, which the model can't widen
+- **Notes**: `InvokeWebSearch` costs $7/1K (the same as the Gateway connector), is in six regions including us-west-2, and has no Gateway charge. The SDK's `WebSearchClient` needs bedrock-agentcore 1.26.0 and boto3 ≥ 1.43.127. A new tool name means a one-time `toolConfig` re-write and an RBAC catalog entry, so price both.
+- **Status**: open
+
+### [2026-11-13] Pre-bump gate for Strands 1.65: refuse a null interrupt response at the route; pin tool-spec order
+- **Source**: research/2026-11-13.md ▸ Top 5 #5; https://github.com/strands-agents/harness-sdk/pull/4471; https://github.com/strands-agents/harness-sdk/issues/5700
+- **Surface**: backend (`apis/inference_api/chat/models.py:42`, resume route, tests) + CLAUDE.md interrupt rows
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: a silent forever-pause today, and stale "re-raise forever" wording in three CLAUDE.md rows after the bump
+- **Notes**: with #4471, `resume()` raises `ValueError` on `None`. #5654 validates restored interrupts (run the smoke interrupt/resume rows on the bump). #5700 may sort tool specs by name by default, so a test that records whether our order already matches turns that into a known no-op or a known one-time re-write.
+- **Status**: open
+
+### [2026-11-13] Spec sync: agent-handoffs-and-consults.md header (Phase 0 built through PR-0.4a)
+- **Source**: research/2026-11-13.md ▸ Spec sync S1
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: a stale status line
+- **Notes**: `:3` still says "Draft proposal. Not scheduled." PR-0.4 (`06e58c670`, `c86b6abe6`) and PR-0.4a (`817c739b9`, `fe4db1d44`) merged 2026-11-12. Supersedes the [2026-11-06] header row.
+- **Status**: open
+
+### [2026-11-13] Spec sync: agent-handoffs-and-consults.md §2 phase table (0a built, 0b built)
+- **Source**: research/2026-11-13.md ▸ Spec sync S2
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: stale phase status
+- **Notes**: `:101` "In progress: PR-0.1–0.3 built" → "Built: PR-0.1–0.3c"; `:104` "Proposed" → "Built: PR-0.3b–0.4a; dev check of files by reference pending (#2033)".
+- **Status**: open
+
+### [2026-11-13] Spec sync: agent-handoffs-and-consults.md §3 (`resolve_turn_agent` is extracted)
+- **Source**: research/2026-11-13.md ▸ Spec sync S3
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: a stale "~450-line inline block" claim
+- **Notes**: `:151`, `:162`; `chat/routes.py:4920`, `7891266fc`.
+- **Status**: open
+
+### [2026-11-13] Spec sync: agent-handoffs-and-consults.md §4.3 (send-back route as built)
+- **Source**: research/2026-11-13.md ▸ Spec sync S4
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: a wrong route shape
+- **Notes**: `:534–535` names `POST /sessions/{targetId}/handoffs` with `{kind: "send_back"}`. The routes as built are `/handoffs/send-back` and `/handoffs/{handoffId}/deliver` (`apis/app_api/handoffs/routes.py:464,561`).
+- **Status**: open
+
+### [2026-11-13] Spec sync: agent-handoffs-and-consults.md §4.8 TTFT (one conditional UpdateItem per card, measured)
+- **Source**: research/2026-11-13.md ▸ Spec sync S5
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: a cost claim superseded by the build
+- **Notes**: `:924` says "one `BatchGetItem` and one conditional write". As built it is one conditional `UpdateItem` per card, issued together, measured at 0.1–5 ms (§11 PR-0.4; `delivery.py:284,336`).
+- **Status**: open
+
+### [2026-11-13] Spec sync: multi-agent-patterns.md §8 step 1 and staleness table (handoffs + deliveries built)
+- **Source**: research/2026-11-13.md ▸ Spec sync S6
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: stale "unbuilt" claims
+- **Notes**: `:235`, `:279`. Supersedes the [2026-11-06] §8 row.
+- **Status**: open
+
+### [2026-11-13] Spec sync: multi-agent-patterns.md §2 "Context between agents" (file references)
+- **Source**: research/2026-11-13.md ▸ Spec sync S7
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: an incomplete claim
+- **Notes**: `:44` "Bounded, wrapped text only". PR-0.4a (`817c739b9`) adds read-only file references (`linked_files.py`, handoffs §4.9).
+- **Status**: open
+
 ### [2026-11-06] Drop `strands-agents-tools`: vendor a byte-identical calculator, delete the pillow override
 - **Source**: research/2026-11-06.md ▸ Top 5 #1; https://github.com/strands-agents/tools/releases/tag/v0.9.0
 - **Surface**: backend
