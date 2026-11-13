@@ -18,7 +18,7 @@ cd src/apis/inference_api && uv run python main.py  # Inference API (port 8001)
 cd frontend/ai.client
 npm install
 npm run start    # Dev server (port 4200)
-npm test         # Tests (Vitest via Analog.js)
+npm test         # Tests (Vitest via @angular/build:unit-test)
 ```
 
 ### Infrastructure
