@@ -67,3 +67,20 @@ class TestProjectHarnessSpecs:
         other = User(email="viewer@example.edu", user_id="u2", name="V", roles=[])
         tools = make_project_memory_tools(ProjectMemoryScopes.for_member("prj_2", None, "spc_9", other))
         assert {t.tool_spec["name"]: t.tool_spec for t in tools} == self._specs()
+
+    def test_save_says_it_writes_the_index_line_itself(self):
+        """Dev: a file and MEMORY.md saved in one batch, one of them refused every time."""
+        description = " ".join(self._specs()["memory_save"]["description"].split())
+        assert "The save writes that line itself, so don't also save MEMORY.md to add or change a file's line" in description
+
+    #: The specs sit in the cacheable ``toolConfig``. A change here is a deliberate
+    #: prefix rewrite at deploy: update the pin with it and state the token delta in
+    #: the PR. Last changed when memory_save said it writes the index line itself.
+    SPEC_DIGEST = "52375e8d97dfe85810ebb6b2b3af9ba1ee2b4de8c7d4b84890ebfc05aaeece46"
+
+    def test_the_specs_are_pinned(self):
+        import hashlib
+        import json
+
+        digest = hashlib.sha256(json.dumps(list(self._specs().values()), sort_keys=True).encode()).hexdigest()
+        assert digest == self.SPEC_DIGEST
