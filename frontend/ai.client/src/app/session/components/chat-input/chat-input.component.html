@@ -267,6 +267,7 @@
           [value]="composerText()"
           [readOnly]="isDictating()"
           (input)="onTextareaInput($event)"
+          (paste)="onTextareaPaste($event)"
           (keydown)="onKeyDown($event)"
           (keyup)="onTextareaCaretMove($event)"
           (click)="onTextareaCaretMove($event)"

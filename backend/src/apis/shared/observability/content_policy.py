@@ -214,6 +214,9 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     # How the turn's attachments were delivered (``attachment_plan``): per file
     # a mode, a class, a reason code, a token estimate and an upload id.
     "attachmentPlan",
+    # Characters of the user's message the composer counted as pasted, on the
+    # turn's last row only. A number, never the text.
+    "pastedChars",
 )
 
 #: C# rows as the release ledger reads them (``apis.shared.sessions.ledger_rollups``):

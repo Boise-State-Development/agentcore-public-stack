@@ -235,6 +235,18 @@ describe('ChatRequestService', () => {
     });
   });
 
+  describe('pasted characters (a count for the cost row, never the text)', () => {
+    it('sends the count when some of the message was pasted', async () => {
+      await service.submitChatRequest('Hello', 'session1', undefined, undefined, undefined, undefined, undefined, 5);
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(expect.objectContaining({ pasted_chars: 5 }));
+    });
+
+    it('omits the field on a typed turn, so its payload is unchanged', async () => {
+      await service.submitChatRequest('Hello', 'session1');
+      expect(mockChatHttpService.sendChatRequest.mock.calls[0][0]).not.toHaveProperty('pasted_chars');
+    });
+  });
+
   describe('session prewarm', () => {
     it('a new conversation starts on the id the page warmed, registered like any new one', async () => {
       const prewarm = TestBed.inject(SessionPrewarmService);
@@ -603,7 +615,7 @@ describe('ChatRequestService', () => {
         new StreamNotStartedError('A response was still finishing for this conversation.', 409),
       );
       await service
-        .submitChatRequest('Hello', 'session1', ['up-1'], undefined, undefined, undefined, [folder])
+        .submitChatRequest('Hello', 'session1', ['up-1'], undefined, undefined, undefined, [folder], 4)
         .catch(() => undefined);
 
       TestBed.inject(FailedSendService).retry('msg-session1-6');
@@ -612,6 +624,7 @@ describe('ChatRequestService', () => {
       expect(mockChatHttpService.sendChatRequest.mock.calls[1][0]).toMatchObject({
         file_upload_ids: ['up-1'],
         folder_attachment_ids: ['fa-1'],
+        pasted_chars: 4,
       });
       const messageMap = TestBed.inject(MessageMapService) as any;
       expect(messageMap.addUserMessage).toHaveBeenLastCalledWith('session1', 'Hello', undefined, [folder]);

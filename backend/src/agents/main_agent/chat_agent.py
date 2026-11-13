@@ -305,6 +305,7 @@ class ChatAgent(BaseAgent):
         turn_clock: Any = None,
         invocation_state: Optional[Dict[str, Any]] = None,
         turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -352,6 +353,10 @@ class ChatAgent(BaseAgent):
                 Strands as its `invocation_state` (tools read it from
                 `ToolContext`; the model never sees it). Per turn, like
                 `turn_lease`. None passes nothing.
+            turn_pasted_chars: How many characters of the message the user
+                pasted, as the composer counted them. Written as `pastedChars`
+                on the turn's last cost row; never reaches the prompt. Per turn,
+                like `turn_attachment_plan`.
 
         Yields:
             str: SSE formatted events
@@ -393,6 +398,7 @@ class ChatAgent(BaseAgent):
             turn_agent_id=turn_agent_id,
             turn_project_id=turn_project_id,
             turn_attachment_plan=turn_attachment_plan,
+            turn_pasted_chars=turn_pasted_chars,
             turn_lease=turn_lease,
             turn_started_at=turn_started_at,
             poll_side_frame=poll_side_frame,

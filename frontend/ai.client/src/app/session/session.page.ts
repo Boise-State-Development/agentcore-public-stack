@@ -779,7 +779,7 @@ export class ConversationPage implements OnDestroy {
       });
   }
 
-  async onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, invokedSkillIds?: string[], folders?: FolderAttachmentData[] }) {
+  async onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, invokedSkillIds?: string[], folders?: FolderAttachmentData[], pastedChars?: number }) {
     // Use the effective session ID (route sessionId or staged sessionId)
     const sessionIdToUse = this.effectiveSessionId();
 
@@ -853,6 +853,7 @@ export class ConversationPage implements OnDestroy {
       undefined,
       message.invokedSkillIds,
       message.folders,
+      message.pastedChars,
     ).catch((error) => {
       console.error('Error sending chat request:', error);
     });
