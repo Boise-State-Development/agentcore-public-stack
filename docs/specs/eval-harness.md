@@ -548,3 +548,34 @@ A trend needs history, so EH-9 should land as soon as possible: every nightly ru
 - The Evaluations page does not draw it.
 - No baseline exists for the models that carry most production spend; an efficiency comparison is only as useful as the model it ran on.
 - No case family covers iterative drafting, browsing loops or spreadsheet loops, the costliest usage patterns in `docs/one-pagers/conversation-usage-patterns.md`.
+
+## 18. The `usage_patterns` family
+
+**Status:** Built 2026-11-12. Advisory.
+
+### 18.1 Why
+
+§17 made efficiency measurable, but the golden set had no case shaped like the usage that carries production spend. The weekly efficiency review classifies prod conversations by pattern (`docs/one-pagers/conversation-usage-patterns.md`); the three costliest engineerable ones are iterative drafting (an artifact revised over several turns, `update_artifact` full-replace), browsing loops (many fetches per turn, each re-reading the context) and spreadsheet loops (`analyze_spreadsheet` probe-and-retry, about 15% of calls failing in prod). A lever aimed at one of them (patch-style edits, a step budget, a clearer spreadsheet policy error) had no eval that showed both that answers held and that the turn got cheaper.
+
+### 18.2 The cases
+
+Ten cases, sixteen turns, all on tools the eval role already grants plus `create_artifact` (which provisions `update_artifact`; `PROVISIONED_TOOLS` maps the one to the other):
+
+| Pattern | Cases | Quality check | What efficiency shows |
+|---|---|---|---|
+| Iterative drafting | one-detail edit; third revision; a question about the draft | the edit lands, the same artifact is updated (`must_call update_artifact`, `must_not_call create_artifact`), a question rewrites nothing | output tokens per edit (a whole document today), input growth from superseded copies |
+| Browsing loops | one named page; two named pages; a follow-up the first fetch answers | the fact is right; `max_calls` equals the pages named; the follow-up fetches nothing | model calls and input per turn |
+| Spreadsheet loops | a cross-sheet lookup; two questions on one sheet; a follow-up that builds on an answer; a small CSV | exact values, a lookalike `forbidden`; `max_calls` allows one listing and one retry | model calls, failed analyses before the right one |
+
+Each case is scored on its last turn (§6.2); efficiency counts every turn, so a drafting case's setup draft is part of what it cost.
+
+### 18.3 Decisions
+
+**D27 — Advisory until its baselines settle.** Loop length is the behaviour under test, and it is what models differ on most: Sonnet 5's first run on dev failed `spreadsheet_two_answers_one_pass` on five calls (a policy rejection, two wrong file-name guesses, then the right `load:` line), which is the prod pattern, not a bad case. A family whose failures are partly a platform's friction should report before it gates. It joins `ADVISORY_FAMILIES` and the nightly run's default families.
+
+**D28 — Pages and fixtures are pinned in the notes.** The browsing cases depend on example.com and example.org. Both changed in 2026-11 (example.com no longer links anywhere), so each case's notes say what the page held when it was written, and a failure that reads "the page is different" is fixed in the case, not the model.
+
+### 18.4 Not done
+
+- Batch items, pasted corpora and long idle conversations have no case: the first two need fixtures sized like prod (tens of thousands of tokens), and the third is a cache-TTL effect the eval cannot pay for at k=3.
+- `create_artifact` leaves artifacts behind for the eval user; session cleanup does not delete them.
