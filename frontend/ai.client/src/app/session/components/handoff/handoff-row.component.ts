@@ -11,7 +11,13 @@ import {
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroCheckCircle, heroChevronRight, heroExclamationCircle, heroMinusCircle } from '@ng-icons/heroicons/outline';
+import {
+  heroCheckCircle,
+  heroChevronRight,
+  heroExclamationCircle,
+  heroMinusCircle,
+  heroPaperClip,
+} from '@ng-icons/heroicons/outline';
 
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ToolInsightService } from '../../services/chat/tool-insight.service';
@@ -19,7 +25,8 @@ import { AgentHandoffService } from '../../services/handoff/agent-handoff.servic
 import { HandoffNotificationService } from '../../services/handoff/handoff-notification.service';
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
 import { DeliveryService } from '../../services/handoff/delivery.service';
-import { HandoffStatus, HandoffView, WaitingOn } from '../../services/handoff/handoff.models';
+import { HandoffTargetFilesService } from '../../services/handoff/handoff-target-files.service';
+import { DeliveryFile, HandoffStatus, HandoffView, WaitingOn } from '../../services/handoff/handoff.models';
 import { SessionService } from '../../services/session/session.service';
 import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
 import { HandoffRelayComponent } from './handoff-relay.component';
@@ -50,7 +57,7 @@ type RowState = Extract<HandoffStatus, 'running' | 'needs_input' | 'done' | 'sto
   selector: 'app-handoff-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, RouterLink, HandoffRelayComponent],
-  providers: [provideIcons({ heroCheckCircle, heroChevronRight, heroExclamationCircle, heroMinusCircle })],
+  providers: [provideIcons({ heroCheckCircle, heroChevronRight, heroExclamationCircle, heroMinusCircle, heroPaperClip })],
   template: `
     @if (link(); as l) {
       <a
@@ -111,6 +118,30 @@ type RowState = Extract<HandoffStatus, 'running' | 'needs_input' | 'done' | 'sto
           }
         </div>
       }
+      <!-- The target's own files as they appear (§4.9), each with Bring back. Siblings of the link. -->
+      @if (targetFiles().length > 0) {
+        <ul class="mt-1.5 flex flex-col gap-1 px-4 text-xs/5" [attr.aria-label]="'Files ' + row().agentName + ' made'">
+          @for (file of targetFiles(); track file.uploadId) {
+            <li class="flex min-w-0 items-center gap-2">
+              <ng-icon name="heroPaperClip" class="size-3.5 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+              <span class="min-w-0 truncate text-gray-800 dark:text-gray-200">{{ file.filename }}</span>
+              @if (delivery.wasFileBroughtBack(row().handoffId, file.uploadId)) {
+                <span class="shrink-0 text-gray-600 dark:text-gray-400" role="status">Added to your next message</span>
+              } @else {
+                <button
+                  type="button"
+                  (click)="bringBackFile(file)"
+                  [disabled]="delivery.isBringingBackFile(row().handoffId, file.uploadId)"
+                  [attr.aria-label]="'Bring back ' + file.filename"
+                  class="shrink-0 rounded-md font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-wait disabled:opacity-60 dark:text-primary-50"
+                >
+                  Bring back
+                </button>
+              }
+            </li>
+          }
+        </ul>
+      }
       @if (offerNotifications()) {
         <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-4 text-xs/5">
           <button
@@ -142,6 +173,7 @@ export class HandoffRowComponent {
   private readonly handoffState = inject(HandoffStateService);
   protected readonly delivery = inject(DeliveryService);
   private readonly connectors = inject(UserConnectorsService);
+  private readonly targetFileList = inject(HandoffTargetFilesService);
   private readonly card = viewChild<ElementRef<HTMLAnchorElement>>('card');
 
   readonly row = input.required<HandoffView>();
@@ -152,6 +184,16 @@ export class HandoffRowComponent {
     effect(() => {
       if (this.state() !== 'needs_input' || this.row().waitingOn?.kind !== 'oauth_consent') return;
       untracked(() => this.connectors.ensureLoaded());
+    });
+
+    // The target's files, read again whenever the row settles into a new state: a file the target
+    // writes shows up once the turn that wrote it ends. Not while it streams, so a long turn costs
+    // one listing, not one per tool call.
+    effect(() => {
+      const target = this.target();
+      const state = this.state();
+      if (!target || state === 'running' || this.row().kind === 'send_back') return;
+      untracked(() => void this.targetFileList.refresh(target));
     });
 
     effect(() => {
@@ -215,6 +257,14 @@ export class HandoffRowComponent {
 
   protected bringBack(): void {
     void this.delivery.bringBack(this.row());
+  }
+
+  protected readonly targetFiles = computed(() =>
+    this.row().kind === 'send_back' ? [] : this.targetFileList.filesFor(this.row().targetSessionId),
+  );
+
+  protected bringBackFile(file: DeliveryFile): void {
+    void this.delivery.bringBackFile(this.row(), file);
   }
 
   protected readonly offerNotifications = computed(

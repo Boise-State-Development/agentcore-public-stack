@@ -164,7 +164,7 @@ describe('DeliveryService', () => {
     service.toggleSendBackArtifact('tgt', 'rubric', false);
     const sending = service.sendBack('tgt');
     const deliver = http.expectOne(`${API}/sessions/tgt/handoffs/sb1/deliver`);
-    expect(deliver.request.body).toEqual({ text: 'Edited: four rows.', artifactIds: [] });
+    expect(deliver.request.body).toEqual({ text: 'Edited: four rows.', artifactIds: [], fileIds: [] });
     deliver.flush({ deliveryId: 'd9', sourceSessionId: 'src', sourceTitle: 'Course planning' });
     await sending;
 
@@ -185,6 +185,48 @@ describe('DeliveryService', () => {
 
     expect(state.reviewFor('tgt')).toBeUndefined();
     expect(toast.info).toHaveBeenCalledWith('This result was already sent');
+  });
+
+  describe('files by reference (§4.9)', () => {
+    const RUBRIC_DOC = { uploadId: 'f1', sessionId: 'tgt', filename: 'rubric.docx', mimeType: 'application/msword', sizeBytes: 2048 };
+    const NOTES = { uploadId: 'f2', sessionId: 'tgt', filename: 'notes.md', mimeType: 'text/markdown', sizeBytes: 90 };
+
+    it('Bring back result carries the files the target made onto the card', async () => {
+      const done = service.bringBack(ROW);
+      http.expectOne(`${API}/sessions/tgt/handoffs/send-back`).flush(created({ deliveryId: 'd1', files: [RUBRIC_DOC] }));
+      await done;
+
+      expect(state.cardsFor('src')[0].files).toEqual([RUBRIC_DOC]);
+    });
+
+    it('the row\'s Bring back sends one file on its own', async () => {
+      const done = service.bringBackFile(ROW, NOTES);
+      const req = http.expectOne(`${API}/sessions/tgt/handoffs/send-back`);
+      expect(req.request.body).toEqual({ deliver: true, fileIds: ['f2'], filesOnly: true });
+      expect(service.isBringingBackFile('h1', 'f2')).toBe(true);
+      req.flush(created({ deliveryId: 'd2', excerpt: '', artifacts: [], files: [RUBRIC_DOC, NOTES] }));
+      await done;
+
+      expect(state.cardsFor('src')[0]).toMatchObject({ deliveryId: 'd2', text: '', artifacts: [], files: [NOTES] });
+      expect(service.wasFileBroughtBack('h1', 'f2')).toBe(true);
+      expect(service.wasBroughtBack('h1')).toBe(false);
+    });
+
+    it('Send to {title} ticks every offered file and sends only the ones left ticked', async () => {
+      const opening = service.openSendBack('tgt', 3);
+      http.expectOne(`${API}/sessions/tgt/handoffs/send-back`).flush(created({ files: [RUBRIC_DOC, NOTES] }));
+      await opening;
+      expect(state.reviewFor('tgt')!.fileIds).toEqual(['f1', 'f2']);
+
+      service.toggleSendBackFile('tgt', 'f1', false);
+      const sending = service.sendBack('tgt');
+      const deliver = http.expectOne(`${API}/sessions/tgt/handoffs/sb1/deliver`);
+      expect(deliver.request.body).toEqual({ text: 'Four rows, done.', artifactIds: ['rubric'], fileIds: ['f2'] });
+      deliver.flush({ deliveryId: 'd9', sourceSessionId: 'src', sourceTitle: 'Course planning' });
+      await sending;
+
+      expect(state.cardsFor('src')[0].files).toEqual([NOTES]);
+    });
   });
 
   it('cancelling the review closes the send-back row on the server', async () => {

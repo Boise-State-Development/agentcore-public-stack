@@ -88,6 +88,28 @@ import { DeliveryService } from '../../services/handoff/delivery.service';
               </fieldset>
             }
 
+            @if (r.created?.files?.length) {
+              <fieldset class="mt-3">
+                <legend class="text-xs font-medium text-gray-700 dark:text-gray-300">Files from this conversation</legend>
+                <ul class="mt-1 flex flex-col gap-1">
+                  @for (f of r.created!.files!; track f.uploadId) {
+                    <li>
+                      <label class="flex items-center gap-2 text-sm/6 text-gray-800 dark:text-gray-200">
+                        <input
+                          type="checkbox"
+                          class="size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-600"
+                          [checked]="r.fileIds.includes(f.uploadId)"
+                          (change)="delivery.toggleSendBackFile(sessionId(), f.uploadId, $any($event.target).checked)"
+                          [disabled]="r.phase === 'sending'"
+                        />
+                        <span class="truncate">{{ f.filename }}</span>
+                      </label>
+                    </li>
+                  }
+                </ul>
+              </fieldset>
+            }
+
             @if (r.error) {
               <p class="mt-2 text-sm/6 text-state-danger-700 dark:text-state-danger-300" role="alert">{{ r.error }}</p>
             }
@@ -134,7 +156,9 @@ export class SendBackSheetComponent {
   );
   protected readonly canSend = computed(() => {
     const r = this.review();
-    return !!r && r.phase === 'ready' && (r.text.trim().length > 0 || r.artifactIds.length > 0);
+    return (
+      !!r && r.phase === 'ready' && (r.text.trim().length > 0 || r.artifactIds.length > 0 || r.fileIds.length > 0)
+    );
   });
 
   constructor() {

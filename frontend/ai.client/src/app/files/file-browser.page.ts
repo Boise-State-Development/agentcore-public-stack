@@ -264,6 +264,16 @@ type SortOrder = 'asc' | 'desc';
                         </span>
                         <span>{{ formatBytes(file.sizeBytes) }}</span>
                         <span>{{ formatDate(file.createdAt) }}</span>
+                        @if (file.linkedFrom) {
+                          <!-- Shared from a linked conversation by reference (handoffs spec §4.9). -->
+                          @if (file.originalAvailable === false) {
+                            <span class="text-state-warning-700 dark:text-state-warning-400">
+                              No longer available (deleted from {{ file.linkedFrom.fromTitle || 'another conversation' }})
+                            </span>
+                          } @else {
+                            <span>From <span class="font-medium text-gray-700 dark:text-gray-300">{{ file.linkedFrom.fromTitle || 'another conversation' }}</span></span>
+                          }
+                        }
                         <a
                           [routerLink]="['/s', file.sessionId]"
                           class="text-primary-accessible hover:underline dark:text-primary-accessible-dark"

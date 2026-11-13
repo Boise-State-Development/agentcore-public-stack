@@ -39,7 +39,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { HandoffRelayService, ResumeOutcome } from '../handoff/handoff-relay.service';
 import { RelayedPromptKind } from '../handoff/handoff.models';
 import { ComposerCard, DeliveryAttach, DeliveryStateService } from '../handoff/delivery-state.service';
-import { joinDeliveryBlocks, renderDeliveryBlock } from '../handoff/handoff-prompt';
+import { fileLineFor, joinDeliveryBlocks, renderDeliveryBlock } from '../handoff/handoff-prompt';
 import { FEATURES } from '../../../services/features';
 
 /**
@@ -203,7 +203,14 @@ export class ChatRequestService implements OnDestroy {
       : this.deliveryState.takeForSend(sessionId);
     const modelText = cards.cards.length
       ? joinDeliveryBlocks(
-          cards.cards.map((c) => renderDeliveryBlock(c.editedText ?? c.text, c.fromTitle, c.artifacts)),
+          cards.cards.map((c) =>
+            renderDeliveryBlock(
+              c.editedText ?? c.text,
+              c.fromTitle,
+              c.artifacts,
+              (c.files ?? []).map((f) => fileLineFor(f, sessionId, c.deliveryId)),
+            ),
+          ),
           userInput,
         )
       : undefined;
@@ -421,6 +428,9 @@ export class ChatRequestService implements OnDestroy {
     handoffId: string;
     /** The context card as sent; absent when the user removed it. */
     contextText?: string;
+    /** Source files shared by reference (handoffs spec §4.9), and how many the sheet left unticked. */
+    sharedFileIds?: string[];
+    filesUnticked?: number;
     fileUploadIds?: string[];
     invokedSkillIds?: string[];
     folders?: FolderAttachmentData[];
@@ -450,8 +460,12 @@ export class ChatRequestService implements OnDestroy {
         invokedSkillIds,
         (folders ?? []).flatMap((folder) => (folder.folderAttachId ? [folder.folderAttachId] : [])),
       );
+      const sharing =
+        options.sharedFileIds?.length || options.filesUnticked
+          ? { fileIds: options.sharedFileIds ?? [], filesUnticked: options.filesUnticked ?? 0 }
+          : {};
       requestObject['handoff_context'] =
-        contextText === undefined ? { handoffId } : { handoffId, text: contextText };
+        contextText === undefined ? { handoffId, ...sharing } : { handoffId, text: contextText, ...sharing };
       this.turnTiming.describe(targetSessionId, {
         modelId: this.modelService.getSelectedModel()?.modelId ?? null,
         hasAgent: true,

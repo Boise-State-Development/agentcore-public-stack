@@ -29,6 +29,7 @@ import { HandoffStateService } from '../../../services/handoff/handoff-state.ser
 import { extractDeliveryBlocks, extractHandoffContext } from '../../../services/handoff/handoff-prompt';
 import { DeliveryBlock } from '../../../services/handoff/handoff.models';
 import { DeliveryArtifactChipsComponent } from '../../handoff/delivery-artifact-chips.component';
+import { DeliveryFileChipsComponent } from '../../handoff/delivery-file-chips.component';
 import { SessionService } from '../../../services/session/session.service';
 
 function isImageMimeType(mimeType: string): boolean {
@@ -46,7 +47,7 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
 @Component({
   selector: 'app-user-message',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DeliveryArtifactChipsComponent, FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, MessageAttachmentsComponent, NgIcon, RouterLink, TooltipDirective],
+  imports: [DeliveryArtifactChipsComponent, DeliveryFileChipsComponent, FileAttachmentBadgeComponent, FolderAttachmentChipComponent, ImageAttachmentGroupComponent, MentionTextComponent, MessageAttachmentsComponent, NgIcon, RouterLink, TooltipDirective],
   viewProviders: [provideIcons({ heroArrowTurnDownRight, heroExclamationCircle, heroArrowPath, heroArrowUturnLeft, heroCheck, heroSquare2Stack, appFork: FORK_ICON })],
   template: `
     @if (hasTextContent() || hasFileAttachments() || folderAttachments().length > 0) {
@@ -112,6 +113,9 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
             }
             @if (block.artifacts.length > 0) {
               <app-delivery-artifact-chips [artifacts]="block.artifacts" [label]="'Artifacts from ' + block.fromTitle" />
+            }
+            @if (block.files.length > 0) {
+              <app-delivery-file-chips [files]="block.files" [label]="'Files from ' + block.fromTitle" />
             }
           </div>
         }

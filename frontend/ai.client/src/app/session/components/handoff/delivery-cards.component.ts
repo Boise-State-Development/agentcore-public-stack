@@ -6,6 +6,7 @@ import { heroArrowUturnLeft, heroXMark } from '@ng-icons/heroicons/outline';
 import { ComposerCard, DELIVERY_MAX_PER_TURN, DeliveryStateService } from '../../services/handoff/delivery-state.service';
 import { DeliveryService } from '../../services/handoff/delivery.service';
 import { DeliveryArtifactChipsComponent } from './delivery-artifact-chips.component';
+import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
 
 /**
  * Cards waiting on this conversation's composer (handoffs spec §4.8): results sent back from
@@ -15,7 +16,7 @@ import { DeliveryArtifactChipsComponent } from './delivery-artifact-chips.compon
 @Component({
   selector: 'app-delivery-cards',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon, DeliveryArtifactChipsComponent],
+  imports: [FormsModule, NgIcon, DeliveryArtifactChipsComponent, DeliveryFileChipsComponent],
   providers: [provideIcons({ heroArrowUturnLeft, heroXMark })],
   template: `
     @if (cards().length > 0) {
@@ -66,6 +67,13 @@ import { DeliveryArtifactChipsComponent } from './delivery-artifact-chips.compon
             @if (card.artifacts.length > 0) {
               <div class="mt-2">
                 <app-delivery-artifact-chips [artifacts]="card.artifacts" [label]="'Artifacts from ' + (card.fromTitle || 'another conversation')" />
+              </div>
+            }
+
+            @if (card.files?.length) {
+              <!-- Shared by reference (§4.9): the chip downloads the original until the send makes it this conversation's. -->
+              <div class="mt-2">
+                <app-delivery-file-chips [files]="card.files!" [label]="'Files from ' + (card.fromTitle || 'another conversation')" />
               </div>
             }
 

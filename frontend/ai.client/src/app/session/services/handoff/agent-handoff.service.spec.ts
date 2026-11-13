@@ -6,13 +6,16 @@ import { Router } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfigService } from '../../../services/config.service';
+import { FileMetadata, FileUploadService } from '../../../services/file-upload/file-upload.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ChatRequestService } from '../chat/chat-request.service';
 import { ChatStateService } from '../chat/chat-state.service';
 import { ComposerDraftService } from '../session/composer-draft.service';
 import { ConversationBindingService } from '../session/conversation-binding.service';
+import { MessageMapService } from '../session/message-map.service';
+import { Message } from '../models/message.model';
 import { AgentHandoffService } from './agent-handoff.service';
-import { buildHandoffMessage, wrapHandoffContext } from './handoff-prompt';
+import { buildHandoffMessage, referenceUploadId, wrapHandoffContext } from './handoff-prompt';
 import { CreateHandoffResponse } from './handoff.models';
 import { HandoffNotificationService } from './handoff-notification.service';
 import { HandoffStateService } from './handoff-state.service';
@@ -48,6 +51,8 @@ describe('AgentHandoffService', () => {
   const toastWarning = vi.fn().mockReturnValue('toast-1');
   const toastDismiss = vi.fn();
   const navigate = vi.fn().mockResolvedValue(true);
+  let sourceFiles: FileMetadata[] = [];
+  let sourceMessages: Message[] = [];
 
   beforeEach(() => {
     submitHandoffRequest.mockClear();
@@ -56,11 +61,15 @@ describe('AgentHandoffService', () => {
     toastWarning.mockClear();
     toastDismiss.mockClear();
     loading = signal<ReadonlySet<string>>(new Set());
+    sourceFiles = [];
+    sourceMessages = [];
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: ConfigService, useValue: { appApiUrl: () => API } },
+        { provide: FileUploadService, useValue: { listSessionFiles: async () => sourceFiles } },
+        { provide: MessageMapService, useValue: { getMessagesForSession: () => signal(sourceMessages) } },
         { provide: ChatRequestService, useValue: { submitHandoffRequest } },
         {
           provide: ChatStateService,
@@ -154,6 +163,83 @@ describe('AgentHandoffService', () => {
     expect(row).toMatchObject({ handoffId: 'h1', status: 'running', sourceMessageIndex: 5, targetSessionId: sent.targetSessionId });
     expect(state.spawnedFrom(sent.targetSessionId)?.sourceTitle).toBe('Course planning');
     expect(toastInfo).toHaveBeenCalledWith('Handed off to Rubric Builder', undefined, expect.anything());
+  });
+
+  describe('files by reference (§4.9)', () => {
+    function file(uploadId: string, extra: Partial<FileMetadata> = {}): FileMetadata {
+      return {
+        uploadId,
+        filename: `${uploadId}.pdf`,
+        mimeType: 'application/pdf',
+        sizeBytes: 2048,
+        sessionId: 'src',
+        status: 'ready',
+        createdAt: '2026-11-12T00:00:00Z',
+        ...extra,
+      };
+    }
+
+    function userMessage(...uploadIds: string[]): Message {
+      return {
+        id: `m-${uploadIds.join('-')}`,
+        role: 'user',
+        content: uploadIds.map((uploadId) => ({
+          type: 'fileAttachment',
+          fileAttachment: { uploadId, filename: `${uploadId}.pdf`, mimeType: 'application/pdf', sizeBytes: 2048 },
+        })),
+      } as Message;
+    }
+
+    async function openWithFiles(): Promise<void> {
+      await openReady();
+      await new Promise((resolve) => setTimeout(resolve));
+    }
+
+    it('lists the source files and ticks the ones attached in its last five user turns', async () => {
+      sourceFiles = [file('old'), file('recent'), file('gone', { linkedFrom: { sessionId: 'x', uploadId: 'o', fromTitle: 'X' }, originalAvailable: false })];
+      sourceMessages = [userMessage('old'), ...Array.from({ length: 5 }, (_, i) => userMessage(i === 4 ? 'recent' : `none${i}`))];
+
+      await openWithFiles();
+
+      const review = state.reviewFor('src')!;
+      expect(review.files?.map((f) => f.uploadId)).toEqual(['old', 'recent']);
+      expect(review.fileIds).toEqual(['recent']);
+    });
+
+    it('stops at five ticked files', async () => {
+      sourceFiles = Array.from({ length: 7 }, (_, i) => file(`f${i}`));
+      await openWithFiles();
+
+      for (let i = 0; i < 7; i++) service.setFileShared('src', `f${i}`, true);
+
+      expect(state.reviewFor('src')!.fileIds).toEqual(['f0', 'f1', 'f2', 'f3', 'f4']);
+    });
+
+    it('previews each ticked file as the line the server writes, named by its reference id', async () => {
+      sourceFiles = [file('syl'), file('shared-in', { linkedFrom: { sessionId: 'other', uploadId: 'orig', fromTitle: 'Other' } })];
+      await openWithFiles();
+      service.setFileShared('src', 'syl', true);
+      service.setFileShared('src', 'shared-in', true);
+
+      const prompt = service.previewPrompt(state.reviewFor('src')!);
+
+      const lines = [
+        { uploadId: referenceUploadId('syl', 'h1'), filename: 'syl.pdf', mimeType: 'application/pdf', sizeBytes: 2048 },
+        // A file the source holds by reference is named by its original.
+        { uploadId: referenceUploadId('orig', 'h1'), filename: 'shared-in.pdf', mimeType: 'application/pdf', sizeBytes: 2048 },
+      ];
+      expect(prompt).toBe(buildHandoffMessage(wrapHandoffContext(CARD, 'Course planning', lines), 'draft a rubric'));
+    });
+
+    it('sends the ticked files and counts the unticked ones', async () => {
+      sourceFiles = [file('a'), file('b'), file('c')];
+      await openWithFiles();
+      service.setFileShared('src', 'b', true);
+
+      await service.send('src');
+
+      expect(submitHandoffRequest.mock.calls[0][0]).toMatchObject({ sharedFileIds: ['b'], filesUnticked: 2 });
+    });
   });
 
   it('a removed card is sent without context text', async () => {

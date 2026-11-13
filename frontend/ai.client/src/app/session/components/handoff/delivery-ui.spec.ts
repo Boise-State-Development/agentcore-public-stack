@@ -115,6 +115,17 @@ describe('delivery UI', () => {
       expect(labels[3]).toContain('Goes with the message after');
     });
 
+    it('lists a card’s files as chips before it is sent (§4.9)', () => {
+      TestBed.inject(DeliveryStateService).hydrate('src', [
+        card('a', 1, { files: [{ uploadId: 'f1', sessionId: 'tgt', filename: 'rubric.docx', mimeType: 'x', sizeBytes: 900 }] }),
+      ]);
+
+      const el = render();
+
+      expect(el.querySelector('[aria-label="Files from Rubric for BIO 101"]')).not.toBeNull();
+      expect(el.querySelector('a[aria-label="Download rubric.docx, 900 B"]')).not.toBeNull();
+    });
+
     it('Edit changes what the card sends, and Remove dismisses it', () => {
       const state = TestBed.inject(DeliveryStateService);
       state.hydrate('src', [card('a', 1)]);
@@ -198,6 +209,22 @@ describe('delivery UI', () => {
       fixture.detectChanges();
 
       expect(el.querySelector('[aria-label="Result from Rubric for BIO 101"]')?.textContent).toBe('Four rows, done.');
+    });
+
+    it('shows a card’s shared files as download chips under the result (§4.9)', () => {
+      const block = renderDeliveryBlock('Here it is.', 'Rubric for BIO 101', [], [
+        { uploadId: 'f1_ref_abc', filename: 'rubric.docx', mimeType: 'application/msword', sizeBytes: 2048 },
+      ]);
+      const el = render({
+        id: 'msg-src-6',
+        role: 'user',
+        content: [{ type: 'text', text: joinDeliveryBlocks([block], 'thanks') }],
+        metadata: { displayText: 'thanks' },
+      });
+
+      const chip = el.querySelector('a[aria-label="Download rubric.docx, 2 KB"]');
+      expect(chip).not.toBeNull();
+      expect(chip?.getAttribute('href')).toContain('/files/f1_ref_abc/download');
     });
 
     it('never reads a card out of a message the user typed', () => {

@@ -68,6 +68,7 @@ describe('HandoffStateService', () => {
       request: 'x',
       card: '',
       cardRemoved: false,
+      fileIds: [],
     });
     state.updateReview('src', { phase: 'ready', card: 'ctx' });
     expect(state.reviewFor('src')?.card).toBe('ctx');
