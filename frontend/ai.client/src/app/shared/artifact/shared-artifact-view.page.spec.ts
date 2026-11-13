@@ -145,6 +145,14 @@ describe('SharedArtifactViewPage', () => {
     expect(text()).toContain('owner@example.com');
   });
 
+  it('says a following link shows the latest version, not a snapshot', async () => {
+    shares.getSharedArtifact.mockResolvedValue({ ...META, version: 5, followsLatest: true });
+    await init();
+    expect(text()).toContain('always the latest version');
+    expect(text()).not.toContain('Shared read-only snapshot');
+    expect(text()).toContain('Latest version (v5)');
+  });
+
   it('never asks for an artifact id — the share id is the only handle', async () => {
     await init();
     const allArgs = [

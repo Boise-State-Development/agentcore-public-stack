@@ -77,11 +77,18 @@ mirrors conversation sharing, so the two behave alike.
 
 ### What a share is
 
-A share is an owner-created, revocable pointer to **one immutable version**.
+A share is an owner-created, revocable pointer to **one immutable version**,
+unless the owner chooses to have it follow the latest one.
 
-- **It pins a version, never `#HEAD`.** A link made against v1 keeps showing v1
-  after the model writes v2. A pointer that moved under the recipient would be a
-  different feature with different consent semantics.
+- **By default it pins a version.** A link made against v1 keeps showing v1
+  after the model writes v2.
+- **"Always show the latest version" is an opt-in, per link.** A link made with
+  it ticked opens whatever version is newest when the recipient opens it,
+  including versions written after the link was shared. The recipient page says
+  so ("Shared read-only · always the latest version"), the owner's list of links
+  shows it as **Latest version**, and an existing pinned link can be switched to
+  it with **Follow latest** without changing its URL. A link shared with
+  **Project members** can't follow: a project's Outputs record one version.
 - **Access levels** are `public` — any *authenticated* user with the link — or
   `specific`, an email allowlist matched case-insensitively. There is no
   anonymous access: `public` still sits behind sign-in, exactly as it does for
@@ -95,14 +102,16 @@ A share is an owner-created, revocable pointer to **one immutable version**.
 Owners share from the **Share** button on the artifact card or in the artifact
 panel header. Both share the version currently on screen — the card shows one row
 per version, and the panel follows its version menu. The dialog also lists the
-artifact's existing links so they can be copied or revoked.
+artifact's existing links so they can be copied, switched to follow the latest
+version, or revoked.
 
 ### Opening one
 
 Recipients open `/shared-artifact/{shareId}`, which renders the artifact
 full-width in the same sandboxed iframe the owner sees, with a preview/code
 toggle and a download. The page is read-only: no re-sharing, no version
-switching, no editing.
+switching, no editing. A link that follows the latest version shows the newest
+version as of page load; reloading picks up one written since.
 
 ### How access is actually enforced
 

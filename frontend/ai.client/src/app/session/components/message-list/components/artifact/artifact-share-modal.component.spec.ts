@@ -28,6 +28,7 @@ const SHARE: ArtifactShare = {
   contentType: 'text/html; charset=utf-8',
   createdAt: '2026-09-03T00:00:00+00:00',
   shareUrl: '/shared-artifact/share-1',
+  followsLatest: false,
 };
 
 describe('ArtifactShareModalComponent', () => {
@@ -165,6 +166,7 @@ describe('ArtifactShareModalComponent', () => {
       2,
       'public',
       undefined,
+      false,
     );
   });
 
@@ -180,10 +182,13 @@ describe('ArtifactShareModalComponent', () => {
     api()['addEmail']();
     await api()['onShare']();
 
-    expect(shareService.createShare).toHaveBeenCalledWith('art-1', 2, 'specific', [
-      'owner@example.com',
-      'friend@example.com',
-    ]);
+    expect(shareService.createShare).toHaveBeenCalledWith(
+      'art-1',
+      2,
+      'specific',
+      ['owner@example.com', 'friend@example.com'],
+      false,
+    );
   });
 
   it('says the link is pinned to one version after sharing', async () => {
@@ -418,7 +423,7 @@ describe('ArtifactShareModalComponent', () => {
       await init();
       await api()['onShare']();
       fixture.detectChanges();
-      expect(shareService.createShare).toHaveBeenCalledWith('art-1', 2, 'project', undefined);
+      expect(shareService.createShare).toHaveBeenCalledWith('art-1', 2, 'project', undefined, false);
       expect(text()).toContain('listed under Outputs on the project page');
     });
 
@@ -437,6 +442,118 @@ describe('ArtifactShareModalComponent', () => {
       expect(text()).toContain('Project members');
       expect(api()['audienceLabel']({ ...SHARE, accessLevel: 'project' })).toBe('Project members');
     });
+  });
+});
+
+describe('ArtifactShareModalComponent: following the latest version', () => {
+  let component: ArtifactShareModalComponent;
+  let fixture: ComponentFixture<ArtifactShareModalComponent>;
+  let shareService: {
+    createShare: ReturnType<typeof vi.fn>;
+    shareOptions: ReturnType<typeof vi.fn>;
+    updateShare: ReturnType<typeof vi.fn>;
+    revokeShare: ReturnType<typeof vi.fn>;
+  };
+  const api = () => component as unknown as Record<string, any>;
+  const el = () => fixture.nativeElement as HTMLElement;
+  const text = () => el().textContent ?? '';
+  const followBox = () =>
+    Array.from(el().querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))[0];
+
+  beforeEach(() => {
+    TestBed.resetTestingModule();
+    shareService = {
+      createShare: vi.fn(),
+      shareOptions: vi.fn().mockResolvedValue({ shares: [], project: null }),
+      updateShare: vi.fn(),
+      revokeShare: vi.fn().mockResolvedValue(undefined),
+    };
+    TestBed.configureTestingModule({
+      imports: [ArtifactShareModalComponent],
+      providers: [
+        { provide: ArtifactShareService, useValue: shareService },
+        { provide: DIALOG_DATA, useValue: DATA },
+        { provide: DialogRef, useValue: { close: vi.fn() } },
+      ],
+    });
+    fixture = TestBed.createComponent(ArtifactShareModalComponent);
+    component = fixture.componentInstance;
+  });
+
+  afterEach(() => fixture?.destroy());
+
+  async function init(): Promise<void> {
+    await component.ngOnInit();
+    fixture.detectChanges();
+  }
+
+  it('offers the option, unticked, and names the version a pinned link shows', async () => {
+    await init();
+    expect(text()).toContain('Always show the latest version');
+    expect(text()).toContain('Leave this off to share version 2 only');
+    expect(followBox().checked).toBe(false);
+  });
+
+  it('creates a following link when ticked and says what it opens', async () => {
+    shareService.createShare.mockResolvedValue({ ...SHARE, followsLatest: true });
+    await init();
+    followBox().click();
+    fixture.detectChanges();
+
+    await api()['onShare']();
+    fixture.detectChanges();
+
+    expect(shareService.createShare).toHaveBeenCalledWith('art-1', 2, 'public', undefined, true);
+    expect(text()).toContain('always opens the latest version');
+    expect(text()).not.toContain("Later versions aren't included");
+  });
+
+  it('hides the option for project members and never sends it', async () => {
+    shareService.shareOptions.mockResolvedValue({
+      shares: [],
+      project: { projectId: 'prj_1', name: 'Enrollment Sync' },
+    });
+    shareService.createShare.mockResolvedValue({ ...SHARE, accessLevel: 'project' });
+    await init();
+    api()['followsLatest'].set(true); // ticked on another option, then switched
+    fixture.detectChanges();
+
+    expect(text()).not.toContain('Always show the latest version');
+    await api()['onShare']();
+    expect(shareService.createShare).toHaveBeenCalledWith('art-1', 2, 'project', undefined, false);
+  });
+
+  it('labels an existing following link "Latest version" and offers no follow action on it', async () => {
+    shareService.shareOptions.mockResolvedValue({
+      shares: [{ ...SHARE, followsLatest: true }],
+      project: null,
+    });
+    await init();
+    expect(text()).toContain('Latest version');
+    expect(text()).not.toContain('Follow latest');
+  });
+
+  it('switches an existing pinned link to follow the latest', async () => {
+    shareService.shareOptions.mockResolvedValue({ shares: [SHARE], project: null });
+    shareService.updateShare.mockResolvedValue({ ...SHARE, followsLatest: true });
+    await init();
+    expect(text()).toContain('Version 2');
+
+    await api()['follow'](SHARE);
+    fixture.detectChanges();
+
+    expect(shareService.updateShare).toHaveBeenCalledWith('share-1', undefined, undefined, true);
+    expect(text()).toContain('Latest version');
+    expect(text()).not.toContain('Follow latest');
+  });
+
+  it('offers no follow action on an existing project link', async () => {
+    shareService.shareOptions.mockResolvedValue({
+      shares: [{ ...SHARE, accessLevel: 'project' }],
+      project: null,
+    });
+    await init();
+    expect(text()).not.toContain('Follow latest');
   });
 });
 

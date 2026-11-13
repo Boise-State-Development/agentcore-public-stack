@@ -80,6 +80,9 @@ interface LibraryRow {
   readonly title: string;
   readonly contentType: string;
   readonly version: number;
+  /** A received link that opens the newest version, so `version` (the one
+   *  it was made at) is not what it shows. Always false for your own. */
+  readonly followsLatest?: boolean;
   /** What the card mints its preview through — the two kinds are two
    *  different credentials for the same bytes. */
   readonly thumbnail: ArtifactThumbnailSource;
@@ -256,6 +259,7 @@ export class ArtifactLibraryPage {
       title: item.title,
       contentType: item.contentType,
       version: item.version,
+      followsLatest: item.followsLatest ?? false,
       thumbnail: {
         kind: 'shared' as const,
         shareId: item.shareId,

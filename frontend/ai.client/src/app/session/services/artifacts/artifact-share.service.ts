@@ -21,8 +21,11 @@ export type ArtifactShareAccessLevel = 'public' | 'specific' | 'project';
 export interface ArtifactShare {
   shareId: string;
   artifactId: string;
-  /** The immutable version this share is pinned to — never HEAD. */
+  /** The version shared. For a share that follows the latest, the one
+   *  current when the link was made; the link itself opens the newest. */
   version: number;
+  /** The link always opens the newest version (owner's opt-in). */
+  followsLatest: boolean;
   ownerId: string;
   accessLevel: ArtifactShareAccessLevel;
   allowedEmails?: string[];
@@ -64,7 +67,9 @@ export interface SharedWithMeArtifact {
   shareId: string;
   title: string;
   contentType: string;
+  /** The version shared; the link opens the newest when `followsLatest`. */
   version: number;
+  followsLatest?: boolean;
   /** Who shared it. */
   ownerEmail: string;
   /** When it was shared with you — not when it was made or last edited. */
@@ -96,7 +101,10 @@ export interface SharedArtifact {
   shareId: string;
   title: string;
   contentType: string;
+  /** The version shown now: the newest one when `followsLatest`. */
   version: number;
+  /** The owner made this link follow the latest version. */
+  followsLatest?: boolean;
   createdAt: string;
   ownerEmail: string;
   canDownload: boolean;
@@ -160,15 +168,19 @@ export class ArtifactShareService {
   // ----------------------------------------------------------------
 
   /**
-   * Share one immutable artifact version. `allowedEmails` is required by
-   * the backend for `specific` and ignored for `public`; the owner is
-   * added to the allowlist server-side, so callers need not include it.
+   * Share an artifact version. `allowedEmails` is required by the backend
+   * for `specific` and ignored for `public`; the owner is added to the
+   * allowlist server-side, so callers need not include it.
+   *
+   * `followsLatest` makes the link open the newest version instead of
+   * `version`. The backend refuses it for a `project` share.
    */
   async createShare(
     artifactId: string,
     version: number,
     accessLevel: ArtifactShareAccessLevel,
     allowedEmails?: string[],
+    followsLatest = false,
   ): Promise<ArtifactShare> {
     return firstValueFrom(
       this.http.post<ArtifactShare>(
@@ -177,6 +189,7 @@ export class ArtifactShareService {
           version,
           accessLevel,
           ...(allowedEmails?.length ? { allowedEmails } : {}),
+          ...(followsLatest ? { followsLatest: true } : {}),
         },
         this.inlineErrors(),
       ),
@@ -206,16 +219,18 @@ export class ArtifactShareService {
     };
   }
 
-  /** Change who may view an existing share. The pinned version is
-   *  immutable — only access can change. */
+  /** Change who may view an existing share, or whether it follows the
+   *  latest version. Omitted fields stay as they are. */
   async updateShare(
     shareId: string,
     accessLevel?: ArtifactShareAccessLevel,
     allowedEmails?: string[],
+    followsLatest?: boolean,
   ): Promise<ArtifactShare> {
     const body: Record<string, unknown> = {};
     if (accessLevel) body['accessLevel'] = accessLevel;
     if (allowedEmails) body['allowedEmails'] = allowedEmails;
+    if (followsLatest !== undefined) body['followsLatest'] = followsLatest;
 
     return firstValueFrom(
       this.http.patch<ArtifactShare>(

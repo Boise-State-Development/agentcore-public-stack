@@ -148,11 +148,13 @@ class ArtifactContentResponse(BaseModel):
 
 
 class CreateArtifactShareRequest(BaseModel):
-    """Request body for sharing one artifact version.
+    """Request body for sharing an artifact.
 
-    `version` is required and never defaults to the artifact's HEAD: a
-    share pins one immutable version, and a pointer that moves under the
-    recipient is a different feature with different consent semantics.
+    `version` is required and never defaults to the artifact's HEAD. By
+    default the share pins that one immutable version. `followsLatest`
+    is the owner's explicit opt-in to a link that always shows the
+    newest version instead; `version` is then the one the owner saw
+    when they made the link, kept for the record.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -172,6 +174,13 @@ class CreateArtifactShareRequest(BaseModel):
         description="Email addresses allowed to view "
         "(required when accessLevel is 'specific')",
     )
+    follows_latest: bool = Field(
+        default=False,
+        alias="followsLatest",
+        description="Show recipients the newest version, not `version`. "
+        "Not allowed for 'project' shares, whose Outputs are a record of "
+        "one version",
+    )
 
     @model_validator(mode="after")
     def validate_allowed_emails(self) -> "CreateArtifactShareRequest":
@@ -179,14 +188,18 @@ class CreateArtifactShareRequest(BaseModel):
             raise ValueError(
                 "allowed_emails is required when access_level is 'specific'"
             )
+        if self.follows_latest and self.access_level == "project":
+            raise ValueError(
+                "a project share pins one version and cannot follow the latest"
+            )
         return self
 
 
 class UpdateArtifactShareRequest(BaseModel):
     """Request body for changing an existing share's access controls.
 
-    The share target — `(artifact_id, version)` — is immutable; only who
-    may view it can change.
+    The share's `(artifact_id, version)` never changes. Who may view it
+    can, and so can whether it follows the latest version.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -199,12 +212,22 @@ class UpdateArtifactShareRequest(BaseModel):
         alias="allowedEmails",
         description="Updated email allowlist",
     )
+    follows_latest: Optional[bool] = Field(
+        default=None,
+        alias="followsLatest",
+        description="Switch the link between the pinned version and the "
+        "newest one; omitted leaves it as it is",
+    )
 
     @model_validator(mode="after")
     def validate_allowed_emails(self) -> "UpdateArtifactShareRequest":
         if self.access_level == "specific" and not self.allowed_emails:
             raise ValueError(
                 "allowed_emails is required when access_level is 'specific'"
+            )
+        if self.follows_latest and self.access_level == "project":
+            raise ValueError(
+                "a project share pins one version and cannot follow the latest"
             )
         return self
 
@@ -220,7 +243,12 @@ class ArtifactShareResponse(BaseModel):
 
     share_id: str = Field(..., alias="shareId")
     artifact_id: str = Field(..., alias="artifactId")
-    version: int = Field(..., description="Pinned artifact version")
+    version: int = Field(
+        ...,
+        description="The version shared; for a following share, the one "
+        "current when the link was made",
+    )
+    follows_latest: bool = Field(default=False, alias="followsLatest")
     owner_id: str = Field(..., alias="ownerId")
     access_level: ArtifactShareAccessLevel = Field(
         ..., alias="accessLevel"
@@ -268,7 +296,11 @@ class SharedArtifactResponse(BaseModel):
     share_id: str = Field(..., alias="shareId")
     title: str = Field(default="")
     content_type: str = Field(default="", alias="contentType")
-    version: int
+    version: int = Field(
+        ..., description="The version shown now: the newest one when "
+        "`followsLatest`"
+    )
+    follows_latest: bool = Field(default=False, alias="followsLatest")
     created_at: str = Field(..., alias="createdAt")
     owner_email: str = Field(
         ..., alias="ownerEmail", description="Who shared this"
@@ -298,7 +330,11 @@ class SharedWithMeArtifact(BaseModel):
     share_id: str = Field(..., alias="shareId")
     title: str = Field(default="")
     content_type: str = Field(default="", alias="contentType")
-    version: int
+    version: int = Field(
+        ..., description="The version shared. For a following share it is "
+        "the one current when the link was made; the link opens the newest"
+    )
+    follows_latest: bool = Field(default=False, alias="followsLatest")
     owner_email: str = Field(
         ..., alias="ownerEmail", description="Who shared this"
     )
