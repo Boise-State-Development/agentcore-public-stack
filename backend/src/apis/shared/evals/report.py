@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from apis.shared.evals.calls import summarize_calls
 from apis.shared.evals.cases import ADVISORY_FAMILIES, FAMILIES, EvalCase
+from apis.shared.evals.efficiency import case_efficiency
 from apis.shared.evals.score import FamilyComparison, compare_family, failure_code, majority
 
 BASELINE_SCHEMA_VERSION = 1
@@ -132,6 +133,7 @@ def build_baseline(
     cases: Sequence[EvalCase],
     meta: Mapping[str, Any],
     judgements: Sequence[Mapping[str, Any]] = (),
+    calls: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """A promotable baseline from a complete run, or :class:`ReportError` saying why not.
 
@@ -166,6 +168,9 @@ def build_baseline(
     judge_models = sorted({str(j.get("judge_model")) for j in judgements})
     if len(judge_models) > 1:
         raise ReportError(f"judgements mix judge models: {judge_models}")
+    # What each case cost to answer (tokens, tool calls, time), so a later run
+    # can be compared on efficiency as well as outcome. Numbers only.
+    efficiency = case_efficiency(rows, calls)
     baseline: Dict[str, Any] = {
         "schemaVersion": BASELINE_SCHEMA_VERSION,
         "modelId": model_id,
@@ -180,6 +185,7 @@ def build_baseline(
                 "passes": outcomes[c.id].passes,
                 "samples": outcomes[c.id].samples,
                 "answer": outcomes[c.id].answer[:MAX_BASELINE_ANSWER_CHARS],
+                **({"efficiency": efficiency[c.id]} if efficiency.get(c.id) else {}),
             }
             for c in cases
         },
