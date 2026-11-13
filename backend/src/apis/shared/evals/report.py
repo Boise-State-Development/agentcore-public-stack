@@ -133,6 +133,7 @@ def build_baseline(
     cases: Sequence[EvalCase],
     meta: Mapping[str, Any],
     judgements: Sequence[Mapping[str, Any]] = (),
+    calls: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """A promotable baseline from a complete run, or :class:`ReportError` saying why not.
 
@@ -169,7 +170,7 @@ def build_baseline(
         raise ReportError(f"judgements mix judge models: {judge_models}")
     # What each case cost to answer (tokens, tool calls, time), so a later run
     # can be compared on efficiency as well as outcome. Numbers only.
-    efficiency = case_efficiency(rows)
+    efficiency = case_efficiency(rows, calls)
     baseline: Dict[str, Any] = {
         "schemaVersion": BASELINE_SCHEMA_VERSION,
         "modelId": model_id,

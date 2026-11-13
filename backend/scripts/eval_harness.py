@@ -108,7 +108,10 @@ from eval_fixtures.build import build as build_fixture  # noqa: E402
 from eval_fixtures.delivery import estimated_tokens as fixture_tokens  # noqa: E402
 from eval_fixtures.references import reference_for  # noqa: E402
 from apis.shared.evals.efficiency import (  # noqa: E402
+    CALLS_FILE,
     MIN_PAIRED_CASES,
+    call_totals,
+    sample_sessions,
     MOVED_THRESHOLD,
     compare_efficiency,
     format_efficiency_table,
@@ -658,6 +661,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
         return 2
 
     all_rows = read_rows(results_path)
+    await _record_calls(out, meta, all_rows)
     by_family: Dict[str, List[bool]] = defaultdict(list)
     for outcome in case_outcomes(all_rows).values():
         by_family[outcome.family].append(outcome.passed)
@@ -1027,6 +1031,42 @@ async def _family_calls(
     return found
 
 
+def _read_calls(out: Path) -> Dict[str, Dict[str, float]]:
+    path = out / CALLS_FILE
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return {}
+
+
+async def _record_calls(
+    out: Path, meta: Dict[str, Any], rows: Sequence[Dict[str, Any]]
+) -> Dict[str, Dict[str, float]]:
+    """Each sample session's totals over every model call, from its ``C#`` rows, kept in ``calls.json``.
+
+    The stream reports only a turn's last model call, so these are the only
+    true token totals a run has (``apis.shared.evals.efficiency``). Sessions
+    already recorded are not read again; a session delete keeps its cost rows,
+    so this works after cleanup. Best-effort: without access the file is left
+    as it was and the token measures read as absent.
+    """
+    recorded = _read_calls(out)
+    wanted = [s for row in rows for s in sample_sessions(row) if s not in recorded]
+    if not wanted:
+        return recorded
+    found = await _session_calls(meta, wanted)
+    if not found:
+        return recorded
+    for session_id, call_rows in found.items():
+        if call_rows:
+            recorded[session_id] = call_totals(call_rows)
+    (out / CALLS_FILE).write_text(json.dumps(recorded, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"cost rows: recorded totals for {len(found)} session(s) in {CALLS_FILE}", file=sys.stderr)
+    return recorded
+
+
 async def _session_calls(
     meta: Dict[str, Any], session_ids: Sequence[str]
 ) -> Optional[Dict[str, Sequence[Dict[str, Any]]]]:
@@ -1138,14 +1178,15 @@ def cmd_score(args: argparse.Namespace) -> int:
             print("\nLLM judges (advisory, mean score 0-1, paired cases only):\n")
             print(format_judge_table(judge_comparisons))
     passed = {case_id: outcome.passed for case_id, outcome in case_outcomes(rows).items()}
-    efficiency = compare_efficiency(baseline, rows, passed)
+    calls = _read_calls(out) if args.no_cost_rows else asyncio.run(_record_calls(out, meta, rows))
+    efficiency = compare_efficiency(baseline, rows, passed, calls)
     print("\nEfficiency (advisory; mean per case in the run and change vs baseline, cases that pass in both;")
     print(f"* = {MOVED_THRESHOLD:.0%} or more over {MIN_PAIRED_CASES}+ cases):\n")
     print(format_efficiency_table(efficiency))
     if moved_efficiency := moved(efficiency):
         print("\nmoved: " + ", ".join(moved_efficiency))
     efficiency_row = {
-        family: {"run": numbers} for family, numbers in run_efficiency(rows, passed).items()
+        family: {"run": numbers} for family, numbers in run_efficiency(rows, passed, calls).items()
     }
     for comparison in efficiency:
         if comparison.metrics:
@@ -1200,7 +1241,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
         rows = [r for r in read_rows(out / RESULTS_FILE) if r.get("family") in wanted and r.get("case_id") in ids]
         judgements = [j for j in read_rows(out / JUDGEMENTS_FILE)
                       if j.get("family") in wanted and j.get("case_id") in ids]
-        baseline = build_baseline(rows, cases=cases, meta=meta, judgements=judgements)
+        baseline = build_baseline(rows, cases=cases, meta=meta, judgements=judgements, calls=_read_calls(out))
     except (ReportError, CaseError) as exc:
         print(f"not promoting: {exc}", file=sys.stderr)
         return 2

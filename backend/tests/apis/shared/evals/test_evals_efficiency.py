@@ -12,8 +12,11 @@ The properties, in the order they would mislead if wrong:
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from apis.shared.evals.efficiency import (
     MIN_PAIRED_CASES,
+    call_totals,
     case_efficiency,
     compare_efficiency,
     format_efficiency_table,
@@ -23,18 +26,35 @@ from apis.shared.evals.efficiency import (
 )
 
 
-def _row(case_id, *, sample=0, out=100, inp=1000, read=0, write=0, tools=1, duration=2000, first=500, turns=1):
+CALLS = {}
+
+
+def _row(case_id, *, sample=0, out=100, inp=1000, model_calls=2, tools=1, duration=2000, first=500, turns=1):
+    """A result row, with its session's cost-row totals registered in ``CALLS``.
+
+    ``usage`` carries a deliberately wrong figure: it is the stream's last
+    call, which efficiency must never read.
+    """
+    session_id = f"eval-{case_id}-{sample}-{out}-{inp}"
+    CALLS[session_id] = {"modelCalls": float(model_calls), "outputTokens": float(out), "inputTokens": float(inp)}
     return {
         "case_id": case_id,
         "family": case_id.split(".", 1)[0],
         "sample": sample,
-        "usage": {
-            "outputTokens": out, "inputTokens": inp,
-            "cacheReadInputTokens": read, "cacheWriteInputTokens": write,
-        },
+        "session_id": session_id,
+        "usage": {"outputTokens": 7, "inputTokens": 7},
         "timing": [{"firstTokenMs": first, "turnDurationMs": duration} for _ in range(turns)],
         "turns": [{"tool_trace": [{"name": "calculator"}] * tools} for _ in range(turns)],
     }
+
+
+def test_call_totals_sum_every_call_however_input_was_billed():
+    rows = [
+        {"tokenUsage": {"inputTokens": Decimal("2"), "cacheReadInputTokens": Decimal("900"),
+                        "cacheWriteInputTokens": Decimal("50"), "outputTokens": Decimal("1200")}},
+        {"tokenUsage": {"inputTokens": 3, "outputTokens": 30}},
+    ]
+    assert call_totals(rows) == {"modelCalls": 2.0, "outputTokens": 1230.0, "inputTokens": 955.0}
 
 
 def _baseline(cases):
@@ -44,11 +64,26 @@ def _baseline(cases):
     }}
 
 
-def test_a_sample_sums_input_however_it_was_billed_and_every_turns_tools_and_time():
-    measured = sample_efficiency(_row("tool_selection.a", inp=100, read=900, write=50, tools=2, duration=1500, turns=2))
+def test_tokens_come_from_the_cost_rows_never_the_stream():
+    measured = sample_efficiency(_row("tool_selection.a", out=1200, inp=1050, tools=2, duration=1500, turns=2), CALLS)
     assert measured == {
-        "outputTokens": 100.0, "inputTokens": 1050.0, "toolCalls": 4.0, "durationMs": 3000.0, "firstTokenMs": 500.0,
+        "modelCalls": 2.0, "outputTokens": 1200.0, "inputTokens": 1050.0,
+        "toolCalls": 4.0, "durationMs": 3000.0, "firstTokenMs": 500.0,
     }
+
+
+def test_without_call_totals_the_token_measures_are_absent():
+    measured = sample_efficiency(_row("tool_selection.a"))
+    assert measured["outputTokens"] is None and measured["modelCalls"] is None
+    assert measured["toolCalls"] == 1.0
+
+
+def test_a_multi_session_sample_sums_every_session_or_reports_nothing():
+    row = _row("project_memory.a", out=100, inp=1000)
+    row["sessions"] = [{"session_id": row["session_id"]}, {"session_id": "eval-second"}]
+    assert sample_efficiency(row, CALLS)["outputTokens"] is None
+    calls = {**CALLS, "eval-second": {"modelCalls": 1.0, "outputTokens": 50.0, "inputTokens": 500.0}}
+    assert sample_efficiency(row, calls)["outputTokens"] == 150.0
 
 
 def test_a_turn_without_a_duration_makes_the_samples_duration_unknown_not_partial():
@@ -58,15 +93,15 @@ def test_a_turn_without_a_duration_makes_the_samples_duration_unknown_not_partia
 
 
 def test_a_row_with_nothing_measured_reports_nothing():
-    assert sample_efficiency({"case_id": "x.y"}) == {
-        "outputTokens": None, "inputTokens": None, "toolCalls": None, "durationMs": None, "firstTokenMs": None,
-    }
+    assert sample_efficiency({"case_id": "x.y"}, CALLS) == dict.fromkeys(
+        ("modelCalls", "outputTokens", "inputTokens", "toolCalls", "durationMs", "firstTokenMs")
+    )
     assert case_efficiency([{"case_id": "x.y"}]) == {}
 
 
 def test_a_case_is_its_median_sample():
     rows = [_row("tool_selection.a", sample=i, out=out) for i, out in enumerate((100, 900, 120))]
-    assert case_efficiency(rows)["tool_selection.a"]["outputTokens"] == 120.0
+    assert case_efficiency(rows, CALLS)["tool_selection.a"]["outputTokens"] == 120.0
 
 
 def test_only_cases_that_pass_on_both_sides_are_compared():
@@ -82,7 +117,7 @@ def test_only_cases_that_pass_on_both_sides_are_compared():
         "tool_selection.gained": True, "tool_selection.new": True,
     }
 
-    (family,) = compare_efficiency(baseline, rows, passed)
+    (family,) = compare_efficiency(baseline, rows, passed, CALLS)
     assert family.paired == 1
     assert (family.metrics["outputTokens"].n, family.metrics["outputTokens"].base,
             family.metrics["outputTokens"].run) == (1, 100.0, 200.0)
@@ -90,7 +125,7 @@ def test_only_cases_that_pass_on_both_sides_are_compared():
 
 def test_a_measure_missing_on_one_side_is_left_out_of_that_measure_only():
     baseline = _baseline({"tool_selection.a": (True, {"outputTokens": 100.0})})
-    (family,) = compare_efficiency(baseline, [_row("tool_selection.a")], {"tool_selection.a": True})
+    (family,) = compare_efficiency(baseline, [_row("tool_selection.a")], {"tool_selection.a": True}, CALLS)
     assert set(family.metrics) == {"outputTokens"}
 
 
@@ -106,7 +141,7 @@ def test_a_change_is_marked_only_with_enough_cases_and_a_large_move():
     def compare(n, run_out):
         ids = [f"tool_selection.c{i}" for i in range(n)]
         baseline = _baseline({cid: (True, {"outputTokens": 100.0}) for cid in ids})
-        return compare_efficiency(baseline, [_row(cid, out=run_out) for cid in ids], {cid: True for cid in ids})
+        return compare_efficiency(baseline, [_row(cid, out=run_out) for cid in ids], {cid: True for cid in ids}, CALLS)
 
     assert moved(compare(MIN_PAIRED_CASES, 130)) == ["tool_selection outputTokens +30%"]
     assert moved(compare(MIN_PAIRED_CASES - 1, 130)) == []
@@ -116,8 +151,9 @@ def test_a_change_is_marked_only_with_enough_cases_and_a_large_move():
 
 def test_the_runs_own_numbers_count_each_passing_case_once():
     rows = [_row("tool_selection.a", sample=i, out=100) for i in range(3)] + [_row("tool_selection.b", out=50)]
-    numbers = run_efficiency(rows, {"tool_selection.a": True, "tool_selection.b": False})
+    numbers = run_efficiency(rows, {"tool_selection.a": True, "tool_selection.b": False}, CALLS)
     assert numbers == {"tool_selection": {
+        "modelCalls": {"n": 1, "sum": 2.0},
         "outputTokens": {"n": 1, "sum": 100.0}, "inputTokens": {"n": 1, "sum": 1000.0},
         "toolCalls": {"n": 1, "sum": 1.0}, "durationMs": {"n": 1, "sum": 2000.0},
         "firstTokenMs": {"n": 1, "sum": 500.0},
@@ -126,5 +162,5 @@ def test_the_runs_own_numbers_count_each_passing_case_once():
 
 def test_the_ledger_form_is_numbers_only():
     baseline = _baseline({"tool_selection.a": (True, {"outputTokens": 100.0})})
-    (family,) = compare_efficiency(baseline, [_row("tool_selection.a", out=80)], {"tool_selection.a": True})
+    (family,) = compare_efficiency(baseline, [_row("tool_selection.a", out=80)], {"tool_selection.a": True}, CALLS)
     assert family.to_dict() == {"paired": 1, "outputTokens": {"n": 1, "base": 100.0, "run": 80.0}}

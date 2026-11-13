@@ -5,8 +5,8 @@ what the run paid for it, so a change that makes every answer twice as slow or
 twice as large passed as long as the answers stayed right, and a change meant
 to make turns cheaper had nowhere to prove it kept quality while doing so.
 
-This reduces each sample to five numbers a result row already carries, takes
-each case's median over its samples, and compares families between a run and a
+This reduces each sample to six numbers, takes each case's median over its
+samples, and compares families between a run and a
 baseline over the cases that **pass in both**. A case that fails is left out
 on purpose: a wrong answer is often a short one, and counting it would report
 a regression in quality as a gain in efficiency.
@@ -18,6 +18,14 @@ moved when enough cases back it and the change is large.
 Tokens, not dollars: concurrent samples share cache writes, so two runs of the
 same case can be billed differently for the same work
 (``apis.shared.evals.calls.CallSummary.input_tokens`` makes the same choice).
+
+**Tokens and model calls come from the sample's ``C#`` cost rows, never from
+the stream.** The stream's ``usage`` is the turn's *last* model call (the
+coordinator keeps it as the current context size for the badge), so a turn
+that rewrites a document through a tool and then says "done" reports the
+"done". ``run`` writes each sample's totals over every call to the run
+directory's ``calls.json`` (:func:`call_totals`); without that file the token
+measures are absent, never a guess.
 """
 
 from __future__ import annotations
@@ -31,6 +39,7 @@ from apis.shared.evals.cases import FAMILIES
 
 #: The measures, in report order: ``(name, column header)``.
 METRICS: Tuple[Tuple[str, str], ...] = (
+    ("modelCalls", "calls"),
     ("outputTokens", "out tok"),
     ("inputTokens", "in tok"),
     ("toolCalls", "tools"),
@@ -39,6 +48,8 @@ METRICS: Tuple[Tuple[str, str], ...] = (
 )
 METRIC_NAMES = tuple(name for name, _ in METRICS)
 INPUT_USAGE_KEYS = ("inputTokens", "cacheReadInputTokens", "cacheWriteInputTokens")
+#: The run directory file :func:`call_totals` results are kept in, by session id.
+CALLS_FILE = "calls.json"
 
 #: A family's change on one measure is called out only with at least this many
 #: paired cases behind it and at least this large a relative change.
@@ -52,27 +63,68 @@ def _number(value: Any) -> Optional[float]:
     return float(value)
 
 
-def sample_efficiency(row: Mapping[str, Any]) -> Dict[str, Optional[float]]:
-    """One sample's measures, from its result row. ``None`` where the row cannot say.
+def call_totals(rows: Sequence[Mapping[str, Any]]) -> Dict[str, float]:
+    """One session's totals over every model call, from its ``C#`` rows.
 
-    - ``outputTokens`` / ``inputTokens``: the sample's token totals; input is
-      uncached, cache-read and cache-written together, what was sent whichever
-      way it was billed.
+    ``{modelCalls, outputTokens, inputTokens}``; input is uncached, cache-read
+    and cache-written together. Numbers only: this is what ``calls.json`` holds.
+    """
+    totals = {"modelCalls": 0.0, "outputTokens": 0.0, "inputTokens": 0.0}
+    for row in rows:
+        usage = row.get("tokenUsage") if isinstance(row.get("tokenUsage"), Mapping) else {}
+        totals["modelCalls"] += 1
+        totals["outputTokens"] += _number(_plain_number(usage.get("outputTokens"))) or 0.0
+        totals["inputTokens"] += sum(_number(_plain_number(usage.get(key))) or 0.0 for key in INPUT_USAGE_KEYS)
+    return totals
+
+
+def _plain_number(value: Any) -> Any:
+    """DynamoDB hands back ``Decimal``; everything else here is a float."""
+    try:
+        from decimal import Decimal
+    except ImportError:  # pragma: no cover
+        return value
+    return float(value) if isinstance(value, Decimal) else value
+
+
+def sample_sessions(row: Mapping[str, Any]) -> List[str]:
+    """Every session a sample ran in: the main one, plus a multi-session case's others."""
+    ids = [str(row.get("session_id") or "")]
+    for entry in row.get("sessions") or ():
+        if isinstance(entry, Mapping) and entry.get("session_id"):
+            ids.append(str(entry["session_id"]))
+    return list(dict.fromkeys(i for i in ids if i))
+
+
+def sample_efficiency(
+    row: Mapping[str, Any], calls: Optional[Mapping[str, Mapping[str, Any]]] = None
+) -> Dict[str, Optional[float]]:
+    """One sample's measures. ``None`` where nothing can say.
+
+    - ``modelCalls`` / ``outputTokens`` / ``inputTokens``: summed over every
+      model call of every session the sample ran in, from ``calls``
+      (``{session_id: call_totals}``, the run's ``calls.json``). Absent when
+      any of the sample's sessions has no entry, never a partial sum.
     - ``toolCalls``: tool calls over every turn of the sample.
     - ``durationMs``: every turn's duration as the Runtime measured it, summed;
       ``None`` if any turn has none (a cut stream), never a partial sum.
     - ``firstTokenMs``: the first turn's first token.
     """
-    usage = row.get("usage") if isinstance(row.get("usage"), Mapping) else {}
     turns = row.get("turns") if isinstance(row.get("turns"), list) else []
     timing = row.get("timing") if isinstance(row.get("timing"), list) else []
-
-    inputs = [_number(usage.get(key)) for key in INPUT_USAGE_KEYS]
     durations = [_number(t.get("turnDurationMs")) if isinstance(t, Mapping) else None for t in timing]
     first = timing[0] if timing and isinstance(timing[0], Mapping) else {}
+
+    measured: Dict[str, Optional[float]] = {"modelCalls": None, "outputTokens": None, "inputTokens": None}
+    sessions = sample_sessions(row)
+    if calls is not None and sessions and all(s in calls for s in sessions):
+        for name in measured:
+            values = [_number(calls[s].get(name)) for s in sessions]
+            measured[name] = sum(v for v in values if v is not None) if all(v is not None for v in values) else None
+        if not measured["modelCalls"]:
+            measured = dict.fromkeys(measured)  # no cost rows at all: unknown, not zero
     return {
-        "outputTokens": _number(usage.get("outputTokens")),
-        "inputTokens": sum(v for v in inputs if v is not None) if any(v is not None for v in inputs) else None,
+        **measured,
         "toolCalls": (
             float(sum(len(t.get("tool_trace") or ()) for t in turns if isinstance(t, Mapping))) if turns else None
         ),
@@ -81,7 +133,9 @@ def sample_efficiency(row: Mapping[str, Any]) -> Dict[str, Optional[float]]:
     }
 
 
-def case_efficiency(rows: Iterable[Mapping[str, Any]]) -> Dict[str, Dict[str, float]]:
+def case_efficiency(
+    rows: Iterable[Mapping[str, Any]], calls: Optional[Mapping[str, Mapping[str, Any]]] = None
+) -> Dict[str, Dict[str, float]]:
     """``{case_id: {metric: median over the case's samples}}``.
 
     A metric no sample of a case could report is absent for that case, so a
@@ -89,7 +143,7 @@ def case_efficiency(rows: Iterable[Mapping[str, Any]]) -> Dict[str, Dict[str, fl
     """
     values: Dict[str, Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
-        for name, value in sample_efficiency(row).items():
+        for name, value in sample_efficiency(row, calls).items():
             if value is not None:
                 values[str(row["case_id"])][name].append(value)
     return {
@@ -139,6 +193,7 @@ def compare_efficiency(
     baseline: Mapping[str, Any],
     rows: Sequence[Mapping[str, Any]],
     passed: Mapping[str, bool],
+    calls: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> List[FamilyEfficiency]:
     """Per family, each measure summed over the cases that pass in both and carry it in both.
 
@@ -147,7 +202,7 @@ def compare_efficiency(
     families come back with ``paired`` set and no metrics, which prints as
     "no baseline efficiency" rather than as no change.
     """
-    run = case_efficiency(rows)
+    run = case_efficiency(rows, calls)
     base_cases: Mapping[str, Mapping[str, Any]] = baseline.get("cases") or {}
     family_of = {str(row["case_id"]): str(row.get("family") or "") for row in rows}
 
@@ -213,12 +268,16 @@ def moved(comparisons: Iterable[FamilyEfficiency]) -> List[str]:
     return found
 
 
-def run_efficiency(rows: Sequence[Mapping[str, Any]], passed: Mapping[str, bool]) -> Dict[str, Dict[str, Any]]:
+def run_efficiency(
+    rows: Sequence[Mapping[str, Any]],
+    passed: Mapping[str, bool],
+    calls: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> Dict[str, Dict[str, Any]]:
     """The run's own numbers per family, with no baseline: ``{family: {metric: {n, sum}}}``
     over the cases the run passed. Two runs of the same model and track compare
     on these when the baseline has no efficiency yet.
     """
-    run = case_efficiency(rows)
+    run = case_efficiency(rows, calls)
     totals: Dict[str, Dict[str, Dict[str, float]]] = defaultdict(lambda: defaultdict(lambda: {"n": 0, "sum": 0.0}))
     for row in rows:
         case_id = str(row["case_id"])

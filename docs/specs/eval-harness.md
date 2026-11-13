@@ -527,7 +527,9 @@ A trend needs history, so EH-9 should land as soon as possible: every nightly ru
 
 ### 17.2 Decisions
 
-**D22 — Five measures per sample, all already on the result row.** `outputTokens`; `inputTokens` (uncached, cache-read and cache-written together); `toolCalls` over every turn; `durationMs` (every turn's Runtime duration, summed, and unknown if any turn has none); `firstTokenMs` of the first turn. A case is its median sample. Tokens, not dollars: concurrent samples share cache writes, so the same work can be billed differently between runs.
+**D22 — Six measures per sample.** `modelCalls`, `outputTokens` and `inputTokens` (uncached, cache-read and cache-written together) are summed over every model call of every session the sample ran in, from the sessions' `C#` cost rows; `toolCalls` over every turn, `durationMs` (every turn's Runtime duration, summed, and unknown if any turn has none) and `firstTokenMs` of the first turn come from the result row. A case is its median sample. Tokens, not dollars: concurrent samples share cache writes, so the same work can be billed differently between runs.
+
+**Why the tokens are not the result row's `usage`.** The stream's usage is the turn's *last* model call: the coordinator keeps it as the current context size for the badge and the compaction trigger, and does not forward Strands' turn-cumulative totals. A turn that rewrites a document through `update_artifact` and then says "done" reports the "done". Measured on dev (Sonnet 5, 2026-11-12): the draft-edit case's stream said 224 output tokens; its four cost rows said 1,017. Every case under-counted by two to five times. So `run` writes each sample session's totals to `calls.json` in the run directory once the run ends (cost rows survive the run's session cleanup), `score` fills in any session it is missing unless `--no-cost-rows`, and `baseline` reads the file. Without it the three token measures are absent, never a guess.
 
 **D23 — Only cases that pass on both sides are compared.** A wrong answer is often a short one. Pairing a failed case would report lost quality as gained efficiency, so a family's efficiency is summed over the cases that pass in the baseline and in the run and that both measured.
 
@@ -539,7 +541,7 @@ A trend needs history, so EH-9 should land as soon as possible: every nightly ru
 
 ### 17.3 Code
 
-`apis/shared/evals/efficiency.py` (pure): `sample_efficiency`, `case_efficiency`, `compare_efficiency`, `run_efficiency`, `format_efficiency_table`, `moved`. `report.build_baseline` records it; `eval_harness.py score` prints it, writes it under `efficiency` in `--json`, and passes it to `eval_ledger_row`.
+`apis/shared/evals/efficiency.py` (pure): `call_totals`, `sample_efficiency`, `case_efficiency`, `compare_efficiency`, `run_efficiency`, `format_efficiency_table`, `moved`. `report.build_baseline` records it; `eval_harness.py score` prints it, writes it under `efficiency` in `--json`, and passes it to `eval_ledger_row`.
 
 ### 17.4 Not done
 

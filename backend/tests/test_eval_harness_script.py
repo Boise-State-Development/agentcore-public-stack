@@ -562,18 +562,23 @@ def _write_measured_run(out: Path, *, output_tokens: int, duration_ms: int, fail
     out.mkdir(parents=True, exist_ok=True)
     (out / "meta.json").write_text(json.dumps({"model_id": MODEL, "k": 3, "startedAt": "t", "user_id": "u"}),
                                    encoding="utf-8")
+    calls = {}
     with (out / "results.jsonl").open("w", encoding="utf-8") as fh:
         for cid in "abcdefgh":
             for s in range(3):
                 passed = cid not in failing
+                session_id = f"eval-{cid}{s}{output_tokens}"
+                calls[session_id] = {"modelCalls": 2.0, "outputTokens": float(output_tokens), "inputTokens": 4000.0}
                 fh.write(json.dumps({
                     "case_id": f"tool_selection.{cid}", "family": "tool_selection", "sample": s,
+                    "session_id": session_id,
                     "model_id": MODEL, "passed": passed, "failures": [] if passed else ["did not call calculator"],
                     "final_message": "ok", "tool_calls": [],
-                    "usage": {"inputTokens": 4000, "outputTokens": output_tokens},
+                    "usage": {"inputTokens": 1, "outputTokens": 1},
                     "timing": [{"firstTokenMs": 800, "turnDurationMs": duration_ms}],
                     "turns": [{"tool_trace": [{"name": "calculator"}]}],
                 }) + "\n")
+    (out / "calls.json").write_text(json.dumps(calls), encoding="utf-8")
 
 
 def test_a_baseline_records_what_each_case_cost(tmp_path, golden):
@@ -584,7 +589,8 @@ def test_a_baseline_records_what_each_case_cost(tmp_path, golden):
 
     case = json.loads((baselines / eval_harness.baseline_filename(MODEL)).read_text())["cases"]["tool_selection.a"]
     assert case["efficiency"] == {
-        "outputTokens": 200.0, "inputTokens": 4000.0, "toolCalls": 1.0, "durationMs": 3000.0, "firstTokenMs": 800.0,
+        "modelCalls": 2.0, "outputTokens": 200.0, "inputTokens": 4000.0,
+        "toolCalls": 1.0, "durationMs": 3000.0, "firstTokenMs": 800.0,
     }
 
 
