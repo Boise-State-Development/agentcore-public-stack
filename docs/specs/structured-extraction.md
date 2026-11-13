@@ -883,6 +883,35 @@ PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
   is what says whether typed extraction is honest enough to put in front of a grants
   office. It is readable from PR-2, before PR-3 renders a single badge.
 
+### 14.1 Verified on dev, 2026-11-13 (1.35.0)
+
+Run in the SPA against the same synthetic two-page PDF as
+`source-provenance-verification.md` §12.1, with an eight-field set (date, currency,
+enum, number, boolean, two fields the document does not answer, list) in a skill
+created and uploaded through the API — still the only way to author one (§4,
+`field-set-authoring.md`). Haiku 5.5 as the turn model; extraction on
+`us.anthropic.claude-haiku-4-5-20251001-v1:0`.
+
+| Check | Result |
+|---|---|
+| Typed values with measured locators | Deadline `2027-03-14` (`date`), budget cap `$750,000` (`literal`), page limit `15` (`numeric`): `supported`, page 1, `measured` |
+| Fields the document does not answer | Program officer email and indirect-cost cap: `unverified` / `no_quote`, not invented. The value arrived as `""` rather than `null`; the state is honest either way |
+| The provoked case | The indirect-cost field points at a section that discusses indirect costs without a figure. The model declined to answer it, so it read `unverified`, not `supported`. This run did **not** produce a `quote_unsupported` row; §16–§17 record paraphrases caught as `quote_unsupported` in earlier dev runs |
+| Judgement and list types | Cost sharing `not required` (an enum member) and foreign lead `No`: `unassessed` / `enum_field`. Topics: `unassessed` / `non_scalar`, as §17.7 says until component-wise lists land |
+| Enforcement | `schemaEnforced: true` on both runs; the enum value was inside the declared set. The `minimum` fallback check was not run: the field-set format cannot declare one |
+| Grammar compilation | First run of the fresh set 32.7 s for the whole turn; an identical re-run 11.9 s, with identical states. About 20 s of compilation, consistent with §16.9. The next-day run was not taken |
+| Render, reload, files | The table renders under the answer; `GET /messages` replays it as `extractions`; the artifact reads back and the `.xlsx` download redirects to its object |
+| Cost | The extraction call's `C#` row is priced ($0.0050, 2,896 in / 338 out, `uncached`). Chat calls in the session kept one `toolConfigHash` and one `systemPromptHash` across both runs |
+
+**One defect found and fixed.** The extraction's `C#` row is written under
+`messageId = "extract:<toolUseId>"`, but the admin session anatomy passed the raw id
+into `SessionCallRow.message_id: Optional[int]`, so `GET /admin/costs/sessions/{id}/calls`
+returned 500 for any session that had run `document_extract` — the view §14 sends a
+reader to for the cost check. Voice's `voice:<n>` ids had the same shape. The anatomy
+now reads such an id as no message id and names its kind through
+`ledger_rollups.call_kind` (`document_extract`, `voice`), pinned by
+`tests/apis/app_api/admin/costs/test_non_turn_message_ids.py`.
+
 ## 15. Non-goals
 
 * **Cross-field validation rules (G9).** Their `cross_field_rules` sits on the

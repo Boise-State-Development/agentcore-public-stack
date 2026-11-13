@@ -454,6 +454,25 @@ PR-1 and PR-2 are slice one. PR-3 is stated as out of slice one rather than assu
   value or filename is ever emitted, so the honesty measurement carries none of the
   document. It rides `PROMPT_CACHE_OBSERVABILITY_ENABLED` like its neighbours.
 
+### 12.1 Verified on dev, 2026-11-13 (1.35.0)
+
+Run in the SPA as an ordinary user, against a synthetic two-page PDF with known
+values (an award amount and a deadline on page 1, a budget section on page 2 that
+discusses indirect costs without a number). Haiku 5.5 as the turn model.
+
+| Check | Result |
+|---|---|
+| A real value with its quote | Both claims `supported` / `literal`, page 1, `precision: "measured"` |
+| A wrong value against a real quote | `$1,000,000` against the `$750,000` passage: `quote_unsupported` / `no_match`, page 1 |
+| A value the passage never states | `10%` against the page-2 indirect-cost passage: `quote_unsupported` / `no_match`, page 2 |
+| Normalization | The text layer carries a curly apostrophe, the model's quote a straight one; located anyway |
+| Render | "Checked 2 values … 2 unconfirmed", opened by itself; each row "not in the quoted passage on page N" |
+| Reload | `GET /messages` replays both calls as `sourceProvenance`; the page re-renders them |
+| Cost | `systemPromptHash` and `toolConfigHash` identical across all four calls; 0 partial misses, $0 wasted |
+
+Every check in §12 above passed. The `method` distribution and the EMF readout
+were not read in this run.
+
 ## 13. Non-goals
 
 * Typed structured extraction (G1). This is sequenced first on purpose: it improves
