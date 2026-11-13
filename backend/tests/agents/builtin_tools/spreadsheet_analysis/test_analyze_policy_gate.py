@@ -157,6 +157,19 @@ async def test_another_import_lists_what_is_allowed() -> None:
         assert root in text
 
 
+def test_timing_a_loop_with_time_passes_the_policy() -> None:
+    """A bootstrap benchmark timed with ``time.time()`` was refused outright."""
+    from apis.shared.security import validate_diagram_code
+
+    validate_diagram_code(
+        "import pandas as pd, random, time\n"
+        "df = pd.read_csv('benchmark-seed.csv', low_memory=False)\n"
+        "start = time.time()\n"
+        "means = [sum(random.choices(df['value'].tolist(), k=10)) / 10 for _ in range(100)]\n"
+        "print(f'Elapsed: {time.time() - start:.2f}s', time.perf_counter())\n"
+    )
+
+
 @pytest.mark.asyncio
 async def test_a_syntax_error_names_the_line() -> None:
     text = await _rejection("import pandas as pd\ndf = pd.read_csv('x.csv'\n")
@@ -181,8 +194,8 @@ def test_the_spec_names_exactly_the_policy_allowlist_and_not_openpyxl() -> None:
 
 #: The spec sits in the cacheable ``toolConfig``. A change here is a deliberate
 #: prefix rewrite at deploy: update the pin with it and state the token delta in
-#: the PR. Last changed when the docstring was aligned with the import policy.
-SPEC_DIGEST = "d33b56b47d50dcd6db25ca12033470c673055ca9181756f4e40bb0a615fcb674"
+#: the PR. Last changed when ``time`` joined the import allowlist.
+SPEC_DIGEST = "bc8cd6a5877645b5a086a8298cb64cc0f10c37edd9dfc5d82f2868e3c8d3bb6b"
 
 
 def test_the_spec_is_pinned_and_constant_per_deployment() -> None:

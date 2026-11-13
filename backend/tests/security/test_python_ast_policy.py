@@ -75,6 +75,8 @@ def test_forbidden_imports_rejected(src: str) -> None:
         "import statistics",
         "from collections import Counter",
         "import itertools",
+        "import time",
+        "from time import perf_counter",
     ],
 )
 def test_allowed_imports_pass(src: str) -> None:
