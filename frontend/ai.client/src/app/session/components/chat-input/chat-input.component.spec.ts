@@ -658,7 +658,7 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
 
   describe('when the turn ends in an error', () => {
     // A turn that fails slowly (a model read timeout: minutes of silence under
-    // "Still working…") is exactly when a user types "is this working?" or the
+    // the loader's silence hint) is exactly when a user types "is this working?" or the
     // next request. Sending that the instant the error lands started a new turn
     // under the failed one's "Please try again" — and the server re-sends the
     // failed turn's attachments with the first turn after a failure, so the
