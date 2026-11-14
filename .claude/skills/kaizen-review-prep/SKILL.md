@@ -77,7 +77,7 @@ check before decisions.]
      latest strands-release-review readout.
      - Pin lag 0: one line, "On X, the latest python release. Nothing to bump."
      - Lag > 0 with a readout: the readout's Verdict, its gates (each with the
-       file:line that makes it reachable for us), and its Adopt / Subtract rows.
+       file:line that makes it reachable for us), its Adopt / Subtract rows, and its Unlocks.
        Recommend Ship this week unless a gate is unresolved AND reachable on a
        path we run. Name that gate and its owner. A gate the readout marks
        unreachable (a config we don't pass, a model we don't curate) is a Guard
@@ -87,12 +87,12 @@ check before decisions.]
        release notes.
      - A bump PR already open: its status, and which readout checklist items are
        still unticked.
-     Subtract rows become their own proposals only if they rank; the bump
+     Subtract and Unlocks rows become their own proposals only if they rank; the bump
      itself is decided here. -->
 
 - **Pin → latest**: X → Y (N releases / N days) — readout: `scoping/strands-Y-readout.md`
 - **Gates**: [gate — file:line — reachable? — owner] or "none"
-- **Adopt / Subtract**: [one line each]
+- **Adopt / Subtract / Unlocks**: [one line each]
 - **Recommendation**: Ship the bump this week / Hold for [gate] until [date] — [why]
 
 ## Proposals — ranked

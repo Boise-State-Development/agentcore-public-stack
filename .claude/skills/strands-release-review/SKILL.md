@@ -1,6 +1,6 @@
 ---
 name: strands-release-review
-description: Review every `strands-agents` Python release since our pin and say what we can adopt, not only what might break. Reads the release notes (tag `python/vX.Y.Z` on `strands-agents/harness-sdk`), diffs the two wheels from PyPI, greps our import surface against what changed (private modules included), diffs `model_info.json` for every curated model id, reads docstrings for behaviour that only changes when a config is passed, and gives each change one verdict (Adopt / Gate / Guard / Subtract / Inert) with the file it touches and a prompt-cache impact line. Ends with what the bump PR must carry. Writes `docs/kaizen/scoping/strands-<new>-readout.md`. Use when the user says "strands release review", "review the strands bump", "what's in strands 1.66", "should we bump strands", "strands readout", or when `kaizen-research` finds `strands-agents` pin lag above 0.
+description: Review every `strands-agents` Python release since our pin and say what we can adopt, not only what might break. Reads the release notes (tag `python/vX.Y.Z` on `strands-agents/harness-sdk`), diffs the two wheels from PyPI, greps our import surface against what changed (private modules included), diffs `model_info.json` for every curated model id, reads docstrings for behaviour that only changes when a config is passed, and gives each change one verdict (Adopt / Gate / Guard / Subtract / Inert) with the file it touches and a prompt-cache impact line. A separate capability-unlock lens lists what the release lets us offer that's new, and what that would cost in speed, quality and cost. Ends with what the bump PR must carry. Writes `docs/kaizen/scoping/strands-<new>-readout.md`. Use when the user says "strands release review", "review the strands bump", "what's in strands 1.66", "should we bump strands", "strands readout", or when `kaizen-research` finds `strands-agents` pin lag above 0.
 ---
 
 # Strands release review
@@ -84,6 +84,12 @@ Read the docstrings of every changed public config (`CacheConfig`, `BedrockConfi
 
 Every verdict names a file and line in our tree. If you can't name one, the verdict is Inert, and you say why. Don't write Gate to mean "be careful". A Gate is a specific change, sized, with its test. A Subtract is usually a follow-up PR, not part of the bump. It goes to `docs/kaizen/review-queue.md` through the review, not into the bump.
 
+**Capability unlock: a second lens, scored apart from the verdict.** The verdict asks what a change does to what we already run. This lens asks what it lets us *offer* that we couldn't easily build before: a new primitive (vended subagent/swarm/graph tools, the public middleware, `DecisionModel`, HITL modes), a new protocol surface (MCP tasks, `_meta`), or a new storage or context mechanism. It is the "capability unlock" lens (b) from standing watch 2b in `docs/kaizen/standing-watches.md`, applied to the whole release. Most unlocks are verdict-Inert, because nothing we run calls them yet, so without this lens they would disappear into the Inert rows. For each one, name:
+
+- **what it unlocks:** the product capability or UX, and the surface it would land on (a tool, an SSE event, a spec section such as handoffs §4 or patterns §4.2);
+- **what it costs speed, quality and cost:** an unlock must cost those three nothing, or say what it costs (a model call per tool round, a resource that bills, latency before the first token). "Unknown" is an answer, and it makes the next step a measurement;
+- **the next step:** a scoping item, a spec-sync row, or "watch". Never part of the bump.
+
 **Prompt-cache impact line (required, one per readout).** List the request bytes that change at deploy, and for which model families. Our cached prefix is exact-match, so any bytes the bump changes get re-written once at the cache-write premium, in every live session. Answer per family (Bedrock Claude, Bedrock Nova/others, OpenAI Responses on bedrock-runtime, Mantle, Gemini). The proof for Bedrock Claude is `tests/agents/main_agent/core/test_bedrock_golden_requests.py`: run it on the new pin. A pass means byte-identical requests. A failure means a real prefix rewrite: price it and say so in the PR. For families the golden test doesn't cover, reason from the diff and say it's reasoned, not measured.
 
 ### 6. What the bump PR must carry
@@ -118,6 +124,11 @@ The version is written with hyphens: `strands-1-65-0-readout.md`. That file is t
 |---|---|---|---|---|
 | 1 | #NNNN short title | Adopt | `path/file.py:NN` | … |
 
+## Unlocks
+| Upstream | Unlocks | Lands on | Costs speed / quality / cost | Next step |
+|---|---|---|---|---|
+| #NNNN … | … | `path` or spec § | none, or what it costs | scoping / spec sync / watch |
+
 ## model_info.json (curated ids)
 [The helper's output, trimmed to changed ids, with a "read by" note per field.]
 
@@ -133,7 +144,7 @@ Then update memory: add the findings that will matter on the *next* bump to "Str
 ## Rules
 
 - **The wheel is the source of truth.** A release note with no matching Python diff is Inert. A Python diff with no note still gets a verdict.
-- **Adoption first.** For every change, ask what it lets us delete or improve before asking what it breaks. A readout with no Adopt or Subtract row across several releases is a finding. Say so in the Verdict.
+- **Adoption first.** For every change, ask what it lets us delete or improve before asking what it breaks. A readout with no Adopt or Subtract row across several releases is a finding. Say so in the Verdict. The same goes for an empty Unlocks table on a release that shipped new primitives: an unlock filed as Inert is a lost unlock.
 - **Gates must be needed.** Before calling something a blocking gate, show the config or code path that makes it reachable for us. A gate on a path we don't run delays the bump and its fixes.
 - **Measure, don't guess,** on the turn path. A per-call wrapper (`ModelProxy`) or `format_request` change gets the A/B numbers in the bump PR, or the readout says "not benchmarked" and the bump PR owes them. See CLAUDE.md's TTFT budget.
 - **No source edits here.** This skill writes the readout (and its PR). The bump, the gates and the guards ship in the bump PR.

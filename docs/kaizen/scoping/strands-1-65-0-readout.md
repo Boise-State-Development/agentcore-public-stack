@@ -5,7 +5,7 @@
 
 ## Verdict
 
-**Bump now, with three small gates.** There is nothing in either release that the 1.64.0 hold was waiting on. The GPT-5.6 message checkpoints (#5418) turn on only when `cache_config` is passed to `OpenAIResponsesModel`, and none of our OpenAI-family configs carry one (`model_config.py:705-770`). That change gets a guard test, not a measurement. The one item that changes what our main path does every call is the new `ModelProxy` wrapper. It's a no-op for us, but it sits on the TTFT path, so the bump PR owes the A/B numbers. The adoptable wins are the reasoning-block fix (#5708), stricter interrupt restore (#5654), and Nova tool-result status and overflow detection.
+**Bump now, with three small gates.** There is nothing in either release that the 1.64.0 hold was waiting on. The GPT-5.6 message checkpoints (#5418) turn on only when `cache_config` is passed to `OpenAIResponsesModel`, and none of our OpenAI-family configs carry one (`model_config.py:705-770`). That change gets a guard test, not a measurement. The one item that changes what our main path does every call is the new `ModelProxy` wrapper. It's a no-op for us, but it sits on the TTFT path, so the bump PR owes the A/B numbers. The adoptable wins are the reasoning-block fix (#5708), stricter interrupt restore (#5654), and Nova tool-result status and overflow detection. Unlocks worth scoping: async child-agent builders (#6093), for consults, and turn-scoped `injected` notes (#5977), which stop paying for status notes on every later turn.
 
 ## Prompt-cache impact
 
@@ -38,6 +38,18 @@
 | 17 | `_openai_bedrock._OPENAI_PATH_MODEL_PREFIXES` lists `google.gemma-4-` (since 1.51.0, still on 1.65.0) | **Subtract** (carried) | `apis/shared/models/mantle.py:69` (`_ensure_gemma4_openai_v1_routing`) | Its own docstring calls it "a no-op on the pinned SDK". Deleting it retires one of our private-module imports. Small separate PR. |
 
 Release-note items with no Python diff (TypeScript, CLI or site only), dropped: #6055 (MCP refresh keeps other tools), #5749, #5751, #5748, #5732, #5325, #5569, #6016, #5972, #5946, #3988, #6022, #5924.
+
+## Unlocks
+
+Scored apart from the verdicts above. Every one of these is verdict-Inert today, because nothing we run calls it yet.
+
+| Upstream | Unlocks | Lands on | Costs speed / quality / cost | Next step |
+|---|---|---|---|---|
+| #6093 async agent builders; content-filtered and refused children reported as tool errors (`multiagent/spec.py`) | Child agents built through our own async turn phases (`resolve_turn_agent`, `_build_main_agent`) rather than a sync copy, and a child's refusal reaching the parent as a tool error it can act on | handoffs spec Phase 1 (consults); patterns §4.2 (what Strands handles vs. ours) | none until used; a consult's own cost is the consult's | spec-sync row for watch 2b (patterns §4.2: async builders are now upstream) |
+| #5975 `HumanInTheLoop("auto")` | Approval decided per call by the SDK's risk strategy, instead of our per-tool `needsApproval` flag (`apis/shared/tool_approval/`) | the `tool_approval_required` flow | **costs speed and money:** a decision on every tool call, before the tool runs; quality unknown against our explicit flags | watch; scope only if per-tool flags become the friction, and measure the decision's latency per tool round first |
+| #5977 `injected` blocks with `dynamic_trailing_blocks` | Turn-scoped notes that the model reads on their turn and that later requests drop, instead of persisting in history | per-turn notes in the user message, e.g. `<project_files_status>` (`apis/shared/assistants/kb_readiness.py:109`) | cost: saves the note's tokens on every later turn, and the cache point sits ahead of it, so it's cache-safe by design; quality: the model loses the note after its turn, which suits status notes but not facts it must keep | scoping item: which of our per-turn notes are status (inject) vs. fact (persist) |
+| #5552 (1.64.0) `S3VectorSearchStrategy` for `S3Storage` | Natural-language search over offloaded tool results, in place of the default keyword scan | `ContextOffloader` storage (`agents/main_agent/core/tool_result_offload.py:233`) | **costs money and resources:** an S3 Vectors index plus an embedding per offload; speed off the first-token path | watch; scope only if offload-retrieval misses show up in evals |
+| #5840 / #5962 `Model.summarize()` | One provider-neutral summarize call that shares the caller's prompt cache | compaction summary, handoff brief | none on Bedrock (no server-side summary) | already the row 8 Subtract scoping item |
 
 ## model_info.json (curated ids)
 
