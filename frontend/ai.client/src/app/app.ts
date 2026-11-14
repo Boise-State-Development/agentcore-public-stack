@@ -32,7 +32,7 @@ import { shortcutAria, withShortcut } from './components/shortcuts/shortcuts';
   ],
   templateUrl: './app.html',
   styleUrl: './app.css',
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     '(document:keydown)': 'onDocumentKeydown($event)',
   },

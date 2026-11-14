@@ -60,7 +60,7 @@ import { EditSidebarDialogComponent } from './components/edit-sidebar-dialog.com
     }),
   ],
   templateUrl: './sidenav.html',
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './sidenav.css',
 })
 export class Sidenav {
