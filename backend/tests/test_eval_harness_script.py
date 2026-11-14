@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -350,6 +351,38 @@ def test_cleaned_up_staged_samples_are_forgotten_so_a_resume_stages_them_again(t
     eval_harness._forget_staged(out, unrun)
     remaining = eval_harness.read_rows(out / eval_harness.STAGED_FILE)
     assert [e["session_id"] for e in remaining] == ["eval-ran"]
+
+
+def test_a_retried_sample_s_first_session_is_not_unrun_and_cleanup_deletes_it(tmp_path, monkeypatch):
+    out = tmp_path / "run"
+    out.mkdir()
+    staged = [
+        {"case_id": "document_qa.a", "sample": 0, "session_id": "eval-first", "upload_ids": ["u1"], "documents": ["manual"]},
+        {"case_id": "document_qa.a", "sample": 0, "session_id": "eval-retry", "upload_ids": ["u2"], "documents": ["manual"]},
+    ]
+    (out / eval_harness.STAGED_FILE).write_text("".join(json.dumps(e) + "\n" for e in staged), encoding="utf-8")
+    row = {"session_id": "eval-retry", "upload_ids": ["u2"],
+           "retried": [{"session_id": "eval-first", "upload_ids": ["u1"], "error_code": "provider_unavailable"}]}
+    assert eval_harness._unrun_staged(out, [row]) == []
+
+    import apis.app_api.sessions.services.session_service as session_service
+    import apis.shared.evals.fixtures as fixtures
+
+    deleted = {"sessions": [], "uploads": []}
+
+    class FakeService:
+        async def delete_session(self, *, user_id, session_id):
+            deleted["sessions"].append(session_id)
+            return True
+
+    async def fake_delete_upload(user_id, upload_id):
+        deleted["uploads"].append(upload_id)
+        return True
+
+    monkeypatch.setattr(session_service, "SessionService", FakeService)
+    monkeypatch.setattr(fixtures, "delete_upload", fake_delete_upload)
+    assert asyncio.run(eval_harness._cleanup([row], "user-1")) == (2, 2)
+    assert deleted == {"sessions": ["eval-retry", "eval-first"], "uploads": ["u2", "u1"]}
 
 
 class TestOrphanSweep:
