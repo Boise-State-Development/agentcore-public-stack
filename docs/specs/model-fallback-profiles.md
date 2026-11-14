@@ -326,12 +326,13 @@ Then every turn on the fallback pays the Geo premium. For a typical Opus 5.5 tur
 (60k read, 3k written, 1.5k out) that is $0.057 Global vs $0.063 Geo, **+$0.006
 a turn**.
 
-**Comparison: today's manual recovery is not free either.** "Try with another
-model" from the outage branch switches the conversation to (say) Sonnet 5
-Global, which re-writes the same prefix at $2.50/MTok: $0.15 at 60k. The
-fallback costs about twice that re-write, but it keeps the model the user chose,
-and it spares the user one or more failed attempts of 30–70 s each plus a manual
-resend.
+**Comparison: today's manual recovery is not free either.** The outage
+branch's **Try again** resends on the same model, which fails the same way
+while the profile is down. The user's remaining way out is to pick another model
+in the composer's picker, say Sonnet 5 Global, and resend. That switch re-writes
+the same prefix at $2.50/MTok: $0.15 at 60k. The fallback costs about twice that
+re-write, but it keeps the model the user chose, and it spares the user one or
+more failed attempts of 30–70 s each, a manual model switch and a resend.
 
 ### 5.2 Should later turns stay on the fallback? Yes, priced
 
@@ -425,8 +426,9 @@ readers subtract it, the same discipline as `agentSwitched` / `modelSwitched` /
 - **Context window.** The same model has the same window, so compaction
   thresholds stay true. Rule 6 is a belt for a hand-edited row.
 - **Quality.** A cheaper model quietly answering is a product decision, not
-  routing. When the model itself is down, the outage branch already offers the
-  user "Try with *another model*", and the user makes that choice.
+  routing. When the model itself is down, the choice stays with the user, who
+  can pick another model in the composer's picker. The outage reply names the
+  model and the provider, so the user knows what to switch away from.
 
 Cross-model fallback is phase 2 at the earliest, and only with a measured replay
 test per pair.
@@ -540,11 +542,15 @@ warning.
   and no new read.
 - **Both routes failed:** the outage branch's `provider_unavailable`
   `stream_error` still names the **requested** model (the coordinator reads
-  `main_agent_wrapper.model_config.model_id`, still the primary) and its
-  Try again / Try with another model buttons apply. `metadata` adds
-  `fallback_model_id` and the copy says the backup route failed too. If that
-  branch has not merged when PR-4 lands, PR-4 adds only the event and the
-  caption, and the both-failed copy follows the branch.
+  `main_agent_wrapper.model_config.model_id`, still the primary), and its
+  "AWS service issue" label and **Try again** button apply unchanged. `metadata`
+  adds `fallback_model_id`, and the copy says the backup route failed too. Try
+  again resends on the same requested model through the same wrapper, so the
+  breaker decides the route: straight to the fallback while it is open, and the
+  primary again once it has closed. Nothing in the SPA offers a different model.
+  That stays the user's choice in the picker (§6). If that branch has not merged
+  when PR-4 lands, PR-4 adds only the event and the caption, and the both-failed
+  copy follows the branch.
 - **The terminal client** logs the unknown event once per turn and is otherwise
   unaffected. The CLAUDE.md SSE table gains the row.
 
