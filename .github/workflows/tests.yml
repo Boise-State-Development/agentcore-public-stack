@@ -1,4 +1,4 @@
-# Reusable test gates (pytest / vitest / jest / xcodebuild). Callers pick suites via the
+# Reusable test gates (pytest / vitest / jest / xcodebuild / the TUI build). Callers pick suites via the
 # run_* inputs; unselected jobs are skipped.
 
 name: Tests
@@ -48,6 +48,11 @@ on:
         type: boolean
       run_scripts:
         description: 'Run operational script unit suites (restore-data; stubbed boto3, no AWS)'
+        required: false
+        default: false
+        type: boolean
+      run_tui:
+        description: 'Run the terminal client checks (scripts/tui/build.sh --check: pytest, ruff, black, mypy, wheel build + smoke install)'
         required: false
         default: false
         type: boolean
@@ -351,3 +356,32 @@ jobs:
       - name: Run restore-data pytest
         working-directory: scripts/restore-data
         run: uv run --frozen pytest test_restore.py -v
+
+  # The terminal client (tui/), checked exactly as release.yml's build-tui job
+  # checks it: scripts/tui/build.sh --check runs pytest, ruff, black --check
+  # and mypy, then builds the wheel and smoke-installs it. Until this job
+  # existed nothing ran that script before a release, so 1.36.0 merged with a
+  # black drift in tui/tests and failed its Release workflow on main, skipping
+  # the tag and the release (1.36.1 shipped it). PR gate only, like the load
+  # and scripts suites: no deploy ships the TUI.
+  #
+  # setup-uv is left on its default uv version, as in release.yml, so this
+  # gate runs the same toolchain the release does rather than the 0.7.12 the
+  # other jobs pin.
+  test-tui:
+    if: ${{ inputs.run_tui }}
+    name: Test terminal client (aps-tui)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: 'tui/uv.lock'
+      - name: Test, lint, type-check and build
+        run: bash scripts/tui/build.sh --check
