@@ -22,7 +22,7 @@ from typing import Any, Dict, Iterator
 from pydantic import ValidationError
 import pytest
 
-from apis.shared.extraction.field_sets import parse_field_set
+from apis.shared.extraction.field_sets import MAX_FIELDS, parse_field_set
 from apis.shared.extraction.schema import (
     build_model,
     field_set_fingerprint,
@@ -324,6 +324,64 @@ class TestValidationOnReturn:
             {f.name: {"value": None, "quote": None} for f in field_set.fields}
         )
         assert instance.sponsor.value is None
+
+    def test_a_null_quote_still_validates_as_empty(self, field_set) -> None:
+        """The schema asks for a string, but a reply sent without it enforced
+        (the unenforced fallback) can carry ``null``. That must not refuse the
+        whole row over an absent quote."""
+        model = model_for_field_set(field_set)
+        instance = model.model_validate(
+            {f.name: {"value": None, "quote": None} for f in field_set.fields}
+        )
+
+        assert instance.sponsor.quote == ""
+
+
+def _union_parameters(schema: Dict[str, Any]) -> int:
+    """Parameters Bedrock counts against its 16-union limit (§16.9): any node
+    whose ``type`` is an array, or that carries ``anyOf`` / ``oneOf``. An enum
+    that lists ``null`` among its values is not one."""
+    return sum(
+        1
+        for node in _walk(schema)
+        if isinstance(node.get("type"), list) or "anyOf" in node or "oneOf" in node
+    )
+
+
+class TestTheUnionBudget:
+    """Bedrock refuses a constrained schema with more than 16 union-typed
+    parameters, in under a second, whatever the field count (§16.9).
+    ``MAX_FIELDS = 14`` is only true while one field costs at most one union.
+    A nullable quote made it two, so a dev pilot's 14-field set was refused at
+    26 unions while the parser, the editor and the spec all said 14 was fine."""
+
+    UNION_LIMIT = 16
+
+    def test_the_quote_is_a_plain_string(self, field_set) -> None:
+        sent = sent_schema(field_set)
+        for name in (f.name for f in field_set.fields):
+            assert sent["properties"][name]["properties"]["quote"]["type"] == "string"
+
+    @pytest.mark.parametrize("field_type", ["string", "currency", "number", "date", "boolean", "list"])
+    def test_a_full_set_of_the_costliest_type_fits(self, field_type) -> None:
+        rows = "\n".join(
+            f"| f{i} | F{i} | {field_type} | field {i} | | yes |" for i in range(MAX_FIELDS)
+        )
+        full = parse_field_set(
+            "| name | title | type | find | enum | optional |\n|---|---|---|---|---|---|\n" + rows,
+            name="full",
+        )
+
+        assert _union_parameters(sent_schema(full)) <= self.UNION_LIMIT
+
+    def test_enum_fields_cost_nothing(self) -> None:
+        only_enums = parse_field_set(
+            "| name | type | find | enum |\n|---|---|---|---|\n"
+            + "\n".join(f"| e{i} | enum | choice {i} | a, b |" for i in range(MAX_FIELDS)),
+            name="enums",
+        )
+
+        assert _union_parameters(sent_schema(only_enums)) == 0
 
 
 class TestTheSchemaBedrockActuallyReceives:

@@ -106,7 +106,7 @@ uv run aps-tui
 |---|---|---|
 | Windows | Windows Terminal, or PowerShell 7+ | The legacy `conhost.exe` console degrades colour and key handling. WSL works fine. |
 | macOS | Ghostty, iTerm2, WezTerm, or Terminal.app | `shift+enter` for newline needs Ghostty/iTerm2/WezTerm/Kitty. |
-| Linux | Any modern emulator | Headless hosts: see the keyring note in [Troubleshooting](#troubleshooting). |
+| Linux | Any modern emulator | Headless hosts and containers work as-is: see [Where credentials are stored](#where-credentials-are-stored). |
 
 ## First run
 
@@ -117,8 +117,7 @@ result is stored exactly where `aps-tui login` would store it, so the two
 are interchangeable, and the client restarts into chat. Esc backs out; the
 same setup appears again next launch until a credential exists.
 
-The shell commands below do the same thing without the screen, for scripts
-and for a terminal with no keyring.
+The shell commands below do the same thing without the screen, for scripts.
 
 There are two ways to authenticate. Which one you use depends on what your
 deployment has enabled.
@@ -164,7 +163,7 @@ Two consequences of how this works, both deliberate:
   matches redirect URIs byte-for-byte and does not honour RFC 8252's rule that
   loopback ports be treated as variable.
 
-The session is stored in the OS keyring and stays alive as long as you keep
+The session is stored [like every credential](#where-credentials-are-stored) and stays alive as long as you keep
 using it — the server slides its expiry on each request, exactly as it does for
 a browser tab. When it does lapse, sign in again; there is no refresh token to
 rotate.
@@ -199,6 +198,34 @@ aps-tui logout     # clear stored credentials for this deployment
 
 The base URL is the app-api root. On a CloudFront deployment that usually ends
 in `/api` — the same origin the SPA calls.
+
+### Where credentials are stored
+
+In the OS keyring when there is one: macOS Keychain, Windows Credential
+Manager, or a Secret Service such as GNOME Keyring or KWallet on a Linux
+desktop.
+
+Containers, VMs and SSH-only Linux boxes usually have none. There `aps-tui`
+keeps credentials in its own encrypted file instead,
+`~/.local/share/aps-tui/credentials.enc`, protected by a passphrase you choose
+the first time you sign in. Nothing needs installing. The passphrase is not
+stored anywhere, so every launch asks for it once:
+
+```
+$ aps-tui login --sso --base-url https://your-host/api
+No OS keyring was found on this machine, so aps-tui will keep your
+credentials in an encrypted file: /home/you/.local/share/aps-tui/credentials.enc
+Choose a passphrase for it. You will be asked for it each time aps-tui starts,
+and it is not saved anywhere, so there is no way to recover it.
+
+New passphrase:
+Repeat it:
+```
+
+If you forget it, delete the file and sign in again. `aps-tui status` shows
+which store is in use. To choose one yourself, set `credential_store` in the
+config file (or `AGENTCORE_CREDENTIAL_STORE`) to `keyring`, `file`, or the
+default `auto`.
 
 ## Commands
 
@@ -272,9 +299,9 @@ quitting can't detach you from the container instead. Or set it once in
 Settings resolve in this order, highest priority first:
 
 1. CLI flags (`--base-url`, `--model`)
-2. Environment variables — `AGENTCORE_BASE_URL`, `AGENTCORE_API_KEY`, `AGENTCORE_MODEL_ID`
+2. Environment variables — `AGENTCORE_BASE_URL`, `AGENTCORE_API_KEY`, `AGENTCORE_MODEL_ID`, `AGENTCORE_CREDENTIAL_STORE`
 3. The config file
-4. The OS keyring (API key only)
+4. The credential store (API key only)
 5. Built-in defaults
 
 Config file location:
@@ -306,6 +333,10 @@ timeout_seconds = 300
 # Startup banner. Shown once per installed version, then not again until you
 # upgrade. Set to false to never show it; `--banner` replays it on demand.
 banner = true
+
+# Where credentials live: "auto" (the OS keyring if there is one, otherwise an
+# encrypted file), "keyring" or "file".
+credential_store = "auto"
 ```
 
 `system_prompt` applies in API-key mode only (`/chat/api-converse`). A signed-in
@@ -313,8 +344,7 @@ session (`aps-tui login`) never sends it: the server ignores a client prompt on
 `/chat/stream`, so your conversations keep the platform prompt and any
 instructions your administrator set on your role.
 
-`api_key` in this file is honoured for environments with no keyring, but the
-client warns on startup because it is plain text on disk. `aps-tui login`
+`api_key` in this file is still honoured, but the client warns on startup because it is plain text on disk. `aps-tui login`
 never writes it there.
 
 ### Projects
@@ -433,9 +463,14 @@ or ask an administrator to grant your role access.
 **"Rate limit or quota exceeded" (429).** The endpoint allows 60 requests per
 minute per key. This is also what an exhausted cost quota looks like.
 
-**No keyring on this host.** Headless Linux boxes, containers, and CI often have
-no Secret Service. The client degrades rather than crashing — `aps-tui
-status` reports the reason. Use `AGENTCORE_API_KEY` there instead.
+**No keyring on this host.** Nothing to fix: credentials go to an encrypted
+file instead (see [Where credentials are stored](#where-credentials-are-stored)).
+Without a terminal to type the passphrase into, as in CI, use
+`AGENTCORE_API_KEY`, which needs no store.
+
+**"That passphrase does not open the credential file."** Three wrong attempts
+end the run. A forgotten passphrase cannot be recovered: delete
+`~/.local/share/aps-tui/credentials.enc` and sign in again.
 
 **A long answer looks like it stopped mid-sentence.** Check the log: if
 `stream end ... text_chars=N` and `turn rendered chars=N` agree, the text all
@@ -633,9 +668,10 @@ tui/
 ├── pyproject.toml               # deps, pins, console script
 └── src/aps_tui/
     ├── cli.py                   # argparse entrypoint: chat, login, logout, status
-    ├── config.py                # config file + env + keyring resolution
+    ├── config.py                # config file + env + credential-store resolution
     ├── credentials.py           # which credential is held, and what it can reach
-    ├── keyring_store.py         # OS keyring access + the app-identity constant
+    ├── keyring_store.py         # credential access (OS keyring or encrypted file) + app identity
+    ├── credential_file.py       # the passphrase-encrypted store for hosts with no keyring
     ├── state.py                 # local bookkeeping the client writes (banner version)
     ├── conversation.py          # domain: Message + ConversationStore
     ├── turn.py                  # one in-flight turn, behind a TurnSink protocol

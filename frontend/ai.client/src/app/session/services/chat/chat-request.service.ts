@@ -143,6 +143,7 @@ export class ChatRequestService implements OnDestroy {
     mentionAgentId?: string,
     invokedSkillIds?: string[],
     folders?: FolderAttachmentData[],
+    pastedChars?: number,
   ): Promise<void> {
     // Ensure conversation exists and get its ID
     // Update URL to reflect current conversation
@@ -165,6 +166,7 @@ export class ChatRequestService implements OnDestroy {
     // immediately, before the stream starts.
     this.chatStateService.setLastTurnContinuable(sessionId, false);
     this.chatStateService.setLastTurnInterrupted(sessionId, false);
+    this.chatStateService.setLastTurnProviderOutage(sessionId, null);
 
     // We're about to navigate to this session; point the viewed-session
     // facades at it eagerly so the composer's loading state flips before
@@ -248,6 +250,10 @@ export class ChatRequestService implements OnDestroy {
         (folders ?? []).flatMap((folder) => (folder.folderAttachId ? [folder.folderAttachId] : [])),
       );
       if (cards.attach.length) requestObject['deliveries'] = cards.attach;
+      // How much of the message was pasted rather than typed: a count only, for
+      // the turn's cost row (docs/one-pagers/idle-return-context.md). Omitted
+      // when nothing was pasted, so a typed turn's payload is unchanged.
+      if (pastedChars && pastedChars > 0) requestObject['pasted_chars'] = pastedChars;
       this.turnTiming.describe(sessionId, {
         // The selected model even when the request omits it as the default.
         modelId: this.modelService.getSelectedModel()?.modelId ?? null,
@@ -276,6 +282,7 @@ export class ChatRequestService implements OnDestroy {
             // Every argument of the original send, or a retry quietly drops
             // what this one carried (dev, 2026-10-14: a folder's manifest).
             folders,
+            pastedChars,
           ),
         );
       }
@@ -530,6 +537,7 @@ export class ChatRequestService implements OnDestroy {
     // interrupted state (a Continue resumes the interrupted partial too).
     this.chatStateService.setLastTurnContinuable(sessionId, false);
     this.chatStateService.setLastTurnInterrupted(sessionId, false);
+    this.chatStateService.setLastTurnProviderOutage(sessionId, null);
 
     // Continuation streaming: pins the existing messages (history +
     // truncated partial + error bubble) as a stable prefix and appends the

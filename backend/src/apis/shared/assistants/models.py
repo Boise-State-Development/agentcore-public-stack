@@ -330,6 +330,23 @@ class AgentVersion(BaseModel):
             "field existed reads as ``balanced``, which is what every Agent ran then."
         ),
     )
+    voice_enabled: bool = Field(
+        False,
+        alias="voiceEnabled",
+        description=(
+            "Whether people can talk to the Agent in voice mode (#625), as reviewed. A "
+            "version cut before the field existed reads as ``False``: voice did not run "
+            "Agents then, so turning it on for a published Agent goes through review."
+        ),
+    )
+    voice_instructions_only: bool = Field(
+        True,
+        alias="voiceInstructionsOnly",
+        description=(
+            "In voice mode, use the Agent's instructions without the built-in voice "
+            "guidelines (#625), as reviewed."
+        ),
+    )
     category: Optional[str] = Field(
         None, description="Category id the reviewer approved this into; absent when the Agent carried no listing"
     )
@@ -428,6 +445,18 @@ class Assistant(BaseModel):
         description="How strictly answers stay within the knowledge base (#112)",
     )
 
+    # Voice mode (#625). Off on every existing row (no backfill): an author opts an Agent
+    # in. ``voice_instructions_only`` leaves out the built-in voice guidelines, which can
+    # fight a role-play persona, so it defaults on.
+    voice_enabled: bool = Field(
+        False, alias="voiceEnabled", description="Whether people can talk to this Agent in voice mode (#625)"
+    )
+    voice_instructions_only: bool = Field(
+        True,
+        alias="voiceInstructionsOnly",
+        description="In voice mode, use only the Agent's instructions, without the built-in voice guidelines (#625)",
+    )
+
     # Agent Marketplace Phase 1: additive, optional, absent on every existing row. There
     # is no backfill — an absent ``listing`` IS the D3 default and means "never submitted".
     tagline: Optional[str] = Field(
@@ -483,6 +512,10 @@ class CreateAssistantRequest(BaseModel):
     response_strictness: ResponseStrictness = Field(
         "balanced", alias="responseStrictness", description="Knowledge-base grounding mode (#112)"
     )
+    voice_enabled: bool = Field(False, alias="voiceEnabled", description="Available in voice mode (#625)")
+    voice_instructions_only: bool = Field(
+        True, alias="voiceInstructionsOnly", description="Voice uses only the Agent's instructions (#625)"
+    )
 
 
 class UpdateAssistantRequest(BaseModel):
@@ -512,6 +545,12 @@ class UpdateAssistantRequest(BaseModel):
     )
     response_strictness: Optional[ResponseStrictness] = Field(
         None, alias="responseStrictness", description="Knowledge-base grounding mode (#112); None = unchanged"
+    )
+    voice_enabled: Optional[bool] = Field(
+        None, alias="voiceEnabled", description="Available in voice mode (#625); None = unchanged"
+    )
+    voice_instructions_only: Optional[bool] = Field(
+        None, alias="voiceInstructionsOnly", description="Voice uses only the Agent's instructions (#625); None = unchanged"
     )
 
 
@@ -544,6 +583,10 @@ class AssistantResponse(BaseModel):
     )
     response_strictness: ResponseStrictness = Field(
         "balanced", alias="responseStrictness", description="Knowledge-base grounding mode (#112)"
+    )
+    voice_enabled: bool = Field(False, alias="voiceEnabled", description="Available in voice mode (#625)")
+    voice_instructions_only: bool = Field(
+        True, alias="voiceInstructionsOnly", description="Voice uses only the Agent's instructions (#625)"
     )
 
     # Share metadata (only present for shared assistants)
@@ -721,6 +764,10 @@ class AgentResponse(BaseModel):
     response_strictness: ResponseStrictness = Field(
         "balanced", alias="responseStrictness", description="Knowledge-base grounding mode (#112)"
     )
+    voice_enabled: bool = Field(False, alias="voiceEnabled", description="Available in voice mode (#625)")
+    voice_instructions_only: bool = Field(
+        True, alias="voiceInstructionsOnly", description="Voice uses only the Agent's instructions (#625)"
+    )
 
     # Marketplace Phase 1. All three are ``None`` on an agent that has never been
     # submitted, and the routes serve this model with ``response_model_exclude_none``,
@@ -836,6 +883,10 @@ BEHAVIOR_FIELDS = (
     "visibility",
     "responseStrictness",
     "response_strictness",
+    "voiceEnabled",
+    "voice_enabled",
+    "voiceInstructionsOnly",
+    "voice_instructions_only",
 )
 
 # Presentation fields an admin may edit on someone else's listing (D13).

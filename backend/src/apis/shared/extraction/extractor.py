@@ -86,7 +86,7 @@ _SYSTEM_PROMPT = (
     "value, never estimate one, never carry one over from a similar document, "
     "and never repeat a value from another field because it looks plausible.\n"
     "2. If the document does not state a field, set its value to null and its "
-    "quote to null. A null is a correct, useful answer. A guess is not, and it "
+    "quote to an empty string. A null is a correct, useful answer. A guess is not, and it "
     "is worse than a blank because someone will rely on it.\n"
     "3. For every value you do give, quote the passage you took it from "
     "verbatim — copied character for character from the document, including its "

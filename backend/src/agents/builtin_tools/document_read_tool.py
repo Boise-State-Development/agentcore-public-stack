@@ -47,6 +47,11 @@ Design notes
   per-round lock (``_PageReadBudget``), each slicing to what is left, so a
   round's PDFs can never add up past it. The lock serializes a round's page
   reads, which costs little: PDFium is already serialized process-wide.
+* **Images** come back whole, as their stored compact copy, when the model
+  names one by ``upload_id`` (``read_image``), and the listing names them. It
+  is how an image in a turn compaction summarized is seen again; the other
+  modes do not apply to one. An image read takes its share of the round's
+  byte budget like a page read.
 * **Search mode** (``query``; ``docs/specs/large-document-attachments.md``
   §4F) exists only on a deployment with the attachments KB
   (``ATTACHMENT_KB_ENABLED`` on the Runtime), so the spec is constant per
@@ -230,14 +235,15 @@ def make_document_read_tool(
             offset=offset,
             text_only=text_only,
         )
-        # Only a page range can return a native PDF, so only it takes a share.
-        if not page_range or pattern or text_only or budget.limit <= 0:
+        # A page range (a native PDF) or a bare upload id (which may be an
+        # image, returned whole) can return bytes, so only they take a share.
+        if pattern or text_only or budget.limit <= 0:
             return await read_document(user_id, session_id, upload_id, **kwargs)
         async with budget.enter(_round_key(tool_context)):
             result = await read_document(
                 user_id, session_id, upload_id, max_document_bytes=max(1, budget.remaining()), **kwargs
             )
-            if result.document_block is not None:
+            if result.document_block is not None or result.mode == "image":
                 budget.used += result.bytes_returned
             return result
 
@@ -262,10 +268,11 @@ def make_document_read_tool(
                 )
             elif not upload_id:
                 listing = await list_session_documents(
-                    user_id, session_id, ancestor_session_ids=ancestor_session_ids
+                    user_id, session_id, ancestor_session_ids=ancestor_session_ids, include_images=True
                 )
                 listing["hint"] = (
                     "Call again with upload_id plus page_range (PDF), pattern, or neither."
+                    + (" An image's upload_id alone returns the image." if listing.get("images") else "")
                 )
                 result = DocumentReadResult(mode="list", payload=listing)
             else:
@@ -295,13 +302,14 @@ def make_document_read_tool(
     ) -> Any:
         """Read part of a document the user attached to this conversation.
 
-        Use this when a document you need is no longer inline (its content
-        was replaced by a placeholder or digest after the conversation was
-        restored) or when you need specific pages of a long document.
+        Use this when a document or image you need is no longer inline (its
+        content was replaced by a placeholder, a digest or a summary of
+        earlier turns) or when you need specific pages of a long document.
 
         Modes, by argument:
-        - No arguments: list this conversation's readable documents with
-          their upload_id, format and size.
+        - No arguments: list this conversation's readable documents and its
+          images with their upload_id, format and size.
+        - An image's upload_id alone: returns that image, to look at again.
         - upload_id + page_range (PDF only, e.g. "4-7"): returns those pages
           as an attached document at full fidelity (text and page images),
           at most max_pages per call. The attachment's own page k is
@@ -334,7 +342,7 @@ def make_document_read_tool(
 
         Returns:
             JSON metadata, plus the requested pages as an attached document
-            for page_range reads.
+            for page_range reads, or the image for an image.
         """
         return await _run(upload_id, page_range, pattern, "", max_pages, offset, tool_context)
 
@@ -361,13 +369,14 @@ def _make_searchable_tool(run):
     ) -> Any:
         """Read part of a document the user attached to this conversation.
 
-        Use this when a document you need is no longer inline (its content
-        was replaced by a placeholder or digest after the conversation was
-        restored) or when you need specific pages of a long document.
+        Use this when a document or image you need is no longer inline (its
+        content was replaced by a placeholder, a digest or a summary of
+        earlier turns) or when you need specific pages of a long document.
 
         Modes, by argument:
-        - No arguments: list this conversation's readable documents with
-          their upload_id, format and size.
+        - No arguments: list this conversation's readable documents and its
+          images with their upload_id, format and size.
+        - An image's upload_id alone: returns that image, to look at again.
         - upload_id + page_range (PDF only, e.g. "4-7"): returns those pages
           as an attached document at full fidelity (text and page images),
           at most max_pages per call. The attachment's own page k is
@@ -410,7 +419,7 @@ def _make_searchable_tool(run):
 
         Returns:
             JSON metadata, plus the requested pages as an attached document
-            for page_range reads.
+            for page_range reads, or the image for an image.
         """
         return await run(upload_id, page_range, pattern, query, max_pages, offset, tool_context)
 

@@ -44,6 +44,7 @@ ENV_API_KEY = "AGENTCORE_API_KEY"
 ENV_MODEL_ID = "AGENTCORE_MODEL_ID"
 ENV_BANNER = "AGENTCORE_BANNER"
 ENV_LOCAL_TOOLS = "AGENTCORE_LOCAL_TOOLS"
+ENV_CREDENTIAL_STORE = "AGENTCORE_CREDENTIAL_STORE"
 
 
 #: Bedrock model IDs known to this codebase. These mirror the platform's own
@@ -198,13 +199,34 @@ def save_session_to_keyring(base_url: str, sealed_session: str) -> None:
         keyring_store.SESSION_SERVICE,
         base_url,
         sealed_session,
-        hint="A working OS keyring is required to stay signed in. On headless Linux, install a Secret Service provider such as gnome-keyring.",
+        hint=f'Set `credential_store = "file"` in {config_path()} to keep it in an encrypted file instead.',
     )
 
 
 def delete_session_from_keyring(base_url: str) -> bool:
     """Remove a stored session. Returns False when there was nothing to remove."""
     return keyring_store.delete(keyring_store.SESSION_SERVICE, base_url)
+
+
+def resolve_store_preference(
+    config_file: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> keyring_store.StorePreference:
+    """Where credentials should live: env var, then config file, then ``auto``.
+
+    Resolved separately from :func:`resolve_config` because it has to be known
+    *before* that runs: resolving the config reads credentials, and reading the
+    encrypted file needs its passphrase first.
+    """
+    environ = os.environ if env is None else env
+    raw = _as_str(environ.get(ENV_CREDENTIAL_STORE)) or _as_str(read_config_file(config_file).get("credential_store"))
+    if raw is None:
+        return keyring_store.StorePreference.AUTO
+    try:
+        return keyring_store.StorePreference(raw.strip().lower())
+    except ValueError:
+        choices = ", ".join(f'"{p.value}"' for p in keyring_store.StorePreference)
+        raise ConfigError(f"`credential_store` must be one of {choices}, got {raw!r}") from None
 
 
 # ---------------------------------------------------------------------------

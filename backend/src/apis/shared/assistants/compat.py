@@ -98,4 +98,7 @@ def to_agent_view(assistant: Assistant) -> dict:
         "showCitations": assistant.show_citations,
         "allowDocumentDownload": assistant.allow_document_download,
         "responseStrictness": assistant.response_strictness,
+        # Voice mode (#625). Always projected so the chat can decide whether to offer voice.
+        "voiceEnabled": assistant.voice_enabled,
+        "voiceInstructionsOnly": assistant.voice_instructions_only,
     }

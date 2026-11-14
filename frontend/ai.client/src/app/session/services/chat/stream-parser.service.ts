@@ -3,6 +3,7 @@ import { Injectable, Injector, Signal, WritableSignal, signal, computed, inject 
 import { Message, ContentBlock, Citation } from '../models/message.model';
 import { MetadataEvent } from '../models/content-types';
 import { ChatStateService } from './chat-state.service';
+import { providerOutageFrom } from './provider-outage';
 import { v4 as uuidv4 } from 'uuid';
 import {
   ErrorService,
@@ -818,6 +819,10 @@ export class StreamParserService {
         if (isMaxTokens) {
           this.chatStateService.setLastTurnContinuable(state.sessionId, true);
         }
+        const outage = providerOutageFrom(streamError);
+        if (outage) {
+          this.chatStateService.setLastTurnProviderOutage(state.sessionId, outage);
+        }
         if (streamError.metadata?.['error_kind'] === 'resume_unavailable') {
           const reason = streamError.metadata?.['reason'];
           this.chatStateService.markResumeUnavailable(
@@ -893,6 +898,7 @@ export class StreamParserService {
     // chip from a previous aborted turn.
     this.chatStateService.setLastTurnContinuable(state.sessionId, false);
     this.chatStateService.setLastTurnInterrupted(state.sessionId, false);
+    this.chatStateService.setLastTurnProviderOutage(state.sessionId, null);
 
     // Compute predictable message ID
     const completedCount = state.completedMessages().length;

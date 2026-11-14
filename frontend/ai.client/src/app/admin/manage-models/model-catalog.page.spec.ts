@@ -259,6 +259,9 @@ describe('ModelCatalogPage', () => {
       // a source outside this file. Anything else that drifts is a typo.
       //  - Claude Opus 5.5 reads at 0.05x: Price List API, $0.22 against $4.40
       //    Regional ($0.20 against $4.00 Global), 2026-09-25.
+      //  - Claude Sonnet 5.5 reads at 0.05x: Price List API, $0.11 against
+      //    $2.20 Regional ($0.10 against $2.00 Global), 2026-11-13. Sonnet 5
+      //    still reads at 0.1x.
       //  - GPT-6.1 Sol reads at 0.05x: its card states the multiplier and
       //    publishes $0.11 against $2.20 US CRIS ($0.10 against $2.00 Global).
       //  - GPT-5.5 has no write bucket: its card's cache-write cell is an em
@@ -267,6 +270,7 @@ describe('ModelCatalogPage', () => {
       const WRITE_MULTIPLIER: Record<string, number> = { 'gpt-5-5': 0 };
       const READ_MULTIPLIER: Record<string, number> = {
         'claude-opus-5-5': 0.05,
+        'claude-sonnet-5-5': 0.05,
         'gpt-6-1-sol': 0.05,
       };
       for (const model of tieredModels) {
@@ -282,6 +286,26 @@ describe('ModelCatalogPage', () => {
           6,
         );
       }
+    });
+  });
+
+  describe('curated Claude Sonnet 5.5', () => {
+    const sonnet = CURATED_BEDROCK_MODELS.find(m => m.key === 'claude-sonnet-5-5')!;
+
+    it('uses the us. id dev can call, at Regional rates', () => {
+      // Dev's SCP denies `global.*`; prod overrides to the Global id.
+      expect(sonnet.template.modelId).toBe('us.anthropic.claude-sonnet-5-5');
+      expect(sonnet.pricingTier).toBe('regional');
+      expect(sonnet.template.inputPricePerMillionTokens).toBeCloseTo(2.2, 6);
+      expect(sonnet.template.outputPricePerMillionTokens).toBeCloseTo(11.0, 6);
+      expect(sonnet.template.cacheReadPricePerMillionTokens).toBeCloseTo(0.11, 6);
+    });
+
+    it('declares only effort and max_tokens; the backend owns thinking', () => {
+      expect(Object.keys(sonnet.template.supportedParams?.params ?? {}).sort()).toEqual([
+        'effort',
+        'max_tokens',
+      ]);
     });
   });
 
@@ -595,6 +619,8 @@ describe('ModelCatalogPage', () => {
     // now catches. A template default cannot assume what else gets added.
     const DEMOTED = [
       'claude-opus-4-7',
+      // Superseded by Claude Sonnet 5.5 at the same Global rates.
+      'claude-sonnet-5',
       'claude-sonnet-4-6',
       'qwen3-coder-30b',
       'gpt-5-5',

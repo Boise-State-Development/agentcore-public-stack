@@ -38,6 +38,8 @@ from typing import Any, Coroutine, Dict, List, Optional, TypeVar
 from strands import tool
 
 from apis.shared.auth.models import User
+from apis.shared.extraction.field_sets import FieldSetError, field_set_name_for, parse_field_set
+from apis.shared.feature_flags import document_extract_enabled
 from apis.shared.skills.bundle_files import (
     MAX_RESOURCE_BYTES,
     MAX_RESOURCES_PER_SKILL,
@@ -162,6 +164,51 @@ def _log_applied(tool_name: str, skill_id: str, session_id: str) -> None:
     )
 
 
+def _field_set_of(filename: str, kind: Optional[str]) -> Optional[str]:
+    """The field-set name a bundle file declares, or None.
+
+    Only ``references/`` is read for field sets (``declared_field_sets``), so a
+    same-named script or asset is not one.
+    """
+    return field_set_name_for(filename) if kind == "reference" else None
+
+
+def _field_set_note(filename: str, kind: str, content: str) -> str:
+    """What a write result adds when the file is, or looks like, a field set.
+
+    The write path has already parsed the file (``validate_field_set_upload``
+    in ``SkillBundleFiles.add_resource``), so this re-parse cannot fail on a
+    file that was saved; it reads back what was stored so the model can confirm
+    the fields with the user. It lives in the result, never the tool's spec, so
+    the cached ``toolConfig`` is unchanged for every user with these tools.
+    """
+    name = field_set_name_for(filename)
+    if name is None:
+        return ""
+    if kind != "reference":
+        return (
+            f" It is not read as a field set, because it was saved as a {kind}: save it "
+            "with kind 'reference' to make it one."
+        )
+    try:
+        field_set = parse_field_set(content, name=name)
+    except FieldSetError:  # pragma: no cover - the write path refused it already
+        return ""
+    fields = ", ".join(f"{f.name} ({f.type})" for f in field_set.fields)
+    note = (
+        f' It is the field set "{name}" ({field_set.title}, version {field_set.version}) '
+        f"with {len(field_set.fields)} fields, in this order: {fields}. The skill's "
+        f"instructions must name \"{name}\" and say when to run it with document_extract."
+    )
+    if not document_extract_enabled():
+        note += (
+            " Structured extraction is turned off in this deployment, so nothing runs "
+            "this field set until an administrator turns it on. Tell the user; the rest "
+            "of the skill works without it."
+        )
+    return note
+
+
 def _stale_note() -> str:
     return (
         "If this skill was activated earlier in this conversation, what that earlier "
@@ -231,6 +278,12 @@ def make_my_skill_read_tool(session_id: str, user_id: str, user_email: Optional[
                         "kind": r.kind,
                         "size": r.size,
                         "content_type": r.content_type,
+                        # Only on a field set, so other files cost nothing more.
+                        **(
+                            {"field_set": name}
+                            if (name := _field_set_of(r.filename, r.kind))
+                            else {}
+                        ),
                     }
                     for r in skill.resources
                 ],
@@ -441,6 +494,7 @@ def make_my_skill_write_file_tool(session_id: str, user_id: str, user_email: Opt
             f"Saved '{filename}' ({kind}, {size:,} bytes) to skill '{skill_id}', which now "
             f"has {len(refs)} of {MAX_RESOURCES_PER_SKILL} files. If this file was read "
             "earlier in this conversation, that copy is out of date."
+            + _field_set_note(filename, kind, content or "")
         )
 
     return my_skill_write_file
@@ -457,6 +511,7 @@ def make_my_skill_delete_file_tool(session_id: str, user_id: str, user_email: Op
             skill_id: The skill's id, from my_skill_list.
             filename: The file's name as listed by my_skill_read.
         """
+        name = field_set_name_for(filename)
         try:
             refs = _run(
                 get_user_skill_service().delete_resource(
@@ -466,8 +521,15 @@ def make_my_skill_delete_file_tool(session_id: str, user_id: str, user_email: Op
         except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
             return _failure(f"delete '{filename}'", exc, skill_id)
         _log_applied("my_skill_delete_file", skill_id, session_id)
+        note = ""
+        if name is not None:
+            note = (
+                f' If the instructions name the field set "{name}", update them too, or '
+                "the skill will ask for a field set it no longer has."
+            )
         return _ok(
             f"Deleted '{filename}' from skill '{skill_id}', which now has {len(refs)} files."
+            + note
         )
 
     return my_skill_delete_file

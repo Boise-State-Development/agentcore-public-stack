@@ -10,6 +10,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, List
 
+from apis.shared.sessions.ledger_rollups import call_kind
 from apis.shared.sessions.models import FEEDBACK_REASONS
 from apis.shared.storage.dynamodb_storage import DynamoDBStorage
 from apis.shared.observability.prefix_tokens import (
@@ -1111,10 +1112,16 @@ class AdminCostService:
 
             gap_raw = record.get("cacheGapSeconds")
             prefix_gap_raw = record.get("cachePrefixGapSeconds")
+            # Not every writer sets `callKind` or uses an integer message id:
+            # `document_extract` writes `extract:<toolUseId>` and voice
+            # `voice:<n>`. Those name no message, so they read as no message id
+            # and their kind comes from the one place that already tells them
+            # apart, rather than failing the whole session's anatomy.
+            row_kind = call_kind(record)
             calls.append(SessionCallRow(
                 timestamp=record.get("timestamp", ""),
-                message_id=record.get("messageId"),
-                call_kind=record.get("callKind"),
+                message_id=_as_int(record.get("messageId")),
+                call_kind=None if row_kind == "chat" else row_kind,
                 model_id=model_info.get("modelId"),
                 input_tokens=int(token_usage.get("inputTokens") or 0),
                 output_tokens=int(token_usage.get("outputTokens") or 0),

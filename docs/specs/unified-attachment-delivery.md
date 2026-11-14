@@ -617,6 +617,23 @@ stated in the PR, and the developer driving the change accepts it before merge.
 What still carries bytes: `document_read` slices inside tool results (re-sent on
 restore, bounded by the tool's cap), and images with no stored copy.
 
+**After compaction.** Restore re-sends only the history after the compaction
+checkpoint, so an image in a summarized turn is no longer in the request, handle or
+not. A document beside it stays reachable through `document_read`; until
+2026-11-13 the image did not (dev QA: eight PNGs, a 364-page PDF and eleven text
+files on Haiku 5.5, cut after turn 2; on turn 3 the model read the PDF and said one
+PNG "isn't attached"). `document_read` now lists the session's images under
+`images` and, given an image's upload id alone, returns its stored compact copy as a
+native `image` block (`document_read.read_image`; the high copy, then the original,
+when the row has no compact one). It takes its share of the round's byte budget like
+a page read, and a text-only model is told it cannot view it. The image rides the
+tool result, which Memory keeps with its bytes, so a restore re-sends it byte for
+byte. Nothing runs before the first token and nothing is re-sent per turn: the read
+happens only when the model asks. The tool's description names images, which moved
+its spec once per deployment: +32 tokens on CountTokens (Haiku 4.5; 664 → 696 without the KB, 837 → 869 with it). Image-only
+sessions do not get the tool: its gate is still a readable document
+(`_session_has_documents`).
+
 ## 7. Flags
 
 | Change | Flag | Why |

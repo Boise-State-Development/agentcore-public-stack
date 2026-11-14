@@ -77,6 +77,16 @@ Limits to know about:
   with an empty knowledge base declines factual questions.
 - Shared Projects do not have this setting.
 
+### Voice mode
+
+**Available in voice mode** lets people talk to the Agent out loud. Voice uses
+the Agent's instructions, knowledge base and tool bindings, and always runs on
+Amazon Nova 2 Sonic, whatever model the Agent pins. It is off by default, and
+the Designer's Voice mode section warns about a knowledge base or tools that
+won't work well in voice. See
+[Voice](/agentcore-public-stack/features/voice/#voice-with-an-agent) for the
+details. Shared Projects do not have this setting.
+
 ### What a binding means at run time
 
 An Agent's tools and skills **replace** the user's own selection for that
@@ -97,7 +107,7 @@ Agents cannot bind a Memory Space. Shared memory belongs to
 
 **Duplicate** (owners and editors) makes a private "Copy of {name}" that you
 own. It copies the description, instructions, tags, starters, emoji, icon,
-model settings, bindings, and the citation and download settings. It does not
+model settings, bindings, and the citation, download and voice settings. It does not
 copy the knowledge base documents, shares, listing, pins, versions or usage.
 
 ## Talking to an Agent

@@ -169,6 +169,44 @@ class FieldSet:
         return (self.name, self.version)
 
 
+@dataclass(frozen=True)
+class FieldSetLayout:
+    """What a field-set file carries besides the set itself.
+
+    ``docs/specs/field-set-authoring.md`` §5.4. The parser deliberately ignores
+    four things a hand-written file may hold, and none of them reaches the
+    schema, so :class:`FieldSet` has no place for them and the extraction path
+    never sees this object. An editor that rewrites the file does need them,
+    or a structured save would silently delete an author's notes. Kept apart
+    from :class:`FieldSet` so its equality, and everything keyed on it, is
+    exactly what it was.
+
+    Every text value is stored trimmed, and an absent one is ``None`` or
+    empty, so two layouts that write the same file compare equal.
+    """
+
+    #: Prose between the frontmatter and the field table.
+    preamble: Optional[str] = None
+    #: Lines after the table's header that are not table rows: prose after the
+    #: table, and any written between its rows. Written back after the table,
+    #: so prose from between two rows moves below it — its words survive, its
+    #: position does not, because a markdown table cannot hold prose.
+    postscript: Optional[str] = None
+    #: Frontmatter lines other than ``title`` and ``version``, as written.
+    frontmatter: Tuple[str, ...] = ()
+    #: Headers of the columns the parser does not read (a note column), in
+    #: authored order. A header may repeat, so these are positions, not keys.
+    unmanaged_columns: Tuple[str, ...] = ()
+    #: One tuple per field, in field order, holding that row's cells for
+    #: :attr:`unmanaged_columns`. Empty when there are no such columns.
+    unmanaged_cells: Tuple[Tuple[str, ...], ...] = ()
+
+
+def default_field_title(field_name: str) -> str:
+    """The title a field gets when its row leaves the title cell empty."""
+    return field_name.replace("_", " ").title()
+
+
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
@@ -212,30 +250,45 @@ def field_set_name_for(path_or_filename: str) -> Optional[str]:
     return name if _SET_NAME_RE.match(name) else None
 
 
-def _split_frontmatter(text: str) -> Tuple[Dict[str, str], str]:
-    """``(frontmatter, body)``. Frontmatter is optional.
+#: The frontmatter keys the set itself reads. Every other frontmatter line is
+#: layout (:attr:`FieldSetLayout.frontmatter`).
+_SET_KEYS = frozenset({"title", "version"})
+
+
+def _split_frontmatter(text: str) -> Tuple[Dict[str, str], Tuple[str, ...], str]:
+    """``(frontmatter, other_lines, body)``. Frontmatter is optional.
 
     Deliberately not YAML: the frontmatter carries a title and a version, both
     scalars, and a real YAML parse would let a field-set file reach for
     structure the format does not have. ``key: value`` lines only.
+    ``other_lines`` are the non-blank lines that set neither, as written.
     """
     lines = text.splitlines()
     first = 0
     while first < len(lines) and not lines[first].strip():
         first += 1
     if first >= len(lines) or lines[first].strip() != "---":
-        return {}, text
+        return {}, (), text
     meta: Dict[str, str] = {}
+    other: List[str] = []
     for index in range(first + 1, len(lines)):
         stripped = lines[index].strip()
         if stripped == "---":
-            return meta, "\n".join(lines[index + 1 :])
-        if not stripped or stripped.startswith("#"):
+            return meta, tuple(other), "\n".join(lines[index + 1 :])
+        if not stripped:
             continue
-        key, _, value = stripped.partition(":")
-        if _:
-            meta[key.strip().lower()] = value.strip().strip("\"'")
+        key, colon, value = stripped.partition(":")
+        if stripped.startswith("#") or not colon or key.strip().lower() not in _SET_KEYS:
+            other.append(stripped)
+            continue
+        meta[key.strip().lower()] = value.strip().strip("\"'")
     raise FieldSetError("frontmatter opened with '---' but was never closed")
+
+
+def _prose(lines: Sequence[str]) -> Optional[str]:
+    """Lines joined back into one block, trimmed, or ``None`` if blank."""
+    text = "\n".join(lines).strip()
+    return text or None
 
 
 def _row_cells(line: str) -> List[str]:
@@ -305,6 +358,16 @@ def parse_field_set(text: str, *, name: str) -> FieldSet:
         FieldSetError: with a message naming the problem. Every failure here is
             an authoring mistake, and the message is what the author reads.
     """
+    return read_field_set_file(text, name=name)[0]
+
+
+def read_field_set_file(text: str, *, name: str) -> Tuple[FieldSet, FieldSetLayout]:
+    """:func:`parse_field_set`, plus everything in the file the set ignores.
+
+    One walk of the file for both, so the editor's idea of which columns and
+    lines are unread can never disagree with the parser's (field-set
+    authoring §5.4). Raises exactly what :func:`parse_field_set` raises.
+    """
     if not _SET_NAME_RE.match(name or ""):
         raise FieldSetError(
             f"field-set name {name!r} must be lowercase words joined by hyphens"
@@ -312,10 +375,18 @@ def parse_field_set(text: str, *, name: str) -> FieldSet:
     if not (text or "").strip():
         raise FieldSetError(f"field set '{name}' is empty")
 
-    meta, body = _split_frontmatter(text)
+    meta, frontmatter_other, body = _split_frontmatter(text)
     body, rules = _split_rules(body)
 
     header: Optional[List[str]] = None
+    #: Indices of header cells the parser does not read: an unknown header,
+    #: or an earlier column that a later alias of the same attribute overrides
+    #: (``row[column] = cell`` below keeps the last).
+    unmanaged_at: List[int] = []
+    unmanaged_headers: Tuple[str, ...] = ()
+    unmanaged_rows: List[Tuple[str, ...]] = []
+    preamble_lines: List[str] = []
+    postscript_lines: List[str] = []
     fields: List[Field] = []
     seen: Dict[str, int] = {}
 
@@ -323,6 +394,7 @@ def parse_field_set(text: str, *, name: str) -> FieldSet:
         if "|" not in line:
             # Prose between the frontmatter and the table, and after it. A
             # field set is a document an office reads, not only a payload.
+            (preamble_lines if header is None else postscript_lines).append(line)
             continue
         cells = _row_cells(line)
         if header is None:
@@ -331,8 +403,16 @@ def parse_field_set(text: str, *, name: str) -> FieldSet:
             if "name" not in mapped:
                 # Not the field table — a pipe in prose, or a table of
                 # something else entirely. Keep looking.
+                preamble_lines.append(line)
                 continue
             header = [column or "" for column in mapped]
+            last = {column: index for index, column in enumerate(header) if column}
+            unmanaged_at = [
+                index
+                for index, column in enumerate(header)
+                if not column or last[column] != index
+            ]
+            unmanaged_headers = tuple(cells[index] for index in unmanaged_at)
             continue
         if _is_delimiter_row(cells):
             continue
@@ -343,6 +423,9 @@ def parse_field_set(text: str, *, name: str) -> FieldSet:
         for column, cell in zip(header, cells):
             if column:
                 row[column] = cell
+        unmanaged_rows.append(
+            tuple(cells[index] if index < len(cells) else "" for index in unmanaged_at)
+        )
 
         field_name = row.get("name", "").strip().strip("`")
         if not field_name:
@@ -398,7 +481,7 @@ def parse_field_set(text: str, *, name: str) -> FieldSet:
         fields.append(
             Field(
                 name=field_name,
-                title=(row.get("title") or "").strip() or field_name.replace("_", " ").title(),
+                title=(row.get("title") or "").strip() or default_field_title(field_name),
                 type=field_type,
                 find=find,
                 enum=values,
@@ -422,19 +505,292 @@ def parse_field_set(text: str, *, name: str) -> FieldSet:
             "Split it into two field sets and run them separately"
         )
 
-    return FieldSet(
+    field_set = FieldSet(
         name=name,
         title=meta.get("title", "").strip() or name,
         version=meta.get("version", "").strip() or "1",
         fields=tuple(fields),
         rules=rules,
     )
+    layout = FieldSetLayout(
+        preamble=_prose(preamble_lines),
+        postscript=_prose(postscript_lines),
+        frontmatter=frontmatter_other,
+        unmanaged_columns=unmanaged_headers,
+        unmanaged_cells=tuple(unmanaged_rows) if unmanaged_headers else (),
+    )
+    return field_set, layout
+
+
+# ---------------------------------------------------------------------------
+# Serializing
+# ---------------------------------------------------------------------------
+
+#: The columns the serializer writes, in this order. Canonical names, never the
+#: aliases: an editor that saved ``field`` one week and ``name`` the next would
+#: turn every save into a whole-file diff.
+_SERIALIZED_COLUMNS = ("name", "title", "type", "find", "enum", "optional")
+
+
+def _single_line(value: str, *, what: str, name: str) -> str:
+    """``value`` with its ends trimmed, refused if it cannot sit on one line."""
+    text = value.strip()
+    if "\n" in text or "\r" in text:
+        raise FieldSetError(
+            f"field set '{name}': {what} cannot contain a line break, because "
+            "each field is one row of the table"
+        )
+    return text
+
+
+def _cell(value: str, *, what: str, name: str) -> str:
+    text = _single_line(value, what=what, name=name)
+    if "|" in text:
+        raise FieldSetError(
+            f"field set '{name}': {what} cannot contain '|', which ends a table "
+            "cell"
+        )
+    return text
+
+
+def _row(cells: Sequence[str]) -> str:
+    return "|" + "|".join(f" {cell} " if cell else " " for cell in cells) + "|"
+
+
+def serialize_field_set(
+    field_set: FieldSet, *, layout: Optional[FieldSetLayout] = None
+) -> str:
+    """The markdown file for ``field_set`` — the inverse of :func:`read_field_set_file`.
+
+    ``docs/specs/field-set-authoring.md`` §4 (D2): the backend owns the format in
+    both directions, so the editor never parses or writes it. The output is one
+    fixed shape — frontmatter (``title``, ``version``, then any other lines the
+    ``layout`` carries), the ``layout``'s preamble prose, the table in authored
+    order with canonical column names followed by any unmanaged columns, the
+    postscript prose, then ``## Rules`` verbatim — so two saves of one set are
+    byte-identical (D5, the diff property).
+
+    The guarantee that matters is the semantic one: reading the output gives
+    back exactly ``field_set`` and ``layout``. Rather than trust that every value
+    survives the table, the result is read back and compared before it is
+    returned, so a value the format cannot carry (a ``|`` in a phrase, a comma
+    inside one enum value, a title the frontmatter would strip) is refused
+    here, by name, instead of being saved as a different file from the one the
+    author wrote.
+
+    Raises:
+        FieldSetError: the set cannot be written as a file that reads back as
+            itself, or is not a valid set (no fields, more than
+            :data:`MAX_FIELDS`, and every other rule :func:`parse_field_set`
+            enforces).
+    """
+    layout = layout or FieldSetLayout()
+    name = field_set.name
+    title = _single_line(field_set.title, what="the title", name=name)
+    version = _single_line(field_set.version, what="the version", name=name)
+
+    extra_columns = [
+        _cell(header, what=f"column {header!r}", name=name)
+        for header in layout.unmanaged_columns
+    ]
+    for header in extra_columns:
+        reads_as = _COLUMN_ALIASES.get(header.lower())
+        if reads_as:
+            raise FieldSetError(
+                f"field set '{name}': an extra column cannot be headed {header!r}, "
+                f"which reads as the '{reads_as}' column"
+            )
+    if extra_columns and len(layout.unmanaged_cells) != len(field_set.fields):
+        raise FieldSetError(
+            f"field set '{name}': the extra columns have "
+            f"{len(layout.unmanaged_cells)} rows for {len(field_set.fields)} fields"
+        )
+
+    expected = FieldSetLayout(
+        preamble=_prose([layout.preamble or ""]),
+        postscript=_prose([layout.postscript or ""]),
+        frontmatter=tuple(
+            _single_line(line, what="a frontmatter line", name=name)
+            for line in layout.frontmatter
+            if line.strip()
+        ),
+        unmanaged_columns=tuple(extra_columns),
+        unmanaged_cells=(),
+    )
+    if expected.postscript and "|" in expected.postscript:
+        raise FieldSetError(
+            f"field set '{name}': the text after the table cannot contain '|', "
+            "because a line with one reads as a row of the table"
+        )
+
+    lines = ["---", f"title: {title}", f"version: {version}", *expected.frontmatter, "---", ""]
+
+    if expected.preamble:
+        lines.extend([expected.preamble, ""])
+
+    lines.append(_row([*_SERIALIZED_COLUMNS, *extra_columns]))
+    lines.append("|" + "---|" * (len(_SERIALIZED_COLUMNS) + len(extra_columns)))
+    extra_rows: List[Tuple[str, ...]] = []
+    for index, item in enumerate(field_set.fields):
+        label = f"field {item.name!r}"
+        values = [
+            _cell(value, what=f"{label}: allowed value {value!r}", name=name)
+            for value in item.enum
+        ]
+        for value in values:
+            if "," in value:
+                raise FieldSetError(
+                    f"field set '{name}', {label}: allowed value {value!r} "
+                    "cannot contain a comma, which separates allowed values"
+                )
+        extras: Tuple[str, ...] = ()
+        if extra_columns:
+            row_cells = layout.unmanaged_cells[index]
+            if len(row_cells) != len(extra_columns):
+                raise FieldSetError(
+                    f"field set '{name}', {label}: {len(row_cells)} extra cells "
+                    f"for {len(extra_columns)} extra columns"
+                )
+            extras = tuple(
+                _cell(cell, what=f"{label}: the {header!r} cell", name=name)
+                for header, cell in zip(extra_columns, row_cells)
+            )
+            extra_rows.append(extras)
+        lines.append(
+            _row(
+                [
+                    _cell(item.name, what=f"{label}: the name", name=name),
+                    _cell(item.title, what=f"{label}: the title", name=name),
+                    _cell(item.type, what=f"{label}: the type", name=name),
+                    _cell(item.find, what=f"{label}: 'find'", name=name),
+                    ", ".join(values),
+                    "yes" if item.optional else "no",
+                    *extras,
+                ]
+            )
+        )
+
+    if expected.postscript:
+        lines.extend(["", expected.postscript])
+
+    rules = (field_set.rules or "").strip()
+    if rules:
+        lines.extend(["", "## Rules", "", rules])
+
+    text = "\n".join(lines) + "\n"
+
+    expected = FieldSetLayout(
+        preamble=expected.preamble,
+        postscript=expected.postscript,
+        frontmatter=expected.frontmatter,
+        unmanaged_columns=expected.unmanaged_columns,
+        unmanaged_cells=tuple(extra_rows),
+    )
+    reparsed, relaid = read_field_set_file(text, name=name)
+    if reparsed != field_set:
+        raise FieldSetError(
+            f"field set '{name}' cannot be written as a file that reads back "
+            "the same: " + _first_difference(field_set, reparsed)
+        )
+    if relaid != expected:
+        raise FieldSetError(
+            f"field set '{name}' cannot be written as a file that reads back "
+            "the same: " + _layout_difference(expected, relaid)
+        )
+    return text
+
+
+def _layout_difference(expected: FieldSetLayout, actual: FieldSetLayout) -> str:
+    """A sentence naming the first part of the layout that did not survive."""
+    described = (
+        ("preamble", "the text before the table"),
+        ("postscript", "the text after the table"),
+        ("frontmatter", "the other frontmatter lines"),
+        ("unmanaged_columns", "the extra columns"),
+        ("unmanaged_cells", "the extra columns' cells"),
+    )
+    for attribute, what in described:
+        if getattr(expected, attribute) != getattr(actual, attribute):
+            return f"{what} would read back as {getattr(actual, attribute)!r}"
+    return "the layout differs"  # pragma: no cover - every attribute is checked
+
+
+def _first_difference(expected: FieldSet, actual: FieldSet) -> str:
+    """A sentence naming the first thing that did not survive the round trip."""
+    for attribute in ("title", "version", "rules"):
+        if getattr(expected, attribute) != getattr(actual, attribute):
+            return f"its {attribute} would read back as {getattr(actual, attribute)!r}"
+    if len(expected.fields) != len(actual.fields):
+        return (
+            f"{len(expected.fields)} fields would read back as "
+            f"{len(actual.fields)}"
+        )
+    for want, got in zip(expected.fields, actual.fields):
+        if want != got:
+            for attribute in ("name", "title", "type", "find", "enum", "optional"):
+                if getattr(want, attribute) != getattr(got, attribute):
+                    return (
+                        f"field {want.name!r}: {attribute} would read back as "
+                        f"{getattr(got, attribute)!r}"
+                    )
+    return "the parsed set differs"  # pragma: no cover - every attribute is checked
+
+
+def require_field_set_name(filename: str) -> str:
+    """The set name in a ``field-set.<name>.md`` filename, or the naming rule.
+
+    Raises:
+        FieldSetError: ``<name>`` is not lowercase words joined by hyphens, so
+            :func:`field_set_name_for` would read the file as no field set.
+    """
+    tail = (filename or "").strip().rsplit("/", 1)[-1]
+    name = field_set_name_for(tail)
+    if name is None:
+        raw = tail
+        if raw.startswith(FIELD_SET_PREFIX):
+            raw = raw[len(FIELD_SET_PREFIX) :]
+        if raw.endswith(FIELD_SET_SUFFIX):
+            raw = raw[: -len(FIELD_SET_SUFFIX)]
+        raise FieldSetError(
+            f"field-set name {raw!r} in '{tail}' must be lowercase words joined "
+            "by hyphens, e.g. 'field-set.nsf-solicitation.md'"
+        )
+    return name
+
+
+def validate_field_set_upload(filename: str, content: bytes) -> Optional[FieldSet]:
+    """Parse a bundle file that claims to be a field set, or return ``None``.
+
+    The check every skill-file write path runs (field-set-authoring §4.2, D6),
+    unconditionally: a file stored invalid would fail later, mid-turn, in front
+    of someone who did not write it. Only the filename decides whether a file is
+    a field set, so every other file passes through untouched.
+
+    A file named ``field-set.<something>.md`` whose ``<something>`` is not a valid
+    set name is refused too, rather than stored: :func:`field_set_name_for`
+    reads it as no field set at all, so the resolver would skip it silently and
+    the author would never learn why their set does not appear.
+
+    Raises:
+        FieldSetError: the file is not UTF-8, its name is not a valid set name,
+            or its contents do not parse.
+    """
+    tail = (filename or "").strip().rsplit("/", 1)[-1]
+    if not tail.startswith(FIELD_SET_PREFIX) or not tail.endswith(FIELD_SET_SUFFIX):
+        return None
+    name = require_field_set_name(tail)
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise FieldSetError(f"field set '{name}' is not UTF-8 text") from None
+    return parse_field_set(text, name=name)
 
 
 __all__ = [
     "Field",
     "FieldSet",
     "FieldSetError",
+    "FieldSetLayout",
     "FIELD_TYPES",
     "JUDGEMENT_TYPES",
     "MAX_FIELDS",
@@ -447,6 +803,11 @@ __all__ = [
     "TYPE_BOOLEAN",
     "TYPE_ENUM",
     "TYPE_LIST",
+    "default_field_title",
     "field_set_name_for",
     "parse_field_set",
+    "read_field_set_file",
+    "require_field_set_name",
+    "serialize_field_set",
+    "validate_field_set_upload",
 ]

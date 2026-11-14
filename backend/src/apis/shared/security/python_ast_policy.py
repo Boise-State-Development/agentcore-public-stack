@@ -72,6 +72,10 @@ _ALLOWED_IMPORT_ROOTS: frozenset[str] = frozenset(
         "fractions",
         "csv",
         "io",
+        # Timing a loop (``time.perf_counter()``). A C module with no module
+        # attributes, so it re-exports nothing on the host list; ``sleep``
+        # reaches no more than a busy loop does under the sandbox timeout.
+        "time",
     }
 )
 

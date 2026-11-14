@@ -97,6 +97,8 @@ async def create_assistant(
     show_citations: bool = True,
     allow_document_download: bool = True,
     response_strictness: ResponseStrictness = "balanced",
+    voice_enabled: bool = False,
+    voice_instructions_only: bool = True,
     project_id: Optional[str] = None,
 ) -> Assistant:
     """
@@ -149,6 +151,8 @@ async def create_assistant(
         show_citations=show_citations,
         allow_document_download=allow_document_download,
         response_strictness=response_strictness,
+        voice_enabled=voice_enabled,
+        voice_instructions_only=voice_instructions_only,
         kind="project" if project_id else None,
         project_id=project_id,
     )
@@ -564,6 +568,8 @@ async def update_assistant(
     show_citations: Optional[bool] = None,
     allow_document_download: Optional[bool] = None,
     response_strictness: Optional[ResponseStrictness] = None,
+    voice_enabled: Optional[bool] = None,
+    voice_instructions_only: Optional[bool] = None,
 ) -> Optional[Assistant]:
     """
     Update assistant fields (deep merge)
@@ -628,6 +634,11 @@ async def update_assistant(
     # #112: None leaves the stored value untouched.
     if response_strictness is not None:
         updates["response_strictness"] = response_strictness
+    # #625: None leaves the stored value untouched.
+    if voice_enabled is not None:
+        updates["voice_enabled"] = voice_enabled
+    if voice_instructions_only is not None:
+        updates["voice_instructions_only"] = voice_instructions_only
 
     # Always update the updated_at timestamp
     updates["updated_at"] = _get_current_timestamp()

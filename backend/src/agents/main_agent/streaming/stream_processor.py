@@ -53,6 +53,7 @@ from apis.shared.errors import (
     is_model_read_timeout_error,
     is_service_unavailable_error,
     model_read_timeout_message,
+    provider_unavailable_message,
     unsupported_attachment_message,
 )
 
@@ -314,10 +315,17 @@ def _handle_completion_events(event: RawEvent) -> Tuple[List[ProcessedEvent], bo
         logger.warning("Agent force-stopped: %s", reason)
 
         error_message, recoverable = _format_force_stop_message(reason)
+        # A provider outage gets its own code so the client can label it and
+        # offer "Try again", and so the coordinator can name the model.
+        code = (
+            ErrorCode.PROVIDER_UNAVAILABLE
+            if error_message == _PROVIDER_UNAVAILABLE_MESSAGE
+            else ErrorCode.AGENT_ERROR
+        )
 
         error_event = StreamErrorEvent(
             error=error_message,
-            code=ErrorCode.AGENT_ERROR,
+            code=code,
             detail=str(reason) if reason != "unknown reason" else None,
             recoverable=recoverable,
         )
@@ -378,6 +386,11 @@ def _handle_retry_events(event: RawEvent, retry_state: Dict[str, int]) -> List[P
             },
         )
     ]
+
+
+# The outage copy before the coordinator knows the model: it names neither the
+# model nor the provider. Also how the force-stop handler recognizes the case.
+_PROVIDER_UNAVAILABLE_MESSAGE = provider_unavailable_message()
 
 
 def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
@@ -453,14 +466,7 @@ def _format_force_stop_message(reason: Any) -> tuple[str, bool]:
     # the generic "I ran into a problem" text, which gave the user no signal
     # that the failure was temporary and worth re-sending.
     if is_service_unavailable_error(reason_lower):
-        return (
-            "⚠️ The model service is temporarily unavailable.\n\n"
-            "> " + reason_str + "\n\n"
-            "This is a problem on the AI provider's side, not with your "
-            "request — I already retried it a few times. Send your message "
-            "again in a moment, or switch models if it keeps happening.",
-            True,
-        )
+        return _PROVIDER_UNAVAILABLE_MESSAGE, True
 
     # The model sent nothing for RETRY_READ_TIMEOUT seconds. The matcher and
     # copy are shared with the raised-exception path.

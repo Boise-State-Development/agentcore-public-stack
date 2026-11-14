@@ -46,19 +46,74 @@ is live.
   and keep context. A voice session appears in the conversation list like any
   other.
 - **Long-term memory.** Your memory setting applies. In an incognito chat,
-  memory is read-only.
+  memory is read-only. A conversation with an Agent neither reads nor writes
+  memory, the same as its text turns.
 - **Tools.** Voice does not use the composer's tool selection. It gets the
   tools an admin has pinned always-on and the platform's system tools, filtered
-  by your roles, minus any tool that is disabled.
-- **Prompt.** The system prompt adds short voice guidelines (be concise, avoid
-  lists and heavy formatting) and one line naming the voice, so languages that
-  mark the speaker's gender use the matching form.
-- **Not applied:** personal instructions, and the chat model picker. Voice
-  always runs on the Nova 2 Sonic model (`NOVA_SONIC_MODEL_ID` on the Runtime
-  overrides the id).
+  by your roles, minus any tool that is disabled. In an Agent's conversation it
+  gets the Agent's tool bindings instead, as a text turn does. Either way, voice
+  only loads tools an admin marked **Available in voice mode** (see below).
+- **Instructions.** Your role instructions and personal instructions apply,
+  in the same order and with the same precedence as a text chat. They are
+  read once, when the voice session connects. In an Agent's conversation the
+  Agent's instructions come first and your personal instructions follow, as in
+  a text turn with that Agent.
+- **Prompt.** After those, the system prompt adds short voice guidelines (be
+  concise, avoid lists and heavy formatting) and one line naming the voice, so
+  languages that mark the speaker's gender use the matching form. An Agent's
+  conversation leaves the guidelines out unless the Agent's author turned them
+  on.
+- **Not applied:** the active conversation mode, and the chat model picker.
+  Voice always runs on the Nova 2 Sonic model (`NOVA_SONIC_MODEL_ID` on the
+  Runtime overrides the id).
 
 Voice is not offered inside the Agent Designer's preview or the marketplace
-review test drive.
+review test drive, or in Shared Project conversations.
+
+### Voice with an Agent
+
+An Agent runs in voice only when its author ticks **Available in voice mode**
+in the Agent Designer (off by default). Voice then uses the Agent's
+instructions, response strictness, knowledge base and tool bindings, with the
+same access checks as a text turn. A published Agent uses its reviewed
+version, so turning voice on for one goes through marketplace review.
+
+The voice button is hidden on an Agent's conversation when voice is off for
+it. If the conversation's Agent can't run in voice (voice turned off since, no
+access, a Shared Project), voice closes with a message saying so.
+
+**Knowledge base.** Voice has no search step: in text chat the server searches
+the knowledge base with the typed message before the model runs, and in voice
+the speech goes straight to Nova 2 Sonic. So voice sends the Agent's text
+documents whole, up to `VOICE_KB_MAX_TOKENS` (default 800,000 estimated tokens,
+80% of Nova 2 Sonic's context window). Once voice is on, the Designer warns
+when the knowledge base is over 50,000 tokens (slower to start, costs more,
+may miss details), and when it is too large for voice, which then leaves it
+out. Spreadsheets and presentations are not read in voice.
+
+**Instructions only.** **Use only this agent's instructions** is on by
+default. It leaves out the built-in voice guidelines, which can fight a
+role-play persona ("confirm understanding before taking actions"). Turn it off
+to add them.
+
+### Tools in voice
+
+Nova 2 Sonic goes quiet for the rest of a session when a tool takes longer
+than about a second, and a chart or document does nothing for a listener. So
+a tool runs in voice only when an admin ticks **Available in voice mode** on it
+in Admin → Tools (off for new tools). The Agent Designer lists an Agent's
+bound tools that voice leaves out.
+
+`backend/scripts/backfill_voice_tool_flags.py` marks the first set on an
+existing deployment (calculator and fast campus lookups); run it once per
+environment after deploying. `--list` prints every tool's flag.
+
+### When voice is busy
+
+Nova 2 Sonic allows 20 concurrent voice sessions per AWS account per Region,
+and the quota cannot be raised. When Bedrock refuses a new session, voice
+closes and says: "Voice mode isn't available right now because too many
+people are using it. Please try again in a few minutes."
 
 ### How it is reached
 
