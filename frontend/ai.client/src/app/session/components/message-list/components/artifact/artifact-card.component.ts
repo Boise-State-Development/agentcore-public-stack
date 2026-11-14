@@ -11,514 +11,113 @@ import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroCodeBracket,
+  heroDocument,
   heroDocumentText,
-  heroArrowDownTray,
-  heroArrowPath,
-  heroArrowUpOnSquare,
-  heroPencilSquare,
-  heroTrash,
+  heroPhoto,
+  heroTableCells,
 } from '@ng-icons/heroicons/outline';
 import type { Artifact } from '../../../../services/artifacts/artifact.model';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 import { ArtifactHttpService } from '../../../../services/artifacts/artifact-http.service';
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
+import { SessionService } from '../../../../services/session/session.service';
 import {
   ArtifactShareModalComponent,
   type ArtifactShareModalData,
 } from './artifact-share-modal.component';
 import { UserService } from '../../../../../auth/user.service';
-import { TooltipDirective } from '../../../../../components/tooltip/tooltip.directive';
 import { ToastService } from '../../../../../services/toast/toast.service';
 import {
   ConfirmationDialogComponent,
   type ConfirmationDialogData,
 } from '../../../../../components/confirmation-dialog';
 import {
+  CONTENT_CARD_ACTION_CLASS,
+  ContentCardComponent,
+  type ContentCardMenuItem,
+} from '../../../../../components/content-card/content-card.component';
+import {
   RenameArtifactDialogComponent,
   type RenameArtifactDialogData,
   type RenameArtifactDialogResult,
 } from '../../../../../artifacts/components/rename-artifact-dialog.component';
+import {
+  ArtifactThumbnailComponent,
+  type ArtifactThumbnailSource,
+} from '../../../../../artifacts/components/artifact-thumbnail.component';
+import { artifactTypeStyle } from '../../../../../artifacts/artifact-type-style';
 import { parseIso } from '../../../../../utils/date';
 
-/** Visual treatment derived from an artifact's content type. */
-interface ArtifactKind {
-  /** Short type label (HTML, JS, MD…). */
-  label: string;
-  /** Heroicon name for the type stamp. */
-  icon: string;
-  /** Single accent color (CSS). Used sparingly — a 2px edge rule, the
-   *  stamp outline, and the type glyph — never as a fill. One mid tone
-   *  that holds up on both the light and dark surface. */
-  accent: string;
-}
+/** The overflow menu's actions. */
+type ArtifactCardAction = 'share' | 'download' | 'rename' | 'delete';
 
 /**
- * One artifact, presented as a calm, rounded card — deliberately
- * un-"component-kit": a borderless tinted surface (radius matched to the
- * chat input), a hairline type stamp, and a quiet sans metadata line.
- * The lone accent color appears only as a thin left rule, the stamp
- * outline, and the glyph — not as a filled tile or pill.
+ * One artifact version in the conversation, drawn with the shared content
+ * card the browser and attachment cards use, so a page, a file and an
+ * artifact read as one family: a live miniature of the artifact in the
+ * tray, then the title, a `Type · vN · when` line, Open, and an overflow
+ * menu.
  *
- * The artifact's content is never inlined here — opening asks the panel
- * to mint a short-lived render token and load it in a sandboxed iframe.
+ * The miniature is `ArtifactThumbnailComponent`, the library grid's
+ * preview: the artifact rendered at a desktop width in the same sandboxed,
+ * null-origin, `inert` frame and scaled down. It mints lazily, once, when
+ * the card nears the viewport. The artifact's content is never inlined
+ * here.
+ *
+ * The menu keeps the old card's distinction between scopes: Share and
+ * Download act on the version this card shows (one card per version), and
+ * say so; Rename and Delete act on the whole artifact.
  *
  * Anchored inline after its producing assistant message by the
  * message-list (via `Artifact.producedByMessageIndex`); only legacy /
  * unanchorable artifacts fall back to the end-of-conversation strip.
- *
- * Accent is applied via `[style.color]` (not a bound class string) so
- * the structural classes stay static and there's no class-merge
- * ambiguity; `currentColor` then carries it into the rule/stamp/glyph.
  */
 @Component({
   selector: 'app-artifact-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, TooltipDirective],
+  imports: [ContentCardComponent, ArtifactThumbnailComponent, NgIcon],
   providers: [
     provideIcons({
       heroCodeBracket,
+      heroDocument,
       heroDocumentText,
-      heroArrowDownTray,
-      heroArrowPath,
-      heroArrowUpOnSquare,
-      heroPencilSquare,
-      heroTrash,
+      heroPhoto,
+      heroTableCells,
     }),
   ],
+  host: { class: 'block w-80 max-w-full' },
   template: `
-    <div class="artifact-card">
+    <app-content-card
+      [title]="title()"
+      [label]="cardLabel()"
+      [meta]="meta()"
+      [status]="status()"
+      [live]="downloading()"
+      [menuItems]="menuItems()"
+      (menuSelect)="onMenu($event)"
+    >
+      <div contentCardChrome class="flex min-w-0 flex-1 items-center gap-1.5" aria-hidden="true">
+        <span class="flex shrink-0" [class]="style().text">
+          <ng-icon [name]="style().icon" size="13" />
+        </span>
+        <span
+          class="min-w-0 flex-1 truncate rounded-full bg-gray-100 px-2 text-[10px]/4 text-gray-600 dark:bg-white/5 dark:text-gray-400"
+          >{{ style().label }}</span
+        >
+      </div>
+
+      <app-artifact-thumbnail contentCardPreview [source]="thumbnail()" />
+
       <button
+        contentCardAction
         type="button"
-        class="artifact-card__hit"
+        [class]="actionClass"
         [attr.aria-label]="ariaLabel()"
         (click)="open()"
-      ></button>
-
-      <span class="artifact-card__surface">
-        <span
-          class="artifact-card__rule"
-          [style.color]="kind().accent"
-          aria-hidden="true"
-        ></span>
-
-        <span
-          class="artifact-card__stamp"
-          [style.color]="kind().accent"
-          aria-hidden="true"
-        >
-          <ng-icon [name]="kind().icon" />
-        </span>
-
-        <span class="artifact-card__body" aria-hidden="true">
-          <span class="artifact-card__title">{{
-            artifact().title || 'Untitled artifact'
-          }}</span>
-          <span class="artifact-card__meta">
-            <span class="artifact-card__type">{{ kind().label }}</span>
-            <span class="artifact-card__sep">·</span>
-            <span>v{{ artifact().version }}</span>
-            @if (updatedLabel()) {
-              <span class="artifact-card__sep">·</span>
-              <span>{{ updatedLabel() }}</span>
-            }
-          </span>
-        </span>
-
-        <span class="artifact-card__actions">
-          <button
-            type="button"
-            class="artifact-card__action"
-            [attr.aria-label]="shareAriaLabel()"
-            [appTooltip]="'Share version ' + artifact().version"
-            (click)="share()"
-          >
-            <ng-icon name="heroArrowUpOnSquare" aria-hidden="true" />
-            <span class="artifact-card__action-label">Share</span>
-          </button>
-
-          <button
-            type="button"
-            class="artifact-card__action"
-            [class.is-busy]="downloading()"
-            [attr.aria-label]="downloadAriaLabel()"
-            [attr.aria-busy]="downloading()"
-            [appTooltip]="'Download version ' + artifact().version"
-            [disabled]="downloading()"
-            (click)="download()"
-          >
-            <ng-icon
-              [name]="downloading() ? 'heroArrowPath' : 'heroArrowDownTray'"
-              aria-hidden="true"
-            />
-            <span class="artifact-card__action-label">Download</span>
-          </button>
-
-          <button
-            type="button"
-            class="artifact-card__action artifact-card__action--icon"
-            [attr.aria-label]="renameAriaLabel()"
-            [appTooltip]="'Rename artifact'"
-            [disabled]="mutating()"
-            (click)="rename()"
-          >
-            <ng-icon name="heroPencilSquare" aria-hidden="true" />
-          </button>
-
-          <button
-            type="button"
-            class="artifact-card__action artifact-card__action--icon artifact-card__action--danger"
-            [attr.aria-label]="deleteAriaLabel()"
-            [appTooltip]="'Delete artifact'"
-            [disabled]="mutating()"
-            (click)="confirmDelete()"
-          >
-            <ng-icon name="heroTrash" aria-hidden="true" />
-          </button>
-        </span>
-      </span>
-    </div>
-  `,
-  styles: `
-    :host {
-      display: block;
-    }
-
-    /* Card shell: a positioning context for the stretched open button
-       and the download button. No chrome of its own. isolation:isolate
-       keeps the internal z-index (hit=1, surface=2) scoped to the card
-       so it can't paint over page overlays (e.g. the context popover) —
-       the card as a whole stacks at its normal flow level. */
-    .artifact-card {
-      position: relative;
-      isolation: isolate;
-      display: block;
-      width: 100%;
-      /* Establishes the query container for the narrow-card rules at the
-         bottom of this block. The card is sized by the chat column, not
-         the viewport — the artifact panel docking open halves it — so a
-         container query is correct here and a media query is not. */
-      container-type: inline-size;
-      /* matches the chat input's rounded-2xl so the focus ring and the
-         surface share the app's corner radius */
-      border-radius: 1rem;
-    }
-
-    /* Primary action: an invisible button stretched over the whole card.
-       It owns the focus ring (an un-clipped rectangle so the rounded
-       corner can't eat it). The surface above is pointer-events:none, so
-       a click anywhere but the download button falls through to here. */
-    .artifact-card__hit {
-      position: absolute;
-      inset: 0;
-      z-index: 1;
-      appearance: none;
-      -webkit-appearance: none;
-      margin: 0;
-      padding: 0;
-      border: 0;
-      background: none;
-      font: inherit;
-      border-radius: inherit;
-      cursor: pointer;
-    }
-
-    .artifact-card__hit:focus-visible {
-      outline: 2px solid #2563eb;
-      outline-offset: 3px;
-    }
-
-    :host-context(html.dark) .artifact-card__hit:focus-visible {
-      outline-color: #60a5fa;
-    }
-
-    /* The visible body: a borderless, tinted, generously rounded card.
-       overflow:hidden so the left rule conforms to the rounded edge.
-       pointer-events:none delegates clicks to the stretched button
-       beneath; the download button (col 3) re-enables them. The grid's
-       auto last column sizes itself to the button — no manual gutter. */
-    .artifact-card__surface {
-      position: relative;
-      z-index: 2;
-      pointer-events: none;
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 0.875rem;
-      padding: 0.8rem 1rem 0.8rem 1.1rem;
-      background: var(--color-gray-100);
-      border-radius: 1rem;
-      overflow: hidden;
-      transition: background-color 0.18s ease;
-    }
-
-    :host-context(html.dark) .artifact-card__surface {
-      background: rgba(255, 255, 255, 0.045);
-    }
-
-    .artifact-card:hover .artifact-card__surface {
-      background: var(--color-gray-200);
-    }
-
-    :host-context(html.dark) .artifact-card:hover .artifact-card__surface {
-      background: rgba(255, 255, 255, 0.08);
-    }
-
-    /* Thin left rule: a short tick at rest, runs the full height on
-       hover/focus. The card's only structural line. */
-    .artifact-card__rule {
-      position: absolute;
-      left: 0;
-      top: 50%;
-      width: 2px;
-      height: 1.15rem;
-      transform: translateY(-50%);
-      background: currentColor;
-      opacity: 0.65;
-      transition:
-        height 0.2s ease,
-        opacity 0.2s ease;
-    }
-
-    .artifact-card:hover .artifact-card__rule,
-    .artifact-card__hit:focus-visible
-      ~ .artifact-card__surface
-      .artifact-card__rule {
-      height: 100%;
-      opacity: 1;
-    }
-
-    /* Hairline type stamp — outline only, no fill. */
-    .artifact-card__stamp {
-      display: grid;
-      place-items: center;
-      width: 2rem;
-      height: 2rem;
-      border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
-      border-radius: 4px;
-    }
-
-    .artifact-card__stamp ng-icon {
-      font-size: 1rem;
-      line-height: 1;
-    }
-
-    /* min-width:0 lets the 1fr column actually shrink; overflow:hidden
-       is what stops its contents painting outside it. Without the
-       latter the metadata line spills under the action buttons once the
-       chat column narrows (e.g. with the artifact panel docked open). */
-    .artifact-card__body {
-      min-width: 0;
-      overflow: hidden;
-    }
-
-    .artifact-card__title {
-      display: block;
-      font-size: 0.875rem;
-      font-weight: 600;
-      letter-spacing: -0.006em;
-      color: #1f2430;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    :host-context(html.dark) .artifact-card__title {
-      color: #eceef2;
-    }
-
-    /* Metadata line — the app's sans, small and quiet. */
-    /* Truncates as one line rather than wrapping or overflowing: the
-       type/version/time chunks are progressively less important, so
-       clipping from the right degrades in the right order. */
-    .artifact-card__meta {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-      margin-top: 0.2rem;
-      font-size: 0.75rem;
-      color: #4b5563;
-      min-width: 0;
-      white-space: nowrap;
-      overflow: hidden;
-    }
-    .artifact-card__meta > * {
-      flex: 0 0 auto;
-    }
-
-    :host-context(html.dark) .artifact-card__meta {
-      color: #9aa3b2;
-    }
-
-    .artifact-card__type {
-      text-transform: uppercase;
-      font-weight: 600;
-      letter-spacing: 0.07em;
-      color: #353c4a;
-    }
-
-    :host-context(html.dark) .artifact-card__type {
-      color: #c4cbd8;
-    }
-
-    .artifact-card__sep {
-      opacity: 0.4;
-    }
-
-    /* Rename and Delete are icon-only at every width. They act on the
-       whole artifact while Share and Download act on the version this
-       card shows, and giving the whole-artifact pair the quieter
-       treatment is what keeps that difference readable — four equally
-       weighted labelled buttons would read as four peers. Their labels
-       are visually hidden rather than absent, so the accessible name
-       survives (WCAG 2.5.3), and [appTooltip] is what a sighted user
-       gets in place of text. */
-    .artifact-card__action--icon {
-      padding-left: 0.4rem;
-      padding-right: 0.4rem;
-    }
-
-    .artifact-card__action--danger:hover {
-      color: #b42318;
-      border-color: color-mix(in srgb, #b42318 45%, transparent);
-      background: rgba(180, 35, 24, 0.07);
-    }
-
-    :host-context(html.dark) .artifact-card__action--danger:hover {
-      color: #f9a8a0;
-      border-color: color-mix(in srgb, #f9a8a0 45%, transparent);
-      background: rgba(249, 168, 160, 0.12);
-    }
-
-    /* Secondary actions sit in the grid's last column.
-       The row re-enables pointer events for itself so the buttons
-       capture their own clicks while the rest of the card falls through
-       to the stretched open button beneath. */
-    .artifact-card__actions {
-      pointer-events: auto;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-      /* The grid's last column is sized auto, so the actions always get
-         the width they ask for; this just stops them being the thing
-         that wraps. */
-      flex: 0 0 auto;
-    }
-
-    /* A bordered, labelled action button. Both actions keep a visible
-       text label, so no tooltip is needed for the accessible name
-       (WCAG 2.5.3) — the icon-only variant would. Resting colour clears
-       the 3:1 non-text contrast bar. */
-    .artifact-card__action {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-      margin: 0;
-      padding: 0.34rem 0.7rem;
-      border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
-      border-radius: 7px;
-      background: none;
-      color: #6b7280;
-      font: inherit;
-      font-size: 0.75rem;
-      font-weight: 600;
-      line-height: 1;
-      white-space: nowrap;
-      cursor: pointer;
-      transition:
-        color 0.18s ease,
-        border-color 0.18s ease,
-        background-color 0.18s ease;
-    }
-
-    .artifact-card__action ng-icon {
-      font-size: 0.95rem;
-      line-height: 1;
-    }
-
-    .artifact-card:hover .artifact-card__action,
-    .artifact-card__action:hover {
-      color: #374151;
-    }
-
-    .artifact-card__action:hover {
-      background: rgba(0, 0, 0, 0.05);
-    }
-
-    .artifact-card__action:focus-visible {
-      outline: 2px solid #2563eb;
-      outline-offset: 2px;
-    }
-
-    .artifact-card__action:disabled {
-      cursor: default;
-    }
-
-    .artifact-card__action.is-busy ng-icon {
-      animation: artifact-card-spin 0.8s linear infinite;
-    }
-
-    :host-context(html.dark) .artifact-card__action {
-      color: #9aa3b2;
-    }
-
-    :host-context(html.dark) .artifact-card:hover .artifact-card__action,
-    :host-context(html.dark) .artifact-card__action:hover {
-      color: #cbd2dd;
-    }
-
-    :host-context(html.dark) .artifact-card__action:hover {
-      background: rgba(255, 255, 255, 0.08);
-    }
-
-    :host-context(html.dark) .artifact-card__action:focus-visible {
-      outline-color: #60a5fa;
-    }
-
-    @keyframes artifact-card-spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
-
-    /* Narrow card (docked artifact panel, split view, mobile): the
-       labelled buttons would otherwise consume the whole row and the
-       title would clip to nothing. Drop the labels to icons and let the
-       title win the space back. The threshold is 34rem rather than the
-       original 26rem because the row now carries four controls, not
-       two — Share and Download have to shed their text sooner to leave
-       the title anything to occupy.
-
-       The label is visually hidden rather than removed, so it stays in
-       the accessible name (WCAG 2.5.3) — and the buttons carry
-       [appTooltip], which is what a sighted user gets in place of the
-       text they can no longer see. */
-    @container (max-width: 34rem) {
-      .artifact-card__action-label {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip-path: inset(50%);
-        white-space: nowrap;
-      }
-      .artifact-card__action {
-        padding-left: 0.45rem;
-        padding-right: 0.45rem;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .artifact-card__surface,
-      .artifact-card__rule,
-      .artifact-card__action {
-        transition: none;
-      }
-      .artifact-card__action.is-busy ng-icon {
-        animation: none;
-      }
-    }
+      >
+        Open
+      </button>
+    </app-content-card>
   `,
 })
 export class ArtifactCardComponent {
@@ -527,55 +126,94 @@ export class ArtifactCardComponent {
   private artifactState = inject(ArtifactStateService);
   private artifactHttp = inject(ArtifactHttpService);
   private artifactDownload = inject(ArtifactDownloadService);
+  private sessionService = inject(SessionService);
   private dialog = inject(Dialog);
   private userService = inject(UserService);
   private toast = inject(ToastService);
 
+  protected readonly actionClass = CONTENT_CARD_ACTION_CLASS;
+
   protected readonly downloading = signal(false);
-  /** A rename or delete is in flight, so both of those buttons wait. */
+  /** A rename or delete is in flight, so both of those wait. */
   protected readonly mutating = signal(false);
 
-  protected readonly kind = computed<ArtifactKind>(() =>
-    classifyContentType(this.artifact().contentType),
+  protected readonly style = computed(() =>
+    artifactTypeStyle(this.artifact().contentType),
   );
 
-  /** Short, human relative time for the meta line. Empty when the
-   *  timestamp is missing or unparseable so the row just omits it. */
+  protected readonly title = computed(
+    () => this.artifact().title || 'Untitled artifact',
+  );
+
+  /** Short, human relative time. Empty when the timestamp is missing or
+   *  unparseable, so the line just omits it. */
   protected readonly updatedLabel = computed<string>(() =>
     relativeTime(this.artifact().updatedAt),
   );
 
+  protected readonly meta = computed(
+    () => `${this.style().label} · v${this.artifact().version}`,
+  );
+
+  protected readonly status = computed(() =>
+    this.downloading() ? 'Downloading…' : this.updatedLabel(),
+  );
+
+  /** The version this card shows, in the conversation that made it. */
+  protected readonly thumbnail = computed<ArtifactThumbnailSource>(() => {
+    const a = this.artifact();
+    return {
+      kind: 'owned',
+      artifactId: a.artifactId,
+      version: a.version,
+      sessionId: this.sessionService.currentSession().sessionId,
+      contentType: a.contentType,
+    };
+  });
+
+  protected readonly cardLabel = computed(
+    () =>
+      `${this.style().label} artifact ${this.title()}, version ${this.artifact().version}`,
+  );
+
+  /** Contains the visible "Open" (WCAG 2.5.3) and names what it opens. */
   protected readonly ariaLabel = computed(
     () =>
-      `Open ${this.kind().label} artifact ${this.artifact().title || 'Untitled'}, version ${this.artifact().version}`,
+      `Open ${this.style().label} artifact ${this.artifact().title || 'Untitled'}, version ${this.artifact().version}`,
   );
 
-  /** Static so the visible "Download" label is always contained in the
-   *  accessible name (WCAG 2.5.3); the working state rides `aria-busy`. */
-  protected readonly downloadAriaLabel = computed(
-    () =>
-      `Download ${this.kind().label} artifact ${this.artifact().title || 'Untitled'}, version ${this.artifact().version}`,
-  );
+  /* Share and Download name the version, because the card does; Rename
+     and Delete name none, deliberately, and Delete says "and all
+     versions" in its confirmation. This card is one of possibly several
+     for the same artifact, each captioned with its own version, so
+     "Delete version 2" beside "Download version 2" would promise
+     something the control does not do: both act on the whole artifact. */
+  protected readonly menuItems = computed<ContentCardMenuItem[]>(() => {
+    const v = this.artifact().version;
+    return [
+      { id: 'share', label: `Share version ${v}` },
+      { id: 'download', label: `Download version ${v}` },
+      { id: 'rename', label: 'Rename artifact' },
+      { id: 'delete', label: 'Delete artifact', danger: true },
+    ];
+  });
 
-  protected readonly shareAriaLabel = computed(
-    () =>
-      `Share ${this.kind().label} artifact ${this.artifact().title || 'Untitled'}, version ${this.artifact().version}`,
-  );
-
-  /* Rename and Delete name no version, deliberately — and Delete says
-     "and all versions" outright. This card is one of possibly several
-     for the same artifact, each captioned with its own version number,
-     so a label reading "Delete … version 2" next to the neighbouring
-     "Download … version 2" would promise something these controls do
-     not do: both act on the whole artifact. */
-  protected readonly renameAriaLabel = computed(
-    () => `Rename artifact ${this.artifact().title || 'Untitled'}`,
-  );
-
-  protected readonly deleteAriaLabel = computed(
-    () =>
-      `Delete artifact ${this.artifact().title || 'Untitled'} and all versions`,
-  );
+  protected onMenu(id: string): void {
+    switch (id as ArtifactCardAction) {
+      case 'share':
+        this.share();
+        return;
+      case 'download':
+        void this.download();
+        return;
+      case 'rename':
+        void this.rename();
+        return;
+      case 'delete':
+        void this.confirmDelete();
+        return;
+    }
+  }
 
   protected open(): void {
     const a = this.artifact();
@@ -609,6 +247,7 @@ export class ArtifactCardComponent {
    *  registry follows — otherwise the sibling cards for the same
    *  artifact would keep the old name until a reload. */
   protected async rename(): Promise<void> {
+    if (this.mutating()) return;
     const a = this.artifact();
     const data: RenameArtifactDialogData = { title: a.title };
     const dialogRef = this.dialog.open<RenameArtifactDialogResult>(
@@ -639,7 +278,7 @@ export class ArtifactCardComponent {
    *
    *  The confirmation copy leads with the version count, because this
    *  control sits on a card captioned "v2" and the neighbouring Share
-   *  and Download buttons really are scoped to that version. The dialog
+   *  and Download items really are scoped to that version. The dialog
    *  is the last chance to correct that reading before the other cards
    *  vanish alongside this one.
    *
@@ -648,6 +287,7 @@ export class ArtifactCardComponent {
    *  the request succeeds: an optimistic removal would look like success
    *  and then reappear on the next session load. */
   protected async confirmDelete(): Promise<void> {
+    if (this.mutating()) return;
     const a = this.artifact();
     const versions = this.artifactState.versionsFor(a.artifactId).length;
     const scope =
@@ -696,40 +336,6 @@ export class ArtifactCardComponent {
     } finally {
       this.downloading.set(false);
     }
-  }
-}
-
-const CODE = 'heroCodeBracket';
-const DOC = 'heroDocumentText';
-
-/** Map a MIME type to a label + accent. The match is on the bare type
- *  (parameters like `; charset=utf-8` are ignored). One mid-tone accent
- *  per type — legible on both the light and dark surface, used only as
- *  a thin rule / outline / glyph. */
-function classifyContentType(contentType: string): ArtifactKind {
-  const mime = (contentType || '').split(';')[0].trim().toLowerCase();
-
-  switch (mime) {
-    case 'text/html':
-    case 'application/xhtml+xml':
-      return { label: 'HTML', icon: CODE, accent: '#e8762a' };
-    case 'text/javascript':
-    case 'application/javascript':
-      return { label: 'JS', icon: CODE, accent: '#cf9a13' };
-    case 'text/css':
-      return { label: 'CSS', icon: CODE, accent: '#2f9bd6' };
-    case 'application/json':
-      return { label: 'JSON', icon: CODE, accent: '#1f9d6b' };
-    case 'image/svg+xml':
-      return { label: 'SVG', icon: CODE, accent: '#d6519a' };
-    case 'text/markdown':
-      return { label: 'MD', icon: DOC, accent: '#7c6cf0' };
-    default:
-      return {
-        label: mime.startsWith('text/') ? 'TEXT' : 'DOC',
-        icon: DOC,
-        accent: '#8a93a3',
-      };
   }
 }
 
