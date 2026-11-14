@@ -1889,10 +1889,10 @@
     },
     "document_qa.budget_indirect_rate": {
       "family": "document_qa",
-      "passed": false,
-      "passes": 1,
+      "passed": true,
+      "passes": 3,
       "samples": 3,
-      "answer": "**26.5%**, applied to modified total direct costs. The earlier rate of 24% no longer applies.",
+      "answer": "**26.5%**, applied to modified total direct costs.",
       "efficiency": {
         "modelCalls": 2.0,
         "outputTokens": 181.0,
@@ -1965,9 +1965,9 @@
     "document_qa.large_manual_per_diem": {
       "family": "document_qa",
       "passed": true,
-      "passes": 2,
+      "passes": 3,
       "samples": 3,
-      "answer": "**$47.50**\n\nThe manual's scanned pages and images were still being indexed when I searched, so I couldn't check whether any of them change this amount.",
+      "answer": "$47.50\n\nThis is from page 88 of the manual. A separate interstate rate of $63.20 is on page 119. The scanned pages are still being indexed, so they weren't included in this search.",
       "efficiency": {
         "modelCalls": 3.0,
         "outputTokens": 410.0,
@@ -2175,7 +2175,7 @@
   },
   "familyPromotions": {
     "document_qa": {
-      "promotedAt": "2026-11-14T17:24:30.187542Z",
+      "promotedAt": "2026-11-14T21:10:01.162145Z",
       "source": {
         "startedAt": "2026-11-14T17:14:52.029264Z",
         "target": "runtime:dev-boisestateai-v2",
