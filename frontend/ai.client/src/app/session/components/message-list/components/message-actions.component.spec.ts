@@ -339,3 +339,55 @@ describe('MessageActionsComponent — the copy shortcut', () => {
     expect(targets.canCopyLatestResponse()).toBe(false);
   });
 });
+
+describe('MessageActionsComponent — provider outage row', () => {
+  let fixture: ComponentFixture<MessageActionsComponent>;
+  let component: MessageActionsComponent;
+
+  const offer = { label: 'AWS service issue', modelName: 'Claude Opus 5.5' };
+
+  function row(): HTMLElement | null {
+    return fixture.nativeElement.querySelector('[data-testid="provider-outage-row"]');
+  }
+
+  function button(label: string): HTMLButtonElement | null {
+    return fixture.nativeElement.querySelector(`button[aria-label="${label}"]`);
+  }
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [MessageActionsComponent],
+      providers: [provideMarkdown()],
+    }).compileComponents();
+    TestBed.inject(MarkdownService).parse = () => '';
+
+    fixture = TestBed.createComponent(MessageActionsComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('messages', [makeMessage('⚠️ down')]);
+  });
+
+  it('shows nothing without an outage', () => {
+    fixture.detectChanges();
+    expect(row()).toBeNull();
+  });
+
+  it('says whose fault it is and offers Try again, with no model switch', () => {
+    fixture.componentRef.setInput('outageOffer', offer);
+    fixture.detectChanges();
+
+    expect(row()?.textContent).toContain('AWS service issue');
+    expect(button('Send your last message again on Claude Opus 5.5')?.textContent).toContain('Try again');
+    expect(row()?.textContent).not.toContain('Try with');
+  });
+
+  it('emits when Try again is clicked', () => {
+    fixture.componentRef.setInput('outageOffer', { ...offer, modelName: null });
+    fixture.detectChanges();
+    let clicks = 0;
+    component.outageRetryRequested.subscribe(() => clicks++);
+
+    button('Send your last message again')!.click();
+
+    expect(clicks).toBe(1);
+  });
+});

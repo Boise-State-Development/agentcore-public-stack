@@ -17,6 +17,8 @@ export enum ErrorCode {
   INTERNAL_ERROR = 'internal_error',
   SERVICE_UNAVAILABLE = 'service_unavailable',
   TIMEOUT = 'timeout',
+  /** The model provider (Bedrock, OpenAI, Gemini) failed on its side. */
+  PROVIDER_UNAVAILABLE = 'provider_unavailable',
 
   // Agent-specific errors
   AGENT_ERROR = 'agent_error',
@@ -294,6 +296,7 @@ export class ErrorService {
       [ErrorCode.INTERNAL_ERROR]: 'Server Error',
       [ErrorCode.SERVICE_UNAVAILABLE]: 'Service Unavailable',
       [ErrorCode.TIMEOUT]: 'Request Timeout',
+      [ErrorCode.PROVIDER_UNAVAILABLE]: 'Model Provider Unavailable',
       [ErrorCode.AGENT_ERROR]: 'Agent Error',
       [ErrorCode.TOOL_ERROR]: 'Tool Error',
       [ErrorCode.MODEL_ERROR]: 'Model Error',

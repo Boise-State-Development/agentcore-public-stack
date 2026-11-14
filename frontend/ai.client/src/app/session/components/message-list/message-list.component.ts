@@ -48,6 +48,7 @@ import {
 } from '../../../services/browser-login/browser-login.service';
 import { CompactionSummaryService } from '../../services/chat/compaction-summary.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
+import { OutageOffer, outageLabel } from '../../services/chat/provider-outage';
 import { ToolInsightService } from '../../services/chat/tool-insight.service';
 import { StreamParserService } from '../../services/chat/stream-parser.service';
 
@@ -253,6 +254,8 @@ export class MessageListComponent {
    *  assistant message. The page reuses the normal submit path with a
    *  canned prompt. */
   continueRequested = output<void>();
+  /** Bubbled up when the user clicks "Try again" after a provider outage. */
+  outageRetryRequested = output<void>();
 
   private consentService = inject(OAuthConsentService);
   private handoffState = inject(HandoffStateService);
@@ -638,6 +641,20 @@ export class MessageListComponent {
   protected readonly showFeedbackLink = computed(
     () => !!this.feedbackAgent() && this.messages().length > 0 && !this.isChatLoading(),
   );
+
+  /** What the retry row under a provider-outage reply shows, once per outage;
+   *  gated per message by `outageOfferFor`. */
+  private readonly outageOffer = computed<OutageOffer | null>(() => {
+    const outage = this.chatStateService.lastTurnProviderOutage();
+    return outage ? { label: outageLabel(outage.provider), modelName: outage.modelName } : null;
+  });
+
+  /** The retry row for this message: only the final message of a turn the
+   *  provider failed, and never while a new response is streaming. */
+  protected outageOfferFor(messageId: string): OutageOffer | null {
+    if (this.isChatLoading() || messageId !== this.lastMessageId()) return null;
+    return this.outageOffer();
+  }
 
   /** Only the final message of a recoverable max_tokens turn gets the
    *  "Continue" affordance. Live-only state, never shown while a new

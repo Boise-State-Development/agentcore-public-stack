@@ -19,6 +19,7 @@
   [config]="chatConfig"
   (messageSubmitted)="onMessageSubmitted($event)"
   (continueRequested)="onContinueRequested()"
+  (outageRetryRequested)="onOutageRetryRequested()"
   (messageCancelled)="onMessageCancelled()"
   (fileAttached)="onFileAttached($event)"
   (assistantClosed)="closeAssistant()"

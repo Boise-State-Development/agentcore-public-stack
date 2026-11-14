@@ -288,7 +288,8 @@
             [streamingMessageId]="streamingMessageId()"
             [embeddedMode]="true"
             [allowDownload]="citationsDownloadAllowed()"
-            (continueRequested)="continueRequested.emit()" />
+            (continueRequested)="continueRequested.emit()"
+          (outageRetryRequested)="outageRetryRequested.emit()" />
         </div>
       </div>
 
@@ -341,7 +342,8 @@
           [feedbackAgent]="feedbackAgent()"
           [sessionId]="sessionId()"
           [allowDownload]="citationsDownloadAllowed()"
-          (continueRequested)="continueRequested.emit()" />
+          (continueRequested)="continueRequested.emit()"
+          (outageRetryRequested)="outageRetryRequested.emit()" />
       </div>
     </div>
 
