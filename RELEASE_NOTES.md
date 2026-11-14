@@ -189,6 +189,8 @@ Behind `HANDOFFS_ENABLED` / `features.handoffs`, on dev only.
 - **Admin session cost view.** It no longer returns 500 for a conversation that ran extraction or voice (#2050).
 - **Office tools.** Five of them clean an output file name instead of refusing it (#2010).
 - **Role inheritance.** Connector, file-source and export access honour one level of it, as tool grants already did (#2013).
+- **Fork and Rewind on summarized messages** (#2065). Once the server refuses one because the message is inside the compaction summary, both buttons are hidden on that message and every earlier one, and focus moves to Copy.
+- **No Retry on an upload that can't succeed** (#2065), such as a PDF over 1,000 pages or a 400 from presign. The reason and Remove stay; Retry is kept for network, 5xx, 409 and quota failures.
 - **Smaller fixes:**
   - the composer's false "image will be left out" warning (#1997);
   - a lone attachment card's name (#1985);

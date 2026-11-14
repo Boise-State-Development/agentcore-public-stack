@@ -98,6 +98,7 @@ Attachments are planned in tokens, per model: one pure planner (`attachment_plan
 - Connector, file-source and export access honour one level of role inheritance, as tool grants do; status probes no longer toast (#2013)
 - 502s from idle connections: idle timeouts now order CloudFront 30 s < ALB 60 s < uvicorn 75 s, and the SPA retries a presign once on 502/503 (#1999)
 - A lone attachment card has room for its name (#1985); handoff relay toast, connector name and `waitingOn` fixes (#2014)
+- After the server refuses a fork or rewind because the message is in the compaction summary, Fork and Rewind are hidden on that message and every earlier one; an upload refused for good (a 400 from presign or `/complete`, such as a PDF over 1,000 pages, or the client's own size and type checks) no longer offers Retry (#2065)
 
 ### 🔒 Security
 

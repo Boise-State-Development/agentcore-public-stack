@@ -241,8 +241,8 @@ const DEFAULT_COLORS = {
 
       <!-- Action buttons -->
       <div class="flex shrink-0 items-center gap-1">
-        @if (isError() && pendingUpload()) {
-          <!-- Retry button -->
+        @if (canRetry()) {
+          <!-- Retry button: not for a refusal the same file would meet again -->
           <button
             type="button"
             (click)="onRetryClick($event)"
@@ -395,6 +395,11 @@ export class FileCardComponent {
   );
   protected readonly isCompleting = computed(() => this.status() === 'completing');
   protected readonly isError = computed(() => this.status() === 'error');
+  /** Retry only a failed upload that could go through next time; see `PendingUpload.permanent`. */
+  protected readonly canRetry = computed(() => {
+    const pending = this.pendingUpload();
+    return this.isError() && !!pending && !pending.permanent;
+  });
   protected readonly isReady = computed(() => this.status() === 'ready');
   protected readonly isImage = computed(() => isImageMimeType(this.mimeType()));
 

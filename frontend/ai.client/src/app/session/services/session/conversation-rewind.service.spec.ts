@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConversationRewindService } from './conversation-rewind.service';
+import { ConversationRewindService, isSummaryRefusal } from './conversation-rewind.service';
 import { SessionService } from './session.service';
 import { MessageMapService } from './message-map.service';
 import { ComposerDraftService } from './composer-draft.service';
@@ -112,5 +112,47 @@ describe('ConversationRewindService', () => {
     );
     expect(messageMap.rewindToMessage).not.toHaveBeenCalled();
     expect(composerDraft.pending()).toBeNull();
+  });
+
+  describe('a message the compaction summary covers', () => {
+    const SUMMARY_DETAIL = "That message is part of the conversation's summary and can't be rewound to";
+    const summaryRefusal = () => new HttpErrorResponse({ status: 409, error: { detail: SUMMARY_DETAIL } });
+
+    it('stops offering rewind on it and on every earlier message once the server says so', async () => {
+      sessionService.rewindSession.mockRejectedValue(summaryRefusal());
+
+      await service.rewind(userMessage({ id: 'msg-sess-1-4' }));
+
+      expect(service.isSummarized(userMessage({ id: 'msg-sess-1-4' }))).toBe(true);
+      expect(service.isSummarized(userMessage({ id: 'msg-sess-1-0' }))).toBe(true);
+      expect(service.canRewind(userMessage({ id: 'msg-sess-1-2' }))).toBe(false);
+      // Past the refused message the server has said nothing, so it stays on offer.
+      expect(service.canRewind(userMessage({ id: 'msg-sess-1-6' }))).toBe(true);
+      // Another conversation is untouched.
+      expect(service.canRewind(userMessage({ id: 'msg-sess-2-0' }))).toBe(true);
+    });
+
+    it('only ever moves the boundary forward', () => {
+      service.noteRefusal(userMessage({ id: 'msg-sess-1-8' }), summaryRefusal());
+      service.noteRefusal(userMessage({ id: 'msg-sess-1-2' }), summaryRefusal());
+      expect(service.isSummarized(userMessage({ id: 'msg-sess-1-8' }))).toBe(true);
+    });
+
+    it('ignores refusals that are worth trying again', async () => {
+      for (const detail of ['The conversation changed; reload and try again', 'That message has already been rewound']) {
+        sessionService.rewindSession.mockRejectedValueOnce(new HttpErrorResponse({ status: 409, error: { detail } }));
+        await service.rewind(userMessage());
+      }
+      expect(service.isSummarized(userMessage())).toBe(false);
+      expect(service.canRewind(userMessage())).toBe(true);
+    });
+
+    it('recognises the summary refusal by status and wording', () => {
+      expect(isSummaryRefusal(summaryRefusal())).toBe(true);
+      expect(isSummaryRefusal(new HttpErrorResponse({ status: 400, error: { detail: SUMMARY_DETAIL } }))).toBe(false);
+      expect(isSummaryRefusal(new HttpErrorResponse({ status: 409, error: { detail: 'A turn is running' } }))).toBe(false);
+      expect(isSummaryRefusal(new HttpErrorResponse({ status: 409, error: null }))).toBe(false);
+      expect(isSummaryRefusal(new Error(SUMMARY_DETAIL))).toBe(false);
+    });
   });
 });
