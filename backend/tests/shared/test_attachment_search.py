@@ -305,10 +305,12 @@ class TestQueryMode:
 
 TOOL_MODULE = "agents.builtin_tools.document_read_tool"
 
-#: sha256 of the sorted-keys JSON of the spec before the search mode existed.
+#: sha256 of the sorted-keys JSON of the spec without the search mode.
 #: A deployment without the KB must keep exactly this spec, or every live
 #: session re-writes its cached prefix (CLAUDE.md, prompt-cache contract).
-SPEC_WITHOUT_SEARCH_SHA256 = "3d0786d1e3d2eee17adea77a97f0e49f0bc924ceaa54bfdc8c9eb59659a9114a"
+#: Moved once, deliberately, when the tool learned to return images
+#: (``read_image``): the docstring names them, one prefix rewrite at deploy.
+SPEC_WITHOUT_SEARCH_SHA256 = "ef07f2b223c724fa435e9760cc866c8128dff52f071d84ebcfa4bfe4ce6c9383"
 
 
 def _spec_hash(tool) -> str:
