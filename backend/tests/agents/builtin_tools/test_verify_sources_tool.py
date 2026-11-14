@@ -9,6 +9,8 @@ it does.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -17,6 +19,7 @@ import pytest
 from agents.builtin_tools.verify_sources_tool import (
     MAX_CLAIMS_PER_CALL,
     MAX_QUOTE_CHARS,
+    VALUE_NOT_BARE_HINT,
     VERIFY_SOURCES_TOOL_NAME,
     make_verify_sources_tool,
 )
@@ -28,6 +31,11 @@ from apis.shared.files.source_provenance import (
 )
 
 TOOL_MODULE = "agents.builtin_tools.verify_sources_tool"
+
+#: sha256 of the spec as the model sees it. It sits in ``toolConfig`` for every
+#: session with a document, so a change here is a deliberate prefix rewrite on
+#: deploy: re-measure it and state the token change in the PR, then re-pin.
+SPEC_DIGEST = "0facacd56528df029b483daac736c59771f41d65bfdcd102c443120f0f555414"
 
 PAGE_1 = "NOTICE OF AWARD\nThe total approved budget is $487,500 for the period of performance."
 PAGE_2 = "The project period begins January 15, 2026.\nDirect costs total $316,200."
@@ -104,6 +112,39 @@ class TestTool:
         assert "quote_unsupported" in description
         assert "verbatim" in description
 
+    def test_the_spec_is_pinned(self):
+        """Constant per deployment and independent of identity, so the prefix
+        has one shape, and any edit to it is caught here first."""
+
+        def digest(tool) -> str:
+            return hashlib.sha256(json.dumps(tool.tool_spec, sort_keys=True).encode()).hexdigest()
+
+        one = make_verify_sources_tool("s1", "u1")
+        other = make_verify_sources_tool("s2", "u2")
+        assert digest(one) == digest(other) == SPEC_DIGEST
+
+    def test_value_is_described_as_the_bare_value_as_printed(self):
+        """It once read "the value exactly as you will state it to the user",
+        and Sonnet 5 on dev sent "July 28, 2027 interim report due": the
+        phrasing of the answer, which no passage contains, so every claim in
+        the call failed."""
+        claims_doc = make_verify_sources_tool("s1", "u1").tool_spec["inputSchema"]["json"][
+            "properties"
+        ]["claims"]["description"]
+        assert "as you will state it" not in claims_doc
+        assert "as the passage prints it" in claims_doc
+        # The failing shape is shown, not just described.
+        assert "interim report due" in claims_doc
+
+    def test_upload_id_is_optional_but_required_among_several(self):
+        """Optional in the schema (a required id sent Haiku 4.5 to guess), and
+        the description says it is not optional once there are two documents:
+        the dev run's first call left it out among five and was refused."""
+        props = make_verify_sources_tool("s1", "u1").tool_spec["inputSchema"]["json"]["properties"]
+        described = " ".join(props["upload_id"]["description"].split())
+        assert "Required when the conversation has more than one document" in described
+        assert "Claims from different documents go in separate calls" in described
+
 
 # ---------------------------------------------------------------------------
 # What reaches the model, and what does not
@@ -147,8 +188,36 @@ class TestWhatReachesTheModel:
             {"json": {"claims": [{"id": "total", "state": STATE_SUPPORTED}]}}
         ]
         payload = str(result)
-        for leaked in ("locator", "precision", "method", "award.pdf", "page"):
+        for leaked in ("locator", "precision", "method", "award.pdf", "page", "hint"):
             assert leaked not in payload
+
+    @pytest.mark.asyncio
+    async def test_a_described_value_comes_back_with_the_one_hint(self, document):
+        """Its date or number is in the passage and the rest is not. Without
+        the hint the model on dev rewrote the quote and re-read the page
+        before it tried the bare value."""
+        tool = make_verify_sources_tool("s1", "u1")
+        result = await _call(
+            tool,
+            upload_id="up-1",
+            claims=[
+                {
+                    "id": "start",
+                    "value": "January 15, 2026 project start",
+                    "quote": "The project period begins January 15, 2026.",
+                },
+                {"id": "fake", "value": "$912,000", "quote": "The total approved budget is $487,500"},
+            ],
+            tool_context=_ctx(),
+        )
+        assert result["content"][0]["json"]["claims"] == [
+            {"id": "start", "state": STATE_QUOTE_UNSUPPORTED, "hint": VALUE_NOT_BARE_HINT},
+            # A wrong amount is not a description: the plain hallucination signal.
+            {"id": "fake", "state": STATE_QUOTE_UNSUPPORTED},
+        ]
+        # The method still reaches the stream, where it is measurement.
+        queued = take_provenance("u1", "s1")
+        assert [c["method"] for c in queued[0]["claims"]] == ["value_not_bare", "no_match"]
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,15 @@ Design notes
   method — leaves on the ``source_provenance`` SSE event and a ``SRCV#`` row
   instead. The state is the deliberate exception: a model that cannot see
   ``quote_unsupported`` cannot correct it, and correcting it is the most
-  valuable thing that can happen in the turn.
+  valuable thing that can happen in the turn. So is the one hint beside it:
+  a ``quote_unsupported`` whose value carries its date or number plus words
+  the passage lacks (``value_not_bare``) says so, because the model otherwise
+  reads it as a bad quote and spends rounds re-reading the document.
+* **The value is the bare value.** ``value`` once read "the value exactly as
+  you will state it to the user", and Sonnet 5 on dev took that literally:
+  "July 28, 2027 interim report due", which no passage contains, so every
+  claim in the call failed. The argument now says *as the passage prints it*
+  and shows the failing shape.
 * **Nowhere near the first token.** The tool runs only when the model calls it,
   after it has read a document and formed an answer. No
   ``BeforeInvocationEvent`` and no ``BeforeModelCallEvent`` hook — the latter
@@ -73,6 +81,7 @@ from apis.shared.files.source_provenance import (
     STATE_SUPPORTED,
     STATE_UNASSESSED,
     STATE_UNVERIFIED,
+    METHOD_VALUE_NOT_BARE,
     Claim,
     document_units,
     verify_claims,
@@ -96,6 +105,14 @@ MAX_CLAIMS_PER_CALL = 12
 #: Refused outright rather than scanned. A passage longer than this is not a
 #: passage, and the quote is model-controlled input.
 MAX_QUOTE_CHARS = 1200
+
+#: Sent beside ``quote_unsupported`` only when the value's own date or number
+#: is in the passage and the rest of it is not (``METHOD_VALUE_NOT_BARE``). On
+#: dev the model read a bare ``quote_unsupported`` as a bad quote: it rewrote
+#: the passage, then re-read the document's page, two rounds and a page of PDF
+#: before it tried the bare value. Failure path only, so a clean call pays
+#: nothing for it.
+VALUE_NOT_BARE_HINT = "Only part of value is in the passage. Send just the value as printed."
 
 _NO_STORAGE_MESSAGE = (
     "❌ Document storage is not configured (S3_USER_FILES_BUCKET_NAME is not set on the runtime)."
@@ -234,6 +251,14 @@ async def _persist(
         logger.warning("verify_sources: failed to persist verdicts", exc_info=True)
 
 
+def _model_facing(result: Any) -> Dict[str, Any]:
+    """``{id, state}``, plus the hint when the value carried a description."""
+    entry = {"id": result.claim_id, "state": result.state}
+    if result.method == METHOD_VALUE_NOT_BARE:
+        entry["hint"] = VALUE_NOT_BARE_HINT
+    return entry
+
+
 def make_verify_sources_tool(session_id: str, user_id: str):
     """Create a ``verify_sources`` tool bound to the given identity."""
     if not session_id or not user_id:
@@ -248,7 +273,8 @@ def make_verify_sources_tool(session_id: str, user_id: str):
         """Check that each value you are asserting is really in the document.
 
         Call this before stating values you took from an attached document —
-        amounts, dates, deadlines, names, percentages — one call per document.
+        amounts, dates, deadlines, names, percentages. One call checks one
+        document; for several, make one call per document in the same turn.
         For each value, give the shortest verbatim passage from the document
         that carries it. Copy the passage exactly as the document has it; do not
         tidy it, join lines, or add quotation marks of your own.
@@ -257,9 +283,9 @@ def make_verify_sources_tool(session_id: str, user_id: str):
         - supported: the passage is in the document and the value is in the
           passage. Safe to cite with a page reference.
         - quote_unsupported: the passage is in the document but the value is
-          NOT in it. Treat this as a mistake on your part — re-read the
-          document and correct the value, or say you could not confirm it. Do
-          not restate it as fact.
+          NOT in it. If it comes with a hint, follow the hint. Otherwise treat
+          it as a mistake on your part — correct the value from the document,
+          or say you could not confirm it. Do not restate it as fact.
         - unassessed: the passage is in the document, but the value is not
           something that can be matched against it. Cite the passage, and do
           not claim the value is confirmed.
@@ -271,12 +297,18 @@ def make_verify_sources_tool(session_id: str, user_id: str):
         you do not need to repeat the location in your answer.
 
         Args:
-            upload_id: Which document. Leave it out when the conversation has
-                one document. Otherwise give the document's filename, or its
-                upload_id from document_read's listing. Never guess an id.
+            upload_id: The one document every claim in this call quotes:
+                its filename, or its upload_id from document_read's listing.
+                Required when the conversation has more than one document;
+                leave it out only when there is one. Claims from different
+                documents go in separate calls. Never guess an id.
             claims: One object per value, each with:
-                id — a short label for the value, e.g. "total_award";
-                value — the value exactly as you will state it to the user;
+                id — a short label for the value, e.g. "interim_report_due";
+                value — only the value, exactly as the passage prints it:
+                "July 28, 2027", "$90,000", "15 days after the end of each
+                calendar quarter". Never a description around it ("July 28,
+                2027 interim report due" fails): the check looks for this
+                exact text inside the quote;
                 quote — the verbatim passage from the document that carries
                 it, one or two sentences;
                 from_fixed_set — true only when the value is one of a fixed
@@ -343,13 +375,11 @@ def make_verify_sources_tool(session_id: str, user_id: str):
 
         record_verify_sources(fmt, [result.state for result in results])
 
-        # The state, and nothing else. Everything richer is display metadata
-        # and would be paid at model rates on every later turn if it went into
-        # the content blocks.
+        # The state, and nothing else, except the one hint a failed claim can
+        # act on. Everything richer is display metadata and would be paid at
+        # model rates on every later turn if it went into the content blocks.
         return {
-            "content": [
-                {"json": {"claims": [{"id": r.claim_id, "state": r.state} for r in results]}}
-            ],
+            "content": [{"json": {"claims": [_model_facing(r) for r in results]}}],
             "status": "success",
         }
 
@@ -360,6 +390,7 @@ __all__ = [
     "MAX_CLAIMS_PER_CALL",
     "MAX_LISTED_DOCUMENTS",
     "MAX_QUOTE_CHARS",
+    "VALUE_NOT_BARE_HINT",
     "VERIFY_SOURCES_TOOL_NAME",
     "make_verify_sources_tool",
     "record_verify_sources",
