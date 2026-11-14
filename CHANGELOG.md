@@ -6,6 +6,10 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ## [Unreleased]
 
+### 🚀 Added
+
+- **The Skill Creator can add a structured extraction to a skill it writes.** A new reference file, `structured-extraction.md`, tells the model when a field set is worth offering, how to write one (format, the 14-field ceiling, `find` phrases), and what the skill's instructions must say so `document_extract` runs it. `my_skill_write_file`'s result for a `field-set.<name>.md` file now lists the fields it stored, says when structured extraction is off in the deployment, and flags a field set saved under the wrong kind. `my_skill_read` marks field-set files, and deleting one says to update the instructions. The seven `my_skill_*` specs are unchanged (pinned by digest), so the cached prefix is not rewritten. A deployment that already seeded `skill_creator` gets the guidance only after an admin adds the file and the two `SKILL.md` edits (`docs/specs/skill-creator.md`, Field sets).
+
 ### 🐛 Fixed
 
 - **An image from a compacted turn can be seen again.** Once compaction summarized the turn that attached an image, the image was no longer in the request, while a PDF attached alongside it stayed readable through `document_read`. On dev, a model asked about one of eight PNGs said it "isn't attached to this conversation". `document_read` now lists the conversation's images and, given an image's upload id, returns its stored compact copy (1,568 px, at most 340 KB). The read counts against the tool round's byte budget, and a text-only model is told it can't view images. The tool's description now names images, which adds 32 tokens to its spec and rewrites the cached prefix once per deployment. A conversation with only images still has no `document_read` (`docs/specs/unified-attachment-delivery.md` §6.2). (#2066)
