@@ -144,18 +144,23 @@ There is nothing to wire for any of them. The useful action is a regression test
 
 ## 5. Capability unlock (new things we could offer)
 
-Ranked separately, as the fourth lens. Each still carries the three-pillar rule: it must cost speed,
-quality and cost nothing, or name the cost.
+This is the fourth lens. It is scored apart from the table in §1, in the same columns as the
+`strands-release-review` skill's Unlocks table (PR #2080), so this audit and the per-release
+readouts line up. An unlock is never part of a bump, and it carries the three-pillar rule: it
+costs speed, quality and cost nothing, or it names the cost. Every row below is unused in
+`backend/src` on `develop` (pin 1.63.0). I have not re-checked them against 1.65.
 
-| Capability | Upstream | What it would enable | Pillar cost if adopted | Verdict |
-|---|---|---|---|---|
-| Request-wide usage across nested agents | `InvocationContext` #5288 | Per-node metering for handoffs, consults and Agent Designer composition (patterns §4 "Metering" row) without building our own aggregator | 0 latency. Metering gets *more* accurate | **Watch**: adopt with the first nested agent (standing watch 2b) |
-| `subagent` / `swarm` / `graph` vended tools | #4841 (1.59), #4922 (1.62), #5131 (1.63) | Model-driven delegation and composition | Each sub-agent is a full prompt prefix of its own (its own cache), so a fan-out multiplies prefix writes. The tool spec enters `toolConfig` once | **Watch**: patterns spec §4.2 decides; read before building our runner |
-| Background tool execution | `BackgroundTasksConfig` #4115 / #4226 (1.55.x) | The model keeps working while a slow tool (browser crawl, extraction) runs | **Cost:** in `agentic` mode it adds a `background` property to every selectable tool's schema plus a management tool, so one `toolConfig` rewrite and per-tool tokens. **Speed:** a turn-latency win only for genuinely independent work | **Watch**: try `always=[…]` for one slow tool first, which leaves schemas untouched |
-| MCP Tasks (SEP-2663) on 2.x | `tasks_config` #4125 (1.55) | Long-running MCP tools that outlive one request | 0 tokens. It is transport | **Watch**: when a connector ships long-running tools |
-| MCP client-level `_meta` | `MCPClient(meta=…)` #4660 (1.61) | Request metadata on every tool call, model-driven ones included | ⚠️ Anything sent here leaves our boundary. Same review as the baggage leak | **Decline** until a server needs it |
-| Deferred cancel (`after_current_tools`) | #4833 | "Finish what you're doing, then stop" | See table #12 | **Watch** (product) |
-| `handoff_to_user` / `DecisionModel` | #4348 (1.57); #5125 / #5588 (1.63) | Reference designs for interrupt tools and a risk classifier for approvals | A classifier is +1 model call per gated tool, on the turn path, which TTFT-adjacent policy must accept | **Decline**: we have `ask_user_question` and the approval card. Read `handoff_to_user` before any new interrupt tool |
+| Unlock | Upstream | What it unlocks | Where it lands | Speed / quality / cost | Next step |
+|---|---|---|---|---|---|
+| Public middleware | `strands.middleware` #4976 (1.62) | A clean way to wrap a tool's execution, here a lock on the tools that write shared resources | `agent_factory.py:372-385`, next to `integrations/mcp_elicitation.py` (already a middleware) | Middleware itself costs none. The concurrent-tools use saves Σd − max d per batch | **Scoping**: the queued [2026-11-14] concurrent-tools spike |
+| Request-wide limits and usage across nested agents | `InvocationContext` #5288 (1.63); `structured_output_attempts` #4926 (1.63) | Per-node metering, and one turn/token budget across handoffs, consults and Agent Designer composition, without our own aggregator | patterns spec §4 "Metering" row; handoffs §8.10; the [2026-07-17] headless `Limits` entry | Speed: none (a check at each cycle boundary). Quality: none. Cost: none, and metering gets more accurate | **Watch**: adopt with the first nested agent (standing watch 2b). The queue entry is refreshed |
+| Vended `subagent` / `swarm` / `graph` tools | #4841 (1.59), #4922 (1.62), #5131 (1.63) | Delegation and composition driven by the model | patterns spec §4.2 (what Strands handles vs. ours) | Cost: each child is a full prefix with its own cache, so a fan-out multiplies prefix writes. The tool spec enters `toolConfig` once. Speed: children can run in parallel | **Spec sync**: a patterns §4.2 row beside the 1.65 readout's #6093 (async child-agent builders) |
+| Background tool execution | `BackgroundTasksConfig` #4115 / #4226 (1.55.x) | The model keeps working while a slow tool (browser crawl, extraction) runs | `agent_factory.py` `Agent(...)` | Cost: `agentic` mode adds a `background` property to every selectable tool's schema plus a management tool, so one `toolConfig` rewrite and per-tool tokens. `always=[…]` leaves schemas untouched. Speed: a win only for independent work | **Watch**: try `always=[one slow tool]` first |
+| MCP Tasks (SEP-2663) on mcp 2.x | `MCPClient(tasks_config=…)` #4125 (1.55) | Long-running MCP tools that outlive one request | `integrations/external_mcp_client.py`, `gateway_mcp_client.py` | None. It is transport only; the result still enters history once | **Watch**: when a connector ships long-running tools |
+| Client-level MCP `_meta` | `MCPClient(meta=…)` #4660 (1.61) | Request metadata on every tool call, model-driven ones included | the same two MCP clients | Speed, quality, cost: none. ⚠️ Anything sent here leaves our boundary, so it needs the review the baggage leak got (PR 1957) | **Watch**: only when a server needs it |
+| Deferred cancel | `agent.cancel(after_current_tools=True, message=…)` #4833 (1.62) | "Finish what you're doing, then stop", with no orphaned `toolUse` to repair | `routes.py:221-248`; handoffs §8.8 | Quality: the batch's work is kept. Cost: the batch's tool tokens are paid instead of discarded. Speed: Stop lands later by one batch | **Watch**: a product choice; pairs with the queued per-turn `cancel_signal` |
+| `DecisionModel` / `LLMDecisionModel` as a HITL risk classifier | #5125, #5588 (1.63) | Auto-approve low-risk tool calls instead of always asking | the tool-approval hook ([2026-07-10] policy-layer entry) | Speed: +1 model call per gated tool, before the tool runs. Cost: that call, metered. Quality: a wrong call approves a tool unasked | **Watch**: the 1.65 readout's #5975 `HumanInTheLoop("auto")` is the same idea with the same per-call cost |
+| `handoff_to_user` vended tool | #4348 (1.57) | A reference design for an interrupt tool | `builtin_tools/ask_user_question.py` | None | **Watch**: read before building any new interrupt tool |
 
 ---
 
