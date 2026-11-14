@@ -124,6 +124,21 @@ The platform is general-purpose, but it was shaped by the needs of a public univ
 
 ---
 
+## 🧭 Workflow examples
+
+Each of these is a Shared Project we built with a campus office and ran end to end, written up with the project's full instructions, the prompts to send, what came back, and where a person still has to check. The people and documents in them are fictional.
+
+| Workflow | Who it's for | What the assistant does | What stays with you |
+| --- | --- | --- | --- |
+| [Setting up awards from their documents](docs-site/src/content/docs/user-guide/projects/example-award-intake.md) | Research administration | Runs one 14-field setup list over five award documents in one call, labels every value with a source check, and flags overlapping PIs and colliding report dates across the set | Look-alike values a check can't tell apart, worked-out totals, and every acceptance or allowability call |
+| [Revising a department policy](docs-site/src/content/docs/user-guide/projects/example-policy-revision.md) | Department chairs | Checks an outdated procedure against university and college rules, then returns each fix as a Word tracked change or a Google Docs suggestion citing its rule | Judgment calls, local context, and accepting each change |
+| [Sorting teaching evaluation comments](docs-site/src/content/docs/user-guide/projects/example-teaching-evaluations.md) | Faculty and chairs | Counts a course-evaluation export in code, sorts every comment with a shared codebook, and lists safety concerns for a person before any summary | Follow-up on flagged comments, and what to change; it declines to rate instructors |
+| [Negotiating a research agreement](docs-site/src/content/docs/user-guide/projects/example-contract-negotiation.md) | Sponsored programs, compliance, legal | Reviews a sponsor's redline clause by clause against a playbook, coordinates seven reviewers, and drafts the response as tracked changes | Escalations, and the final read before anything is sent |
+
+The award-intake workflow uses structured extraction and source provenance verification, which are in development and off by default.
+
+---
+
 ## ✨ What You Get
 
 ### 💬 A conversation surface that ships finished
