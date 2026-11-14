@@ -45,6 +45,7 @@ export const environment = {
         awsLimits: false,
         knowledgeBaseMode: true,
         releaseLedger: false,
-        attachmentCards: false,
+        // On in our prod from 1.36.1 (UI only; in development, off by default; #1798).
+        attachmentCards: true,
     } satisfies FeatureFlags,
 };
