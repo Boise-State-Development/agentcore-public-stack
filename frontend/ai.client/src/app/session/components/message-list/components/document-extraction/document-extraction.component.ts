@@ -33,6 +33,9 @@ interface CellRef {
   field: string;
 }
 
+/** Numbers each table's ids; DOM ids only need to be unique on the page. */
+let nextExtractionTable = 0;
+
 /**
  * The rows one `document_extract` call produced, rendered under the answer
  * (`docs/specs/structured-extraction.md` §8.1, §17).
@@ -348,9 +351,9 @@ export class DocumentExtractionComponent {
 
   private readonly artifactState = inject(ArtifactStateService);
 
-  private readonly uid = Math.random().toString(36).slice(2, 9);
-  protected readonly panelId = `extraction-${this.uid}`;
-  protected readonly detailId = `extraction-detail-${this.uid}`;
+  private readonly tableNumber = ++nextExtractionTable;
+  protected readonly panelId = `extraction-${this.tableNumber}`;
+  protected readonly detailId = `extraction-detail-${this.tableNumber}`;
 
   /** The one run when the call covered a single document, else null. */
   protected readonly single = computed(() =>
