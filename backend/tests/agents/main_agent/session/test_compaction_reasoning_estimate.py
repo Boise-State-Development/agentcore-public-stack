@@ -83,6 +83,8 @@ class TestReplayMode:
             (HAIKU55, REASONING_REPLAY_BOUND),
             (OPUS55, REASONING_REPLAY_BOUND),
             (SONNET55, REASONING_REPLAY_BOUND),
+            ("global.anthropic.claude-fable-5-2", REASONING_REPLAY_BOUND),
+            ("us.anthropic.claude-mythos-5-2", REASONING_REPLAY_BOUND),
             (SONNET46, REASONING_REPLAY_PRESERVED),
             (OPUS47, REASONING_REPLAY_PRESERVED),
             (HAIKU45, REASONING_REPLAY_STRIPPED),

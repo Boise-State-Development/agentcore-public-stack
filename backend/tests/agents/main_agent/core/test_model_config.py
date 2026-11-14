@@ -402,6 +402,9 @@ class TestThinkingBinding:
             "us.anthropic.claude-haiku-5-5",
             "us.anthropic.claude-opus-5-5",
             "us.anthropic.claude-sonnet-5-5",
+            # By contract (Bedrock's preserved-thinking page): dev can't call them yet.
+            "us.anthropic.claude-fable-5-2",
+            "us.anthropic.claude-mythos-5-2",
         ],
     )
     def test_default_request_gets_summarized_adaptive_thinking_with_drop_block(self, model_id):
@@ -418,7 +421,12 @@ class TestThinkingBinding:
         assert arf["output_config"] == {"effort": "medium"}
 
     @pytest.mark.parametrize(
-        "model_id", ["global.anthropic.claude-haiku-5-5", "global.anthropic.claude-opus-5-5"]
+        "model_id",
+        [
+            "global.anthropic.claude-haiku-5-5",
+            "global.anthropic.claude-opus-5-5",
+            "global.anthropic.claude-fable-5-2",
+        ],
     )
     def test_global_profile_is_covered_too(self, model_id):
         arf = ModelConfig(model_id=model_id).to_bedrock_config()["additional_request_fields"]

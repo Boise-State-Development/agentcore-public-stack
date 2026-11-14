@@ -511,6 +511,33 @@ class TestModel:
             asyncio.run(resolve_maintenance_model())
         assert e.value.status_code == 503
 
+    @pytest.mark.parametrize("model_id", [
+        "us.anthropic.claude-opus-5-5",
+        "us.anthropic.claude-sonnet-5-5",
+        "global.anthropic.claude-fable-5-2",
+    ])
+    def test_refused_on_a_model_that_rejects_the_forced_tool_call(self, monkeypatch, model_id):
+        """The planner forces its tool; these models 400 on that (probed 2026-11-14)."""
+        from apis.shared.projects.memory_maintenance import resolve_maintenance_model
+
+        monkeypatch.delenv("MEMORY_MAINTENANCE_MODEL_ID", raising=False)
+        self._catalog(monkeypatch, [], default=self._row(model_id))
+        with pytest.raises(MaintenanceRequestError) as e:
+            asyncio.run(resolve_maintenance_model())
+        assert e.value.status_code == 503
+        assert "MEMORY_MAINTENANCE_MODEL_ID" in str(e.value)
+
+    def test_an_override_that_accepts_it_runs_beside_a_default_that_does_not(self, monkeypatch):
+        from apis.shared.projects.memory_maintenance import resolve_maintenance_model
+
+        monkeypatch.setenv("MEMORY_MAINTENANCE_MODEL_ID", "us.anthropic.claude-haiku-5-5")
+        self._catalog(
+            monkeypatch,
+            [self._row("us.anthropic.claude-haiku-5-5")],
+            default=self._row("us.anthropic.claude-opus-5-5"),
+        )
+        assert asyncio.run(resolve_maintenance_model()).model_id == "us.anthropic.claude-haiku-5-5"
+
 
 class TestHandler:
     def test_the_lambda_entry_point(self, monkeypatch):

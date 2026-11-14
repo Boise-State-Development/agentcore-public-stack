@@ -319,7 +319,12 @@ class Planner:
         return plan
 
     def _call(self, system: str, tool: Dict[str, Any], tool_name: str, message: str) -> Tuple[Any, Tuple[int, int]]:
-        """One forced-tool Converse call: ``(tool input, (input tokens, output tokens))``."""
+        """One forced-tool Converse call: ``(tool input, (input tokens, output tokens))``.
+
+        ``toolChoice: any`` is a 400 on Opus 5.5, Sonnet 5.5 and Fable / Mythos
+        5.1+, so ``resolve_maintenance_model`` never hands this class one of
+        those (``apis/shared/models/forced_tool_choice.py``).
+        """
         try:
             response = self.client.converse(
                 modelId=self.model_id,

@@ -40,6 +40,18 @@ same Pydantic validation on return — and the run is marked
 and the artifact header, because a reviewer has to be able to tell types that
 were guaranteed from types that were merely requested.
 
+MODELS THAT REFUSE A FORCED TOOL
+--------------------------------
+``structured_output`` forces its tool (``toolChoice: any``), which Opus 5.5,
+Sonnet 5.5 and Fable / Mythos 5.1+ reject on Converse with a 400 before
+inference. Strands (1.63) recognizes that exact error and retries with native
+structured output (``outputConfig``), and remembers the refusal for the
+process. Measured on dev 2026-11-14: Opus 5.5 and Sonnet 5.5 both returned
+``schema_enforced=True`` with correct values. So ``DOCUMENT_EXTRACT_MODEL_ID``
+may name one of them; the first call per process pays one rejected, unbilled
+round trip. Fable 5.2 is untested here (dev cannot call it yet). See
+``apis/shared/models/forced_tool_choice.py``.
+
 NO TURN-SCOPED STATE
 --------------------
 :func:`extract_fields` is a function of ``(document text, field set)`` and

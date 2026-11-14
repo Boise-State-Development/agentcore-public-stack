@@ -16,7 +16,9 @@ the rest; nothing in this file calls a model.
 
 The model is the catalog's default unless ``MEMORY_MAINTENANCE_MODEL_ID`` names
 another catalog row. Either way it must have a row: that is where its prices
-come from, and a run is metered to the project like any task.
+come from, and a run is metered to the project like any task. It must also
+accept a forced tool call, which Opus 5.5, Sonnet 5.5 and the Fable / Mythos
+5.1+ models refuse on Converse (``apis/shared/models/forced_tool_choice.py``).
 
 **Undo, per file.** A file is put back only while it is exactly what the run
 wrote (its content hash), so an edit made since the run is never thrown away;
@@ -45,6 +47,7 @@ from typing import Any, Callable, List, Literal, Optional, Tuple
 
 from apis.shared.audit.models import AuditAction
 from apis.shared.auth.models import User
+from apis.shared.models.forced_tool_choice import model_accepts_forced_tool_choice
 
 from .access import resolve_project_role
 from .repository import ProjectRepository
@@ -100,6 +103,15 @@ async def resolve_maintenance_model() -> MaintenanceModel:
         raise MaintenanceRequestError(
             503, f"Memory maintenance needs a Bedrock model, and {row.model_id} isn't one. "
             "An admin can make a Bedrock model the catalog default."
+        )
+    if not model_accepts_forced_tool_choice(row.model_id):
+        # The planner forces its one tool (`toolChoice: any`), which these
+        # models 400 on Converse before inference; every file would fail.
+        # See `apis/shared/models/forced_tool_choice.py`.
+        raise MaintenanceRequestError(
+            503, f"Memory maintenance can't run on {row.model_id}: it doesn't accept the forced tool "
+            f"call maintenance makes. An admin can set {MODEL_ENV} to a catalog model that does, "
+            "such as Claude Haiku 5.5."
         )
     return MaintenanceModel(
         model_id=row.model_id,

@@ -61,6 +61,17 @@ CASES = [
         "",
         "true",
     ),
+    # The curated row's Global id and params; the summarized dict, binding and
+    # beta come from model_config._apply_thinking_binding (by contract: dev
+    # cannot call this model until its account opts in to `aws_review`).
+    (
+        "fable52-thinking",
+        "global.anthropic.claude-fable-5-2",
+        {"max_tokens": 64000, "effort": "high"},
+        True,
+        "",
+        "true",
+    ),
     (
         "opus47-thinking",
         "us.anthropic.claude-opus-4-7",
