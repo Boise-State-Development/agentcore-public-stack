@@ -10,7 +10,8 @@ name: CI
 # Which suites run is decided per PR by the `changes` job from the PR's file
 # list (scripts/ci/classify-changes.sh): a docs-only PR runs nothing, a
 # frontend-only PR runs the two SPA jobs, an infrastructure PR runs jest plus
-# the backend suites that read the CDK tree. The mapping is fail-open — an
+# the backend suites that read the CDK tree, a tui/ PR runs the terminal
+# client's checks. The mapping is fail-open — an
 # unrecognised path, a workflow_dispatch, or a failed file-list call runs
 # everything — and is pinned by backend/tests/supply_chain/test_ci_path_filter.py.
 #
@@ -55,6 +56,7 @@ jobs:
       ios: ${{ steps.classify.outputs.ios }}
       load: ${{ steps.classify.outputs.load }}
       scripts: ${{ steps.classify.outputs.scripts }}
+      tui: ${{ steps.classify.outputs.tui }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -108,4 +110,8 @@ jobs:
       # Offline unit tests for scripts/restore-data. PR gate only, like the
       # load suite: a deploy gains nothing from them.
       run_scripts: ${{ needs.changes.outputs.scripts == 'true' }}
+      # The terminal client's scripts/tui/build.sh --check. Before this, only
+      # release.yml ran it, on push to main, so a lint or format drift in tui/
+      # surfaced as a failed release instead of a failed PR.
+      run_tui: ${{ needs.changes.outputs.tui == 'true' }}
 

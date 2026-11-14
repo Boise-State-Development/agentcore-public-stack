@@ -4,7 +4,7 @@
 # stdin:  one repository-relative path per line (the PR's changed files; a
 #         rename is listed under both its old and new name).
 # stdout: `key=true|false` lines for $GITHUB_OUTPUT, one per tests.yml suite:
-#         backend, backend_contracts, frontend, infra, ios, load, scripts.
+#         backend, backend_contracts, frontend, infra, ios, load, scripts, tui.
 #
 # Called by the `changes` job in .github/workflows/ci.yml. Before it existed
 # the PR gate ran every suite on every pull request, so a two-line docs change
@@ -27,6 +27,7 @@ infra=false
 ios=false
 load=false
 scripts=false
+tui=false
 all=false
 seen=0
 
@@ -40,6 +41,9 @@ while IFS= read -r path; do
     # backend supply-chain suite (scripts/build) and the restore-data suite.
     # Both change rarely and both reach several suites, so run everything.
     .github/*|scripts/*) all=true ;;
+    # tui/tests/test_catalog.py reads this backend file to pin the TUI's copy
+    # of the upload limits to it, so a change here runs the TUI suite too.
+    backend/src/apis/shared/files/models.py) backend=true; load=true; tui=true ;;
     # backend/scripts holds the backfills that infrastructure/test asserts
     # exist by path (pending-backfills.test.ts).
     backend/scripts/*) backend=true; load=true; infra=true ;;
@@ -59,9 +63,13 @@ while IFS= read -r path; do
     # The repo-root supply-chain suite runs inside the backend jobs.
     tests/supply_chain/*) backend_contracts=true ;;
     tests/load/*) load=true ;;
-    # No suite reads these. docs-site has its own build on push to main, and
-    # the TUI is not wired into CI at all.
-    docs/*|docs-site/*|tui/*) ;;
+    # The terminal client: scripts/tui/build.sh --check, the same gate the
+    # Release workflow runs on push to main. scripts/tui/ reaches it through
+    # the scripts/* rule above, VERSION (which build.sh compares with
+    # tui/pyproject.toml) through the unknown-root-file rule below.
+    tui/*) tui=true ;;
+    # No suite reads these. docs-site has its own build on push to main.
+    docs/*|docs-site/*) ;;
     # Any other directory is unknown to this script: run everything.
     */*) all=true ;;
     # Root files no suite reads (RELEASE_NOTES.md was matched above).
@@ -78,6 +86,7 @@ if [ "$seen" -eq 0 ] || [ "$all" = true ]; then
   ios=true
   load=true
   scripts=true
+  tui=true
 fi
 
 printf 'backend=%s\n' "$backend"
@@ -87,3 +96,4 @@ printf 'infra=%s\n' "$infra"
 printf 'ios=%s\n' "$ios"
 printf 'load=%s\n' "$load"
 printf 'scripts=%s\n' "$scripts"
+printf 'tui=%s\n' "$tui"

@@ -28,7 +28,16 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "classify-changes.sh"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 
-SUITES = ("backend", "backend_contracts", "frontend", "infra", "ios", "load", "scripts")
+SUITES = (
+    "backend",
+    "backend_contracts",
+    "frontend",
+    "infra",
+    "ios",
+    "load",
+    "scripts",
+    "tui",
+)
 
 
 def _find_bash() -> Optional[str]:
@@ -104,7 +113,6 @@ class TestRules:
             (["docs/specs/turn-path-ttft.md", "docs/kaizen/review-queue.md"], NONE),
             (["CHANGELOG.md", "README.md", "CONTRIBUTING.md", "CLAUDE.MD"], NONE),
             (["LICENSE", ".gitignore"], NONE),
-            (["tui/src/app.py", "tui/pyproject.toml"], NONE),
             # --- one package ---------------------------------------------
             (["backend/src/apis/shared/feature_flags.py"], on("backend", "load")),
             (["backend/tests/shared/test_anything.py"], on("backend", "load")),
@@ -118,11 +126,15 @@ class TestRules:
             (["infrastructure/test/platform-stack.test.ts"], on("infra", "backend_contracts")),
             (["tests/supply_chain/test_backup_coverage.py"], on("backend_contracts")),
             (["tests/load/locustfile.py"], on("load")),
+            (["tui/src/aps_tui/app.py", "tui/pyproject.toml"], on("tui")),
+            (["tui/tests/test_catalog.py", "tui/uv.lock"], on("tui")),
             # --- cross-package reads pinned by name ----------------------
             # pending-backfills.test.ts asserts the backfill scripts exist.
             (["backend/scripts/backfill_something.py"], on("backend", "load", "infra")),
             # pending-backfills.test.ts reads RELEASE_NOTES.md.
             (["RELEASE_NOTES.md"], on("infra", "backend_contracts")),
+            # tui/tests/test_catalog.py pins the TUI's upload limits to this file.
+            (["backend/src/apis/shared/files/models.py"], on("backend", "load", "tui")),
             # gsi-update-limit.test.ts asserts against the release skill.
             ([".claude/skills/cutting-a-release/SKILL.md"], on("infra")),
             # --- unions ----------------------------------------------------
@@ -160,6 +172,7 @@ class TestRules:
             ["scripts/release/check-pending-backfills.mjs"],
             ["scripts/restore-data/restore.py"],
             ["scripts/ci/classify-changes.sh"],
+            ["scripts/tui/build.sh"],
             # A directory this script has never heard of.
             ["brand-new-package/src/main.py"],
             # A root file this script has never heard of.
