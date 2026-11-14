@@ -404,6 +404,43 @@ describe('StreamParserService - max_tokens Continue affordance', () => {
     expect(chatState.lastTurnContinuable()).toBe(false);
   });
 
+  it('records a provider outage, with the model it named', () => {
+    service.parseEventSourceMessage('s1', 'stream_error', {
+      type: 'stream_error',
+      code: 'provider_unavailable',
+      message: "⚠️ **Claude Opus 5.5 isn't responding right now**",
+      recoverable: true,
+      metadata: {
+        error_kind: 'provider_unavailable',
+        model_id: 'global.anthropic.claude-opus-5-5',
+        model_name: 'Claude Opus 5.5',
+        provider: 'bedrock',
+      },
+    });
+
+    expect(chatState.lastTurnProviderOutage()).toEqual({
+      modelId: 'global.anthropic.claude-opus-5-5',
+      modelName: 'Claude Opus 5.5',
+      provider: 'bedrock',
+    });
+    expect(chatState.lastTurnContinuable()).toBe(false);
+  });
+
+  it('retires a provider outage when the next assistant turn starts streaming', () => {
+    service.parseEventSourceMessage('s1', 'stream_error', {
+      type: 'stream_error',
+      code: 'provider_unavailable',
+      message: 'down',
+      recoverable: true,
+      metadata: { error_kind: 'provider_unavailable' },
+    });
+    expect(chatState.lastTurnProviderOutage()).not.toBeNull();
+
+    service.parseEventSourceMessage('s1', 'message_start', { role: 'assistant' });
+
+    expect(chatState.lastTurnProviderOutage()).toBeNull();
+  });
+
   it('does not mark continuable for a non-max_tokens stream_error', () => {
     service.parseEventSourceMessage('s1', 'stream_error', {
       type: 'stream_error',

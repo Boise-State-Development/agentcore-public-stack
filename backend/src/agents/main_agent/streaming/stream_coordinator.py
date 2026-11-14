@@ -33,6 +33,7 @@ from apis.shared.errors import (
     StreamErrorEvent,
     build_conversational_error_event,
     model_read_timeout_phase,
+    provider_unavailable_message,
 )
 from apis.shared.observability.emf import emit_model_read_timeout
 from apis.shared.sessions.ledger_rollups import TURN_OUTCOMES
@@ -138,6 +139,61 @@ def _model_provider_value(model_config: Any) -> Optional[str]:
         logger.debug("Could not resolve the model provider for a continuation", exc_info=True)
         return None
     return getattr(provider, "value", provider) or None
+
+
+# How long a failed turn may wait for the model's display name. The catalog
+# read is usually a cache hit; this only stops a slow one from holding the
+# error reply back. Never on the success path.
+_OUTAGE_MODEL_NAME_TIMEOUT_SECONDS = 2.0
+
+
+async def _outage_model_name(model_id: Optional[str]) -> Optional[str]:
+    """The catalog's display name for a model, or ``None`` if it can't be read in time."""
+    if not model_id:
+        return None
+    try:
+        from apis.shared.costs.pricing_config import get_model_by_model_id
+
+        record = await asyncio.wait_for(
+            get_model_by_model_id(model_id), timeout=_OUTAGE_MODEL_NAME_TIMEOUT_SECONDS
+        )
+    except Exception:  # noqa: BLE001 — the reply still goes out, unnamed
+        logger.debug("Could not read the display name for %s", model_id, exc_info=True)
+        return None
+    name = getattr(record, "model_name", None)
+    return name if isinstance(name, str) and name.strip() else None
+
+
+async def _describe_provider_outage(
+    event: ConversationalErrorEvent, main_agent_wrapper: Any
+) -> ConversationalErrorEvent:
+    """Name the turn's model and provider in a provider-outage reply.
+
+    The classifiers that recognize the outage (the force-stop formatter, and
+    ``build_conversational_error_event`` for a raised error) know only the
+    error text. The coordinator knows the model, so it rebuilds the copy here
+    and puts the model on ``metadata``, where the SPA reads it for the
+    outage label and "Try again". Ids and display names only.
+    """
+    model_config = getattr(main_agent_wrapper, "model_config", None)
+    model_id = getattr(model_config, "model_id", None)
+    provider = _model_provider_value(model_config)
+    model_name = await _outage_model_name(model_id)
+
+    metadata: Dict[str, Any] = dict(event.metadata or {})
+    metadata["error_kind"] = "provider_unavailable"
+    if model_id:
+        metadata["model_id"] = model_id
+    if model_name:
+        metadata["model_name"] = model_name
+    if provider:
+        metadata["provider"] = provider
+    return event.model_copy(
+        update={
+            "message": provider_unavailable_message(model_name, provider),
+            "metadata": metadata,
+        }
+    )
 
 
 def _record_model_read_timeout(
@@ -1311,7 +1367,7 @@ class StreamCoordinator:
                     # generic wrapper below.
                     recoverable = error_data.get("recoverable", False)
                     if (
-                        error_code == ErrorCode.AGENT_ERROR
+                        error_code in (ErrorCode.AGENT_ERROR, ErrorCode.PROVIDER_UNAVAILABLE)
                         and error_message
                         and error_message.lstrip().startswith("⚠️")
                     ):
@@ -1336,6 +1392,14 @@ class StreamCoordinator:
                             error=synthetic_error,
                             session_id=session_id,
                             recoverable=recoverable,
+                        )
+
+                    # Either classifier may have recognized a provider outage
+                    # (a raised error arrives here as STREAM_ERROR and is
+                    # reclassified by the builder), so check the built event.
+                    if conv_error_event.code == ErrorCode.PROVIDER_UNAVAILABLE:
+                        conv_error_event = await _describe_provider_outage(
+                            conv_error_event, main_agent_wrapper
                         )
 
                     if error_code == ErrorCode.MAX_TOKENS:

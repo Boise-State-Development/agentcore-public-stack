@@ -22,6 +22,11 @@ class ErrorCode(str, Enum):
     INTERNAL_ERROR = "internal_error"
     SERVICE_UNAVAILABLE = "service_unavailable"
     TIMEOUT = "timeout"
+    # The model provider (Bedrock, OpenAI, Gemini) failed on its side and the
+    # automatic retries were spent. Distinct from SERVICE_UNAVAILABLE, which
+    # is this platform's own outage: the SPA labels the fault as the
+    # provider's on this code and offers "Try again".
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
 
     # Agent-specific errors
     AGENT_ERROR = "agent_error"
@@ -174,6 +179,65 @@ def is_service_unavailable_error(error_lower: str) -> bool:
         error_lower: The error text, ALREADY lowercased by the caller.
     """
     return any(marker in error_lower for marker in _SERVICE_UNAVAILABLE_MARKERS)
+
+
+# Who runs a model, by `ModelProvider` value: (service the user can name, the
+# company whose side the fault is on). Bedrock Mantle and the Responses API
+# are both Amazon Bedrock surfaces, so an outage there is AWS's too.
+_PROVIDER_SERVICES: Dict[str, tuple] = {
+    "bedrock": ("Amazon Bedrock", "AWS"),
+    "bedrock-responses": ("Amazon Bedrock", "AWS"),
+    "mantle": ("Amazon Bedrock", "AWS"),
+    "openai": ("OpenAI", "OpenAI"),
+    "gemini": ("Google Gemini", "Google"),
+}
+
+
+def provider_unavailable_message(
+    model_name: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> str:
+    """The reply a user gets when the model provider failed and retries ran out.
+
+    The one copy for this case: the force-stop classifier in the agent's
+    stream_processor and ``build_conversational_error_event`` both produce it,
+    and the stream coordinator rebuilds it with the turn's model and provider
+    once it knows them.
+
+    It names the model and the service that runs it, says the fault is the
+    provider's and not this app's or the user's, and leaves the raw provider
+    error out: that text ("reached max retries: 1") read as if nothing had
+    been retried, and it stays in the logs and the event's ``detail``. The
+    copy says "this app" rather than a product name because other
+    organizations deploy this stack under their own.
+
+    Keeps the leading "⚠️": the coordinator passes a message with it through
+    unwrapped instead of adding a second generic header.
+
+    Args:
+        model_name: Display name of the turn's model, if known.
+        provider: The model's ``ModelProvider`` value, if known.
+    """
+    subject = model_name.strip() if model_name and model_name.strip() else "This model"
+    service = _PROVIDER_SERVICES.get((provider or "").lower())
+    if service:
+        name, owner = service
+        what_failed = (
+            f"{name}, the {owner} service that runs this model, returned a "
+            f"service error. This is a problem on {owner}'s side"
+        )
+    else:
+        what_failed = (
+            "The service that runs this model returned a service error. "
+            "This is a problem on the provider's side"
+        )
+    return (
+        f"⚠️ **{subject} isn't responding right now**\n\n"
+        f"{what_failed}, not with this app or your message. It was already "
+        "retried automatically.\n\n"
+        "Send your message again in a moment, or switch models if it keeps "
+        "happening."
+    )
 
 
 # The two wordings of a Bedrock read timeout (`RETRY_READ_TIMEOUT`). botocore
@@ -409,13 +473,7 @@ Please try again."""
     # temporary. Reaching this point means the automatic retries were already
     # spent (see TransientModelRetryStrategy), so the copy says so.
     if is_service_unavailable_error(error_lower):
-        message = (
-            "⚠️ The model service is temporarily unavailable.\n\n"
-            f"> {error_str}\n\n"
-            "This is a problem on the AI provider's side, not with your "
-            "request — I already retried it a few times. Send your message "
-            "again in a moment, or switch models if it keeps happening."
-        )
+        message = provider_unavailable_message()
         recoverable = True
 
     if is_model_read_timeout_error(error_lower):
@@ -440,6 +498,12 @@ Please try again."""
         message = unsupported
         recoverable = False
 
+    # Only while the outage copy survived the more specific checks above: a
+    # message they replaced is not a provider outage, and must not get the
+    # client's "Try again" row.
+    if message == provider_unavailable_message():
+        code = ErrorCode.PROVIDER_UNAVAILABLE
+
     metadata: Dict[str, Any] = {}
     if session_id:
         metadata["session_id"] = session_id
@@ -447,6 +511,8 @@ Please try again."""
         # Machine-readable hint so the frontend can offer a "Continue"
         # affordance without parsing the human-readable message.
         metadata["error_kind"] = "max_tokens"
+    if code == ErrorCode.PROVIDER_UNAVAILABLE:
+        metadata["error_kind"] = "provider_unavailable"
 
     return ConversationalErrorEvent(
         code=code,

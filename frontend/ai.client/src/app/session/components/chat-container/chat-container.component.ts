@@ -285,6 +285,8 @@ export class ChatContainerComponent {
   // back into a plain turn, or every `/` skill command into ordinary prose.
   messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }>();
   continueRequested = output<void>();
+  /** "Try again" after a provider outage: resend the last message. */
+  outageRetryRequested = output<void>();
   messageCancelled = output<void>();
   fileAttached = output<File>();
   assistantClosed = output<void>();

@@ -63,6 +63,7 @@ export class ConversationRewindService {
       // reply that is no longer on screen.
       this.chatState.setLastTurnContinuable(ref.sessionId, false);
       this.chatState.setLastTurnInterrupted(ref.sessionId, false);
+      this.chatState.setLastTurnProviderOutage(ref.sessionId, null);
       this.injector.get(ComposerDraftService).request(ref.sessionId, result.prefillText);
       return true;
     } catch (error) {

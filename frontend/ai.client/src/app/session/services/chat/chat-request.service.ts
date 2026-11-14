@@ -166,6 +166,7 @@ export class ChatRequestService implements OnDestroy {
     // immediately, before the stream starts.
     this.chatStateService.setLastTurnContinuable(sessionId, false);
     this.chatStateService.setLastTurnInterrupted(sessionId, false);
+    this.chatStateService.setLastTurnProviderOutage(sessionId, null);
 
     // We're about to navigate to this session; point the viewed-session
     // facades at it eagerly so the composer's loading state flips before
@@ -536,6 +537,7 @@ export class ChatRequestService implements OnDestroy {
     // interrupted state (a Continue resumes the interrupted partial too).
     this.chatStateService.setLastTurnContinuable(sessionId, false);
     this.chatStateService.setLastTurnInterrupted(sessionId, false);
+    this.chatStateService.setLastTurnProviderOutage(sessionId, null);
 
     // Continuation streaming: pins the existing messages (history +
     // truncated partial + error bubble) as a stable prefix and appends the

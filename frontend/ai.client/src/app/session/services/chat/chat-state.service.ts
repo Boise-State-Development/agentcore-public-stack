@@ -21,6 +21,21 @@ interface AwaitingInputMark {
 }
 
 /**
+ * The model provider failed this turn on its side (`provider_unavailable`),
+ * and the automatic retries were spent. Drives the outage label and "Try
+ * again" under the reply. Live only: the reply's text explains
+ * the outage after a reload, and an offer to resend is only honest while the
+ * failed turn is still the latest one.
+ */
+export interface ProviderOutage {
+    /** The model that failed, when the server named it. */
+    modelId: string | null;
+    modelName: string | null;
+    /** `ModelProvider` value (`bedrock`, `openai`, …), when known. */
+    provider: string | null;
+}
+
+/**
  * Mutable chat state for one conversation. Every stream-scoped flag lives
  * here, keyed by session, so two conversations streaming concurrently can
  * never clobber each other's loading spinner, cost badge, Stop button, or
@@ -30,6 +45,8 @@ interface SessionChatState {
     loading: WritableSignal<boolean>;
     stopReason: WritableSignal<string | null>;
     lastTurnContinuable: WritableSignal<boolean>;
+    /** Set when the last turn failed on the model provider's side. */
+    lastTurnProviderOutage: WritableSignal<ProviderOutage | null>;
     /** True when the last turn was interrupted before completion (Stop /
      *  refresh / dropped connection). Drives the reload chip. */
     lastTurnInterrupted: WritableSignal<boolean>;
@@ -105,6 +122,7 @@ export class ChatStateService {
     readonly currentStopReason = computed(() => this.viewedState()?.stopReason() ?? null);
     readonly lastTurnContinuable = computed(() => this.viewedState()?.lastTurnContinuable() ?? false);
     readonly lastTurnInterrupted = computed(() => this.viewedState()?.lastTurnInterrupted() ?? false);
+    readonly lastTurnProviderOutage = computed(() => this.viewedState()?.lastTurnProviderOutage() ?? null);
     readonly lastTurnInterruptReason = computed(() => this.viewedState()?.lastTurnInterruptReason() ?? null);
 
     // ----- Session-level cost / context aggregates ---------------------------
@@ -342,6 +360,11 @@ export class ChatStateService {
         this.stateFor(sessionId).lastTurnContinuable.set(continuable);
     }
 
+    /** Marks (or clears, with null) a provider outage on the session's last turn. */
+    setLastTurnProviderOutage(sessionId: string, outage: ProviderOutage | null): void {
+        this.stateFor(sessionId).lastTurnProviderOutage.set(outage);
+    }
+
     /** Records that a session's resume was refused as unresumable, and why. */
     markResumeUnavailable(sessionId: string, reason = 'unknown'): void {
         this.resumeUnavailable.set(sessionId, reason);
@@ -498,6 +521,7 @@ export class ChatStateService {
             loading: signal(false),
             stopReason: signal<string | null>(null),
             lastTurnContinuable: signal(false),
+            lastTurnProviderOutage: signal<ProviderOutage | null>(null),
             lastTurnInterrupted: signal(false),
             lastTurnInterruptReason: signal<string | null>(null),
             costDollars: signal(0),
