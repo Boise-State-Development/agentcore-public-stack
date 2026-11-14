@@ -6,7 +6,7 @@ import { ToastService } from '../../../services/toast/toast.service';
 import { ChatStateService } from '../chat/chat-state.service';
 import { Message } from '../models/message.model';
 import { ComposerDraftStorageService } from './composer-draft-storage.service';
-import { rewindErrorMessage } from './conversation-rewind.service';
+import { ConversationRewindService, rewindErrorMessage } from './conversation-rewind.service';
 import { parseMessageRef } from './message-feedback.service';
 import { SessionService } from './session.service';
 
@@ -30,6 +30,8 @@ export class ConversationForkService {
   private readonly features = inject(FEATURES);
   private readonly chatState = inject(ChatStateService);
   private readonly injector = inject(Injector);
+  /** Holds what the server has said about the compaction summary, which fork and rewind share. */
+  private readonly rewinder = inject(ConversationRewindService);
 
   /** The message a fork is in flight for. */
   readonly pendingMessageId = signal<string | null>(null);
@@ -38,11 +40,11 @@ export class ConversationForkService {
     return this.features.sessionFork;
   }
 
-  /** Same rules as rewind: a numbered user message, while its conversation is idle. */
+  /** Same rules as rewind: a numbered user message the summary does not cover, while its conversation is idle. */
   canFork(message: Message): boolean {
     if (!this.enabled || message.role !== 'user' || message.steering || message.sendFailure) return false;
     const ref = parseMessageRef(message.id);
-    if (!ref) return false;
+    if (!ref || this.rewinder.isSummarized(message)) return false;
     return !this.chatState.isSessionLoading(ref.sessionId) && this.pendingMessageId() === null;
   }
 
@@ -59,6 +61,7 @@ export class ConversationForkService {
       await this.injector.get(Router).navigate(['/s', result.sessionId]);
       return result.sessionId;
     } catch (error) {
+      this.rewinder.noteRefusal(message, error);
       this.injector.get(ToastService).error("Couldn't fork", rewindErrorMessage(error));
       return null;
     } finally {

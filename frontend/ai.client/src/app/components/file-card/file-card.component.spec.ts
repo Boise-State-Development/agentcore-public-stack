@@ -154,3 +154,38 @@ describe('FileCardComponent search chip', () => {
     expect(fake.tracked).toEqual([]);
   });
 });
+
+describe('FileCardComponent retry', () => {
+  async function mount(upload: PendingUpload) {
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({ imports: [FileCardComponent] }).compileComponents();
+    const fixture = TestBed.createComponent(FileCardComponent);
+    fixture.componentRef.setInput('pendingUpload', upload);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  const failed = (overrides: Partial<PendingUpload> = {}): PendingUpload => ({
+    file: new File(['x'], 'scan.pdf', { type: 'application/pdf' }),
+    uploadId: 'up-1',
+    status: 'error',
+    progress: 0,
+    error: 'Upload failed',
+    ...overrides,
+  });
+
+  const retryButton = (el: HTMLElement) =>
+    Array.from(el.querySelectorAll('button')).find((b) => b.textContent?.includes('Retry upload')) ?? null;
+
+  it('offers Retry on a failure that could go through next time', async () => {
+    expect(retryButton(await mount(failed()))).not.toBeNull();
+  });
+
+  it('offers no Retry on a permanent refusal, and still says why', async () => {
+    const reason = 'A PDF can have at most 1,000 pages; split it and attach the parts.';
+    const el = await mount(failed({ error: reason, permanent: true }));
+    expect(retryButton(el)).toBeNull();
+    expect(el.textContent).toContain(reason);
+  });
+});

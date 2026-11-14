@@ -4,6 +4,7 @@ import { Router } from '@angular/router';
 import { signal } from '@angular/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationForkService } from './conversation-fork.service';
+import { ConversationRewindService } from './conversation-rewind.service';
 import { SessionService } from './session.service';
 import { ComposerDraftStorageService } from './composer-draft-storage.service';
 import { ChatStateService } from '../chat/chat-state.service';
@@ -89,5 +90,19 @@ describe('ConversationForkService', () => {
     expect(service.canFork(userMessage({ id: 'local' }))).toBe(false);
     setup(false);
     expect(service.canFork(userMessage())).toBe(false);
+  });
+
+  it('explains a summary refusal and stops offering fork and rewind up to that message', async () => {
+    const detail = "That message is part of the conversation's summary and can't be rewound to";
+    sessionService.forkSession.mockRejectedValue(new HttpErrorResponse({ status: 409, error: { detail } }));
+
+    await expect(service.fork(userMessage())).resolves.toBeNull();
+
+    expect(toast.error).toHaveBeenCalledWith("Couldn't fork", detail);
+    expect(service.canFork(userMessage())).toBe(false);
+    expect(service.canFork(userMessage({ id: 'msg-parent-1-2' }))).toBe(false);
+    expect(service.canFork(userMessage({ id: 'msg-parent-1-6' }))).toBe(true);
+    // Rewind shares the rule, so the same refusal hides it too.
+    expect(TestBed.inject(ConversationRewindService).isSummarized(userMessage())).toBe(true);
   });
 });

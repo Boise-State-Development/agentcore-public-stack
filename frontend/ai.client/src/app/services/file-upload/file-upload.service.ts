@@ -318,6 +318,13 @@ export interface PendingUpload {
    * connected file source — so there is no upload and no percentage to show.
    */
   statusLabel?: string;
+  /**
+   * The server refused this file for good (a 400 from presign, `/complete`
+   * or a file-source import: a PDF over the page limit, a type it won't take,
+   * a size over the cap), so sending the same file again can only fail the
+   * same way. The card offers Remove and no Retry. See `isPermanentUploadRefusal`.
+   */
+  permanent?: boolean;
 }
 
 /**
@@ -362,6 +369,24 @@ export class QuotaExceededError extends FileUploadError {
       { currentUsage, maxAllowed, requiredSpace }
     );
   }
+}
+
+/**
+ * Whether an upload failure would fail again on retry with the same file.
+ *
+ * True for the size and type checks (ours or the server's) and for any other
+ * 400 from the files API, which is how app-api answers a validation refusal
+ * (too many pages, an unreadable image). Everything else — a dropped
+ * connection, an S3 error, a 5xx, a quota 403 the user can clear by freeing
+ * space — keeps Retry.
+ */
+export function isPermanentUploadRefusal(err: unknown): boolean {
+  if (err instanceof FileTooLargeError || err instanceof InvalidFileTypeError) return true;
+  if (err instanceof FileUploadError) return err.code === 'API_ERROR' && err.details?.['status'] === 400;
+  if (err instanceof HttpErrorResponse) return err.status === 400;
+  // A file-source import's error carries its HTTP status (FileSourceError).
+  const status = (err as { status?: unknown } | null)?.status;
+  return err instanceof Error && status === 400;
 }
 
 /**
@@ -647,6 +672,7 @@ export class FileUploadService {
         ...pendingUpload,
         status: 'error',
         error: errorMessage,
+        permanent: isPermanentUploadRefusal(err),
       });
       throw err;
     }
