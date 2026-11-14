@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -89,11 +90,18 @@ def _case_sensitive(path: Path) -> bool:
     return sensitive
 
 
+def _temp_fs_is_case_sensitive() -> bool:
+    # A private directory per probe: xdist workers import this module at the
+    # same time, and a shared probe path let one delete another's file.
+    with tempfile.TemporaryDirectory() as d:
+        return _case_sensitive(Path(d))
+
+
 # The sandbox is Linux (case-sensitive), where the alias is a symlink. On a
 # case-insensitive filesystem (a developer's Mac) the cased name already is
 # the CSV, so nothing is linked and the read still has to work.
 needs_case_sensitive_fs = pytest.mark.skipif(
-    not _case_sensitive(Path(os.environ.get("TMPDIR", "/tmp"))),
+    not _temp_fs_is_case_sensitive(),
     reason="the alias only exists on a case-sensitive filesystem",
 )
 
