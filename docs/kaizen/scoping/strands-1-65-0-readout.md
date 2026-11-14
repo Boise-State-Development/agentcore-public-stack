@@ -37,7 +37,7 @@
 | 16 | `Agent.structured_output_async` warns on dropped system blocks; #5792 summarizer truncation; SageMaker, Mistral, Ollama, llama.cpp, Writer, LlamaAPI, sandbox, vended tools, decisions, storage | **Inert** | none of these are imported | — |
 | 17 | `_openai_bedrock._OPENAI_PATH_MODEL_PREFIXES` lists `google.gemma-4-` (since 1.51.0, still on 1.65.0) | **Subtract** (carried) | `apis/shared/models/mantle.py:69` (`_ensure_gemma4_openai_v1_routing`) | Its own docstring calls it "a no-op on the pinned SDK". Deleting it retires one of our private-module imports. Small separate PR. |
 
-Release-note items with no Python diff (TypeScript, CLI or site only), dropped: #6055 (MCP refresh keeps other tools), #5749, #5751, #5748, #5732, #5325, #5569, #6016, #5972, #5946, #3988, #6022, #5924.
+Release-note items whose PR touches neither `strands-py/src/` nor `shared/` (TypeScript, CLI or site only; checked with `gh pr view --json files`), dropped: #6055 (MCP refresh keeps other tools), #5749, #5751, #5748, #5732, #5325, #5569, #6016, #5972, #5946, #3988, #6022, #5924.
 
 ## Unlocks
 

@@ -32,6 +32,15 @@ gh release view python/v<X> --repo strands-agents/harness-sdk --json publishedAt
 
 Do this for every `python/v*` tag after the pin. **Filter out** `feat(site)`, `docs(*)`, `ci(*)`, `chore(site|docs)`, `test(*)`, `feat(cli)`/`fix(cli)`, anything marked `(typescript)`/`(TypeScript)`/`(ts)`, and `feat(ts)`. The release notes are drafted from commits across the monorepo. **Treat what's left as leads, not facts:** a note may describe a TypeScript-only change, and a change may ship with no note. The wheel diff decides. On 1.65.0, #6055 ("keep other sources' tools when an MCP server refreshes") touched no file in the Python wheel, and `model_info.json` flips appeared in no note at all.
 
+**Settle each lead's language with its PR's file list.** Unlabelled lines often read as Python or shared and touch only `strands-ts/`. The 1.55 → 1.63 audit found five (#4408, #4863, #4569, #5065, #4851), and #4408 had already been listed as a Python unlock in a research doc. One call per PR settles it:
+
+```bash
+gh pr view <N> --repo strands-agents/harness-sdk --json files \
+  -q '[.files[].path | select(startswith("strands-py/src/") or startswith("shared/"))]'
+```
+
+Count `shared/` as Python: `shared/model-info.json` ships in the wheel as `strands/models/model_info.json`. #6073, the Haiku 5.5 `forcedToolChoice` flip, touched only `shared/` and tests, so a `strands-py/src` filter alone would drop it. A lead with neither path is TypeScript- or CLI-only: list it under "dropped" and give it no verdict. For a release with many leads, loop the call over the PR numbers rather than reading notes.
+
 ### 2. Wheel diff and our import surface
 
 ```bash
