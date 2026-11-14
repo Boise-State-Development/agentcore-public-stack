@@ -30,13 +30,13 @@
       "js-yaml": "4.3.2"
     },
     "@jest/reporters": {
-      "glob": "^14.0.4"
+      "glob": "14.0.4"
     },
     "jest-config": {
-      "glob": "^14.0.4"
+      "glob": "14.0.4"
     },
     "jest-runtime": {
-      "glob": "^14.0.4"
+      "glob": "14.0.4"
     }
   }
 }

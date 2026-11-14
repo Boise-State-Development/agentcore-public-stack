@@ -1146,6 +1146,25 @@ recorded here rather than discovered by the first office to author a wide set.
 Chunking one logical set across several constrained calls is the obvious fix
 and is **not** built — see §15.
 
+**16.9a Correction, 2026-11-13: the shipped schema did not match the measured one.**
+The sweep above measured "a nullable `value` and a string `quote`". From the first
+commit the shipped schema also made `quote` nullable. Each nullable property is one
+union, so every non-enum field cost **two** unions. The 16-union counter then refused
+a set at its ninth non-enum field, not at 14. A dev pilot of a 14-field award-intake set
+(12 non-enum fields, 2 enums) was refused in under a second at 26 unions. Smaller sets
+were all that had been run on dev, so nothing had shown it.
+
+Fixed by making `quote` a plain `string`, empty when the document does not state the
+value. An empty quote already resolves to `unverified` / `no_quote`, so verification is
+unchanged. A `null` in a reply sent without the schema enforced still validates, as
+`""`. A field now costs at most one union, and an enum costs none, so 14 is again the
+true ceiling. `TestTheUnionBudget` in `tests/shared/test_extraction_schema.py` pins
+this, counting unions on the schema Strands actually sends.
+
+**Cost of the fix:** every field set's schema changes once, so its first run after the
+deploy pays one grammar compilation (§16.9, roughly 13–23 s by width). The extraction
+call is its own request, so no turn's cached prefix is touched.
+
 **16.10 A capacity failure must not fall back to unenforced.** D11 would have
 retried *any* schema-shaped `ValidationException` without `strict_tools`. But a
 field set one field too wide is not a transient fault: it would have produced

@@ -76,6 +76,8 @@ Attachments are planned in tokens, per model: one pure planner (`attachment_plan
 
 ### 🐛 Fixed
 
+- **Structured extraction can now run the 14-field sets it always promised.** Bedrock refuses a constrained schema with more than 16 nullable ("union") parameters. The extraction schema made both a field's value and its quote nullable, two unions per field, so a set was refused at its ninth non-enum field, while the parser, the field-set editor and the docs all allowed 14. The quote is now a plain string, empty when the document doesn't state the value, which verification already reads as "no quote". A field costs at most one union, and a "one of a list" field none. A test now counts unions on the schema actually sent. Each field set's first run after this deploy pays one grammar compilation (`docs/specs/structured-extraction.md` §16.9a). (#2063)
+
 - **The admin session cost view no longer fails for a conversation that ran structured extraction or voice.** `document_extract` writes its cost row under `extract:<toolUseId>` and voice under `voice:<n>`, and `GET /admin/costs/sessions/{id}/calls` put that id into an integer field, so one such row returned 500 for the whole session. Those rows now show no message id, and `callKind` names them (`document_extract`, `voice`) through the same rule the release ledger uses. Found while verifying source provenance and structured extraction on dev; results are recorded in both specs (§12.1, §14.1). (#2050)
 
 - **app-api no longer runs PDFium to draw a PDF's attachment thumbnail.** PDFium has crashed app-api tasks in production. The prepare Lambda already opens every PDF at upload, so it now renders page 1 to `_derived/thumb.png` (`apis/shared/files/pdf_thumbnail.py`, PNG encoded with `zlib`, no new dependency) on both its paths: the facts pass for a small PDF and the full preparation for a large one. `GET /files/{id}/thumbnail` keeps its URL and presigns that file. It falls back to the `_thumb.png` app-api rendered for older uploads. When neither exists, it queues `{"action": "thumbnail"}` and answers **202**, and the card asks again after 2, 4 and 8 seconds. A deployment without the prepare queue (large-document attachments off) still renders in-process, as before. No IAM, CDK or flag change: the Lambda already writes `_derived/`, and deleting a PDF now also clears its `_derived/` prefix. (#1972)
@@ -121,7 +123,7 @@ Attachments are planned in tokens, per model: one pure planner (`attachment_plan
 
 - **Backend:** `mcp` 1.30.0 → 2.3.0, new `mcp-types` 2.3.0, `httpx2` and `httpcore2` 2.13.1, `truststore` 0.10.4, `idna` 3.15 → 3.20; `pydantic-settings` and `httpx-sse` leave the lock; the scheduled-runs Lambda requirements carry the same pins (#1666)
 - **Terminal client:** `cryptography` 50.0.1, now a direct pin (#2009)
-- **Frontend / infrastructure (dev only):** `glob` 13.0.6 → 14.0.4 and `minimatch` 10.2.5 → 11.0.5 via `overrides` (#2005)
+- **Frontend / infrastructure (dev only):** `glob` 13.0.6 → 14.0.4 and `minimatch` 10.2.5 → 11.0.5 via `overrides` (#2005), pinned exactly (#2062)
 
 ### 🔧 CI/CD
 

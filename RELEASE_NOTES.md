@@ -164,7 +164,7 @@ Behind `HANDOFFS_ENABLED` / `features.handoffs`, on dev only.
 
 - **Artifact share links can follow the latest version** (#2034). An "Always show the latest version" checkbox; an existing pinned link can be switched with **Follow latest** and keep its URL. Project shares always pin.
 - **Pin private Agents** (#1990).
-- **Structured extraction renders as a table** under the answer (#1940), with documents and field sets resolved by name (#1941). Both are in the dev build only, behind `DOCUMENT_EXTRACT_ENABLED`.
+- **Structured extraction renders as a table** under the answer (#1940), with documents and field sets resolved by name (#1941). A 14-field set now fits Bedrock's limit of 16 union parameters, because a field's quote is a plain string (empty when the document doesn't state the value) and no longer nullable (#2063). Each field set's first run after the deploy pays one grammar compilation, about 13–23 s. All of this is behind `DOCUMENT_EXTRACT_ENABLED`.
 - **Field-set authoring** (#2055, #2057; `FIELD_SET_AUTHORING_ENABLED`, in development).
   - Routes under `/skills/mine/{id}/field-sets` and a structured editor on the skill edit form.
   - On every deployment, a `field-set.*.md` skill file is now checked when it is saved (#2053); see Breaking changes.
@@ -249,7 +249,7 @@ Behind `HANDOFFS_ENABLED` / `features.handoffs`, on dev only.
 | `idna` | 3.15 | 3.20 | backend (#1666) |
 | `pydantic-settings`, `httpx-sse` | pinned | removed | backend (#1666) |
 | `cryptography` | 50.0.0 (transitive) | 50.0.1 (direct) | `tui/` (#2009) |
-| `glob` / `minimatch` | 13.0.6 / 10.2.5 | 14.0.4 / 11.0.5 | frontend and infrastructure dev tooling, via `overrides` (#2005) |
+| `glob` / `minimatch` | 13.0.6 / 10.2.5 | 14.0.4 / 11.0.5 | frontend and infrastructure dev tooling, via `overrides` (#2005), pinned exactly (#2062) |
 
 ## 🧪 Test coverage
 
