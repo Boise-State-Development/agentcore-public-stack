@@ -187,6 +187,32 @@ def test_the_images_are_pngs():
             assert image.format == "PNG" and image.size[0] >= 800
 
 
+class TestSiteBadges:
+    """The compaction cases: large badge images whose one asked number is only in pixels."""
+
+    def test_each_badge_is_large_and_prints_its_number_beside_a_lookalike(self):
+        from PIL import Image
+
+        assert len(set(b.SITE_BADGE_NUMBERS) | set(b.SITE_BADGE_REPLACED)) == 2 * b.SITE_BADGE_COUNT
+        for i in range(1, b.SITE_BADGE_COUNT + 1):
+            with Image.open(io.BytesIO(b.build(f"site_badge_{i:02d}.png"))) as image:
+                # ~4,761 visual tokens each at Claude's high tier: 16 pass Haiku 5.5's 70k hard ceiling.
+                assert image.format == "PNG" and image.size[0] >= 1_900
+
+    def test_the_cases_ask_for_the_planted_number_and_forbid_its_neighbours(self):
+        cases = {c.id: c for c in load_cases(CASES_DIR)}
+        for case_id, asked in zip(
+            ("attachment_tools.image_after_compaction", "attachment_tools.image_only_after_compaction"),
+            b.SITE_BADGE_ASKED,
+        ):
+            case = cases[case_id]
+            assert f"site_badge_{asked:02d}.png" in case.turns[-1]
+            assert case.expect.contains_any == (b.SITE_BADGE_NUMBERS[asked - 1],)
+            assert b.SITE_BADGE_REPLACED[asked - 1] in case.expect.forbidden
+            assert len(case.files) >= b.SITE_BADGE_COUNT
+            assert all(b.SITE_BADGE_NUMBERS[asked - 1] not in turn for turn in case.turns)
+
+
 class TestEntities:
     def test_every_case_names_a_defined_fixture(self):
         from eval_fixtures import entities

@@ -335,16 +335,45 @@ def _modes_for(fmt: str) -> List[str]:
     return ["pattern", "text"]
 
 
-async def session_has_documents(user_id: str, session_id: str) -> bool:
-    """Whether the session has at least one READY document the tool can read.
+#: What a session holds that ``document_read`` can return, strongest first
+#: (:func:`session_attachment_kind`). ``""`` is nothing.
+ATTACHMENTS_DOCUMENTS = "documents"
+ATTACHMENTS_IMAGES = "images"
 
-    The tool-injection gate. One ``SessionIndex`` query; callers memoize the
-    positive answer because it is monotonic for practical purposes (a file,
-    once uploaded, stays unless the user deletes it).
+
+def attachment_kind_of(files: Sequence[FileMetadata], user_id: str) -> str:
+    """:data:`ATTACHMENTS_DOCUMENTS` when ``files`` hold a readable document of
+    ``user_id``'s, else :data:`ATTACHMENTS_IMAGES` when they hold an image, else ``""``."""
+    kind = ""
+    for meta in files:
+        if meta.user_id != user_id:
+            continue
+        if is_document_class(meta.mime_type, meta.filename):
+            return ATTACHMENTS_DOCUMENTS
+        if image_format_for(meta.mime_type) is not None:
+            kind = ATTACHMENTS_IMAGES
+    return kind
+
+
+async def session_attachment_kind(user_id: str, session_id: str) -> str:
+    """What the session holds that the tool can return: documents, only images, or nothing.
+
+    The tool-injection gate. One ``SessionIndex`` query, the same one the
+    documents-only gate ran, so answering for images too reads nothing more.
+    Images count because ``document_read`` lists and returns them: an image's
+    turn can be compacted away, and the tool is then the only way back to it.
+    Callers memoize ``documents`` (monotonic for practical purposes: a file,
+    once uploaded, stays unless the user deletes it); ``images`` can still
+    become ``documents``.
     """
     _require_identity(user_id, session_id)
     files = await get_file_upload_repository().list_session_files(session_id, status=FileStatus.READY)
-    return any(meta.user_id == user_id and is_document_class(meta.mime_type, meta.filename) for meta in files)
+    return attachment_kind_of(files, user_id)
+
+
+async def session_has_documents(user_id: str, session_id: str) -> bool:
+    """Whether the session has at least one READY document the tool can read."""
+    return await session_attachment_kind(user_id, session_id) == ATTACHMENTS_DOCUMENTS
 
 
 async def session_has_tabular_files(user_id: str, session_id: str) -> bool:

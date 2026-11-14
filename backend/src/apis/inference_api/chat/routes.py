@@ -49,8 +49,8 @@ from apis.shared.feature_flags import (
     project_file_readiness_enabled,
     skills_enabled,
 )
-from apis.shared.files.document_read import is_document_class
-from apis.shared.files.file_kinds import KIND_DOCUMENT, KIND_PRESENTATION, KIND_TABULAR, any_hint
+from apis.shared.files.document_read import image_format_for, is_document_class
+from apis.shared.files.file_kinds import KIND_DOCUMENT, KIND_IMAGE, KIND_PRESENTATION, KIND_TABULAR, any_hint
 from apis.shared.files.file_resolver import get_file_resolver, model_image_source
 from apis.shared.files.inline_persist import get_inline_attachment_persister
 from apis.shared.files.attachment_handle import (
@@ -1319,7 +1319,8 @@ def _build_powerpoint_presentation_tools(
 #: query per turn otherwise; a positive answer is memoized because it is
 #: monotonic in practice (an upload stays unless the user deletes it, and a
 #: stale tool on a session whose files were deleted just returns "not found").
-#: Negative answers are never memoized — the next turn may be the upload.
+#: Only ``documents`` is memoized: a session holding only images may still
+#: get a document, and a negative answer may be followed by the upload.
 _DOCUMENT_SESSIONS: "OrderedDict[str, bool]" = OrderedDict()
 _DOCUMENT_SESSIONS_MAX = 10_000
 
@@ -1331,54 +1332,74 @@ def _remember_document_session(session_id: str) -> None:
         _DOCUMENT_SESSIONS.popitem(last=False)
 
 
-async def _session_has_documents(
+def _stronger_kind(a: str, b: str) -> str:
+    """The stronger of two attachment kinds: documents, then images, then nothing."""
+    from apis.shared.files.document_read import ATTACHMENTS_DOCUMENTS, ATTACHMENTS_IMAGES
+
+    for kind in (ATTACHMENTS_DOCUMENTS, ATTACHMENTS_IMAGES):
+        if kind in (a, b):
+            return kind
+    return ""
+
+
+async def _session_attachment_kind(
     session_id: str,
     user_id: str,
-    turn_has_document: bool = False,
+    turn_kind: str = "",
     ancestor_session_ids: Sequence[str] = (),
     document_hint: Optional["asyncio.Task[bool]"] = None,
-) -> bool:
-    """Whether ``document_read`` should exist on this turn.
+    image_hint: Optional["asyncio.Task[bool]"] = None,
+) -> str:
+    """What ``document_read`` can return in this session: ``documents``, ``images`` or ``""``.
 
-    True when this turn attached a file the tool can actually read (the
-    caller has already classified it, so no query is needed), when the
-    session was seen carrying a document earlier in this process, or when
-    the session's upload rows include at least one readable document (PDF,
-    Word, text, markdown, HTML — not spreadsheets, decks or images, which
-    have other paths). Fail-closed on error: a turn without the tool is
-    today's behavior, never a broken turn.
+    ``documents`` when this turn attached a file the tool can actually read
+    (the caller has already classified it, so no query is needed), when the
+    session was seen carrying a document earlier in this process, or when the
+    session's upload rows include a readable document (PDF, Word, text,
+    markdown, HTML; not spreadsheets or decks, which have their own tools).
+    Otherwise ``images`` when the turn or the rows hold an image: the tool
+    lists and returns images, and once an image's turn is compacted away it is
+    the only way back to it. The same single query answers both, so images
+    cost the gate nothing more. Fail-closed on error to what this turn alone
+    says: a turn without the tool is today's behavior, never a broken turn.
 
-    ``turn_has_document`` must be *classified*, not merely "this turn
-    attached something". It used to be the raw ``file_upload_ids`` list, and
-    the difference is the whole bug: an image, a spreadsheet or a deck is an
-    upload id but not a document, so an image-only turn injected a tool whose
-    listing is empty by construction — and, worse, memoized the session as a
-    document session, so every later turn in that process carried it too.
-    Measured in prod over 2026-09-20T22:00..2026-09-21T17:15: 13 of the 29
-    sessions with attachments held no readable document, they accounted for
-    **100%** of the window's avoidable ``toolConfigHash`` rotations, and
-    because the memo is per-process while the DynamoDB query is not, the tool
-    (and therefore the cacheable prefix) flapped A→B→A→B as microVMs
-    recycled. Each flip re-writes the whole prefix at 1.25x input.
+    ``turn_kind`` must be *classified*, not merely "this turn attached
+    something". It used to be the raw ``file_upload_ids`` list, and the
+    difference is the whole bug: a spreadsheet or a deck is an upload id but
+    nothing this tool reads, so such a turn injected a tool whose listing is
+    empty by construction, and memoized the session, so every later turn in
+    that process carried it too. Measured in prod over
+    2026-09-20T22:00..2026-09-21T17:15: 13 of the 29 sessions with attachments
+    held no readable document, they accounted for **100%** of the window's
+    avoidable ``toolConfigHash`` rotations, and because the memo is
+    per-process while the DynamoDB query is not, the tool (and therefore the
+    cacheable prefix) flapped A→B→A→B as microVMs recycled. Each flip
+    re-writes the whole prefix at 1.25x input. Images now count on both
+    sides (classification and query), so they cannot flap either.
 
-    ``document_hint`` is a classified answer that arrives late: a handoff or delivery this turn
-    carries whose files include a document (handoffs spec §4.9). Its reference rows are written
-    during the stream, so the query can't see them yet; the hint, started before the lease, is
-    awaited beside the query and only when the memo hasn't already answered yes.
+    ``document_hint`` / ``image_hint`` are classified answers that arrive late: a handoff or
+    delivery this turn carries whose files include a document or an image (handoffs spec §4.9).
+    Their reference rows are written during the stream, so the query can't see them yet; the
+    hints, started before the lease, are awaited beside the query and only when the memo hasn't
+    already answered.
     """
-    if turn_has_document:
-        _remember_document_session(session_id)
-        return True
-    if _DOCUMENT_SESSIONS.get(session_id):
-        return True
-    try:
-        from apis.shared.files.document_read import session_has_documents
+    from apis.shared.files.document_read import ATTACHMENTS_DOCUMENTS, ATTACHMENTS_IMAGES
 
-        if document_hint is not None:
+    if turn_kind == ATTACHMENTS_DOCUMENTS:
+        _remember_document_session(session_id)
+        return ATTACHMENTS_DOCUMENTS
+    if _DOCUMENT_SESSIONS.get(session_id):
+        return ATTACHMENTS_DOCUMENTS
+    try:
+        from apis.shared.files.document_read import session_attachment_kind
+
+        if document_hint is not None or image_hint is not None:
             began = time.perf_counter()
-            hint_done_before = document_hint.done()
-            present, hinted = await asyncio.gather(
-                session_has_documents(user_id, session_id), _hint_answer(document_hint)
+            hint_done_before = all(h.done() for h in (document_hint, image_hint) if h is not None)
+            present, hinted_document, hinted_image = await asyncio.gather(
+                session_attachment_kind(user_id, session_id),
+                _optional_hint(document_hint),
+                _optional_hint(image_hint),
             )
             # The hint's whole cost before the first token: how long the gate waited with it beside
             # the query it runs anyway. Read on dev for the PR-0.4a TTFT number (§4.9).
@@ -1386,29 +1407,34 @@ async def _session_has_documents(
                 "document_hint %s",
                 json.dumps(
                     {
-                        "hinted": hinted,
+                        "hinted": hinted_document,
+                        "hintedImage": hinted_image,
                         "present": present,
                         "readyAtGate": hint_done_before,
                         "gateMs": round((time.perf_counter() - began) * 1000, 1),
                     }
                 ),
             )
-            present = present or hinted
+            if hinted_document:
+                present = ATTACHMENTS_DOCUMENTS
+            elif hinted_image:
+                present = _stronger_kind(present, ATTACHMENTS_IMAGES)
         else:
-            present = await session_has_documents(user_id, session_id)
-        # A fork's copied messages carry documents attached in its parent or
-        # root (``ancestor_session_ids``). Asked only when the fork has none
-        # of its own, and once per process: the positive answer is memoized.
+            present = await session_attachment_kind(user_id, session_id)
+        kind = _stronger_kind(present, turn_kind)
+        # A fork's copied messages carry files attached in its parent or root
+        # (``ancestor_session_ids``). Asked only while the fork has no document
+        # of its own, and once per process: the documents answer is memoized.
         for ancestor in ancestor_session_ids:
-            if present:
+            if kind == ATTACHMENTS_DOCUMENTS:
                 break
-            present = await session_has_documents(user_id, ancestor)
+            kind = _stronger_kind(kind, await session_attachment_kind(user_id, ancestor))
     except Exception:  # noqa: BLE001 - the gate must never fail a turn
-        logger.warning("document_read gate lookup failed; tool not injected this turn", exc_info=True)
-        return False
-    if present:
+        logger.warning("document_read gate lookup failed; answering from this turn alone", exc_info=True)
+        return turn_kind if turn_kind == ATTACHMENTS_IMAGES else ""
+    if kind == ATTACHMENTS_DOCUMENTS:
         _remember_document_session(session_id)
-    return present
+    return kind
 
 
 async def _hint_answer(hint: "asyncio.Task[bool]") -> bool:
@@ -1423,29 +1449,34 @@ async def _hint_answer(hint: "asyncio.Task[bool]") -> bool:
 async def _document_tools_gate(
     session_id: str,
     user_id: str,
-    turn_has_document: bool = False,
+    turn_kind: str = "",
     ancestor_session_ids: Sequence[str] = (),
     document_hint: Optional["asyncio.Task[bool]"] = None,
-) -> bool:
-    """The single answer to "does this turn carry ``document_read``" — the
-    builder and the resume path's cache key both read it, so the two can
-    never disagree (a disagreement orphans a paused agent).
+    image_hint: Optional["asyncio.Task[bool]"] = None,
+) -> str:
+    """The single answer to "does this turn carry ``document_read``, and for
+    what": ``documents``, ``images`` or ``""``. The builder and the resume
+    path's cache key both read it, so the two can never disagree (a
+    disagreement orphans a paused agent).
 
-    The resume path calls this with ``turn_has_document=False`` and relies on
-    the answer being reproducible from session state alone. That only holds
-    once the short-circuit is classified: an image-only turn used to answer
-    True on the way in (raw upload ids) and False on resume (the query sees
-    no readable document), so the resumed agent missed the slot the paused
-    turn was cached under.
+    The resume path calls this with no ``turn_kind`` and relies on the answer
+    being reproducible from session state alone. That only holds because the
+    short-circuit is classified the same way the query is: a turn's image is
+    ``images`` on the way in and on resume, and a spreadsheet is neither.
     """
     from apis.shared.feature_flags import document_read_enabled
 
     if not document_read_enabled():
-        return False
+        return ""
     if not session_id or not user_id:
-        return False
-    return await _session_has_documents(
-        session_id, user_id, turn_has_document, ancestor_session_ids, document_hint=document_hint
+        return ""
+    return await _session_attachment_kind(
+        session_id,
+        user_id,
+        turn_kind,
+        ancestor_session_ids,
+        document_hint=document_hint,
+        image_hint=image_hint,
     )
 
 
@@ -1468,11 +1499,12 @@ def _resolved_files_include_a_document(resolved_files: list | None) -> bool:
     """Whether this turn's resolved uploads include one ``document_read`` can read.
 
     The turn-level half of the injection gate. Classification, not presence:
-    images, spreadsheets and presentations all arrive as upload ids and none
-    of them is a document — spreadsheets route through the analysis tools and
-    decks through the PowerPoint tools, and ``document_read``'s own listing
-    filters them out, so injecting it for those turns buys nothing and
-    rotates ``toolConfigHash``.
+    spreadsheets and presentations arrive as upload ids and neither is a
+    document — spreadsheets route through the analysis tools and decks
+    through the PowerPoint tools, and ``document_read``'s own listing filters
+    them out, so injecting it for those turns buys nothing and rotates
+    ``toolConfigHash``. Images are classified separately
+    (``_resolved_files_include_an_image``).
 
     Mirrors what ``_session_has_tabular`` already does for the Spreadsheet
     Analysis auto-enable, which takes ``turn_has_tabular=bool(diverted_tabular)``
@@ -1484,6 +1516,24 @@ def _resolved_files_include_a_document(resolved_files: list | None) -> bool:
     )
 
 
+def _resolved_files_include_an_image(resolved_files: list | None) -> bool:
+    """Whether this turn's resolved uploads include an image ``document_read`` can return.
+
+    The same predicate the gate's query applies to the session's rows
+    (``attachment_kind_of``), so the attach turn and every later one agree.
+    """
+    return any(image_format_for(getattr(rf, "content_type", "") or "") is not None for rf in (resolved_files or ()))
+
+
+def _turn_attachment_kind(turn_has_document: bool, turn_has_image: bool) -> str:
+    """This turn's classified attachment kind for the gate."""
+    from apis.shared.files.document_read import ATTACHMENTS_DOCUMENTS, ATTACHMENTS_IMAGES
+
+    if turn_has_document:
+        return ATTACHMENTS_DOCUMENTS
+    return ATTACHMENTS_IMAGES if turn_has_image else ""
+
+
 async def _build_document_tools(
     session_id: str,
     user_id: str,
@@ -1491,27 +1541,44 @@ async def _build_document_tools(
     text_only: bool = False,
     ancestor_session_ids: Sequence[str] = (),
     document_hint: Optional["asyncio.Task[bool]"] = None,
-) -> list:
-    """Context-bound ``document_read`` for a session that has a readable attachment.
+    *,
+    turn_has_image: bool = False,
+    image_hint: Optional["asyncio.Task[bool]"] = None,
+) -> Tuple[list, str]:
+    """Context-bound ``document_read`` for a session that has a readable attachment,
+    and the gate's kind (``documents``, ``images`` or ``""``).
 
     **Not gated on ``enabled_tools``** — the governing capability is the user's
     own attachment, exactly as the Memory-Space tools are governed by an
     Agent's binding. Its id stays out of ``INJECTED_TOOL_IDS``. Kill switch:
-    ``DOCUMENT_READ_ENABLED=false``. The gate's answer also feeds the agent
-    cache key (``has_document_tools``), so an agent cached before the first
-    upload is never served without the tool afterwards.
+    ``DOCUMENT_READ_ENABLED=false``. The kind also feeds the agent cache key
+    (``has_document_tools``), so an agent cached before the first upload is
+    never served without the tool afterwards.
 
-    ``turn_has_document`` is this turn's *classified* answer — see
-    ``_session_has_documents``. Passing "did this turn attach anything"
-    injects the tool for image, spreadsheet and deck attachments, which it
+    A session holding only images gets ``document_read`` alone: its listing
+    names the images and a read returns one, which is how an image whose turn
+    was compacted away comes back. ``verify_sources`` needs a document to
+    check a quote against, so it rides ``documents`` only.
+
+    ``turn_has_document`` / ``turn_has_image`` are this turn's *classified*
+    answers — see ``_session_attachment_kind``. Passing "did this turn attach
+    anything" injects the tool for spreadsheet and deck attachments, which it
     cannot read. ``text_only`` (the turn's model reads TEXT only) makes its
     page-range reads return text; the model is in the cache key, so the flag
     needs no key element of its own.
     """
-    if not await _document_tools_gate(
-        session_id, user_id, turn_has_document, ancestor_session_ids, document_hint=document_hint
-    ):
-        return []
+    from apis.shared.files.document_read import ATTACHMENTS_DOCUMENTS
+
+    kind = await _document_tools_gate(
+        session_id,
+        user_id,
+        _turn_attachment_kind(turn_has_document, turn_has_image),
+        ancestor_session_ids,
+        document_hint=document_hint,
+        image_hint=image_hint,
+    )
+    if not kind:
+        return [], ""
 
     from agents.builtin_tools.document_read_tool import make_document_read_tool
 
@@ -1521,23 +1588,24 @@ async def _build_document_tools(
         )
     ]
 
-    # Source provenance rides the same gate, for the same reason: the governing
-    # capability is the user's own attachment, and there is nothing to verify a
-    # quote against without one. The flag is a deployment constant, so this adds
-    # no key element of its own — `has_document_tools` already covers the gate
-    # (docs/specs/source-provenance-verification.md §8).
+    # Source provenance rides the documents answer, for the same reason: the
+    # governing capability is the user's own attachment, and there is nothing
+    # to verify a quote against without a document. The flag is a deployment
+    # constant, so this adds no key element of its own — `has_document_tools`
+    # already carries the kind (docs/specs/source-provenance-verification.md §8).
     from apis.shared.feature_flags import source_provenance_enabled
 
-    if source_provenance_enabled():
+    if kind == ATTACHMENTS_DOCUMENTS and source_provenance_enabled():
         from agents.builtin_tools.verify_sources_tool import make_verify_sources_tool
 
         tools.append(make_verify_sources_tool(session_id, user_id))
 
     logger.info(
-        "Created document tools (session has a readable document): %s",
+        "Created document tools (session has %s): %s",
+        kind,
         ", ".join(getattr(t, "tool_name", type(t).__name__) for t in tools),
     )
-    return tools
+    return tools, kind
 
 
 # ============================================================
@@ -3085,6 +3153,10 @@ class TurnAttachments:
     dropped_over_count_names: list = field(default_factory=list)
     dropped_over_count_total: int = 0
     turn_has_document: bool = False
+    #: Whether this turn attached an image, classified like ``turn_has_document``:
+    #: an image-only session still gets ``document_read``, which returns an image
+    #: whose turn was compacted away.
+    turn_has_image: bool = False
     marker_names: list = field(default_factory=list)
     # Reference-class uploads (``ReferenceAttachment``, large-document spec
     # §4B): never inline, no bytes. Each reaches the model as its digest or a
@@ -3361,8 +3433,9 @@ async def _resolve_turn_attachments(
     # Classified here, from the resolved uploads, rather than inferred from
     # `file_upload_ids` being non-empty: an image, a spreadsheet and a deck
     # are all upload ids and none of them is a document. Feeds the injection
-    # gate and therefore `toolConfig` — see `_session_has_documents`.
+    # gate and therefore `toolConfig` — see `_session_attachment_kind`.
     turn_has_document = False
+    turn_has_image = False
     # The row behind each resolved inline-class upload, by the identity of the
     # ``FileContent`` built from it. Read only if that file falls out of the
     # combined inline budget below and goes by reference instead.
@@ -3395,6 +3468,7 @@ async def _resolve_turn_attachments(
                     compact_images[id(content)] = (rf.compact_bytes, rf.compact_content_type)
                 all_files.append(content)
             turn_has_document = _resolved_files_include_a_document(resolved_files)
+            turn_has_image = _resolved_files_include_an_image(resolved_files)
             logger.info(f"Resolved {len(resolved_files)} files from upload IDs")
             # Keep the rows' token facts for this session's compaction and
             # offload estimates (unified-attachment-delivery §9.1, phase 2).
@@ -3416,6 +3490,7 @@ async def _resolve_turn_attachments(
         turn_has_document = turn_has_document or _folders_have(
             folders, lambda name, mime: is_document_class(mime, name)
         )
+        turn_has_image = turn_has_image or _folders_have(folders, lambda name, mime: image_format_for(mime) is not None)
 
     # Deduplicate files by (filename, content_type) before partitioning.
     # The same file can arrive via both `files` (direct base64) and
@@ -3556,6 +3631,7 @@ async def _resolve_turn_attachments(
         dropped_over_count_names=dropped_over_count_names,
         dropped_over_count_total=dropped_over_count_total,
         turn_has_document=turn_has_document,
+        turn_has_image=turn_has_image,
         marker_names=attachment_marker_names,
         unpersisted_inline=unpersisted_inline,
         reference_documents=reference_documents,
@@ -4477,7 +4553,8 @@ class TurnTools:
 
     ``extra_tools`` is appended to the registry's filtered tools by
     ``BaseAgent``. ``document_tools`` is the ``document_read`` subset, whose
-    presence is a cache-key element of its own. ``extra_tools_key_described``
+    presence is a cache-key element of its own, as ``document_tools_kind``
+    (``documents``, ``images`` or ``""``). ``extra_tools_key_described``
     says whether every builder that fired closes over values the cache key
     already carries (otherwise the agent is not cached). ``memory_binding_key``
     is what the memory tools close over, or None.
@@ -4487,6 +4564,7 @@ class TurnTools:
     document_tools: list
     extra_tools_key_described: bool
     memory_binding_key: Optional[dict]
+    document_tools_kind: str = ""
 
 
 async def _build_turn_tools(
@@ -4497,10 +4575,12 @@ async def _build_turn_tools(
     *,
     project_memory,
     turn_has_document: bool,
+    turn_has_image: bool = False,
     text_only_model: bool = False,
     turn_project_id: Optional[str] = None,
     document_ancestor_session_ids: Sequence[str] = (),
     document_hint: Optional["asyncio.Task[bool]"] = None,
+    image_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> TurnTools:
     """Map stage B11 (in ``tools``): every injected tool, and the key material
     that describes them. Closures only — no IO except the ``document_read``
@@ -4593,13 +4673,15 @@ async def _build_turn_tools(
     # picker; its presence goes into the cache key below rather than
     # vetoing the cache, so an attachment session that could keep a
     # warm agent still does.
-    document_tools = await _build_document_tools(
+    document_tools, document_tools_kind = await _build_document_tools(
         session_id=input_data.session_id,
         user_id=user_id,
         turn_has_document=turn_has_document,
         text_only=text_only_model,
         ancestor_session_ids=document_ancestor_session_ids,
         document_hint=document_hint,
+        turn_has_image=turn_has_image,
+        image_hint=image_hint,
     )
     extra_tools = extra_tools + document_tools
 
@@ -4622,6 +4704,7 @@ async def _build_turn_tools(
         document_tools=document_tools,
         extra_tools_key_described=extra_tools_key_described,
         memory_binding_key=memory_binding_key,
+        document_tools_kind=document_tools_kind,
     )
 
 
@@ -6423,9 +6506,9 @@ async def _run_invocation(
                 # digest is replayed so the key lands on the paused agent.
                 extra_tools=_client_tools_from_snapshot(snapshot),
                 client_tools_digest=_client_tools_digest_from_snapshot(snapshot),
-                # The original turn's key carried whether the session had a
-                # readable document; the gate is monotonic, so re-asking it
-                # rebuilds the same key (an orphaned paused agent otherwise).
+                # The original turn's key carried what the session had that
+                # document_read returns; the gate is monotonic, so re-asking
+                # it rebuilds the same key (an orphaned paused agent otherwise).
                 has_document_tools=await _document_tools_gate(
                     input_data.session_id, user_id,
                     ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
@@ -6542,6 +6625,7 @@ async def _run_invocation(
                 effective_enabled_tools,
                 project_memory=project_memory,
                 turn_has_document=attachments.turn_has_document,
+                turn_has_image=attachments.turn_has_image,
                 text_only_model=turn_model.text_only,
                 turn_project_id=turn_project_id,
                 # A fork's parent and root, off the row this turn already
@@ -6550,6 +6634,7 @@ async def _run_invocation(
                 # Files a handoff or delivery carries in (handoffs spec §4.9), classified from
                 # rows read before the lease; None when the send carries neither.
                 document_hint=_turn_file_hint(handoff_turn, delivery_turn, KIND_DOCUMENT),
+                image_hint=_turn_file_hint(handoff_turn, delivery_turn, KIND_IMAGE),
             )
             # Client-executed tools (terminal only; the SPA never declares any).
             # Key-described by construction: the digest is a cache-key element,
@@ -6616,7 +6701,7 @@ async def _run_invocation(
                     client_tools_digest=client_tools_digest,
                     accessible_skill_ids=effective_skill_ids,
                     extra_tools_key_described=turn_tools.extra_tools_key_described,
-                    has_document_tools=bool(turn_tools.document_tools),
+                    has_document_tools=turn_tools.document_tools_kind,
                     assistant_id=input_data.rag_assistant_id,
                     build_stage_recorder=_mark_build_stage,
                     build_detail_recorder=prelude.detail,
