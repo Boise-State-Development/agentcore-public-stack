@@ -15,7 +15,13 @@ document conversion keeps, and a little more:
   they cover (a lookup by row or column then finds the value where it belongs),
   cell paragraphs joined with ``<br>``;
 * an embedded picture as ``[image: <alt text>]`` — the text form cannot carry
-  the picture itself, and saying one is there is better than silence.
+  the picture itself, and saying one is there is better than silence;
+* a native chart as its saved data (``office_charts``): a ``[chart: …]`` line,
+  its axis titles and a table of its series, as a block after the paragraph
+  that anchors it (inside a table cell, the one-line form);
+* ``mc:AlternateContent`` read from its ``Choice`` only. Word writes a text box
+  or a new-style chart twice, once for current readers and once as a
+  ``Fallback`` for old ones, so reading both said everything twice.
 
 Tracked changes are written out first through the same
 ``annotate_docx_for_model`` the inline document path and ``docx_paragraphs``
@@ -34,9 +40,13 @@ import zipfile
 from typing import Dict, List, Optional, Tuple
 from xml.etree import ElementTree
 
+from apis.shared.files.office_charts import Chart, chart_line, chart_markdown, chart_reference, load_charts
+
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _WP = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
 _V = "{urn:schemas-microsoft-com:vml}"
+_MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+_DOCUMENT_PART = "word/document.xml"
 _HEADING_NAME = re.compile(r"^heading\s*(\d)$", re.IGNORECASE)
 _BULLET_FORMATS = frozenset({"bullet", "none"})
 #: Deepest heading level markdown has.
@@ -152,28 +162,51 @@ class _Numbering:
         return f"{counters[ilvl]}."
 
 
-def _run_text(paragraph: ElementTree.Element, *, in_cell: bool) -> str:
+#: A chart a paragraph anchors: its relationship id and the drawing's alt text.
+_ChartRef = Tuple[str, str]
+
+
+def _drawing_alt(drawing: ElementTree.Element) -> str:
+    for node in drawing.iter(f"{_WP}docPr"):
+        return (node.get("descr") or node.get("title") or "").strip()
+    return ""
+
+
+def _run_text(paragraph: ElementTree.Element, *, in_cell: bool) -> Tuple[str, List[_ChartRef]]:
+    """The paragraph's text, and the charts it anchors in document order."""
     parts: List[str] = []
-    for node in paragraph.iter():
-        tag = node.tag
+    charts: List[_ChartRef] = []
+    _walk(paragraph, parts, charts, in_cell)
+    return "".join(parts).strip(), charts
+
+
+def _walk(node: ElementTree.Element, parts: List[str], charts: List[_ChartRef], in_cell: bool) -> None:
+    for child in node:
+        tag = child.tag
+        if tag == _MC_FALLBACK:
+            continue
         if tag == f"{_W}t":
-            parts.append(node.text or "")
+            parts.append(child.text or "")
         elif tag == f"{_W}tab":
             parts.append("\t")
         elif tag in (f"{_W}br", f"{_W}cr"):
             parts.append(" " if in_cell else "\n")
         elif tag == f"{_WP}docPr":
-            alt = (node.get("descr") or node.get("title") or node.get("name") or "").strip()
+            alt = (child.get("descr") or child.get("title") or child.get("name") or "").strip()
             parts.append(f"[image: {alt}]" if alt else "[image]")
         elif tag == f"{_V}imagedata":
             parts.append("[image]")
-    return "".join(parts).strip()
+        elif tag == f"{_W}drawing" and (rid := chart_reference(child)) is not None:
+            charts.append((rid, _drawing_alt(child)))
+        else:
+            _walk(child, parts, charts, in_cell)
 
 
 class _Renderer:
-    def __init__(self, styles: _Styles, numbering: _Numbering) -> None:
+    def __init__(self, styles: _Styles, numbering: _Numbering, charts: Dict[str, Optional[Chart]]) -> None:
         self.styles = styles
         self.numbering = numbering
+        self.charts = charts
 
     # -- blocks -----------------------------------------------------------
 
@@ -182,9 +215,11 @@ class _Renderer:
         out: List[Tuple[str, bool]] = []
         for child in container:
             if child.tag == f"{_W}p":
-                text, is_item = self.paragraph(child)
+                text, is_item, charts = self.paragraph(child)
                 if text:
                     out.append((text, is_item))
+                for rid, alt in charts:
+                    out.append((chart_markdown(self.charts.get(rid), alt=alt), False))
             elif child.tag == f"{_W}tbl":
                 table = self.table(child)
                 if table:
@@ -193,10 +228,10 @@ class _Renderer:
                 out.extend(self.blocks(child))
         return out
 
-    def paragraph(self, para: ElementTree.Element) -> Tuple[str, bool]:
-        text = _run_text(para, in_cell=False)
+    def paragraph(self, para: ElementTree.Element) -> Tuple[str, bool, List[_ChartRef]]:
+        text, charts = _run_text(para, in_cell=False)
         if not text:
-            return "", False
+            return "", False, charts
         ppr = para.find(f"{_W}pPr")
         style = _attr(ppr.find(f"{_W}pStyle") if ppr is not None else None, "val")
         level = self.styles.heading_level(style)
@@ -205,7 +240,7 @@ class _Renderer:
             if outline is not None and outline.isdigit() and int(outline) < 9:
                 level = int(outline) + 1
         if level is not None:
-            return f"{'#' * min(max(level, 1), _MAX_HEADING)} {text}", False
+            return f"{'#' * min(max(level, 1), _MAX_HEADING)} {text}", False, charts
         numbering = None
         num_pr = ppr.find(f"{_W}numPr") if ppr is not None else None
         if num_pr is not None:
@@ -216,10 +251,10 @@ class _Renderer:
         if numbering is None and num_pr is None:
             numbering = self.styles.numbering(style)
         if numbering is None:
-            return text, False
+            return text, False, charts
         num_id, ilvl = numbering
         marker = self.numbering.marker(num_id, ilvl)
-        return f"{'  ' * ilvl}{marker} {text}", True
+        return f"{'  ' * ilvl}{marker} {text}", True, charts
 
     # -- tables -----------------------------------------------------------
 
@@ -227,9 +262,10 @@ class _Renderer:
         parts: List[str] = []
         for child in cell:
             if child.tag == f"{_W}p":
-                text = _run_text(child, in_cell=True)
+                text, charts = _run_text(child, in_cell=True)
                 if text:
                     parts.append(text)
+                parts.extend(chart_line(self.charts.get(rid), alt=alt) for rid, alt in charts)
             elif child.tag == f"{_W}tbl":
                 # A nested table reads row by row inside its cell.
                 for row in child.iter(f"{_W}tr"):
@@ -297,14 +333,15 @@ def docx_to_markdown(raw: bytes) -> str:
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             names = set(archive.namelist())
-            document = archive.read("word/document.xml")
+            document = archive.read(_DOCUMENT_PART)
             styles = archive.read("word/styles.xml") if "word/styles.xml" in names else None
             numbering = archive.read("word/numbering.xml") if "word/numbering.xml" in names else None
+            charts = load_charts(archive, _DOCUMENT_PART)
     except (zipfile.BadZipFile, KeyError) as e:
         raise DocxRenderError(f"Could not open the Word document: {e}") from e
     try:
         root = ElementTree.fromstring(document)
-        renderer = _Renderer(_Styles(styles), _Numbering(numbering))
+        renderer = _Renderer(_Styles(styles), _Numbering(numbering), charts)
     except ElementTree.ParseError as e:
         raise DocxRenderError(f"Could not parse the Word document: {e}") from e
     body = root.find(f"{_W}body")

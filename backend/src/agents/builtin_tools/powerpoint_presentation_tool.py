@@ -41,6 +41,8 @@ from typing import Any, Dict, Optional
 
 from strands import tool
 
+from apis.shared.files.office_charts import CHART_MARKER_CLOSE, CHART_MARKER_OPEN, fill_chart_markers
+
 from agents.builtin_tools.office._storage import (
     _DocGenError,
     _ci_exec,
@@ -194,6 +196,82 @@ def _modify_pptx_bytes(
             pass
 
 
+#: The sandbox half of ``read_powerpoint_presentation``: each slide's text,
+#: tables and notes in shape order, recursing into groups. A picture is named
+#: by its alt text. A chart is left as a marker carrying its part name
+#: (``office_charts.CHART_MARKER_OPEN``), which the host fills from the deck's
+#: bytes; the sweep after the shapes catches the charts python-pptx does not
+#: list as shapes (an Office 2016 chart sits in ``mc:AlternateContent``).
+_PPTX_TEXT_EXTRACTION = (
+    "from pptx import Presentation\n"
+    "prs = Presentation(__SOURCE__)\n"
+    f"OPEN, CLOSE = {CHART_MARKER_OPEN!r}, {CHART_MARKER_CLOSE!r}\n"
+    "CHART_IDS = './/*[local-name()=\"chart\"][not(ancestor::*[local-name()=\"Fallback\"])]/@*[local-name()=\"id\"]'\n"
+    "def clean(text):\n"
+    "    return ' '.join(str(text).replace(CLOSE, ' ').replace('|', ' ').split())\n"
+    "def alt_text(shape):\n"
+    "    try:\n"
+    "        found = shape._element.xpath('./*[1]/*[local-name()=\"cNvPr\"]/@descr')\n"
+    "        return clean(found[0]) if found else ''\n"
+    "    except Exception:\n"
+    "        return ''\n"
+    "def marker(slide, rid, alt, seen):\n"
+    "    if rid in seen:\n"
+    "        return None\n"
+    "    seen.add(rid)\n"
+    "    try:\n"
+    "        name = str(slide.part.related_part(rid).partname)\n"
+    "    except Exception:\n"
+    "        return '[chart: ' + alt + ']' if alt else '[chart]'\n"
+    "    return OPEN + name + '|' + alt + CLOSE\n"
+    "def emit(slide, shape, lines, seen):\n"
+    "    inner = getattr(shape, 'shapes', None)\n"
+    "    if inner is not None:\n"
+    "        for child in inner:\n"
+    "            emit(slide, child, lines, seen)\n"
+    "        return\n"
+    "    if getattr(shape, 'has_text_frame', False):\n"
+    "        t = shape.text_frame.text.strip()\n"
+    "        if t:\n"
+    "            lines.append(t)\n"
+    "    if getattr(shape, 'has_table', False):\n"
+    "        for row in shape.table.rows:\n"
+    "            cells = [c.text.strip() for c in row.cells]\n"
+    "            lines.append(' | '.join(cells))\n"
+    "    try:\n"
+    "        rids = shape._element.xpath(CHART_IDS)\n"
+    "    except Exception:\n"
+    "        rids = []\n"
+    "    for rid in rids:\n"
+    "        m = marker(slide, rid, alt_text(shape), seen)\n"
+    "        if m:\n"
+    "            lines.append(m)\n"
+    "    if not rids and shape._element.tag.endswith('}pic'):\n"
+    "        alt = alt_text(shape)\n"
+    "        lines.append('[image: ' + alt + ']' if alt else '[image]')\n"
+    "lines = []\n"
+    "for i, slide in enumerate(prs.slides):\n"
+    "    lines.append('## Slide %d' % (i + 1))\n"
+    "    seen = set()\n"
+    "    for shape in slide.shapes:\n"
+    "        emit(slide, shape, lines, seen)\n"
+    "    try:\n"
+    "        rest = slide.shapes._spTree.xpath(CHART_IDS)\n"
+    "    except Exception:\n"
+    "        rest = []\n"
+    "    for rid in rest:\n"
+    "        m = marker(slide, rid, '', seen)\n"
+    "        if m:\n"
+    "            lines.append(m)\n"
+    "    if slide.has_notes_slide:\n"
+    "        notes = slide.notes_slide.notes_text_frame.text.strip()\n"
+    "        if notes:\n"
+    "            lines.append('[Notes] ' + notes)\n"
+    "    lines.append('')\n"
+    "print('\\n'.join(lines))\n"
+)
+
+
 def _extract_pptx_text(code_interpreter_id: str, source_bytes: bytes) -> str:
     """Extract readable text (per slide: shapes, tables, notes) from a .pptx.
 
@@ -205,29 +283,11 @@ def _extract_pptx_text(code_interpreter_id: str, source_bytes: bytes) -> str:
     code_interpreter.start(identifier=code_interpreter_id)
     try:
         _ci_write_bytes(code_interpreter, _SANDBOX_SOURCE, source_bytes)
-        extraction = (
-            "from pptx import Presentation\n"
-            f"prs = Presentation({_SANDBOX_SOURCE!r})\n"
-            "lines = []\n"
-            "for i, slide in enumerate(prs.slides):\n"
-            "    lines.append('## Slide %d' % (i + 1))\n"
-            "    for shape in slide.shapes:\n"
-            "        if shape.has_text_frame:\n"
-            "            t = shape.text_frame.text.strip()\n"
-            "            if t:\n"
-            "                lines.append(t)\n"
-            "        if shape.has_table:\n"
-            "            for row in shape.table.rows:\n"
-            "                cells = [c.text.strip() for c in row.cells]\n"
-            "                lines.append(' | '.join(cells))\n"
-            "    if slide.has_notes_slide:\n"
-            "        notes = slide.notes_slide.notes_text_frame.text.strip()\n"
-            "        if notes:\n"
-            "            lines.append('[Notes] ' + notes)\n"
-            "    lines.append('')\n"
-            "print('\\n'.join(lines))\n"
-        )
-        return _ci_exec(code_interpreter, extraction).strip()
+        extraction = _PPTX_TEXT_EXTRACTION.replace("__SOURCE__", repr(_SANDBOX_SOURCE))
+        text = _ci_exec(code_interpreter, extraction).strip()
+        # Charts come back as markers naming their part; the data is read here,
+        # from the same bytes, by the renderer Word documents use.
+        return fill_chart_markers(text, source_bytes)
     finally:
         try:
             code_interpreter.stop()

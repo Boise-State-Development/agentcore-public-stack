@@ -68,6 +68,7 @@ from .models import (
     is_presentation_file,
     is_tabular_file,
 )
+from .office_charts import chart_line, chart_reference, load_charts
 from .pdfium_lock import pdfium_lock, serialized_pdfium
 from .repository import get_file_upload_repository
 from .workspace import (
@@ -1214,11 +1215,16 @@ def docx_paragraphs(raw: bytes) -> List[str]:
     read, so a deletion vanishes and an insertion reads as settled text. The
     upload digest numbers paragraphs through this same function, so its outline
     and ``document_read`` agree only while app-api and the Runtime have the flag
-    set the same way."""
+    set the same way.
+
+    A native chart is written out on the paragraph that anchors it, as
+    ``office_charts.chart_line`` renders it, so ``pattern`` finds a value a
+    chart plots where the chart sits."""
     raw = annotate_docx_for_model(raw)
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             xml = archive.read("word/document.xml")
+            charts = load_charts(archive, "word/document.xml")
     except (zipfile.BadZipFile, KeyError) as e:
         raise DocumentReadError(f"Could not open the Word document: {e}") from e
     try:
@@ -1236,9 +1242,39 @@ def docx_paragraphs(raw: bytes) -> List[str]:
             elif node.tag in (f"{_W_NS}br", f"{_W_NS}cr"):
                 parts.append(" ")
         text = "".join(parts).strip()
+        if charts:
+            lines = [chart_line(charts.get(rid), alt=alt) for rid, alt in _paragraph_charts(para)]
+            text = " ".join(t for t in [text, *lines] if t)
         if text:
             paragraphs.append(text)
     return paragraphs
+
+
+_MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+_WP_DOCPR = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}docPr"
+
+
+def _paragraph_charts(para: ElementTree.Element) -> List[Tuple[str, str]]:
+    """``(relationship id, alt text)`` per chart this paragraph anchors itself:
+    not one inside a nested paragraph (a text box's, counted on its own), nor
+    the picture Word saves as an ``mc:Fallback`` for a new-style chart."""
+    found: List[Tuple[str, str]] = []
+
+    def walk(node: ElementTree.Element) -> None:
+        for child in node:
+            if child.tag in (_MC_FALLBACK, f"{_W_NS}p"):
+                continue
+            if child.tag == f"{_W_NS}drawing":
+                rid = chart_reference(child)
+                if rid is not None:
+                    docpr = next(child.iter(_WP_DOCPR), None)
+                    alt = ((docpr.get("descr") or docpr.get("title") or "") if docpr is not None else "").strip()
+                    found.append((rid, alt))
+                    continue
+            walk(child)
+
+    walk(para)
+    return found
 
 
 def _docx_read(raw: bytes, pattern: Optional[str], offset: int, base: Dict[str, Any]) -> DocumentReadResult:
