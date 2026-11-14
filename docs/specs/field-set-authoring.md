@@ -449,6 +449,19 @@ Also checked in the same session:
 * a new set was created and then deleted through the dialog;
 * at 375 px in dark mode, nothing scrolled sideways.
 
+**Checked on dev, 2026-11-13**, after #2055 and #2057 deployed. The dev app-api task
+definition (992) carries `FIELD_SET_AUTHORING_ENABLED=true`, and the dev bundle has
+`fieldSetAuthoring` on. Everything below used a throwaway skill, deleted afterwards:
+* A broken `field-set.*.md` upload answered **400** with the parser's message (PR 1).
+* The list route returned the set (PR 2).
+* The section showed "Grant Intake · grant-intake · 2 fields · version 2".
+* A structured save from the editor kept the `note` column and its cell, both prose
+  blocks, the `owner:` line and `## Rules`, with `version` still 2.
+* An unchanged second save left the skill's `updatedAt` and the file's hash as they
+  were.
+* Markdown mode carried the note column.
+* Delete through the dialog left "No field sets yet".
+
 ---
 
 ## 9. Open questions for review
