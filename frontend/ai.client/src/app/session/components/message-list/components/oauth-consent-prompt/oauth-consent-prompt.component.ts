@@ -256,9 +256,8 @@ export class OAuthConsentPromptComponent {
   });
 
   protected displayName = computed<string>(() => {
-    const c = this.connector();
-    if (c?.displayName) return c.displayName;
-    return this.titleCase(this.request().providerId);
+    const providerId = this.request().providerId;
+    return providerId ? this.connectorsService.displayNameFor(providerId) : 'This tool';
   });
 
   protected isInFlight = computed<boolean>(() =>
@@ -276,15 +275,5 @@ export class OAuthConsentPromptComponent {
   dismiss(event: Event): void {
     event.stopPropagation();
     this.consentService.dismiss(this.request().providerId);
-  }
-
-  private titleCase(providerId: string): string {
-    if (!providerId) return 'This tool';
-    return providerId
-      .replace(/[-_]+/g, ' ')
-      .split(' ')
-      .filter((part) => part.length > 0)
-      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join(' ');
   }
 }

@@ -1,4 +1,4 @@
-import { HandoffView, SpawnedFrom } from '../handoff/handoff.models';
+import { DeliveryView, HandoffView, SpawnedFrom } from '../handoff/handoff.models';
 import { inject, Injectable, signal, WritableSignal, resource, computed, effect, untracked } from '@angular/core';
 import { HttpClient, HttpContext, HttpParams } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
@@ -149,6 +149,14 @@ export interface MessagesListResponse {
    */
   sourceProvenance?: { toolUseId?: string; claims?: SourceProvenanceClaim[] }[];
   /**
+   * Persisted structured-extraction runs, one per document, each shaped like
+   * the live `document_extraction` SSE event plus `quotesOmitted` when the
+   * stored row dropped its quotes. Raw on purpose: ToolInsightService
+   * validates each row through the same normalizer as the live event.
+   * Present only on the first page.
+   */
+  extractions?: unknown[];
+  /**
    * Handoffs sent from this conversation (handoffs spec §4.3), each shaped like
    * `GET /sessions/{id}/handoffs/{handoffId}`. Rendered as handoff rows after their
    * `sourceMessageIndex`. Present only on the first page, and empty while the backend
@@ -157,6 +165,12 @@ export interface MessagesListResponse {
   handoffs?: HandoffView[];
   /** Set when this conversation was started by a handoff: where its context came from. */
   spawnedFrom?: SpawnedFrom;
+  /**
+   * Cards waiting on this conversation's composer (handoffs spec §4.8), oldest first: results
+   * sent back from another of the user's conversations. The next send carries them. An attached
+   * card isn't listed; its block is in the user message it went with. First page only.
+   */
+  deliveries?: DeliveryView[];
   /**
    * True when Memory's events for this session have expired and these
    * messages are the conversation archive's text-only copy. The agent cannot

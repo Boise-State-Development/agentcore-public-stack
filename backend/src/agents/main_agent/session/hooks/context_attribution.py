@@ -36,20 +36,28 @@ Strands' own projection no longer calls CountTokens at all
 (``CountTokensBedrockModel(native_projection=False)``): nothing in this stack
 reads it except the interrupted-turn fallback (:func:`get_projected_input_tokens`).
 
-**Why the split is not computed while an attachment is in context.**
+**Why the split is counted over a stand-in when an attachment is in context.**
 ``toolTokens`` is a residual, so any disagreement between its two sides about
 how a content block is counted lands wholly in it. When one side was Strands'
 projection and the other our own CountTokens call, a PDF's entire weight was
 attributed to tools. Measured on dev 2026-09-16 (session ``61de2256``): a call
 reported ``toolTokens`` of **106,756** where the session's real tools prefix
 was **12,516** — a difference of 94,240 against a document measured at
-~94,485, i.e. the whole document. Both sides are now native counts of the
-same snapshot, which should remove that failure, but the guard stays until a
-document turn has been measured to prove it: the split is skipped on any call
-whose context carries inline document or image bytes, and taken on a later
-clean call instead. An absent ``prefixTokens`` reads "not tracked" (the
-ledger's convention); a wrong one silently corrupts every share computed from
-it.
+~94,485, i.e. the whole document. CountTokens also refuses document input
+outright ("Document input not supported for token counting", measured
+2026-11-09), so a snapshot that holds one can never be counted.
+
+So inline document and image blocks are replaced by a one-line text stand-in
+in the *counted snapshot* only (:func:`_without_attachments`); the agent's
+messages are never touched. Neither the system prompt nor the tool schemas
+depend on what the conversation holds, and both sides of the tools residual
+count the same stand-in snapshot, so the split is the same one a clean
+conversation measures. Until 2026-11-10 the split was skipped instead, and a
+session whose document arrived on its first turn never got one: on dev on
+2026-11-07 (session ``smoke-tailbound-…``) no call carried ``prefixTokens``,
+compaction had no measured ``messages`` partition and calibrated its cut
+against the whole input. The stand-in snapshot is not the request, so it is
+not kept as the exact-request count :func:`get_projected_input_tokens` reads.
 
 **Why the split is not computed at all on OpenAI-surface providers.**
 There is no native counter to take it from. Only Bedrock Converse serves
@@ -343,6 +351,44 @@ def _has_inline_attachment(messages: Any) -> bool:
     return False
 
 
+#: What an inline attachment becomes in a counted snapshot.
+_ATTACHMENT_STAND_IN = "[attachment]"
+
+
+def _without_attachments(messages: List[Any]) -> List[Any]:
+    """A copy of ``messages`` whose inline ``document`` / ``image`` blocks, at the
+    top level or inside a tool result, are a one-line text stand-in.
+
+    New lists and dicts only where a block is replaced; everything else is
+    shared, and nothing in ``messages`` is mutated."""
+
+    def swap(block: Any) -> Any:
+        if not isinstance(block, dict):
+            return block
+        for key in ("document", "image"):
+            if isinstance(block.get(key), dict):
+                return {"text": _ATTACHMENT_STAND_IN}
+        result = block.get("toolResult")
+        if isinstance(result, dict) and isinstance(result.get("content"), list):
+            inner = [swap(item) for item in result["content"]]
+            if any(a is not b for a, b in zip(inner, result["content"])):
+                return {**block, "toolResult": {**result, "content": inner}}
+        return block
+
+    out: List[Any] = []
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            out.append(message)
+            continue
+        swapped = [swap(block) for block in content]
+        if any(a is not b for a, b in zip(swapped, content)):
+            out.append({**message, "content": swapped})
+        else:
+            out.append(message)
+    return out
+
+
 def get_context_breakdown(agent: Any, itemized: bool = False) -> Optional[dict]:
     """Return the latest context breakdown stashed on ``agent``, or ``None``.
 
@@ -634,11 +680,12 @@ class ContextAttributionHook(HookProvider):
                 logger.debug("Context attribution split adopted from session memo")
                 return
 
-        if _has_inline_attachment(messages):
-            # Untrustworthy residual (see module docstring) — try again on a
-            # later call without inline bytes.
-            logger.debug("Context attribution deferred: inline attachment in context")
-            return
+        # CountTokens refuses documents, and a residual over an attachment is
+        # untrustworthy (module docstring): count the system and tools over a
+        # stand-in snapshot instead. ``exact`` is whether nothing was swapped.
+        counted = _without_attachments(messages)
+        exact = all(a is b for a, b in zip(counted, messages))
+        messages = counted
 
         # Bedrock refuses an empty message list, so the system prompt is
         # counted against a fixed probe message whose own weight is
@@ -659,7 +706,8 @@ class ContextAttributionHook(HookProvider):
             "toolTokens": max(0, full - no_tools),
         }
         setattr(agent, _SPLIT_ATTR, split)
-        setattr(agent, _SNAPSHOT_FULL_ATTR, (len(messages), full))
+        if exact:
+            setattr(agent, _SNAPSHOT_FULL_ATTR, (len(messages), full))
         if memo_key is not None:
             _memo_put(memo_key, split)
         _refresh_breakdown(agent)

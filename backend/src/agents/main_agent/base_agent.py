@@ -14,10 +14,10 @@ from agents.main_agent.core import ModelConfig, SystemPromptBuilder, AgentFactor
 from agents.main_agent.session import SessionFactory
 from agents.main_agent.session.hooks import (
     AgentStatusHook,
+    AnalyzeSandboxHook,
     ContextLedgerHook,
     ToolCensusHook,
     DisplayTextHook,
-    McpAppAwaitingSubmissionHook,
     SteeringHook,
     StopHook,
     OAuthConsentHook,
@@ -364,8 +364,6 @@ class BaseAgent(ABC):
           OAuth-gated MCP tool is about to run without a cached token
         - AgentStatusHook: Records model/tool boundaries so the UI can say what
           the agent is doing while the turn streams
-        - McpAppAwaitingSubmissionHook: Marks an MCP App's "form shown,
-          nothing written yet" result so the UI does not call it a failure
         - Approval hooks: Gate dangerous operations for user confirmation
 
         Returns:
@@ -430,6 +428,15 @@ class BaseAgent(ABC):
         # bypass, @-mention, memory binding) adopts it instead of re-counting.
         hooks.append(ContextAttributionHook(session_id=self.session_id))
 
+        # Scopes the analyze_spreadsheet Code Interpreter sandbox to this turn
+        # (#259): BeforeInvocation registers the turn token that lets the tool
+        # reuse one sandbox across its calls, AfterInvocation stops it. Held on
+        # the wrapper so the stream coordinator can release it from its own
+        # `finally` too. Inert unless the tool is used or
+        # ANALYZE_SANDBOX_REUSE_ENABLED=false.
+        self.analyze_sandbox_hook = AnalyzeSandboxHook(self.session_id, self.user_id)
+        hooks.append(self.analyze_sandbox_hook)
+
         # Live narration of what the agent is doing (model call / tool call
         # boundaries) plus Strands-measured per-tool durations. Held on the
         # wrapper so the stream coordinator can drain the transitions into
@@ -439,13 +446,6 @@ class BaseAgent(ABC):
         self.agent_status_hook = AgentStatusHook()
         hooks.append(self.agent_status_hook)
 
-        # An MCP App write tool that handed the operation to its form returns
-        # `isError: true` on purpose; mark it `awaiting_user_submission` at
-        # intake so the stream and the persisted message both say "waiting
-        # for you" rather than "failed". Only `structuredContent` changes,
-        # which no model formatter sends.
-        hooks.append(McpAppAwaitingSubmissionHook())
-
         # Content-free tool census (tool name → calls/errors per model call).
         # Held on the wrapper so the stream coordinator can read each call's
         # tally at turn end and persist it on that call's cost row for the
@@ -454,6 +454,14 @@ class BaseAgent(ABC):
         # COST_DIAGNOSTICS_ENABLED=false.
         self.tool_census_hook = ToolCensusHook()
         hooks.append(self.tool_census_hook)
+
+        # A call the provider declined (stop reason content_filtered or
+        # guardrail_intervened, no text) gets a platform notice in its message
+        # before Strands appends it, so history and a reload are never blank.
+        # After the model answers only; the coordinator streams the same notice.
+        from agents.main_agent.session.hooks.declined_answer import DeclinedAnswerHook
+
+        hooks.append(DeclinedAnswerHook())
 
         # Per-model-call context ledger: the conversation window's cumulative
         # trim count and the compaction decisions taken since the previous
@@ -478,9 +486,11 @@ class BaseAgent(ABC):
         """Resolve a Strands `selected_tool` to the set of tool names that
         pause for approval.
 
-        Two sources, one gate. An external MCP tool uses the per-tool set
+        Three sources, one gate. An external MCP tool uses the per-tool set
         cached by the integration (mirrors the provider lookup used by the
-        OAuth consent hook). The skill-authoring writes are a fixed set of
+        OAuth consent hook). A Gateway tool uses the set the Gateway
+        integration took from the catalog when it built this agent's Gateway
+        client (#454). The skill-authoring writes are a fixed set of
         built-in names (skill-creator spec D10), composed in here so the
         snapshot, resume route, breadcrumb and SPA card stay the MCP ones.
         Gating a name that was not built this turn is a no-op.
@@ -495,10 +505,17 @@ class BaseAgent(ABC):
         from strands.tools.mcp import MCPAgentTool
 
         integration = get_external_mcp_integration()
+        owner = self
 
         def approval_names_lookup(selected_tool: object) -> set[str]:
             if isinstance(selected_tool, MCPAgentTool):
-                return integration.approval_names_for_client(selected_tool.mcp_client)
+                client = selected_tool.mcp_client
+                # Read per call: the Gateway client is built after the hooks.
+                # Absent on the bare namespaces some tests build the hook from.
+                gateway = getattr(owner, "gateway_integration", None)
+                if gateway is not None and client is gateway.client:
+                    return gateway.approval_names_for_client(client)
+                return integration.approval_names_for_client(client)
             if getattr(selected_tool, "tool_name", None) in SKILL_AUTHORING_APPROVAL_NAMES:
                 return set(SKILL_AUTHORING_APPROVAL_NAMES)
             return set()
@@ -576,15 +593,15 @@ class BaseAgent(ABC):
             disconnected_lookup=disconnected_lookup,
         )
 
-    def _expand_gateway_tool_ids(self, gateway_tool_ids: List[str]) -> List[str]:
+    def _resolve_gateway_tools(self, gateway_tool_ids: List[str]):
         """Expand #419 catalog gateway tools into the gateway's runtime per-tool
-        ids (see `expand_gateway_tool_ids`), bridging the async catalog lookup
-        into this sync build path the same way `_register_external_mcp_tools`
-        does.
+        ids and collect their approval flags (see `resolve_gateway_tools`),
+        bridging the async catalog lookup into this sync build path the same
+        way `_register_external_mcp_tools` does.
         """
         from apis.shared.tools.repository import get_tool_catalog_repository
         from agents.main_agent.tools.gateway_integration import (
-            expand_gateway_tool_ids,
+            resolve_gateway_tools,
         )
 
         repo = get_tool_catalog_repository()
@@ -598,13 +615,13 @@ class BaseAgent(ABC):
 
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     return executor.submit(
-                        asyncio.run, expand_gateway_tool_ids(gateway_tool_ids, repo)
+                        asyncio.run, resolve_gateway_tools(gateway_tool_ids, repo)
                     ).result()
             return loop.run_until_complete(
-                expand_gateway_tool_ids(gateway_tool_ids, repo)
+                resolve_gateway_tools(gateway_tool_ids, repo)
             )
         except RuntimeError:
-            return asyncio.run(expand_gateway_tool_ids(gateway_tool_ids, repo))
+            return asyncio.run(resolve_gateway_tools(gateway_tool_ids, repo))
 
     def _build_filtered_tools(self) -> List:
         """
@@ -628,13 +645,16 @@ class BaseAgent(ABC):
         if gateway_tool_ids:
             # #419 catalog tools (`gateway_<id>`) must be expanded to the
             # gateway's runtime per-tool ids (`gateway_<target>___<tool>`)
-            # before the FilteredMCPClient can match them.
-            gateway_tool_ids = self._expand_gateway_tool_ids(gateway_tool_ids)
+            # before the FilteredMCPClient can match them. The same catalog
+            # rows say which of them pause for approval (#454).
+            resolution = self._resolve_gateway_tools(gateway_tool_ids)
             # The JWT-authorized Gateway needs *this user's* access token per
             # invocation — there is no machine-identity fallback. Passed
             # explicitly (never cached globally) so tokens can't cross users.
             gateway_client = self.gateway_integration.get_client(
-                gateway_tool_ids, auth_token=self.auth_token
+                resolution.runtime_ids,
+                auth_token=self.auth_token,
+                approval_names=resolution.approval_names,
             )
             if gateway_client:
                 local_tools = self.gateway_integration.add_to_tool_list(local_tools)

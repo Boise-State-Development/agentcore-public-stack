@@ -104,7 +104,6 @@ describe('ToolFormPage — Gateway target (protocol=mcp)', () => {
       gwCredentialType: 'oauth',
       gwCredentialProviderArn: 'arn:aws:bedrock-agentcore:us-west-2:1:token-vault/default/oauth2credentialprovider/gh',
       gwOauthScopes: 'repo read:user',
-      gwGrantType: 'client_credentials',
     });
 
     await cmp.onSubmit();
@@ -114,7 +113,57 @@ describe('ToolFormPage — Gateway target (protocol=mcp)', () => {
     expect(cfg.listingMode).toBe('default');
     expect(cfg.credentialProviderArn).toContain('oauth2credentialprovider/gh');
     expect(cfg.oauthScopes).toEqual(['repo', 'read:user']);
+    // Client Credentials is the only grant a Gateway target can be saved with (#454).
     expect(cfg.grantType).toBe('client_credentials');
+  });
+
+  function gatewayToolRow(grantType: string, credentialType = 'oauth') {
+    return {
+      toolId: 'gw_old',
+      displayName: 'Old OAuth target',
+      description: 'Saved before #454',
+      category: 'utility',
+      protocol: 'mcp',
+      status: 'active',
+      isPublic: false,
+      mcpGatewayConfig: {
+        targetName: 'old-target',
+        endpointUrl: 'https://old.example.com/mcp',
+        listingMode: 'default',
+        credentialType,
+        credentialProviderArn: 'arn:aws:bedrock-agentcore:us-west-2:1:token-vault/default/oauth2credentialprovider/old',
+        oauthScopes: ['read'],
+        grantType,
+        customParameters: null,
+        tools: [],
+      },
+    };
+  }
+
+  it('warns that saving switches a pre-#454 3LO target to Client Credentials', async () => {
+    const cmp = makeComponent();
+    adminToolService.fetchTool.mockResolvedValue(gatewayToolRow('authorization_code'));
+    cmp.toolId.set('gw_old');
+    await cmp.loadTool('gw_old');
+
+    expect(cmp.legacyGatewayGrantType()).toBe('authorization_code');
+
+    await cmp.onSubmit();
+    expect(adminToolService.updateTool).toHaveBeenCalledTimes(1);
+    const cfg = adminToolService.updateTool.mock.calls[0][1].mcpGatewayConfig;
+    expect(cfg.grantType).toBe('client_credentials');
+  });
+
+  it('does not warn for a Client Credentials target or a non-OAuth row', async () => {
+    const cmp = makeComponent();
+    adminToolService.fetchTool.mockResolvedValue(gatewayToolRow('client_credentials'));
+    await cmp.loadTool('gw_old');
+    expect(cmp.legacyGatewayGrantType()).toBeNull();
+
+    // Non-OAuth rows saved before #454 stored authorization_code as the default.
+    adminToolService.fetchTool.mockResolvedValue(gatewayToolRow('authorization_code', 'gateway_iam_role'));
+    await cmp.loadTool('gw_old');
+    expect(cmp.legacyGatewayGrantType()).toBeNull();
   });
 
   it('discovers tools from the gateway endpoint and merges them into the rows', async () => {

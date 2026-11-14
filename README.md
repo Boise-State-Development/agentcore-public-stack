@@ -7,12 +7,15 @@
 
 <h1>AgentCore Public Stack</h1>
 
-**The open-source AI platform for universities and state & local government.**
-*Chat, agents, tools, knowledge and governance, deployed into an AWS account you control. Built by Boise State University, designed for every public institution.*
+**The AI platform for public institutions on AWS.**
+*Governed in code. Measured in public. Deployed in your own AWS account.*
 
-[![Release](https://img.shields.io/badge/Release-v1.35.0-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
+Chat, agents, skills, tools and connectors on Amazon Bedrock AgentCore. Every model, tool and connector is a role grant your admins control, every model call is metered to the token, and every release publishes its quality, speed and cost, failures included. Source-available, and free for universities, public research and government. Built by Boise State University.
+
+[![Release](https://img.shields.io/badge/Release-v1.36.0-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
 [![Nightly](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml)
 [![Docs](https://img.shields.io/badge/Docs-boise--state--development.github.io-0ea5e9?style=flat&logo=readthedocs&logoColor=white)](https://boise-state-development.github.io/agentcore-public-stack/)
+[![Benchmarks](https://img.shields.io/badge/Benchmarks-published_every_release-22c55e?style=flat)](https://boise-state-development.github.io/agentcore-public-stack/benchmarks/)
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)
 ![Angular](https://img.shields.io/badge/Angular-v21-DD0031?style=flat&logo=angular&logoColor=white)
@@ -21,13 +24,13 @@
 ![Tailwind](https://img.shields.io/badge/Tailwind_CSS-v4.2-06B6D4?style=flat&logo=tailwindcss&logoColor=white)
 ![License](https://img.shields.io/badge/License-PolyForm_Noncommercial-blue?style=flat)
 
-[Why](#-why-institutions-choose-this) · [Who It's For](#-built-for-the-public-sector) · [Features](#-what-you-get) · [Quotas](#-quotas-budgets-everyone-can-see) · [Admin Console](#-the-admin-console) · [Roadmap](#-roadmap) · [Architecture](#-architecture) · [Deploy](#-deployment) · [Docs](https://boise-state-development.github.io/agentcore-public-stack/)
+[Why](#-why-institutions-choose-this) · [Governance](#-governance-you-can-read) · [Benchmarks](#-measured-in-the-open) · [Built for AWS](#-built-for-institutions-whose-cloud-is-aws) · [Who It's For](#-built-for-the-public-sector) · [Features](#-what-you-get) · [Quotas](#-quotas-budgets-everyone-can-see) · [Admin Console](#-the-admin-console) · [Roadmap](#-roadmap) · [Architecture](#-architecture) · [Deploy](#-deployment) · [Docs](https://boise-state-development.github.io/agentcore-public-stack/)
 
 </div>
 
 ---
 
-> 🚀 **Ready to deploy?** Fork the repo and follow the [**GitHub Actions Quick Start**](.github/README-ACTIONS.md) to stand up your own platform in your AWS account in under an hour. No license to buy, no vendor to call.
+> 🚀 **[Deploy it](.github/README-ACTIONS.md)** in your AWS account in under an hour, with no license to buy and no vendor to call · 📊 **[See the benchmarks](https://boise-state-development.github.io/agentcore-public-stack/benchmarks/)** and rerun them on your own deployment · 🛡️ **[Read the governance model](https://boise-state-development.github.io/agentcore-public-stack/configuration/governance/)**
 
 ---
 
@@ -38,7 +41,7 @@
 
 AgentCore Public Stack is the working codebase behind [boisestate.ai](https://boisestate.ai), the AI platform that serves students, faculty and staff at Boise State University. It packages **AWS Bedrock AgentCore** and **Strands Agents** into a complete, production-ready product: a polished chat experience, custom agents and skills, shared team workspaces, document intelligence, voice, a terminal client, and a full admin console for identity, access, quotas and cost.
 
-Fork it, deploy it, brand it, and hand your whole organization an AI platform you own, without writing agent code. Everything is configured through the UI; the model, tool and policy decisions stay yours.
+Fork it, deploy it, brand it, and hand your whole organization an AI platform you run, without writing agent code. Everything is configured through the UI; the model, tool, connector and policy decisions stay yours, and every one of them is enforced by code you can read.
 
 ---
 
@@ -50,14 +53,54 @@ Universities and public agencies share the same AI dilemma: per-seat subscriptio
 |-------------|------------|
 | 💸 **Per-seat pricing doesn't scale to 30,000 people** | Consumption billing through the AWS account and agreement you already have. Pay for tokens used, not seats purchased |
 | 🔐 **Student, employee and resident data must stay under your control** | Every conversation, document and knowledge base lives inside your AWS account. Models are used for inference only and never train on your data |
-| 🔒 **Betting the institution on one vendor** | Swap models without a redeploy. Claude, Nova, Llama, Mistral, GPT, Gemini and more, curated by your admins and governed by role |
-| 🧩 **Dozens of systems, none of them talking to the AI** | Connect Canvas, Google Workspace, PeopleSoft, GitHub, records systems and any internal API through MCP servers, registered from the admin console |
+| 🔒 **Betting the institution on one vendor** | Choose your models. Claude, Nova, Llama and Mistral from Bedrock, plus GPT and Gemini, curated by your admins, governed by role and swapped without a redeploy |
+| 🧩 **Dozens of systems, none of them talking to the AI** | Any MCP server, registered from the admin console. Sign-in to 25 providers is built in, among them Google, Microsoft, Canvas, GitHub, Slack, Zoom, Salesforce, Atlassian, Notion and Okta, plus any custom OAuth provider |
+| 🔎 **Vendor claims nobody can check** | Every release publishes its eval results per model: cases passed, cost per task and time per task, with the cases it failed. One command reruns them on your deployment |
 | ⚖️ **Inequitable access** | Everyone gets the same models and tools. Premium capability is a role grant, not a price tier |
 | 📋 **Accountability** | Role-based access from your identity provider, delegated admin scopes, an audit log of every admin change, and cost attribution down to the individual model call |
 
-At 30,000 users, commercial subscriptions would cost upwards of **$7.2M per year**. This platform delivers the same capabilities, and more, for the cost of the AWS resources you actually use.
+At 30,000 users, commercial subscriptions at $20 a seat per month would cost **$7.2M per year**. This platform delivers the same capabilities, and more, for the cost of the AWS resources you actually use.
 
 > *"Keep your harness separate from the model."* Even the platform vendors now coach enterprises to keep their AI stack swappable. We think the only harness that is truly separate from the model is one you can read, fork and run yourself.
+
+---
+
+## 🛡️ Governance you can read
+
+Every rule below is code you can read and test, not a vendor's promise. The [governance page](https://boise-state-development.github.io/agentcore-public-stack/configuration/governance/) links each one to its source.
+
+| What you govern | How it's enforced |
+|---|---|
+| **Models** | Choose any model in your catalog. A role grant decides who uses which, through one access rule every service calls, and a disabled model cannot run even for an administrator |
+| **Tools** | Each tool is a role grant. An administrator can require the user's approval before a tool runs, and code the agent executes passes a policy check that no prompt can change |
+| **Connectors** | Administrators register MCP servers and sign-in providers. Each user consents to a provider inside the conversation, and the agent acts with that user's own account, never a shared one |
+| **Spend** | Quota tiers by role, department or person, with warnings before a hard stop. Cost is attributed to every model call by user, session, agent and model, without reading the conversation |
+| **Administration** | Admin areas are delegated to the office that owns them from a closed list with no wildcard; role administration and identity-provider setup can never be delegated. The audit log keeps before-and-after values for a year, including denied attempts to escalate |
+| **Change** | New capabilities ship switched off. Each deployment turns on what it wants, and the [feature flags](https://boise-state-development.github.io/agentcore-public-stack/configuration/feature-flags/) say which ones cost money |
+| **Quality** | Every release is scored against committed per-model baselines, and the results are [published](https://boise-state-development.github.io/agentcore-public-stack/benchmarks/) |
+
+### 📊 Measured in the open
+
+**We publish our results; most platforms keep theirs private.** Every release runs 143 synthetic cases, three times each, on every model we list, and publishes what passed, what it cost and how long it took, failing cases included. The cases are synthetic, so nothing is withheld, and on the Benchmarks page every number links back to the case and commit that produced it.
+
+| Model | Cases passing | Cost per task | Median task time | Median first token | Measured |
+|---|---:|---:|---:|---:|---|
+| `us.anthropic.claude-haiku-5-5` | 142 of 143 (k=3) | $0.0006 | 6.8 s | 2.7 s | 2026-11-13, v1.35.0 |
+| `us.anthropic.claude-sonnet-5` | 140 of 143 (k=3) | $0.0101 | 6.3 s | 1.5 s | 2026-11-13, v1.35.0 |
+| `us.anthropic.claude-opus-5-5` | 138 of 143 (k=3) | $0.0219 | 7.4 s | 2.2 s | 2026-11-13, v1.35.0 |
+
+Cost per task is what the platform metered for every model call of a task, at Regional rates on the development deployment. Full tables by workflow, the methodology and the command that reruns the benchmark on your own deployment are on the [Benchmarks](https://boise-state-development.github.io/agentcore-public-stack/benchmarks/) page.
+
+---
+
+## ☁️ Built for institutions whose cloud is AWS
+
+Not multi-cloud, on purpose: it runs on what your institution already approved.
+
+- **Your agreement.** Model usage bills through your AWS account and the agreement you already have. No new vendor contract, no per-seat license.
+- **Your controls.** Data stays in your account and your region. IAM, CloudTrail and your organization's service control policies apply to it as they do to everything else; our own development account runs under a policy that blocks cross-region model routing.
+- **AWS's agent services, composed for you.** AgentCore Runtime, Memory, Gateway, Identity, Browser and Code Interpreter, wired together with Bedrock models in one CDK stack.
+- **One deploy.** GitHub Actions takes a fork to a running platform in [under an hour](.github/README-ACTIONS.md).
 
 ---
 
@@ -116,6 +159,8 @@ Short-term session history plus long-term memory across conversations, with thre
 Direct tools, AWS SDK calls, MCP servers behind AgentCore Gateway, external MCP servers and remote A2A agents, all in one governed tool catalog. Register an MCP server URL in the admin console and its tools are discovered, assigned to roles and available to users with no redeploy. **MCP Apps** let a tool render its own interactive UI inline in the chat, animating as the model types its arguments. OAuth consent is asked for mid-conversation and the turn resumes after sign-in.
 
 **Web and browser.** The agent browses the web with page cards and screenshots, and when a site needs the user to sign in, it hands the browser to the user in a docked live view and takes it back when they are done, never seeing the credentials.
+
+**Connectors.** Sign-in to 25 providers is built in (Google, Microsoft, Canvas, GitHub, Slack, Zoom, Salesforce, Atlassian, Notion, Dropbox, HubSpot, Okta and more, plus any custom OAuth provider), so an MCP server behind any of them works with each user's own consent. Ready-made tools cover Google Calendar meetings, Zoom transcripts and GitHub project tasks, alongside web search, a real browser, code execution, spreadsheets and Word, Excel and PowerPoint output.
 
 **Example integrations:** 📚 Canvas LMS · 📁 Google Workspace · 🎓 PeopleSoft · 🐙 GitHub · 🔍 Library systems · 🔧 Any API, wrapped in an MCP server
 
@@ -296,7 +341,7 @@ agentcore-public-stack/
 
 See [RELEASE_NOTES.md](RELEASE_NOTES.md) for every release: new features, fixes, platform upgrades, breaking changes and the manual steps a deployment needs.
 
-**Current release:** v1.35.0
+**Current release:** v1.36.0
 
 ---
 

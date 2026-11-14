@@ -47,6 +47,11 @@ Design notes
   extracted once per process (``kb_documents.kb_document_text``'s cache) so
   paging does not re-download. A document past
   :data:`PROJECT_FILE_TEXT_MAX_CHARS` is reported, not sampled.
+* **Never offloaded.** Both voices are in the tool-result offloader's
+  ``OFFLOAD_EXEMPT_TOOLS``, as ``document_read`` is: the page is the bound
+  (a full one measured 9,149 tokens on Haiku 4.5), and an offloaded page came
+  back as a preview of one escaped JSON line that line search could not split,
+  so a section past the preview was unreachable.
 * **Costs nothing before the first token.** The builder makes closures; the
   DynamoDB Query, the membership read and the S3 fetch run only when the model
   calls the tool.
@@ -61,9 +66,8 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from strands import tool
 
-from apis.shared.assistants.kb_documents import kb_document_text, list_kb_documents
+from apis.shared.assistants.kb_documents import kb_document_format, kb_document_text, list_kb_documents
 from apis.shared.auth.models import User
-from apis.shared.files.document_read import document_format_for
 from apis.shared.files.workspace import WORKSPACE_READ_MAX_BYTES
 
 logger = logging.getLogger(__name__)
@@ -274,7 +278,7 @@ def member_emails(project_id: str) -> Dict[str, str]:
 def _type_label(doc: Mapping[str, Any]) -> str:
     """What kind of document a listing says this is: its text format, else its kind."""
     name = str(doc.get("filename") or "")
-    fmt = document_format_for(str(doc.get("contentType") or ""), name)
+    fmt = kb_document_format(doc)
     if fmt:
         return fmt
     kind = _kind(name)
@@ -389,8 +393,7 @@ def read_project_file(
             "status": status,
             "message": message.format(name=name, status=status),
         }
-    content_type = str(doc.get("contentType") or "")
-    fmt = document_format_for(content_type, name)
+    fmt = kb_document_format(doc)
     if fmt is None:
         raise ProjectFilesError(NOT_TEXT.format(name=name, kind=_kind(name)))
     text = kb_document_text(doc, fmt, PROJECT_FILE_TEXT_MAX_CHARS)

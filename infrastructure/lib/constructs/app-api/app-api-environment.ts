@@ -79,6 +79,8 @@ export interface AppApiSsmParams {
   voiceTicketReplayTableName: string;
   voiceTicketReplayTableArn: string;
   voiceTicketSigningSecretArn: string;
+  // The browser sign-in viewer's own origin (never the mcp-sandbox origin).
+  browserLiveViewOrigin: string;
   // Inference
   inferenceApiRuntimeEndpointUrl: string;
   /** AgentCore Runtime CloudWatch log group (spans + content log records) for eval sampling. */
@@ -206,6 +208,7 @@ export function resolveAppApiParams(
     voiceTicketReplayTableName: refs.voiceTicketReplayTable.tableName,
     voiceTicketReplayTableArn: refs.voiceTicketReplayTable.tableArn,
     voiceTicketSigningSecretArn: refs.voiceTicketSigningSecret.secretArn,
+    browserLiveViewOrigin: refs.browserLiveViewOrigin,
     // Inference
     inferenceApiRuntimeEndpointUrl: overrides.inferenceApiRuntimeEndpointUrl,
     agentCoreRuntimeLogGroupName: overrides.agentCoreRuntimeLogGroupName,
@@ -428,6 +431,17 @@ export function buildAppApiEnvironment(
     // so only "true" enables.
     SOURCE_PROVENANCE_ENABLED: config.sourceProvenance.enabled ? 'true' : 'false',
 
+    // Attachment planner's token profile (docs/specs/unified-attachment-delivery.md
+    // phase 3). app-api's share is `GET /files/limits`, which reports the active
+    // profile. In development, so only "true" enables.
+    ATTACHMENT_PLAN_ENABLED: config.attachmentPlan.enabled ? 'true' : 'false',
+
+    // MCP form elicitation (docs/specs/mcp-elicitation.md). app-api's share is
+    // admin capability discovery, which advertises form elicitation to an
+    // opted-in server so its elicitation-gated tools can be listed and allowed.
+    // In development, so only "true" enables.
+    MCP_ELICITATION_ENABLED: config.mcpElicitation.enabled ? 'true' : 'false',
+
     // Release ledger writes (docs/specs/release-ledger.md §5.2). app-api's share
     // is the api-converse cost rows it writes; the Runtime writes the rest. In
     // development, so only "true" enables.
@@ -439,6 +453,11 @@ export function buildAppApiEnvironment(
     // only "true" enables. The model id is deliberately NOT set here — app-api
     // never makes the extraction call.
     DOCUMENT_EXTRACT_ENABLED: config.documentExtract.enabled ? 'true' : 'false',
+
+    // Field-set authoring (docs/specs/field-set-authoring.md §7): the
+    // `/skills/mine/{id}/field-sets` routes. app-api only; the Runtime resolves
+    // field sets the same way either way. In development, so only "true" enables.
+    FIELD_SET_AUTHORING_ENABLED: config.fieldSetAuthoring.enabled ? 'true' : 'false',
 
     // Assistant KB full-context mode. app-api never sends a knowledge base to a
     // model; its share is `GET /assistants/{id}/knowledge-base/mode`, which tells
@@ -475,5 +494,12 @@ export function buildAppApiEnvironment(
     DICTATION_LANGUAGES: config.dictation.languages,
     VOICE_TICKET_REPLAY_TABLE_NAME: params.voiceTicketReplayTableName,
     VOICE_TICKET_SIGNING_SECRET_ARN: params.voiceTicketSigningSecretArn,
+    // The origin the SPA frames the browser sign-in viewer from, returned on
+    // the live-view mint response beside the signed URL it is the only place
+    // to send (docs/specs/authenticated-web-assessment.md D3). Its own
+    // CloudFront distribution, so no MCP App ever shares an origin with the
+    // page a user types a password into. app-api only: the Runtime never
+    // frames anything, and its environment budget stays untouched.
+    BROWSER_LIVE_VIEW_ORIGIN: params.browserLiveViewOrigin,
   };
 }

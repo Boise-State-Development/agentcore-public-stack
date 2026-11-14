@@ -1,6 +1,11 @@
 """
 Thumbnail rendering for non-image file attachments.
 
+The prepare Lambda renders a PDF's first page at upload, so app-api normally
+only presigns it. This in-process renderer remains for a deployment without
+the prepare queue (large-document attachments turned off), where nothing else
+would render it.
+
 Currently supports PDF (page 1) via pypdfium2. Office formats (.docx, .xlsx)
 are intentionally not implemented here — see ThumbnailRenderer.render() for
 guidance on how to extend this.
@@ -27,6 +32,16 @@ class ThumbnailUnsupportedError(Exception):
 
 class ThumbnailRenderError(Exception):
     """Raised when rendering ran but the source file was unreadable."""
+
+
+class ThumbnailPending(Exception):
+    """The thumbnail is not rendered yet and a render has been queued.
+
+    The prepare Lambda renders every PDF's first page at upload
+    (``apis/shared/files/pdf_thumbnail.py``). A PDF uploaded before it did,
+    or one asked for in the seconds before its preparation finished, gets a
+    render queued instead of one run here: PDFium has crashed app-api tasks.
+    """
 
 
 class ThumbnailRenderer:

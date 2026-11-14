@@ -38,6 +38,9 @@ import { isPreviewSession } from '../../../shared/constants/session.constants';
 import { HttpErrorResponse } from '@angular/common/http';
 import { HandoffRelayService, ResumeOutcome } from '../handoff/handoff-relay.service';
 import { RelayedPromptKind } from '../handoff/handoff.models';
+import { ComposerCard, DeliveryAttach, DeliveryStateService } from '../handoff/delivery-state.service';
+import { fileLineFor, joinDeliveryBlocks, renderDeliveryBlock } from '../handoff/handoff-prompt';
+import { FEATURES } from '../../../services/features';
 
 /**
  * How long a send will wait for the tool/skill lists before giving up and
@@ -85,6 +88,8 @@ export class ChatRequestService implements OnDestroy {
   private readonly binding = inject(ConversationBindingService);
   private readonly incognitoChat = inject(IncognitoChatService);
   private readonly handoffRelay = inject(HandoffRelayService);
+  private readonly deliveryState = inject(DeliveryStateService);
+  private readonly features = inject(FEATURES);
   // TODO: Inject proper logging service
 
   constructor() {
@@ -138,6 +143,7 @@ export class ChatRequestService implements OnDestroy {
     mentionAgentId?: string,
     invokedSkillIds?: string[],
     folders?: FolderAttachmentData[],
+    pastedChars?: number,
   ): Promise<void> {
     // Ensure conversation exists and get its ID
     // Update URL to reflect current conversation
@@ -160,6 +166,7 @@ export class ChatRequestService implements OnDestroy {
     // immediately, before the stream starts.
     this.chatStateService.setLastTurnContinuable(sessionId, false);
     this.chatStateService.setLastTurnInterrupted(sessionId, false);
+    this.chatStateService.setLastTurnProviderOutage(sessionId, null);
 
     // We're about to navigate to this session; point the viewed-session
     // facades at it eagerly so the composer's loading state flips before
@@ -191,8 +198,29 @@ export class ChatRequestService implements OnDestroy {
     // Get file attachment metadata for display in user message
     const fileAttachments = this.getFileAttachments(fileUploadIds);
 
+    // Cards waiting on this composer ride this send (handoffs spec §4.8). The bubble's text is what
+    // the server will store, the blocks then what was typed, so it renders the same after a reload.
+    const cards: { attach: DeliveryAttach[]; cards: ComposerCard[] } = isNewSession || !this.features.handoffs
+      ? { attach: [], cards: [] }
+      : this.deliveryState.takeForSend(sessionId);
+    const modelText = cards.cards.length
+      ? joinDeliveryBlocks(
+          cards.cards.map((c) =>
+            renderDeliveryBlock(
+              c.editedText ?? c.text,
+              c.fromTitle,
+              c.artifacts,
+              (c.files ?? []).map((f) => fileLineFor(f, sessionId, c.deliveryId)),
+            ),
+          ),
+          userInput,
+        )
+      : undefined;
+
     // Create and add user message with file attachments
-    const userMessage = this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments, folders);
+    const userMessage = modelText === undefined
+      ? this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments, folders)
+      : this.messageMapService.addUserMessage(sessionId, userInput, fileAttachments, folders, modelText);
     // If this send is the retry a down-thumb asked for, link it to the thumb
     // (an index on the feedback row — never the text).
     this.messageFeedbackService.consumePendingRetry(sessionId, userMessage);
@@ -221,6 +249,11 @@ export class ChatRequestService implements OnDestroy {
         invokedSkillIds,
         (folders ?? []).flatMap((folder) => (folder.folderAttachId ? [folder.folderAttachId] : [])),
       );
+      if (cards.attach.length) requestObject['deliveries'] = cards.attach;
+      // How much of the message was pasted rather than typed: a count only, for
+      // the turn's cost row (docs/one-pagers/idle-return-context.md). Omitted
+      // when nothing was pasted, so a typed turn's payload is unchanged.
+      if (pastedChars && pastedChars > 0) requestObject['pasted_chars'] = pastedChars;
       this.turnTiming.describe(sessionId, {
         // The selected model even when the request omits it as the default.
         modelId: this.modelService.getSelectedModel()?.modelId ?? null,
@@ -235,6 +268,9 @@ export class ChatRequestService implements OnDestroy {
       this.chatStateService.setChatLoading(sessionId, false);
       this.messageMapService.endStreaming(sessionId);
       if (error instanceof StreamNotStartedError) {
+        // Refused before the server took anything: the cards go back on the composer, and a retry
+        // takes them again.
+        this.deliveryState.restore(sessionId, cards.cards);
         this.markNotSent(sessionId, userMessage.id, error.reason, () =>
           this.submitChatRequest(
             userInput,
@@ -246,6 +282,7 @@ export class ChatRequestService implements OnDestroy {
             // Every argument of the original send, or a retry quietly drops
             // what this one carried (dev, 2026-10-14: a folder's manifest).
             folders,
+            pastedChars,
           ),
         );
       }
@@ -398,6 +435,9 @@ export class ChatRequestService implements OnDestroy {
     handoffId: string;
     /** The context card as sent; absent when the user removed it. */
     contextText?: string;
+    /** Source files shared by reference (handoffs spec §4.9), and how many the sheet left unticked. */
+    sharedFileIds?: string[];
+    filesUnticked?: number;
     fileUploadIds?: string[];
     invokedSkillIds?: string[];
     folders?: FolderAttachmentData[];
@@ -427,8 +467,12 @@ export class ChatRequestService implements OnDestroy {
         invokedSkillIds,
         (folders ?? []).flatMap((folder) => (folder.folderAttachId ? [folder.folderAttachId] : [])),
       );
+      const sharing =
+        options.sharedFileIds?.length || options.filesUnticked
+          ? { fileIds: options.sharedFileIds ?? [], filesUnticked: options.filesUnticked ?? 0 }
+          : {};
       requestObject['handoff_context'] =
-        contextText === undefined ? { handoffId } : { handoffId, text: contextText };
+        contextText === undefined ? { handoffId, ...sharing } : { handoffId, text: contextText, ...sharing };
       this.turnTiming.describe(targetSessionId, {
         modelId: this.modelService.getSelectedModel()?.modelId ?? null,
         hasAgent: true,
@@ -493,6 +537,7 @@ export class ChatRequestService implements OnDestroy {
     // interrupted state (a Continue resumes the interrupted partial too).
     this.chatStateService.setLastTurnContinuable(sessionId, false);
     this.chatStateService.setLastTurnInterrupted(sessionId, false);
+    this.chatStateService.setLastTurnProviderOutage(sessionId, null);
 
     // Continuation streaming: pins the existing messages (history +
     // truncated partial + error bubble) as a stable prefix and appends the

@@ -157,12 +157,14 @@ class BrowserLoginRequiredEvent(BaseModel):
         default="",
         alias="sandboxOrigin",
         description=(
-            "Origin the SPA frames the live-view page from — the same "
-            "mcp-sandbox origin MCP Apps use, whose CloudFront function locks "
-            "`frame-ancestors` to the SPA and composes `connect-src` from the "
-            "`?csp=` query. Empty when the sandbox origin is not deployed, in "
-            "which case the SPA shows the prompt without a viewer rather than "
-            "framing nothing"
+            "Whether this deployment has an edge to show the viewer on: the "
+            "mcp-sandbox origin, deployed beside the viewer's own distribution. "
+            "Empty when it is not deployed, in which case the SPA shows the "
+            "prompt without a viewer rather than framing nothing. The SPA "
+            "never frames the viewer from this origin and never posts to it: "
+            "MCP Apps run there, and a same-origin App frame could read the "
+            "viewer's document. The viewer's own origin arrives on app-api's "
+            "mint response (`viewerOrigin`), beside the signed URL"
         ),
     )
 
@@ -178,9 +180,9 @@ class BrowserLoginRequiredEvent(BaseModel):
 #
 #   targetUrl     — the page the agent already browsed to, shown so the user
 #                   knows what they are signing into. Plain and navigational.
-#   sandboxOrigin — a deployment constant (the mcp-sandbox origin). It carries
-#                   no credential and is identical for every user of an
-#                   environment.
+#   sandboxOrigin — a deployment constant (the mcp-sandbox origin), used only
+#                   as "a viewer is deployed". It carries no credential and is
+#                   identical for every user of an environment.
 #
 # What the guard IS for is a *presigned* live-view URL: SigV4 query-signed,
 # short-lived, and a credential in URL form. Add to this set only for a value

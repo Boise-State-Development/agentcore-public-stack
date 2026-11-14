@@ -10,13 +10,11 @@ history. The per-file 4 MB gate and the SPA's 5-file cap do not protect: prod
 measurement (validation doc, Claim 7) found ~1.3–1.4% of attachment turns over
 quota, several with only 3–4 files.
 
-Two helpers, composed in the chat route:
-
-- ``_apply_message_file_cap`` — the server side of the SPA's
-  ``MAX_FILES_PER_MESSAGE``, applied *before* the S3 fetch so a sixth file is
-  reported to the user instead of silently truncated by the resolver.
-- ``_apply_inline_byte_budget`` — first-fit in attachment order against
-  ``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES``; images count.
+Which file survives is the planner's decision (``apis.shared.files.attachment_plan``)
+and lives in its table test (``tests/apis/shared/files/test_attachment_plan.py``).
+This file keeps the route's side: the guidance and marker text built from the
+plan, the over-quota metric, the kill switch reader, the budget's derivation,
+and that ``_resolve_turn_attachments`` applies the count cap before the fetch.
 """
 
 import base64
@@ -24,19 +22,17 @@ import math
 
 import pytest
 
+from apis.inference_api.chat import routes
+from apis.inference_api.chat.models import InvocationRequest
 from apis.inference_api.chat.routes import (
-    _apply_inline_byte_budget,
-    _apply_message_file_cap,
     _attachment_marker_names,
     _build_attachment_guidance,
     _emit_attachment_over_quota_metric,
     _estimate_decoded_size,
-    _partition_attachments,
 )
 from apis.shared.feature_flags import attachment_turn_guard_enabled
 from apis.shared.files import models as file_models
 
-XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 EVENT_QUOTA_BYTES = 10_000_000  # AgentCore Memory event payload quota
 
 
@@ -57,196 +53,62 @@ class _Attachment:
 MB = 1024 * 1024
 
 
-class TestInlineByteBudget:
-    def test_under_the_budget_keeps_everything_in_order(self):
-        files = [_Attachment("a.pdf", size=3 * MB), _Attachment("b.pdf", size=3 * MB)]
-        kept, over, requested = _apply_inline_byte_budget(files, 7_500_000)
+class TestTheRouteAppliesTheCountCapBeforeTheFetch:
+    """Wiring: the planner's count decision reaches the resolver and the plan."""
 
-        assert kept == files
-        assert over == []
-        assert requested == 6 * MB
+    @pytest.fixture
+    def phase(self, monkeypatch):
+        calls: list = []
 
-    def test_over_the_budget_moves_the_file_that_breaks_it(self):
-        files = [_Attachment("a.pdf", size=4 * MB), _Attachment("b.pdf", size=4 * MB)]
-        kept, over, requested = _apply_inline_byte_budget(files, 7_500_000)
+        class _Resolver:
+            async def resolve_files(self, *, user_id, upload_ids, max_files=None):
+                calls.append({"upload_ids": list(upload_ids), "max_files": max_files})
+                return []
 
-        assert [f.filename for f in kept] == ["a.pdf"]
-        assert [f.filename for f in over] == ["b.pdf"]
-        assert requested == 8 * MB
+        async def _no_pending(*args, **kwargs):
+            return []
 
-    def test_first_fit_earlier_files_win_and_a_later_small_file_still_rides(self):
-        # A(4) fits, B(4) would break the budget, C(1) still fits after A.
-        files = [
-            _Attachment("a.pdf", size=4 * MB),
-            _Attachment("b.pdf", size=4 * MB),
-            _Attachment("c.pdf", size=1 * MB),
-        ]
-        kept, over, _ = _apply_inline_byte_budget(files, 7_500_000)
+        import apis.shared.sessions.metadata as metadata
 
-        assert [f.filename for f in kept] == ["a.pdf", "c.pdf"]
-        assert [f.filename for f in over] == ["b.pdf"]
+        monkeypatch.setattr(metadata, "pop_pending_attachments", _no_pending)
+        monkeypatch.setattr(routes, "get_file_resolver", lambda: _Resolver())
 
-    def test_order_is_deterministic_attachment_order_in_both_lists(self):
-        files = [
-            _Attachment("z.pdf", size=3 * MB),
-            _Attachment("y.pdf", size=3 * MB),
-            _Attachment("x.pdf", size=3 * MB),
-            _Attachment("w.pdf", size=3 * MB),
-        ]
-        kept, over, _ = _apply_inline_byte_budget(files, 7_500_000)
+        async def run(upload_ids):
+            req = InvocationRequest(session_id="sess-1", message="hi", file_upload_ids=upload_ids)
+            return await routes._resolve_turn_attachments(req, "user-1", None, is_resume=False, is_continuation=False)
 
-        assert [f.filename for f in kept] == ["z.pdf", "y.pdf"]
-        assert [f.filename for f in over] == ["x.pdf", "w.pdf"]
+        return run, calls
 
-    def test_images_count_toward_the_budget(self):
-        # The per-file document gate skips images; the message-level budget
-        # must not, because the image bytes are in the same persisted event.
-        files = [
-            _Attachment("photo.png", content_type="image/png", size=4 * MB),
-            _Attachment("report.pdf", size=4 * MB),
-        ]
-        kept, over, _ = _apply_inline_byte_budget(files, 7_500_000)
+    @pytest.mark.asyncio
+    async def test_a_sixth_upload_is_counted_and_never_fetched(self, phase):
+        run, calls = phase
+        out = await run([f"u{i}" for i in range(6)])
 
-        assert [f.filename for f in kept] == ["photo.png"]
-        assert [f.filename for f in over] == ["report.pdf"]
+        assert calls == [{"upload_ids": [f"u{i}" for i in range(5)], "max_files": None}]
+        assert out.dropped_over_count_total == 1
+        assert out.max_files_per_message == 5
+        assert out.plan.to_row() == {"profile": "legacy", "files": [], "droppedOverCount": 1}
 
-    def test_a_single_file_over_the_budget_is_moved_not_raised(self):
-        files = [_Attachment("huge.png", content_type="image/png", size=8 * MB)]
-        kept, over, _ = _apply_inline_byte_budget(files, 7_500_000)
+    @pytest.mark.asyncio
+    async def test_with_the_guard_off_the_resolver_keeps_its_backstop(self, phase, monkeypatch):
+        monkeypatch.setenv("ATTACHMENT_TURN_GUARD_ENABLED", "false")
+        run, calls = phase
+        out = await run([f"u{i}" for i in range(6)])
 
-        assert kept == []
-        assert over == files
-
-    def test_exactly_at_the_budget_is_allowed(self):
-        files = [_Attachment("a.pdf", size=7_500_000)]
-        kept, over, _ = _apply_inline_byte_budget(files, 7_500_000)
-        assert kept == files and over == []
-
-    def test_non_positive_budget_disables_the_cap(self):
-        files = [_Attachment("a.pdf", size=4 * MB), _Attachment("b.pdf", size=4 * MB)]
-        kept, over, requested = _apply_inline_byte_budget(files, 0)
-
-        assert kept == files
-        assert over == []
-        assert requested == 8 * MB
-
-    def test_empty_input(self):
-        assert _apply_inline_byte_budget([], 7_500_000) == ([], [], 0)
+        assert calls[0]["max_files"] == 5 and len(calls[0]["upload_ids"]) == 6
+        assert out.dropped_over_count_total == 0
 
 
-class TestNothingReachesTheSessionExceptionPath:
-    """The property the whole PR exists for: whatever survives the budget is
-    writable as one AgentCore Memory event.
-
-    The SDK serialises the message as base64 inside a ``blob`` payload. If the
-    kept set's encoded size is under the 10 MB event quota, ``create_message``
-    cannot fail on size, so the turn degrades to the guidance note rather than
-    to ``SessionException``.
-    """
-
-    @pytest.mark.parametrize(
-        "sizes",
-        [
-            [4 * MB, 4 * MB],                       # the classic two-file case
-            [4 * MB, 4 * MB, 4 * MB, 4 * MB, 4 * MB],  # SPA-legal five files
-            [3 * MB, 3 * MB, 3 * MB],               # 3 files, each fine
-            [2_600_000, 2_600_000, 2_600_000],      # the "3–4 files" prod shape
-            [7_500_000, 1],
-            [1] * 5 + [4 * MB] * 5,
-        ],
-    )
-    def test_kept_set_encodes_under_the_event_quota(self, sizes):
-        files = [_Attachment(f"f{i}.pdf", size=s) for i, s in enumerate(sizes)]
-        default_cap = file_models.INLINE_ATTACHMENTS_MAX_TOTAL_BYTES
-        kept, over, _ = _apply_inline_byte_budget(files, default_cap)
-
-        encoded = sum(len(f.bytes) for f in kept)
-        assert encoded <= math.ceil(default_cap * 4 / 3) + 4 * len(kept)  # padding slack
-        assert encoded <= EVENT_QUOTA_BYTES
-        # Nothing is lost silently: every input is in exactly one bucket.
-        assert sorted(f.filename for f in kept + over) == sorted(f.filename for f in files)
-
-    def test_partition_then_budget_chain_on_files_that_each_pass_the_per_file_gate(self):
-        # Each file is under INLINE_DOCUMENT_MAX_BYTES (4 MiB) so the
-        # per-file gate keeps all three; only the aggregate budget catches
-        # the turn. This is exactly the hole the per-file gate left open.
-        per_file = file_models.INLINE_DOCUMENT_MAX_BYTES - 1024
-        files = [_Attachment(f"f{i}.pdf", size=per_file) for i in range(3)]
-        sheet = _Attachment("data.xlsx", content_type=XLSX_MIME, size=6 * MB)
-
-        inline, tabular, _, oversized, _ = _partition_attachments(files + [sheet])
-        assert oversized == [] and inline == files and tabular == [sheet]
-
-        kept, over, requested = _apply_inline_byte_budget(
-            inline, file_models.INLINE_ATTACHMENTS_MAX_TOTAL_BYTES
-        )
-        assert [f.filename for f in kept] == ["f0.pdf"]
-        assert [f.filename for f in over] == ["f1.pdf", "f2.pdf"]
-        assert requested == 3 * per_file
-        # The diverted spreadsheet never counted: it is not in the message.
-        assert sum(len(f.bytes) for f in kept) <= EVENT_QUOTA_BYTES
-
+class TestDefaults:
     def test_default_cap_is_the_documented_derivation(self):
         # 10 MB event quota × 3/4 (base64) = 7.5 MB raw is the *break point*,
         # not a safe cap: encoding exactly that lands ON the quota, and the
-        # event's JSON envelope (role, content keys, the prompt text block,
-        # per-file metadata, the wrapper) is then added on top. The default
-        # therefore sits below it, with room for the envelope.
+        # event's JSON envelope is then added on top. The default sits below it.
         assert len(_b64_of_size(7_500_000)) == EVENT_QUOTA_BYTES, "the break point is real"
         assert file_models.INLINE_ATTACHMENTS_MAX_TOTAL_BYTES == 7_000_000
         assert len(_b64_of_size(file_models.INLINE_ATTACHMENTS_MAX_TOTAL_BYTES)) < EVENT_QUOTA_BYTES
 
-
-class TestMessageFileCap:
-    def test_under_the_cap_is_untouched(self):
-        direct = [_Attachment("a.pdf")]
-        ids = ["u1", "u2"]
-        assert _apply_message_file_cap(direct, ids, 5) == (direct, ids, [], 0)
-
-    def test_upload_ids_beyond_the_cap_are_counted_not_fetched(self):
-        # The old resolver truncated at 5 silently; now the route knows.
-        ids = [f"u{i}" for i in range(7)]
-        kept_direct, kept_ids, names, total = _apply_message_file_cap([], ids, 5)
-
-        assert kept_direct == []
-        assert kept_ids == ids[:5]
-        assert names == []
-        assert total == 2
-
-    def test_direct_files_beyond_the_cap_are_named(self):
-        direct = [_Attachment(f"d{i}.pdf") for i in range(6)]
-        kept_direct, kept_ids, names, total = _apply_message_file_cap(direct, [], 5)
-
-        assert kept_direct == direct[:5]
-        assert kept_ids == []
-        assert names == ["d5.pdf"]
-        assert total == 1
-
-    def test_direct_files_come_first_and_ids_fill_the_remainder(self):
-        direct = [_Attachment("d0.pdf"), _Attachment("d1.pdf")]
-        ids = ["u0", "u1", "u2", "u3", "u4"]
-        kept_direct, kept_ids, names, total = _apply_message_file_cap(direct, ids, 5)
-
-        assert kept_direct == direct
-        assert kept_ids == ["u0", "u1", "u2"]
-        assert names == []
-        assert total == 2
-
-    def test_direct_overflow_leaves_no_budget_for_ids(self):
-        direct = [_Attachment(f"d{i}.pdf") for i in range(6)]
-        kept_direct, kept_ids, names, total = _apply_message_file_cap(direct, ["u0"], 5)
-
-        assert len(kept_direct) == 5
-        assert kept_ids == []
-        assert names == ["d5.pdf"]
-        assert total == 2
-
-    def test_non_positive_cap_disables(self):
-        direct = [_Attachment(f"d{i}.pdf") for i in range(9)]
-        ids = [f"u{i}" for i in range(9)]
-        assert _apply_message_file_cap(direct, ids, 0) == (direct, ids, [], 0)
-
-    def test_default_cap_matches_the_spa(self):
+    def test_default_file_cap_matches_the_spa(self):
         assert file_models.MAX_FILES_PER_MESSAGE == 5
 
 

@@ -75,7 +75,8 @@
           [draftKey]="draftKey()"
           [isChatLoading]="isChatLoading()"
           [showFileControls]="resolvedConfig().showFileControls"
-          [showVoiceControl]="resolvedConfig().showVoiceControl"
+          [showVoiceControl]="showVoiceControl()"
+          [voiceAgentId]="voiceAgentId()"
           (messageSubmitted)="onMessageSubmitted($event)"
           (messageCancelled)="onMessageCancelled()"
           (fileAttached)="onFileAttached($event)"
@@ -140,7 +141,8 @@
             [draftKey]="draftKey()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
-          [showVoiceControl]="resolvedConfig().showVoiceControl"
+          [showVoiceControl]="showVoiceControl()"
+          [voiceAgentId]="voiceAgentId()"
             (messageSubmitted)="onMessageSubmitted($event)"
             (messageCancelled)="onMessageCancelled()"
             (fileAttached)="onFileAttached($event)"
@@ -191,7 +193,8 @@
             [draftKey]="draftKey()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
-          [showVoiceControl]="resolvedConfig().showVoiceControl"
+          [showVoiceControl]="showVoiceControl()"
+          [voiceAgentId]="voiceAgentId()"
             (messageSubmitted)="onMessageSubmitted($event)"
             (messageCancelled)="onMessageCancelled()"
             (fileAttached)="onFileAttached($event)"
@@ -249,7 +252,8 @@
               [draftKey]="draftKey()"
               [isChatLoading]="isChatLoading()"
               [showFileControls]="resolvedConfig().showFileControls"
-          [showVoiceControl]="resolvedConfig().showVoiceControl"
+          [showVoiceControl]="showVoiceControl()"
+          [voiceAgentId]="voiceAgentId()"
               (messageSubmitted)="onMessageSubmitted($event)"
               (messageCancelled)="onMessageCancelled()"
               (fileAttached)="onFileAttached($event)"
@@ -284,7 +288,8 @@
             [streamingMessageId]="streamingMessageId()"
             [embeddedMode]="true"
             [allowDownload]="citationsDownloadAllowed()"
-            (continueRequested)="continueRequested.emit()" />
+            (continueRequested)="continueRequested.emit()"
+          (outageRetryRequested)="outageRetryRequested.emit()" />
         </div>
       </div>
 
@@ -301,7 +306,8 @@
             [draftKey]="draftKey()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
-            [showVoiceControl]="resolvedConfig().showVoiceControl"
+            [showVoiceControl]="showVoiceControl()"
+          [voiceAgentId]="voiceAgentId()"
             (messageSubmitted)="onMessageSubmitted($event)"
             (messageCancelled)="onMessageCancelled()"
             (fileAttached)="onFileAttached($event)"
@@ -336,7 +342,8 @@
           [feedbackAgent]="feedbackAgent()"
           [sessionId]="sessionId()"
           [allowDownload]="citationsDownloadAllowed()"
-          (continueRequested)="continueRequested.emit()" />
+          (continueRequested)="continueRequested.emit()"
+          (outageRetryRequested)="outageRetryRequested.emit()" />
       </div>
     </div>
 
@@ -353,6 +360,11 @@
                only while one is open for this conversation. -->
           @if (sessionId(); as sid) {
             <app-handoff-review-sheet [sessionId]="sid" />
+            <!-- Send to {title}'s review, in a conversation a handoff started (§4.3), and the
+                 results waiting to ride this conversation's next send (§4.8). Each renders
+                 only while it has something to show. -->
+            <app-send-back-sheet [sessionId]="sid" />
+            <app-delivery-cards [sessionId]="sid" />
           }
           <app-chat-input
             [showAnnouncements]="showAnnouncements()"
@@ -362,7 +374,8 @@
             [draftKey]="draftKey()"
             [isChatLoading]="isChatLoading()"
             [showFileControls]="resolvedConfig().showFileControls"
-            [showVoiceControl]="resolvedConfig().showVoiceControl"
+            [showVoiceControl]="showVoiceControl()"
+          [voiceAgentId]="voiceAgentId()"
             (messageSubmitted)="onMessageSubmitted($event)"
             (messageCancelled)="onMessageCancelled()"
             (fileAttached)="onFileAttached($event)"

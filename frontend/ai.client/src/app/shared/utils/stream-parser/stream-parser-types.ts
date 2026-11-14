@@ -544,6 +544,68 @@ export interface SourceProvenanceEvent {
   claims: SourceProvenanceClaim[];
 }
 
+/**
+ * One extracted field of a `document_extract` run
+ * (`docs/specs/structured-extraction.md` §9).
+ *
+ * `state` is the source-provenance verdict for this value, in exactly the
+ * vocabulary of {@link SourceProvenanceClaim} — the extraction tool asks the
+ * same module the same question, so the renderer must not invent a fifth
+ * reading. `value` is already a single display line (`""` when the document
+ * did not answer the field), and `quote` is `null` when the model gave none
+ * or the stored row had to drop it.
+ */
+export interface DocumentExtractionField {
+  name: string;
+  title: string;
+  /** The field set's declared type (`string`, `number`, `date`, `enum`, `list`, …). */
+  type: string;
+  value: string;
+  state: SourceProvenanceClaim['state'];
+  method: string;
+  quote: string | null;
+  locator: SourceLocator | null;
+}
+
+/**
+ * A named field set run over ONE document. A call over N documents produces N
+ * of these, all sharing the call's `toolUseId`, and the renderer groups them
+ * back into one table.
+ */
+export interface DocumentExtractionRun {
+  toolUseId: string;
+  fieldSet: string;
+  fieldSetVersion: string;
+  uploadId: string;
+  filename: string;
+  /** Extraction runs on its own model, not the turn's, so it is disclosed. */
+  modelId: string;
+  /**
+   * `false` when the typed schema could not be applied and the types were
+   * requested rather than guaranteed. Never silent: the table says so.
+   */
+  schemaEnforced: boolean;
+  artifactId: string | null;
+  downloadUploadId: string | null;
+  /** Documents the whole call succeeded on (live event only). */
+  documentCount?: number;
+  /** The stored row dropped its quotes to fit the item limit (replay only). */
+  quotesOmitted?: boolean;
+  fields: DocumentExtractionField[];
+}
+
+/**
+ * One document's extraction, emitted mid-turn and never re-streamed —
+ * `GET /messages` replays the same shape under `extractions`.
+ *
+ * Gated by `DOCUMENT_EXTRACT_ENABLED` on the backend and
+ * `features.documentExtract` here.
+ */
+export interface DocumentExtractionEvent extends DocumentExtractionRun {
+  type: 'document_extraction';
+  sessionId: string;
+}
+
 export interface ToolGroupSummaryEvent {
   type: 'tool_group_summary';
   sessionId: string;
@@ -698,7 +760,8 @@ export type StreamEventType =
   | 'agent_notice'
   | 'agent_status'
   | 'tool_group_summary'
-  | 'source_provenance';
+  | 'source_provenance'
+  | 'document_extraction';
 
 /**
  * Union type of all possible event data types
@@ -732,6 +795,7 @@ export type StreamEventData =
   | AgentStatusEvent
   | ToolGroupSummaryEvent
   | SourceProvenanceEvent
+  | DocumentExtractionEvent
   | null
   | undefined;
 

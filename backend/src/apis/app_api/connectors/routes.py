@@ -43,6 +43,10 @@ from apis.shared.oauth.disconnect_repository import (
     OAuthDisconnectRepository,
     get_disconnect_repository,
 )
+from apis.shared.oauth.connector_access import (
+    connector_role_ids,
+    connector_visible_to_user,
+)
 from apis.shared.oauth.models import OAuthProvider, OAuthProviderType
 from apis.shared.oauth.provider_repository import (
     OAuthProviderRepository,
@@ -93,19 +97,6 @@ class UserConnectorListResponse(BaseModel):
     connectors: List[UserConnector]
 
 
-def _visible_to_user(provider: OAuthProvider, user_role_ids: List[str]) -> bool:
-    """True when the user is allowed to use this connector.
-
-    An empty `allowed_roles` list means unrestricted access. A non-empty
-    list grants access to users who share at least one AppRole ID.
-    """
-    if not provider.enabled:
-        return False
-    if not provider.allowed_roles:
-        return True
-    return bool(set(provider.allowed_roles) & set(user_role_ids))
-
-
 @router.get("/", response_model=UserConnectorListResponse)
 async def list_connectors(
     current_user: User = Depends(get_current_user_from_session),
@@ -115,7 +106,8 @@ async def list_connectors(
     """List enabled connectors available to the current user."""
     permissions = await role_service.resolve_user_permissions(current_user)
     providers = await provider_repo.list_providers(enabled_only=True)
-    visible = [p for p in providers if _visible_to_user(p, permissions.app_roles)]
+    role_ids = await connector_role_ids(permissions, role_service)
+    visible = [p for p in providers if connector_visible_to_user(p, role_ids)]
     return UserConnectorListResponse(
         connectors=[
             UserConnector(
@@ -191,7 +183,8 @@ async def _resolve_visible_provider(
         )
 
     permissions = await role_service.resolve_user_permissions(current_user)
-    if not _visible_to_user(provider, permissions.app_roles):
+    role_ids = await connector_role_ids(permissions, role_service)
+    if not connector_visible_to_user(provider, role_ids):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have access to this connector",

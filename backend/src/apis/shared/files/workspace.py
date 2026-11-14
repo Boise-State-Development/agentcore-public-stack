@@ -263,6 +263,15 @@ async def read_workspace_file(
         raise WorkspaceValidationError("offset must be >= 0")
 
     meta = await _get_owned_ready_file(user_id, upload_id)
+    if meta.linked_from is not None:
+        # A file shared from another conversation reads its original's bytes, or says it is
+        # gone (handoffs spec §4.9 rules 4–5), never ``NoSuchKey``.
+        from .linked_files import linked_file_gone_message, readable_view
+
+        view = await readable_view(meta, reader="workspace_read")
+        if view is None:
+            raise WorkspaceFileNotFoundError(linked_file_gone_message(meta))
+        meta = view
     base = {
         "upload_id": meta.upload_id,
         "filename": meta.filename,

@@ -29,6 +29,7 @@ describe('ChatContainerComponent — a project conversation', () => {
     readonly isChatLoading = input<boolean>(false);
     readonly showFileControls = input<boolean>(true);
     readonly showVoiceControl = input<boolean>(true);
+    readonly voiceAgentId = input<string | null>(null);
     readonly showAnnouncements = input<boolean>(true);
     readonly announcementPlacement = input<'above' | 'below'>('above');
     readonly messageSubmitted = output<{ content: string; timestamp: Date }>();
@@ -114,5 +115,55 @@ describe('ChatContainerComponent — a project conversation', () => {
     expect(html.querySelector('div.animate-pulse.rounded-2xl')).toBeNull();
     expect(html.querySelector('[data-testid="greeting-message"]')).not.toBeNull();
     expect(composer().project()).toEqual(PROJECT);
+  });
+
+  describe('voice mode (#625)', () => {
+    const AGENT = { ...HARNESS, kind: undefined, projectId: undefined, assistantId: 'ast-1' } as unknown as Assistant;
+
+    it('offers voice on a plain chat', () => {
+      render({});
+      expect(composer().showVoiceControl()).toBe(true);
+      expect(composer().voiceAgentId()).toBeNull();
+    });
+
+    it("hides voice on an agent's chat until the author turns it on", () => {
+      render({ assistant: AGENT });
+      expect(composer().showVoiceControl()).toBe(false);
+    });
+
+    it("offers voice on a voice-enabled agent's chat and names the agent", () => {
+      render({ assistant: { ...AGENT, voiceEnabled: true } });
+      expect(composer().showVoiceControl()).toBe(true);
+      expect(composer().voiceAgentId()).toBe('ast-1');
+    });
+
+    it('hides voice while the agent named in the URL is still loading', () => {
+      // The bug this guards: voice started as a plain chat before the Agent loaded.
+      render({ boundAgentId: 'ast-1', hasUrlBinding: true, isLoadingAssistant: true });
+      expect(composer().showVoiceControl()).toBe(false);
+      expect(composer().voiceAgentId()).toBe('ast-1');
+    });
+
+    it('hides voice when the agent in the URL failed to load', () => {
+      render({ boundAgentId: 'ast-1', hasUrlBinding: true, assistantError: 'Agent unavailable' });
+      expect(composer().showVoiceControl()).toBe(false);
+    });
+
+    it('decides by the agent the URL names, not one still loaded from before a switch', () => {
+      render({ assistant: { ...AGENT, voiceEnabled: true }, boundAgentId: 'ast-2', hasUrlBinding: true });
+      expect(composer().showVoiceControl()).toBe(false);
+      expect(composer().voiceAgentId()).toBe('ast-2');
+    });
+
+    it('offers voice once the URL agent has loaded with voice on', () => {
+      render({ assistant: { ...AGENT, voiceEnabled: true }, boundAgentId: 'ast-1', hasUrlBinding: true });
+      expect(composer().showVoiceControl()).toBe(true);
+      expect(composer().voiceAgentId()).toBe('ast-1');
+    });
+
+    it('hides voice in a project conversation', () => {
+      render({ assistant: { ...HARNESS, voiceEnabled: true }, project: PROJECT });
+      expect(composer().showVoiceControl()).toBe(false);
+    });
   });
 });

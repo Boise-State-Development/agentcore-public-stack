@@ -286,7 +286,7 @@ What gets copied:
 | `compactionState` | Yes | Verbatim, then apply §5 at *k*. A fresh state would mean checkpoint 0 (full history instead of summary) and anchor 0 (untruncated tool output): a guaranteed history miss |
 | Agent / project / Memory Space binding, model | Yes | A different config is a different prefix, and a different agent |
 | `displayText`, tool summaries (`TSUM#`), UI resources for indices < *k* | Yes | Display parity on reload |
-| Session files (S3 + metadata) | Yes, server-side `CopyObject` | `document_read` resolves files per session, and the parent's delete would remove shared objects. Counts toward the user's file quota |
+| Session files (S3 + metadata) | **No**: read through to the parent and root | Shipped without the planned `CopyObject`. The fork's restore, its `document_read` gate, listing and `query` search, the planner's conversation-files read and the re-index of evicted documents on open read the caller's own upload rows on the fork, then on `forkedFrom.sessionId`, then on `rootSessionId` (`apis.shared.sessions.fork.ancestor_session_ids`), taken from the session row each already reads. The attachments KB keeps a document under the session it was attached in, so a fork's search widens only the session clause (`in` over those ids), never the owner clause. Deleting the root deletes its files, and the fork's blocks then fall back to placeholders. A file attached in a middle generation of a fork of a fork is not reached |
 | Cost rows, feedback, pending interrupts | No | Invariant 3; feedback belongs to the parent's messages; a paused turn cannot be forked |
 | Title | `"<title> (fork)"` | No Nova call |
 

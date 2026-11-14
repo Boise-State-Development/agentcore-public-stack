@@ -146,6 +146,133 @@ def _forget_base(key: Tuple[str, str, str, str]) -> None:
         _READ_BASES.pop(key, None)
 
 
+# The MEMORY.md text each conversation last read or saved, and the files whose index
+# line its own saves wrote, so an index save that conflicts only with those lines can
+# rebase onto them. Same keying, process scope and loss on a container move as
+# ``_READ_BASES``: a turn that lands elsewhere just gets the conflict, as before.
+#
+# Why: a model that saves a file and MEMORY.md in one batch (or the file, then the
+# index) conflicted with the line the file's own save had just added, and was told
+# "someone else saved it". On dev that was 26 of 45 refused saves (2026-10-01 to
+# 2026-11-13): two saves in one call, exactly one refused, then a re-read.
+_INDEX_TEXTS: "OrderedDict[Tuple[str, str, str], str]" = OrderedDict()
+_OWN_LINES: "OrderedDict[Tuple[str, str, str], set]" = OrderedDict()
+_INDEX_STATE_MAX = 1024
+_LINK_LINE = re.compile(r"^\s*[-*]\s+\[\[\s*([^\[\]]+?)\s*\]\]")
+
+
+def _space_key(session_id: Optional[str], user_id: str, space_id: str) -> Tuple[str, str, str]:
+    return (session_id or "", user_id or "", space_id)
+
+
+def _bounded_put(store: "OrderedDict[Any, Any]", key: Any, value: Any) -> None:
+    store[key] = value
+    store.move_to_end(key)
+    while len(store) > _INDEX_STATE_MAX:
+        store.popitem(last=False)
+
+
+def _remember_index_text(key: Tuple[str, str, str], text: str) -> None:
+    with _READ_BASES_LOCK:
+        _bounded_put(_INDEX_TEXTS, key, text)
+
+
+def _remember_own_line(key: Tuple[str, str, str], *slugs: Optional[str]) -> None:
+    """Note that this conversation's save may write ``slugs``' index lines. Called before the save."""
+    with _READ_BASES_LOCK:
+        own = set(_OWN_LINES.get(key, set()))
+        own.update(s.strip().casefold() for s in slugs if s)
+        _bounded_put(_OWN_LINES, key, own)
+
+
+# File saves in flight per conversation, member and scope. An index save in the same
+# tool batch waits for them: run first, its new link to the file being saved would be
+# refused as a link to nothing; run after, it conflicts only with that file's own line,
+# which ``_rebased_index`` settles. Polled rather than awaited on a loop-bound primitive,
+# since the count is process-wide.
+_FILE_SAVES_IN_FLIGHT: dict = {}
+_FILE_SAVE_WAIT_SECONDS = 15.0
+_FILE_SAVE_POLL_SECONDS = 0.05
+
+
+def _begin_save(
+    tool_context: Optional[ToolContext], scopes: ProjectMemoryScopes, scope: str, slug: str
+) -> Optional[Tuple[str, str, str]]:
+    """Count a file save as in flight (synchronously, before any await); None for an index save."""
+    if _is_index_slug(slug):
+        return None
+    key = (_session_of(tool_context) or "", scopes.user.user_id or "", scope)
+    with _READ_BASES_LOCK:
+        _FILE_SAVES_IN_FLIGHT[key] = _FILE_SAVES_IN_FLIGHT.get(key, 0) + 1
+    return key
+
+
+def _end_save(key: Optional[Tuple[str, str, str]]) -> None:
+    if key is None:
+        return
+    with _READ_BASES_LOCK:
+        left = _FILE_SAVES_IN_FLIGHT.get(key, 0) - 1
+        if left > 0:
+            _FILE_SAVES_IN_FLIGHT[key] = left
+        else:
+            _FILE_SAVES_IN_FLIGHT.pop(key, None)
+
+
+async def _await_file_saves(tool_context: Optional[ToolContext], scopes: ProjectMemoryScopes, scope: str) -> None:
+    key = (_session_of(tool_context) or "", scopes.user.user_id or "", scope)
+    # One yield first, so a file save started in the same batch has registered.
+    await asyncio.sleep(0)
+    waited = 0.0
+    while waited < _FILE_SAVE_WAIT_SECONDS:
+        with _READ_BASES_LOCK:
+            if not _FILE_SAVES_IN_FLIGHT.get(key):
+                return
+        await asyncio.sleep(_FILE_SAVE_POLL_SECONDS)
+        waited += _FILE_SAVE_POLL_SECONDS
+
+
+def _rebased_index(key: Tuple[str, str, str], current: str, text: str, template: Optional[str]) -> Optional[str]:
+    """``text`` rebased onto ``current``, or None unless every change since the read is our own line.
+
+    The index this conversation read is diffed against the current one by line. Each
+    added and each removed line must link a file this conversation saved; the one other
+    change allowed is the blank starter's placeholder prose, which the first indexed file
+    takes out. Any other change (a teammate's line, an edit on the Memory tab) is still a
+    conflict. The lines our saves added that ``text`` does not link are kept, so the
+    files stay in the index the model is replacing.
+    """
+    from collections import Counter
+
+    from apis.shared.memory.service import _without_starter
+
+    with _READ_BASES_LOCK:
+        base = _INDEX_TEXTS.get(key)
+        own = set(_OWN_LINES.get(key, set()))
+    if base is None or not own:
+        return None
+
+    def linked(line: str) -> Optional[str]:
+        match = _LINK_LINE.match(line)
+        return match.group(1).casefold() if match else None
+
+    def changes(before: str) -> tuple[list[str], list[str]]:
+        old, new = Counter(before.split("\n")), Counter(current.split("\n"))
+        return list((new - old).elements()), list((old - new).elements())
+
+    added, removed = changes(base)
+    if template and any(line.strip() and linked(line) is None for line in removed):
+        added, removed = changes(_without_starter(base, template))
+    if not any(line.strip() for line in added):
+        return None
+    if any(line.strip() and linked(line) not in own for line in added + removed):
+        return None
+    in_text = {slug for slug in map(linked, text.split("\n")) if slug}
+    keep = [line for line in added if line.strip() and linked(line) not in in_text]
+    if not keep:
+        return text
+    return text.rstrip("\n") + "\n" + "\n".join(keep) + "\n"
+
+
 def _read_slugs(session_id: Optional[str], user_id: str, space_id: str) -> list[str]:
     """The files this conversation read in a space, most recent first (the index left out)."""
     with _READ_BASES_LOCK:
@@ -331,6 +458,7 @@ def make_project_memory_read_tool(scopes: ProjectMemoryScopes):
             service = MemorySpaceService()
             if _is_index_slug(slug):
                 body = await asyncio.to_thread(service.read_index, space_id, user.user_id, user.email)
+                _remember_index_text(_space_key(_session_of(tool_context), user.user_id, space_id), body)
             else:
                 body = await asyncio.to_thread(service.read_entry, space_id, user.user_id, user.email, slug)
                 # Off the return path: hands one UpdateItem to a background thread (2.6b).
@@ -400,6 +528,135 @@ def make_project_memory_query_tool(scopes: ProjectMemoryScopes):
     return memory_query
 
 
+async def _save_file(
+    scopes: ProjectMemoryScopes,
+    scope: str,
+    slug: str,
+    text: str,
+    description: str,
+    replaces: str,
+    tool_context: Optional[ToolContext],
+) -> dict[str, Any]:
+    """``memory_save``'s body; the tool wraps it so an index save can wait for the batch's file saves."""
+    if (bad := _bad_scope(scope)) is not None:
+        return bad
+    user = scopes.user
+    label = _LABELS[scope]
+    session_id = _session_of(tool_context)
+    renaming = (replaces or "").strip()
+    if renaming and (_is_index_slug(slug) or _is_index_slug(renaming)):
+        return _error("MEMORY.md can't be renamed, and no file can take its name.")
+    if scope == "project" and is_headless_session(session_id):
+        # Nobody is watching a scheduled run, so what it would add to the
+        # project's shared memory waits for an editor (shared-projects §9.3).
+        if _is_index_slug(slug):
+            return _error(_UNATTENDED_INDEX)
+        if renaming:
+            return _error(_UNATTENDED_RENAME)
+        return await _propose(scopes, slug, text, description, session_id, unattended=True)
+    key: Optional[Tuple[str, str, str, str]] = None
+    old_key: Optional[Tuple[str, str, str, str]] = None
+    base: Optional[str] = None
+    service: Optional[MemorySpaceService] = None
+    try:
+        if scope == "mine":
+            space_id = await asyncio.to_thread(scopes.ensure_personal_space)
+        else:
+            space_id = await asyncio.to_thread(scopes.space_id, scope)
+            if space_id is None:
+                return _error(f'{_missing(scope)} Save it to "mine" instead.')
+        key = _base_key(session_id, user.user_id, space_id, slug)
+        base = _read_base(key)
+        if renaming:
+            # A rename moves the file this conversation read, so that read is the base.
+            old_key = _base_key(session_id, user.user_id, space_id, renaming)
+            base = _read_base(old_key)
+            if base is None:
+                return _error(
+                    f'Not saved: memory_read "{renaming}" first, then save it as "{slug}" with '
+                    f'replaces="{renaming}", keeping its anchors.'
+                )
+        service = MemorySpaceService()
+        if _is_index_slug(slug):
+            if base is None:
+                return _error(f"Not saved: memory_read MEMORY.md of {label} first, then send back the whole index.")
+            index_key = _space_key(session_id, user.user_id, space_id)
+            rebased = False
+            try:
+                saved = await asyncio.to_thread(
+                    lambda: service.save_index(space_id, user.user_id, user.email, text, base_content_hash=base)
+                )
+            except MemorySpaceConcurrencyError:
+                saved = await _save_index_over_own_lines(service, space_id, scopes, index_key, text)
+                if saved is None:
+                    raise
+                text, saved = saved
+                rebased = True
+            _remember_base(key, saved.space.index_content_hash)
+            _remember_index_text(index_key, text)
+            out = f"Updated the MEMORY.md index of {label}."
+            if rebased:
+                out += " It already had the lines your saves added in this conversation, and they are kept."
+            if saved.warnings:
+                out += " Notes: " + " ".join(saved.warnings)
+            return {"content": [{"text": out}], "status": "success"}
+        _remember_own_line(_space_key(session_id, user.user_id, space_id), slug, renaming)
+        context = SaveContext(source_session_id=session_id)
+        result = await asyncio.to_thread(
+            lambda: service.save_entry(
+                space_id, user.user_id, user.email, slug, text,
+                description=description or None, reason="save", context=context,
+                base_content_hash=NEW_FILE if base is None else base,
+                replaces=renaming or None,
+            )
+        )
+    except MemoryValidationError as exc:
+        if renaming and exc.code == "name_collision":
+            return _error(
+                f'Not saved: "{slug}" already exists in {label}, so "{renaming}" can\'t take that name, '
+                "and both files are unchanged. Pick another name, or tell the member both exist: "
+                "they can delete one from the project's Memory tab."
+            )
+        hint = ""
+        if exc.code == "unknown_anchor" and base is None and service is not None:
+            hint = await _anchor_hint(service, space_id, session_id, user, slug, text)
+        return _error(f"Not saved: {exc}{hint}")
+    except MemoryEntryNotFoundError:
+        return _error(f'Not saved: {label} has no file named "{renaming or slug}".')
+    except MemorySpaceConcurrencyError:
+        if key is not None:
+            _forget_base(key)
+        if old_key is not None:
+            _forget_base(old_key)
+            return _error(
+                f"Not saved: '{renaming}' changed since you read it (someone else saved it). "
+                "memory_read it again and rename that version."
+            )
+        if base is None:
+            return _error(
+                f"Not saved: '{slug}' already exists in {label}. memory_read it first, "
+                "then send back the whole list with your change."
+            )
+        return _error(
+            f"Not saved: '{slug}' changed since you read it (someone else saved it). "
+            "memory_read it again and make your change on that version."
+        )
+    except MemorySpacePermissionError:
+        return _error(await _refusal(scopes, scope))
+    except MemorySpaceNotFoundError:
+        return _error(_NOT_A_MEMBER)
+    except MemorySpaceError as exc:
+        return _error(f"Could not save '{slug}': {exc}")
+    except ProjectError as exc:  # the first save to "mine" creates the space
+        return _error(_project_error(exc))
+    # The next save of this file in this conversation builds on this one.
+    _remember_base(key, result.ref.content_hash)
+    if old_key is not None:
+        _forget_base(old_key)
+    indexed = await _index_saved_file(service, space_id, scopes, scope, result)
+    return {"content": [{"text": _saved(result, label, indexed, _INDEX_BUDGETS[scope])}], "status": "success"}
+
+
 def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
     @tool(context=True)
     async def memory_save(
@@ -434,7 +691,8 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
         `description` is the file's line in that scope's MEMORY.md index, which appears
         in every conversation and is often all a later one reads. Send it on every save,
         and when your change makes it wrong (a date, number, name or rule it states),
-        write a new one: the index line is rewritten to match it.
+        write a new one: the index line is rewritten to match it. The save writes that
+        line itself, so don't also save MEMORY.md to add or change a file's line.
 
         "mine" is the member's own and always writable. "project" is shared with every
         member and needs the editor role; a viewer can save to "mine" instead, or use
@@ -450,110 +708,13 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
                 line. For a preference or rule, the rule itself. Ignored for "MEMORY.md".
             replaces: Only to rename a file: its current name. Leave empty otherwise.
         """
-        if (bad := _bad_scope(scope)) is not None:
-            return bad
-        user = scopes.user
-        label = _LABELS[scope]
-        session_id = _session_of(tool_context)
-        renaming = (replaces or "").strip()
-        if renaming and (_is_index_slug(slug) or _is_index_slug(renaming)):
-            return _error("MEMORY.md can't be renamed, and no file can take its name.")
-        if scope == "project" and is_headless_session(session_id):
-            # Nobody is watching a scheduled run, so what it would add to the
-            # project's shared memory waits for an editor (shared-projects §9.3).
-            if _is_index_slug(slug):
-                return _error(_UNATTENDED_INDEX)
-            if renaming:
-                return _error(_UNATTENDED_RENAME)
-            return await _propose(scopes, slug, text, description, session_id, unattended=True)
-        key: Optional[Tuple[str, str, str, str]] = None
-        old_key: Optional[Tuple[str, str, str, str]] = None
-        base: Optional[str] = None
-        service: Optional[MemorySpaceService] = None
+        flight = _begin_save(tool_context, scopes, scope, slug)
         try:
-            if scope == "mine":
-                space_id = await asyncio.to_thread(scopes.ensure_personal_space)
-            else:
-                space_id = await asyncio.to_thread(scopes.space_id, scope)
-                if space_id is None:
-                    return _error(f'{_missing(scope)} Save it to "mine" instead.')
-            key = _base_key(session_id, user.user_id, space_id, slug)
-            base = _read_base(key)
-            if renaming:
-                # A rename moves the file this conversation read, so that read is the base.
-                old_key = _base_key(session_id, user.user_id, space_id, renaming)
-                base = _read_base(old_key)
-                if base is None:
-                    return _error(
-                        f'Not saved: memory_read "{renaming}" first, then save it as "{slug}" with '
-                        f'replaces="{renaming}", keeping its anchors.'
-                    )
-            service = MemorySpaceService()
-            if _is_index_slug(slug):
-                if base is None:
-                    return _error(f"Not saved: memory_read MEMORY.md of {label} first, then send back the whole index.")
-                saved = await asyncio.to_thread(
-                    lambda: service.save_index(space_id, user.user_id, user.email, text, base_content_hash=base)
-                )
-                _remember_base(key, saved.space.index_content_hash)
-                out = f"Updated the MEMORY.md index of {label}."
-                if saved.warnings:
-                    out += " Notes: " + " ".join(saved.warnings)
-                return {"content": [{"text": out}], "status": "success"}
-            context = SaveContext(source_session_id=session_id)
-            result = await asyncio.to_thread(
-                lambda: service.save_entry(
-                    space_id, user.user_id, user.email, slug, text,
-                    description=description or None, reason="save", context=context,
-                    base_content_hash=NEW_FILE if base is None else base,
-                    replaces=renaming or None,
-                )
-            )
-        except MemoryValidationError as exc:
-            if renaming and exc.code == "name_collision":
-                return _error(
-                    f'Not saved: "{slug}" already exists in {label}, so "{renaming}" can\'t take that name, '
-                    "and both files are unchanged. Pick another name, or tell the member both exist: "
-                    "they can delete one from the project's Memory tab."
-                )
-            hint = ""
-            if exc.code == "unknown_anchor" and base is None and service is not None:
-                hint = await _anchor_hint(service, space_id, session_id, user, slug, text)
-            return _error(f"Not saved: {exc}{hint}")
-        except MemoryEntryNotFoundError:
-            return _error(f'Not saved: {label} has no file named "{renaming or slug}".')
-        except MemorySpaceConcurrencyError:
-            if key is not None:
-                _forget_base(key)
-            if old_key is not None:
-                _forget_base(old_key)
-                return _error(
-                    f"Not saved: '{renaming}' changed since you read it (someone else saved it). "
-                    "memory_read it again and rename that version."
-                )
-            if base is None:
-                return _error(
-                    f"Not saved: '{slug}' already exists in {label}. memory_read it first, "
-                    "then send back the whole list with your change."
-                )
-            return _error(
-                f"Not saved: '{slug}' changed since you read it (someone else saved it). "
-                "memory_read it again and make your change on that version."
-            )
-        except MemorySpacePermissionError:
-            return _error(await _refusal(scopes, scope))
-        except MemorySpaceNotFoundError:
-            return _error(_NOT_A_MEMBER)
-        except MemorySpaceError as exc:
-            return _error(f"Could not save '{slug}': {exc}")
-        except ProjectError as exc:  # the first save to "mine" creates the space
-            return _error(_project_error(exc))
-        # The next save of this file in this conversation builds on this one.
-        _remember_base(key, result.ref.content_hash)
-        if old_key is not None:
-            _forget_base(old_key)
-        indexed = await _index_saved_file(service, space_id, scopes, scope, result)
-        return {"content": [{"text": _saved(result, label, indexed, _INDEX_BUDGETS[scope])}], "status": "success"}
+            if flight is None:
+                await _await_file_saves(tool_context, scopes, scope)
+            return await _save_file(scopes, scope, slug, text, description, replaces, tool_context)
+        finally:
+            _end_save(flight)
 
     return memory_save
 
@@ -621,6 +782,40 @@ async def _propose(
     if warnings:
         text_out += " Notes: " + " ".join(warnings)
     return {"content": [{"text": text_out}], "status": "success"}
+
+
+async def _save_index_over_own_lines(
+    service: MemorySpaceService, space_id: str, scopes: ProjectMemoryScopes, key: Tuple[str, str, str], text: str
+) -> Optional[Tuple[str, Any]]:
+    """Retry a conflicted MEMORY.md save on the current index when only our own lines moved it.
+
+    Returns ``(saved_text, IndexSaveResult)``, or None to report the conflict as before.
+    The retry is conditional on the index read here, so a teammate's change in between
+    is still a conflict.
+    """
+    user = scopes.user
+
+    def current() -> Tuple[str, Optional[str]]:
+        space = service.repository.get_space(space_id)
+        return service.read_index(space_id, user.user_id, user.email), getattr(space, "template", None)
+
+    try:
+        now, template = await asyncio.to_thread(current)
+    except MemorySpaceError:
+        return None
+    merged = _rebased_index(key, now, text, template)
+    if merged is None:
+        return None
+    try:
+        saved = await asyncio.to_thread(
+            lambda: service.save_index(
+                space_id, user.user_id, user.email, merged,
+                base_content_hash=compute_content_hash(now.encode("utf-8")),
+            )
+        )
+    except MemorySpaceConcurrencyError:
+        return None
+    return merged, saved
 
 
 async def _index_saved_file(

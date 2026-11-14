@@ -41,6 +41,8 @@ SIGNED_URL = (
     "sessions/bs-1/live?X-Amz-Signature=deadbeefdeadbeef&X-Amz-Expires=300"
 )
 
+VIEWER_ORIGIN = "https://d111111abcdef8.cloudfront.net"
+
 REF = {
     "browserSessionId": "bs-1",
     "browserId": "browser-abc",
@@ -73,6 +75,7 @@ def _client(monkeypatch, *, metadata=..., mint=None) -> TestClient:
                 "expiresAt": "2026-09-18T12:05:00+00:00",
                 "viewport": {"width": 1280, "height": 800},
                 "controlState": "user",
+                "viewerOrigin": VIEWER_ORIGIN,
             }
         ),
     )
@@ -95,6 +98,8 @@ class TestMinting:
         # Carried, not re-declared in the viewer: DCV crops on a mismatch.
         assert body["viewport"] == {"width": 1280, "height": 800}
         assert body["controlState"] == "user"
+        # The one origin the SPA may frame the viewer from and post `url` to.
+        assert body["viewerOrigin"] == VIEWER_ORIGIN
 
     def test_the_client_sends_only_a_conversation_id(self, monkeypatch):
         mint = AsyncMock(
@@ -291,3 +296,67 @@ class TestMintLiveView:
 
         window = (expires - before).total_seconds()
         assert 0 < window <= browser_live_view.LIVE_VIEW_EXPIRY_SECONDS + 1
+
+
+class TestViewerOrigin:
+    """The viewer's own origin rides the mint response, beside the credential.
+
+    It must never be the mcp-sandbox origin (MCP Apps run there); CDK pins that
+    split (`infrastructure/test/browser-live-view-origin.test.ts`). Here: the
+    value is passed through as an origin, and a misconfigured one is dropped
+    rather than handed to the SPA as somewhere to post a signed URL.
+    """
+
+    @pytest.fixture
+    def fake_client(self, monkeypatch):
+        class FakeBrowserClient:
+            def __init__(self, **_):
+                self.identifier = None
+                self.session_id = None
+
+            def generate_live_view_url(self, expires):
+                return SIGNED_URL
+
+        monkeypatch.setattr(
+            "bedrock_agentcore.tools.browser_client.BrowserClient", FakeBrowserClient
+        )
+
+    @pytest.mark.asyncio
+    async def test_carries_the_configured_origin(self, monkeypatch, fake_client):
+        monkeypatch.setenv(browser_live_view.VIEWER_ORIGIN_ENV, VIEWER_ORIGIN + "/")
+
+        minted = await browser_live_view.mint_live_view(dict(REF))
+
+        assert minted["viewerOrigin"] == VIEWER_ORIGIN
+
+    @pytest.mark.asyncio
+    async def test_is_empty_when_no_viewer_is_deployed(self, monkeypatch, fake_client):
+        monkeypatch.delenv(browser_live_view.VIEWER_ORIGIN_ENV, raising=False)
+
+        minted = await browser_live_view.mint_live_view(dict(REF))
+
+        assert minted["viewerOrigin"] == ""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "https://d111111abcdef8.cloudfront.net/live-view.html",
+            "https://d111111abcdef8.cloudfront.net?x=1",
+            "https://user:pw@d111111abcdef8.cloudfront.net",
+            "javascript:alert(1)",
+            "d111111abcdef8.cloudfront.net",
+        ],
+    )
+    def test_refuses_anything_that_is_not_an_origin(self, monkeypatch, value):
+        monkeypatch.setenv(browser_live_view.VIEWER_ORIGIN_ENV, value)
+
+        assert browser_live_view.viewer_origin() == ""
+
+    def test_the_route_defaults_it_to_empty(self):
+        from apis.shared.sessions.models import BrowserLiveViewResponse
+
+        body = BrowserLiveViewResponse.model_validate(
+            {"url": SIGNED_URL, "expiresAt": "x", "viewport": {"width": 1, "height": 1}}
+        ).model_dump(by_alias=True)
+
+        assert body["viewerOrigin"] == ""

@@ -216,7 +216,7 @@ narrower than the Runtime's own grant — no Start/Stop and no
 `ConnectBrowserAutomationStream`, because app-api must never drive the
 browser.)
 
-### D3 — A plain-JS viewer at the sandbox origin, SDK fetched at build time
+### D3 — A plain-JS viewer at its own origin, SDK fetched at build time
 
 **This supersedes an earlier draft** that reached for AWS's React
 `<BrowserLiveView>` component from the `bedrock-agentcore` npm package. That
@@ -237,7 +237,7 @@ SDK and made it resolvable under those names. So the React path is a strict
 React plus ~189 packages into a surface where a user types a password.
 
 **So: no React, no npm, no third-party code.** The viewer is
-`infrastructure/assets/mcp-sandbox/live-view.{html,js}` — plain ES2017 against
+`infrastructure/assets/browser-live-view/live-view.{html,js}` — plain ES2017 against
 the official Amazon DCV Web Client SDK, which is framework-agnostic.
 
 **The SDK is fetched at build time, never committed.** It is a EULA-licensed
@@ -274,11 +274,13 @@ deliberately rather than inherited.
 **The SPA mints; the viewer never calls app-api.** app-api's CORS is a
 credentialed allowlist, so letting the viewer call it would mean allowlisting an
 origin that also serves untrusted MCP App HTML. Instead the SPA mints the URL
-and `postMessage`s it in, targeted at the sandbox origin explicitly — never
-`'*'`, which would post a live credential to whatever happened to be framed. The
+and `postMessage`s it in, targeted at the viewer's own origin explicitly — never
+`'*'`, which would post a live credential to whatever happened to be framed.
+That origin is **not** the mcp-sandbox origin; see "D3 correction — the viewer
+gets an origin of its own" below. The
 viewer accepts messages only from the origin that framed it, and stores nothing.
 
-**CSP.** The sandbox origin's CloudFront function already composes `connect-src`
+**CSP.** The mcp-sandbox CloudFront function, shared by the viewer's distribution, composes `connect-src`
 from a `?csp=` query parameter, and is attached to the **default** behaviour, so
 it covers any path there. The SPA mints first and then names the minted URL's
 own origin in that parameter, so the grant is exactly the endpoint in use rather
@@ -629,7 +631,9 @@ takeover the user has a fully interactive Chromium with our egress. Controls:
    separately from `browse_web` is still worth keeping — it lets the capability
    be piloted with the evaluator group before it is widened — but the thing
    that stops coursework submission is control 1, not this.
-4. **`frame-ancestors`** on the viewer origin, so only the SPA can frame it.
+4. **`frame-ancestors`** on the viewer origin, so only the SPA can frame it,
+   and **a viewer origin no MCP App runs on**, so no App frame on the same page
+   can script it (see "D3 correction — the viewer gets an origin of its own").
 5. **The agent provably cannot act while the human holds control** — the
    automation stream is `DISABLED` at the service, not by convention in our code.
 
@@ -718,6 +722,9 @@ app-api at all. This is strictly less surface than D3 as drafted.
 
 ### D3 correction — no new distribution, no new certificate
 
+> **Superseded 2026-11-09** by "D3 correction — the viewer gets an origin of
+> its own" below. The certificate concern was real; the conclusion was not.
+
 D3 implies a viewer origin built like the mcp-sandbox one. A *second*
 CloudFront distribution means a second subdomain, a second us-east-1 ACM cert
 and a second `CDK_*_CERTIFICATE_ARN` deploy var — and per the scar tissue in
@@ -730,6 +737,46 @@ with `frame-ancestors` locked to the SPA. The viewer should be one more static
 file served from it. Note its `BucketDeployment` is `prune: true` with no key
 prefix, so the page belongs in `infrastructure/assets/mcp-sandbox/` — a second
 prefixed deployment to the same bucket would be pruned by the first.
+
+### D3 correction — the viewer gets an origin of its own (2026-11-09)
+
+Serving the viewer from the mcp-sandbox origin put the one page where a user
+types a password on the same origin as untrusted MCP App HTML. Two frames of
+one origin on one page are one security principal: an App frame beside the
+viewer could reach it through `window.top.frames` and read its document — the
+signed live-view URL the SPA posts in and the keystrokes DCV forwards. The
+SPA framed the viewer with no `sandbox` attribute, so nothing stood between
+them. The "no session cookie" argument above still holds; it just was not the
+only boundary that mattered.
+
+The fix keeps everything the correction above was protecting:
+
+- **A second CloudFront distribution on its default `*.cloudfront.net`
+  domain** (`BrowserLiveViewConstruct`). No alias, so no certificate, no
+  Route53 record and no deploy variable; the synth-time cert guard never
+  applies. The hostname is an iframe's origin and is never shown to the user.
+- **Its own bucket**, deployed from `infrastructure/assets/browser-live-view/`,
+  so neither distribution can serve the other's page and neither
+  `BucketDeployment`'s `prune` sees the other's files. The DCV SDK is fetched
+  into `assets/browser-live-view/dcvjs/`.
+- **The same CSP function and response headers** as the mcp-sandbox origin, so
+  `frame-ancestors` and the `?csp=` composition are one implementation.
+- **The origin travels on the mint response** (`viewerOrigin` on
+  `POST /sessions/{id}/browser/live-view`, from app-api's
+  `BROWSER_LIVE_VIEW_ORIGIN`), beside the credential it is the only place to
+  send. The SPA frames, listens to and posts to that origin only, and refuses
+  one equal to the event's `sandboxOrigin`. The AgentCore Runtime carries
+  nothing new, so the V2 environment budget is untouched; the event's
+  `sandboxOrigin` remains only as "a viewer is deployed".
+
+**Not chosen: `sandbox` without `allow-same-origin`.** An opaque origin sends
+`Origin: null` on DCV's WebSocket upgrade and has no storage, and the SDK's
+behaviour under either is undocumented; it would also force the SPA to post
+the signed URL to `'*'`, since an opaque frame has no origin to target.
+
+Cost: six resources (bucket, bucket policy, OAC, distribution, the deployment
+custom resource and its CLI layer) and one CloudFront distribution's request
+charges, which at sign-in volume round to nothing.
 
 ### What PR 2 ships
 

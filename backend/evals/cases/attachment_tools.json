@@ -1,0 +1,363 @@
+[
+  {
+    "id": "attachment_tools.image_chart_value",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "From the attached chart, what was fall enrollment in 2024? Reply with just the number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "1,315",
+        "1315"
+      ],
+      "forbidden": [
+        "1,240",
+        "1,402"
+      ]
+    },
+    "files": [
+      "enrollment_chart.png"
+    ],
+    "notes": "An image block. Each bar's value is printed above it, so this reads, not estimates."
+  },
+  {
+    "id": "attachment_tools.image_screenshot_error_code",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "What error code is shown in the attached screenshot? Reply with just the code."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "0x80070AB3"
+      ]
+    },
+    "files": [
+      "sync_error.png"
+    ],
+    "notes": "Text in a screenshot of a dialog."
+  },
+  {
+    "id": "attachment_tools.two_images_compared",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "The two attached charts are weeks 1 and 2 of an orchard harvest. Which crop's count went up from week 1 to week 2? Reply with just the crop."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "Plums"
+      ]
+    },
+    "files": [
+      "harvest_week1.png",
+      "harvest_week2.png"
+    ],
+    "notes": "Apples are level, Pears fell 30 to 22, Plums rose 9 to 17. No forbidden value: a correct answer may name the others."
+  },
+  {
+    "id": "attachment_tools.image_with_document",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "The attached screenshot shows a sync error. According to the attached runbook, which step code fixes that error? Reply with just the step code."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "STEP-K9"
+      ],
+      "forbidden": [
+        "STEP-K2",
+        "STEP-M3"
+      ]
+    },
+    "files": [
+      "sync_error.png",
+      "it_runbook.md"
+    ],
+    "notes": "Reads the code off the image, then looks it up in a text document in the same turn."
+  },
+  {
+    "id": "attachment_tools.spreadsheet_category_total",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "Using the attached workbook, what is the total Amount of the Travel lines on the Expenses sheet? Reply with just the number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "list_spreadsheets",
+        "analyze_spreadsheet"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "4,815",
+        "4815"
+      ],
+      "forbidden": [
+        "4,185"
+      ],
+      "tools": {
+        "must_call": [
+          "analyze_spreadsheet"
+        ],
+        "must_not_call": [
+          "document_read"
+        ]
+      }
+    },
+    "files": [
+      "grant_expenses.xlsx"
+    ],
+    "notes": "1210 + 905 + 2700. An .xlsx is never a document block; it reaches the model only through the spreadsheet tools."
+  },
+  {
+    "id": "attachment_tools.spreadsheet_filtered_count",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "In the attached workbook's Expenses sheet, how many Equipment lines have an Amount over 1,000? Reply with just the number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "list_spreadsheets",
+        "analyze_spreadsheet"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "3"
+      ],
+      "tools": {
+        "must_call": [
+          "analyze_spreadsheet"
+        ],
+        "must_not_call": [
+          "document_read"
+        ]
+      }
+    },
+    "files": [
+      "grant_expenses.xlsx"
+    ],
+    "notes": "2400, 1500 and 1180; 640 is under."
+  },
+  {
+    "id": "attachment_tools.spreadsheet_second_sheet",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "The attached workbook has an Approvals sheet. What approver code is recorded for line EXP-0042? Reply with just the code."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "list_spreadsheets",
+        "analyze_spreadsheet"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "AP-77"
+      ],
+      "tools": {
+        "must_call": [
+          "analyze_spreadsheet"
+        ],
+        "must_not_call": [
+          "document_read"
+        ]
+      }
+    },
+    "files": [
+      "grant_expenses.xlsx"
+    ],
+    "notes": "The value is only on the second sheet."
+  },
+  {
+    "id": "attachment_tools.csv_max_reading",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "Using the attached CSV, what is the highest reading recorded for sensor S-3? Reply with just the number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "list_spreadsheets",
+        "analyze_spreadsheet"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "41.7"
+      ],
+      "forbidden": [
+        "47.1"
+      ],
+      "tools": {
+        "must_call": [
+          "analyze_spreadsheet"
+        ],
+        "must_not_call": [
+          "document_read"
+        ]
+      }
+    },
+    "files": [
+      "sensor_readings.csv"
+    ],
+    "notes": "A CSV is diverted to the spreadsheet tools like an .xlsx. 47.1 is the digits swapped."
+  },
+  {
+    "id": "attachment_tools.deck_slide_fact",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "According to the attached deck, how many pilot sites are there this quarter? Reply with just the number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "create_powerpoint_presentation"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "14"
+      ],
+      "tools": {
+        "must_call": [
+          "read_powerpoint_presentation"
+        ]
+      }
+    },
+    "files": [
+      "quarterly_review.pptx"
+    ],
+    "notes": "A .pptx is never a document block (Bedrock has no pptx format); create_powerpoint_presentation provisions the read tool."
+  },
+  {
+    "id": "attachment_tools.deck_speaker_notes",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "The attached deck's speaker notes mention a budget contingency. What percentage is it? Reply with just the number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "create_powerpoint_presentation"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "7.5"
+      ],
+      "tools": {
+        "must_call": [
+          "read_powerpoint_presentation"
+        ]
+      }
+    },
+    "files": [
+      "quarterly_review.pptx"
+    ],
+    "notes": "Only in slide 2's speaker notes, never on a slide."
+  },
+  {
+    "id": "attachment_tools.mixed_image_and_spreadsheet",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "Using the attached chart and workbook: what was 2024 fall enrollment, and what is the total Amount of the Travel lines on the Expenses sheet?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "list_spreadsheets",
+        "analyze_spreadsheet"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_all": [
+        "1315",
+        "4815"
+      ],
+      "tools": {
+        "must_call": [
+          "analyze_spreadsheet"
+        ]
+      }
+    },
+    "files": [
+      "enrollment_chart.png",
+      "grant_expenses.xlsx",
+      "lab_equipment_inventory.docx"
+    ],
+    "notes": "Three attachments, three paths: an image block, the spreadsheet tools, and a Word file as text. The Word file is a bystander."
+  },
+  {
+    "id": "attachment_tools.mixed_deck_and_pdf",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "How many pilot sites does the attached deck list, and when does the last weekday shuttle leave according to the attached timetable?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "create_powerpoint_presentation"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_all": [
+        "14",
+        "21:40"
+      ],
+      "tools": {
+        "must_call": [
+          "read_powerpoint_presentation"
+        ]
+      }
+    },
+    "files": [
+      "quarterly_review.pptx",
+      "shuttle_schedule.pdf",
+      "sync_error.png"
+    ],
+    "notes": "A deck through the PowerPoint tools and a native PDF in one turn; the screenshot is a bystander."
+  }
+]

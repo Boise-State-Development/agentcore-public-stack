@@ -1,0 +1,337 @@
+[
+  {
+    "id": "usage_patterns.draft_small_edit_updates_in_place",
+    "family": "usage_patterns",
+    "turns": [
+      {
+        "prompt": "Write a one-page announcement for the Harrowfield Field Station open house and save it as a document I can keep. Details: Saturday, April 11, 10am to 2pm, at the Lakeview Pavilion. Include a short schedule with three items and a line about who to contact (Dana Ruiz, events office)."
+      },
+      {
+        "prompt": "Change the date to Saturday, April 18. Keep everything else exactly the same."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "create_artifact"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "April 18",
+        "18 April",
+        "Apr 18",
+        "Apr. 18"
+      ],
+      "tools": {
+        "must_call": [
+          "update_artifact"
+        ],
+        "must_not_call": [
+          "create_artifact"
+        ],
+        "max_calls": 1
+      }
+    },
+    "notes": "Iterative drafting, the costliest engineerable usage pattern in production (docs/one-pagers/conversation-usage-patterns.md). A one-detail edit should revise the existing artifact once, not create a second copy. Efficiency is the point: update_artifact is full-replace today, so the edit turn's output tokens are a whole document; a patch-style edit would show here as a fall in outputTokens with the case still passing."
+  },
+  {
+    "id": "usage_patterns.draft_third_revision_updates_in_place",
+    "family": "usage_patterns",
+    "turns": [
+      {
+        "prompt": "Draft a short welcome note for new volunteers at the Harrowfield Field Station and save it as a document. Mention the orientation on Monday at 9am in Room 104."
+      },
+      {
+        "prompt": "Make the tone a little warmer, and add that lunch is provided at orientation."
+      },
+      {
+        "prompt": "One more change: add a line saying parking is free in Lot C."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "create_artifact"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "Lot C"
+      ],
+      "tools": {
+        "must_call": [
+          "update_artifact"
+        ],
+        "must_not_call": [
+          "create_artifact"
+        ],
+        "max_calls": 1
+      }
+    },
+    "notes": "Three turns on one document, so the history carries two superseded full copies by the last turn: the drafting pattern's second cost, paid as input on every later call. Scored on the third turn; efficiency counts every turn."
+  },
+  {
+    "id": "usage_patterns.draft_question_does_not_rewrite",
+    "family": "usage_patterns",
+    "turns": [
+      {
+        "prompt": "Write a one-page announcement for the Harrowfield Field Station open house and save it as a document I can keep. Details: Saturday, April 11, 10am to 2pm, at the Lakeview Pavilion."
+      },
+      {
+        "prompt": "Quick question about the draft: what time does the open house end? Reply with just the time."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "create_artifact"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "2pm",
+        "2 pm",
+        "2:00",
+        "2 p.m.",
+        "14:00"
+      ],
+      "tools": {
+        "must_not_call": [
+          "create_artifact",
+          "update_artifact"
+        ],
+        "max_calls": 0
+      }
+    },
+    "notes": "A question about a draft is answered from it, not by rewriting it. A rewrite here is the drafting pattern's waste with no edit to show for it."
+  },
+  {
+    "id": "usage_patterns.page_question_takes_one_fetch",
+    "family": "usage_patterns",
+    "turns": [
+      {
+        "prompt": "According to https://example.com, what is that domain meant to be used for? One sentence."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "documentation",
+        "example",
+        "illustrative"
+      ],
+      "tools": {
+        "must_call": [
+          "fetch_url_content"
+        ],
+        "max_calls": 1
+      }
+    },
+    "notes": "The browsing pattern's cost is loop length: every extra fetch is another model call that re-reads the whole context. One named page needs one fetch."
+  },
+  {
+    "id": "usage_patterns.two_pages_take_two_fetches",
+    "family": "usage_patterns",
+    "turns": [
+      {
+        "prompt": "Fetch https://example.com and https://example.org. Do the two pages use the same main heading? Answer yes or no, then give the heading."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_all": [
+        "Example Domain"
+      ],
+      "regex": {
+        "search": [
+          "(?i)\\byes\\b"
+        ]
+      },
+      "tools": {
+        "must_call": [
+          "fetch_url_content"
+        ],
+        "max_calls": 2
+      }
+    },
+    "notes": "Two named pages, two fetches. Both pages carry the heading \"Example Domain\" (as of 2026-11); if either changes, this case's expectation changes with it."
+  },
+  {
+    "id": "usage_patterns.followup_reuses_the_fetched_page",
+    "family": "usage_patterns",
+    "turns": [
+      {
+        "prompt": "Read https://example.com and summarize it in one sentence."
+      },
+      {
+        "prompt": "What was that page's main heading? Reply with just the heading."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "fetch_url_content"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "Example Domain"
+      ],
+      "tools": {
+        "must_not_call": [
+          "fetch_url_content"
+        ],
+        "max_calls": 0
+      }
+    },
+    "notes": "The page is already in the conversation, so a follow-up about what it said is answered from it. Re-fetching is a browsing loop's waste in miniature. An earlier version asked where the page linked; example.com no longer links anywhere (2026-11), and a question the first fetch's text cannot answer makes a re-fetch the right call. If a future change offloads small tool results out of history, the right fix is the offload rule, not this case."
+  },
+  {
+    "id": "usage_patterns.spreadsheet_cross_sheet_lookup",
+    "family": "usage_patterns",
+    "turns": [
+      {
+        "prompt": "In the attached workbook, find the largest Equipment line on the Expenses sheet, then give me its approver code from the Approvals sheet. Reply with the line and the code."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "list_spreadsheets",
+        "analyze_spreadsheet"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_all": [
+        "EXP-0041",
+        "AP-51"
+      ],
+      "forbidden": [
+        "AP-77"
+      ],
+      "tools": {
+        "must_call": [
+          "analyze_spreadsheet"
+        ],
+        "max_calls": 3
+      }
+    },
+    "files": [
+      "grant_expenses.xlsx"
+    ],
+    "notes": "The spreadsheet pattern's cost is probe-and-retry loops (analyze_spreadsheet fails about 15% of calls in production). A two-sheet lookup fits in one analysis, plus at most a listing and one retry. EXP-0041 (2,400) is the largest Equipment line; its approver is AP-51. AP-77 belongs to EXP-0042, a Travel line."
+  },
+  {
+    "id": "usage_patterns.spreadsheet_two_answers_one_pass",
+    "family": "usage_patterns",
+    "turns": [
+      {
+        "prompt": "Two questions about the attached workbook's Expenses sheet: what is the total Amount of the Supplies lines, and how many Travel lines are there?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "list_spreadsheets",
+        "analyze_spreadsheet"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_all": [
+        "405"
+      ],
+      "regex": {
+        "search": [
+          "(?i)\\b(3|three)\\b"
+        ]
+      },
+      "tools": {
+        "must_call": [
+          "analyze_spreadsheet"
+        ],
+        "max_calls": 3
+      }
+    },
+    "files": [
+      "grant_expenses.xlsx"
+    ],
+    "notes": "Two questions about one sheet should share one analysis. Supplies: 310 + 95 = 405. Travel lines: EXP-0040, EXP-0042, EXP-0045."
+  },
+  {
+    "id": "usage_patterns.spreadsheet_followup_builds_on_the_answer",
+    "family": "usage_patterns",
+    "turns": [
+      {
+        "prompt": "Using the attached workbook, what is the total Amount of the Travel lines on the Expenses sheet?"
+      },
+      {
+        "prompt": "And what share of all expenses on that sheet is that, to the nearest percent?"
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "list_spreadsheets",
+        "analyze_spreadsheet"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "44%",
+        "44 %",
+        "44 percent"
+      ],
+      "tools": {
+        "max_calls": 2
+      }
+    },
+    "files": [
+      "grant_expenses.xlsx"
+    ],
+    "notes": "The follow-up reuses the first answer and needs at most one more analysis (the sheet total). Travel 4,815 of 10,940 is 44.0%."
+  },
+  {
+    "id": "usage_patterns.csv_question_answers_without_a_loop",
+    "family": "usage_patterns",
+    "turns": [
+      {
+        "prompt": "From the attached readings, what is the highest reading for each sensor? List the three."
+      }
+    ],
+    "run": {
+      "enabled_tools": [
+        "list_spreadsheets",
+        "analyze_spreadsheet"
+      ],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_all": [
+        "40.4",
+        "46.3",
+        "41.7"
+      ],
+      "forbidden": [
+        "47.1"
+      ],
+      "tools": {
+        "max_calls": 2
+      }
+    },
+    "files": [
+      "sensor_readings.csv"
+    ],
+    "notes": "A nine-row CSV may reach the model as text or through the spreadsheet tools, depending on the deployment; either is fine, a loop is not. Maxima: S-1 40.4, S-2 46.3, S-3 41.7 (47.1 is S-3's digits swapped)."
+  }
+]

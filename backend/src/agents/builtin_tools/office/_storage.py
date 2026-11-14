@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -100,6 +101,40 @@ def _validate_document_name(name: str) -> Tuple[bool, Optional[str]]:
     if name.startswith("-") or name.endswith("-"):
         return False, "Name cannot start or end with a hyphen"
     return True, None
+
+
+def _safe_document_name(name: str) -> str:
+    """``name`` reduced to what ``_validate_document_name`` accepts, or ``""``.
+
+    Real file names carry spaces and punctuation ("Q3 Budget (draft)"), and so
+    do the names a model picks for an output, usually because it copies the
+    source's. Accents are folded to ASCII and every other run of disallowed
+    characters, hyphens included, becomes one hyphen, trimmed from the ends.
+    """
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return re.sub(r"[^A-Za-z0-9_]+", "-", ascii_name).strip("-")
+
+
+def _output_document_name(output_name: Optional[str], default_base: str, extension: str) -> str:
+    """The base name (no extension) an edited or generated copy is saved under.
+
+    ``output_name`` when the model gave one, else ``default_base``, with a
+    trailing ``extension`` (".docx") dropped and the rest made safe by
+    ``_safe_document_name``. An output name is normalised rather than refused:
+    a refusal makes the model re-send the whole call (a redline's every change,
+    an edit's whole program) to fix a file name, and the saved name is on the
+    download card either way. A name with nothing usable left falls back to the
+    default's, then to "document".
+    """
+    for candidate in (output_name, default_base):
+        if not candidate:
+            continue
+        if candidate.lower().endswith(extension.lower()):
+            candidate = candidate[: -len(extension)]
+        safe = _safe_document_name(candidate)
+        if safe:
+            return safe
+    return "document"
 
 
 _s3_client = None
@@ -262,10 +297,40 @@ def _ci_write_bytes(code_interpreter, path: str, data: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 
+class StoredFileGone(Exception):
+    """The file's bytes are gone: a file shared from another conversation whose original was
+    deleted there (handoffs spec §4.9 rule 5). Its message is what the tool tells the model."""
+
+
+_GONE_MESSAGE = (
+    "this file is no longer available. It was shared from another conversation, "
+    "and it has been deleted there"
+)
+
+
 def _download_s3_bytes(bucket: str, key: str) -> bytes:
-    """Read an object's bytes from S3 (blocking — use ``asyncio.to_thread``)."""
-    resp = _s3().get_object(Bucket=bucket, Key=key)
+    """Read an object's bytes from S3 (blocking — use ``asyncio.to_thread``).
+
+    A missing object raises ``StoredFileGone`` rather than ``NoSuchKey``: the only file row that
+    can outlive its bytes is a reference whose original was deleted.
+    """
+    try:
+        resp = _s3().get_object(Bucket=bucket, Key=key)
+    except Exception as exc:  # noqa: BLE001 - re-raised unless it is a missing object
+        code = getattr(exc, "response", {}).get("Error", {}).get("Code") if hasattr(exc, "response") else None
+        if code in ("NoSuchKey", "404"):
+            raise StoredFileGone(_GONE_MESSAGE) from exc
+        raise
     return resp["Body"].read()
+
+
+def note_linked_read(meta, reader: str) -> None:
+    """Count a read of a shared file by an office tool (``LinkedFileRead`` by reader, §4.7)."""
+    if getattr(meta, "linked_from", None) is None:
+        return
+    from apis.shared.files.linked_files import emit_linked_file_metric
+
+    emit_linked_file_metric("LinkedFileRead", reader=reader, session_id=getattr(meta, "session_id", None))
 
 
 async def _store_document(

@@ -3,6 +3,8 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import {
+  LedgerEvalsOptions,
+  LedgerEvalsResponse,
   LedgerQualityResponse,
   LedgerRangeOptions,
   LedgerReadout,
@@ -59,6 +61,15 @@ export class ReleaseLedgerHttpService {
     if (options.baseline) params = params.set('baseline', options.baseline);
     if (options.days !== undefined) params = params.set('days', options.days);
     return this.http.get<LedgerReadout>(`${this.baseUrl()}/readout`, { params });
+  }
+
+  /** `LEDGER#EVAL` rows for the Evaluations page, newest first (eval-harness spec §16 D21). */
+  getEvals(options: LedgerEvalsOptions = {}): Observable<LedgerEvalsResponse> {
+    let params = rangeParams(options);
+    if (options.modelId) params = params.set('modelId', options.modelId);
+    if (options.track) params = params.set('track', options.track);
+    if (options.unit) params = params.set('unit', options.unit);
+    return this.http.get<LedgerEvalsResponse>(`${this.baseUrl()}/evals`, { params });
   }
 
   /** The raw ledger rows for the range, as NDJSON (ids and numbers only). */

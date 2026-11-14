@@ -119,6 +119,14 @@ export interface McpSandboxDistributionConstructProps {
 export class McpSandboxDistributionConstruct extends Construct {
   public readonly distribution: cloudfront.Distribution;
   public readonly proxyOrigin: string;
+  /**
+   * Shared with the browser sign-in viewer's own distribution
+   * (`BrowserLiveViewConstruct`), so both origins get one `frame-ancestors`
+   * and one header set. Sharing the policy objects shares no origin.
+   */
+  public readonly cspFunction: cloudfront.IFunction;
+  public readonly responseHeadersPolicy: cloudfront.IResponseHeadersPolicy;
+  public readonly cachePolicy: cloudfront.ICachePolicy;
 
   constructor(
     scope: Construct,
@@ -214,6 +222,10 @@ export class McpSandboxDistributionConstruct extends Construct {
         enableAcceptEncodingBrotli: true,
       },
     );
+
+    this.cspFunction = cspFunction;
+    this.responseHeadersPolicy = responseHeadersPolicy;
+    this.cachePolicy = cachePolicy;
 
     const distributionProps: cloudfront.DistributionProps = {
       comment: getResourceName(config, 'mcp-sandbox-cdn'),

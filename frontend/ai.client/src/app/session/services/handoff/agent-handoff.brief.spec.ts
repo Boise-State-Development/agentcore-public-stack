@@ -1,10 +1,13 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfigService } from '../../../services/config.service';
+import { FileUploadService } from '../../../services/file-upload/file-upload.service';
+import { MessageMapService } from '../session/message-map.service';
 import { FEATURES, FeatureFlags } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
 import { environment } from '../../../../environments/environment';
@@ -65,6 +68,8 @@ describe('AgentHandoffService — brief', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: FEATURES, useValue: features },
+        { provide: FileUploadService, useValue: { listSessionFiles: async () => [] } },
+        { provide: MessageMapService, useValue: { getMessagesForSession: () => signal([]) } },
         { provide: ConfigService, useValue: { appApiUrl: () => API } },
         { provide: ChatRequestService, useValue: { submitHandoffRequest, buildHandoffBriefRequest } },
         { provide: HandoffBriefService, useValue: { stream, preempt, isRunning: () => false } },

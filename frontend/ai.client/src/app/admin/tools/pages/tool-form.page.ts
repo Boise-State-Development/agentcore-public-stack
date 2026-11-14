@@ -41,7 +41,7 @@ import {
   A2A_AUTH_TYPES,
   GATEWAY_LISTING_MODES,
   GATEWAY_CREDENTIAL_TYPES,
-  GATEWAY_OAUTH_GRANT_TYPES,
+  GATEWAY_SUPPORTED_OAUTH_GRANT_TYPE,
   MCPServerConfig,
   MCPToolEntry,
   A2AAgentConfig,
@@ -703,7 +703,7 @@ function reservedHeaderValidator(control: AbstractControl): ValidationErrors | n
                       </select>
                       <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
                         @if (form.get('gwCredentialType')?.value === 'oauth') {
-                          OAuth requires Default listing (Dynamic disables 3LO + semantic search).
+                          OAuth requires Default listing.
                         } @else {
                           Dynamic resolves tools at call time but disables semantic search.
                         }
@@ -817,41 +817,33 @@ function reservedHeaderValidator(control: AbstractControl): ValidationErrors | n
                     </div>
                   }
 
-                  <!-- OAuth scopes + grant type (for oauth) -->
+                  <!-- OAuth scopes (for oauth). Client Credentials is the only grant (#454). -->
                   @if (form.get('gwCredentialType')?.value === 'oauth') {
-                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div>
-                        <label for="gwOauthScopes" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                          OAuth scopes
-                        </label>
-                        <input
-                          id="gwOauthScopes"
-                          type="text"
-                          formControlName="gwOauthScopes"
-                          placeholder="openid profile email"
-                          class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
-                        />
-                        <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                          Space- or comma-separated.
+                    <div>
+                      <label for="gwOauthScopes" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        OAuth scopes
+                      </label>
+                      <input
+                        id="gwOauthScopes"
+                        type="text"
+                        formControlName="gwOauthScopes"
+                        placeholder="openid profile email"
+                        class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                      />
+                      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                        Space- or comma-separated. The Gateway signs in as itself with the Client Credentials grant;
+                        no user is involved. For a tool that acts as the signed-in user, register it as an
+                        MCP External Server instead.
+                      </p>
+                      @if (legacyGatewayGrantType(); as legacyGrant) {
+                        <p class="mt-2 flex items-start gap-1.5 text-xs/5 text-state-warning-700 dark:text-state-warning-400">
+                          <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                          <span>
+                            This target was saved with the <code class="font-mono">{{ legacyGrant }}</code> grant, which
+                            is no longer supported. Saving switches it to Client Credentials.
+                          </span>
                         </p>
-                      </div>
-                      <div>
-                        <label for="gwGrantType" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
-                          Grant type
-                        </label>
-                        <select
-                          id="gwGrantType"
-                          formControlName="gwGrantType"
-                          class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                        >
-                          @for (grant of gatewayOauthGrantTypes; track grant.value) {
-                            <option [value]="grant.value">{{ grant.label }}</option>
-                          }
-                        </select>
-                        <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-                          Authorization Code (3LO) requires the user to connect the provider first.
-                        </p>
-                      </div>
+                      }
                     </div>
                   }
 
@@ -932,9 +924,7 @@ function reservedHeaderValidator(control: AbstractControl): ValidationErrors | n
                       </div>
                     }
                     <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">
-                      Note: per-tool approval flags are stored but not yet enforced for Gateway tools (tracked separately).
-                      For OAuth targets, users connect the provider via
-                      <a routerLink="/admin/connectors" class="font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Connectors</a>.
+                      A tool marked Needs approval pauses the chat until the user approves the call.
                     </p>
                   </div>
                 } @else {
@@ -1212,6 +1202,25 @@ function reservedHeaderValidator(control: AbstractControl): ValidationErrors | n
                 </p>
               </div>
 
+              <div>
+                <label class="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    formControlName="voiceAvailable"
+                    data-testid="tool-voice-available"
+                    class="size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                  />
+                  <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                    Available in voice mode
+                  </span>
+                </label>
+                <p class="ml-7 mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                  Voice conversations only use tools marked here. Mark a tool only if it usually
+                  answers in under a second and its result makes sense read aloud: voice goes
+                  silent after a slow tool, and charts or documents do nothing for a listener.
+                </p>
+              </div>
+
               <fieldset>
                 <legend class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">
                   Availability in the tool picker
@@ -1367,7 +1376,11 @@ export class ToolFormPage implements OnInit {
   readonly a2aAuthTypes = A2A_AUTH_TYPES;
   readonly gatewayListingModes = GATEWAY_LISTING_MODES;
   readonly gatewayCredentialTypes = GATEWAY_CREDENTIAL_TYPES;
-  readonly gatewayOauthGrantTypes = GATEWAY_OAUTH_GRANT_TYPES;
+  /**
+   * The grant a loaded OAuth Gateway target was saved with, when it is one that
+   * can no longer be saved (#454). Drives the "saving switches it" warning.
+   */
+  readonly legacyGatewayGrantType = signal<string | null>(null);
 
   loading = signal(false);
   saving = signal(false);
@@ -1414,6 +1427,8 @@ export class ToolFormPage implements OnInit {
     retirementNote: [''],
     retiresOn: [''],
     isPublic: [false],
+    // #625: off by default — a tool runs in voice only when an admin says it suits voice.
+    voiceAvailable: [false],
     // One control for what the backend still stores as two booleans, so the
     // incoherent pair (off by default + always on) cannot be produced here.
     toolEnablement: ['user_choice' as ToolEnablement],
@@ -1452,7 +1467,6 @@ export class ToolFormPage implements OnInit {
     gwAwsRegion: [''],
     gwLambdaFunctionName: [''],
     gwOauthScopes: [''],
-    gwGrantType: ['authorization_code'],
     gwTools: this.fb.array([] as FormGroup[]),
     // 'server' = external MCP server; otherwise a built-in connector id.
     gwTargetKind: ['server' as GatewayTargetKind],
@@ -1901,6 +1915,7 @@ export class ToolFormPage implements OnInit {
         retirementNote: tool.retirementNote ?? '',
         retiresOn: tool.retiresOn ?? '',
         isPublic: tool.isPublic,
+        voiceAvailable: tool.voiceAvailable ?? false,
         toolEnablement: toolEnablementOf(tool),
         // An already-saved always-on server was acknowledged when it was set;
         // don't re-prompt on every edit of an unrelated field.
@@ -1968,8 +1983,13 @@ export class ToolFormPage implements OnInit {
           gwAwsRegion: tool.mcpGatewayConfig.awsRegion || '',
           gwLambdaFunctionName: tool.mcpGatewayConfig.lambdaFunctionName || '',
           gwOauthScopes: (tool.mcpGatewayConfig.oauthScopes || []).join(' '),
-          gwGrantType: tool.mcpGatewayConfig.grantType,
         });
+        this.legacyGatewayGrantType.set(
+          tool.mcpGatewayConfig.credentialType === 'oauth' &&
+            tool.mcpGatewayConfig.grantType !== GATEWAY_SUPPORTED_OAUTH_GRANT_TYPE
+            ? tool.mcpGatewayConfig.grantType
+            : null,
+        );
         this.gwToolsArray.clear();
         for (const entry of tool.mcpGatewayConfig.tools) {
           this.gwToolsArray.push(this.buildMcpToolRow(entry));
@@ -2058,7 +2078,7 @@ export class ToolFormPage implements OnInit {
           listingMode: 'default',
           credentialType: 'gateway_iam_role',
           oauthScopes: [],
-          grantType: 'authorization_code',
+          grantType: GATEWAY_SUPPORTED_OAUTH_GRANT_TYPE,
           customParameters: null,
           // Keep any per-tool flags a loaded row carried; empty lets the
           // backend fill in the connector's one tool.
@@ -2104,7 +2124,7 @@ export class ToolFormPage implements OnInit {
             isOauth && formValue.gwOauthScopes
               ? formValue.gwOauthScopes.split(/[\s,]+/).map((s: string) => s.trim()).filter((s: string) => s)
               : [],
-          grantType: formValue.gwGrantType,
+          grantType: GATEWAY_SUPPORTED_OAUTH_GRANT_TYPE,
           customParameters: null,
           tools: gwTools,
         };
@@ -2128,6 +2148,7 @@ export class ToolFormPage implements OnInit {
           retirementNote: formValue.retirementNote ?? '',
           retiresOn: formValue.retiresOn ?? '',
           isPublic: formValue.isPublic,
+          voiceAvailable: formValue.voiceAvailable === true,
           ...toolEnablementFlags(formValue.toolEnablement),
           requiresOauthProvider: requiresOauthProvider,
           forwardAuthToken: formValue.forwardAuthToken || false,
@@ -2152,6 +2173,7 @@ export class ToolFormPage implements OnInit {
           retirementNote: formValue.retirementNote ?? '',
           retiresOn: formValue.retiresOn ?? '',
           isPublic: formValue.isPublic,
+          voiceAvailable: formValue.voiceAvailable === true,
           ...toolEnablementFlags(formValue.toolEnablement),
           requiresOauthProvider: requiresOauthProvider,
           forwardAuthToken: formValue.forwardAuthToken || false,

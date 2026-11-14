@@ -33,9 +33,12 @@ from apis.shared.errors import (
     StreamErrorEvent,
     build_conversational_error_event,
     model_read_timeout_phase,
+    provider_unavailable_message,
 )
 from apis.shared.observability.emf import emit_model_read_timeout
 from apis.shared.sessions.ledger_rollups import TURN_OUTCOMES
+from agents.main_agent.session.hooks.declined_answer import DECLINED_NOTICE
+from agents.main_agent.session.hooks.declined_answer import needs_notice as needs_declined_notice
 
 from .history_count import HistoryCount, count_created_before
 from .stream_processor import process_agent_stream
@@ -136,6 +139,61 @@ def _model_provider_value(model_config: Any) -> Optional[str]:
         logger.debug("Could not resolve the model provider for a continuation", exc_info=True)
         return None
     return getattr(provider, "value", provider) or None
+
+
+# How long a failed turn may wait for the model's display name. The catalog
+# read is usually a cache hit; this only stops a slow one from holding the
+# error reply back. Never on the success path.
+_OUTAGE_MODEL_NAME_TIMEOUT_SECONDS = 2.0
+
+
+async def _outage_model_name(model_id: Optional[str]) -> Optional[str]:
+    """The catalog's display name for a model, or ``None`` if it can't be read in time."""
+    if not model_id:
+        return None
+    try:
+        from apis.shared.costs.pricing_config import get_model_by_model_id
+
+        record = await asyncio.wait_for(
+            get_model_by_model_id(model_id), timeout=_OUTAGE_MODEL_NAME_TIMEOUT_SECONDS
+        )
+    except Exception:  # noqa: BLE001 — the reply still goes out, unnamed
+        logger.debug("Could not read the display name for %s", model_id, exc_info=True)
+        return None
+    name = getattr(record, "model_name", None)
+    return name if isinstance(name, str) and name.strip() else None
+
+
+async def _describe_provider_outage(
+    event: ConversationalErrorEvent, main_agent_wrapper: Any
+) -> ConversationalErrorEvent:
+    """Name the turn's model and provider in a provider-outage reply.
+
+    The classifiers that recognize the outage (the force-stop formatter, and
+    ``build_conversational_error_event`` for a raised error) know only the
+    error text. The coordinator knows the model, so it rebuilds the copy here
+    and puts the model on ``metadata``, where the SPA reads it for the
+    outage label and "Try again". Ids and display names only.
+    """
+    model_config = getattr(main_agent_wrapper, "model_config", None)
+    model_id = getattr(model_config, "model_id", None)
+    provider = _model_provider_value(model_config)
+    model_name = await _outage_model_name(model_id)
+
+    metadata: Dict[str, Any] = dict(event.metadata or {})
+    metadata["error_kind"] = "provider_unavailable"
+    if model_id:
+        metadata["model_id"] = model_id
+    if model_name:
+        metadata["model_name"] = model_name
+    if provider:
+        metadata["provider"] = provider
+    return event.model_copy(
+        update={
+            "message": provider_unavailable_message(model_name, provider),
+            "metadata": metadata,
+        }
+    )
 
 
 def _record_model_read_timeout(
@@ -343,6 +401,8 @@ class StreamCoordinator:
         original_message: Optional[str] = None,
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
         turn_lease: Any = None,
         turn_started_at: Optional[float] = None,
         poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
@@ -372,6 +432,13 @@ class StreamCoordinator:
             turn_project_id: The Shared Project whose harness ran this turn (None for any
                 other turn). Recorded on each cost row as ``projectId``; the metadata writer
                 also adds the call to the project's monthly ``COST#`` rollup.
+            turn_attachment_plan: The turn's ``AttachmentPlan.to_row()`` (per file: mode,
+                class, tokens, reason, upload id; ``docs/specs/unified-attachment-delivery.md``
+                §8.2), or None for a turn with no attachments. Written as ``attachmentPlan``
+                on the turn's last cost row, after the stream. Per turn, like turn_agent_id.
+            turn_pasted_chars: Characters of the user's message the composer counted as
+                pasted, or None. Written as ``pastedChars`` on the turn's last cost row,
+                beside ``attachmentPlan``; never reaches the prompt.
             turn_lease: This turn's single-flight ``SessionLease``, which doubles as the
                 mid-turn steering inbox. Stamped onto the session manager for the life of
                 the turn so ``SteeringHook`` can read it at each tool boundary — and
@@ -456,7 +523,11 @@ class StreamCoordinator:
         # named stays pinned. Best-effort: never blocks the turn.
         if session_manager is not None and hasattr(session_manager, "apply_document_offload"):
             try:
-                session_manager.apply_document_offload(agent, prompt=prompt)
+                session_manager.apply_document_offload(
+                    agent,
+                    prompt=prompt,
+                    model_id=getattr(getattr(main_agent_wrapper, "model_config", None), "model_id", None),
+                )
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"apply_document_offload failed, continuing: {e}")
 
@@ -750,6 +821,8 @@ class StreamCoordinator:
                         # Capture the partial for interruption persistence.
                         assistant_text_acc.append(event_data["text"])
                         if current_assistant_message_index >= 0 and current_assistant_message_index < len(per_message_metadata):
+                            text_slot = per_message_metadata[current_assistant_message_index]
+                            text_slot["text_chars"] = text_slot.get("text_chars", 0) + len(event_data["text"])
                             if per_message_metadata[current_assistant_message_index]["first_token_time"] is None:
                                 per_message_metadata[current_assistant_message_index]["first_token_time"] = time.time()
                                 logger.info(
@@ -758,6 +831,13 @@ class StreamCoordinator:
                                 # Also update global first_token_time for the first message (backward compatibility)
                                 if current_assistant_message_index == 0 and first_token_time is None:
                                     first_token_time = per_message_metadata[0]["first_token_time"]
+
+                # What this call's output was made of, as lengths only
+                # (`outputChars` on the cost row): the reasoning the model
+                # streamed and the signature that tracks what it was billed.
+                elif event.get("type") == "reasoning":
+                    if 0 <= current_assistant_message_index < len(per_message_metadata):
+                        self._count_reasoning(per_message_metadata[current_assistant_message_index], event.get("data"))
 
                 # Note whether the agent invoked an artifact authoring
                 # tool this turn. Gates the post-turn artifacts query so
@@ -826,6 +906,16 @@ class StreamCoordinator:
                         per_message_metadata[current_assistant_message_index]["end_time"] = time.time()
                         per_message_metadata[current_assistant_message_index]["has_text"] = call_streamed_text
                         logger.debug(f"📝 Assistant message {current_assistant_message_index} ended")
+                    # The provider declined this call and it said nothing: show
+                    # the notice DeclinedAnswerHook also writes into the message,
+                    # before this message_stop goes out, so the bubble is never
+                    # blank (declined_answer.py).
+                    if needs_declined_notice(event.get("data", {}).get("stopReason"), call_streamed_text):
+                        if 0 <= current_assistant_message_index < len(per_message_metadata):
+                            per_message_metadata[current_assistant_message_index]["declined"] = True
+                        yield 'event: content_block_start\ndata: {"contentBlockIndex": 0, "type": "text"}\n\n'
+                        yield f"event: content_block_delta\ndata: {json.dumps({'contentBlockIndex': 0, 'type': 'text', 'text': DECLINED_NOTICE})}\n\n"
+                        yield 'event: content_block_stop\ndata: {"contentBlockIndex": 0}\n\n'
 
                 # Track individual metadata events (per assistant message)
                 if event.get("type") == "metadata":
@@ -976,6 +1066,12 @@ class StreamCoordinator:
                     ):
                         yield sse
                     for sse in await self._extract_browser_login_required_events(
+                        agent,
+                        session_id=session_id,
+                        user_id=user_id,
+                    ):
+                        yield sse
+                    for sse in await self._extract_mcp_elicitation_required_events(
                         agent,
                         session_id=session_id,
                         user_id=user_id,
@@ -1178,6 +1274,9 @@ class StreamCoordinator:
                                     current_messages=current_messages,
                                     context_window=turn_context_window,
                                     history_tokens=history_tokens,
+                                    model_id=getattr(
+                                        getattr(main_agent_wrapper, "model_config", None), "model_id", None
+                                    ),
                                 )
                                 # The cut (and its forced / floor_unreachable
                                 # flags) belongs on the call that triggered it,
@@ -1268,7 +1367,7 @@ class StreamCoordinator:
                     # generic wrapper below.
                     recoverable = error_data.get("recoverable", False)
                     if (
-                        error_code == ErrorCode.AGENT_ERROR
+                        error_code in (ErrorCode.AGENT_ERROR, ErrorCode.PROVIDER_UNAVAILABLE)
                         and error_message
                         and error_message.lstrip().startswith("⚠️")
                     ):
@@ -1293,6 +1392,14 @@ class StreamCoordinator:
                             error=synthetic_error,
                             session_id=session_id,
                             recoverable=recoverable,
+                        )
+
+                    # Either classifier may have recognized a provider outage
+                    # (a raised error arrives here as STREAM_ERROR and is
+                    # reclassified by the builder), so check the built event.
+                    if conv_error_event.code == ErrorCode.PROVIDER_UNAVAILABLE:
+                        conv_error_event = await _describe_provider_outage(
+                            conv_error_event, main_agent_wrapper
                         )
 
                     if error_code == ErrorCode.MAX_TOKENS:
@@ -1430,6 +1537,8 @@ class StreamCoordinator:
                         citations=citations,
                         turn_agent_id=turn_agent_id,
                         turn_project_id=turn_project_id,
+                        turn_attachment_plan=turn_attachment_plan,
+                        turn_pasted_chars=turn_pasted_chars,
                     )
 
                     # Skip the original error event and exit the loop - we've handled the error
@@ -1688,6 +1797,8 @@ class StreamCoordinator:
                     citations=citations,
                     turn_agent_id=turn_agent_id,
                     turn_project_id=turn_project_id,
+                    turn_attachment_plan=turn_attachment_plan,
+                    turn_pasted_chars=turn_pasted_chars,
                     outcome=turn_outcome,
                     empty_answer=empty_answer,
                 )
@@ -1826,6 +1937,8 @@ class StreamCoordinator:
                 citations=citations,
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
+                turn_attachment_plan=turn_attachment_plan,
+                turn_pasted_chars=turn_pasted_chars,
                 meter_usage=meter_usage,
                 model_retries=model_retries_seen,
             )
@@ -1877,6 +1990,8 @@ class StreamCoordinator:
                 citations=citations,
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
+                turn_attachment_plan=turn_attachment_plan,
+                turn_pasted_chars=turn_pasted_chars,
                 meter_usage=meter_usage,
                 model_retries=model_retries_seen,
             )
@@ -1954,6 +2069,8 @@ class StreamCoordinator:
                     citations=citations,
                     turn_agent_id=turn_agent_id,
                     turn_project_id=turn_project_id,
+                    turn_attachment_plan=turn_attachment_plan,
+                    turn_pasted_chars=turn_pasted_chars,
                 )
         finally:
             # The first model output was the stream's last event (or the turn
@@ -1989,6 +2106,16 @@ class StreamCoordinator:
             except Exception:  # noqa: BLE001
                 logger.debug("source provenance discard failed", exc_info=True)
 
+            # Stop the turn's analyze_spreadsheet sandbox (#259). The agent's
+            # AfterInvocationEvent normally does this; a dropped client can
+            # skip it, so release here too. Idempotent.
+            try:
+                sandbox_hook = getattr(main_agent_wrapper, "analyze_sandbox_hook", None)
+                if sandbox_hook is not None:
+                    await sandbox_hook.release()
+            except Exception:  # noqa: BLE001
+                logger.debug("analyze sandbox release failed", exc_info=True)
+
     @staticmethod
     def _completed_turn_outcome(
         agent: Any, per_message_metadata: List[Dict[str, Any]]
@@ -2008,7 +2135,9 @@ class StreamCoordinator:
         if interrupt_state is not None and getattr(interrupt_state, "activated", False) is True:
             return "paused", False
         final_call = per_message_metadata[-1] if per_message_metadata else None
-        empty = final_call is not None and not final_call.get("has_text")
+        # A call the provider declined is not the empty-answer defect: the
+        # user saw the declined notice, and the model chose not to answer.
+        empty = final_call is not None and not final_call.get("has_text") and not final_call.get("declined")
         return "completed", empty
 
     @staticmethod
@@ -2027,7 +2156,46 @@ class StreamCoordinator:
             "first_token_time": None,  # When first token was received
             "end_time": None,  # When this message ended
             "call_index": call_index,
+            # Lengths of what the call streamed, for `outputChars`.
+            "text_chars": 0,
+            "reasoning_chars": 0,
+            "reasoning_signature_chars": 0,
         }
+
+    @staticmethod
+    def _count_reasoning(slot: Dict[str, Any], data: Any) -> None:
+        """Add one reasoning event's lengths to its call slot. Lengths only."""
+        if not isinstance(data, dict):
+            return
+        text = data.get("reasoningText")
+        if isinstance(text, str):
+            slot["reasoning_chars"] = slot.get("reasoning_chars", 0) + len(text)
+        signature = data.get("reasoning_signature")
+        if isinstance(signature, str):
+            slot["reasoning_signature_chars"] = slot.get("reasoning_signature_chars", 0) + len(signature)
+
+    @staticmethod
+    def _output_chars(slot: Any) -> Optional[Dict[str, int]]:
+        """``outputChars`` for a call's cost row, or ``None`` when it streamed
+        nothing measurable or the cost diagnostics are off.
+
+        ``text`` is the answer the call streamed and ``reasoning`` the thinking
+        it streamed. ``reasoningSignature`` is the length of the reasoning
+        block's signature: with summarized thinking the streamed text is a
+        short summary while the signature carries the full thinking, so its
+        length is what tracks the reasoning share of the billed output tokens
+        (see ``REASONING_SIGNATURE_CHARS_PER_TOKEN`` in the compaction policy).
+        What the model wrote to call tools is the census's ``inputChars``.
+        """
+        if not isinstance(slot, dict) or not cost_diagnostics_enabled():
+            return None
+        chars = {
+            "text": slot.get("text_chars", 0),
+            "reasoning": slot.get("reasoning_chars", 0),
+            "reasoningSignature": slot.get("reasoning_signature_chars", 0),
+        }
+        chars = {name: count for name, count in chars.items() if isinstance(count, int) and count > 0}
+        return chars or None
 
     @staticmethod
     def _last_persisted_role(agent: Any) -> Optional[str]:
@@ -2119,6 +2287,8 @@ class StreamCoordinator:
         citations: Optional[List] = None,
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
         meter_usage: bool = True,
         model_retries: int = 0,
         original_message: Optional[str] = None,
@@ -2358,6 +2528,8 @@ class StreamCoordinator:
                             citations=citations,
                             turn_agent_id=turn_agent_id,
                             turn_project_id=turn_project_id,
+                            turn_attachment_plan=turn_attachment_plan,
+                            turn_pasted_chars=turn_pasted_chars,
                             # The breakdown describes the call in flight, so
                             # only a row for that call may carry it.
                             attach_context_breakdown=metered[-1] == in_flight_idx,
@@ -2799,6 +2971,72 @@ class StreamCoordinator:
             )
         return events
 
+    async def _extract_mcp_elicitation_required_events(
+        self,
+        agent: Any,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> List[str]:
+        """Yield one SSE-formatted ``mcp_elicitation_required`` event per form
+        an MCP server is waiting on, persisting each one so the form rehydrates
+        after a refresh (``docs/specs/mcp-elicitation.md`` §4).
+
+        Raised by ``elicitation_middleware`` through
+        ``ExecuteToolContext.interrupt``; Strands stops for it exactly as it
+        does for a hook or tool interrupt, so the ``PausedTurnSnapshot`` on
+        this same ``done`` event covers it. One difference from the other
+        extractors: a call that elicits twice pauses twice, and the first
+        round's interrupt is still in the state, answered. Only an unanswered
+        one is a form to show.
+
+        Persistence is best-effort, as for the other kinds.
+        """
+        from apis.shared.mcp_elicitation.forms import (
+            ELICITATION_EVENT_TYPE,
+            event_payload,
+            event_sse,
+        )
+        from apis.shared.sessions.metadata import add_pending_interrupt
+        from apis.shared.sessions.models import PendingInterrupt
+
+        interrupt_state = getattr(agent, "_interrupt_state", None)
+        if not interrupt_state or not getattr(interrupt_state, "activated", False):
+            return []
+
+        events: List[str] = []
+        for interrupt in interrupt_state.interrupts.values():
+            reason = interrupt.reason or {}
+            if not isinstance(reason, dict) or reason.get("type") != ELICITATION_EVENT_TYPE:
+                continue
+            if interrupt.response is not None:
+                continue
+            if not reason.get("fields"):
+                logger.warning("MCP elicitation interrupt has no fields: id=%s", interrupt.id)
+                continue
+
+            if session_id and user_id:
+                try:
+                    await add_pending_interrupt(
+                        session_id=session_id,
+                        user_id=user_id,
+                        interrupt=PendingInterrupt(
+                            interrupt_id=interrupt.id,
+                            kind="mcp_elicitation",
+                            tool_use_id=reason.get("toolUseId") or None,
+                            tool_name=reason.get("toolName") or None,
+                            elicitation=json.dumps(event_payload(interrupt.id, reason)),
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to persist mcp_elicitation pending_interrupt %s: %s",
+                        interrupt.id, e, exc_info=True,
+                    )
+
+            events.append(event_sse(interrupt.id, reason))
+        return events
+
     async def _extract_client_tool_call_events(
         self,
         agent: Any,
@@ -2974,12 +3212,12 @@ class StreamCoordinator:
                 deadline_at=ref.deadline_at,
                 target_url=ref.target_url,
                 reason=prompt_reason,
-                # Same origin MCP Apps are framed from, and for the same
-                # reasons: its CloudFront function locks `frame-ancestors` to
-                # the SPA and composes `connect-src` from `?csp=`, which is how
-                # the viewer is allowed to open DCV's WebSocket. Empty when the
-                # sandbox origin is not deployed — the SPA then shows the
-                # prompt without a viewer rather than framing nothing.
+                # Only "is a viewer deployed": the mcp-sandbox origin ships
+                # beside the viewer's own distribution, and is empty when it is
+                # not deployed, in which case the SPA shows the prompt without
+                # a viewer. The SPA never frames the viewer from this origin —
+                # MCP Apps run there — and takes the viewer's own origin from
+                # app-api's mint response, so the Runtime carries no new env.
                 sandbox_origin=os.environ.get(
                     "AGENTCORE_MCP_APPS_SANDBOX_ORIGIN", ""
                 ).strip(),
@@ -4040,6 +4278,8 @@ class StreamCoordinator:
         citations: Optional[List],
         turn_agent_id: Optional[str],
         turn_project_id: Optional[str],
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
         attach_context_breakdown: bool = True,
         outcome: Optional[str] = None,
         empty_answer: bool = False,
@@ -4147,6 +4387,10 @@ class StreamCoordinator:
                     include_context_breakdown=attach_context_breakdown and is_last,
                     turn_agent_id=turn_agent_id,  # Which Agent ran this turn (#756)
                     turn_project_id=turn_project_id,
+                    # The turn's attachment plan, on its last row only (a turn counts once there).
+                    turn_attachment_plan=turn_attachment_plan if is_last else None,
+                    # How much of the user's message was pasted, on the same row (a count only).
+                    turn_pasted_chars=turn_pasted_chars if is_last else None,
                     turn_outcome=outcome,
                     empty_answer=empty_answer and is_last,
                     tool_calls=(
@@ -4190,6 +4434,8 @@ class StreamCoordinator:
         citations: Optional[List],
         turn_agent_id: Optional[str],
         turn_project_id: Optional[str],
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
     ) -> None:
         """Meter the model calls a failed turn made before it failed.
 
@@ -4253,6 +4499,8 @@ class StreamCoordinator:
                 citations=citations,
                 turn_agent_id=turn_agent_id,
                 turn_project_id=turn_project_id,
+                turn_attachment_plan=turn_attachment_plan,
+                turn_pasted_chars=turn_pasted_chars,
                 attach_context_breakdown=False,
                 outcome="error",
             )
@@ -4328,6 +4576,8 @@ class StreamCoordinator:
         call_index: Optional[int] = None,
         turn_agent_id: Optional[str] = None,
         turn_project_id: Optional[str] = None,
+        turn_attachment_plan: Optional[Dict[str, Any]] = None,
+        turn_pasted_chars: Optional[int] = None,
         tool_calls: Optional[Dict[str, Dict[str, int]]] = None,
         context_ledger: Optional[Dict[str, Any]] = None,
         turn_duration_ms: Optional[int] = None,
@@ -4585,6 +4835,18 @@ class StreamCoordinator:
                 # writer reads it back to bump PROJECT#{id}/COST#{YYYY-MM}.
                 if turn_project_id:
                     metadata_kwargs["projectId"] = turn_project_id
+                # How each of the turn's attachments was delivered (the planner's
+                # decision: modes, classes, reason codes, token estimates and
+                # upload ids — never a filename). Turn-level, so only the last
+                # row carries it. Written here, after the stream, never before
+                # the first token.
+                if turn_attachment_plan:
+                    metadata_kwargs["attachmentPlan"] = turn_attachment_plan
+                # Characters of the user's message that were pasted, as the composer
+                # counted them (docs/one-pagers/idle-return-context.md). A number,
+                # never text; on the turn's last row, like the attachment plan.
+                if turn_pasted_chars:
+                    metadata_kwargs["pastedChars"] = int(turn_pasted_chars)
 
                 # Content-free tool census for this call (tool name → calls /
                 # errors), another extra field. Read by the admin session
@@ -4593,6 +4855,14 @@ class StreamCoordinator:
                 # no tools or COST_DIAGNOSTICS_ENABLED=false.
                 if tool_calls:
                     metadata_kwargs["toolCalls"] = tool_calls
+
+                # What the call's output was made of: characters of answer
+                # text, of streamed reasoning, and of the reasoning signature.
+                # Lengths counted as the stream passed, never the text. Absent
+                # when the call streamed neither or COST_DIAGNOSTICS_ENABLED=false.
+                output_chars = self._output_chars(accumulated_metadata)
+                if output_chars:
+                    metadata_kwargs["outputChars"] = output_chars
 
                 # Context ledger for this call: the conversation window's
                 # cumulative trim count (a rise between consecutive rows is a
@@ -4638,7 +4908,13 @@ class StreamCoordinator:
                     try:
                         from agents.main_agent.session.document_context import summarize_document_context
 
-                        footprint = summarize_document_context(getattr(strands_agent, "messages", None))
+                        index_of = getattr(turn_session_manager, "document_index", None)
+                        footprint = summarize_document_context(
+                            getattr(strands_agent, "messages", None),
+                            index_of(getattr(getattr(agent, "model_config", None), "model_id", None))
+                            if callable(index_of)
+                            else None,
+                        )
                         if footprint:
                             metadata_kwargs.update(footprint)
                     except Exception as doc_err:  # noqa: BLE001 - never block the cost row

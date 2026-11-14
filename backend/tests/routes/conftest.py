@@ -271,6 +271,7 @@ def _no_live_infrastructure_reads(monkeypatch):
         ("apis.inference_api.chat.system_prompt_resolver.get_session_metadata", None),
         ("apis.shared.files.document_read.session_has_documents", False),
         ("apis.shared.files.document_read.session_has_tabular_files", False),
+        ("apis.shared.files.document_read.session_has_presentation_files", False),
         # The tool-catalog snapshot behind `freshness.get_always_on_tool_ids`.
         # The invocation path resolves the admin-pinned tool set every turn, so
         # it reads the catalog where it previously did not — and the resolver is

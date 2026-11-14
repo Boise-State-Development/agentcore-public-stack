@@ -61,6 +61,15 @@ class CompactionState:
     # model id + agent id of the last turn; a change means the cached prefix
     # is already invalid, so a pending cut can ride the same re-write.
     last_prefix_key: Optional[str] = None
+    # Absolute message index from which the history ahead of a replayed
+    # reasoning block is unchanged since the block was produced: the history
+    # length at the head of the last turn that rewrote the prefix (a cut
+    # applied, an anchor advance, a document offload, a model or agent
+    # switch). Haiku 5.5 / Opus 5.5 bill only those blocks
+    # (``model_config.REASONING_REPLAY_BOUND``), so the cut's calibration
+    # prices the older ones at 0. Estimates only; nothing reads it to change
+    # a message. ``None`` (and legacy rows): nothing rewritten yet.
+    reasoning_live_from: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for DynamoDB storage."""
@@ -78,6 +87,7 @@ class CompactionState:
             "pendingHardCeiling": self.pending_hard_ceiling,
             "pendingSince": self.pending_since,
             "lastPrefixKey": self.last_prefix_key,
+            "reasoningLiveFrom": self.reasoning_live_from,
         }
 
     @classmethod
@@ -109,6 +119,9 @@ class CompactionState:
             ),
             pending_since=data.get("pendingSince"),
             last_prefix_key=data.get("lastPrefixKey"),
+            reasoning_live_from=(
+                int(data["reasoningLiveFrom"]) if data.get("reasoningLiveFrom") is not None else None
+            ),
         )
 
 

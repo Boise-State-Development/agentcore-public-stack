@@ -9,7 +9,10 @@ Pinned here:
 - every response is content-free: no content-bearing path and no identity
   key (session, user, message, tool use) anywhere in the JSON;
 - export round-trips: summing its ``LEDGER#VERSION`` lines gives the versions
-  route's totals for the same range.
+  route's totals for the same range;
+- ``evals`` (eval-harness spec §16 D21) returns ``LEDGER#EVAL`` rows newest
+  first, filtered by model and track, with per-case entries intact and the
+  counts the page's selectors offer taken before the filters.
 """
 
 from __future__ import annotations
@@ -168,6 +171,7 @@ def _app(*, authorize: bool = True, deny: bool = False) -> FastAPI:
 ROUTES = [
     "/costs/ledger/versions", "/costs/ledger/series", "/costs/ledger/tools", "/costs/ledger/agents",
     "/costs/ledger/projects", "/costs/ledger/quality", "/costs/ledger/readout", "/costs/ledger/export",
+    "/costs/ledger/evals",
 ]
 
 
@@ -308,3 +312,112 @@ def test_export_round_trips_the_versions_totals():
     listed = _get("/costs/ledger/versions", **{"from": "2026-10-01", "to": "2026-10-05"})
     assert float(exported_cost) == pytest.approx(sum(v["totals"]["cost"] for v in listed["versions"]))
     assert {r["PK"].split("#")[1] for r in rows} == {"VERSION", "MODEL", "TOOL", "AGENT", "PROJECT", "EVAL", "DEPLOY", "BACKFILL"}
+
+
+# ---------------------------------------------------------------------------
+# /evals (eval-harness spec §16)
+# ---------------------------------------------------------------------------
+
+HAIKU_55 = "us.anthropic.claude-haiku-5-5"
+HAIKU_45 = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+def _eval(started: str, model: str, track: Any, build: str = "bbbb", **extra: Any) -> Dict[str, Any]:
+    row = {
+        "PK": "LEDGER#EVAL", "SK": started, "startedAt": started, "date": started[:10], "runKind": "eval",
+        "appVersion": "1.33.0", "build": build, "modelId": model, "k": Decimal(1), "gateFailed": False,
+        "families": {"tool_selection": {"n": Decimal(9), "base": Decimal(9), "run": Decimal(8), "gained": Decimal(0),
+                                        "lost": Decimal(1), "p": Decimal("1.0"), "gate": "pass", "gating": True}},
+        "cases": {
+            "tool_selection.weather_lookup": {"pass": True, "passes": Decimal(1), "samples": Decimal(1), "base": True},
+            "tool_selection.calendar_lookup": {"pass": False, "passes": Decimal(0), "samples": Decimal(1), "base": True,
+                                               "codes": ["tool_missing"], "names": ["list_events"]},
+        },
+        "costUsd": Decimal("0.0075"), "calls": Decimal(12), "durationS": Decimal("27.2"),
+    }
+    if track:
+        row["track"] = track
+    row.update(extra)
+    return row
+
+
+EVAL_RUNS = [
+    _eval("2026-10-02T09:05:00Z", HAIKU_55, "nightly", build="aaaa"),
+    _eval("2026-10-04T09:05:00Z", HAIKU_55, "nightly"),
+    _eval("2026-10-04T16:00:00Z", HAIKU_45, "release", k=Decimal(3)),
+    _eval("2026-10-05T09:05:00Z", HAIKU_55, "nightly"),
+    # Published before EH-9: no track, no cases.
+    _eval("2026-10-01T12:00:00Z", HAIKU_55, None, build="aaaa"),
+]
+
+
+class EvalStore(FakeStore):
+    def eval_rows(self, start, end):
+        return [r for r in EVAL_RUNS if start <= r["SK"][:10] <= end]
+
+
+def _evals(**params: Any) -> Dict[str, Any]:
+    app = _app()
+    app.dependency_overrides[ledger_routes.get_ledger_store] = EvalStore
+    resp = TestClient(app).get("/costs/ledger/evals", params={"from": "2026-10-01", "to": "2026-10-05", **params})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    _assert_content_free(body)
+    return body
+
+
+def test_evals_returns_every_run_newest_first_with_cases_whole():
+    body = _evals()
+    assert [r["startedAt"] for r in body["runs"]] == [
+        "2026-10-05T09:05:00Z", "2026-10-04T16:00:00Z", "2026-10-04T09:05:00Z",
+        "2026-10-02T09:05:00Z", "2026-10-01T12:00:00Z",
+    ]
+    newest = body["runs"][0]
+    assert newest["cases"]["tool_selection.calendar_lookup"] == {
+        "pass": False, "passes": 0, "samples": 1, "base": True, "codes": ["tool_missing"], "names": ["list_events"],
+    }
+    assert newest["families"]["tool_selection"]["run"] == 8 and newest["k"] == 1
+    assert newest["costUsd"] == pytest.approx(0.0075) and newest["durationS"] == pytest.approx(27.2)
+
+
+def test_evals_counts_models_and_tracks_before_filtering():
+    body = _evals(modelId=HAIKU_55, track="nightly")
+    assert body["models"] == [{"modelId": HAIKU_55, "runs": 4}, {"modelId": HAIKU_45, "runs": 1}]
+    assert body["tracks"] == {"nightly": 3, "release": 1, "untracked": 1}
+
+
+def test_evals_filters_by_model_and_track():
+    nightly = _evals(modelId=HAIKU_55, track="nightly")
+    assert nightly["modelId"] == HAIKU_55 and nightly["track"] == "nightly"
+    assert [r["startedAt"][:10] for r in nightly["runs"]] == ["2026-10-05", "2026-10-04", "2026-10-02"]
+    release = _evals(track="release")
+    assert [r["modelId"] for r in release["runs"]] == [HAIKU_45]
+    # A row from before --track existed is its own choice, never folded into one.
+    untracked = _evals(track="untracked")
+    assert [r["startedAt"] for r in untracked["runs"]] == ["2026-10-01T12:00:00Z"]
+    assert _evals(modelId="us.anthropic.claude-opus-9")["runs"] == []
+
+
+def test_evals_filters_by_date_range():
+    body = _evals(**{"from": "2026-10-04", "to": "2026-10-04"})
+    assert {r["startedAt"][:10] for r in body["runs"]} == {"2026-10-04"}
+
+
+def test_evals_carries_the_releases_tabs_bands():
+    by_build = _evals()
+    assert body_bands(by_build) == [("1.32.0#aaaa", "2026-10-01", "2026-10-03"), ("1.33.0#bbbb", "2026-10-03", "2026-10-05")]
+    by_version = _evals(unit="version")
+    assert body_bands(by_version) == [("1.32.0", "2026-10-01", "2026-10-03"), ("1.33.0", "2026-10-03", "2026-10-05")]
+
+
+def body_bands(body: Dict[str, Any]) -> List[tuple]:
+    return [(b["key"], b["from"], b["to"]) for b in body["bands"]]
+
+
+def test_evals_rejects_a_bad_filter():
+    app = _app()
+    app.dependency_overrides[ledger_routes.get_ledger_store] = EvalStore
+    client = TestClient(app)
+    assert client.get("/costs/ledger/evals", params={"track": "weekly"}).status_code == 422
+    assert client.get("/costs/ledger/evals", params={"modelId": "haiku; drop"}).status_code == 422
+    assert client.get("/costs/ledger/evals", params={"from": "2026-10-05", "to": "2026-10-01"}).status_code == 400

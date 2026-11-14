@@ -175,7 +175,20 @@ class TestScorePublish:
         assert (row["PK"], row["SK"]) == ("LEDGER#EVAL", "2026-11-07T04:00:00.000001Z")
         assert (row["build"], row["buildSource"]) == (self.RUNTIME, "cost_rows")
         assert row["families"]["tool_selection"]["lost"] == 3 and row["gateFailed"] is True
+        assert row["track"] == "manual"
+        assert row["cases"]["tool_selection.a"] == {
+            "pass": False, "passes": 0, "samples": 3, "base": True,
+            "codes": ["tool_missing"], "names": ["calculator"],
+        }
+        assert row["cases"]["tool_selection.d"] == {"pass": True, "passes": 3, "samples": 3, "base": True}
         assert "ledger: published LEDGER#EVAL" in capsys.readouterr().out
+
+    def test_track_names_the_pass(self, tmp_path, golden, monkeypatch, published):
+        flags, run2 = self._runs(tmp_path, golden)
+        eval_harness.main(flags + ["score", "--out", str(run2), "--publish", "--track", "nightly"])
+        assert published[0]["track"] == "nightly"
+        with pytest.raises(SystemExit):
+            eval_harness.main(flags + ["score", "--out", str(run2), "--publish", "--track", "hourly"])
 
     def test_without_cost_rows_it_falls_back_to_the_runtime_image_tag_never_app_apis_build(
         self, tmp_path, golden, monkeypatch, published
@@ -416,3 +429,271 @@ class TestOrphanSweep:
         assert "swept 1 upload(s) and 1 session(s)" in capsys.readouterr().out
         assert s3.list_objects_v2(Bucket="files").get("Contents", []) == []
         assert ended == ["eval-old"]
+
+
+# --------------------------------------------------------------------------- attachment_delivery (§8)
+
+
+def test_presign_uploads_need_a_cognito_session():
+    base = ["run", "--out", "x", "--model-id", MODEL, "--prefix", "dev-example"]
+    assert eval_harness.parse_args(base + ["--user-id", "u"]).upload_via == "direct"
+    with pytest.raises(SystemExit):
+        eval_harness.parse_args(base + ["--user-id", "u", "--upload-via", "presign"])
+    args = eval_harness.parse_args(base + ["--auth", "cognito", "--base-url", "https://dev.example/api",
+                                           "--upload-via", "presign"])
+    assert args.upload_via == "presign"
+
+
+def test_the_estimate_prices_sized_attachments():
+    from apis.shared.evals.cases import load_cases
+
+    cases = {c.id: c for c in load_cases(eval_harness.CASES_DIR, families=["attachment_delivery"])}
+    _, small, _ = eval_harness.estimate([(cases["attachment_delivery.lookup_md_5k"], 0)], MODEL)
+    _, large, _ = eval_harness.estimate([(cases["attachment_delivery.lookup_md_300k"], 0)], MODEL)
+    # ~300k tokens written to the cache at 1.25x Haiku 4.5's $1.10.
+    assert large > 0.4 > small
+
+
+def test_a_run_with_no_family_leaves_out_the_opt_in_family(tmp_path, capsys):
+    from apis.shared.evals.cases import DEFAULT_FAMILIES, load_cases
+
+    default = len(load_cases(eval_harness.CASES_DIR, families=list(DEFAULT_FAMILIES)))
+    delivery = len(load_cases(eval_harness.CASES_DIR, families=["attachment_delivery"]))
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+    ])
+    assert code == 0
+    every = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery",
+    ])
+    assert every == 0
+    first, second = capsys.readouterr().out.split("estimate only", 1)
+    assert f"{default} cases × k=3" in first
+    # One run, one ceiling: the default run leaves out the 200k and documents-excluded cases.
+    others = sum(1 for c in load_cases(eval_harness.CASES_DIR, families=["attachment_delivery"])
+                 if c.run.ceiling != "default")
+    assert f"skipping {others} attachment_delivery case(s) of other ceilings" in second
+    assert f"{delivery - others} cases × k=3" in second
+
+
+def test_a_non_default_ceiling_needs_a_local_stack(tmp_path, capsys):
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery", "--ceiling", "200k",
+    ])
+    assert code == 2
+    assert "needs a local stack" in capsys.readouterr().err
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery", "--ceiling", "200k", "--invocations-url", "http://localhost:8011",
+    ])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS=200000" in out and "6 cases × k=3" in out
+
+
+def _write_delivery_run(out: Path):
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "meta.json").write_text(json.dumps({"model_id": MODEL, "k": 1, "startedAt": "t"}), encoding="utf-8")
+    (out / "results.jsonl").write_text(json.dumps({
+        "case_id": "attachment_delivery.lookup_md_5k", "family": "attachment_delivery", "sample": 0,
+        "model_id": MODEL, "passed": True, "failures": [], "final_message": "WP", "tool_calls": [],
+        "session_id": "eval-x", "timing": [{"firstTokenMs": 900, "turnDurationMs": 2100}],
+    }) + "\n", encoding="utf-8")
+
+
+def test_readout_prints_the_per_case_table_and_writes_json(tmp_path, capsys):
+    run = tmp_path / "run"
+    _write_delivery_run(run)
+    report = tmp_path / "readout.json"
+    assert eval_harness.main(["readout", "--out", str(run), "--no-cost-rows", "--json", str(report)]) == 0
+    out = capsys.readouterr().out
+    assert "| lookup_md_5k | — | — | 1/1 |" in out and "0.9s" in out
+    assert json.loads(report.read_text())["cases"][0]["firstTokenMs"] == 900
+
+
+def test_baseline_family_splices_into_the_existing_file(tmp_path, golden, capsys):
+    flags, baselines = golden
+    run1 = tmp_path / "run1"
+    _write_run(run1)
+    assert eval_harness.main(flags + ["baseline", "--out", str(run1)]) == 0
+    path = baselines / eval_harness.baseline_filename(MODEL)
+    before = json.loads(path.read_text())
+
+    run2 = tmp_path / "run2"
+    _write_run(run2, failing="a")
+    assert eval_harness.main(flags + ["baseline", "--out", str(run2), "--family", "tool_selection"]) == 0
+    after = json.loads(path.read_text())
+    assert before["cases"]["tool_selection.a"]["passed"] and not after["cases"]["tool_selection.a"]["passed"]
+    assert "tool_selection" in after["familyPromotions"]
+
+
+def test_match_narrows_the_run_to_matching_case_ids(tmp_path, capsys):
+    code = eval_harness.main([
+        "run", "--out", str(tmp_path / "r"), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+        "--family", "attachment_delivery", "--match", r"ceiling_pdf_(30|80)k_.*_default_",
+    ])
+    assert code == 0
+    # native and on_demand, two sizes, two paces, at the default ceiling.
+    assert "8 cases × k=3" in capsys.readouterr().out
+
+
+def test_baseline_match_promotes_the_subset_a_run_covered(tmp_path, golden, capsys):
+    """A family that grew since its first baseline can be promoted for the cases a run covered."""
+    flags, baselines = golden
+    run = tmp_path / "run"
+    _write_run(run)
+    # Drop every sample of cases g and h: without --match the run is partial.
+    rows = [r for r in (run / "results.jsonl").read_text().splitlines()
+            if not json.loads(r)["case_id"].endswith((".g", ".h"))]
+    (run / "results.jsonl").write_text("\n".join(rows) + "\n")
+    assert eval_harness.main(flags + ["baseline", "--out", str(run)]) == 2
+    assert eval_harness.main(flags + ["baseline", "--out", str(run), "--match", r"\.[a-f]$"]) == 0
+    written = json.loads(next(baselines.glob("*.json")).read_text())
+    assert sorted(written["cases"]) == [f"tool_selection.{c}" for c in "abcdef"]
+
+
+# --------------------------------------------------------------------------- efficiency (advisory)
+
+
+def _write_measured_run(out: Path, *, output_tokens: int, duration_ms: int, failing: str = ""):
+    """A complete k=3 run whose rows carry usage, timing and a tool call."""
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "meta.json").write_text(json.dumps({"model_id": MODEL, "k": 3, "startedAt": "t", "user_id": "u"}),
+                                   encoding="utf-8")
+    calls = {}
+    with (out / "results.jsonl").open("w", encoding="utf-8") as fh:
+        for cid in "abcdefgh":
+            for s in range(3):
+                passed = cid not in failing
+                session_id = f"eval-{cid}{s}{output_tokens}"
+                calls[session_id] = {"modelCalls": 2.0, "outputTokens": float(output_tokens), "inputTokens": 4000.0}
+                fh.write(json.dumps({
+                    "case_id": f"tool_selection.{cid}", "family": "tool_selection", "sample": s,
+                    "session_id": session_id,
+                    "model_id": MODEL, "passed": passed, "failures": [] if passed else ["did not call calculator"],
+                    "final_message": "ok", "tool_calls": [],
+                    "usage": {"inputTokens": 1, "outputTokens": 1},
+                    "timing": [{"firstTokenMs": 800, "turnDurationMs": duration_ms}],
+                    "turns": [{"tool_trace": [{"name": "calculator"}]}],
+                }) + "\n")
+    (out / "calls.json").write_text(json.dumps(calls), encoding="utf-8")
+
+
+def test_a_baseline_records_what_each_case_cost(tmp_path, golden):
+    flags, baselines = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000)
+    assert eval_harness.main(flags + ["baseline", "--out", str(run)]) == 0
+
+    case = json.loads((baselines / eval_harness.baseline_filename(MODEL)).read_text())["cases"]["tool_selection.a"]
+    assert case["efficiency"] == {
+        "modelCalls": 2.0, "outputTokens": 200.0, "inputTokens": 4000.0,
+        "toolCalls": 1.0, "durationMs": 3000.0, "firstTokenMs": 800.0,
+    }
+
+
+def test_a_slower_larger_run_is_reported_and_never_fails_the_gate(tmp_path, golden, capsys):
+    flags, _ = golden
+    base = tmp_path / "base"
+    _write_measured_run(base, output_tokens=200, duration_ms=3000)
+    assert eval_harness.main(flags + ["baseline", "--out", str(base)]) == 0
+    capsys.readouterr()
+
+    slow = tmp_path / "slow"
+    _write_measured_run(slow, output_tokens=400, duration_ms=6000)
+    report = tmp_path / "report.json"
+    assert eval_harness.main(flags + ["score", "--out", str(slow), "--json", str(report)]) == 0
+
+    out = capsys.readouterr().out
+    assert "GATE: pass" in out and "Efficiency (advisory" in out
+    assert "moved: tool_selection outputTokens +100%, tool_selection durationMs +100%" in out
+    efficiency = json.loads(report.read_text())["efficiency"]["tool_selection"]
+    assert efficiency["vsBaseline"]["outputTokens"] == {"n": 8, "base": 1600.0, "run": 3200.0}
+    assert efficiency["run"]["durationMs"] == {"n": 8, "sum": 48000.0}
+
+
+def test_a_baseline_from_before_efficiency_scores_as_before(tmp_path, golden, capsys):
+    flags, _ = golden
+    old = tmp_path / "old"
+    _write_run(old)  # rows with no usage or timing, as older runs wrote them
+    assert eval_harness.main(flags + ["baseline", "--out", str(old)]) == 0
+    capsys.readouterr()
+
+    new = tmp_path / "new"
+    _write_measured_run(new, output_tokens=200, duration_ms=3000)
+    assert eval_harness.main(flags + ["score", "--out", str(new)]) == 0
+    out = capsys.readouterr().out
+    assert "no baseline efficiency" in out and "moved:" not in out
+
+
+# --------------------------------------------------------------------------- publish
+
+
+def test_publish_refuses_an_incomplete_run(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000)
+    lines = (run / "results.jsonl").read_text().splitlines()
+    (run / "results.jsonl").write_text("\n".join(lines[:-1]) + "\n")
+    out = tmp_path / "public.json"
+    assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out), "--no-cost-rows"]) == 2
+    assert "fewer than k=3" in capsys.readouterr().err and not out.exists()
+
+
+def test_publish_refuses_samples_without_a_metered_cost(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000)  # calls.json has no costUsd
+    out = tmp_path / "public.json"
+    assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out), "--no-cost-rows"]) == 2
+    assert "no metered cost" in capsys.readouterr().err and not out.exists()
+
+
+def test_publish_writes_the_document_and_the_headline(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000, failing="a")
+    calls = json.loads((run / "calls.json").read_text())
+    (run / "calls.json").write_text(json.dumps({s: {**c, "costUsd": 0.002} for s, c in calls.items()}))
+    out, headline = tmp_path / "public.json", tmp_path / "headline.md"
+    assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out),
+                                      "--markdown", str(headline), "--no-cost-rows"]) == 0
+    document = json.loads(out.read_text())
+    (family,) = document["runs"][0]["families"]
+    assert family["failing"] == ["tool_selection.a"] and family["passing"] == 7
+    assert "7 of 8 (k=3)" in headline.read_text()
+    assert "eval-" not in out.read_text()
+
+
+# --------------------------------------------------------------------------- rescore
+
+
+def test_rescore_reapplies_the_current_checks_without_touching_answers(tmp_path, golden, capsys):
+    """Stored outcomes that disagree with the cases' checks are corrected both ways; answers stay."""
+    flags, _ = golden
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "meta.json").write_text(json.dumps({"model_id": MODEL, "k": 1, "startedAt": "t"}), encoding="utf-8")
+    rows = [
+        # Called the calculator, but stored as a failure: the check now passes it.
+        {"case_id": "tool_selection.a", "family": "tool_selection", "sample": 0, "passed": False,
+         "failures": ["stale"], "final_message": "42", "tool_calls": [{"name": "calculator"}]},
+        # Never called it, but stored as a pass: the check now fails it.
+        {"case_id": "tool_selection.b", "family": "tool_selection", "sample": 0, "passed": True,
+         "failures": [], "final_message": "42", "tool_calls": []},
+    ]
+    original = "".join(json.dumps(r) + "\n" for r in rows)
+    (run / "results.jsonl").write_text(original, encoding="utf-8")
+
+    assert eval_harness.main(flags + ["rescore", "--out", str(run)]) == 0
+    after = {r["case_id"]: r for r in map(json.loads, (run / "results.jsonl").read_text().splitlines())}
+    assert after["tool_selection.a"]["passed"] is True and after["tool_selection.a"]["failures"] == []
+    assert after["tool_selection.b"]["passed"] is False
+    assert after["tool_selection.b"]["failures"] == ["did not call calculator"]
+    assert all(r["final_message"] == "42" for r in after.values())
+    assert (run / "results.jsonl.bak").read_text() == original
+    assert "rescoredAt" in json.loads((run / "meta.json").read_text())
+    out = capsys.readouterr().out
+    assert "2 sample(s) changed" in out and "tool_selection.a, tool_selection.b" in out

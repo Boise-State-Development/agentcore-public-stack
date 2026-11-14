@@ -44,6 +44,12 @@ Design notes
   ``UnmeteredModelCall`` is emitted so the gap is visible.
 * Identity is captured by closure, never read from ``invocation_state`` or from
   model input, exactly as ``document_read`` and ``verify_sources`` do.
+* **The model rarely has an upload id to give.** A small attachment reaches it
+  as an inline block named by filename, so it sends the filename, or the
+  skill's name where the set inside it is called something else. Both are
+  resolved here (``apis.shared.files.session_documents``, shared with
+  ``verify_sources``, and ``resolve_field_set``), never guessed between: an
+  ambiguous name is answered with the real choices.
 * **Content-free record per run** in ``AgentCoreStack/Compaction``
   (``DocumentExtract``, ``DocumentExtractFields``; properties ``format``,
   ``fieldCount``, ``schemaEnforced`` and the per-state counts), beside the
@@ -94,10 +100,19 @@ from apis.shared.extraction.rows import (
     model_facing_result,
     state_counts,
 )
-from apis.shared.files.document_read import DocumentReadError, document_provenance_units
+from apis.shared.files.document_read import (
+    DocumentReadError,
+    document_provenance_units,
+    list_session_documents,
+)
+from apis.shared.files.session_documents import (
+    document_choices,
+    match_session_document,
+)
 from apis.shared.files.source_provenance import document_units
 from apis.shared.files.workspace import (
     WorkspaceError,
+    WorkspaceFileNotFoundError,
     WorkspaceStorageNotConfiguredError,
 )
 
@@ -399,7 +414,7 @@ def _normalize_upload_ids(upload_ids: Any) -> List[str]:
     return list(seen)
 
 
-def _outcome_note(outcomes: List[Any]) -> str:
+def _outcome_note(outcomes: List[Any], choices: str = "") -> str:
     """One line per failed document, for the model to pass on.
 
     A set where three documents failed silently is a judgement made on eleven
@@ -412,10 +427,16 @@ def _outcome_note(outcomes: List[Any]) -> str:
         return ""
     lines = "; ".join(f"{o.filename or o.upload_id}: {o.error}" for o in failed[:10])
     more = f" (and {len(failed) - 10} more)" if len(failed) > 10 else ""
-    return (
+    note = (
         f"{len(failed)} of {len(outcomes)} documents could not be extracted — "
         f"{lines}{more}. Say so; do not present the comparison as covering them."
     )
+    if choices:
+        # Said once for the call, not once per failed document: the model
+        # needs the listing to correct its next call, and N copies of it would
+        # be N times the tokens for one fact.
+        note += f" This conversation's documents are: {choices}."
+    return note
 
 
 def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]):
@@ -468,9 +489,8 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
         useful answer — say so plainly rather than guessing.
 
         Args:
-            upload_ids: The documents' ids, from the attachment note, the
-                document listing, or earlier document_read calls. Pass them all
-                at once.
+            upload_ids: The documents to extract from, by id or by filename
+                as attached. Pass them all at once.
             field_set: The name of the field set to run, as named in the skill's
                 instructions.
             pages: Optional. Narrow every document to these pages, e.g. "1-4".
@@ -490,11 +510,6 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
             return _error(f"❌ field_set is required. Available field sets: {listing}")
 
         ids = _normalize_upload_ids(upload_ids)
-        if not ids:
-            return _error(
-                "❌ upload_ids is required: pass the id of each document to "
-                "extract from, as a list."
-            )
         if len(ids) > MAX_DOCUMENTS:
             return _error(
                 f"❌ {len(ids)} documents in one call exceeds the limit of "
@@ -517,6 +532,50 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
                 "maintains the skill."
             )
 
+        # Which documents the model meant. It often has no upload id to give:
+        # a small attachment reaches it as an inline block named by filename,
+        # so a filename (or nothing, in a one-document conversation) is the
+        # natural thing to send. One listing query per call, after the field
+        # set resolved and long after the first token, against a call whose
+        # model request takes seconds.
+        documents: Optional[List[Dict[str, Any]]] = None
+        try:
+            documents = (await list_session_documents(user_id, session_id)).get(
+                "documents"
+            ) or []
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - the listing is a convenience
+            # Without it every id passes through as sent, which is exactly the
+            # behaviour before the listing existed.
+            logger.warning("document_extract: session listing failed", exc_info=True)
+
+        if not ids:
+            if documents is not None and len(documents) == 1:
+                ids = [documents[0]["upload_id"]]
+            elif documents:
+                return _error(
+                    "❌ Say which documents to extract from: pass their ids or "
+                    f"filenames in upload_ids. This conversation's documents are: "
+                    f"{document_choices(documents)}."
+                )
+            else:
+                return _error(
+                    "❌ This conversation has no readable document to extract from."
+                )
+        elif documents is not None:
+            only_request = len(ids) == 1
+            matched: Dict[str, None] = {}
+            for requested in ids:
+                # An id the listing cannot place passes through unchanged: it
+                # may still be a readable workspace file, and if it is not the
+                # read fails and the note below names the real documents.
+                upload_id = match_session_document(
+                    documents, requested, only_request=only_request
+                ) or requested
+                matched.setdefault(upload_id, None)
+            ids = list(matched)
+
         model_id = document_extract_model_id()
 
         async def extract_one(upload_id: str, _label: str) -> DocumentOutcome:
@@ -527,6 +586,12 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
                 )
             except WorkspaceStorageNotConfiguredError:
                 return DocumentOutcome(upload_id, upload_id, error=_NO_STORAGE_MESSAGE)
+            except WorkspaceFileNotFoundError:
+                return DocumentOutcome(
+                    upload_id,
+                    upload_id,
+                    error="no document with that id or filename in this conversation",
+                )
             except (WorkspaceError, DocumentReadError) as exc:
                 return DocumentOutcome(upload_id, upload_id, error=str(exc))
             except asyncio.CancelledError:
@@ -583,8 +648,13 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
         )
 
         succeeded = [o for o in outcomes if o.ok]
+        unplaced = any(
+            not o.ok and o.upload_id not in {d["upload_id"] for d in documents or []}
+            for o in outcomes
+        )
+        choices = document_choices(documents) if unplaced and documents else ""
         if not succeeded:
-            note = _outcome_note(outcomes)
+            note = _outcome_note(outcomes, choices)
             return _error(f"❌ No document could be extracted. {note}")
 
         # Provenance is verified against the WHOLE document, never the narrowed
@@ -728,7 +798,7 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
                 "you will miss the deadline and personnel collisions that are the "
                 "point of reading them together."
             )
-        failures = _outcome_note(outcomes)
+        failures = _outcome_note(outcomes, choices)
         if failures:
             note += " " + failures
         summary["note"] = note

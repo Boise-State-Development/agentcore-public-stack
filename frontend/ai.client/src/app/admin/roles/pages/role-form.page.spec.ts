@@ -9,7 +9,6 @@
  */
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
-import { provideMarkdown } from 'ngx-markdown';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RoleFormPage } from './role-form.page';
@@ -85,7 +84,6 @@ describe('RoleFormPage — grant pickers', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([{ path: 'admin/roles', children: [] }]),
-        provideMarkdown(),
         { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap({ id }) } } },
         { provide: AppRolesService, useValue: service },
         {
@@ -277,7 +275,6 @@ describe('RoleFormPage — system instruction', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([{ path: 'admin/roles', children: [] }]),
-        provideMarkdown(),
         { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap({ id }) } } },
         { provide: AppRolesService, useValue: service },
         { provide: AdminToolService, useValue: { toolsResource: { isLoading: () => false }, getTools: () => [] } },
@@ -332,12 +329,6 @@ describe('RoleFormPage — system instruction', () => {
     expect(fixture.componentInstance.instructionOverLimit()).toBe(true);
     expect(submitButton().disabled).toBe(true);
     expect(el.querySelector('#system-instruction-count')!.textContent).toContain('shorten it to save');
-  });
-
-  it('previews the text as markdown', async () => {
-    await mount('new');
-    type('**Be brief.**');
-    expect(fixture.componentInstance.instructionPreview()).toBe('**Be brief.**');
   });
 
   it('sends the trimmed instruction on update, and null to clear it', async () => {

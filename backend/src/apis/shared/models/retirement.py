@@ -48,6 +48,14 @@ class EffectiveModel:
     retired: Optional[ManagedModel] = None
     """Catalog row of the retired model that was redirected or denied."""
     denied: bool = False
+    catalog_read: bool = True
+    """``False`` when the catalog could not be read, so ``record`` is unknown
+    rather than absent. Model access fails open on it (``grants_model_access``)."""
+
+    @property
+    def uncataloged(self) -> bool:
+        """The catalog was read and has no row for ``model_id``: it would price to ``None``."""
+        return self.catalog_read and self.record is None and not self.denied
 
     @property
     def redirected(self) -> bool:
@@ -80,9 +88,9 @@ def resolve_from_catalog(model_id: str, catalog: Iterable[ManagedModel]) -> Effe
         seen.add(successor_id)
         successor = by_id.get(successor_id)
         if successor is None or successor.status != ModelStatus.RETIRED:
-            # A successor with no row still runs: the write path validates it
-            # exists, so a missing row is a later deletion — which behaves like
-            # any other id with no row, rather than failing a turn here.
+            # A successor with no row is resolved, not failed here: the write
+            # path validates it exists, so a missing row is a later deletion —
+            # which the access check then refuses like any other id with no row.
             return EffectiveModel(
                 requested_id=model_id, model_id=successor_id, record=successor, retired=record
             )
@@ -106,7 +114,7 @@ async def resolve_effective_model(model_id: Optional[str]) -> Optional[Effective
         catalog = await list_all_managed_models()
     except Exception:
         logger.warning("Model catalog unavailable; skipping retirement resolution", exc_info=True)
-        return EffectiveModel(requested_id=model_id, model_id=model_id)
+        return EffectiveModel(requested_id=model_id, model_id=model_id, catalog_read=False)
     effective = resolve_from_catalog(model_id, catalog)
     if effective.redirected:
         logger.info("Redirecting retired model to its successor")

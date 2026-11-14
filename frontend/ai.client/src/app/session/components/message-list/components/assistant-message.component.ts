@@ -2,10 +2,19 @@ import { ChangeDetectionStrategy, Component, computed, inject, input } from '@an
 import { Message, ContentBlock, ToolUseData } from '../../../services/models/message.model';
 import { ToolUseComponent } from './tool-use';
 import { ToolRailComponent } from './tool-rail';
-import { ToolCallGroup, ToolCallDisplay, ToolCallBatch } from './tool-rail/tool-rail.model';
+import {
+  ToolCallGroup,
+  ToolCallDisplay,
+  ToolCallBatch,
+  ToolRailStep,
+} from './tool-rail/tool-rail.model';
 import { SourceProvenanceComponent } from './source-provenance/source-provenance.component';
+import { DocumentExtractionComponent } from './document-extraction/document-extraction.component';
 import { FEATURES } from '../../../../services/features';
-import type { SourceProvenanceClaim } from '../../../../shared/utils/stream-parser';
+import type {
+  DocumentExtractionRun,
+  SourceProvenanceClaim,
+} from '../../../../shared/utils/stream-parser';
 import { ReasoningContentComponent } from './reasoning-content';
 import { StreamingTextComponent } from './streaming-text.component';
 import { InlineVisualComponent } from './inline-visual';
@@ -125,12 +134,15 @@ interface DisplayBlock {
     | 'reasoningContent'
     | 'oauth_required'
     | 'browser_page'
-    | 'source_provenance';
+    | 'source_provenance'
+    | 'document_extraction';
   data?: ContentBlock;
   // For browser page cards: where a rail's browse_web calls left the browser.
   browserPage?: BrowserPageSummary;
   // For source-provenance panels: one `verify_sources` call's verdicts.
   provenance?: readonly SourceProvenanceClaim[];
+  // For extraction tables: one `document_extract` call's runs, one per document.
+  extractions?: readonly DocumentExtractionRun[];
   // For tool groups (inline rail)
   group?: ToolCallGroup;
   // For promoted visuals
@@ -169,6 +181,7 @@ interface DisplayBlock {
     McpAppFrameComponent,
     BrowserPageCardComponent,
     SourceProvenanceComponent,
+    DocumentExtractionComponent,
   ],
   template: `
     <div class="block-container">
@@ -259,6 +272,14 @@ interface DisplayBlock {
                 class="flex w-full justify-start"
                 [claims]="block.provenance!"
               />
+            </div>
+          }
+          @case ('document_extraction') {
+            <div
+              class="message-block"
+              [style.animation-delay]="$index * 0.1 + 's'"
+            >
+              <app-document-extraction class="w-full" [runs]="block.extractions!" />
             </div>
           }
           @case ('browser_page') {
@@ -375,11 +396,14 @@ export class AssistantMessageComponent {
 
   /**
    * Transforms content blocks into display blocks.
-   * - Consecutive non-promoted tool-use blocks are grouped into a single ToolCallGroup
-   *   rendered as an inline rail via app-tool-rail.
+   * - Consecutive non-promoted tool-use blocks, and the reasoning between and
+   *   around them, are grouped into a single ToolCallGroup rendered as an
+   *   inline rail via app-tool-rail.
+   * - Reasoning with no tool call beside it (think, then answer) stays a
+   *   standalone reasoning block.
    * - Tool-use blocks with promoted visuals (ui_display: "inline") are kept separate
    *   as minimized tool + promoted visual pairs.
-   * - Text and reasoning blocks flush any accumulated tool group and stand alone.
+   * - Text flushes any accumulated group and stands alone.
    */
   displayBlocks = computed<DisplayBlock[]>(() => {
     // 🔧 MOCK: return fake tool group for visual dev
@@ -405,7 +429,17 @@ export class AssistantMessageComponent {
       .filter((req) => req.messageId && messageIds.has(req.messageId));
     const hasPendingInterruptHere = pendingInterruptsHere.length > 0;
     const result: DisplayBlock[] = [];
-    let pendingToolCalls: ToolCallDisplay[] = [];
+    /**
+     * The work between two things the user reads: tool calls and the
+     * reasoning around them, in order. Reasoning no longer breaks a rail —
+     * that turned a think-before-every-call turn into a column of alternating
+     * one-line rows — so it waits here with the calls until text, a promoted
+     * visual or the end of the run decides what the segment becomes.
+     */
+    type SegmentEntry =
+      | { kind: 'call'; call: ToolCallDisplay }
+      | { kind: 'thinking'; key: string; block: ContentBlock; streaming: boolean };
+    let segment: SegmentEntry[] = [];
     let lastBrowserPage: BrowserPageSummary | null = null;
 
     // Read once per recomputation, not per call: these are signal reads, and
@@ -413,6 +447,7 @@ export class AssistantMessageComponent {
     const insights = this.toolInsight;
     // Compile-time switch: while off, no panel is built and nothing is read.
     const provenanceEnabled = this.features.sourceProvenance;
+    const extractionEnabled = this.features.documentExtract;
 
     /**
      * Segment a rail's calls by the backend batch that produced them.
@@ -448,16 +483,66 @@ export class AssistantMessageComponent {
     };
 
     const flushToolGroup = () => {
-      if (pendingToolCalls.length === 0) return;
-      const calls = [...pendingToolCalls];
-      pendingToolCalls = [];
+      if (segment.length === 0) return;
+      const entries = segment;
+      segment = [];
+
+      const calls = entries.flatMap((e) => (e.kind === 'call' ? [e.call] : []));
+
+      // Reasoning with no tool call beside it is the model thinking before
+      // it answers: nothing to collapse it into, so it keeps its own block.
+      if (calls.length === 0) {
+        for (const e of entries) {
+          if (e.kind === 'thinking') {
+            result.push({ type: 'reasoningContent', data: e.block, streaming: e.streaming });
+          }
+        }
+        return;
+      }
+
+      // Walk the segment in order: each run of calls becomes its batches,
+      // each reasoning span a thinking step between them.
+      const steps: ToolRailStep[] = [];
+      let run: ToolCallDisplay[] = [];
+      const flushRun = () => {
+        for (const batch of segmentIntoBatches(run)) {
+          steps.push({ kind: 'batch', key: batch.key, batch });
+        }
+        run = [];
+      };
+      for (const e of entries) {
+        if (e.kind === 'call') {
+          run.push(e.call);
+          continue;
+        }
+        flushRun();
+        const data = e.block.reasoningContent;
+        const durationMs = e.block.reasoningDurationMs;
+        steps.push({
+          kind: 'thinking',
+          key: e.key,
+          thinking: {
+            key: e.key,
+            text: data?.reasoningText?.text ?? '',
+            durationMs,
+            redacted: !!data?.redactedContent,
+            active: e.streaming && typeof durationMs !== 'number',
+          },
+        });
+      }
+      flushRun();
+
+      const hasThinking = steps.some((st) => st.kind === 'thinking');
       result.push({
         type: 'tool_group',
         group: {
           calls,
           // `groupSummary` is deliberately left unset: the rail derives its
           // header from these batches, so the two can never disagree.
-          batches: segmentIntoBatches(calls),
+          batches: steps.flatMap((st) => (st.kind === 'batch' ? [st.batch] : [])),
+          // Only when reasoning was folded in: a rail of calls alone reads
+          // its steps straight from `batches`, exactly as before.
+          ...(hasThinking ? { steps } : {}),
         },
       });
       // The page a rail's browse_web calls reached gets its own card under
@@ -483,19 +568,32 @@ export class AssistantMessageComponent {
           }
         }
       }
+      // Extraction tables follow the same placement, for the same reason:
+      // the model is told the table is already on screen, so it must not be
+      // folded inside a collapsed rail. One table per call; a call over N
+      // documents is one table with N rows.
+      if (extractionEnabled) {
+        for (const call of calls) {
+          const runs = insights.extractionsFor(sessionId, call.id);
+          if (runs?.length) {
+            result.push({ type: 'document_extraction', extractions: runs });
+          }
+        }
+      }
     };
 
     // Flatten the run. A tool group deliberately spans message boundaries:
-    // only text and reasoning break it, because those are the points where
-    // the agent actually said something to the user.
+    // only text breaks it, because that is where the agent actually said
+    // something to the user. Reasoning is the agent working, like a tool call.
     const blocks = messages.flatMap((message) =>
-      message.content.map((block) => ({
+      message.content.map((block, index) => ({
         block,
+        key: `${message.id}:${index}`,
         streaming: message.id === streamingId,
       })),
     );
 
-    for (const { block, streaming } of blocks) {
+    for (const { block, key, streaming } of blocks) {
       // Handle reasoning content. Only render a "Thinking" block when it has
       // something to show -- reasoning text or a redacted notice. A block with
       // an empty `reasoningText.text` and no `redactedContent` (e.g. a
@@ -506,8 +604,7 @@ export class AssistantMessageComponent {
       // it. This mirrors the live stream parser's `reasoningText` guard, which
       // the history-rehydration path bypasses.
       if (block.type === 'reasoningContent' && this.hasRenderableReasoning(block)) {
-        flushToolGroup();
-        result.push({ type: 'reasoningContent', data: block, streaming });
+        segment.push({ kind: 'thinking', key, block, streaming });
         continue;
       }
 
@@ -598,14 +695,17 @@ export class AssistantMessageComponent {
           // the event loop, not inferred from stream arrival times), so it is
           // absent on a reload — deliberately, see ToolInsightService.
           const insight = insights.get(sessionId, toolUse.toolUseId);
-          pendingToolCalls.push({
-            id: toolUse.toolUseId,
-            toolName: toolUse.name,
-            input: toolUse.input || {},
-            result: toolUse.result,
-            status,
-            streamingContent: toolUse.streamingContent,
-            durationMs: insight?.durationMs,
+          segment.push({
+            kind: 'call',
+            call: {
+              id: toolUse.toolUseId,
+              toolName: toolUse.name,
+              input: toolUse.input || {},
+              result: toolUse.result,
+              status,
+              streamingContent: toolUse.streamingContent,
+              durationMs: insight?.durationMs,
+            },
           });
         }
         continue;

@@ -147,13 +147,14 @@ describe('MessageListComponent — handoffs', () => {
       expect(requestPermission).toHaveBeenCalledTimes(1);
     });
 
-    it('a finished row makes no offer', () => {
+    it('a finished row makes no notification offer; its one button is Bring back result', () => {
       Object.assign(TestBed.inject(HandoffNotificationService), { canOffer: () => true });
       TestBed.inject(HandoffStateService).upsertRow(handoff({ status: 'done' }));
 
       render([message('src', 0), message('src', 1)], 'src');
 
-      expect(fixture.nativeElement.querySelector('app-handoff-row button')).toBeNull();
+      const buttons = Array.from(fixture.nativeElement.querySelectorAll('app-handoff-row button') as NodeListOf<HTMLElement>);
+      expect(buttons.map((b) => b.textContent?.trim())).toEqual(['Bring back result']);
     });
 
     it("renders a row whose message isn't loaded at the tail rather than dropping it", () => {

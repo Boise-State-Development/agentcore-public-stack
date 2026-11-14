@@ -72,6 +72,10 @@ _ALLOWED_IMPORT_ROOTS: frozenset[str] = frozenset(
         "fractions",
         "csv",
         "io",
+        # Timing a loop (``time.perf_counter()``). A C module with no module
+        # attributes, so it re-exports nothing on the host list; ``sleep``
+        # reaches no more than a busy loop does under the sandbox timeout.
+        "time",
     }
 )
 
@@ -186,6 +190,23 @@ _MAX_SOURCE_LENGTH = 32 * 1024  # 32 KiB
 
 class PolicyError(ValueError):
     """Raised when ``python_code`` violates the diagram-tool policy."""
+
+
+#: The import allowlist, for callers that tell the model what it may import.
+#: The policy is public code, so naming it gives a caller nothing it could not
+#: read, while a model told only "rejected" guesses at what to change.
+ALLOWED_IMPORT_ROOTS: frozenset[str] = _ALLOWED_IMPORT_ROOTS
+
+
+def policy_violation(exc: PolicyError) -> tuple[str, str]:
+    """``(label, name)`` of a :class:`PolicyError` this module raised.
+
+    ``label`` is the short structural label (``"forbidden import"``,
+    ``"forbidden name"``, ``"syntax error"`` …) and ``name`` the module,
+    builtin or attribute it names, or ``""`` when the label names none.
+    """
+    label, _, name = str(exc).partition(": ")
+    return label.strip(), name.strip()
 
 
 def _root_package(dotted_name: str) -> str:

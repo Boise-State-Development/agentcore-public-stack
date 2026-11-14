@@ -48,9 +48,11 @@ from agents.builtin_tools.office._storage import (
     _ci_write_bytes,
     _download_card,
     _download_s3_bytes,
+    note_linked_read,
     _error,
     _get_code_interpreter_id,
     _NO_CI_MESSAGE,
+    _output_document_name,
     _region,
     _storage_configured,
     _store_document,
@@ -298,6 +300,7 @@ async def _find_powerpoint_presentation(
             and meta.mime_type == _PPTX_MIME
             and meta.filename.lower() == target.lower()
         ):
+            note_linked_read(meta, "powerpoint")
             return meta
     return None
 
@@ -555,14 +558,7 @@ def make_modify_powerpoint_presentation_tool(session_id: str, user_id: str):
                 "what's available."
             )
 
-        out_base = output_name or source.filename
-        if out_base.lower().endswith(".pptx"):
-            out_base = out_base[: -len(".pptx")]
-        is_valid, error_msg = _validate_document_name(out_base)
-        if not is_valid:
-            return _error(
-                f"❌ Invalid output name '{out_base}': {error_msg}"
-            )
+        out_base = _output_document_name(output_name, source.filename, ".pptx")
         output_filename = f"{out_base}.pptx"
 
         try:

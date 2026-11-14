@@ -26,7 +26,11 @@ export interface BrowserLoginRequest {
   deadlineAt?: string;
   targetUrl?: string;
   reason?: string;
-  /** Origin to frame the viewer from; empty when undeployed. */
+  /**
+   * The mcp-sandbox origin, used only as "a viewer is deployed"; empty when
+   * undeployed. Never framed or posted to for the viewer: MCP Apps run there.
+   * The viewer's own origin is `BrowserLiveView.viewerOrigin`.
+   */
   sandboxOrigin?: string;
   receivedAt: number;
   /** Assistant message whose tool call raised this, for inline anchoring. */
@@ -45,6 +49,13 @@ export interface BrowserLiveView {
   expiresAt: string;
   viewport: { width: number; height: number };
   controlState: 'user' | 'agent';
+  /**
+   * The viewer's own origin: the only place to frame the viewer from and to
+   * post `url` to. Deliberately not the request's `sandboxOrigin`, where MCP
+   * Apps run. Empty (or absent, from an older app-api) when no viewer is
+   * deployed, and the panel then frames nothing.
+   */
+  viewerOrigin?: string;
 }
 
 /**

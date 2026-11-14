@@ -23,7 +23,12 @@ layers of ``conversation_search/index_search.py``:
 
 Scoping is per **session**, which is stricter than ``document_read``'s other modes
 (owner only): a search in one conversation never surfaces a document attached to
-another.
+another. A fork is the one widening, and it is fixed by the fork's own row: its
+copied messages name documents attached in its parent and root, which stay
+indexed under those sessions, so a fork's search also covers its
+``ancestor_session_ids`` (``apis.shared.sessions.fork``). The owner clause is
+never widened, so a fork of another user's conversation still finds only the
+caller's own documents.
 
 A missing or empty user or session id raises before anything is sent: an empty
 ``equals`` value makes Bedrock raise ``ValidationException``, and an empty id is
@@ -34,7 +39,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from apis.shared.files.attachment_index import parse_document_id
 from apis.shared.files.models import FileMetadata, FileStatus
@@ -65,19 +70,43 @@ class AttachmentHit:
     truncated: bool
 
 
-def attachment_filter(user_id: str, session_id: str, upload_id: Optional[str] = None) -> Dict[str, Any]:
+def attachment_filter(
+    user_id: str,
+    session_id: str,
+    upload_id: Optional[str] = None,
+    *,
+    ancestor_session_ids: Sequence[str] = (),
+) -> Dict[str, Any]:
     """The retrieval filter for one caller in one conversation.
 
     Exact-match operators only, which ``validate_isolation_filter`` also insists
     on. Public so the isolation tests can assert the exact shape that is sent.
+    A fork (``ancestor_session_ids``) matches its own session or its parent's or
+    root's with one ``in`` clause; a session that is not a fork keeps the single
+    ``equals`` it always had.
     """
+    sessions = _scope(session_id, ancestor_session_ids)
+    session_clause = (
+        {"equals": {"key": "session_id", "value": sessions[0]}}
+        if len(sessions) == 1
+        else {"in": {"key": "session_id", "value": list(sessions)}}
+    )
     clauses = [
         {"equals": {"key": "user_id", "value": user_id}},
-        {"equals": {"key": "session_id", "value": session_id}},
+        session_clause,
     ]
     if upload_id:
         clauses.append({"equals": {"key": "upload_id", "value": upload_id}})
     return {"andAll": clauses}
+
+
+def _scope(session_id: str, ancestor_session_ids: Sequence[str]) -> Tuple[str, ...]:
+    """The conversation first, then its fork ancestors; blanks and repeats dropped."""
+    out: List[str] = []
+    for sid in (session_id, *ancestor_session_ids):
+        if isinstance(sid, str) and sid.strip() and sid not in out:
+            out.append(sid)
+    return tuple(out)
 
 
 def _require(value: Any, what: str) -> str:
@@ -95,6 +124,7 @@ def _page(value: Any) -> Optional[int]:
 
 
 def _owned_in_session(meta: Optional[FileMetadata], session_id: str) -> bool:
+    """The row is READY and was attached in ``session_id``, the session its hit named."""
     if meta is None or meta.session_id != session_id:
         return False
     status = meta.status if isinstance(meta.status, str) else meta.status.value
@@ -108,12 +138,15 @@ async def search_attachments(
     *,
     upload_id: Optional[str] = None,
     top_k: int = DEFAULT_TOP_K,
+    ancestor_session_ids: Sequence[str] = (),
     backend: Any = None,
     repository: Any = None,
 ) -> List[AttachmentHit]:
     """Search the caller's indexed documents in one conversation, best first.
 
-    ``upload_id`` narrows the search to that document. ``backend`` (a
+    ``upload_id`` narrows the search to that document. ``ancestor_session_ids``
+    is a fork's parent and root, read from the fork's own row: the search also
+    covers the caller's documents attached there, and nothing else. ``backend`` (a
     ``ManagedKbBackend`` by default) and ``repository`` are injectable for tests;
     neither is a filter. Raises ``ManagedKbNotProvisioned`` when the knowledge
     base has not been created yet and lets any Bedrock error through; the caller
@@ -125,6 +158,7 @@ async def search_attachments(
         upload_id = None
     if not query or not query.strip():
         return []
+    scope = _scope(session, ancestor_session_ids)
 
     if backend is None:
         from apis.shared.kb_backend.managed_backend import ManagedKbBackend
@@ -139,7 +173,7 @@ async def search_attachments(
         ATTACHMENTS_KB_ID,
         query.strip(),
         top_k,
-        attachment_filter(caller, session, upload_id),
+        attachment_filter(caller, session, upload_id, ancestor_session_ids=scope[1:]),
     )
 
     rows: Dict[str, Optional[FileMetadata]] = {}
@@ -153,13 +187,13 @@ async def search_attachments(
         doc_user, doc_session, doc_upload = ref
         metadata = chunk.metadata or {}
         # Fail closed: a hit whose id or attributes do not name the caller and
-        # this conversation is never theirs, and one with no owner attribute
-        # cannot be shown to be.
+        # this conversation (or, for a fork, its parent or root) is never
+        # theirs, and one with no owner attribute cannot be shown to be.
         if (
             doc_user != caller
-            or doc_session != session
+            or doc_session not in scope
             or metadata.get("user_id") != caller
-            or metadata.get("session_id") != session
+            or metadata.get("session_id") != doc_session
             or metadata.get("upload_id") != doc_upload
             or (upload_id is not None and doc_upload != upload_id)
         ):
@@ -168,7 +202,7 @@ async def search_attachments(
         if doc_upload not in rows:
             rows[doc_upload] = await repository.get_file(caller, doc_upload)
         meta = rows[doc_upload]
-        if not _owned_in_session(meta, session):
+        if not _owned_in_session(meta, doc_session):
             # Deleted since it was indexed (the delete event has not landed yet),
             # or not this conversation's: never shown.
             continue

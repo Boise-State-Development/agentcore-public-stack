@@ -57,6 +57,7 @@ class TestCompactionStateToDict:
             "pendingHardCeiling",
             "pendingSince",
             "lastPrefixKey",
+            "reasoningLiveFrom",
         }
 
     def test_to_dict_values_match(self):

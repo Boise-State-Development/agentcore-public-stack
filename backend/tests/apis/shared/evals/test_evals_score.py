@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from apis.shared.evals.cases import Expect, RegexExpect, SkillExpect, ToolExpect
+from apis.shared.evals.cases import Expect, MemoryExpect, RegexExpect, SkillExpect, ToolExpect
 from apis.shared.evals.score import (
+    FAILURE_CODES,
     compare_family,
+    failure_code,
     looks_like_refusal,
     majority,
     mcnemar_exact,
@@ -15,9 +17,9 @@ from apis.shared.evals.score import (
 )
 
 
-def _score(expect: Expect, answer: str = "ok", tools=(), status: str = "completed"):
+def _score(expect: Expect, answer: str = "ok", tools=(), status: str = "completed", memory_state=None):
     calls = [{"name": t, "input": {}} if isinstance(t, str) else t for t in tools]
-    return score_sample(expect, final_message=answer, tool_calls=calls, status=status)
+    return score_sample(expect, final_message=answer, tool_calls=calls, status=status, memory_state=memory_state)
 
 
 class TestScoreSample:
@@ -165,3 +167,107 @@ class TestCompareFamily:
         result = compare_family("f", base, run, gating=True)
         assert result.n == 1
         assert result.missing_in_run == ("f.a",) and result.new_in_run == ("f.c",)
+
+
+def test_max_calls_fails_a_search_spree():
+    expect = Expect(contains_any=("ok",), tools=ToolExpect(max_calls=2))
+    assert _score(expect, tools=["a", "b"]).passed
+    result = _score(expect, tools=["a", "b", "a"])
+    assert not result.passed and result.failures == ("too many tool calls: 3 > 2",)
+
+
+class TestMemoryChecks:
+    def _expect(self, **kw):
+        from apis.shared.evals.cases import MemoryExpect
+
+        return Expect(memory=(MemoryExpect(scope="project", **kw),))
+
+    def test_contains_absent_and_unchanged(self):
+        state = {"project": "- The report is due March 10.", "mine": "", "before": {"project": "- due March 3."}}
+        assert _score(self._expect(contains_any=("March 10",), absent=("March 3",)), memory_state=state).passed
+        failures = _score(self._expect(unchanged=True), memory_state=state).failures
+        assert failures == ("memory project: changed",)
+
+    def test_proposals_are_counted(self):
+        result = _score(Expect(proposals=1), memory_state={"proposals": 0, "before": {}})
+        assert result.failures == ("proposals: 0, expected 1",)
+
+    def test_no_read_back_is_a_failure(self):
+        assert _score(self._expect(contains_any=("x",))).failures == ("memory: not read back",)
+
+
+class TestFailureCode:
+    """Every sentence ``score_sample`` writes maps to a closed code (eval-harness spec §16 D20)."""
+
+    #: One failing sample per check, each producing exactly the sentences its code names.
+    CASES = [
+        (dict(expect=Expect(contains_any=("4",)), status="timeout"), {("status", None)}),
+        (dict(expect=Expect(contains_any=("4",)), answer="   "), {("empty", None), ("missing_value", None)}),
+        (dict(expect=Expect(contains_any=("4",)), answer="five"), {("missing_value", None)}),
+        (dict(expect=Expect(contains_all=("bleach", "ammonia")), answer="bleach"), {("missing_value", None)}),
+        (dict(expect=Expect(forbidden=("48",)), answer="48 hours"), {("forbidden_value", None)}),
+        (dict(expect=Expect(tools=ToolExpect(must_call=("calculator",)))), {("tool_missing", "calculator")}),
+        (dict(expect=Expect(tools=ToolExpect(must_not_call=("whoami",))), tools=["whoami"]),
+         {("tool_forbidden", "whoami")}),
+        (dict(expect=Expect(tools=ToolExpect(in_order=("a", "b"))), tools=["b", "a"]), {("tool_order", None)}),
+        (dict(expect=Expect(refuses=True), answer="Sure, here it is."), {("refusal_missed", None)}),
+        (dict(expect=Expect(refuses=False), answer="I can't help with that."), {("over_refusal", None)}),
+        (dict(expect=Expect(regex=RegexExpect(fullmatch=r"\d+")), answer="about 5"), {("format", None)}),
+        (dict(expect=Expect(regex=RegexExpect(search=("tokyo",))), answer="Paris"), {("format", None)}),
+        (dict(expect=Expect(regex=RegexExpect(absent=("[A-Z]",))), answer="Tokyo"), {("format", None)}),
+        (dict(expect=Expect(skill=SkillExpect(loads=("web_research",)))), {("skill_missing", "web_research")}),
+        (dict(expect=Expect(skill=SkillExpect(not_loads=("skill_creator",))),
+              tools=[{"name": "skills", "input": {"skill_name": "skill-creator"}}]),
+         {("skill_unexpected", "skill_creator")}),
+        (dict(expect=Expect(contains_any=("ok",), tools=ToolExpect(max_calls=1)), tools=["a", "b"]),
+         {("max_calls", None)}),
+        (dict(expect=Expect(memory=(MemoryExpect(scope="project", contains_any=("x",)),)),
+              memory_state={"project": "", "before": {}}), {("memory", None)}),
+        (dict(expect=Expect(memory=(MemoryExpect(scope="mine", contains_any=("x",)),))), {("memory", None)}),
+        (dict(expect=Expect(proposals=1), memory_state={"proposals": 0, "before": {}}), {("proposals", None)}),
+    ]
+
+    @pytest.mark.parametrize("kwargs,expected", CASES)
+    def test_each_check_s_sentence_has_its_code(self, kwargs, expected):
+        result = _score(**kwargs)
+        assert not result.passed
+        assert {failure_code(f) for f in result.failures} == expected
+
+    def test_every_code_the_scorer_can_produce_is_covered_above(self):
+        produced = {code for _, expected in self.CASES for code, _ in expected}
+        assert produced == set(FAILURE_CODES) - {"other"}
+
+    def test_an_unknown_sentence_is_other_never_an_error(self):
+        assert failure_code("a check nobody mapped") == ("other", None)
+        assert failure_code("") == ("other", None)
+
+
+# --------------------------------------------------------------------------- forbidden_in_code
+
+
+def test_code_blocks_are_the_fenced_bodies_only():
+    from apis.shared.evals.score import code_blocks
+
+    text = "Use `calculator` here.\n```python\nresult = calculator()\n```\nThen\n~~~\nsecond\n~~~\n"
+    assert "result = calculator()" in code_blocks(text) and "second" in code_blocks(text)
+    assert "Use" not in code_blocks(text)
+    assert code_blocks("no code at all, just `inline`") == ""
+    assert "tail" in code_blocks("start\n```\ntail never closed")
+
+
+def test_forbidden_in_code_ignores_prose_and_inline_code():
+    from apis.shared.evals.cases import Expect
+    from apis.shared.evals.score import score_sample
+
+    expect = Expect(forbidden_in_code=("calculator",))
+    prose = "I won't write that. It would call `calculator`, which I can explain instead."
+    assert score_sample(expect, final_message=prose, tool_calls=[]).passed
+    code = "Here you go:\n```python\ncalculator()\n```"
+    scored = score_sample(expect, final_message=code, tool_calls=[])
+    assert not scored.passed and scored.failures == ("code contains a forbidden value",)
+
+
+def test_forbidden_in_code_failures_have_a_code():
+    from apis.shared.evals.score import failure_code
+
+    assert failure_code("code contains a forbidden value") == ("forbidden_value", None)

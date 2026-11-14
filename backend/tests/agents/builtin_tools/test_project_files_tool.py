@@ -227,6 +227,17 @@ class TestRead:
         assert first["content"] + second["content"] == text
         assert second["truncated"] is False and second["next_offset"] is None
 
+    def test_a_page_is_never_offloaded_so_the_model_reads_it_whole(self, files):
+        # The page is the bound; the tool-result offloader would page it twice,
+        # and its json-block copy is one escaped line its line search can't split.
+        from agents.main_agent.core.tool_result_offload import OFFLOAD_EXEMPT_TOOLS
+
+        assert _tool().tool_name in OFFLOAD_EXEMPT_TOOLS
+        text = "".join(f"## Section {i}\n\nBody of section {i}.\n\n" for i in range(1, 2000))
+        files.add(_doc("d1", "handbook.md", content_type="text/markdown"), **{"handbook.md": text})
+        page = _payload(_call(_tool(), filename="handbook.md"))["content"]
+        assert page.splitlines()[:3] == ["## Section 1", "", "Body of section 1."]
+
     def test_an_offset_past_the_end_is_an_error(self, files):
         files.add(_doc("d1", "short.docx"), **{"short.docx": "tiny"})
         assert "beyond the end" in _text_of(_call(_tool(), filename="short.docx", offset=99))

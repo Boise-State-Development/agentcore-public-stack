@@ -155,6 +155,7 @@ def test_an_app_form_waiting_for_the_user_is_not_an_error(hook):
     event.result["content"] = [
         {"text": "An interactive form has been shown to the user for creating a new issue"}
     ]
+    event.result["structuredContent"] = {"status": "awaiting_user_submission"}
 
     _turn(hook, [event])
 
@@ -230,3 +231,49 @@ def test_a_strange_payload_weighs_zero_and_never_raises(hook):
     entry = hook.tally_for_call(0)["t"]
     assert entry["calls"] == 1
     assert entry["resultChars"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 7. Why a call failed: a closed vocabulary, never the error's text.
+# ---------------------------------------------------------------------------
+
+
+def _error_result(text):
+    return {"status": "error", "content": [{"text": text}]}
+
+
+def test_error_kinds_split_a_failure_count_into_its_causes(hook):
+    from agents.main_agent.session.hooks.tool_census import ERROR_KINDS
+
+    auth = _after("search_files", status="error", content=[{"text": "401 Unauthorized"}])
+    plain = _after("search_files", status="error", content=[{"text": "no such folder"}])
+    timed_out = _after("search_files", exception=TimeoutError("slow"))
+    raised = _after("search_files", exception=ValueError("boom"))
+    _turn(hook, [auth, plain, timed_out, raised, _after("search_files")])
+
+    slot = hook.tally_for_call(0)["search_files"]
+    assert slot["calls"] == 5 and slot["errors"] == 4
+    assert slot["errorKinds"] == {"auth": 1, "result_error": 1, "timeout": 1, "exception": 1}
+    assert set(slot["errorKinds"]) <= set(ERROR_KINDS)
+    assert sum(slot["errorKinds"].values()) == slot["errors"]
+
+
+def test_a_timeout_is_recognised_by_exception_type_name(hook):
+    class ReadTimeout(Exception):
+        pass
+
+    _turn(hook, [_after("browse_web", exception=ReadTimeout("x"))])
+    assert hook.tally_for_call(0)["browse_web"]["errorKinds"] == {"timeout": 1}
+
+
+def test_a_tool_that_never_failed_carries_no_error_kinds(hook):
+    _turn(hook, [_after("calculator")])
+    assert "errorKinds" not in hook.tally_for_call(0)["calculator"]
+
+
+def test_error_kinds_keep_nothing_of_the_error(hook):
+    secret = "401 Unauthorized for alice@example.edu token abc123"
+    _turn(hook, [_after("search_files", status="error", content=[{"text": secret}]),
+                 _after("search_files", exception=RuntimeError(secret))])
+    assert "alice" not in repr(hook.tally_for_call(0))
+    assert "abc123" not in repr(hook.tally_for_call(0))

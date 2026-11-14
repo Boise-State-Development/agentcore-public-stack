@@ -49,7 +49,9 @@
                   [latest]="segment.key === latestResponseKey()"
                   [canContinue]="canContinueFor(segment.last.id)"
                   [interruptedReason]="interruptedReasonFor(segment.last.id)"
-                  (continueRequested)="continueRequested.emit()"></app-message-actions>
+                  [outageOffer]="outageOfferFor(segment.last.id)"
+                  (continueRequested)="continueRequested.emit()"
+                  (outageRetryRequested)="outageRetryRequested.emit()"></app-message-actions>
             </div>
             <div class="invisible mt-1 flex flex-wrap items-center gap-2 opacity-0 transition-opacity duration-200 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100" aria-live="polite" aria-atomic="true">
                 @if (segment.last.metadata) {
@@ -256,6 +258,7 @@
     <div class="py-4">
       <app-pulsating-loader
       [notice]="loaderNotice()"
+      [hint]="stallHint()"
       [status]="loaderStatus()"
       [statusTool]="loaderStatusTool()"
       [startedAt]="loaderStartedAt()" />

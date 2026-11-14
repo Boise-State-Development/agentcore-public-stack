@@ -47,6 +47,7 @@ touches the agent layer — the tool does that.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
 import logging
 import os
@@ -199,20 +200,47 @@ class DocumentReadResult:
 _FOLDER_SOURCE_MARK = ":folder:"
 
 
-async def list_session_documents(user_id: str, session_id: str) -> Dict[str, Any]:
+def _scope_session_ids(session_id: str, ancestor_session_ids: Sequence[str]) -> List[str]:
+    """The conversation, then a fork's parent and root; blanks and repeats dropped."""
+    return list(dict.fromkeys(sid for sid in (session_id, *ancestor_session_ids) if sid))
+
+
+async def _list_scope_files(session_ids: Sequence[str]) -> List[FileMetadata]:
+    """READY rows of each session, in order, read concurrently. Not owner-filtered:
+    the session index is keyed by conversation, so every caller filters on user."""
+    repo = get_file_upload_repository()
+    per_session = await asyncio.gather(
+        *(repo.list_session_files(sid, status=FileStatus.READY) for sid in session_ids)
+    )
+    return [meta for rows in per_session for meta in rows]
+
+
+async def list_session_documents(
+    user_id: str,
+    session_id: str,
+    *,
+    ancestor_session_ids: Sequence[str] = (),
+) -> Dict[str, Any]:
     """The session's READY documents the tool can read, newest first.
 
     A file from an attached folder also carries ``path``: the folder's name and
     the file's path inside it (drive-folder spec §4.4), so a model that lost the
     manifest to compaction can still find its way around the folder.
+
+    ``ancestor_session_ids`` (a fork's parent and root) appends this user's
+    documents in those sessions after the session's own, because the fork's
+    copied messages name them. Another user's rows are never listed.
     """
     _require_identity(user_id, session_id)
-    files = await get_file_upload_repository().list_session_files(session_id, status=FileStatus.READY)
+    session_ids = _scope_session_ids(session_id, ancestor_session_ids)
+    files = await _list_scope_files(session_ids)
     documents: List[Dict[str, Any]] = []
     folder_files = False
+    listed: set = set()
     for meta in files:
-        if meta.user_id != user_id:
+        if meta.user_id != user_id or meta.upload_id in listed:
             continue
+        listed.add(meta.upload_id)
         fmt = document_format_for(meta.mime_type, meta.filename)
         if fmt is None:
             continue
@@ -227,7 +255,9 @@ async def list_session_documents(user_id: str, session_id: str) -> Dict[str, Any
             }
         )
     if folder_files:
-        paths = await _folder_paths(user_id, session_id)
+        paths: Dict[str, str] = {}
+        for sid in session_ids:
+            paths.update(await _folder_paths(user_id, sid))
         for doc in documents:
             path = paths.get(doc["upload_id"])
             if path:
@@ -291,6 +321,20 @@ async def session_has_tabular_files(user_id: str, session_id: str) -> bool:
     return any(meta.user_id == user_id and is_tabular_file(meta.filename, meta.mime_type) for meta in files)
 
 
+async def session_has_presentation_files(user_id: str, session_id: str) -> bool:
+    """Whether the session has at least one READY PowerPoint deck (.pptx).
+
+    The PowerPoint auto-enable gate, the deck counterpart of
+    :func:`session_has_tabular_files`: same one-query cost, same "memoize the
+    positive answer" contract. Decks never go inline (Bedrock has no pptx
+    document format) and this module refuses them, so a session holding one
+    is a session whose turns need the PowerPoint tools to read it at all.
+    """
+    _require_identity(user_id, session_id)
+    files = await get_file_upload_repository().list_session_files(session_id, status=FileStatus.READY)
+    return any(meta.user_id == user_id and is_presentation_file(meta.filename, meta.mime_type) for meta in files)
+
+
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
@@ -337,6 +381,20 @@ def clamp_max_pages(max_pages: Any) -> int:
     return max(1, min(requested, DOCUMENT_READ_HARD_MAX_PAGES))
 
 
+async def _read_through(meta: FileMetadata, *, reader: str) -> FileMetadata:
+    """``meta``, or a shared file read through to its original (handoffs spec §4.9 rule 4).
+
+    A reference whose original was deleted answers "No longer available (deleted from …)"
+    as a ``DocumentReadError`` the tool relays, never as ``NoSuchKey`` (rule 5).
+    """
+    from .linked_files import linked_file_gone_message, readable_view
+
+    view = await readable_view(meta, reader=reader)
+    if view is None:
+        raise DocumentReadError(linked_file_gone_message(meta))
+    return view
+
+
 async def read_document(
     user_id: str,
     session_id: str,
@@ -367,7 +425,7 @@ async def read_document(
     if offset < 0:
         raise WorkspaceValidationError("offset must be >= 0")
 
-    meta = await _get_owned_ready_file(user_id, upload_id)
+    meta = await _read_through(await _get_owned_ready_file(user_id, upload_id), reader="document_read")
     fmt = document_format_for(meta.mime_type, meta.filename)
     if fmt is None:
         raise DocumentReadError(
@@ -421,7 +479,9 @@ async def read_document(
     # txt / md / html
     if pattern_text:
         raw = await _fetch_bytes(meta)
-        return await asyncio.to_thread(_text_pattern, raw.decode("utf-8", errors="replace"), pattern_text, base, "line")
+        return await asyncio.to_thread(
+            lambda: _text_pattern("\n".join(text_lines(fmt, raw)), pattern_text, base, "line")
+        )
     return await _text_read(user_id, upload_id, offset, base, fmt)
 
 
@@ -437,7 +497,7 @@ _SEARCH_NOT_READY = {
         "re-indexed when this conversation is opened, which takes a few minutes."
     ),
     "unavailable": "is not available for search.",
-    "off": "is not indexed for search (only large documents are).",
+    "off": "is not indexed for search (only documents too large to keep in context are).",
 }
 
 
@@ -467,8 +527,14 @@ async def search_documents(
     *,
     upload_id: Optional[str] = None,
     kb_enabled: bool = True,
+    ancestor_session_ids: Sequence[str] = (),
 ) -> DocumentReadResult:
     """Semantic search over this conversation's indexed large documents.
+
+    ``ancestor_session_ids`` (a fork's parent and root) widens the conversation
+    to the caller's documents attached there, as ``list_session_documents``
+    does: a fork's copied messages name them, and they stay indexed under the
+    session they were attached in. Another user's rows are never searched.
 
     With ``upload_id``, that document only. A document that is not searchable yet
     (or any more) comes back as its status and the suggestion to use ``pattern``,
@@ -483,17 +549,32 @@ async def search_documents(
     if not query_text:
         raise WorkspaceValidationError("query must not be empty")
 
+    session_ids = _scope_session_ids(session_id, ancestor_session_ids)
     if upload_id:
         meta = await _get_owned_ready_file(user_id, upload_id)
-        if meta.session_id != session_id:
+        if meta.session_id not in session_ids:
             raise WorkspaceFileNotFoundError(f"No file with id '{upload_id}' found in this conversation")
         candidates = [meta]
     else:
-        files = await get_file_upload_repository().list_session_files(session_id, status=FileStatus.READY)
-        candidates = [
-            m for m in files if m.user_id == user_id and document_format_for(m.mime_type, m.filename) is not None
-        ]
+        files = await _list_scope_files(session_ids)
+        seen: set = set()
+        candidates = []
+        for m in files:
+            if m.user_id != user_id or m.upload_id in seen:
+                continue
+            seen.add(m.upload_id)
+            if document_format_for(m.mime_type, m.filename) is not None:
+                candidates.append(m)
 
+    # A shared file is searched as its original, which is what the attachments KB indexed
+    # (handoffs spec §4.9 rule 4). A reference whose original is gone reads as unavailable.
+    from .linked_files import readable_view
+
+    linked: Dict[str, Optional[FileMetadata]] = {}
+    for m in candidates:
+        if m.linked_from is not None:
+            linked[m.upload_id] = await readable_view(m, reader="document_read")
+    candidates = [linked.get(m.upload_id) or m for m in candidates]
     statuses = {m.upload_id: search_status(m, kb_enabled=kb_enabled) for m in candidates}
     searchable = [m for m in candidates if statuses[m.upload_id] == SEARCH_SEARCHABLE]
     not_searchable = [
@@ -527,7 +608,30 @@ async def search_documents(
         return DocumentReadResult(mode="query", payload=payload)
 
     try:
-        hits = await search_attachments(user_id, session_id, query_text, upload_id=upload_id or None)
+        own = [m for m in searchable if m.linked_from is None]
+        hits = (
+            await search_attachments(
+                user_id,
+                session_id,
+                query_text,
+                upload_id=upload_id or None,
+                ancestor_session_ids=session_ids[1:],
+            )
+            if own
+            else []
+        )
+        # Each shared file is searched where its original was indexed, narrowed to that one
+        # document, so a reference reaches only the file that was shared and nothing else in
+        # the conversation it came from. Its hits are reported under the reference's id.
+        for m in (m for m in searchable if m.linked_from is not None):
+            assert m.linked_from is not None
+            found = await search_attachments(
+                user_id, m.linked_from.session_id, query_text, upload_id=m.linked_from.upload_id
+            )
+            hits.extend(dataclasses.replace(hit, upload_id=m.upload_id) for hit in found)
+        if len(searchable) > len(own):
+            hits.sort(key=lambda hit: hit.score if hit.score is not None else 0.0, reverse=True)
+            hits = hits[: _attachment_top_k()]
     except Exception as exc:  # noqa: BLE001 - a failed search degrades to pattern, never to an error
         logger.warning("attachment search failed (%s); suggesting pattern", type(exc).__name__)
         payload.update(
@@ -563,6 +667,12 @@ async def search_documents(
         bytes_returned=sum(len(r["text"].encode("utf-8")) for r in results),
         hits=len(results),
     )
+
+
+def _attachment_top_k() -> int:
+    from .attachment_search import DEFAULT_TOP_K
+
+    return DEFAULT_TOP_K
 
 
 async def _text_read(user_id: str, upload_id: str, offset: int, base: Dict[str, Any], fmt: str) -> DocumentReadResult:
@@ -1012,7 +1122,7 @@ def _scan_pages(
         lines = page_text(index).splitlines()
         page_no = index + 1
         hit = False
-        for entry in _grep_lines(lines, regex, DOCUMENT_READ_MAX_MATCHES - len(matches), clock):
+        for entry in _grep_lines(lines, regex, DOCUMENT_READ_MAX_MATCHES - len(matches), clock, across_wraps=True):
             entry["page"] = page_no
             matches.append(entry)
             hit = True
@@ -1287,14 +1397,32 @@ def _grep_lines(
     regex: "re.Pattern[str]",
     budget: int,
     clock: Optional[_Budget] = None,
+    *,
+    across_wraps: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Matching lines with ``_CONTEXT_LINES`` of context, 1-indexed."""
+    """Matching lines with ``_CONTEXT_LINES`` of context, 1-indexed.
+
+    ``across_wraps`` is for a PDF page, whose lines are where the layout
+    wrapped, not where the author broke the text: a match that runs across a
+    line break ("Major" / "incident: at …") is also found, reported at the line
+    it starts on with both lines as its text. Without it a phrase was invisible
+    to ``pattern`` whenever the wrap fell inside it (attachment_delivery's
+    ``whole_summarise_pdf_150k_on_demand``: Sonnet 4.6 missed the same
+    incident in 3 of 3 samples).
+    """
     out: List[Dict[str, Any]] = []
     for i, line in enumerate(lines):
         if len(out) >= budget or (clock is not None and clock.out_of_time()):
             break
         text = line.strip()
         match = regex.search(text)
+        if not match and across_wraps and i + 1 < len(lines):
+            joined = f"{text} {lines[i + 1].strip()}"
+            spanning = next(
+                (m for m in regex.finditer(joined) if m.start() < len(text) < m.end()), None
+            )
+            if spanning is not None:
+                text, match = joined, spanning
         if not match:
             continue
         before = [ln.strip()[:_LINE_CHARS] for ln in lines[max(0, i - _CONTEXT_LINES): i]]
@@ -1375,8 +1503,8 @@ def _units_text(fmt: str, raw: bytes) -> List[str]:
 
     The same three extractors the retrieval modes above use, so a quote is
     verified against exactly the text ``document_read`` would have shown — not
-    a second, differently-cleaned rendering of the same file. HTML in
-    particular is left as-is, because that is what ``pattern`` mode searches.
+    a second, differently-cleaned rendering of the same file. HTML is
+    rendered by ``text_lines``, because that is what ``pattern`` mode searches.
     """
     if fmt == "pdf":
         with pdfium_lock():
@@ -1387,7 +1515,25 @@ def _units_text(fmt: str, raw: bytes) -> List[str]:
                 pdf.close()
     if fmt == "docx":
         return docx_paragraphs(raw)
-    return raw.decode("utf-8", errors="replace").splitlines()
+    return text_lines(fmt, raw)
+
+
+def text_lines(fmt: str, raw: bytes) -> List[str]:
+    """The lines ``pattern`` mode searches in a txt, md or html document.
+
+    HTML is rendered first (``html_markdown``, the renderer the Converse
+    projection uses). Its raw lines are markup, and a minified page is a
+    single line, so a pattern used to find only the first match in the whole
+    document, cut to ``_LINE_CHARS`` around it: a fact beside an earlier
+    lookalike could never be reached. Measured by the ``attachment_delivery``
+    eval's ``arm_html_30k_on_demand`` cell (0/3 on Haiku 5.5 before this).
+    """
+    text = raw.decode("utf-8", errors="replace")
+    if fmt == "html":
+        from apis.shared.files.html_markdown import html_to_markdown
+
+        text = html_to_markdown(text)
+    return text.splitlines()
 
 
 async def document_provenance_units(
@@ -1412,7 +1558,7 @@ async def document_provenance_units(
     if not upload_id:
         raise WorkspaceValidationError("upload_id is required")
 
-    meta = await _get_owned_ready_file(user_id, upload_id)
+    meta = await _read_through(await _get_owned_ready_file(user_id, upload_id), reader="document_read")
     fmt = document_format_for(meta.mime_type, meta.filename)
     if fmt is None:
         raise DocumentReadError(

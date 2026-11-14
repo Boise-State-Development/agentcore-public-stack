@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -171,6 +172,9 @@ async def run_agent_headless(
     inference_params: Optional[Dict[str, Any]] = None,
     file_upload_ids: Optional[List[str]] = None,
     enabled_skills: Optional[List[str]] = None,
+    client_surface: Optional[str] = None,
+    client_tools: Optional[List[Dict[str, Any]]] = None,
+    interrupt_responses: Optional[List[Dict[str, Any]]] = None,
     trigger: str = "manual",
     invocations_base_url: Optional[str] = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
@@ -253,8 +257,19 @@ async def run_agent_headless(
         payload["file_upload_ids"] = file_upload_ids
     if enabled_skills is not None:
         payload["enabled_skills"] = enabled_skills
+    # The terminal client's request fields (TUI_WEB_PARITY_SPEC), sent only when
+    # given: ``client_tools`` declares tools the caller executes, and a resume
+    # answers their ``client_tool_call`` pauses with ``interrupt_responses``.
+    if client_surface is not None:
+        payload["client_surface"] = client_surface
+    if client_tools is not None:
+        payload["client_tools"] = client_tools
+    if interrupt_responses is not None:
+        payload["interrupt_responses"] = interrupt_responses
 
     acc = InvocationStreamAccumulator()
+    sent_at = time.monotonic()
+    first_text_at: Optional[float] = None
     try:
         async with _build_http_client(timeout_seconds) as client:
             async with client.stream(
@@ -281,6 +296,13 @@ async def run_agent_headless(
                         response.aiter_lines()
                     ):
                         acc.handle(name, data)
+                        if (
+                            first_text_at is None
+                            and name == "content_block_delta"
+                            and data.get("type") == "text"
+                            and data.get("text")
+                        ):
+                            first_text_at = time.monotonic()
                         if on_event is not None:
                             await on_event(name, data)
     except httpx.TimeoutException:
@@ -289,11 +311,18 @@ async def run_agent_headless(
     except httpx.HTTPError as exc:
         result.error = f"transport: {type(exc).__name__}: {exc}"
 
+    result.client_duration_ms = int((time.monotonic() - sent_at) * 1000)
+    if first_text_at is not None:
+        result.client_first_token_ms = int((first_text_at - sent_at) * 1000)
+    result.turn_duration_ms = acc.turn_duration_ms
+    result.quota_exceeded = acc.quota_exceeded
+    result.first_token_ms = acc.first_token_ms
     result.final_message = acc.final_message
     result.stop_reason = acc.stop_reason
     result.tool_trace = acc.tool_trace
     result.usage = acc.finalize_usage()
     result.oauth_required = acc.oauth_required
+    result.client_tool_calls = acc.client_tool_calls
     result.title = acc.title
     result.events_seen = acc.events_seen
     result.error = result.error or acc.error
@@ -302,6 +331,8 @@ async def run_agent_headless(
             result.status = "error"
         elif acc.oauth_required:
             result.status = "oauth_required"
+        elif acc.client_tool_calls:
+            result.status = "client_tool_call"
         elif acc.done:
             result.status = "completed"
         else:

@@ -108,6 +108,47 @@ class FileUploadRepository:
             logger.error(f"Error getting file {upload_id}: {e}")
             raise
 
+    def batch_get_files_sync(self, user_id: str, upload_ids: List[str]) -> dict:
+        """This user's rows for ``upload_ids``, keyed by upload id, in one ``BatchGetItem``.
+
+        Missing ids (another user's, never written, deleted) are simply absent. At most 100 ids,
+        the call's own limit; the callers cap far below it. Unprocessed keys are retried once.
+        """
+        wanted = list(dict.fromkeys(u for u in upload_ids if u))[:100]
+        if not wanted:
+            return {}
+        keys = [{"PK": f"USER#{user_id}", "SK": f"FILE#{u}"} for u in wanted]
+        request = {self.table_name: {"Keys": keys}}
+        found: dict = {}
+        for _ in range(2):
+            response = self._dynamodb.batch_get_item(RequestItems=request)
+            for item in response.get("Responses", {}).get(self.table_name, []):
+                meta = FileMetadata.from_dynamo_item(item)
+                if meta.user_id == user_id:
+                    found[meta.upload_id] = meta
+            request = response.get("UnprocessedKeys") or {}
+            if not request:
+                break
+        return found
+
+    def batch_put_files_sync(self, rows: List[FileMetadata]) -> None:
+        """Write ``rows`` in one ``BatchWriteItem`` (at most 25). No conditions: callers use
+        deterministic ids, so a repeat writes the same row again rather than a second one."""
+        rows = rows[:25]
+        if not rows:
+            return
+        request = {
+            self.table_name: [
+                {"PutRequest": {"Item": self._convert_floats_to_decimals(r.to_dynamo_item())}} for r in rows
+            ]
+        }
+        for _ in range(3):
+            response = self._dynamodb.batch_write_item(RequestItems=request)
+            request = response.get("UnprocessedItems") or {}
+            if not request:
+                return
+        raise RuntimeError("batch_put_files_sync: items left unprocessed")
+
     async def update_file_status(
         self, user_id: str, upload_id: str, status: FileStatus
     ) -> Optional[FileMetadata]:
@@ -176,7 +217,12 @@ class FileUploadRepository:
             raise
 
     async def update_file_preparation(
-        self, user_id: str, upload_id: str, preparation: dict, digest: Optional[dict] = None
+        self,
+        user_id: str,
+        upload_id: str,
+        preparation: dict,
+        digest: Optional[dict] = None,
+        facts: Optional[dict] = None,
     ) -> Optional[FileMetadata]:
         """Store a large-document ``preparation`` map (and, with it, the
         digest) on a READY file row, in one write.
@@ -185,10 +231,15 @@ class FileUploadRepository:
         was deleted while it was being prepared, and the caller must clean up
         whatever it wrote for it.
         """
-        return self.update_file_preparation_sync(user_id, upload_id, preparation, digest)
+        return self.update_file_preparation_sync(user_id, upload_id, preparation, digest, facts)
 
     def update_file_preparation_sync(
-        self, user_id: str, upload_id: str, preparation: dict, digest: Optional[dict] = None
+        self,
+        user_id: str,
+        upload_id: str,
+        preparation: dict,
+        digest: Optional[dict] = None,
+        facts: Optional[dict] = None,
     ) -> Optional[FileMetadata]:
         """Synchronous body of :meth:`update_file_preparation`."""
         expression = "SET preparation = :preparation, updatedAt = :now"
@@ -200,6 +251,9 @@ class FileUploadRepository:
         if digest is not None:
             expression += ", digest = :digest"
             values[":digest"] = self._convert_floats_to_decimals(dict(digest))
+        if facts is not None:
+            expression += ", facts = :facts"
+            values[":facts"] = self._convert_floats_to_decimals(dict(facts))
         try:
             response = self._table.update_item(
                 Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
@@ -216,11 +270,86 @@ class FileUploadRepository:
             logger.error(f"Error updating file preparation {upload_id}: {e}")
             raise
 
+    async def update_file_facts(
+        self, user_id: str, upload_id: str, facts: dict, size_bytes: int
+    ) -> Optional[FileMetadata]:
+        """Store the file-facts map on a READY row whose size is still ``size_bytes``.
+
+        The size condition keeps facts computed from old bytes off a row whose
+        bytes were replaced meanwhile (``replace_file_content_fields`` drops
+        ``facts`` and the replacement is prepared again). ``None`` when the row
+        is gone, no longer READY, or holds other bytes.
+        """
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression="SET facts = :facts, updatedAt = :now",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":facts": self._convert_floats_to_decimals(dict(facts)),
+                    ":now": utc_now_iso(),
+                    ":ready": FileStatus.READY.value,
+                    ":size": int(size_bytes),
+                },
+                ConditionExpression="attribute_exists(PK) AND #status = :ready AND sizeBytes = :size",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error updating file facts {upload_id}: {e}")
+            raise
+
+    async def update_file_model_image(
+        self, user_id: str, upload_id: str, model_image: dict
+    ) -> Optional[FileMetadata]:
+        """Store an image's ``modelImage`` map (``image_downscale``) on its row.
+
+        Written before the row turns READY, so a turn never reads an image
+        without it. ``None`` when the row no longer exists.
+        """
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression="SET modelImage = :mi, updatedAt = :now",
+                ExpressionAttributeValues={
+                    ":mi": self._convert_floats_to_decimals(dict(model_image)),
+                    ":now": utc_now_iso(),
+                },
+                ConditionExpression="attribute_exists(PK)",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error updating model image {upload_id}: {e}")
+            raise
+
+    async def update_file_page_count(self, user_id: str, upload_id: str, page_count: int) -> Optional[FileMetadata]:
+        """Store a PDF's admission page count (``pageCount``). ``None`` when the row is gone."""
+        try:
+            response = self._table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
+                UpdateExpression="SET pageCount = :pages, updatedAt = :now",
+                ExpressionAttributeValues={":pages": int(page_count), ":now": utc_now_iso()},
+                ConditionExpression="attribute_exists(PK)",
+                ReturnValues="ALL_NEW",
+            )
+            return FileMetadata.from_dynamo_item(response["Attributes"])
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return None
+            logger.error(f"Error updating page count {upload_id}: {e}")
+            raise
+
     async def replace_file_content_fields(
         self, user_id: str, upload_id: str, size_bytes: int
     ) -> Optional[FileMetadata]:
         """A READY file's bytes were replaced at the same key: record the new
-        size and drop what described the old bytes (``digest``, ``preparation``).
+        size and drop what described the old bytes (``digest``, ``preparation``,
+        ``facts``).
 
         The upload id, key, name and ``kbIndex`` stay: the id is what earlier
         turns cite, and the next preparation re-ingests under the same KB
@@ -229,7 +358,7 @@ class FileUploadRepository:
         try:
             response = self._table.update_item(
                 Key={"PK": f"USER#{user_id}", "SK": f"FILE#{upload_id}"},
-                UpdateExpression="SET sizeBytes = :size, updatedAt = :now REMOVE digest, preparation",
+                UpdateExpression="SET sizeBytes = :size, updatedAt = :now REMOVE digest, preparation, facts, modelImage, pageCount",
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues={":size": size_bytes, ":now": utc_now_iso(), ":ready": FileStatus.READY.value},
                 ConditionExpression="attribute_exists(PK) AND #status = :ready",
@@ -445,7 +574,8 @@ class FileUploadRepository:
 
         Same ``SessionIndex`` query as :meth:`list_session_files`, but projects
         only ``uploadId, sessionId, sizeBytes, mimeType, source, status,
-        createdAt``. ``filename``, ``s3Key`` and ``s3Uri`` carry the user's
+        createdAt``. ``filename``, ``s3Key`` and (on rows written before it was
+        dropped) ``s3Uri`` carry the user's
         chosen file name and never leave DynamoDB on this path. Returns plain
         dicts (``sizeBytes`` as ``int``), not ``FileMetadata``, because that
         model requires the very fields this read refuses to fetch.

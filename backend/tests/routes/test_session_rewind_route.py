@@ -78,6 +78,17 @@ class TestRewindService:
         compaction = table.update_item.call_args.kwargs["ExpressionAttributeValues"][":cmp"]
         assert compaction["truncationAnchor"] == 2
         assert compaction["pendingCheckpoint"] is None
+        assert "reasoningLiveFrom" not in compaction
+
+    def test_clamps_where_replayed_reasoning_is_still_billed(self, env):
+        row = {
+            "SK": f"S#{SESSION}",
+            "compaction": {"checkpoint": 0, "truncationAnchor": 0, "reasoningLiveFrom": 6.0, "summary": None},
+        }
+        _, table = _run(row, _conversation(4), f"msg-{SESSION}-2")
+
+        compaction = table.update_item.call_args.kwargs["ExpressionAttributeValues"][":cmp"]
+        assert compaction["reasoningLiveFrom"] == 2
 
     def test_a_second_rewind_is_conditional_on_the_epoch_it_read(self, env):
         row = {"SK": f"S#{SESSION}", "rewind": RewindState().with_cut(6, 8).to_dict()}

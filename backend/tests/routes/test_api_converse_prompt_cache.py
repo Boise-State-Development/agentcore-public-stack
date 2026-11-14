@@ -204,7 +204,11 @@ class TestRoute:
 
     def test_catalog_row_with_caching_off_carries_no_point(self, client, bedrock):
         effective = SimpleNamespace(
-            denied=False, redirected=False, record=SimpleNamespace(supports_caching=False)
+            denied=False,
+            redirected=False,
+            catalog_read=True,
+            uncataloged=False,
+            record=SimpleNamespace(supports_caching=False),
         )
         with patch(
             "apis.app_api.chat.converse_routes.resolve_effective_model",

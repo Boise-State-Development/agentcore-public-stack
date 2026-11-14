@@ -29,6 +29,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,8 @@ LIVE_VIEW_EXPIRY_SECONDS = min(
 )
 
 DEFAULT_VIEWPORT = {"width": 1280, "height": 800}
+
+VIEWER_ORIGIN_ENV = "BROWSER_LIVE_VIEW_ORIGIN"
 
 
 class LiveViewUnavailable(Exception):
@@ -78,8 +81,42 @@ def _viewport(ref: Dict[str, Any]) -> Dict[str, int]:
     return dict(DEFAULT_VIEWPORT)
 
 
+def viewer_origin() -> str:
+    """The origin the SPA frames the sign-in viewer from, or ``""``.
+
+    Its own CloudFront distribution (``BrowserLiveViewConstruct``), and never
+    the mcp-sandbox origin: that origin runs untrusted MCP App HTML, and two
+    same-origin frames on one page can script each other — so an App beside
+    the viewer could read the signed URL and the password being typed.
+
+    It travels on the mint response rather than the SSE event so that the one
+    place the SPA learns where to send a credential is the response carrying
+    the credential, and so a reloaded thread can never frame an origin from an
+    older deploy. Empty when unset (a local app-api with no edge): the SPA then
+    shows "no viewer here" instead of framing anything.
+    """
+    raw = os.environ.get(VIEWER_ORIGIN_ENV, "").strip().rstrip("/")
+    if not raw:
+        return ""
+    # An origin, not a URL: scheme and host only. Anything with a path, query
+    # or credentials is a misconfiguration the SPA would refuse anyway.
+    parts = urlsplit(raw)
+    if (
+        parts.scheme not in ("https", "http")
+        or not parts.hostname
+        or parts.path
+        or parts.query
+        or parts.fragment
+        or parts.username
+        or parts.password
+    ):
+        logger.warning("browser live view: %s is not an origin; ignoring it", VIEWER_ORIGIN_ENV)
+        return ""
+    return raw
+
+
 async def mint_live_view(ref: Dict[str, Any]) -> Dict[str, Any]:
-    """Return `{url, expiresAt, viewport, controlState}` for a browser session.
+    """Return `{url, expiresAt, viewport, controlState, viewerOrigin}`.
 
     `ref` is the conversation's `browserSession` projection. Raises
     :class:`LiveViewUnavailable` when it is missing fields or the service
@@ -130,6 +167,7 @@ async def mint_live_view(ref: Dict[str, Any]) -> Dict[str, Any]:
         "expiresAt": expires_at.isoformat(),
         "viewport": _viewport(ref),
         "controlState": ref.get("controlState") or "agent",
+        "viewerOrigin": viewer_origin(),
     }
 
 

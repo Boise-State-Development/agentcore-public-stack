@@ -22,9 +22,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, Literal, Optional, List, Set, Tuple
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
-from mcp.client.streamable_http import streamablehttp_client
 from strands.tools.mcp import MCPClient
 
+from apis.shared.feature_flags import mcp_elicitation_enabled
 from apis.shared.tools.models import (
     MCPServerConfig,
     MCPAuthType,
@@ -39,6 +39,8 @@ from agents.main_agent.integrations.mcp_apps import (
     hidden_from_model,
 )
 from agents.main_agent.integrations.gateway_auth import get_sigv4_auth
+from agents.main_agent.integrations.mcp_elicitation import elicitation_callback
+from agents.main_agent.integrations.mcp_transport import streamable_http_transport
 from agents.main_agent.integrations.token_exchange import (
     TokenExchangeError,
     get_token_exchange_client,
@@ -422,11 +424,20 @@ def create_external_mcp_client(
             # Validated on the model, so none can collide with the auth above;
             # None when empty, so header-less servers connect exactly as before.
             headers = dict(config.custom_headers) or None
+            # Form elicitation (docs/specs/mcp-elicitation.md): only a server
+            # the admin opted in, and only while the feature is on. Without the
+            # callback the SDK default is kept and nothing is advertised, so
+            # every other server connects exactly as before.
+            elicitation_kwargs = (
+                {"elicitation_callback": elicitation_callback}
+                if mcp_elicitation_enabled() and getattr(config, "elicitation_enabled", False)
+                else {}
+            )
             # UICapableMCPClient advertises the MCP Apps UI extension on
             # initialize and filters app-only tools out of the model's tool
             # list (both inert unless AGENTCORE_MCP_APPS_HOST_ENABLED=true).
             mcp_client = UICapableMCPClient(
-                lambda url=config.server_url, auth=auth, headers=headers: streamablehttp_client(
+                lambda url=config.server_url, auth=auth, headers=headers: streamable_http_transport(
                     url,
                     headers=headers,
                     auth=auth,
@@ -435,6 +446,7 @@ def create_external_mcp_client(
                 # Retained so the MCP Apps header can resolve the server's
                 # served-manifest icon from this origin (best-effort).
                 server_url=config.server_url,
+                **elicitation_kwargs,
             )
             scope_label = (
                 f" (tools: {', '.join(sorted(allowed_tool_names))})"

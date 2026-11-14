@@ -259,11 +259,20 @@ describe('ModelCatalogPage', () => {
       // a source outside this file. Anything else that drifts is a typo.
       //  - Claude Opus 5.5 reads at 0.05x: Price List API, $0.22 against $4.40
       //    Regional ($0.20 against $4.00 Global), 2026-09-25.
+      //  - Claude Sonnet 5.5 reads at 0.05x: Price List API, $0.11 against
+      //    $2.20 Regional ($0.10 against $2.00 Global), 2026-11-13. Sonnet 5
+      //    still reads at 0.1x.
+      //  - GPT-6.1 Sol reads at 0.05x: its card states the multiplier and
+      //    publishes $0.11 against $2.20 US CRIS ($0.10 against $2.00 Global).
       //  - GPT-5.5 has no write bucket: its card's cache-write cell is an em
       //    dash, and a live probe reported `cache_write_tokens: 0` on every turn
       //    while reading the prefix back from cache.
       const WRITE_MULTIPLIER: Record<string, number> = { 'gpt-5-5': 0 };
-      const READ_MULTIPLIER: Record<string, number> = { 'claude-opus-5-5': 0.05 };
+      const READ_MULTIPLIER: Record<string, number> = {
+        'claude-opus-5-5': 0.05,
+        'claude-sonnet-5-5': 0.05,
+        'gpt-6-1-sol': 0.05,
+      };
       for (const model of tieredModels) {
         const t = model.template;
         if (!t.supportsCaching) continue;
@@ -277,6 +286,26 @@ describe('ModelCatalogPage', () => {
           6,
         );
       }
+    });
+  });
+
+  describe('curated Claude Sonnet 5.5', () => {
+    const sonnet = CURATED_BEDROCK_MODELS.find(m => m.key === 'claude-sonnet-5-5')!;
+
+    it('uses the us. id dev can call, at Regional rates', () => {
+      // Dev's SCP denies `global.*`; prod overrides to the Global id.
+      expect(sonnet.template.modelId).toBe('us.anthropic.claude-sonnet-5-5');
+      expect(sonnet.pricingTier).toBe('regional');
+      expect(sonnet.template.inputPricePerMillionTokens).toBeCloseTo(2.2, 6);
+      expect(sonnet.template.outputPricePerMillionTokens).toBeCloseTo(11.0, 6);
+      expect(sonnet.template.cacheReadPricePerMillionTokens).toBeCloseTo(0.11, 6);
+    });
+
+    it('declares only effort and max_tokens; the backend owns thinking', () => {
+      expect(Object.keys(sonnet.template.supportedParams?.params ?? {}).sort()).toEqual([
+        'effort',
+        'max_tokens',
+      ]);
     });
   });
 
@@ -394,9 +423,16 @@ describe('ModelCatalogPage', () => {
         const params = model.template.supportedParams?.params;
         expect(params, `${model.key} must declare a measured spec`).toBeTruthy();
 
-        // The endpoint's own 400 enumerates exactly these, identically on all four.
+        // The endpoint's own 400 enumerates exactly these, identically on all
+        // four originals. GPT-6.1 Sol is the first to drop `none`: probed
+        // 2026-10-09, it 400s with "'none' is not supported with the
+        // 'us.openai.gpt-6.1-sol' model".
+        const expectedLevels =
+          model.key === 'gpt-6-1-sol'
+            ? 'low,medium,high,xhigh,max'
+            : 'none,low,medium,high,xhigh,max';
         expect(`${model.key}:${params!['reasoning_effort'].allowed?.join(',')}`).toBe(
-          `${model.key}:none,low,medium,high,xhigh,max`,
+          `${model.key}:${expectedLevels}`,
         );
 
         // Measured 400: "Unsupported parameter: 'temperature' is not supported
@@ -479,19 +515,37 @@ describe('ModelCatalogPage', () => {
       expect(astra?.template.outputPricePerMillionTokens).toBeCloseTo(55.0, 6);
     });
 
-    it('declares Astra\'s published output cap and cutoff, which its siblings lack', () => {
+    it('declares the output caps only the Astra and GPT-6.1 Sol cards publish', () => {
       // Astra's card publishes `Max output tokens: 128,000` and an April 30,
-      // 2026 cutoff; every GPT-5.6 card states neither, which is why the
-      // family default is null for both. Inheriting the default here would
-      // discard two numbers AWS actually publishes.
+      // 2026 cutoff; GPT-6.1 Sol's publishes 131,072 and no cutoff. Every
+      // GPT-5.6 card states neither, which is why the family default is null
+      // for both. Inheriting the default would discard numbers AWS publishes.
+      const PUBLISHED_CAPS: Record<string, number> = {
+        'gpt-6-astra': 128_000,
+        'gpt-6-1-sol': 131_072,
+      };
       const astra = CURATED_BEDROCK_RESPONSES_MODELS.find(m => m.key === 'gpt-6-astra');
-
-      expect(astra?.template.maxOutputTokens).toBe(128_000);
       expect(astra?.template.knowledgeCutoffDate).toBe('2026-04-30');
 
-      for (const sibling of CURATED_BEDROCK_RESPONSES_MODELS.filter(m => m.key !== 'gpt-6-astra')) {
-        expect(`${sibling.key}:${sibling.template.maxOutputTokens}`).toBe(`${sibling.key}:null`);
+      for (const model of CURATED_BEDROCK_RESPONSES_MODELS) {
+        const cap = PUBLISHED_CAPS[model.key] ?? null;
+        expect(`${model.key}:${model.template.maxOutputTokens}`).toBe(`${model.key}:${cap}`);
+        if (cap !== null) {
+          expect(model.template.supportedParams?.params['max_tokens'].max, model.key).toBe(cap);
+        }
       }
+    });
+
+    it('curates GPT-6.1 Sol on the US CRIS Short Context card', () => {
+      // `bedrock-runtime` has no In-Region id for it, so `us.` is the cheapest
+      // id dev's SCP lets us call. Same input and output rates as GPT-6 Sol.
+      const sol = CURATED_BEDROCK_RESPONSES_MODELS.find(m => m.key === 'gpt-6-1-sol');
+
+      expect(sol?.template.modelId).toBe('us.openai.gpt-6.1-sol');
+      expect(sol?.template.inputPricePerMillionTokens).toBeCloseTo(2.2, 6);
+      expect(sol?.template.outputPricePerMillionTokens).toBeCloseTo(11.0, 6);
+      expect(sol?.template.cacheWritePricePerMillionTokens).toBeCloseTo(2.75, 6);
+      expect(sol?.template.cacheReadPricePerMillionTokens).toBeCloseTo(0.11, 6);
     });
   });
 
@@ -565,9 +619,12 @@ describe('ModelCatalogPage', () => {
     // now catches. A template default cannot assume what else gets added.
     const DEMOTED = [
       'claude-opus-4-7',
+      // Superseded by Claude Sonnet 5.5 at the same Global rates.
+      'claude-sonnet-5',
       'claude-sonnet-4-6',
       'qwen3-coder-30b',
       'gpt-5-5',
+      'gpt-6-sol',
       'gpt-5-6-sol',
       'gpt-5-6-terra',
       'gpt-5-6-luna',

@@ -250,6 +250,8 @@ async def create_agent_endpoint(
             show_citations=request.show_citations,
             allow_document_download=request.allow_document_download,
             response_strictness=request.response_strictness,
+            voice_enabled=request.voice_enabled,
+            voice_instructions_only=request.voice_instructions_only,
         )
         return _agent_response(assistant, permission="owner")
     except Exception as e:
@@ -327,9 +329,13 @@ async def agent_store_endpoint(
 
 
 # ----------------------------------------------------------------------- pins (D8/D9)
+# Pins live on the Agent surface, not the marketplace: a user can pin their own private
+# or shared Agent with the store switched off (#1897). Only role-seeded pins depend on the
+# marketplace, and ``list_pins`` drops those itself while it is off.
+#
 # Declared BEFORE ``/{agent_id}`` so the literal path is not captured by the path param.
 @router.get("/pins", response_model=AgentPinsResponse)
-async def list_agent_pins_endpoint(current_user: User = Depends(require_marketplace_enabled)):
+async def list_agent_pins_endpoint(current_user: User = Depends(require_agents_enabled)):
     """The caller's effective pin list (D9).
 
     Phase 5 resolves the user's own pins. Role-seeded pins union in here in Phase 6
@@ -555,6 +561,8 @@ async def update_agent_endpoint(
             show_citations=request.show_citations,
             allow_document_download=request.allow_document_download,
             response_strictness=request.response_strictness,
+            voice_enabled=request.voice_enabled,
+            voice_instructions_only=request.voice_instructions_only,
         )
         if not updated:
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
@@ -779,7 +787,7 @@ async def withdraw_agent_listing_endpoint(
 
 @router.post("/{agent_id}/pin", response_model=PinnedAgentResponse, status_code=201)
 async def pin_agent_endpoint(
-    agent_id: str, current_user: User = Depends(require_marketplace_enabled)
+    agent_id: str, current_user: User = Depends(require_agents_enabled)
 ):
     """Add an Agent to the caller's own set (D8).
 
@@ -798,7 +806,7 @@ async def pin_agent_endpoint(
 
 @router.delete("/{agent_id}/pin", status_code=204)
 async def unpin_agent_endpoint(
-    agent_id: str, current_user: User = Depends(require_marketplace_enabled)
+    agent_id: str, current_user: User = Depends(require_agents_enabled)
 ):
     """Remove an Agent from the caller's own set, and remember the dismissal (D9.3).
 

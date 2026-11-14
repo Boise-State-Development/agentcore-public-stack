@@ -13,7 +13,9 @@ import pytest
 
 from apis.shared.evals.cases import (
     FAMILIES,
+    PROVISIONED_TOOLS,
     CaseError,
+    grant_for_tool,
     load_cases,
     parse_case,
     required_grants,
@@ -21,7 +23,6 @@ from apis.shared.evals.cases import (
 
 BACKEND = Path(__file__).resolve().parents[4]
 CASES_DIR = BACKEND / "evals" / "cases"
-FIXTURES_DIR = BACKEND / "evals" / "fixtures"
 
 
 def _case(**overrides):
@@ -38,17 +39,21 @@ def _case(**overrides):
 
 
 class TestCommittedGoldenSet:
-    def test_every_committed_case_loads_with_its_fixtures(self):
-        cases = load_cases(CASES_DIR, fixtures_dir=FIXTURES_DIR)
+    def test_every_committed_case_loads(self):
+        # That every fixture a case names exists, committed or generated, is
+        # pinned in tests/test_eval_fixtures.py, which can import the builder.
+        cases = load_cases(CASES_DIR)
         assert len(cases) >= 40
         assert len({c.id for c in cases}) == len(cases)
 
     def test_every_gating_family_has_enough_cases_to_ever_fail(self):
         # The gate's small-family clause needs a few cases to mean anything;
         # spec §9 targets eight to twelve per gating family.
+        from apis.shared.evals.cases import ADVISORY_FAMILIES
+
         cases = load_cases(CASES_DIR)
         for family in FAMILIES:
-            if family == "general_chat":
+            if family in ADVISORY_FAMILIES:
                 continue
             assert sum(1 for c in cases if c.family == family) >= 8, family
 
@@ -60,6 +65,44 @@ class TestCommittedGoldenSet:
         grants = required_grants(load_cases(CASES_DIR))
         assert "calculator" in grants["tools"]
         assert set(grants["skills"]) == {"web_research", "skill_creator"}
+
+    def test_required_grants_hold_catalog_ids_never_provisioned_tool_names(self):
+        tools = set(required_grants(load_cases(CASES_DIR))["tools"])
+        assert not tools & set(PROVISIONED_TOOLS), "a provisioned tool name is not a catalog id the role can grant"
+        assert "create_powerpoint_presentation" in tools
+
+
+class TestProvisionedTools:
+    """Tools a case requires that a gate or another catalog id provisions."""
+
+    def test_a_deck_tool_is_reachable_through_the_id_that_provisions_it(self):
+        raw = _case(run={"enabled_tools": ["create_powerpoint_presentation"]},
+                    expect={"contains_any": ["14"], "tools": {"must_call": ["read_powerpoint_presentation"]}})
+        assert parse_case(raw, family="tool_selection").expect.tools.must_call == ("read_powerpoint_presentation",)
+
+    def test_without_that_id_it_is_unreachable(self):
+        raw = _case(run={"enabled_tools": []},
+                    expect={"contains_any": ["14"], "tools": {"must_call": ["read_powerpoint_presentation"]}})
+        with pytest.raises(CaseError, match="not in run.enabled_tools"):
+            parse_case(raw, family="tool_selection")
+
+    def test_document_read_needs_no_grant(self):
+        raw = _case(run={"enabled_tools": []},
+                    expect={"contains_any": ["x"], "tools": {"must_call": ["document_read"]}})
+        case = parse_case(raw, family="tool_selection")
+        assert grant_for_tool("document_read") is None
+        assert required_grants([case])["tools"] == []
+
+    def test_a_catalog_tool_grants_itself(self):
+        assert grant_for_tool("analyze_spreadsheet") == "analyze_spreadsheet"
+
+
+class TestGeneratedFixtures:
+    def test_a_generated_name_satisfies_the_fixture_check(self, tmp_path):
+        (tmp_path / "tool_selection.json").write_text(json.dumps([{**_case(), "files": ["built.png"]}]))
+        with pytest.raises(CaseError, match="not found"):
+            load_cases(tmp_path, fixtures_dir=tmp_path)
+        assert len(load_cases(tmp_path, fixtures_dir=tmp_path, generated=["built.png"])) == 1
 
 
 class TestParseCase:
@@ -153,3 +196,206 @@ class TestLoadCases:
         assert [c.family for c in load_cases(tmp_path, families=["retention"])] == ["retention"]
         with pytest.raises(CaseError, match="unknown"):
             load_cases(tmp_path, families=["nope"])
+
+
+class TestFixtureRuns:
+    def test_a_case_may_run_against_a_project_or_an_agent(self):
+        case = parse_case(_case(run={"project": "kb_small"}), family="tool_selection")
+        assert case.run.project == "kb_small" and case.run.agent is None
+
+    def test_not_both(self):
+        with pytest.raises(CaseError, match="not both"):
+            parse_case(_case(run={"project": "kb_small", "agent": "agent_format"}), family="tool_selection")
+
+    def test_a_fixture_name_is_a_short_name(self):
+        with pytest.raises(CaseError, match="fixture name"):
+            parse_case(_case(run={"project": "[eval] kb_small"}), family="tool_selection")
+
+    def test_fixture_keys_name_each_fixture_once(self):
+        from apis.shared.evals.cases import fixture_key, fixture_keys
+
+        a = parse_case(_case(id="tool_selection.a", run={"project": "kb_small"}), family="tool_selection")
+        b = parse_case(_case(id="tool_selection.b", run={"agent": "agent_format"}), family="tool_selection")
+        c = parse_case(_case(id="tool_selection.c"), family="tool_selection")
+        assert fixture_keys([a, b, a, c]) == ["agent:agent_format", "project:kb_small"]
+        assert fixture_key(c) is None
+
+
+class TestMaxCalls:
+    def test_parses(self):
+        case = parse_case(_case(expect={"contains_any": ["4"], "tools": {"max_calls": 2}}), family="tool_selection")
+        assert case.expect.tools.max_calls == 2
+
+    def test_cannot_be_lower_than_the_tools_it_must_call(self):
+        raw = _case(expect={"contains_any": ["4"], "tools": {"must_call": ["calculator"], "max_calls": 0}})
+        with pytest.raises(CaseError, match="max_calls"):
+            parse_case(raw, family="tool_selection")
+
+    def test_rejects_a_non_integer(self):
+        with pytest.raises(CaseError, match="max_calls"):
+            parse_case(_case(expect={"contains_any": ["4"], "tools": {"max_calls": "3"}}), family="tool_selection")
+
+
+def _memory_case(**overrides):
+    raw = {
+        "id": "project_memory.example",
+        "family": "project_memory",
+        "turns": [{"prompt": "Remember X."}],
+        "run": {"project": "@ephemeral"},
+        "expect": {"memory": [{"scope": "mine", "contains_any": ["X"]}]},
+    }
+    raw.update(overrides)
+    return raw
+
+
+class TestProjectMemoryFormat:
+    def test_a_memory_case_parses(self):
+        case = parse_case(_memory_case(), family="project_memory")
+        assert case.run.project == "@ephemeral" and case.expect.memory[0].scope == "mine"
+        assert case.meta_for(0).session == 1 and case.meta_for(0).as_user == "eval"
+
+    def test_memory_checks_need_a_project_of_their_own(self):
+        with pytest.raises(CaseError, match="project of its own"):
+            parse_case(_memory_case(run={"project": "kb_small"}), family="project_memory")
+
+    def test_an_empty_memory_check_is_refused(self):
+        with pytest.raises(CaseError, match="must check something"):
+            parse_case(_memory_case(expect={"memory": [{"scope": "mine"}]}), family="project_memory")
+
+    def test_an_unknown_scope_is_refused(self):
+        with pytest.raises(CaseError, match="scope"):
+            parse_case(_memory_case(expect={"memory": [{"scope": "team", "contains_any": ["X"]}]}), family="project_memory")
+
+    def test_a_member2_turn_needs_a_role(self):
+        turns = [{"prompt": "Hi", "as": "member2"}]
+        with pytest.raises(CaseError, match="member2_role"):
+            parse_case(_memory_case(turns=turns), family="project_memory")
+
+    def test_a_session_belongs_to_one_user(self):
+        turns = [{"prompt": "A"}, {"prompt": "B", "as": "member2"}]
+        with pytest.raises(CaseError, match="already belongs"):
+            parse_case(_memory_case(turns=turns, run={"project": "@ephemeral", "member2_role": "editor"}),
+                       family="project_memory")
+
+    def test_seeded_memory_has_a_body(self):
+        run = {"project": "@ephemeral", "project_memory": {"project": {"a": {"description": "x"}}}}
+        with pytest.raises(CaseError, match="body"):
+            parse_case(_memory_case(run=run), family="project_memory")
+
+    def test_the_memory_tools_need_no_grant(self):
+        case = parse_case(_memory_case(expect={"tools": {"must_call": ["memory_save"]}}), family="project_memory")
+        assert required_grants([case])["tools"] == []
+
+    def test_an_ephemeral_project_is_not_a_seeded_fixture(self):
+        from apis.shared.evals.cases import fixture_key, fixture_keys
+
+        case = parse_case(_memory_case(), family="project_memory")
+        assert fixture_keys([case]) == [] and fixture_key(case) is None
+
+
+class TestTerminalFormat:
+    def _raw(self, **run):
+        return {"id": "terminal.x", "family": "terminal", "turns": [{"prompt": "Read a file"}],
+                "run": {"client_surface": "terminal", **run}, "expect": {"tools": {"must_call": ["local_read_file"]}}}
+
+    def test_a_terminal_case_is_advisory_and_its_client_tools_need_no_grant(self):
+        case = parse_case(self._raw(client_tools=[{"name": "read_file", "description": "Read.", "respond": {"output": "x"}}],
+                                    enabled_tools=[]), family="terminal")
+        assert not case.gating and required_grants([case])["tools"] == []
+
+    def test_a_client_tool_needs_an_answer(self):
+        with pytest.raises(CaseError, match="respond"):
+            parse_case(self._raw(client_tools=[{"name": "read_file", "description": "Read.", "respond": {}}]),
+                       family="terminal")
+
+    def test_an_unknown_surface_is_refused(self):
+        with pytest.raises(CaseError, match="client_surface"):
+            parse_case(self._raw(client_surface="tui"), family="terminal")
+
+
+# --------------------------------------------------------------------------- delivery arms (§8.4)
+
+
+def _delivery(**run):
+    return {
+        "id": "attachment_delivery.example",
+        "family": "attachment_delivery",
+        "turns": [{"prompt": "What is the permit?"}],
+        "run": {"enabled_tools": [], **run},
+        "expect": {"contains_any": ["WP-1"]},
+        "notes": "",
+    }
+
+
+def test_a_delivery_case_defaults_to_the_auto_arm_and_the_deployments_ceiling():
+    case = parse_case(_delivery(), family="attachment_delivery")
+    assert (case.run.arm, case.run.ceiling) == ("auto", "default")
+    assert not case.gating
+
+
+@pytest.mark.parametrize("key,value", [
+    ("arm", "native"), ("arm", "text"), ("arm", "on_demand"), ("arm", "search"),
+    ("ceiling", "200k"),
+])
+def test_the_forced_arms_and_the_ceiling_arms_parse(key, value):
+    case = parse_case(_delivery(**{key: value}), family="attachment_delivery")
+    assert getattr(case.run, key) == value
+
+
+def test_no_arm_is_reserved_since_phase_five():
+    from apis.shared.evals.cases import DELIVERY_ARMS, RESERVED_ARMS
+
+    assert "search" in DELIVERY_ARMS and RESERVED_ARMS == ()
+    with pytest.raises(CaseError, match="arm"):
+        parse_case(_delivery(arm="tool"), family="attachment_delivery")
+
+
+def test_a_delivery_turn_may_attach_its_own_files():
+    raw = _delivery()
+    raw["files"] = ["a.md"]
+    raw["turns"] = [{"prompt": "one", "files": ["b.md"]}, {"prompt": "two"}, {"prompt": "three", "files": ["c.md", "d.md"]}]
+    case = parse_case(raw, family="attachment_delivery")
+    assert [case.meta_for(i).files for i in range(3)] == [("b.md",), (), ("c.md", "d.md")]
+    assert case.all_files == ("a.md", "b.md", "c.md", "d.md")
+
+
+def test_only_a_delivery_turn_attaches_files_and_only_in_its_own_session():
+    raw = _delivery()
+    raw["turns"] = [{"prompt": "one"}, {"prompt": "two", "session": 2, "files": ["b.md"]}]
+    with pytest.raises(CaseError, match="files"):
+        parse_case(raw, family="attachment_delivery")
+
+
+def test_every_ceiling_names_its_runtime_environment():
+    from apis.shared.evals.cases import CEILING_ENV, CEILINGS
+
+    assert set(CEILING_ENV) == set(CEILINGS) and CEILING_ENV["default"] == {}
+    assert "100k_documents_excluded" not in CEILINGS  # deleted with §5.2's switch
+
+
+def test_a_pause_is_a_delivery_case_s_and_bounded():
+    raw = _delivery()
+    raw["turns"] = [{"prompt": "one"}, {"prompt": "two", "pause_seconds": 330}]
+    case = parse_case(raw, family="attachment_delivery")
+    assert [case.meta_for(i).pause_seconds for i in range(2)] == [0, 330]
+    raw["turns"][1]["pause_seconds"] = 5_000
+    with pytest.raises(CaseError, match="pause_seconds"):
+        parse_case(raw, family="attachment_delivery")
+    other = _case()
+    other["turns"] = [{"prompt": "one", "pause_seconds": 10}]
+    with pytest.raises(CaseError, match="only attachment_delivery cases pause"):
+        parse_case(other, family="tool_selection")
+
+
+def test_an_unknown_arm_and_an_arm_outside_the_family_are_refused():
+    with pytest.raises(CaseError, match="expected one of auto, native"):
+        parse_case(_delivery(arm="fast"), family="attachment_delivery")
+    with pytest.raises(CaseError, match="only attachment_delivery cases name a arm"):
+        parse_case(_case(run={"enabled_tools": ["calculator"], "arm": "auto"}), family="tool_selection")
+
+
+def test_the_delivery_family_is_opt_in():
+    from apis.shared.evals.cases import DEFAULT_FAMILIES, OPT_IN_FAMILIES
+
+    assert "attachment_delivery" in OPT_IN_FAMILIES and "attachment_delivery" not in DEFAULT_FAMILIES
+    assert set(DEFAULT_FAMILIES) | OPT_IN_FAMILIES == set(FAMILIES)

@@ -258,6 +258,12 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // sessions-metadata table and one more tool in toolConfig — so it is here
     // for the environment-variable ceilings, not the resource count.
     sourceProvenance: { enabled: true },
+    // The attachment planner's token profile adds no resources; it is here for
+    // the Runtime's environment-variable ceiling.
+    attachmentPlan: { enabled: true },
+    // MCP elicitation adds no resources; it is here for the Runtime's
+    // environment-variable ceiling.
+    mcpElicitation: { enabled: true },
     // The release ledger adds no resources either — `LEDGER#` rows on the
     // existing system-cost-rollup table — so it is here for the Runtime's
     // environment-variable ceiling, flag coverage, and its one statement
@@ -269,6 +275,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // like source provenance it is here for the environment-variable ceilings
     // and for the flag-coverage test below, not for the resource count.
     documentExtract: { ...base.documentExtract, enabled: true },
+    // Field-set authoring: one app-api variable and routes, no resources.
+    fieldSetAuthoring: { enabled: true },
     // Web Search's result default is one Runtime variable, written only while
     // on: here for the environment-variable ceilings and flag coverage.
     webSearchDefaultMaxResults: { enabled: true },

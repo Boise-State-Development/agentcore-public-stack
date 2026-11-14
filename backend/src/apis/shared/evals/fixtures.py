@@ -32,7 +32,7 @@ import time
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 #: Extensions the case fixtures use, pinned rather than left to the host's
 #: ``mimetypes`` table, which differs between macOS and the CI image for ``.md``.
@@ -43,6 +43,11 @@ _MIME_BY_SUFFIX = {
     ".pdf": "application/pdf",
     ".html": "text/html",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
 }
 
 
@@ -66,8 +71,34 @@ def upload_key(user_id: str, session_id: str, upload_id: str, filename: str) -> 
     return f"user-files/{user_id}/{session_id}/{upload_id}/{filename}"
 
 
-async def register_upload(user_id: str, session_id: str, filename: str, mime_type: str, data: bytes) -> str:
-    """Store ``data`` as a READY upload in ``session_id`` and return its ``upload_id``."""
+async def register_upload(
+    user_id: str,
+    session_id: str,
+    filename: str,
+    mime_type: str,
+    data: bytes,
+    *,
+    delivery: Optional[str] = None,
+) -> str:
+    """Store ``data`` as a READY upload in ``session_id`` and return its ``upload_id``.
+
+    ``delivery`` is an ``attachment_delivery`` arm (``native``, ``text``,
+    ``on_demand`` or ``search``): it is written on the row as the planner's
+    fixture-only override, the one way that value is ever set
+    (``test_delivery_override_is_fixture_only.py``). A document forced
+    ``on_demand`` or ``search`` also gets the digest app-api builds for an
+    upload, so its message carries what an over-budget reference's does rather
+    than a stub. One forced ``search`` is also sent to the deployed prepare
+    queue as ``{"action": "index"}``, the message the pipeline sends itself, so
+    the deployed Lambda ingests it into the attachments KB
+    (``attachment_index.indexed_by_budget`` admits a ``search`` row whatever its
+    size); :func:`wait_for_searchable` waits for that.
+
+    A document also gets the §4.1 facts the prepare Lambda writes for a real
+    upload (``file_facts.compute_document_facts``), so the attachment planner's
+    ``token`` profile costs a fixture the way it costs a user's file. Without
+    them every fixture would plan as ``facts_pending``.
+    """
     import boto3
 
     from apis.shared.files.models import FileMetadata, FileStatus
@@ -92,8 +123,118 @@ async def register_upload(user_id: str, session_id: str, filename: str, mime_typ
             s3_key=key,
             s3_bucket=bucket,
             status=FileStatus.READY,
+            delivery_override=delivery,
+            facts=await asyncio.to_thread(_document_facts, filename, mime_type, data),
         )
     )
+    if delivery in ("on_demand", "search"):
+        await _store_digest(user_id, upload_id, filename, mime_type, data)
+    if delivery == "search":
+        await _enqueue_index(user_id, upload_id)
+    return upload_id
+
+
+async def _enqueue_index(user_id: str, upload_id: str) -> None:
+    import json
+
+    import boto3
+
+    queue_url = os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "")
+    if not queue_url:
+        raise FixtureError("LARGE_DOCUMENT_PREPARE_QUEUE_URL is not set; the search arm needs the deployed prepare queue")
+    body = json.dumps({"action": "index", "user_id": user_id, "upload_id": upload_id})
+    await asyncio.to_thread(boto3.client("sqs").send_message, QueueUrl=queue_url, MessageBody=body)
+
+
+def _document_facts(filename: str, mime_type: str, data: bytes) -> Optional[dict]:
+    """The facts preparation writes for a document; ``None`` for anything else or a file that will not parse."""
+    from apis.shared.files.document_read import document_format_for
+    from apis.shared.files.file_facts import compute_document_facts
+
+    fmt = document_format_for(mime_type, filename)
+    if fmt is None:
+        return None
+    try:
+        return compute_document_facts(fmt, data)
+    except Exception:  # noqa: BLE001 - a fixture without facts plans as facts_pending, like a user's
+        return None
+
+
+async def _store_digest(user_id: str, upload_id: str, filename: str, mime_type: str, data: bytes) -> None:
+    """The digest ``FileUploadService`` builds after a document upload, built and stored the same way."""
+    from apis.shared.files.document_digest import build_digest
+    from apis.shared.files.repository import get_file_upload_repository
+
+    digest = await build_digest(raw=data, mime_type=mime_type, filename=filename, upload_id=upload_id)
+    await get_file_upload_repository().update_file_digest(user_id, upload_id, digest.to_item())
+
+
+class AppApiCaller(Protocol):
+    """What :func:`upload_via_presign` needs from a signed-in app-api client.
+
+    ``smoke_turns.AppApiTransport.call`` is one: a JSON request as the
+    signed-in user, cookie session and CSRF header included.
+    """
+
+    async def call(
+        self, method: str, path: str, *, json_body: Any = None, params: Optional[Dict[str, Any]] = None
+    ) -> Tuple[int, Any]: ...
+
+
+#: ``(url, data, headers) -> status``: the PUT to the presigned URL.
+PutObject = Callable[[str, bytes, Dict[str, str]], Awaitable[int]]
+
+
+async def _httpx_put(url: str, data: bytes, headers: Dict[str, str]) -> int:
+    import httpx
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+        response = await client.put(url, content=data, headers=headers)
+        return response.status_code
+
+
+def _detail(body: Any) -> str:
+    if isinstance(body, Mapping):
+        return str(body.get("detail") or body)[:300]
+    return str(body)[:300]
+
+
+async def upload_via_presign(
+    app_api: AppApiCaller,
+    session_id: str,
+    filename: str,
+    mime_type: str,
+    data: bytes,
+    *,
+    put: PutObject = _httpx_put,
+) -> str:
+    """Upload ``data`` the way the SPA does and return its ``upload_id``.
+
+    ``POST /files/presign`` → ``PUT`` to the presigned URL → ``POST
+    /files/{id}/complete``, so app-api's admission (type, size, quota) and
+    its post-upload work (a reference document's preparation) run on the
+    fixture exactly as on a user's file (unified-attachment-delivery §8.2).
+    The opt-in alternative to :func:`register_upload`, which writes the row
+    directly and so never meets admission.
+
+    A refusal at any step is a :class:`FixtureError` naming the step and
+    app-api's reason, because a case whose file cannot be attached measures
+    nothing about delivery.
+    """
+    status, body = await app_api.call(
+        "POST", "/files/presign",
+        json_body={"sessionId": session_id, "filename": filename, "mimeType": mime_type, "sizeBytes": len(data)},
+    )
+    if status != 200 or not isinstance(body, Mapping) or not body.get("uploadId") or not body.get("presignedUrl"):
+        raise FixtureError(f"presign refused {filename} ({len(data):,} bytes): HTTP {status}: {_detail(body)}")
+    upload_id = str(body["uploadId"])
+    # The URL is signed over Content-Type, so the PUT must send the same one.
+    put_status = await put(str(body["presignedUrl"]), data, {"Content-Type": mime_type})
+    if put_status not in (200, 204):
+        raise FixtureError(f"PUT of {filename} to the presigned URL -> HTTP {put_status}")
+    status, body = await app_api.call("POST", f"/files/{upload_id}/complete")
+    if status != 200:
+        raise FixtureError(f"complete refused {filename}: HTTP {status}: {_detail(body)}")
     return upload_id
 
 
@@ -196,6 +337,44 @@ async def wait_for_documents(
         await sleep(poll)
 
 
+def searchable_settled(state: Dict[str, Any]) -> bool:
+    """Ready for the ``search`` arm: searchable, or in a KB state that will not change."""
+    return state["kbIndex"] in _KB_TERMINAL or state["textIndexed"] or state["preparation"] == "missing"
+
+
+async def wait_for_searchable(
+    user_id: str,
+    upload_ids: Sequence[str],
+    *,
+    timeout: float,
+    poll: float = 15.0,
+    sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> Dict[str, Dict[str, Any]]:
+    """Poll each upload's row until the attachments KB can search it (the ``search`` arm).
+
+    A document under the inline limit has no preparation to wait for, so only
+    its ``kbIndex`` counts. Returns ``{upload_id: state}`` with ``settled`` and
+    ``waitedSeconds``; one still unsettled at ``timeout`` goes ahead as it is,
+    and the planner then sends it ``on_demand``, which the row records.
+    """
+    from apis.shared.files.repository import get_file_upload_repository
+
+    repository = get_file_upload_repository()
+    start = clock()
+    while True:
+        now = clock()
+        states: Dict[str, Dict[str, Any]] = {}
+        for upload_id in upload_ids:
+            state = document_state(await repository.get_file(user_id, upload_id))
+            state["settled"] = searchable_settled(state)
+            state["waitedSeconds"] = round(now - start)
+            states[upload_id] = state
+        if all(s["settled"] for s in states.values()) or now - start >= timeout:
+            return states
+        await sleep(poll)
+
+
 async def delete_upload(user_id: str, upload_id: str) -> bool:
     """Remove an upload this harness registered: the row, then its S3 objects. ``False`` if it was already gone."""
     from apis.shared.files.repository import get_file_upload_repository
@@ -203,6 +382,9 @@ async def delete_upload(user_id: str, upload_id: str) -> bool:
     meta = await get_file_upload_repository().delete_file(user_id, upload_id)
     if meta is None:
         return False
+    if meta.linked_from is not None:
+        # A reference shares its original's objects (handoffs spec §4.9 rule 2): the row only.
+        return True
     # Everything under the upload's prefix: the original, and for a prepared
     # document its ``_derived/`` sidecars. The delete events take a document
     # out of the attachments KB, as for a user's own delete.

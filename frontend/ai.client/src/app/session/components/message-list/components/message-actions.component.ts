@@ -11,7 +11,7 @@ import {
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroSquare2Stack, heroCheck, heroArrowPath, heroHandThumbUp, heroHandThumbDown } from '@ng-icons/heroicons/outline';
+import { heroSquare2Stack, heroCheck, heroArrowPath, heroArrowUturnLeft, heroCloud, heroHandThumbUp, heroHandThumbDown } from '@ng-icons/heroicons/outline';
 import { heroHandThumbUpSolid, heroHandThumbDownSolid } from '@ng-icons/heroicons/solid';
 import { MarkdownService } from 'ngx-markdown';
 import { FeedbackReason, Message, isTextContentBlock } from '../../../services/models/message.model';
@@ -19,6 +19,10 @@ import { FEEDBACK_REASONS, MessageFeedbackService, parseMessageRef } from '../..
 import { TooltipDirective } from '../../../../components/tooltip';
 import { ShortcutTargetsService } from '../../../../components/shortcuts/shortcut-targets.service';
 import { shortcutAria, withShortcut } from '../../../../components/shortcuts/shortcuts';
+import { FEATURES } from '../../../../services/features';
+import { DeliveryService } from '../../../services/handoff/delivery.service';
+import { HandoffStateService } from '../../../services/handoff/handoff-state.service';
+import { OutageOffer } from '../../../services/chat/provider-outage';
 
 @Component({
   selector: 'app-message-actions',
@@ -29,6 +33,8 @@ import { shortcutAria, withShortcut } from '../../../../components/shortcuts/sho
       heroSquare2Stack,
       heroCheck,
       heroArrowPath,
+      heroArrowUturnLeft,
+      heroCloud,
       heroHandThumbUp,
       heroHandThumbDown,
       heroHandThumbUpSolid,
@@ -36,7 +42,7 @@ import { shortcutAria, withShortcut } from '../../../../components/shortcuts/sho
     }),
   ],
   template: `
-    <div class="flex items-center gap-1">
+    <div class="flex flex-wrap items-center gap-1">
       <!-- Copy + thumbs are revealed on hover of the response (the .group
            wrapper in message-list), like the metadata row below them. Opacity
            only — never visibility or display, which would drop these buttons
@@ -64,6 +70,21 @@ import { shortcutAria, withShortcut } from '../../../../components/shortcuts/sho
             <ng-icon name="heroSquare2Stack" class="size-4" aria-hidden="true" />
           }
         </button>
+
+        @if (sendBackTitle(); as title) {
+          <!-- Send to {title} (handoffs spec §4.3): this conversation came from a handoff, so an
+               answer here can go back to where it started. Opens a review; nothing navigates. -->
+          <button
+            type="button"
+            class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+            [appTooltip]="'Send to ' + title"
+            appTooltipPosition="top"
+            [attr.aria-label]="'Send to ' + title"
+            (click)="sendBack()"
+          >
+            <ng-icon name="heroArrowUturnLeft" class="size-4" aria-hidden="true" />
+          </button>
+        }
 
         @if (showFeedback()) {
           <!-- Thumbs: the outcome signal joined to the cost rows. A second click
@@ -168,6 +189,29 @@ import { shortcutAria, withShortcut } from '../../../../components/shortcuts/sho
           You stopped this response
         </span>
       }
+
+      <!-- Provider outage: not hover-gated, like Continue. The label says
+           whose fault it is; Try again is the reply's own advice ("send it
+           again in a moment") made into one click. -->
+      @if (outageOffer(); as offer) {
+        <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Retry after a model provider issue" data-testid="provider-outage-row">
+          <span class="ml-1 inline-flex items-center gap-1 rounded-md bg-state-warning-50 px-2 py-0.5 text-xs/5 font-medium text-state-warning-800 ring-1 ring-state-warning-600/20 ring-inset dark:bg-state-warning-900/30 dark:text-state-warning-200">
+            <ng-icon name="heroCloud" class="size-3.5" aria-hidden="true" />
+            {{ offer.label }}
+          </span>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-primary-accessible transition-colors hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:hover:text-primary-50"
+            appTooltip="Send your last message again"
+            appTooltipPosition="top"
+            [attr.aria-label]="offer.modelName ? 'Send your last message again on ' + offer.modelName : 'Send your last message again'"
+            (click)="outageRetryRequested.emit()"
+          >
+            <ng-icon name="heroArrowPath" class="size-4" aria-hidden="true" />
+            <span>Try again</span>
+          </button>
+        </div>
+      }
     </div>
   `,
   styles: `
@@ -230,6 +274,35 @@ export class MessageActionsComponent {
   /** Emitted when the user asks to continue the truncated / interrupted
    *  response. */
   continueRequested = output<void>();
+
+  /** Set on the last message of a turn the model provider failed: shows who
+   *  is at fault and a "Try again" that resends the last message. */
+  outageOffer = input<OutageOffer | null>(null);
+
+  /** Emitted when the user clicks "Try again" on a provider-outage reply. */
+  outageRetryRequested = output<void>();
+
+  private readonly features = inject(FEATURES);
+  private readonly handoffState = inject(HandoffStateService);
+  private readonly delivery = inject(DeliveryService);
+
+  /** Where this answer's conversation came from, when a handoff started it and there is an answer to send. */
+  private readonly sendBackTarget = computed(() => {
+    if (!this.features.handoffs) return null;
+    const ref = parseMessageRef(this.lastMessage()?.id ?? '');
+    if (!ref) return null;
+    const origin = this.handoffState.spawnedFrom(ref.sessionId);
+    return origin ? { ref, origin } : null;
+  });
+
+  protected readonly sendBackTitle = computed(
+    () => this.sendBackTarget()?.origin.sourceTitle || (this.sendBackTarget() ? 'the original conversation' : null),
+  );
+
+  protected sendBack(): void {
+    const target = this.sendBackTarget();
+    if (target) void this.delivery.openSendBack(target.ref.sessionId, target.ref.index);
+  }
 
   /** Continue click: emit as before, and record the implicit signal. */
   protected onContinue(): void {

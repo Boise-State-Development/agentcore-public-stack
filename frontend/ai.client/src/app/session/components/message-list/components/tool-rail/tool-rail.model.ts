@@ -72,6 +72,41 @@ export interface ToolCallBatch {
 }
 
 /**
+ * A span of the model's reasoning that fell between (or right around) the
+ * tool calls of one rail.
+ *
+ * Reasoning used to break a rail apart, so a turn that thinks before every
+ * tool round rendered as alternating "Thought for <1s" and one-tool rails —
+ * a column as tall as the work it was meant to collapse. Folded in, it is a
+ * step of the same activity: counted and timed in the rail's header, and
+ * readable in order between the tool rows when the rail is opened.
+ */
+export interface ThinkingStep {
+  /** Stable key: the owning message id and the block's index in it. */
+  key: string;
+
+  /** The reasoning text as streamed (untrimmed, so sentence ends survive). */
+  text: string;
+
+  /**
+   * Measured span length, set by the stream parser when the span closes.
+   * Live-only, like tool durations: absent on a reloaded conversation.
+   */
+  durationMs?: number;
+
+  /** Some or all of this reasoning was redacted. */
+  redacted: boolean;
+
+  /** The model is still producing this span. */
+  active: boolean;
+}
+
+/** One entry in a rail's expanded list, in the order the agent did it. */
+export type ToolRailStep =
+  | { kind: 'batch'; key: string; batch: ToolCallBatch }
+  | { kind: 'thinking'; key: string; thinking: ThinkingStep };
+
+/**
  * A group of consecutive tool calls displayed as a single inline rail.
  */
 export interface ToolCallGroup {
@@ -84,6 +119,13 @@ export interface ToolCallGroup {
    * omits it and the rail treats the whole group as one unsummarized batch.
    */
   batches?: ToolCallBatch[];
+
+  /**
+   * The batches interleaved with the reasoning around them, in order. Only
+   * set when the rail folded reasoning in; without it the rail's steps are
+   * just its batches.
+   */
+  steps?: ToolRailStep[];
 
   /**
    * Explicit override for the collapsed header line. Left unset by the live

@@ -29,7 +29,8 @@ import { parseIso } from '../../../../../utils/date';
 /** Data passed to the artifact-share dialog. */
 export interface ArtifactShareModalData {
   artifactId: string;
-  /** The version to share. A share pins one immutable version, never HEAD. */
+  /** The version to share. Pinned unless the owner ticks "Always show the
+   *  latest version", in which case the link opens HEAD. */
   version: number;
   title: string;
   ownerEmail: string;
@@ -52,11 +53,13 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
  * radio, same email chips, same clipboard copy, same CDK dialog shell —
  * with three deliberate differences:
  *
- *  - **A share pins one immutable version, never HEAD.** Artifact
- *    versions are append-only, so the recipient's view can never change
- *    under them. Existing links are therefore listed *with* their
- *    version: a link made against v1 keeps showing v1 after the model
- *    writes v2.
+ *  - **A share pins one immutable version unless the owner opts in to
+ *    following.** Artifact versions are append-only, so a pinned link
+ *    made against v1 keeps showing v1 after the model writes v2, and
+ *    existing links are listed *with* their version. "Always show the
+ *    latest version" is the explicit opt-in to a link that opens the
+ *    newest version instead; it is off by default, and a project share
+ *    can't follow, because a project's Outputs record one version.
  *  - **Create and manage live in one dialog.** Conversations split these
  *    across the share modal and the manage-shares dialog because the
  *    latter is reached from the sessions list; an artifact has no
@@ -203,6 +206,30 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
         </div>
       }
 
+      <!-- Follow the latest version (opt-in; never for project shares) -->
+      @if (canFollow()) {
+        <label
+          class="mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border border-gray-200 p-3 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-700/40"
+        >
+          <input
+            type="checkbox"
+            [checked]="followsLatest()"
+            (change)="followsLatest.set($any($event.target).checked)"
+            [disabled]="!!shareResult()"
+            class="mt-1 size-4 rounded text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+          />
+          <span class="min-w-0">
+            <span class="block text-sm/6 font-medium text-gray-900 dark:text-white"
+              >Always show the latest version</span
+            >
+            <span class="block text-xs/5 text-gray-600 dark:text-gray-300">
+              People with the link see each new version as it's made. Leave
+              this off to share version {{ data.version }} only.
+            </span>
+          </span>
+        </label>
+      }
+
       <!-- Result of the share just created -->
       @if (shareResult(); as result) {
         <div
@@ -214,8 +241,13 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
             Artifact shared
           </p>
           <p class="mb-2 text-xs/5 text-state-success-700 dark:text-state-success-400">
-            This link always shows version {{ result.version }}. Later
-            versions aren't included.
+            @if (result.followsLatest) {
+              This link always opens the latest version, including versions
+              made after today.
+            } @else {
+              This link always shows version {{ result.version }}. Later
+              versions aren't included.
+            }
             @if (result.accessLevel === 'project') {
               It’s listed under Outputs on the project page, replacing any
               earlier version shared there.
@@ -281,9 +313,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                   <span
                     class="truncate text-sm/6 text-gray-700 dark:text-gray-300"
                   >
-                    <span class="font-medium"
-                      >Version {{ share.version }}</span
-                    >
+                    <span class="font-medium">{{ versionLabel(share) }}</span>
                     <span class="text-gray-500 dark:text-gray-400">
                       · {{ audienceLabel(share) }}
                       @if (formatDate(share.createdAt); as d) {
@@ -293,13 +323,24 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                   </span>
                 </span>
                 <span class="flex shrink-0 items-center gap-1">
+                  @if (!share.followsLatest && share.accessLevel !== 'project') {
+                    <button
+                      type="button"
+                      (click)="follow(share)"
+                      [disabled]="followingIds().has(share.shareId)"
+                      class="rounded-2xl px-3 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:text-gray-400 dark:hover:bg-gray-700"
+                      [attr.aria-label]="
+                        'Make the link for version ' + share.version + ' show the latest version'
+                      "
+                    >
+                      {{ followingIds().has(share.shareId) ? 'Updating…' : 'Follow latest' }}
+                    </button>
+                  }
                   <button
                     type="button"
                     (click)="copyLink(share)"
                     class="rounded-2xl px-3 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700"
-                    [attr.aria-label]="
-                      'Copy link for version ' + share.version
-                    "
+                    [attr.aria-label]="'Copy link for ' + versionLabel(share)"
                   >
                     {{
                       copiedShareId() === share.shareId ? 'Copied' : 'Copy'
@@ -310,9 +351,7 @@ export type ArtifactShareModalResult = ArtifactShare[] | undefined;
                     (click)="revoke(share)"
                     [disabled]="revokingIds().has(share.shareId)"
                     class="rounded-2xl px-3 py-1 text-xs/5 font-medium text-state-danger-600 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 disabled:cursor-not-allowed disabled:opacity-60 dark:text-state-danger-400 dark:hover:bg-state-danger-500/10"
-                    [attr.aria-label]="
-                      'Revoke link for version ' + share.version
-                    "
+                    [attr.aria-label]="'Revoke link for ' + versionLabel(share)"
                   >
                     {{
                       revokingIds().has(share.shareId)
@@ -383,6 +422,12 @@ export class ArtifactShareModalComponent implements OnInit {
   protected shares = signal<ArtifactShare[]>([]);
   protected copiedShareId = signal<string | null>(null);
   protected revokingIds = signal<Set<string>>(new Set());
+  protected followingIds = signal<Set<string>>(new Set());
+  /** "Always show the latest version". Off by default: a link pins one version. */
+  protected followsLatest = signal(false);
+
+  /** A project share records one version in the project's Outputs, so it can't follow. */
+  protected readonly canFollow = computed(() => this.selectedAccess() !== 'project');
 
   /** Set once anything is committed, so closing reports a result rather
    *  than `undefined` ("cancelled") even if the created link was then
@@ -450,6 +495,10 @@ export class ArtifactShareModalComponent implements OnInit {
     this.selectedAccess.set(value);
   }
 
+  protected versionLabel(share: ArtifactShare): string {
+    return share.followsLatest ? 'Latest version' : `Version ${share.version}`;
+  }
+
   protected audienceLabel(share: ArtifactShare): string {
     if (share.accessLevel === 'public') return 'Anyone signed in';
     if (share.accessLevel === 'project') return 'Project members';
@@ -491,6 +540,7 @@ export class ArtifactShareModalComponent implements OnInit {
         this.data.version,
         this.selectedAccess(),
         emails,
+        this.canFollow() && this.followsLatest(),
       );
 
       this.committed = true;
@@ -524,6 +574,34 @@ export class ArtifactShareModalComponent implements OnInit {
       this.error.set(describeShareError(err) ?? 'Failed to revoke this link.');
     } finally {
       this.revokingIds.update((ids) => {
+        const next = new Set(ids);
+        next.delete(share.shareId);
+        return next;
+      });
+    }
+  }
+
+  /** Switch an existing pinned link to the latest version. Same URL, so
+   *  anyone already holding it sees the newest version on their next open. */
+  protected async follow(share: ArtifactShare): Promise<void> {
+    if (this.followingIds().has(share.shareId)) return;
+    this.followingIds.update((ids) => new Set(ids).add(share.shareId));
+    this.error.set(null);
+    try {
+      const updated = await this.shareService.updateShare(
+        share.shareId,
+        undefined,
+        undefined,
+        true,
+      );
+      this.committed = true;
+      this.shares.update((list) =>
+        list.map((s) => (s.shareId === updated.shareId ? updated : s)),
+      );
+    } catch (err: unknown) {
+      this.error.set(describeShareError(err) ?? 'Failed to update this link.');
+    } finally {
+      this.followingIds.update((ids) => {
         const next = new Set(ids);
         next.delete(share.shareId);
         return next;

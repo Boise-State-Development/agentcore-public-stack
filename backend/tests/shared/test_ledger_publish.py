@@ -133,6 +133,36 @@ class TestEvalRow:
         assert SESSION not in text and USER not in text
         lp.assert_content_free(row, lp.EVAL_ROW_FIELDS, forbidden=[SESSION, USER])
 
+    def test_carries_each_cases_outcome_and_the_track_and_passes_the_guard(self):
+        cases = {"tool_selection.a": {"pass": False, "passes": 0, "samples": 1, "base": True,
+                                      "codes": ["tool_missing"], "names": ["calculator"]}}
+        row = _eval_row(call_rows=[_call()], cases=cases, track="nightly")
+        assert row["cases"] == cases and row["track"] == "nightly"
+        lp.assert_content_free(row, lp.EVAL_ROW_FIELDS, forbidden=[SESSION, USER])
+
+    def test_carries_what_the_passing_cases_cost_and_passes_the_guard(self):
+        efficiency = {"tool_selection": {
+            "run": {"outputTokens": {"n": 8, "sum": 1600.0}},
+            "vsBaseline": {"paired": 8, "outputTokens": {"n": 8, "base": 1500.0, "run": 1600.0}},
+        }}
+        row = _eval_row(call_rows=[_call()], efficiency=efficiency)
+        assert row["efficiency"] == efficiency
+        lp.assert_content_free(row, lp.EVAL_ROW_FIELDS, forbidden=[SESSION, USER])
+        assert "efficiency" not in _eval_row()
+
+    def test_an_unknown_track_is_refused(self):
+        with pytest.raises(lp.PublishError):
+            _eval_row(track="hourly")
+
+    def test_without_cases_or_track_the_row_is_as_before(self):
+        row = _eval_row()
+        assert "cases" not in row and "track" not in row
+
+    def test_the_guard_still_refuses_prose_inside_a_case_entry(self):
+        row = _eval_row(cases={"tool_selection.a": {"pass": False, "codes": ["did not call calculator"]}})
+        with pytest.raises(lp.PublishError):
+            lp.assert_content_free(row, lp.EVAL_ROW_FIELDS)
+
     def test_a_run_without_started_at_cannot_be_keyed(self):
         with pytest.raises(lp.PublishError):
             lp.eval_ledger_row({**META, "startedAt": None}, [], served=lp.ServedBuild("1", "b", "cost_rows"))
@@ -257,7 +287,9 @@ class TestWrite:
 def test_the_ledger_reader_reads_a_published_row_back_whole(rollup_table):
     """The quality route filters rows through ``export_row`` and matches them by unit (PR-4)."""
     reader = pytest.importorskip("apis.shared.costs.ledger_reader")
-    for row in (_eval_row(call_rows=[_call()]),
+    cases = {"tool_selection.a": {"pass": True, "passes": 1, "samples": 1, "base": False,
+                                  "codes": ["tool_missing"], "names": ["calculator"]}}
+    for row in (_eval_row(call_rows=[_call()], cases=cases, track="nightly"),
                 TestSmokeRow()._row(results=[dict(r) for r in _smoke_results()])):
         assert lp.put_ledger_row(row, table=rollup_table)
     store = reader.LedgerStore(table=rollup_table)
@@ -269,3 +301,4 @@ def test_the_ledger_reader_reads_a_published_row_back_whole(rollup_table):
         assert reader.Unit("1.33.0", RUNTIME_BUILD).matches(stored)
         assert reader.Unit("1.33.0").matches(stored)
         assert not reader.Unit("1.33.0", APP_API_BUILD).matches(stored)
+    assert reader.export_row(evals[0])["cases"] == cases

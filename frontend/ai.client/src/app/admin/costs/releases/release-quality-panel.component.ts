@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import {
   LedgerEvalRun,
   LedgerPair,
@@ -18,6 +19,8 @@ interface EvalRunView {
   id: string;
   title: string;
   gateFailed: boolean;
+  /** Query params for `/admin/evaluations`, filtered to this run's build (eval-harness spec §16 D21). */
+  link: Record<string, string>;
   families: { name: string; n: number; base: number; run: number; gained: number; lost: number; p: string; gate: string }[];
 }
 
@@ -63,6 +66,7 @@ const OUTCOME_LABELS: [string, string][] = [
 @Component({
   selector: 'app-release-quality-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterLink],
   template: `
     <section
       aria-labelledby="release-quality-heading"
@@ -94,6 +98,13 @@ const OUTCOME_LABELS: [string, string][] = [
                         <span [class]="run.gateFailed ? 'font-semibold text-state-danger-700 dark:text-state-danger-300' : 'font-semibold text-state-success-700 dark:text-state-success-300'">
                           gate {{ run.gateFailed ? 'failed' : 'passed' }}
                         </span>
+                        ·
+                        <a
+                          routerLink="/admin/evaluations"
+                          [queryParams]="run.link"
+                          class="font-medium text-primary-700 underline underline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-300"
+                          data-testid="eval-link"
+                        >Trends for this build</a>
                       </caption>
                       <thead class="bg-gray-50 dark:bg-gray-900/40">
                         <tr class="text-left font-medium text-gray-600 dark:text-gray-300">
@@ -304,6 +315,7 @@ function evalView(run: LedgerEvalRun, index: number): EvalRunView {
     id: run.startedAt ?? String(index),
     title: runTitle(run, run.modelId),
     gateFailed: !!run.gateFailed,
+    link: evaluationsLink(run),
     families: Object.entries(run.families ?? {})
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, f]) => ({
@@ -317,6 +329,15 @@ function evalView(run: LedgerEvalRun, index: number): EvalRunView {
         gate: f.gate,
       })),
   };
+}
+
+/** The Evaluations page filtered to this run's build, with the run open (eval-harness spec §16 D21). */
+function evaluationsLink(run: LedgerEvalRun): Record<string, string> {
+  const params: Record<string, string> = { track: run.track ?? 'untracked' };
+  if (run.modelId) params['model'] = run.modelId;
+  if (run.build) params['build'] = run.build;
+  if (run.startedAt) params['run'] = run.startedAt;
+  return params;
 }
 
 function smokeView(run: LedgerSmokeRun, index: number) {

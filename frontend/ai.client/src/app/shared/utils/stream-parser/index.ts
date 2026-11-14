@@ -72,6 +72,8 @@ export {
   validateAgentStatusEvent,
   validateToolGroupSummaryEvent,
   validateSourceProvenanceEvent,
+  validateDocumentExtractionEvent,
+  normalizeDocumentExtractionRun,
 } from './stream-parser-core';
 
 // Types
@@ -110,6 +112,9 @@ export type {
   SourceProvenanceEvent,
   SourceProvenanceClaim,
   SourceLocator,
+  DocumentExtractionEvent,
+  DocumentExtractionRun,
+  DocumentExtractionField,
   McpUiCsp,
   McpUiPermissions,
   StreamEventType,

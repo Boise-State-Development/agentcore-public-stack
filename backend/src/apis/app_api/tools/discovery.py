@@ -140,7 +140,7 @@ def _paginate(list_page, extract) -> tuple[list, bool]:
             entries = entries[:MAX_CAPABILITY_ENTRIES]
             truncated = True
             break
-        cursor = getattr(result, "nextCursor", None)
+        cursor = getattr(result, "next_cursor", None)
         if not cursor:
             break
     else:
@@ -176,13 +176,13 @@ def _prompt_entries(result) -> List[MCPPromptEntry]:
 def _resource_entries(result, *, templates: bool) -> List[MCPResourceEntry]:
     out: List[MCPResourceEntry] = []
     source = (
-        getattr(result, "resourceTemplates", None)
+        getattr(result, "resource_templates", None)
         if templates
         else getattr(result, "resources", None)
     ) or []
     for resource in source:
-        # A template carries `uriTemplate`; a concrete resource carries `uri`.
-        uri = getattr(resource, "uriTemplate", None) if templates else None
+        # A template carries `uri_template`; a concrete resource carries `uri`.
+        uri = getattr(resource, "uri_template", None) if templates else None
         uri = uri or getattr(resource, "uri", None)
         if not uri:
             continue
@@ -191,7 +191,7 @@ def _resource_entries(result, *, templates: bool) -> List[MCPResourceEntry]:
                 uri=str(uri),
                 name=_clip(getattr(resource, "name", None)),
                 description=_clip(getattr(resource, "description", None)),
-                mime_type=getattr(resource, "mimeType", None),
+                mime_type=getattr(resource, "mime_type", None),
                 uri_template=templates,
             )
         )

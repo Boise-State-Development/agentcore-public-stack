@@ -219,7 +219,9 @@ class TestRedlineTool:
         assert store["filename"] == expected
 
     @pytest.mark.asyncio
-    async def test_an_invalid_output_name_given_by_the_model_is_still_refused(self, store):
+    async def test_an_output_name_given_by_the_model_is_made_safe_not_refused(self, store):
+        """Dev, 2026-11-11: a 13-change call was refused for spaces in the name,
+        and the model had to send every change again to fix it."""
         from agents.builtin_tools.word_document_tool import make_redline_word_document_tool
 
         tool = make_redline_word_document_tool("s1", "u1", "Pat Reviewer")
@@ -227,12 +229,11 @@ class TestRedlineTool:
             tool,
             document_name="services-agreement",
             changes=[{"find": "Idaho", "replace": "Utah"}],
-            output_name="my redline",
+            output_name="Services Agreement - redline",
         )
 
-        assert result["status"] == "error"
-        assert "Invalid output name 'my redline'" in result["content"][0]["text"]
-        assert store == {}
+        assert json.loads(result)["payload"]["filename"] == "Services-Agreement-redline.docx"
+        assert store["filename"] == "Services-Agreement-redline.docx"
 
     @pytest.mark.asyncio
     async def test_a_change_that_cannot_be_placed_saves_nothing(self, store):

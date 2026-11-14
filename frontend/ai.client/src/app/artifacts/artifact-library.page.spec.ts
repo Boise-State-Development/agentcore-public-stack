@@ -140,6 +140,7 @@ describe('ArtifactLibraryPage', () => {
         route: readonly string[];
         ownerEmail?: string;
         timestampLabel: string;
+        followsLatest?: boolean;
       }>;
       typeOptions: () => Array<{ value: string; label: string }>;
       isEmpty: () => boolean;
@@ -388,6 +389,27 @@ describe('ArtifactLibraryPage', () => {
       expect(row.ownerEmail).toBe('ada@x.com');
       // "Updated" is the owner's clock and means nothing to a recipient.
       expect(row.timestampLabel).toBe('Shared');
+    });
+
+    it('labels a received link that follows the latest version', async () => {
+      // Its `version` is the one current when the link was made, which is
+      // not what it opens, so showing "v2" would be wrong.
+      mockHttp.listLibrary.mockResolvedValue([]);
+      withInbox([
+        stubShared({ shareId: 'f', version: 2, followsLatest: true }),
+        stubShared({ shareId: 'p', version: 2 }),
+      ]);
+      const fixture = await createComponent();
+      const c = api(fixture);
+      fixture.detectChanges();
+
+      expect(c.filtered().map((r) => [r.key, r.followsLatest])).toEqual([
+        ['shared:f', true],
+        ['shared:p', false],
+      ]);
+      const page = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(page).toContain('Latest version');
+      expect(page).toContain('v2');
     });
 
     it('searches received artifacts by sender as well as title', async () => {

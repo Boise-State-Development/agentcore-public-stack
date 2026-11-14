@@ -113,6 +113,10 @@ def _compaction_after_cut(compaction: Optional[Dict[str, Any]], logical_cut: int
     # was already below the old anchor.
     anchor = int(compaction.get("truncationAnchor", checkpoint) or 0)
     updated["truncationAnchor"] = min(anchor, logical_cut)
+    # Estimates only: reasoning in the messages that take the cut's indices is
+    # produced after it, so it is billed (``CompactionState.reasoning_live_from``).
+    if compaction.get("reasoningLiveFrom") is not None:
+        updated["reasoningLiveFrom"] = min(int(compaction["reasoningLiveFrom"]), logical_cut)
     # A parked cut was computed over the history being hidden.
     for key in ("pendingCheckpoint", "pendingSummary", "pendingHardCeiling", "pendingSince"):
         updated[key] = None

@@ -152,4 +152,117 @@ export interface HandoffReview {
   cardRemoved: boolean;
   /** Present when a brief was requested (`features.handoffBrief`). */
   brief?: HandoffBrief;
+  /** The source conversation's files the sheet lists (§4.9); absent until the listing lands. */
+  files?: ShareableFile[];
+  /** The listed files the user is sharing, in list order. */
+  fileIds: string[];
+}
+
+/** A file the review sheet can share, as the source's file listing returned it. */
+export interface ShareableFile {
+  uploadId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  /** Set when the source's file is itself shared from elsewhere: the line names its original. */
+  linkedFrom?: { sessionId: string; uploadId: string; fromTitle: string } | null;
+}
+
+/** Files one handoff or one delivery shares (`HANDOFF_MAX_FILES` / `DELIVERY_MAX_FILES`). */
+export const MAX_SHARED_FILES = 5;
+
+/** User turns whose attachments the review sheet ticks by default (§4.9). */
+export const SHARED_FILES_RECENT_TURNS = 5;
+
+/** A reference to an artifact the sending conversation made, pinned at the version sent (§4.8). */
+export interface DeliveryArtifact {
+  artifactId: string;
+  version: number;
+  title: string;
+  contentType: string;
+}
+
+/**
+ * A file a card or a handoff shares by reference (§4.9): always the original, and where it lives.
+ * The receiving conversation reads it through a reference row (`referenceUploadId`), or, for a
+ * file handed back to the conversation it came from, through the original itself.
+ */
+export interface DeliveryFile {
+  uploadId: string;
+  sessionId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+/** One `<file …/>` line: the id the receiving model reads, and what the file is. */
+export interface FileLine {
+  uploadId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+/**
+ * A card waiting on a conversation's composer (`deliveries` on `GET /messages`, handoffs spec §4.8):
+ * text from another of the user's conversations that the next send there carries.
+ */
+export interface DeliveryView {
+  deliveryId: string;
+  fromSessionId: string;
+  fromTitle: string;
+  handoffId?: string;
+  origin: 'user' | 'agent';
+  text: string;
+  artifacts: DeliveryArtifact[];
+  /** Files the card shares by reference (§4.9). Absent from rows written before PR-0.4a. */
+  files?: DeliveryFile[];
+  createdAt: string;
+}
+
+/** `POST /sessions/{targetId}/handoffs/send-back`: a target's answer, offered back to its source. */
+export interface CreateSendBackResponse {
+  handoffId: string;
+  sourceSessionId: string;
+  sourceTitle: string;
+  /** The sending conversation's title, which the card is labelled with. */
+  fromTitle: string;
+  messageIndex: number;
+  excerpt: string;
+  excerptHash: string;
+  artifacts: DeliveryArtifact[];
+  /** The target's own files, newest first, offered with the result (§4.9). */
+  files?: DeliveryFile[];
+  /** Present when the delivery was made at once (Bring back result). */
+  deliveryId?: string;
+}
+
+/** `POST /sessions/{targetId}/handoffs/{handoffId}/deliver`: Send to *{title}* made its card. */
+export interface DeliverSendBackResponse {
+  deliveryId: string;
+  sourceSessionId: string;
+  sourceTitle: string;
+}
+
+/** Send to *{title}*'s review sheet, in the target conversation (§4.3). */
+export interface SendBackReview {
+  messageIndex: number;
+  phase: 'loading' | 'ready' | 'sending' | 'error';
+  error?: string;
+  created?: CreateSendBackResponse;
+  /** The card as it will be sent (editable). */
+  text: string;
+  /** The offered artifacts the user is sending (unticking one leaves it behind). */
+  artifactIds: string[];
+  /** The offered files the user is sending (§4.9). */
+  fileIds: string[];
+}
+
+/** One delivery block read back out of a user message the model received (the sent bubble's card). */
+export interface DeliveryBlock {
+  fromTitle: string;
+  text: string;
+  artifacts: DeliveryArtifact[];
+  /** The block's `<file …/>` lines (§4.9). */
+  files: FileLine[];
 }

@@ -23,6 +23,7 @@ import {
   type FileMetadata,
 } from '../../services/file-upload';
 import { FEATURES } from '../../services/features';
+import { AttachmentLimitsService } from '../../services/file-upload/attachment-limits';
 
 /**
  * Check if MIME type is an image
@@ -240,8 +241,8 @@ const DEFAULT_COLORS = {
 
       <!-- Action buttons -->
       <div class="flex shrink-0 items-center gap-1">
-        @if (isError() && pendingUpload()) {
-          <!-- Retry button -->
+        @if (canRetry()) {
+          <!-- Retry button: not for a refusal the same file would meet again -->
           <button
             type="button"
             (click)="onRetryClick($event)"
@@ -287,6 +288,7 @@ export class FileCardComponent {
 
   /** Present only while the deployment has the attachments KB. */
   private readonly searchStatus = inject(FEATURES).attachmentKb ? inject(AttachmentSearchStatusService) : null;
+  private readonly attachmentLimits = inject(AttachmentLimitsService);
 
   constructor() {
     // A ready large document follows its search index (one poll per upload,
@@ -393,6 +395,11 @@ export class FileCardComponent {
   );
   protected readonly isCompleting = computed(() => this.status() === 'completing');
   protected readonly isError = computed(() => this.status() === 'error');
+  /** Retry only a failed upload that could go through next time; see `PendingUpload.permanent`. */
+  protected readonly canRetry = computed(() => {
+    const pending = this.pendingUpload();
+    return this.isError() && !!pending && !pending.permanent;
+  });
   protected readonly isReady = computed(() => this.status() === 'ready');
   protected readonly isImage = computed(() => isImageMimeType(this.mimeType()));
 
@@ -401,7 +408,7 @@ export class FileCardComponent {
   protected readonly isReference = computed(() => {
     const pending = this.pendingUpload();
     const mime = pending ? resolveMimeType(pending.file) : this.mimeType();
-    return isReferenceDocument(mime, this.sizeBytes());
+    return isReferenceDocument(mime, this.sizeBytes(), this.attachmentLimits.limits());
   });
 
   /** What the large-document chip says: read on demand, indexing, or searchable. */

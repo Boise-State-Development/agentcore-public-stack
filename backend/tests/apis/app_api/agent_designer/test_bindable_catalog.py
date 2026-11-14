@@ -70,6 +70,7 @@ def _tool(**kw):
         category="research", protocol="mcp", status=ToolStatus.ACTIVE,
         retirement_note=None, retires_on=None,
         requires_oauth_provider=None,
+        voice_available=False,
         server_tools=[SimpleNamespace(name="search", description="d", needs_approval=False, enabled=True)],
     )
     base.update(kw)
@@ -88,6 +89,14 @@ class TestTools:
         items = await bc.list_bindable("tool", _user(), tool_service=_tool_svc([_tool()]))
         assert items[0].ref == "wikipedia"
         assert items[0].meta["serverTools"][0]["name"] == "search"
+
+    @pytest.mark.asyncio
+    async def test_voice_availability_rides_on_meta(self):
+        """#625: the Designer names the bound tools voice mode leaves out."""
+        items = await bc.list_bindable(
+            "tool", _user(), tool_service=_tool_svc([_tool(), _tool(tool_id="calculator", voice_available=True)])
+        )
+        assert [i.meta["voiceAvailable"] for i in items] == [False, True]
 
     @pytest.mark.asyncio
     async def test_status_rides_on_meta(self):

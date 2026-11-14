@@ -15,6 +15,7 @@ import {
   NEW_CONVERSATION_DRAFT_KEY,
 } from './services/session/composer-draft-storage.service';
 import { ChatStateService } from './services/chat/chat-state.service';
+import { lastUserText } from './services/chat/provider-outage';
 import { SidenavService } from '../services/sidenav/sidenav.service';
 import { HeaderService } from '../services/header/header.service';
 import { ModelService } from './services/model/model.service';
@@ -100,7 +101,8 @@ export class ConversationPage implements OnDestroy {
   private toast = inject(ToastService);
   private features = inject(FEATURES);
   private agentHandoff = inject(AgentHandoffService);
-  private binding = inject(ConversationBindingService);
+  /** Protected: the template hands the URL binding to the composer's voice control (#625). */
+  protected readonly binding = inject(ConversationBindingService);
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
 
@@ -779,7 +781,7 @@ export class ConversationPage implements OnDestroy {
       });
   }
 
-  async onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, invokedSkillIds?: string[], folders?: FolderAttachmentData[] }) {
+  async onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, invokedSkillIds?: string[], folders?: FolderAttachmentData[], pastedChars?: number }) {
     // Use the effective session ID (route sessionId or staged sessionId)
     const sessionIdToUse = this.effectiveSessionId();
 
@@ -853,6 +855,7 @@ export class ConversationPage implements OnDestroy {
       undefined,
       message.invokedSkillIds,
       message.folders,
+      message.pastedChars,
     ).catch((error) => {
       console.error('Error sending chat request:', error);
     });
@@ -890,6 +893,24 @@ export class ConversationPage implements OnDestroy {
       .continueTruncatedTurn(sessionIdToUse, assistantIdToUse)
       .catch((error) => {
         console.error('Error continuing truncated turn:', error);
+      });
+  }
+
+  /**
+   * "Try again" under a provider-outage reply: send the last message again, a
+   * new turn, exactly what the reply advises the user to do by hand. The failed
+   * turn's attachments are still on the server's pending marker (a failed turn
+   * never clears it), so its files go with the resend without being re-attached.
+   */
+  onOutageRetryRequested() {
+    const text = lastUserText(this.messages());
+    if (!text) return;
+    const assistantIdToUse =
+      this.binding.boundAgentId() || this.assistant()?.assistantId || undefined;
+    this.chatRequestService
+      .submitChatRequest(text, this.effectiveSessionId(), undefined, assistantIdToUse)
+      .catch((error) => {
+        console.error('Error resending after a provider outage:', error);
       });
   }
 

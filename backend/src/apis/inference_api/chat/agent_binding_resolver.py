@@ -252,7 +252,9 @@ async def resolve_agent_invocation(
         # (docs/specs/model-retirement.md §5 Stage 3). The Agent's params ride
         # along; the successor's own spec drops what it does not support.
         effective = await resolve_effective_model(model_settings.model_id) or EffectiveModel(
-            requested_id=model_settings.model_id, model_id=model_settings.model_id
+            requested_id=model_settings.model_id,
+            model_id=model_settings.model_id,
+            catalog_read=False,
         )
         model_id = effective.model_id
         provider = effective.provider if effective.redirected else model_settings.provider
@@ -262,7 +264,9 @@ async def resolve_agent_invocation(
                 plan.unavailable.model_id = model_settings.model_id
             else:
                 raise AgentBindingBlockedError(retired_model_message(effective.retired, agent=True))
-        elif await app_role_service.can_access_model(invoker, model_id, record=effective.record):
+        elif await app_role_service.can_access_model(
+            invoker, model_id, record=effective.record, catalog_read=effective.catalog_read
+        ):
             plan.model_override = ResolvedModel(
                 model_id=model_id,
                 provider=provider,
@@ -273,7 +277,9 @@ async def resolve_agent_invocation(
             plan.unavailable.model_id = model_id
         else:
             raise AgentBindingBlockedError(
-                model_access_denied_message(model_id, effective.record, agent=True)
+                model_access_denied_message(
+                    model_id, effective.record, agent=True, uncataloged=effective.uncataloged
+                )
             )
 
     plan.tools = await _resolve_tools(assistant, invoker, plan.unavailable if degrade else None)

@@ -19,7 +19,9 @@ Four rules, each a guard of §8:
   publishing the same run twice writes the same item twice. Nothing is
   ``ADD``ed: an ``ADD`` replayed is a double count.
 * **Content-free (D7).** A row carries ids (version, build, model, family, row
-  name, evaluator, commit, target) and numbers. No prompt, answer, failure
+  name, evaluator, commit, target, track, and on an eval row each synthetic
+  case id with its closed failure codes and the tool or skill names they are
+  about) and numbers. No prompt, answer, failure
   text, session id or user id; :func:`assert_content_free` refuses a row with
   any string that is not id-shaped or that contains one of the run's own
   session or user ids, before anything is written.
@@ -61,7 +63,7 @@ BUILD_FROM_IMAGE_TAG = "image_tag"
 EVAL_ROW_FIELDS = frozenset({
     "PK", "SK", "runKind", "date", "startedAt", "publishedAt", "appVersion", "build", "buildSource",
     "otherBuildCalls", "gitCommit", "modelId", "k", "target", "families", "gateFailed", "judgeModel",
-    "judgeMeans", "samples", "calls", "costUsd", "durationS",
+    "judgeMeans", "samples", "calls", "costUsd", "durationS", "track", "cases", "efficiency",
 })
 SMOKE_ROW_FIELDS = frozenset({
     "PK", "SK", "runKind", "date", "startedAt", "publishedAt", "appVersion", "build", "buildSource",
@@ -69,6 +71,12 @@ SMOKE_ROW_FIELDS = frozenset({
     "firstTokenMsMedian", "firstTokenTurns", "secondTurnCacheRead", "secondTurnCacheWrite", "calls",
     "costUsd", "durationS",
 })
+
+
+#: Which pass a published eval run was (eval-harness spec §16 D20). The
+#: Evaluations page draws one trend per track: a k=1 nightly run and a k=3
+#: release run are different measurements, and a line through both is neither.
+EVAL_TRACKS = ("nightly", "release", "manual")
 
 
 class PublishError(RuntimeError):
@@ -231,15 +239,29 @@ def eval_ledger_row(
     judge_comparisons: Sequence[Any] = (),
     judge_model: Optional[str] = None,
     call_rows: Sequence[Mapping[str, Any]] = (),
+    cases: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    track: Optional[str] = None,
+    efficiency: Optional[Mapping[str, Mapping[str, Any]]] = None,
     published_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """The ``LEDGER#EVAL`` row: §8's report table, with nothing from any answer.
 
+    ``efficiency`` is ``{family: {"run": ..., "vsBaseline": ...}}`` from
+    ``apis.shared.evals.efficiency``: what the passing cases cost to answer
+    (tokens, tool calls, time), as counts and sums. Numbers only.
+
     ``comparisons`` are ``apis.shared.evals.score.FamilyComparison`` and
     ``judge_comparisons`` ``apis.shared.evals.report.JudgeComparison``. A
-    comparison's ``reason`` is prose and the flipped case ids are left out: the
-    row says *that* a family moved, and ``score --explain`` on the run says why.
+    comparison's ``reason`` is prose and is left out: the row says *that* a
+    family moved, and ``score --explain`` on the run says why.
+
+    ``cases`` is ``apis.shared.evals.report.case_ledger_entries``: each case's
+    outcome as a synthetic case id, counts and closed failure codes (eval-harness
+    spec §16 D20), which the Evaluations page reads for its flip matrix.
+    ``track`` is one of :data:`EVAL_TRACKS`.
     """
+    if track is not None and track not in EVAL_TRACKS:
+        raise PublishError(f"unknown track {track!r} (known: {', '.join(EVAL_TRACKS)})")
     row = _base_row(EVAL_PK, "eval", str(meta.get("startedAt") or ""), served, published_at)
     row.update({
         "modelId": str(meta.get("model_id") or ""),
@@ -255,6 +277,12 @@ def eval_ledger_row(
         "gateFailed": any(getattr(c, "failed", False) for c in comparisons),
         "samples": len(result_rows),
     })
+    if track:
+        row["track"] = track
+    if cases:
+        row["cases"] = {str(case_id): dict(entry) for case_id, entry in cases.items()}
+    if efficiency:
+        row["efficiency"] = json.loads(json.dumps(efficiency))
     if meta.get("gitCommit"):
         row["gitCommit"] = str(meta["gitCommit"])
     if judge_comparisons:

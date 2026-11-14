@@ -5,6 +5,9 @@
     POST /sessions/{session_id}/handoffs/{handoff_id}/dismiss    cancel an open one
     POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/read    mark its inbox entries read
     POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/events  count a browser-side fact
+    POST /sessions/{session_id}/handoffs/send-back                send a target's answer back (§4.3)
+    POST /sessions/{session_id}/handoffs/{handoff_id}/deliver     Send to *{title}* after review
+    POST /sessions/{session_id}/deliveries/{delivery_id}/dismiss  remove a pending card (§4.8)
 
 All 404 to a signed-in user while ``HANDOFFS_ENABLED`` is off (401 unauthenticated regardless).
 
@@ -21,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,8 +43,27 @@ from apis.shared.handoff import (
     render_excerpt,
     wrap_handoff_context,
 )
+from apis.shared.files.linked_files import DELIVERY_MAX_FILES
+from apis.shared.handoff.delivery import (
+    DELIVERY_MAX_ARTIFACTS,
+    DeliveryArtifact,
+    DeliveryFileView,
+    DeliveryStore,
+    get_delivery_store,
+)
+from apis.shared.handoff.excerpt import CHARS_PER_TOKEN
 from apis.shared.handoff.metrics import emit_handoff_metric
 from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, HandoffView
+from apis.shared.handoff.send_back import (
+    DeliveryRefused,
+    LinkedPair,
+    load_linked_pair,
+    offered_artifacts,
+    offered_files,
+    prepare_delivery,
+    render_return_excerpt,
+    write_delivery,
+)
 from apis.shared.handoff.notify import HANDOFF_NOTIFICATION_KINDS
 from apis.shared.handoff.relay import load_relayed_prompts
 from apis.shared.notifications import NotificationService
@@ -163,6 +185,7 @@ async def create_handoff(
         excerpt_hash=context_hash(excerpt.text),
         excerpt_tokens=excerpt.estimated_tokens,
         turns_covered=turns,
+        source_project_id=_source_project_id(source),
         created_at=now,
         updated_at=now,
     )
@@ -185,6 +208,12 @@ async def create_handoff(
         source_message_index=row.source_message_index,
         source_title=source_title,
     )
+
+
+def _source_project_id(source: Any) -> Optional[str]:
+    """The Shared Project the source conversation is a task of, if any (§4.9: no file leaves one)."""
+    prefs = getattr(source, "preferences", None)
+    return getattr(prefs, "project_id", None) or None
 
 
 @router.get(
@@ -342,6 +371,305 @@ async def record_handoff_notification_event(
     detail = body.outcome if body.metric == "HandoffBrowserPermission" else body.channel
     emit_handoff_metric(body.metric, "mention", session_id=session_id, detail=detail)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Send back (§4.3) and deliveries (§4.8), PR-0.4 ---------------------------------------------
+
+
+class CreateSendBackRequest(BaseModel):
+    """Bring back result (``deliver``) or the start of Send to *{title}* (review first)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    message_index: Optional[int] = Field(
+        None, alias="messageIndex", ge=0, description="The assistant message to send back; the last one when absent"
+    )
+    deliver: bool = Field(False, description="Make the delivery now (Bring back result) instead of opening a review")
+    file_ids: Optional[List[str]] = Field(
+        None,
+        alias="fileIds",
+        max_length=DELIVERY_MAX_FILES,
+        description="With deliver, the files to bring back instead of the ones offered (§4.9)",
+    )
+    files_only: bool = Field(
+        False,
+        alias="filesOnly",
+        description="With deliver and fileIds: bring back just these files, without the answer (the row's per-file Bring back)",
+    )
+
+
+class CreateSendBackResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    handoff_id: str = Field(..., alias="handoffId")
+    source_session_id: str = Field(..., alias="sourceSessionId", description="Where the result goes")
+    source_title: str = Field(..., alias="sourceTitle")
+    from_title: str = Field(..., alias="fromTitle", description="This conversation's title, which the block names")
+    message_index: int = Field(..., alias="messageIndex")
+    excerpt: str = Field(..., description="The return excerpt: the message's text, capped")
+    excerpt_hash: str = Field(..., alias="excerptHash")
+    artifacts: List[DeliveryArtifact] = Field(
+        default_factory=list, description="Artifacts the message produced, offered with it"
+    )
+    files: List[DeliveryFileView] = Field(
+        default_factory=list, description="This conversation's own files, newest first, offered with it (§4.9)"
+    )
+    delivery_id: Optional[str] = Field(None, alias="deliveryId", description="Set when the delivery was made")
+
+
+class DeliverSendBackRequest(BaseModel):
+    """Send to *{title}*: the reviewed card and the artifacts left on it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    text: str = Field("", max_length=200_000)
+    artifact_ids: List[str] = Field(default_factory=list, alias="artifactIds", max_length=DELIVERY_MAX_ARTIFACTS)
+    file_ids: List[str] = Field(default_factory=list, alias="fileIds", max_length=DELIVERY_MAX_FILES)
+
+
+class DeliverSendBackResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    delivery_id: str = Field(..., alias="deliveryId")
+    source_session_id: str = Field(..., alias="sourceSessionId")
+    source_title: str = Field(..., alias="sourceTitle")
+
+
+#: How each refusal reads over HTTP. A conversation that isn't the caller's, or isn't linked, is a
+#: 404 like every other id here, so the response never says which ids exist.
+_REFUSAL_STATUS = {
+    "not_found": status.HTTP_404_NOT_FOUND,
+    "not_linked": status.HTTP_404_NOT_FOUND,
+    "same_conversation": status.HTTP_404_NOT_FOUND,
+    "artifact_not_in_sender": status.HTTP_404_NOT_FOUND,
+    "file_not_in_sender": status.HTTP_404_NOT_FOUND,
+    "too_many_files": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "project_task": status.HTTP_409_CONFLICT,
+    "empty": status.HTTP_422_UNPROCESSABLE_ENTITY,
+    "too_many_artifacts": status.HTTP_422_UNPROCESSABLE_ENTITY,
+}
+
+
+def _refused(exc: DeliveryRefused) -> HTTPException:
+    detail = {
+        "project_task": "Results can't be sent into or out of a shared project",
+        "empty": "There is nothing to send",
+        "too_many_artifacts": f"A result carries at most {DELIVERY_MAX_ARTIFACTS} artifacts",
+        "too_many_files": f"A result carries at most {DELIVERY_MAX_FILES} files",
+    }.get(exc.reason, "Conversation not found")
+    return HTTPException(status_code=_REFUSAL_STATUS.get(exc.reason, status.HTTP_404_NOT_FOUND), detail=detail)
+
+
+@router.post(
+    "/{session_id}/handoffs/send-back",
+    response_model=CreateSendBackResponse,
+    response_model_by_alias=True,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_send_back(
+    session_id: str,
+    body: CreateSendBackRequest,
+    user: User = Depends(require_handoffs_user),
+    store: HandoffStore = Depends(get_handoff_store),
+) -> CreateSendBackResponse:
+    """Offer one of this conversation's answers back to the conversation it was handed off from.
+
+    ``session_id`` is the handoff's **target**; the result goes to its ``spawnedFrom`` source.
+    Renders the return excerpt and lists the artifacts the message made. With ``deliver`` (Bring
+    back result, on the source's done row) the delivery is made at once; without it (Send to
+    *{title}*, in the target) the row stays ``open`` for the review sheet, and
+    ``POST …/handoffs/{handoffId}/deliver`` sends what the user kept.
+    """
+    from apis.shared.sessions.metadata import load_session_meta
+
+    meta = await load_session_meta(session_id, user.user_id)
+    spawned = (meta.row or {}).get("spawnedFrom") if meta.row else None
+    source_id = spawned.get("sessionId") if isinstance(spawned, dict) else None
+    if not isinstance(source_id, str) or not source_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    try:
+        pair = await load_linked_pair(user.user_id, session_id, source_id)
+    except DeliveryRefused as exc:
+        raise _refused(exc)
+
+    files = await asyncio.to_thread(offered_files, user.user_id, session_id)
+    if body.files_only:
+        if not body.deliver or not body.file_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="filesOnly needs deliver and fileIds"
+            )
+        message, index, excerpt, artifacts = {}, -1, "", []
+    else:
+        message, index = await _send_back_message(session_id, user.user_id, body.message_index)
+        excerpt = render_return_excerpt(message)
+        artifacts = await asyncio.to_thread(offered_artifacts, user.user_id, session_id, index)
+    if not excerpt and not artifacts and not files:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="That answer has nothing to send")
+
+    now = utc_now_iso()
+    from_title = str(pair.sender.get("title") or "")
+    row = Handoff(
+        handoff_id=str(uuid.uuid4()),
+        user_id=user.user_id,
+        session_id=session_id,
+        kind="send_back",
+        status="open",
+        agent_id=str(pair.sender.get("assistantId") or ""),
+        source_title=from_title,
+        source_message_index=index,
+        excerpt_hash=context_hash(excerpt) if excerpt else None,
+        excerpt_tokens=len(excerpt) // CHARS_PER_TOKEN,
+        target_session_id=source_id,
+        created_at=now,
+        updated_at=now,
+    )
+    try:
+        await asyncio.to_thread(store.create, row)
+    except HandoffStoreUnavailable:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Handoffs are unavailable")
+    emit_handoff_metric("HandoffCreated", "send_back", session_id=session_id, detail="row" if body.deliver else "target")
+
+    delivery_id: Optional[str] = None
+    if body.deliver:
+        file_ids = body.file_ids if body.file_ids is not None else [f.upload_id for f in files]
+        delivery_id = await _deliver(
+            store,
+            user,
+            row,
+            pair,
+            excerpt,
+            [a.artifact_id for a in artifacts],
+            file_ids,
+            origin_surface="row",
+        )
+    return CreateSendBackResponse(
+        handoff_id=row.handoff_id,
+        source_session_id=source_id,
+        source_title=str(pair.receiver.get("title") or ""),
+        from_title=from_title,
+        message_index=index,
+        excerpt=excerpt,
+        excerpt_hash=row.excerpt_hash or "",
+        artifacts=artifacts,
+        files=[DeliveryFileView.from_file(f) for f in files],
+        delivery_id=delivery_id,
+    )
+
+
+@router.post(
+    "/{session_id}/handoffs/{handoff_id}/deliver",
+    response_model=DeliverSendBackResponse,
+    response_model_by_alias=True,
+)
+async def deliver_send_back(
+    session_id: str,
+    handoff_id: str,
+    body: DeliverSendBackRequest,
+    user: User = Depends(require_handoffs_user),
+    store: HandoffStore = Depends(get_handoff_store),
+) -> DeliverSendBackResponse:
+    """Send to *{title}*: make the delivery from the reviewed card. Nothing navigates (§4.3).
+
+    409 once the send-back was already delivered or cancelled, so a double click sends once.
+    """
+    row = await _owned_row(store, user, session_id, handoff_id)
+    if row.kind != "send_back" or not row.target_session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Handoff not found")
+    if row.status != "open":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This result was already sent")
+    try:
+        pair = await load_linked_pair(user.user_id, session_id, row.target_session_id)
+    except DeliveryRefused as exc:
+        raise _refused(exc)
+    delivery_id = await _deliver(
+        store, user, row, pair, body.text, body.artifact_ids, body.file_ids, origin_surface="target"
+    )
+    return DeliverSendBackResponse(
+        delivery_id=delivery_id,
+        source_session_id=row.target_session_id,
+        source_title=str(pair.receiver.get("title") or ""),
+    )
+
+
+@router.post("/{session_id}/deliveries/{delivery_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT)
+async def dismiss_delivery(
+    session_id: str,
+    delivery_id: str,
+    user: User = Depends(require_handoffs_user),
+    deliveries: DeliveryStore = Depends(get_delivery_store),
+) -> Response:
+    """Remove a pending card from this conversation's composer (§4.8).
+
+    Idempotent for a dismissed card. 409 for one a send already attached; 404 for anything that
+    isn't the caller's card on this conversation.
+    """
+    try:
+        dismissed = await asyncio.to_thread(deliveries.dismiss, user.user_id, delivery_id, session_id)
+        if dismissed is not None:
+            emit_handoff_metric("DeliveryDismissed", "send_back", session_id=session_id, detail=dismissed.origin)
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        current = await asyncio.to_thread(deliveries.get, user.user_id, delivery_id)
+    except HandoffStoreUnavailable:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Handoffs are unavailable")
+    if current is None or current.to_session_id != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Delivery not found")
+    if current.status == "dismissed":
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This card was already sent")
+
+
+async def _deliver(
+    store: HandoffStore,
+    user: User,
+    row: Handoff,
+    pair: LinkedPair,
+    text: str,
+    artifact_ids: List[str],
+    file_ids: List[str],
+    *,
+    origin_surface: str,
+) -> str:
+    """Make a send-back's delivery and close its row, once. 409 if another request got there first.
+
+    Checks first, then the row's ``open`` → ``done`` (the exactly-once step), then the write. A
+    refusal leaves the row open, so the user can fix the card and send again.
+    """
+    try:
+        delivery = await prepare_delivery(
+            user_id=user.user_id,
+            from_session_id=row.session_id,
+            to_session_id=str(row.target_session_id),
+            text=text,
+            handoff_id=row.handoff_id,
+            artifact_ids=artifact_ids,
+            file_ids=file_ids,
+            pair=pair,
+        )
+    except DeliveryRefused as exc:
+        raise _refused(exc)
+    completed = await asyncio.to_thread(store.complete_send_back, user.user_id, row.handoff_id)
+    if completed is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This result was already sent")
+    await write_delivery(delivery)
+    emit_handoff_metric("SendBack", "send_back", session_id=row.session_id, detail=origin_surface)
+    return delivery.delivery_id
+
+
+async def _send_back_message(session_id: str, user_id: str, message_index: Optional[int]) -> Tuple[Dict[str, Any], int]:
+    """The assistant message a send-back carries, and its index. 404 if there is no such answer."""
+    try:
+        listing = await get_messages(session_id=session_id, user_id=user_id)
+    except FileNotFoundError:
+        listing = None
+    for message in reversed(listing.messages if listing else []):
+        if message.role != "assistant":
+            continue
+        index = parse_message_index(session_id, message.id)
+        if index is None or (message_index is not None and index != message_index):
+            continue
+        return message.model_dump(by_alias=True, exclude_none=True), index
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
 
 
 async def _owned_row(store: HandoffStore, user: User, session_id: str, handoff_id: str) -> Handoff:

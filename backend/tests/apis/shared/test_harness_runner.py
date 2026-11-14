@@ -191,6 +191,48 @@ async def test_happy_path_completes_and_delivers(monkeypatch, delivery_spy):
 
 
 @pytest.mark.asyncio
+async def test_the_runtime_and_client_timing_are_reported(monkeypatch, delivery_spy):
+    stream = _sse(
+        ("message_start", '{"role": "assistant"}'),
+        ("content_block_delta", '{"contentBlockIndex": 0, "type": "text", "text": "pong"}'),
+        ("message_stop", '{"stopReason": "end_turn"}'),
+        ("metadata", '{"usage": {"inputTokens": 5}, "metrics": {"timeToFirstByteMs": 1200}, "turnDurationMs": 3400}'),
+        ("done", "{}"),
+    )
+    _mock_http(monkeypatch, lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=stream))
+
+    result = await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=SpyBearerAuth("b"),
+        invocations_base_url="http://localhost:8001", governance=GovernanceFloor(audit=RecordingAudit()),
+    )
+
+    assert result.turn_duration_ms == 3400
+    assert result.first_token_ms == 1200
+    assert result.client_first_token_ms is not None and result.client_duration_ms is not None
+    assert 0 <= result.client_first_token_ms <= result.client_duration_ms
+    assert result.to_dict()["turn_duration_ms"] == 3400
+
+
+@pytest.mark.asyncio
+async def test_a_quota_exceeded_frame_is_flagged_and_the_status_is_unchanged(monkeypatch, delivery_spy):
+    stream = _sse(
+        ("message_start", '{"role": "assistant"}'),
+        ("content_block_delta", '{"contentBlockIndex": 0, "type": "text", "text": "limit reached"}'),
+        ("message_stop", '{"stopReason": "quota_exceeded"}'),
+        ("quota_exceeded", '{"type": "quota_exceeded"}'),
+        ("done", "{}"),
+    )
+    _mock_http(monkeypatch, lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=stream))
+    result = await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=SpyBearerAuth("b"),
+        invocations_base_url="http://localhost:8001", governance=GovernanceFloor(audit=RecordingAudit()),
+    )
+    assert result.quota_exceeded and result.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_scheduled_completion_marks_session_unread(monkeypatch, delivery_spy):
     """An unattended (schedule) run flags the session unread on completion."""
     def handler(request: httpx.Request) -> httpx.Response:
@@ -337,6 +379,58 @@ async def test_upload_ids_and_skills_pass_through_only_when_given(monkeypatch, d
             assert payload[field] == expected[field]
         else:
             assert field not in payload
+
+
+_PAUSE_STREAM = (
+    b'event: message_start\ndata: {"role": "assistant"}\n\n'
+    b'event: message_stop\ndata: {"stopReason": "tool_use"}\n\n'
+    b'event: client_tool_call\ndata: {"type": "client_tool_call", "interruptId": "int-1", "toolUseId": "tu-1", '
+    b'"toolName": "read_file", "arguments": {"path": "./a.txt"}}\n\n'
+    b'event: done\ndata: {}\n\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_the_terminal_fields_pass_through_and_a_client_tool_pause_is_its_own_status(monkeypatch, delivery_spy):
+    """The eval harness's terminal cases: declare client tools, see the pause, answer it on the resume."""
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_PAUSE_STREAM)
+
+    _mock_http(monkeypatch, handler)
+    spec = {"name": "read_file", "description": "Read a file.", "inputSchema": {"type": "object"}}
+    answer = [{"interruptId": "int-0", "response": {"output": "x", "isError": False}}]
+    result = await run_agent_headless(
+        user_id="user-1", prompt="", auth=StaticBearerAuth("t"), invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=RecordingAudit()),
+        client_surface="terminal", client_tools=[spec], interrupt_responses=answer,
+    )
+    payload = seen["payload"]
+    assert payload["client_surface"] == "terminal" and payload["client_tools"] == [spec]
+    assert payload["interrupt_responses"] == answer
+    assert result.status == "client_tool_call"
+    assert result.client_tool_calls == [
+        {"interruptId": "int-1", "toolUseId": "tu-1", "toolName": "read_file", "arguments": {"path": "./a.txt"}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_terminal_fields_are_absent_unless_given(monkeypatch, delivery_spy):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_HAPPY_STREAM)
+
+    _mock_http(monkeypatch, handler)
+    result = await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=StaticBearerAuth("t"), invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=RecordingAudit()),
+    )
+    assert not {"client_surface", "client_tools", "interrupt_responses"} & set(seen["payload"])
+    assert result.status == "completed" and result.client_tool_calls == []
 
 
 # ---------------------------------------------------------------------------

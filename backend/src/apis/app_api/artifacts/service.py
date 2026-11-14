@@ -285,6 +285,9 @@ class RenderTokenService:
         if not share:
             raise ShareNotFoundError("share not found")
         _check_share_access(share, viewer)
+        # After the ACL check, never before: a following share reads the
+        # owner's HEAD row to find the version to mint for.
+        share = _resolve_share_target(share)
 
         owner_id = str(share.get("owner_id", ""))
         artifact_id = str(share.get("artifact_id", ""))
@@ -687,6 +690,45 @@ def _get_version_item(
     return item
 
 
+def _resolve_share_target(share: dict) -> dict:
+    """The share as a recipient sees it now: version, title, content type.
+
+    A pinned share is returned unchanged. A share with `follows_latest`
+    reads the owner's `#HEAD` row and takes its version, title and
+    content type, so the recipient sees what the owner sees.
+
+    Same rule as `_get_version_item`: the share's `owner_id` is an
+    ADDRESS, and only a caller that has already run
+    `_check_share_access` may pass a share here. The HEAD read targets
+    the owner's partition and checks nothing itself.
+
+    The artifact writer puts the version row before it re-points HEAD,
+    so the version HEAD names always exists. A HEAD that is gone (the
+    artifact was deleted) is a 404, like a pinned share whose version
+    row is gone.
+    """
+    if not share.get("follows_latest"):
+        return share
+    try:
+        head = _table().get_item(
+            Key={
+                "PK": f"USER#{share.get('owner_id', '')}",
+                "SK": f"ARTIFACT#{share.get('artifact_id', '')}#HEAD",
+            }
+        ).get("Item")
+    except ClientError as exc:
+        raise ArtifactQueryError("artifact head lookup failed") from exc
+    if not head or head.get("version") is None:
+        raise ArtifactNotFoundError("artifact not found")
+    return {
+        **share,
+        "version": int(head["version"]),
+        "title": head.get("title") or share.get("title", ""),
+        "content_type": head.get("content_type")
+        or share.get("content_type", ""),
+    }
+
+
 def _is_markdown(content_type: str) -> bool:
     bare = (content_type or "").split(";")[0].strip().lower()
     return bare in _MARKDOWN_MIME_TYPES
@@ -907,6 +949,10 @@ class ShareAccessDeniedError(ArtifactShareError):
     """The viewer is not permitted to open this share."""
 
 
+class ShareCannotFollowError(ArtifactShareError):
+    """A project share pins one version; it cannot follow the latest."""
+
+
 class NotShareOwnerError(ArtifactShareError):
     """A non-owner attempted to mutate or revoke a share."""
 
@@ -1007,9 +1053,15 @@ def _resolve_allowed_emails(
 class ArtifactShareService:
     """Owner-side CRUD for artifact shares.
 
-    A share pins one immutable `(artifact_id, version)` pair — never
-    `#HEAD`. Version rows are append-only, so the recipient's view can
+    By default a share pins one immutable `(artifact_id, version)`
+    pair. Version rows are append-only, so the recipient's view can
     never change under them and no snapshot copy is needed.
+
+    A share the owner creates with `follows_latest` is the one
+    exception: the recipient reads resolve the owner's `#HEAD` at read
+    time (`_resolve_share_target`), so the link always shows the newest
+    version. The owner opts in per share; a project share can never
+    follow, because a project's Outputs record one version.
     """
 
     def create(
@@ -1021,6 +1073,7 @@ class ArtifactShareService:
         access_level: str,
         allowed_emails: Optional[list[str]],
         project_id: Optional[str] = None,
+        follows_latest: bool = False,
     ) -> dict:
         """Create a share for one artifact version.
 
@@ -1034,6 +1087,8 @@ class ArtifactShareService:
         404. Title and content type are denormalized off that row so the
         recipient header needs no second read.
         """
+        if follows_latest and access_level == "project":
+            raise ShareCannotFollowError("a project share cannot follow")
         item = _get_version_item(owner.user_id, artifact_id, version)
 
         share_id = str(uuid.uuid4())
@@ -1058,6 +1113,8 @@ class ArtifactShareService:
         )
         if resolved is not None:
             attrs["allowed_emails"] = resolved
+        if follows_latest:
+            attrs["follows_latest"] = True
         if access_level == "project":
             if not project_id:
                 raise ValueError("a project share needs its project")
@@ -1102,12 +1159,15 @@ class ArtifactShareService:
         return [self._strip_keys(item) for item in items]
 
     def get_for_viewer(self, *, share_id: str, viewer: User) -> dict:
-        """Access-checked read of a share record. Never returns content."""
+        """Access-checked read of a share record. Never returns content.
+
+        The version, title and content type are the ones the recipient
+        sees now: the newest for a share that follows the latest."""
         share = _get_share_lookup(share_id)
         if not share:
             raise ShareNotFoundError("share not found")
         _check_share_access(share, viewer)
-        return self._strip_keys(share)
+        return _resolve_share_target(self._strip_keys(share))
 
     def update(
         self,
@@ -1117,8 +1177,9 @@ class ArtifactShareService:
         access_level: Optional[str],
         allowed_emails: Optional[list[str]],
         project_id: Optional[str] = None,
+        follows_latest: Optional[bool] = None,
     ) -> dict:
-        """Change access level / allowlist on an existing share.
+        """Change access level / allowlist / following on an existing share.
 
         ``project_id`` is required when a share becomes ``project`` (the caller
         resolves it); leaving ``project`` drops it.
@@ -1156,6 +1217,14 @@ class ArtifactShareService:
         else:
             updated.pop("project_id", None)
 
+        if follows_latest is not None:
+            if follows_latest:
+                updated["follows_latest"] = True
+            else:
+                updated.pop("follows_latest", None)
+        if new_access == "project" and updated.get("follows_latest"):
+            raise ShareCannotFollowError("a project share cannot follow")
+
         updated["version"] = int(updated.get("version", 0))
         updated["updated_at"] = _now_iso()
 
@@ -1165,9 +1234,10 @@ class ArtifactShareService:
         # inbox while staying reachable by link.
         self._sync_recipient_rows(updated, previous=previous)
         logger.info(
-            "updated artifact share share=%s access=%s",
+            "updated artifact share share=%s access=%s follows=%s",
             scrub_log(share_id),
             scrub_log(new_access),
+            bool(updated.get("follows_latest")),
         )
         return updated
 
@@ -1611,6 +1681,7 @@ class ArtifactShareService:
                     "title": str(share.get("title", "")),
                     "content_type": str(share.get("content_type", "")),
                     "version": int(share.get("version", 0)),
+                    "follows_latest": bool(share.get("follows_latest")),
                     "owner_email": str(share.get("owner_email", "")),
                     "shared_at": str(
                         pointer.get("shared_at")

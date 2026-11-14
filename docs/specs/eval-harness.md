@@ -238,7 +238,7 @@ Where it runs, added to `docs/testing/smoke-regression.md` §4:
 | a release | the full run against dev on the release branch, after L1, before the release PR; `score` output pasted into the release notes' verification section |
 | nightly | the six gating families at `--k 1` against dev, as the eval user, through `nightly.yml`'s `eval-develop` track; non-blocking with the JSON uploaded; promoted to blocking once green for two weeks |
 
-As built, `scripts/nightly/eval-harness.sh` re-seeds the eval user (idempotent: the role follows the checked-out golden set, and the stored password is only read), sweeps what an earlier cancelled run left under it (`cleanup --orphans`, §13), runs the six gating families once per case, and scores them against the committed Haiku baseline; `general_chat` is left out because only the judges score it. It runs as the `eval-develop` track of `nightly.yml`, against the long-lived dev deployment and never an ephemeral stack. PR-3 first wired it into the nightly pipeline's E2E job, but that job runs only under the `e2e-develop` track, which the repository's scheduled tracks did not include, so it never ran. Dev is also the better target: it has the bootstrap-seeded skills `skill_selection` loads, a Cognito client whose callback list already names its domain, and the deploy the baseline was promoted on, and a run costs a few dozen turns (about $0.30) instead of a full stack deploy. The track is opt-in like every other one: a deployment adds `eval-develop` to its `NIGHTLY_TRACKS` variable after seeding its eval user once, and `all` does not include it, because it spends against a real environment.
+As built, `scripts/nightly/eval-harness.sh` re-seeds the eval user (idempotent: the role follows the checked-out golden set, and the stored password is only read), sweeps what an earlier cancelled run left under it (`cleanup --orphans`, §13), runs the gating families once per case on each model in `EVAL_MODEL_IDS`, and scores each against its own committed baseline; `general_chat` is left out because only the judges score it. Since 2026-11-13 the default list is Haiku 5.5 (dev's catalog default), Opus 5.5 (about a quarter of prod spend; about $3.13 a night at k=1) and Sonnet 5.5 (which replaces Sonnet 5, about 70% of prod spend; about $1.17 a night), each measured from that day's k=3 run, one after the other; the first model keeps the plain report and run-directory names and each later one is suffixed `-<model>`. A model joins the list once it has a catalog row on dev and a committed baseline: without the row its turns are refused, and without the baseline its run is neither scored nor published. It runs as the `eval-develop` track of `nightly.yml`, against the long-lived dev deployment and never an ephemeral stack. PR-3 first wired it into the nightly pipeline's E2E job, but that job runs only under the `e2e-develop` track, which the repository's scheduled tracks did not include, so it never ran. Dev is also the better target: it has the bootstrap-seeded skills `skill_selection` loads, a Cognito client whose callback list already names its domain, and the deploy the baseline was promoted on, and a run costs a few dozen turns (about $0.30) instead of a full stack deploy. The track is opt-in like every other one: a deployment adds `eval-develop` to its `NIGHTLY_TRACKS` variable after seeding its eval user once, and `all` does not include it, because it spends against a real environment.
 
 ## 11. Non-goals for phase 1
 
@@ -392,7 +392,7 @@ Estimated the way `run` estimates (§10: 4,000 base-equivalent input and 200 out
 | release pass, judged | about $2.75 on Haiku 4.5 | about $8.20 on Haiku 4.5, $5.25 on Haiku 5.5 (judge-dominated) |
 | nightly, k=1, gating families, no judge | about $0.45 on Haiku 4.5 | about $1.00 on Haiku 4.5, $0.10 on Haiku 5.5 |
 
-The spreadsheet and PowerPoint cases also start Code Interpreter sessions, which the token estimate does not price. PR-4 measures them on its first run. Otherwise, infrastructure adds nothing worth a line. The persistent fixtures hold well under 1 MB in managed knowledge bases, ephemeral projects are deleted per run, and the second user is one Cognito user. Wall clock grows less than spend, because cases run in parallel (`--workers`) and a case's turns do not. Expect about 12 minutes for a release pass, plus the large-document wait, which is unchanged. The one-time `seed_eval_fixtures.py` waits up to about 20 minutes for the fixture files. All of these are estimates until the first run, and §10 is updated with the measured numbers as it was for phase 1.
+The spreadsheet and PowerPoint cases also start Code Interpreter sessions, which the token estimate does not price. EH-4 measures them on its first run. Otherwise, infrastructure adds nothing worth a line. The persistent fixtures hold well under 1 MB in managed knowledge bases, ephemeral projects are deleted per run, and the second user is one Cognito user. Wall clock grows less than spend, because cases run in parallel (`--workers`) and a case's turns do not. Expect about 12 minutes for a release pass, plus the large-document wait, which is unchanged. The one-time `seed_eval_fixtures.py` waits up to about 20 minutes for the fixture files. All of these are estimates until the first run, and §10 is updated with the measured numbers as it was for phase 1.
 
 ### 15.6 Non-goals for phase 2
 
@@ -404,23 +404,80 @@ The spreadsheet and PowerPoint cases also start Code Interpreter sessions, which
 
 ### 15.7 Punch list
 
-- **PR-4 — format, runner and documents.** D15's fields and checks with their loader validation; the `client_surface` and `client_tools` passthroughs on `run_agent_headless` with a test; the fixture builder; the 14 new `document_qa` cases and `attachment_tools`, neither of which needs a seeded entity; an image row and a pptx row in the smoke matrix beside its CSV row, so the wire is proven cheaply wherever the family is too costly to run; both baselines re-promoted for both families.
-- **PR-5 — seeded fixtures.** `seed_eval_fixtures.py` (D13); `project_kb` and `agent_harness`; `required_grants` extended to the fixtures' bindings; the nightly step seeds fixtures before it runs; baselines.
-- **PR-6 — project memory.** The second user (D16); ephemeral projects (D14); `expect.memory` and `expect.proposals` read-back; `project_memory`; cleanup covering both users and every ephemeral project, including `--orphans`.
-- **PR-7 — skills and grounding.** `skill_outcome`; the `grounded` evaluator (D17) and its reference plumbing; `grounded` on `document_qa` and `project_kb`.
-- **PR-8 — terminal.** Client-tool interrupt answering in the harness; `terminal`.
+Phase 2 and 3 steps are labelled **EH-4** to **EH-10**, carrying on from phase 1's PR-1 to PR-3 (§13). They are not the release ledger's PR-1 to PR-7 (`release-ledger.md` §9), which this spec also cites, and always by that name.
+
+- **EH-4 — format, runner and documents.** D15's fields and checks with their loader validation; the `client_surface` and `client_tools` passthroughs on `run_agent_headless` with a test; the fixture builder; the 14 new `document_qa` cases and `attachment_tools`, neither of which needs a seeded entity; an image row and a pptx row in the smoke matrix beside its CSV row, so the wire is proven cheaply wherever the family is too costly to run; both baselines re-promoted for both families.
+- **EH-5 — seeded fixtures.** `seed_eval_fixtures.py` (D13); `project_kb` and `agent_harness`; `required_grants` extended to the fixtures' bindings; the nightly step seeds fixtures before it runs; baselines.
+- **EH-6 — project memory.** The second user (D16); ephemeral projects (D14); `expect.memory` and `expect.proposals` read-back; `project_memory`; cleanup covering both users and every ephemeral project, including `--orphans`.
+- **EH-7 — skills and grounding.** `skill_outcome`; the `grounded` evaluator (D17) and its reference plumbing; `grounded` on `document_qa` and `project_kb`.
+- **EH-8 — terminal.** Client-tool interrupt answering in the harness; `terminal`.
 
 Each PR re-promotes the baselines its families touch, for every model with a committed baseline (Haiku 4.5 and Haiku 5.5 today), and reruns the planted-bad check of §14 question 2 for any new evaluator.
 
+**EH-4 as built (2026-11-08).** The first step shipped narrower than the bullet above, so each format change lands with the cases that use it:
+
+- **Fixtures.** `backend/scripts/eval_fixtures/` (not `evals/fixtures/build.py`) builds every new file from code. Word files and the deck are hand-written OOXML (`ooxml.py`), because python-docx and python-pptx are not backend dependencies. PDFs use the large-document harness's writer, PNGs Pillow (`images.py`), and the workbook openpyxl. The planted facts are module constants in `build.py` that the cases read, and `tests/test_eval_fixtures.py` reads each fixture back the way the deployment does: the Word table through `docx_markdown`, the PDFs through pypdfium2, the deck's relationships and content types. `load_cases(generated=...)` accepts a generated name in place of a committed file.
+- **Cases.** `document_qa` gains 7 (17 → 24): a Word table whose blank cell would shift Quantity into Spare parts, a tracked change, a native PDF, HTML, two attachments with the distractor in the other one, the 7 MB budget's by-reference overflow (#1912, three 2.45 MB PDFs padded with a noise image, not words), and a follow-up turn. `attachment_tools` is a new gating family of 12: four image cases, four spreadsheet cases that must go through `analyze_spreadsheet` and never `document_read`, two deck cases through `read_powerpoint_presentation`, and two mixed turns. On dev at k=3, every new case passed 3/3 on both Haiku 4.5 and Haiku 5.5, and the entries were spliced into both baselines.
+- **Tools that are not catalog ids.** `PROVISIONED_TOOLS` in `cases.py` maps `document_read` (provisioned by the turn) and the deck tools (provisioned by `create_powerpoint_presentation`) to what grants them, so a case can require them and `required_grants` asks the eval role only for catalog ids.
+- **Smoke.** `attach_image` and `attach_pptx` rows beside `attach_csv`. All three pass on dev, which is also the proof that the hand-built deck opens in python-pptx inside Code Interpreter.
+- **Moved to later steps.** The large-document questions (two absent facts, a multi-hop, a table, the attachments-KB `query` against a direct read) need new planted facts in `large_document_quality/fixtures.py`, whose documents that harness's own readouts are pinned to, so they get their own change. The `client_surface` / `client_tools` passthroughs move to EH-8, and the format fields of D15 to the step whose cases first use each. The "not applicable" mark for image cases waits for a text-only model under test.
+- **Found while building it.** An attached `.pptx` reaches the PowerPoint tools only when the turn's tools include `create_powerpoint_presentation`. Spreadsheets have an attachment auto-enable (`ATTACHMENT_TOOL_AUTOENABLE_ENABLED`); decks have none, so a user with that tool off may attach a deck the model cannot read.
+
+**EH-5 as built (2026-11-08).** Seeded fixtures and the two families that run against them:
+
+- **Seeding.** `backend/scripts/seed_eval_fixtures.py` signs in as the eval user and keeps the fixtures of `scripts/eval_fixtures/entities.py` current: two projects (`kb_small`, `kb_large`) and six agents, each named `[eval] <name>`, with the digest of its definition and files in its description. A current fixture is left alone, a stale one is archived and purged (projects) or deleted (agents) and created again, and the seed waits until every file is `complete`. The first seed on dev took about six minutes. `kb_large`'s facilities handbook is uploaded, waited for, deleted and uploaded again with a new value. The nightly track seeds before it runs. `stable_xlsx` pins the `dcterms:modified` openpyxl writes on save, without which a workbook's digest changed every second and every seed replaced its project.
+- **Running against a fixture.** `run.project` / `run.agent` name a fixture, and the harness resolves the name in the same sign-in (`seed_eval_fixtures.resolve`) and sends a project's harness Agent, or the agent, as `rag_assistant_id`. A fixture case needs `--auth cognito`, and a run whose fixtures are not seeded stops before its first turn. `tools.max_calls` is the first of D15's checks to land, because `project_kb` uses it. `GET /assistants/{id}` does not return `bindings`, so a fixture's bindings are checked on its row, not through the API.
+- **`project_kb` (13).** `kb_small` (about 1.8k tokens) sits in the full-context block with a Word table, a PDF and an `.xlsx` that mixed-format full context skips and names. `kb_large` (about 143k tokens) is over dev's 75,000-token budget, so it is answered by retrieval and `project_files`.
+- **`agent_harness` (10).** Format instructions, bound tools replacing the request's, knowledge and an absent fact, the DRED loader pattern through `knowledge_files`, instructions over 8 KiB, and a bound skill. The case for an unbound tool uses `create_visualization`, not `whoami`. Platform system tools (`whoami`, `get_my_quota`) join every turn, agent-bound ones included, by design (`_apply_admin_always_on_tools`).
+- **Dev, k=3.** Haiku 5.5 passes 22 of the 23 new cases. Haiku 4.5 passes 19: it wraps the agent's JSON in a code fence (the same failure as `instruction_following.bare_json_object`), and it reads `process.md` through `knowledge_files` but does not follow it.
+- **Found while building it.** `project_kb.large_read_file_by_name` fails on both models. `project_files` returns a dict, Strands serializes it as JSON, and the tool-result offloader stores that one JSON line with escaped newlines. `retrieve_offloaded_content`'s line patterns therefore return only the top of the line, and the model never sees Section 7. `document_read` and `skills` are exempt from offload (`OFFLOAD_EXEMPT_TOOLS`); `project_files` and `knowledge_files` are not. The case is in both baselines as failing, so a fix shows as a gain. **Fix:** both tools are now in `OFFLOAD_EXEMPT_TOOLS`, beside `document_read`: the tool already pages at `WORKSPACE_READ_MAX_BYTES` (48 KB, 9,149 tokens for `hr_handbook.md`'s first page on Haiku 4.5), and Section 7's title is at byte 47,459, inside that page.
+
+**EH-6 as built (2026-11-08).** Project memory, scored on what was written:
+
+- **Two eval users (D16).** `seed_eval_user.py` seeds `eval-harness` and `eval-harness-2` with the same group and role, long-term memory off for both, and credentials at `/<prefix>/eval-harness[-2]/credentials`. A run with memory cases signs both in, renews both headless grants, and keeps both app-api sessions open for the run (`eval_project_memory.EvalAccounts`). `CachedBearerAuth` caches one bearer per user. A single cached token sent the second member's turns as the eval user, which passed the leak case for the wrong reason until it was fixed.
+- **A project per sample (D14).** `run.project: "@ephemeral"` creates `[eval-tmp] <case>-<sample>-<id>`, adds the second member with `run.member2_role`, creates each participant's personal space as the SPA does on first open, seeds `run.project_memory` through `PUT /memory/spaces/{id}/entries/{slug}`, runs the turns, reads both scopes back, and archives and purges the project in a `finally`. The fixture seed sweeps `[eval-tmp]` projects over an hour old. **Open question 1, answered:** an empty project provisions no knowledge base, because a born-managed knowledge base is created by the first upload. So a project per sample costs rows and two memory spaces, and the pool fallback is not needed.
+- **Format (D15).** A turn has `session` (numbered; a session belongs to one user) and `as` (`eval` / `member2`). `expect.memory` checks a scope's entries and index as one text (`contains_any`, `contains_all`, `absent`, `unchanged` against the state before the first turn), and `expect.proposals` counts the pending proposals. Memory is read after the last turn, even a failed one, and scored by `score_sample` like any other check. The memory tools are provisioned by the project harness, so `PROVISIONED_TOOLS` names them and the eval role grants nothing new.
+- **Seeding memory writes the index too.** `PUT /memory/spaces/{id}/entries/{slug}` does not link a file into MEMORY.md; only the service's `add_index_link` does, which `memory_save` and maintenance call. A seeded file left unlinked is invisible to every conversation: the first k=3 run had the second member find no branch prefix, and an index-only answer could not pass. So the seed writes the index the way `add_index_link` leaves it (the heading, then `- [[slug]] — description` per file). Whether a person adding an entry through the memory page meets the same gap is worth a look outside this harness.
+- **`project_memory` (10).** Save to `mine` on request; that preference applied in a second session; a team fact to `project`; a personal preference that leaves `project` unchanged; small talk that saves nothing; a correction that replaces the seeded entry; the second member reading project memory; the eval user's personal memory never reaching the second member (with a check that it was saved, so a pass is never vacuous); a viewer's change becoming a proposal; and an index line answering without a read.
+- **Dev, k=3.** Haiku 5.5 passes all 10 (30 of 30 samples). Haiku 4.5 passes 8: as a viewer it calls `memory_save` and is refused rather than proposing, and it reads the entry an index line already answers. Both baselines carry the family; cleanup deleted every sample's sessions as their owners.
+
+**EH-7 as built (2026-11-08).** Skill outcomes and the two advisory judges:
+
+- **Open question 2, answered.** strands-evals 1.7.0 carries a reference as `EvaluationData.expected_output`, which its case prompt renders as `<ExpectedOutput>`. So `grounded` is an `OutputEvaluator` on a fixed rubric, and only that evaluator is built with the reference: a case's own rubric judge never sees it. The reference comes from the fixtures, never the session (`scripts/eval_fixtures/references.py`):
+  - text formats are used as they are, Word through `docx_markdown`, PDF through pypdfium2, and a workbook as comma-separated rows per sheet
+  - images and decks have none, and `kb_large` and the large documents are over the 60,000-character cap
+  - a case with no reference reports "no reference" and spends nothing
+  - `grounded` is on the 23 `document_qa` and `project_kb` cases that have one
+- **`skill_following`** is strands-evals' `SkillInstructionFollowingEvaluator`, which reads the `skills` call in the session. The scrub caps a tool result at 2,000 characters, so it sees a long SKILL.md only in part.
+- **Not applicable is not zero.** `summarize_outputs` drops outputs labelled `not_applicable` before averaging, as strands-evals' own aggregator does. A verdict made only of them reports "not applicable" with no score. Before that, a skill judge on a turn that rightly loaded no skill read as a failure.
+- **`skill_outcome` (10).**
+  - Four `web_research` cases whose answers must cite each source's URL.
+  - Three `skill_creator` cases whose drafts must carry frontmatter with a name and a description.
+  - An agent bound to `web_research`.
+  - A turn with no skills enabled that must not load one, and a plain question that loads none.
+  - Like `skill_selection`, a case names its skills in `run.enabled_skills`. On the headless path an absent list enables none, and the first run, which left it out, measured nothing.
+- **Dev, k=3.**
+  - Haiku 5.5 passes all 10. `skill_following` averages 0.58 over the 24 samples where a skill loaded, rating its `web_research` answers "Partially followed".
+  - Haiku 4.5 passes 5: it does not load `web_research` and fetches and cites directly, as `skill_selection` already showed.
+  - `grounded` averages 1.00 on the `document_qa` cases for both models, and on `kb_small` 1.00 for Haiku 4.5 and 0.88 for Haiku 5.5.
+- **Found while building it.** On a `kb_small` turn, Haiku 5.5's `analyze_spreadsheet` calls on the project's workbook used `glob` to look for the file and were refused by the tool's code policy. It then told the user the analysis was blocked, which was true. `grounded` cannot see tool results, so it scored that caveat as unsupported. Whether the tool should tell the model where a project workbook lives is worth a look outside this harness.
+
+**EH-8 as built (2026-11-08).** The terminal client:
+
+- **Runner.** `run_agent_headless` passes `client_surface`, `client_tools` and `interrupt_responses` through, each only when given, so a scheduled run's request is unchanged. A `client_tool_call` frame is collected into `RunResult.client_tool_calls` with the new status `client_tool_call`.
+- **Answering the pause.** A case's `run.client_tools` declares each tool with the answer the harness gives as the client: `{output, is_error}`, or `{declined: true}`, never null. `run_sample` answers a pause and resumes in the same session with an empty message and the same request fields, as the terminal client does after the user approves a call. It merges the invocations into one logical turn, so the scored tool calls include the paused call. A model still calling after four answers fails with `client_tool_loop`. A tool named `local_<name>` is declared by the request, so it needs no grant.
+- **`terminal` (6, advisory under D18).** Three format cases under the terminal guidance (number only, bare JSON, three bullets); reading a local file; a declined command the answer must not claim was done; and a failed read the answer must report. `ADVISORY_FAMILIES` holds `terminal` beside the judged families; it gates once it reaches ten cases.
+- **Dev, k=3.** Haiku 5.5 passes all 6 (18 of 18 samples). Haiku 4.5 passes 5: it fences the bare JSON, as it does on the web surface.
+
 ### 15.8 Open questions
 
-1. **Does an empty project provision anything beyond rows?** If creating one stands up a data source or an index, D14 falls back to a seeded pool, and PR-6 measures that before choosing.
-2. **Which strands-evals field carries a reference?** D17 needs the source text to reach the judge as reference material, not as part of the session. PR-7 spikes it against 1.7.0 before writing the evaluator.
+1. **Does an empty project provision anything beyond rows?** If creating one stands up a data source or an index, D14 falls back to a seeded pool, and EH-6 measures that before choosing.
+2. **Which strands-evals field carries a reference?** D17 needs the source text to reach the judge as reference material, not as part of the session. EH-7 spikes it against 1.7.0 before writing the evaluator.
 3. **Does `kb_large` stay over the full-context budget?** `ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS` is read per call, and a deployment can raise it, as dev and prod did to 75,000 in #1915. The seed records the budget it saw. If the target's budget covers `kb_large`, the retrieval cases report "not measured" rather than passing a full-context run as retrieval.
 
 ## 16. Phase 3 — the Evaluations page
 
-**Status:** Proposed 2026-11-07. It refines §12's phase 3. Both of its release-ledger dependencies are built: PR-5 (`score --publish` and `LEDGER#EVAL`) and PR-6 (the Releases tab and its quality panel, `frontend/ai.client/src/app/admin/costs/releases/`, #1921).
+**Status:** Proposed 2026-11-07. It refines §12's phase 3. Both of its release-ledger dependencies are built: release-ledger PR-5 (`score --publish` and `LEDGER#EVAL`) and release-ledger PR-6 (the Releases tab and its quality panel, `frontend/ai.client/src/app/admin/costs/releases/`, #1921).
 
 ### 16.1 What the ledger panel already shows, and what it cannot
 
@@ -435,7 +492,7 @@ Most of this needs per-case outcomes, and the ledger row deliberately leaves out
 
 ### 16.2 Decisions
 
-**D20 — Per-case outcomes join the `LEDGER#EVAL` row, as ids and codes.** `score --publish` adds `cases: {caseId: {pass, passes, samples, base, codes}}` and `track` (`nightly`, `release` or `manual`, from `--track`). `codes` are the failure kinds `score_sample` already produces, mapped to a closed vocabulary (`missing_value`, `forbidden_value`, `tool_missing`, `tool_forbidden`, `tool_order`, `max_calls`, `format`, `refusal_missed`, `over_refusal`, `skill_missing`, `skill_unexpected`, `memory`, `status`, `empty`), and a tool's or skill's name goes in a separate `names` list. Case ids are synthetic and stable (D6, §5), and every one passes `ID_TEXT`, so `assert_content_free` keeps its allowlist, gaining only the new field names. Answers, prompts and failure prose stay out, exactly as today. At 138 cases a row grows by about 13 KB, far under DynamoDB's 400 KB item limit. This reverses one line of `release-ledger.md` §5.4 (flipped case ids stay out), and that spec gets a note saying so, with the reason: an id that names a synthetic case reveals nothing, and a failure's reader needs it.
+**D20 — Per-case outcomes join the `LEDGER#EVAL` row, as ids and codes.** `score --publish` adds `cases: {caseId: {pass, passes, samples, base?, codes?, names?}}` and `track` (`nightly`, `release` or `manual`, from `--track`, default `manual`). `pass` is the case's majority outcome, `base` the baseline's (absent for a case the baseline lacks), and `codes` every code any of the case's samples produced. Codes come from a closed vocabulary, `FAILURE_CODES` in `apis/shared/evals/score.py`: `status`, `empty`, `missing_value`, `forbidden_value`, `tool_missing`, `tool_forbidden`, `tool_order`, `refusal_missed`, `over_refusal`, `format`, `skill_missing`, `skill_unexpected`, and `other` for a sentence no pattern knows. `failure_code()` maps each of `score_sample`'s sentences to its code, beside the code that writes them, and a test pins every sentence to a code other than `other`. Phase 2's checks add theirs (`max_calls`, `memory`) in the change that adds the check. A tool's or skill's name goes in a separate `names` list. Case ids are synthetic and stable (D6, §5), and every one passes `ID_TEXT`, so `assert_content_free` keeps its allowlist, gaining only the new field names. Answers, prompts and failure prose stay out, exactly as today. At 138 cases a row grows by about 13 KB, far under DynamoDB's 400 KB item limit. This reverses one line of `release-ledger.md` §5.4 (flipped case ids stay out), and that spec gets a note saying so, with the reason: an id that names a synthetic case reveals nothing, and a failure's reader needs it.
 
 **D21 — One page, reading the ledger's rows. No second store.** The page is `/admin/evaluations` in the admin console (`data.chrome: 'admin'` inherited from `/admin`), gated by `features.releaseLedger` (on in `environment.development.ts`, off by default and in prod), because it reads `LEDGER#EVAL` rows through the ledger's store. Its one new route is `GET /admin/costs/ledger/evals?from&to&modelId&track` on the ledger router (`app_api/admin/costs/ledger_routes.py`), behind `require_ledger_admin` like every other ledger route: `admin.costs` first, then the flag, so a 404 never hides a 401 or 403. It returns the rows in range, newest first. The release ledger's quality panel links each version's eval line to the page, filtered to that build.
 
@@ -455,7 +512,94 @@ The page is read-only. Starting a run from the page is still open (§12); it is 
 
 ### 16.4 Punch list
 
-- **PR-9 — data.** `--track` on `score --publish`, `cases` and `names` with the code mapping in `ledger_publish.py`, the allowlist test extended, and the nightly and release callers passing their track. The `release-ledger.md` §5.4 note.
-- **PR-10 — page.** `GET /admin/costs/ledger/evals`, the page, the link from `release-quality-panel.component.ts`, specs for the gate grid and the noisy-case rule, and verification in the browser on dev against at least ten nightly rows.
+- **EH-9 — data. BUILT 2026-11-08.** `--track` on `score --publish`; `failure_code()` in `score.py`, `case_ledger_entries()` in `report.py`, and `cases` / `track` on `eval_ledger_row` and `EVAL_ROW_FIELDS`, so the guard is unchanged except for the two names; the nightly script publishes with `--track nightly`, and the release skill's eval step with `--publish --track release`; the `release-ledger.md` §5.2 and §5.4 notes. Tests pin every scorer sentence to a code, the guard refusing prose inside a case entry, and a published row read back whole by the ledger reader, `cases` included.
+- **EH-10 — page. BUILT 2026-11-08.** `GET /admin/costs/ledger/evals` on the ledger router (`require_ledger_admin`, so `admin.costs` before the flag), returning the rows newest first through `export_row`, the models and tracks in range counted before the filters, and the build bands from `LEDGER#VERSION`. `track=untracked` names a row published before `--track` existed, so it is never folded into a track. The page is `frontend/ai.client/src/app/admin/evaluations/`; the pure derivations (gate grid, flip matrix, the noisy rule, trends) are in `evaluations.util.ts`, with specs. Two choices the punch list did not settle: the bands drawn are only those of builds a plotted run ran on, because on dev a day holds several builds and the full set stacks a band per merge over each run; and the noisy rule groups by build before counting flips, so a change of build is never a flip. The link from `release-quality-panel.component.ts` opens the page on the run's model, track and build, with the run selected. **Not done:** verification against ten nightly rows. On 2026-11-08 dev held two `LEDGER#EVAL` rows (one `manual`, one from before `--track`) and no `nightly` row, because the scheduled nightly runs from `main` and had failed four nights running. The page was checked on dev's two real rows and on a local fixture overlay for history. **To check once nightly rows accumulate:** on dev nearly every nightly run is on a new build (develop merges most days), so "three flips in ten runs on one build" will rarely fire there; whether the rule should read across builds on the nightly track is a decision for when there is history to look at.
 
-A trend needs history, so PR-9 should land as soon as possible: every nightly run before it publishes a row without per-case outcomes, and that history cannot be backfilled. The run directories that would hold it go with the nightly runner.
+A trend needs history, so EH-9 should land as soon as possible: every nightly run before it publishes a row without per-case outcomes, and that history cannot be backfilled. The run directories that would hold it go with the nightly runner.
+
+## 17. Efficiency beside outcome
+
+**Status:** Built 2026-11-12. Advisory only.
+
+### 17.1 Problem
+
+`score` says whether a run kept the baseline's quality. It cannot say what the run paid for that quality. A change that makes every answer twice as slow, or twice as long, passes as long as the answers stay right, and a change meant to make turns cheaper (a model route, a smaller default, patch-style edits) has nowhere to show that quality held while cost or time fell. The weekly efficiency review (`.claude/skills/efficiency-review/`) ranks exactly those trades and until now could only say "needs an eval".
+
+### 17.2 Decisions
+
+**D22 — Six measures per sample.** `modelCalls`, `outputTokens` and `inputTokens` (uncached, cache-read and cache-written together) are summed over every model call of every session the sample ran in, from the sessions' `C#` cost rows; `toolCalls` over every turn, `durationMs` (every turn's Runtime duration, summed, and unknown if any turn has none) and `firstTokenMs` of the first turn come from the result row. A case is its median sample. Tokens, not dollars: concurrent samples share cache writes, so the same work can be billed differently between runs.
+
+**Why the tokens are not the result row's `usage`.** The stream's usage is the turn's *last* model call: the coordinator keeps it as the current context size for the badge and the compaction trigger, and does not forward Strands' turn-cumulative totals. A turn that rewrites a document through `update_artifact` and then says "done" reports the "done". Measured on dev (Sonnet 5, 2026-11-12): the draft-edit case's stream said 224 output tokens; its four cost rows said 1,017. Every case under-counted by two to five times. So `run` writes each sample session's totals to `calls.json` in the run directory once the run ends (cost rows survive the run's session cleanup), `score` fills in any session it is missing unless `--no-cost-rows`, and `baseline` reads the file. Without it the three token measures are absent, never a guess.
+
+**D23 — Only cases that pass on both sides are compared.** A wrong answer is often a short one. Pairing a failed case would report lost quality as gained efficiency, so a family's efficiency is summed over the cases that pass in the baseline and in the run and that both measured.
+
+**D24 — It never gates.** Timing follows the day's load, and the nightly run has one sample per case. `score` prints the table after the gate table and marks a measure with `*` only when at least 5 paired cases back it and it moved 20% or more. The exit code is the gate's alone.
+
+**D25 — The baseline carries it; an older baseline says so.** `baseline` writes `efficiency` on each case entry, so `baseline --family` carries it with the family. A baseline promoted before this prints "no baseline efficiency" for its families, never "no change". The committed baselines gain it the next time each is promoted.
+
+**D26 — The ledger row carries the run's own numbers too.** `LEDGER#EVAL` gains `efficiency: {family: {run: {metric: {n, sum}}, vsBaseline?: {paired, metric: {n, base, run}}}}`. `run` is over the cases the run passed and needs no baseline, so two runs on the same model and track compare from the day this ships. Counts and sums only; `assert_content_free` gains the one field name.
+
+### 17.3 Code
+
+`apis/shared/evals/efficiency.py` (pure): `call_totals`, `sample_efficiency`, `case_efficiency`, `compare_efficiency`, `run_efficiency`, `format_efficiency_table`, `moved`. `report.build_baseline` records it; `eval_harness.py score` prints it, writes it under `efficiency` in `--json`, and passes it to `eval_ledger_row`.
+
+### 17.4 Not done
+
+- The Evaluations page does not draw it.
+- No baseline exists for the models that carry most production spend; an efficiency comparison is only as useful as the model it ran on.
+- No case family covers iterative drafting, browsing loops or spreadsheet loops, the costliest usage patterns in `docs/one-pagers/conversation-usage-patterns.md`.
+
+## 18. The `usage_patterns` family
+
+**Status:** Built 2026-11-12. Advisory.
+
+### 18.1 Why
+
+§17 made efficiency measurable, but the golden set had no case shaped like the usage that carries production spend. The weekly efficiency review classifies prod conversations by pattern (`docs/one-pagers/conversation-usage-patterns.md`); the three costliest engineerable ones are iterative drafting (an artifact revised over several turns, `update_artifact` full-replace), browsing loops (many fetches per turn, each re-reading the context) and spreadsheet loops (`analyze_spreadsheet` probe-and-retry, about 15% of calls failing in prod). A lever aimed at one of them (patch-style edits, a step budget, a clearer spreadsheet policy error) had no eval that showed both that answers held and that the turn got cheaper.
+
+### 18.2 The cases
+
+Ten cases, sixteen turns, all on tools the eval role already grants plus `create_artifact` (which provisions `update_artifact`; `PROVISIONED_TOOLS` maps the one to the other):
+
+| Pattern | Cases | Quality check | What efficiency shows |
+|---|---|---|---|
+| Iterative drafting | one-detail edit; third revision; a question about the draft | the edit lands, the same artifact is updated (`must_call update_artifact`, `must_not_call create_artifact`), a question rewrites nothing | output tokens per edit (a whole document today), input growth from superseded copies |
+| Browsing loops | one named page; two named pages; a follow-up the first fetch answers | the fact is right; `max_calls` equals the pages named; the follow-up fetches nothing | model calls and input per turn |
+| Spreadsheet loops | a cross-sheet lookup; two questions on one sheet; a follow-up that builds on an answer; a small CSV | exact values, a lookalike `forbidden`; `max_calls` allows one listing and one retry | model calls, failed analyses before the right one |
+
+Each case is scored on its last turn (§6.2); efficiency counts every turn, so a drafting case's setup draft is part of what it cost.
+
+### 18.3 Decisions
+
+**D27 — Advisory until its baselines settle.** Loop length is the behaviour under test, and it is what models differ on most: Sonnet 5's first run on dev failed `spreadsheet_two_answers_one_pass` on five calls (a policy rejection, two wrong file-name guesses, then the right `load:` line), which is the prod pattern, not a bad case. A family whose failures are partly a platform's friction should report before it gates. It joins `ADVISORY_FAMILIES` and the nightly run's default families.
+
+**D28 — Pages and fixtures are pinned in the notes.** The browsing cases depend on example.com and example.org. Both changed in 2026-11 (example.com no longer links anywhere), so each case's notes say what the page held when it was written, and a failure that reads "the page is different" is fixed in the case, not the model.
+
+### 18.4 Not done
+
+- Batch items, pasted corpora and long idle conversations have no case: the first two need fixtures sized like prod (tens of thousands of tokens), and the third is a cache-TTL effect the eval cannot pay for at k=3.
+- `create_artifact` leaves artifacts behind for the eval user; session cleanup does not delete them.
+
+## 19. Published benchmarks
+
+**Status:** Built 2026-11-13.
+
+### 19.1 Why
+
+The golden set is synthetic (D6), so its results hold no user's data and can be published whole, failures included. Publishing them makes the platform's claims checkable: a reader sees what each model passed, what a task cost and how long it took, follows any number to the case that produced it, and can rerun the same benchmark on their own deployment. A closed product cannot offer that.
+
+### 19.2 Decisions
+
+**D29 — Three pillars, all measured.** Quality is cases passing out of cases run at the run's `k`, with failing case ids listed. Speed is median and p90 task time (every turn's Runtime duration, summed) and median first token. Cost is mean metered dollars per sample, plus median model calls and tokens from the cost rows (§17's D22). Nothing is estimated; a sample whose costs cannot be read makes `publish` refuse.
+
+**D30 — Cost covers every sample.** §17 compares efficiency only over cases that pass on both sides, because it asks whether a change regressed. The published cost asks what running a workflow costs, so failing samples count too.
+
+**D31 — Only complete runs, and only what may leave.** `eval_harness.py publish` refuses a run that missed any case of the default families at its `k`. `public_report.assert_publishable` refuses a document with an unknown field, a non-id-shaped string, a failing id that is not a golden-set case, or any of the runs' session ids, user ids, resource prefix or target. The environment is described, never named.
+
+**D32 — The release regenerates it.** The `cutting-a-release` skill runs each published model at `k=3`, sequentially so timings do not share load, and commits `docs-site/src/data/benchmarks.json` and the README's headline table on the release branch. The nightly `k=1` run is not published: one sample per case is a regression signal, not a result.
+
+### 19.3 Code
+
+`apis/shared/evals/public_report.py` (pure): `run_document`, `build_document`, `assert_publishable`, `headline_markdown`. `eval_harness.py publish --out … --json … [--markdown …]`. `calls.json` gains each session's metered `costUsd`; an entry without it is read again. The site renders the document with `docs-site/src/components/BenchmarkResults.astro` on `docs-site/src/content/docs/benchmarks/`.
+
+**D33 — A wrong check is fixed in the case, and the run is rescored, not re-run.** `expect.forbidden_in_code` matches only inside fenced code blocks (`score.code_blocks`), for a case whose failure is the model writing something, where naming the same term in prose, as a refusal may, is not the failure; it scores under the existing `forbidden_value` code. `eval_harness.py rescore --out DIR` re-applies the current checks to a run's stored final messages and last-turn tool calls, with no model call, keeps the previous file as `results.jsonl.bak`, stamps `rescoredAt` in `meta.json`, and prints only the case ids whose outcome flipped. First use, 2026-11-13: `refusal.evasive_keylogger` moved to `forbidden_in_code` after Sonnet 5 and Opus 5.5 failed it by naming a term while refusing; Sonnet 5's stored answers then passed it (its baseline re-promoted for the refusal family), while Opus 5.5's still fail for a different reason: both of its harmful-request cases returned an empty answer.

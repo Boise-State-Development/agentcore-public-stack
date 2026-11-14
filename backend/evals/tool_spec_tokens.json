@@ -1,17 +1,17 @@
 {
-  "measuredAt": "2026-11-08",
+  "measuredAt": "2026-11-13",
   "modelId": "anthropic.claude-haiku-4-5-20251001-v1:0",
   "region": "us-west-2",
   "method": "Bedrock CountTokens, marginal beside one anchor tool (the fixed tool-use preamble is in the baseline); flags in MEASURE_ENV forced on",
   "baselineTokens": 558,
   "tools": {
     "analyze_spreadsheet": {
-      "tokens": 1013,
+      "tokens": 1164,
       "tools": {
-        "analyze_spreadsheet": 1013
+        "analyze_spreadsheet": 1164
       },
-      "chars": 3297,
-      "specHash": "cc5cb594c7e007c7"
+      "chars": 3801,
+      "specHash": "445f032a07bd6494"
     },
     "ask_user_question": {
       "tokens": 678,

@@ -6,20 +6,21 @@
     <!--
       Browser sign-in live view (docs/specs/authenticated-web-assessment.md D3).
 
-      Served from the mcp-sandbox origin and framed by the SPA. Plain JS on
-      purpose: the Amazon DCV Web Client SDK is framework-agnostic, so there is
-      no React here, no bundler, and no third-party code. `dcv/` is fetched and
-      signature-verified at build time by scripts/build/fetch-dcv-sdk.sh and is
-      never committed — it is a EULA-licensed AWS download and this repo is
-      public.
+      Served from its own CloudFront distribution (BrowserLiveViewConstruct)
+      and framed by the SPA. Plain JS on purpose: the Amazon DCV Web Client SDK
+      is framework-agnostic, so there is no React here, no bundler, and no
+      third-party code. `dcvjs/` is fetched and signature-verified at build
+      time by scripts/build/fetch-dcv-sdk.sh and is never committed — it is a
+      EULA-licensed AWS download and this repo is public.
 
-      Why this page exists at a separate origin rather than inside the Angular
-      SPA: this is the one surface where a user types a password, and dcv.js
-      forwards their keystrokes. Keeping it in an origin that holds no session
-      cookie means a compromised SDK cannot also reach their session. The
-      isolation argument that justifies this origin for MCP Apps does NOT apply
-      (DCV streams pixels; the remote page's code runs in AWS's Chromium, never
-      in this document) — this is defence in depth, deliberately chosen.
+      Why this page has an origin of its own, shared with neither the SPA nor
+      MCP Apps: this is the one surface where a user types a password, and
+      dcv.js forwards their keystrokes.
+        - Not the SPA's: an origin that holds no session cookie means a
+          compromised SDK cannot also reach their session.
+        - Not the mcp-sandbox origin's: MCP Apps run untrusted HTML there, and
+          two same-origin frames on one page can script each other, so an App
+          beside this page could read the signed URL and what is typed.
 
       `no-referrer` matters: without it this page's URL, which carries the CSP
       query, would leak to the AgentCore endpoint on every request.

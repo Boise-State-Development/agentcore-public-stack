@@ -48,6 +48,7 @@ from ..errors import (
     UpstreamError,
 )
 from .agent_events import AgentEvent, interrupt_from_pending
+from .attachment_limits import AttachmentLimits, format_limit
 from .auth import AuthProvider
 from .endpoints import Endpoints
 
@@ -503,6 +504,7 @@ UPLOAD_MIME_TYPES: dict[str, str] = {
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".md": "text/markdown",
+    ".sql": "text/plain",
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -714,6 +716,7 @@ class CatalogClient:
         self._endpoints = endpoints or Endpoints(base_url)
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, follow_redirects=True)
+        self._attachment_limits: AttachmentLimits | None = None
 
     async def __aenter__(self) -> CatalogClient:
         return self
@@ -1051,18 +1054,43 @@ class CatalogClient:
 
     # -- files ---------------------------------------------------------------
 
+    async def attachment_limits(self) -> AttachmentLimits | None:
+        """The server's attachment limits (``GET /files/limits``), fetched once.
+
+        None when the server cannot say (an older deployment 404s, or the call
+        failed): the TUI then checks nothing and presign decides, as before. A
+        failure is not cached, so the next upload asks again.
+        """
+        if self._attachment_limits is not None:
+            return self._attachment_limits
+        try:
+            body = await self._get(self._endpoints.files_limits)
+        except (ApiError, ConnectionFailedError) as exc:
+            logger.info("attachment limits unavailable: %s", exc)
+            return None
+        self._attachment_limits = AttachmentLimits.from_wire(body)
+        return self._attachment_limits
+
     async def upload_file(self, session_id: str, path: Path) -> UploadedFile:
         """Attach a local file to the conversation, the way the SPA does.
 
-        Presign → PUT to S3 → complete. Raises the usual typed errors; a
-        rejected type or size comes back as a 4xx from presign, before any
-        bytes move.
+        Presign → PUT to S3 → complete. The type and the server's per-class
+        size limit (``GET /files/limits``) are checked first, so an oversized
+        file is refused before its bytes are read; presign re-checks both.
         """
         suffix = path.suffix.lower()
         mime = UPLOAD_MIME_TYPES.get(suffix)
         if mime is None:
             supported = ", ".join(sorted(UPLOAD_MIME_TYPES))
             raise UploadError(f"{path.name}: unsupported file type", hint=f"Supported: {supported}")
+        limits = await self.attachment_limits()
+        ceiling = limits.size_limit_for(suffix) if limits else None
+        size = path.stat().st_size
+        if ceiling is not None and size > ceiling:
+            raise UploadError(
+                f"{path.name}: file exceeds {format_limit(ceiling)} limit",
+                hint=f"It is {format_limit(size)}. This server takes {suffix} files up to {format_limit(ceiling)}.",
+            )
         data = path.read_bytes()
         presign = await self._request(
             "POST",

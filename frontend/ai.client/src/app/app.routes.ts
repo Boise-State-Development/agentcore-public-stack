@@ -8,6 +8,7 @@ import { FEATURES } from './services/features';
 
 /** Matches only in a build with Shared Projects on (compile-time; see environments/feature-flags.ts). */
 const projectsEnabled = () => inject(FEATURES).projects;
+const fieldSetAuthoringEnabled = () => inject(FEATURES).fieldSetAuthoring;
 
 export const routes: Routes = [
     {
@@ -236,6 +237,23 @@ export const routes: Routes = [
         path: 'customize/skills/:skillId/edit',
         loadComponent: () =>
             import('./customize/skills/skill-form.page').then(m => m.SkillFormPage),
+        canActivate: [authGuard],
+    },
+    // Field-set editor (docs/specs/field-set-authoring.md §3): a page under the
+    // skill that owns the set, never a top-level tab. `new` stays above `:name`
+    // for the same reason as `customize/skills/new` above.
+    {
+        path: 'customize/skills/:skillId/field-sets/new',
+        loadComponent: () =>
+            import('./customize/skills/field-set-editor.page').then(m => m.FieldSetEditorPage),
+        canMatch: [fieldSetAuthoringEnabled],
+        canActivate: [authGuard],
+    },
+    {
+        path: 'customize/skills/:skillId/field-sets/:name',
+        loadComponent: () =>
+            import('./customize/skills/field-set-editor.page').then(m => m.FieldSetEditorPage),
+        canMatch: [fieldSetAuthoringEnabled],
         canActivate: [authGuard],
     },
     // One skill: its SKILL.md body, supporting files and catalog facts. The id

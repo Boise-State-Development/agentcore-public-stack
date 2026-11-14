@@ -1,8 +1,9 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, retry, throwError, timer } from 'rxjs';
+import { GATEWAY_RETRY_DELAY_MS } from '../../auth/retry.interceptor';
 import { ConfigService } from '../config.service';
-import { FEATURES, type FeatureFlags } from '../features';
+import { type AttachmentLimits, AttachmentLimitsService } from './attachment-limits';
 /**
  * File status enum matching backend FileStatus
  */
@@ -46,40 +47,11 @@ export const ALLOWED_EXTENSIONS = [
   '.png', '.jpg', '.jpeg', '.gif', '.webp'
 ];
 
-/**
- * Maximum file size in bytes (4MB): the per-file inline limit. Must match
- * `INLINE_DOCUMENT_MAX_BYTES` in `backend/src/apis/shared/files/models.py`
- * (pinned by `test_inline_budget_by_reference.py`).
- */
-export const MAX_FILE_SIZE_BYTES = 4 * 1024 * 1024;
-
-/**
- * Maximum .pptx size in bytes (25MB).
- *
- * Decks get a larger cap because the general limit exists to keep documents
- * under what Bedrock accepts as an inline content block, and a .pptx is
- * never sent inline — it routes to the PowerPoint tools instead. Corporate
- * templates with imagery routinely clear 4MB, which is what made the
- * `template_name` workflow unusable.
- *
- * Must match `FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION` on the backend
- * (`files/service.py`), which is the enforcing side — if this is the larger
- * of the two, the UI accepts a deck that presign then rejects.
- */
-export const PPTX_MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
-
-/**
- * Maximum size of a large document attached by reference (50MB).
- *
- * A document over `MAX_FILE_SIZE_BYTES` never rides inline: the backend
- * prepares it off the request path and the model reads the parts it needs
- * through `document_read` (docs/specs/large-document-attachments.md). Admitted
- * only while `features.largeDocumentAttachments` is on.
- *
- * Must match `LARGE_DOCUMENT_MAX_BYTES` on the backend
- * (`backend/src/apis/shared/files/models.py`), which is the enforcing side.
- */
-export const LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024;
+const SPREADSHEET_MIME_TYPES = new Set<string>([
+  'text/csv',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
 
 /**
  * MIME types `document_read` can read: the backend's `DOCUMENT_CLASS_FORMATS`
@@ -103,51 +75,61 @@ export function isDocumentClassMimeType(mimeType: string): boolean {
  * Whether a file is attached by reference: a document over the inline limit
  * and within the large-document ceiling. Mirrors the backend's one predicate,
  * `is_reference_document`, for display only (the attachment chip); the backend
- * decides how the file actually reaches the model.
+ * decides how the file actually reaches the model. `limits` is
+ * `AttachmentLimitsService.limits()`.
  */
-export function isReferenceDocument(mimeType: string, sizeBytes: number): boolean {
+export function isReferenceDocument(
+  mimeType: string,
+  sizeBytes: number,
+  limits: Readonly<AttachmentLimits>,
+): boolean {
+  const ceiling = limits.maxBytes.largeDocument;
   return (
     isDocumentClassMimeType(mimeType) &&
-    sizeBytes > MAX_FILE_SIZE_BYTES &&
-    sizeBytes <= LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES
+    sizeBytes > limits.inlineDocumentMaxBytes &&
+    ceiling !== null &&
+    sizeBytes <= ceiling
   );
 }
 
 /**
- * Resolve the size cap that applies to a given file. Use this rather than
- * `MAX_FILE_SIZE_BYTES` directly at any gate, or a legitimate deck (or, with
- * large-document attachments on, a large PDF) gets rejected by whichever check
- * was missed. `features` comes from the `FEATURES` token at the call site.
+ * Resolve the size cap that applies to a given file. Use this at every gate
+ * rather than a single number, or a legitimate deck (or, with large-document
+ * attachments on, a large PDF) gets rejected by whichever check was missed.
+ * `limits` is `AttachmentLimitsService.limits()`, the same numbers presign
+ * enforces (`GET /files/limits`).
  */
-export function maxFileSizeFor(
-  file: File,
-  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
-): number {
-  return attachmentSizeLimitFor(file.name, file.type, features);
+export function maxFileSizeFor(file: File, limits: Readonly<AttachmentLimits>): number {
+  return attachmentSizeLimitFor(file.name, file.type, limits);
 }
 
 /**
  * The same cap, for a file known only by name and MIME type: an entry in a
- * connected file source's listing, before it is downloaded.
+ * connected file source's listing, before it is downloaded. The order is the
+ * backend's (`upload_size_limit`): decks, spreadsheets, large documents.
  */
 export function attachmentSizeLimitFor(
   filename: string,
   mimeType: string,
-  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
+  limits: Readonly<AttachmentLimits>,
 ): number {
   const isPptx =
     filename.toLowerCase().endsWith('.pptx') ||
     mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   if (isPptx) {
-    return PPTX_MAX_FILE_SIZE_BYTES;
+    return limits.maxBytes.presentation;
   }
-  if (
-    features.largeDocumentAttachments &&
-    isDocumentClassMimeType(resolveMimeTypeFor(filename, mimeType))
-  ) {
-    return LARGE_DOCUMENT_MAX_FILE_SIZE_BYTES;
+  const mime = resolveMimeTypeFor(filename, mimeType);
+  if (SPREADSHEET_MIME_TYPES.has(mime)) {
+    return limits.maxBytes.spreadsheet;
   }
-  return MAX_FILE_SIZE_BYTES;
+  if (limits.largeDocuments && limits.maxBytes.largeDocument !== null && isDocumentClassMimeType(mime)) {
+    return limits.maxBytes.largeDocument;
+  }
+  if (mime.startsWith('image/')) {
+    return limits.maxBytes.image;
+  }
+  return limits.maxBytes.document;
 }
 
 /** The shape of a file-source listing entry the composer needs to judge. */
@@ -170,41 +152,17 @@ export interface AttachableSourceFile {
  */
 export function isAttachableSourceFile(
   file: AttachableSourceFile,
-  features: Pick<FeatureFlags, 'largeDocumentAttachments'>,
+  limits: Readonly<AttachmentLimits>,
 ): boolean {
   const mime = resolveMimeTypeFor(file.name, file.downloadMimeType || file.mimeType || '');
   if (!isAllowedMimeType(mime)) {
     return false;
   }
-  if (file.sizeBytes != null && file.sizeBytes > attachmentSizeLimitFor(file.name, mime, features)) {
+  if (file.sizeBytes != null && file.sizeBytes > attachmentSizeLimitFor(file.name, mime, limits)) {
     return false;
   }
   return true;
 }
-
-/**
- * Maximum files per message
- */
-export const MAX_FILES_PER_MESSAGE = 5;
-
-/**
- * Combined bytes of one message's inline attachments (7.0 MB): every image and
- * every document under `MAX_FILE_SIZE_BYTES`. Spreadsheets, decks and large
- * documents never ride inline, so they do not count. The backend holds a turn
- * to it first-fit in attachment order (`_apply_inline_byte_budget`), because the
- * turn's inline attachments are stored as one AgentCore Memory event, which
- * fails past ~7.5 MB. The composer computes the same total before send
- * (`inlineBudgetOverflow`) so the user is told which files will not fit.
- *
- * Mirrored rather than fetched: no endpoint serves the SPA its upload limits
- * (every number in this file is a mirror of this kind), and a fetch would leave
- * the composer unable to judge a drop until it answered. A deployment can
- * override the backend's value with an env var; the SPA would then mis-predict,
- * which is cosmetic, since the backend decides. Must match
- * `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES` in `backend/src/apis/shared/files/models.py`;
- * `test_inline_budget_by_reference.py` pins the two.
- */
-export const INLINE_ATTACHMENTS_MAX_TOTAL_BYTES = 7_000_000;
 
 /**
  * Request body for POST /files/presign
@@ -231,7 +189,6 @@ export interface PresignResponse {
 export interface CompleteUploadResponse {
   uploadId: string;
   status: string;
-  s3Uri: string;
   filename: string;
   sizeBytes: number;
 }
@@ -275,7 +232,12 @@ export interface ThumbnailResponse {
 export type ThumbnailFetchResult =
   | { status: 'ready'; response: ThumbnailResponse }
   | { status: 'unsupported' }
-  | { status: 'unavailable' };
+  | { status: 'unavailable' }
+  /** Not rendered yet; the prepare Lambda has been asked (HTTP 202). */
+  | { status: 'pending' };
+
+/** Waits between asks while a thumbnail is being rendered (`getThumbnailWhenRendered`). */
+const THUMBNAIL_PENDING_DELAYS_MS = [2000, 4000, 8000];
 
 /**
  * Whether a large document can be searched through the attachments KB, from
@@ -305,9 +267,22 @@ export interface FileMetadata {
   mimeType: string;
   sizeBytes: number;
   sessionId: string;
-  s3Uri: string;
   status: FileStatus;
   createdAt: string;
+  /**
+   * Set on a file shared from another of the user's conversations by a handoff or a result
+   * brought back (handoffs spec §4.9): the original, and that conversation's title then.
+   */
+  linkedFrom?: LinkedFrom | null;
+  /** For a shared file: whether its original still exists. Absent for every other file. */
+  originalAvailable?: boolean | null;
+}
+
+/** The original a shared file points at (`linkedFrom` on the row). */
+export interface LinkedFrom {
+  sessionId: string;
+  uploadId: string;
+  fromTitle: string;
 }
 
 /**
@@ -343,6 +318,13 @@ export interface PendingUpload {
    * connected file source — so there is no upload and no percentage to show.
    */
   statusLabel?: string;
+  /**
+   * The server refused this file for good (a 400 from presign, `/complete`
+   * or a file-source import: a PDF over the page limit, a type it won't take,
+   * a size over the cap), so sending the same file again can only fail the
+   * same way. The card offers Remove and no Retry. See `isPermanentUploadRefusal`.
+   */
+  permanent?: boolean;
 }
 
 /**
@@ -387,6 +369,24 @@ export class QuotaExceededError extends FileUploadError {
       { currentUsage, maxAllowed, requiredSpace }
     );
   }
+}
+
+/**
+ * Whether an upload failure would fail again on retry with the same file.
+ *
+ * True for the size and type checks (ours or the server's) and for any other
+ * 400 from the files API, which is how app-api answers a validation refusal
+ * (too many pages, an unreadable image). Everything else — a dropped
+ * connection, an S3 error, a 5xx, a quota 403 the user can clear by freeing
+ * space — keeps Retry.
+ */
+export function isPermanentUploadRefusal(err: unknown): boolean {
+  if (err instanceof FileTooLargeError || err instanceof InvalidFileTypeError) return true;
+  if (err instanceof FileUploadError) return err.code === 'API_ERROR' && err.details?.['status'] === 400;
+  if (err instanceof HttpErrorResponse) return err.status === 400;
+  // A file-source import's error carries its HTTP status (FileSourceError).
+  const status = (err as { status?: unknown } | null)?.status;
+  return err instanceof Error && status === 400;
 }
 
 /**
@@ -438,6 +438,32 @@ const EXTENSION_TO_MIME_TYPE: Record<string, string> = {
 };
 
 /**
+ * Gateway statuses on which a presign is sent once more: 502 (CloudFront or
+ * the ALB could not use its connection to the origin) and 503 (no healthy
+ * target). Both mean the request almost certainly never reached app-api.
+ * 504 is left out because app-api may have handled the request before the
+ * gateway gave up.
+ */
+const PRESIGN_RETRY_STATUSES = new Set([502, 503]);
+
+/**
+ * Wait before the one presign retry, or rethrow the error if it isn't a
+ * retryable gateway error.
+ *
+ * `gatewayRetryInterceptor` retries only GETs, because a repeated POST can do
+ * the work twice. Presign is an exception: the worst a duplicate can do is
+ * leave an extra PENDING file row that never completes and expires by its TTL.
+ * Dropping the file is worse, because the composer fires one presign per file,
+ * up to 20 at once, and one gateway blip used to cost the user that file and
+ * an "Upload Failed" toast.
+ */
+export function presignRetryDelay(err: unknown) {
+  return err instanceof HttpErrorResponse && PRESIGN_RETRY_STATUSES.has(err.status)
+    ? timer(GATEWAY_RETRY_DELAY_MS)
+    : throwError(() => err);
+}
+
+/**
  * Resolve the MIME type to send with a presign request.
  *
  * Browsers do not always populate `File.type` — an OS with no handler
@@ -478,7 +504,7 @@ export function resolveMimeTypeFor(filename: string, mimeType: string): string {
 export class FileUploadService {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
-  private features = inject(FEATURES);
+  private readonly attachmentLimits = inject(AttachmentLimitsService);
 
   private readonly baseUrl = computed(() => `${this.config.appApiUrl()}/files`);
 
@@ -533,7 +559,6 @@ export class FileUploadService {
         filename: pending.file.name,
         mimeType: pending.file.type || 'application/octet-stream',
         sizeBytes: pending.file.size,
-        s3Uri: '', // S3 URI not available in client-side pending upload
         status: 'ready',
         createdAt: new Date().toISOString(),
       };
@@ -561,7 +586,7 @@ export class FileUploadService {
    */
   validateFile(file: File): void {
     // Check size (pptx and, behind the flag, large documents have their own caps)
-    const sizeLimit = maxFileSizeFor(file, this.features);
+    const sizeLimit = maxFileSizeFor(file, this.attachmentLimits.limits());
     if (file.size > sizeLimit) {
       throw new FileTooLargeError(file.size, sizeLimit);
     }
@@ -601,10 +626,12 @@ export class FileUploadService {
     let presignResponse: PresignResponse;
     try {
       presignResponse = await firstValueFrom(
-        this.http.post<PresignResponse>(`${this.baseUrl()}/presign`, presignRequest)
+        this.http.post<PresignResponse>(`${this.baseUrl()}/presign`, presignRequest).pipe(
+          retry({ count: 1, delay: (err: unknown) => presignRetryDelay(err) }),
+        )
       );
     } catch (err) {
-      throw this.handleApiError(err, 'Failed to get upload URL');
+      throw this.handleApiError(err, 'Failed to get upload URL', presignRequest);
     }
 
     // Track pending upload
@@ -628,7 +655,7 @@ export class FileUploadService {
       });
 
       // Step 3: Mark as complete
-      const completeResponse = await this.completeUpload(presignResponse.uploadId);
+      const completeResponse = await this.completeUpload(presignResponse.uploadId, presignRequest);
 
       // Update to ready
       this.updatePendingUpload(presignResponse.uploadId, {
@@ -645,6 +672,7 @@ export class FileUploadService {
         ...pendingUpload,
         status: 'error',
         error: errorMessage,
+        permanent: isPermanentUploadRefusal(err),
       });
       throw err;
     }
@@ -662,7 +690,7 @@ export class FileUploadService {
     files: File[]
   ): Promise<Array<{ file: File; result?: CompleteUploadResponse; error?: Error }>> {
     // Limit number of files
-    const filesToUpload = files.slice(0, MAX_FILES_PER_MESSAGE);
+    const filesToUpload = files.slice(0, this.attachmentLimits.filesPerMessage());
 
     // Upload in parallel
     const results = await Promise.all(
@@ -737,13 +765,16 @@ export class FileUploadService {
   /**
    * Mark an upload as complete.
    */
-  async completeUpload(uploadId: string): Promise<CompleteUploadResponse> {
+  async completeUpload(
+    uploadId: string,
+    file?: { filename: string; mimeType: string; sizeBytes: number },
+  ): Promise<CompleteUploadResponse> {
     try {
       return await firstValueFrom(
         this.http.post<CompleteUploadResponse>(`${this.baseUrl()}/${uploadId}/complete`, {})
       );
     } catch (err) {
-      throw this.handleApiError(err, 'Failed to complete upload');
+      throw this.handleApiError(err, 'Failed to complete upload', file);
     }
   }
 
@@ -877,24 +908,42 @@ export class FileUploadService {
   /**
    * Fetch a presigned URL for a PNG thumbnail of the file's first page.
    *
-   * Backend lazy-renders on first call and caches the result, so subsequent
-   * calls return instantly. Distinguishes between "this file type can never
-   * have a thumbnail" (415 → `unsupported`) and "we tried but it didn't
-   * work" (404/422/network → `unavailable`) so the UI can decide whether
-   * to retry or give up.
+   * The prepare Lambda renders it at upload; app-api only presigns it. A
+   * thumbnail not rendered yet answers 202 (`pending`), and a render is
+   * queued. Distinguishes "this file type can never have a thumbnail" (415 →
+   * `unsupported`) from "we tried but it didn't work" (404/422/network →
+   * `unavailable`) so the UI can decide whether to retry or give up.
    */
   async getThumbnail(uploadId: string): Promise<ThumbnailFetchResult> {
     try {
       const response = await firstValueFrom(
-        this.http.get<ThumbnailResponse>(`${this.baseUrl()}/${uploadId}/thumbnail`)
+        this.http.get<ThumbnailResponse>(`${this.baseUrl()}/${uploadId}/thumbnail`, { observe: 'response' })
       );
-      return { status: 'ready', response };
+      if (response.status === 202 || !response.body) return { status: 'pending' };
+      return { status: 'ready', response: response.body };
     } catch (err) {
       if (err instanceof HttpErrorResponse && err.status === 415) {
         return { status: 'unsupported' };
       }
       return { status: 'unavailable' };
     }
+  }
+
+  /**
+   * `getThumbnail`, asking again a few times (2 s, 4 s, 8 s) while it is
+   * still being rendered: a card shown in the seconds after an upload, or the
+   * first view of a PDF uploaded before preparation rendered thumbnails.
+   * Still pending after that, it reports `unavailable` and the card keeps its
+   * skeleton until the next view.
+   */
+  async getThumbnailWhenRendered(uploadId: string, delays: readonly number[] = THUMBNAIL_PENDING_DELAYS_MS): Promise<ThumbnailFetchResult> {
+    let result = await this.getThumbnail(uploadId);
+    for (const delay of delays) {
+      if (result.status !== 'pending') return result;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      result = await this.getThumbnail(uploadId);
+    }
+    return result.status === 'pending' ? { status: 'unavailable' } : result;
   }
 
   /**
@@ -969,7 +1018,11 @@ export class FileUploadService {
   /**
    * Handle API errors with proper typing.
    */
-  private handleApiError(err: unknown, fallbackMessage: string): FileUploadError {
+  private handleApiError(
+    err: unknown,
+    fallbackMessage: string,
+    file?: { filename: string; mimeType: string; sizeBytes: number },
+  ): FileUploadError {
     if (err instanceof HttpErrorResponse) {
       const body = err.error;
 
@@ -987,9 +1040,16 @@ export class FileUploadService {
         return new InvalidFileTypeError(body.detail);
       }
 
-      // Check for file too large
-      if (err.status === 400 && body?.detail?.includes('too large')) {
-        return new FileTooLargeError(0, MAX_FILE_SIZE_BYTES);
+      // Check for file too large. app-api says "File exceeds 25MB limit";
+      // the size is the file's own and the limit is its class's, read from
+      // the message when it names one (the server is the enforcing side).
+      const detail = typeof body?.detail === 'string' ? body.detail : '';
+      if (file && err.status === 400 && /too large|exceeds .*limit/i.test(detail)) {
+        const stated = /(\d+)\s*MB limit/i.exec(detail);
+        const limit = stated
+          ? Number(stated[1]) * 1024 * 1024
+          : attachmentSizeLimitFor(file.filename, file.mimeType, this.attachmentLimits.limits());
+        return new FileTooLargeError(file.sizeBytes, limit);
       }
 
       // Generic API error

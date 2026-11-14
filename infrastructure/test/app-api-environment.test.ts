@@ -96,6 +96,12 @@ describe('buildAppApiEnvironment — quota requests', () => {
     expect(on.QUOTA_REQUESTS_ENABLED).toBe('true');
   });
 
+  it('forwards the field-set authoring flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).FIELD_SET_AUTHORING_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ fieldSetAuthoring: { enabled: true } }), stubParams());
+    expect(on.FIELD_SET_AUTHORING_ENABLED).toBe('true');
+  });
+
   it('forwards the AWS Limits flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).AWS_LIMITS_ENABLED).toBe('false');
     const on = buildAppApiEnvironment(createMockConfig({ awsLimits: { enabled: true } }), stubParams());
@@ -141,6 +147,10 @@ describe('buildAppApiEnvironment — folder sync', () => {
 
 describe('buildAppApiEnvironment — source provenance', () => {
   it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).ATTACHMENT_PLAN_ENABLED).toBe('false');
+    expect(
+      buildAppApiEnvironment(createMockConfig({ attachmentPlan: { enabled: true } }), stubParams()).ATTACHMENT_PLAN_ENABLED,
+    ).toBe('true');
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).SOURCE_PROVENANCE_ENABLED).toBe('false');
     const on = buildAppApiEnvironment(
       createMockConfig({ sourceProvenance: { enabled: true } }),
@@ -296,5 +306,16 @@ describe('buildAppApiEnvironment — knowledge-base per-file upload limit', () =
       managedKb: { ...base.managedKb, uploadMaxFileBytes: 10 * 1024 * 1024 },
     });
     expect(buildAppApiEnvironment(config, stubParams()).KB_UPLOAD_MAX_FILE_BYTES).toBe('10485760');
+  });
+});
+
+describe('buildAppApiEnvironment — MCP elicitation', () => {
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).MCP_ELICITATION_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(
+      createMockConfig({ mcpElicitation: { enabled: true } }),
+      stubParams(),
+    );
+    expect(on.MCP_ELICITATION_ENABLED).toBe('true');
   });
 });

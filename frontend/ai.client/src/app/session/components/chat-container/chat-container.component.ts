@@ -39,6 +39,8 @@ import { ProjectsService } from '../../../projects/services/projects.service';
 import { MessageMapService } from '../../services/session/message-map.service';
 import { ExpiredSessionNoticeComponent } from '../expired-session-notice/expired-session-notice.component';
 import { HandoffReviewSheetComponent } from '../handoff/handoff-review-sheet.component';
+import { DeliveryCardsComponent } from '../handoff/delivery-cards.component';
+import { SendBackSheetComponent } from '../handoff/send-back-sheet.component';
 
 /**
  * Configuration options for ChatContainerComponent.
@@ -85,6 +87,8 @@ export interface ChatContainerConfig {
     VoiceOverlayComponent,
     ExpiredSessionNoticeComponent,
     HandoffReviewSheetComponent,
+    DeliveryCardsComponent,
+    SendBackSheetComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './chat-container.component.html',
@@ -226,12 +230,63 @@ export class ChatContainerComponent {
     ...this.config(),
   }));
 
+  /**
+   * The Agent the URL binds this conversation to (`?assistantId=`, or a project's
+   * harness), from the session page. Known before the Agent record loads, which is
+   * the point: voice must not start as a plain chat while the Agent is loading.
+   */
+  boundAgentId = input<string | null>(null);
+  /** The URL names a binding at all (`?assistantId=` or `?project=`), resolved or not. */
+  hasUrlBinding = input<boolean>(false);
+
+  /**
+   * The Agent whose voice setting decides the voice button: the loaded record, but
+   * only once it is the one the URL names. While a switch is loading, `assistant()`
+   * still holds the previous Agent.
+   */
+  private readonly voiceAssistant = computed<Assistant | null>(() => {
+    const assistant = this.assistant();
+    const bound = this.boundAgentId();
+    if (!assistant) return null;
+    return !bound || assistant.assistantId === bound ? assistant : null;
+  });
+
+  /**
+   * The conversation's Agent for voice mode (#625). The backend checks it against
+   * the Agent saved on the session, so this only matters for a brand-new chat.
+   */
+  protected readonly voiceAgentId = computed<string | null>(
+    () => this.boundAgentId() ?? this.assistant()?.assistantId ?? null,
+  );
+
+  /**
+   * Voice mode (#625): offered on a plain chat, and on an Agent's chat only once the
+   * Agent has loaded and its author turned voice on. Hidden while the Agent named in
+   * the URL is still loading (or failed to load), so voice can never start without
+   * it. Not offered in a Shared Project, whose harness has no voice setting. The
+   * backend enforces the same rules; this hides a button that could only fail.
+   */
+  protected readonly showVoiceControl = computed<boolean>(() => {
+    if (!this.resolvedConfig().showVoiceControl) return false;
+    if (this.project()) return false;
+    const unbound = !this.hasUrlBinding() && !this.boundAgentId() && !this.assistant();
+    if (unbound) return true;
+    const assistant = this.voiceAssistant();
+    if (!assistant || assistant.kind === 'project') return false;
+    // The Agent record only counts when it is the same Agent (it can lag on a switch too).
+    const agent = this.agent();
+    const fromAgent = agent?.agentId === assistant.assistantId ? agent.voiceEnabled : undefined;
+    return (fromAgent ?? assistant.voiceEnabled) === true;
+  });
+
   // Output events
   // `mentionAgentId` and `invokedSkillIds` ride through untouched: the container is a
   // layout shell, and dropping either field here would silently turn every `@`-mention
   // back into a plain turn, or every `/` skill command into ordinary prose.
-  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[] }>();
+  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }>();
   continueRequested = output<void>();
+  /** "Try again" after a provider outage: resend the last message. */
+  outageRetryRequested = output<void>();
   messageCancelled = output<void>();
   fileAttached = output<File>();
   assistantClosed = output<void>();
@@ -252,12 +307,19 @@ export class ChatContainerComponent {
    *
    * The fallback is deliberately `listed: false`: an Assistant carries no listing, so
    * neither store affordance is offered rather than guessed at.
+   *
+   * Pinning is offered only from the Agent shape, and never for a project's harness: the
+   * server refuses that pin (400), and the Agent shape does not say what it is. The
+   * Assistant shape does, so it is read here.
    */
   protected readonly launchCardView = computed<AgentLaunchCardView | null>(() => {
     const agent = this.agent();
-    if (agent) return agentLaunchCardView(agent);
-
     const assistant = this.assistant();
+    if (agent) {
+      const view = agentLaunchCardView(agent);
+      return assistant?.kind === 'project' ? { ...view, pinnable: false } : view;
+    }
+
     if (!assistant) return null;
     return {
       agentId: assistant.assistantId,
@@ -267,6 +329,7 @@ export class ChatContainerComponent {
       emoji: assistant.emoji,
       starters: assistant.starters ?? [],
       listed: false,
+      pinnable: false,
     };
   });
 
@@ -394,7 +457,7 @@ export class ChatContainerComponent {
   }
 
   // Event handlers
-  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[] }) {
+  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }) {
     this.messageSubmitted.emit(event);
 
     // Wait for DOM to update (user message to be added) then scroll to it

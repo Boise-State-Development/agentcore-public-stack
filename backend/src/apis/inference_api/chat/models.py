@@ -7,11 +7,12 @@ import json
 from typing import Any, Dict, List, Optional
 
 from apis.shared.client_tools import ClientToolSpec, validate_client_tools
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
 from apis.shared.browser_takeover import coerce_frame_height
 from apis.shared.handoff.brief import HandoffBriefRequest
+from apis.shared.handoff.delivery_turn import DELIVERY_FIELD_MAX_ITEMS, DeliveryAttachRequest
 from apis.shared.handoff.turn import HandoffContextRequest
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
@@ -152,6 +153,21 @@ class InvocationRequest(BaseModel):
     # event, the client runs it and resumes with the result. Absent for every
     # web turn — the SPA has nothing to execute. See `apis.shared.client_tools`.
     client_tools: Optional[List[ClientToolSpec]] = None
+    # How many characters of `message` the user pasted rather than typed, as
+    # the composer counted them. A number only, never the text: it is written
+    # as `pastedChars` on the turn's last cost row so a large paste can be told
+    # apart from context the server injected (docs/one-pagers/idle-return-context.md).
+    # Measurement only: nothing reaches the prompt. Clamped to the message length
+    # on validation; absent from clients that don't count (the terminal, the API).
+    pasted_chars: Optional[int] = None
+
+    @model_validator(mode="after")
+    def _bound_pasted_chars(self) -> "InvocationRequest":
+        # A count from the client is a hint: a bad one is dropped rather than
+        # failing the turn, and it never exceeds the message it describes.
+        count = self.pasted_chars
+        self.pasted_chars = min(count, len(self.message)) if count and count > 0 and self.message else None
+        return self
 
     @field_validator("client_tools")
     @classmethod
@@ -224,6 +240,13 @@ class InvocationRequest(BaseModel):
     # resolves and builds the agent exactly as for that turn, then streams the brief from a
     # side call over a copy of the history instead of running a turn. Nothing is persisted.
     handoff_brief: Optional[HandoffBriefRequest] = None
+    # Deliveries (agent-handoffs-and-consults.md §4.8): the cards waiting on this conversation's
+    # composer that this send carries, `[{deliveryId, text?}]`, `text` present only when the card
+    # was edited. Each is attached exactly once (a conditional write, issued beside the agent build)
+    # and prepended to the user message in 0a's wrapper; the bubble shows `message` only. At most
+    # three per turn; the rest stay pending. An unknown, foreign or already-attached id is ignored
+    # with a warning, as is the whole field on a resume, a continuation, or with HANDOFFS_ENABLED off.
+    deliveries: Optional[List[DeliveryAttachRequest]] = Field(None, max_length=DELIVERY_FIELD_MAX_ITEMS)
     # When set, the route resumes a paused agent turn instead of starting a
     # new one. `message` is ignored in that case — the original prompt is
     # already in the agent's interrupt context.

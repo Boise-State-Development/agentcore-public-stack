@@ -16,7 +16,7 @@ it from the row its restore already loads.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 FORKED_FROM_ATTRIBUTE = "forkedFrom"
 ROOT_SESSION_ATTRIBUTE = "rootSessionId"
@@ -68,3 +68,32 @@ def root_session_of(session_id: str, row: Optional[Dict[str, Any]]) -> str:
     """The conversation a session's family started from: its own id unless it is a fork."""
     root = (row or {}).get(ROOT_SESSION_ATTRIBUTE)
     return root if isinstance(root, str) and root else session_id
+
+
+def ancestor_session_ids(session_id: str, row: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
+    """The sessions a fork's copied messages were attached in: its parent, then its root.
+
+    A fork copies its parent's stored messages verbatim, document blocks
+    included, but not the upload rows those blocks name: they stay on the
+    session the file was attached in. So anything that matches a fork's
+    document block to its row reads these sessions' rows after its own. Empty
+    for a session that is not a fork. A fork of a fork whose file was attached
+    in a middle generation that is neither the parent nor the root is not
+    covered; reaching it would cost a read per generation.
+
+    Deterministic and fixed for the life of the fork (both attributes are
+    written once, when it is created), so a restore that uses it renders the
+    same bytes every time.
+    """
+    ids = []
+    origin = ForkOrigin.from_row(row)
+    if origin is not None:
+        ids.append(origin.session_id)
+        ids.append(root_session_of(session_id, row))
+    seen = {session_id}
+    out = []
+    for sid in ids:
+        if sid and sid not in seen:
+            seen.add(sid)
+            out.append(sid)
+    return tuple(out)

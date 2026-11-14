@@ -60,7 +60,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # relative path it resolves its worker and decoder files from. Matching the
 # default means the viewer never has to set baseUrl, which is one fewer
 # assumption that can be silently wrong at runtime.
-DEST="${REPO_ROOT}/infrastructure/assets/mcp-sandbox/dcvjs"
+DEST="${REPO_ROOT}/infrastructure/assets/browser-live-view/dcvjs"
 
 log() { printf '  %s\n' "$*"; }
 

@@ -3,13 +3,14 @@
 ``docs/specs/large-document-attachments.md`` §4B (PR-2). Pins:
 
 - the resolver reads the row first and never fetches a reference-class object;
-- ``_partition_attachments`` puts those files in their own ``reference`` list:
-  counted in the marker, zero bytes against the inline budget, and the turn is
-  classified as carrying a document (so ``document_read`` is injected);
+- the route turns the planner's ``on_demand`` entries into the turn's
+  ``reference`` list: counted in the marker and the per-message cap, and the
+  turn classified as carrying a document (so ``document_read`` is injected).
+  Which file is a reference, and that it costs nothing against the inline
+  budget, are rows of the planner's table (``test_attachment_plan.py``);
 - the user message gets the stored digest with its handle when preparation is
   ready, otherwise a fixed stub, and the text is a pure function of the row;
 - the guidance sentence;
-- direct ``files`` bytes over the inline limit stay oversized (§4B.6).
 """
 
 from __future__ import annotations
@@ -22,11 +23,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import apis.inference_api.chat.routes as routes
-from apis.inference_api.chat.models import FileContent, InvocationRequest
+from apis.inference_api.chat.models import InvocationRequest
 from apis.shared.files import large_document
 from apis.shared.files.document_digest import DigestSection, DocumentDigest
 from apis.shared.files.file_resolver import FileResolver
-from apis.shared.files.models import FileMetadata, FileStatus, INLINE_ATTACHMENTS_MAX_TOTAL_BYTES
+from apis.shared.files.models import FileMetadata, FileStatus
 from apis.shared.files.reference_attachments import (
     ReferenceAttachment,
     format_size,
@@ -134,45 +135,8 @@ class TestResolverReadsTheRowFirst:
         assert s3.get_object.call_count == 2
 
 
-# ---------------------------------------------------------------------------
-# Partition
-# ---------------------------------------------------------------------------
-
-
 def _b64_of_size(n: int) -> str:
     return base64.b64encode(b"x" * n).decode()
-
-
-class TestReferencePartition:
-    def test_reference_files_get_their_own_list(self):
-        ref = ReferenceAttachment(meta=_meta())
-        small = FileContent(filename="memo.pdf", content_type=PDF, bytes=_b64_of_size(1000))
-
-        inline, tabular, presentations, oversized, reference = routes._partition_attachments([small, ref])
-
-        assert inline == [small]
-        assert reference == [ref]
-        assert tabular == presentations == oversized == []
-
-    def test_a_reference_adds_nothing_to_the_inline_byte_budget(self):
-        ref = ReferenceAttachment(meta=_meta(size_bytes=49 * MB))
-        inline_file = FileContent(filename="memo.pdf", content_type=PDF, bytes=_b64_of_size(3 * MB))
-
-        inline, *_rest, reference = routes._partition_attachments([ref, inline_file])
-        kept, over, requested = routes._apply_inline_byte_budget(inline, INLINE_ATTACHMENTS_MAX_TOTAL_BYTES)
-
-        assert routes._estimate_decoded_size(ref) == 0
-        assert requested == 3 * MB
-        assert kept == [inline_file] and over == []
-
-    def test_direct_bytes_over_the_inline_limit_stay_oversized(self):
-        # §4B.6: bytes in the request body have no upload row to be a reference.
-        direct = FileContent(filename="big.pdf", content_type=PDF, bytes=_b64_of_size(5 * MB))
-
-        inline, _, _, oversized, reference = routes._partition_attachments([direct])
-
-        assert oversized == [direct]
-        assert inline == reference == []
 
 
 class _FakeResolver:
@@ -231,7 +195,11 @@ class TestResolveTurnAttachments:
         # The cap is applied to the ids before resolution, so a reference uses
         # one of the five slots exactly like an inline file.
         run, state = phase
-        monkeypatch.setattr(routes, "MAX_FILES_PER_MESSAGE", 2)
+        from dataclasses import replace
+
+        from apis.shared.files.attachment_plan import legacy_profile
+
+        monkeypatch.setattr(routes, "current_limits_profile", lambda: replace(legacy_profile(), max_files_per_message=2))
 
         out = await run(["up-1", "up-2", "up-3"])
 

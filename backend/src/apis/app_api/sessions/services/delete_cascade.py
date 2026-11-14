@@ -39,10 +39,12 @@ logger = logging.getLogger(__name__)
 
 
 def delete_session_handoffs(user_id: str, session_id: str) -> int:
-    """Delete the ``HANDOFF#`` rows opened from a conversation."""
+    """Delete the ``HANDOFF#`` rows opened from a conversation, and the ``DELIVERY#`` rows sent into it."""
     from apis.shared.handoff import get_handoff_store
+    from apis.shared.handoff.delivery import get_delivery_store
 
-    return get_handoff_store().delete_for_session(user_id, session_id)
+    handoffs = get_handoff_store().delete_for_session(user_id, session_id)
+    return handoffs + get_delivery_store().delete_for_session(user_id, session_id)
 
 
 @dataclass(frozen=True)

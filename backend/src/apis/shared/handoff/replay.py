@@ -20,6 +20,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from apis.shared.feature_flags import handoffs_enabled
+from apis.shared.handoff.delivery import DeliveryStore, DeliveryView, get_delivery_store
 from apis.shared.handoff.models import HandoffView
 from apis.shared.handoff.relay import MetaLoader, load_relayed_prompts
 from apis.shared.handoff.store import HandoffStore, get_handoff_store
@@ -55,6 +56,25 @@ async def load_handoff_replay(
     return [view.model_dump(by_alias=True, exclude_none=True) for view in views], spawned
 
 
+async def load_delivery_replay(
+    session_id: str, user_id: str, store: Optional[DeliveryStore] = None
+) -> List[Dict[str, Any]]:
+    """This conversation's pending deliveries, oldest first, as composer cards (§4.8). Never raises.
+
+    Only ``pending``: an attached delivery's block is already in the user message that carried it,
+    which is what a reloaded bubble renders, and a dismissed one is gone.
+    """
+    if not handoffs_enabled():
+        return []
+    store = store or get_delivery_store()
+    try:
+        rows = await asyncio.to_thread(store.list_pending, user_id, session_id)
+    except Exception:  # noqa: BLE001 - a replay that fails costs only the cards, never the thread
+        logger.warning("Delivery replay failed", exc_info=True)
+        return []
+    return [DeliveryView.from_row(row).model_dump(by_alias=True, exclude_none=True) for row in rows]
+
+
 def _spawned_from(
     store: HandoffStore, user_id: str, session_row: Optional[Dict[str, Any]]
 ) -> Optional[Dict[str, Any]]:
@@ -74,4 +94,4 @@ def _spawned_from(
     }
 
 
-__all__ = ["load_handoff_replay"]
+__all__ = ["load_delivery_replay", "load_handoff_replay"]

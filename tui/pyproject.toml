@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aps-tui"
-version = "1.35.0"
+version = "1.36.0"
 requires-python = ">=3.11"
 description = "aps-tui — the APS terminal client: streaming AI chat in your terminal"
 readme = "README.md"
@@ -28,6 +28,9 @@ dependencies = [
     "httpx==0.28.1",
     "httpx-sse==0.4.3",
     "keyring==25.7.0",
+    # The encrypted credential file used where there is no OS keyring.
+    # Matches backend/pyproject.toml; already a transitive dependency on Linux.
+    "cryptography==50.0.1",
     "platformdirs==4.11.0",
 ]
 

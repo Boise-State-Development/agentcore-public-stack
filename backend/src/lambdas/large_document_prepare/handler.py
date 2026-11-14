@@ -45,6 +45,32 @@ attachment_index.py``), because the stack had no room for a second one:
 
 An index failure never undoes a preparation: Tier 1 does not depend on Tier 2.
 With the flag off, every index message is acknowledged untouched.
+
+**File facts (unified-attachment-delivery spec §4.1).** A preparation that ends
+``ready`` writes the row's ``facts`` map in its final write, from the units it
+already extracted. Every *other* document-class upload (one under the inline
+limit) arrives as ``{"action": "facts", "user_id", "upload_id"}``: it reads the
+original, computes the same facts, and writes only ``facts``. It writes no
+sidecar, no shard, no ``preparation`` and no digest (app-api builds that one
+in-process, as before). With the KB on it then syncs the upload's index entry,
+which ingests only a document the attachment planner's ``token`` profile would
+send on demand (phase 5, ``attachment_index.indexed_by_budget``); on the
+``legacy`` profile no small file is ever eligible, as before.
+
+**PDF thumbnail.** Both paths render a PDF's first page to
+``_derived/thumb.png`` (``apis/shared/files/pdf_thumbnail.py``) while the PDF
+is open, so app-api only presigns it and never runs PDFium on a request.
+``{"action": "thumbnail", "user_id", "upload_id"}`` renders one for a PDF
+uploaded before this existed, when app-api first finds it missing. A page that
+will not render leaves no thumbnail and fails nothing: the card falls back to
+its skeleton.
+
+**Card preview.** The same passes write a Word file's opening paragraphs to
+``_derived/preview.json`` (``apis/shared/files/attachment_preview.py``), and
+``{"action": "preview", "user_id", "upload_id"}`` (from app-api, for a
+spreadsheet, CSV or deck, which are not document-class and so get no facts
+pass) writes their first rows or first slide. A file that will not parse
+leaves no preview: the card keeps its skeleton.
 """
 
 from __future__ import annotations
@@ -61,10 +87,18 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from apis.shared.aws_clients import get_client
 from apis.shared.feature_flags import attachment_kb_enabled
-from apis.shared.files import large_document
+from apis.shared.files import file_facts, large_document
 from apis.shared.files.document_digest import build_digest, document_digest_enabled, record_digest
-from apis.shared.files.document_read import _open_pdf, _pdf_page_text, document_format_for, docx_paragraphs
-from apis.shared.files.models import FileMetadata, FileStatus, is_reference_document
+from apis.shared.files.document_read import _open_pdf, _pdf_page_text, document_format_for, docx_paragraphs, text_lines
+from apis.shared.files.models import FileMetadata, FileStatus, is_linked_reference, is_reference_document
+from apis.shared.files.attachment_preview import (
+    PreviewUnavailable,
+    build_preview,
+    encode_preview,
+    preview_format,
+    preview_key,
+)
+from apis.shared.files.pdf_thumbnail import render_first_page, thumbnail_key
 from apis.shared.files.pdfium_lock import serialized_pdfium
 from apis.shared.files.repository import FileUploadRepository, get_file_upload_repository
 from apis.shared.timestamps import utc_now_iso
@@ -125,11 +159,58 @@ def _put(s3: Any, bucket: str, key: str, body: Union[bytes, BinaryIO], content_t
     s3.put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type)
 
 
+def _first_page_png(pdf: Any) -> Optional[bytes]:
+    """The thumbnail, or ``None`` when the page will not render. The caller
+    holds the PDFium lock."""
+    try:
+        return render_first_page(pdf)
+    except Exception as e:  # noqa: BLE001 - a thumbnail is never worth a failed preparation
+        logger.warning("large-document-prepare: thumbnail not rendered (%s)", type(e).__name__)
+        return None
+
+
+def _put_thumbnail(s3: Any, meta: FileMetadata, png: Optional[bytes]) -> None:
+    if png is not None:
+        _put(s3, meta.s3_bucket, thumbnail_key(meta.s3_key), png, "image/png")
+
+
+def _store_preview(s3: Any, meta: FileMetadata, raw: bytes) -> bool:
+    """Write the card preview of a Word, spreadsheet, CSV or deck file.
+
+    False when the file has no preview format or will not parse; S3 errors
+    propagate so SQS retries them.
+    """
+    fmt = preview_format(meta.filename, meta.mime_type)
+    if fmt is None:
+        return False
+    try:
+        preview = build_preview(fmt, raw)
+    except PreviewUnavailable as e:
+        logger.warning("large-document-prepare: preview not built (%s)", e)
+        return False
+    _put(s3, meta.s3_bucket, preview_key(meta.s3_key), encode_preview(preview), "application/json")
+    return True
+
+
+@serialized_pdfium
+def _pdf_thumbnail(raw: bytes) -> Optional[bytes]:
+    """Open ``raw`` and render its first page; ``None`` when either fails."""
+    try:
+        pdf = _open_pdf(raw)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("large-document-prepare: thumbnail source did not open (%s)", type(e).__name__)
+        return None
+    try:
+        return _first_page_png(pdf)
+    finally:
+        pdf.close()
+
+
 @serialized_pdfium
 def _prepare_pdf(s3: Any, meta: FileMetadata, raw: bytes, shard_pages: int) -> List[str]:
     """Page texts, with every shard uploaded as it is rendered (one shard in
-    memory at a time). Document errors raise ``PreparationFailed``; S3 errors
-    propagate as they are."""
+    memory at a time) and the first page's thumbnail beside them. Document
+    errors raise ``PreparationFailed``; S3 errors propagate as they are."""
     try:
         pdf = _open_pdf(raw)
     except Exception as e:  # noqa: BLE001
@@ -152,6 +233,7 @@ def _prepare_pdf(s3: Any, meta: FileMetadata, raw: bytes, shard_pages: int) -> L
                     raise PreparationFailed("ShardsTooLarge")
                 out.seek(0)
                 _put(s3, meta.s3_bucket, large_document.shard_key(meta.s3_key, start, end), out, "application/pdf")
+        _put_thumbnail(s3, meta, _first_page_png(pdf))
         return texts
     finally:
         pdf.close()
@@ -162,7 +244,7 @@ def _units(fmt: str, raw: bytes) -> List[str]:
     try:
         if fmt == "docx":
             return docx_paragraphs(raw)
-        return raw.decode("utf-8", errors="replace").splitlines()
+        return text_lines(fmt, raw)
     except Exception as e:  # noqa: BLE001
         raise PreparationFailed(e) from e
 
@@ -222,6 +304,10 @@ async def prepare_upload(
     status = meta.status if isinstance(meta.status, str) else meta.status.value
     if status != FileStatus.READY.value:
         return "not_ready"
+    if is_linked_reference(meta):
+        # A file shared from another conversation (handoffs spec §4.9): its preparation is the
+        # original's, so nothing is prepared twice and no state is written onto the reference.
+        return "linked_reference"
     if not is_reference_document(meta):
         return "not_reference"
     if large_document.is_prepared(meta):
@@ -240,6 +326,8 @@ async def prepare_upload(
             texts = _units(fmt, raw)
         layer = large_document.encode_text_layer(large_document.UNIT_FOR_FORMAT[fmt], texts)
         _put(s3, meta.s3_bucket, large_document.text_layer_key(meta.s3_key), layer, "application/x-ndjson")
+        if fmt == "docx":
+            _store_preview(s3, meta, raw)
     except PreparationFailed as e:
         logger.warning("large-document-prepare: document could not be prepared (%s)", e.cause)
         try:
@@ -271,6 +359,15 @@ async def prepare_upload(
         record_digest(built)
         digest = built.to_item()
 
+    facts: Optional[Dict[str, Any]] = None
+    try:
+        if fmt == "pdf":
+            facts = file_facts.build_document_facts(fmt, size_bytes=len(raw), page_texts=texts)
+        else:
+            facts = file_facts.build_document_facts(fmt, size_bytes=len(raw), text=file_facts.render_text(fmt, raw))
+    except Exception:  # noqa: BLE001 - facts are never worth a failed preparation
+        logger.warning("large-document-prepare: file facts not computed", exc_info=True)
+
     ms = int((time.monotonic() - started) * 1000)
     page_count = len(texts) if fmt == "pdf" else 0
     preparation = large_document.preparation_record(
@@ -282,7 +379,7 @@ async def prepare_upload(
         ms=ms,
         prepared_at=utc_now_iso(),
     )
-    stored = await repository.update_file_preparation(user_id, upload_id, preparation, digest)
+    stored = await repository.update_file_preparation(user_id, upload_id, preparation, digest, facts)
     if stored is None:
         # Deleted (or no longer READY) while it was being prepared: app-api's
         # delete may already have run, so the sidecars are this run's to remove.
@@ -295,6 +392,143 @@ async def prepare_upload(
         return "deleted"
     large_document.record_preparation(outcome="ready", fmt=fmt, ms=ms, pages=page_count, units=len(texts))
     return "ready"
+
+
+async def compute_facts(
+    user_id: str,
+    upload_id: str,
+    *,
+    s3: Any = None,
+    repository: Optional[FileUploadRepository] = None,
+    final_attempt: bool = False,
+) -> str:
+    """Write the facts of one document under the inline limit; returns the outcome.
+
+    The facts-only preparation (module docstring). Raises only on AWS errors
+    before the final attempt, so SQS retries them; a document that will not
+    parse is recorded as ``failed`` in the metric and left without facts, which
+    is the state every turn already handles.
+    """
+    repository = repository or get_file_upload_repository()
+    s3 = s3 or get_client("s3", os.environ.get("AWS_REGION") or None)
+    started = time.monotonic()
+
+    meta = await repository.get_file(user_id, upload_id)
+    if meta is None:
+        return "missing"
+    status = meta.status if isinstance(meta.status, str) else meta.status.value
+    if status != FileStatus.READY.value:
+        return "not_ready"
+    fmt = document_format_for(meta.mime_type, meta.filename)
+    if fmt is None:
+        return "not_document"
+    if is_reference_document(meta):
+        return "reference"  # its preparation writes the facts
+    if file_facts.facts_current(meta):
+        return "already_computed"
+    if not _key_is_owned(meta, user_id, upload_id):
+        file_facts.record_facts(outcome="failed", fmt=fmt, ms=0)
+        return "unexpected_key"
+
+    try:
+        raw = s3.get_object(Bucket=meta.s3_bucket, Key=meta.s3_key)["Body"].read()
+    except _TRANSIENT as e:
+        if not final_attempt:
+            raise
+        logger.warning("large-document-prepare: facts given up after retries (%s)", type(e).__name__)
+        file_facts.record_facts(outcome="failed", fmt=fmt, ms=int((time.monotonic() - started) * 1000))
+        return "failed"
+    try:
+        if fmt == "pdf":
+            _put_thumbnail(s3, meta, _pdf_thumbnail(raw))
+        else:
+            _store_preview(s3, meta, raw)
+    except _TRANSIENT:
+        logger.warning("large-document-prepare: thumbnail or preview not stored", exc_info=True)
+    try:
+        facts = file_facts.compute_document_facts(fmt, raw)
+    except Exception as e:  # noqa: BLE001 - a bad document leaves the row as it was
+        logger.warning("large-document-prepare: facts not computed (%s)", type(e).__name__)
+        file_facts.record_facts(outcome="failed", fmt=fmt, ms=int((time.monotonic() - started) * 1000))
+        return "failed"
+
+    stored = await repository.update_file_facts(user_id, upload_id, facts, len(raw))
+    ms = int((time.monotonic() - started) * 1000)
+    outcome = "ready" if stored is not None else "stale"
+    file_facts.record_facts(outcome=outcome, fmt=fmt, ms=ms)
+    return outcome
+
+
+async def render_thumbnail(
+    user_id: str,
+    upload_id: str,
+    *,
+    s3: Any = None,
+    repository: Optional[FileUploadRepository] = None,
+    final_attempt: bool = False,
+) -> str:
+    """Render the thumbnail of one PDF uploaded before preparation wrote one.
+
+    app-api queues this the first time it finds ``_derived/thumb.png`` missing.
+    Raises only on AWS errors before the final attempt, so SQS retries them.
+    """
+    repository = repository or get_file_upload_repository()
+    s3 = s3 or get_client("s3", os.environ.get("AWS_REGION") or None)
+
+    meta = await repository.get_file(user_id, upload_id)
+    if meta is None:
+        return "missing"
+    status = meta.status if isinstance(meta.status, str) else meta.status.value
+    if status != FileStatus.READY.value:
+        return "not_ready"
+    if document_format_for(meta.mime_type, meta.filename) != "pdf":
+        return "not_pdf"
+    if not _key_is_owned(meta, user_id, upload_id):
+        return "unexpected_key"
+    try:
+        raw = s3.get_object(Bucket=meta.s3_bucket, Key=meta.s3_key)["Body"].read()
+        png = _pdf_thumbnail(raw)
+        _put_thumbnail(s3, meta, png)
+    except _TRANSIENT as e:
+        if not final_attempt:
+            raise
+        logger.warning("large-document-prepare: thumbnail given up after retries (%s)", type(e).__name__)
+        return "failed"
+    return "ready" if png is not None else "failed"
+
+
+async def render_preview(
+    user_id: str,
+    upload_id: str,
+    *,
+    s3: Any = None,
+    repository: Optional[FileUploadRepository] = None,
+    final_attempt: bool = False,
+) -> str:
+    """Write the card preview of a spreadsheet, CSV or deck (or an older Word
+    file). Raises only on AWS errors before the final attempt."""
+    repository = repository or get_file_upload_repository()
+    s3 = s3 or get_client("s3", os.environ.get("AWS_REGION") or None)
+
+    meta = await repository.get_file(user_id, upload_id)
+    if meta is None:
+        return "missing"
+    status = meta.status if isinstance(meta.status, str) else meta.status.value
+    if status != FileStatus.READY.value:
+        return "not_ready"
+    if preview_format(meta.filename, meta.mime_type) is None:
+        return "no_preview"
+    if not _key_is_owned(meta, user_id, upload_id):
+        return "unexpected_key"
+    try:
+        raw = s3.get_object(Bucket=meta.s3_bucket, Key=meta.s3_key)["Body"].read()
+        written = _store_preview(s3, meta, raw)
+    except _TRANSIENT as e:
+        if not final_attempt:
+            raise
+        logger.warning("large-document-prepare: preview given up after retries (%s)", type(e).__name__)
+        return "failed"
+    return "ready" if written else "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +585,11 @@ def _ids(message: Dict[str, Any]) -> Optional[Tuple[str, str]]:
 def _parse(body: str) -> Optional[Dict[str, Any]]:
     """The message's kind and fields, or None when it is malformed.
 
-    Kinds: ``prepare`` (``{user_id, upload_id}``, from app-api), ``index`` and
+    Kinds: ``prepare`` (``{user_id, upload_id}``, from app-api), ``facts``
+    (``{"action": "facts", ...}``, from app-api for a document under the inline
+    limit), ``thumbnail`` (``{"action": "thumbnail", ...}``, from app-api for a
+    PDF with no rendered first page yet), ``preview`` (``{"action":
+    "preview", ...}``, from app-api for a spreadsheet, CSV or deck), ``index`` and
     ``check`` (from this pipeline and app-api's re-index on open), ``deleted``
     (an S3 Object Deleted event for an original) and ``reconcile`` (the daily
     schedule).
@@ -381,6 +619,12 @@ def _parse(body: str) -> Optional[Dict[str, Any]]:
         return None
     if action is None:
         return {"kind": "prepare", "user_id": ids[0], "upload_id": ids[1]}
+    if action == "facts":
+        return {"kind": "facts", "user_id": ids[0], "upload_id": ids[1]}
+    if action == "thumbnail":
+        return {"kind": "thumbnail", "user_id": ids[0], "upload_id": ids[1]}
+    if action == "preview":
+        return {"kind": "preview", "user_id": ids[0], "upload_id": ids[1]}
     if action == "index":
         return {"kind": "index", "user_id": ids[0], "upload_id": ids[1], "force": bool(message.get("force"))}
     if action == "check":
@@ -401,6 +645,19 @@ async def _handle(message: Dict[str, Any], final_attempt: bool) -> str:
         if outcome == "ready" and attachment_kb_enabled():
             outcome += f", index: {await index_after_prepare(message['user_id'], message['upload_id'])}"
         return outcome
+    if kind == "facts":
+        outcome = await compute_facts(message["user_id"], message["upload_id"], final_attempt=final_attempt)
+        # Unified attachment delivery phase 5: under the token profile a document
+        # the planner would send on demand is indexed by its facts, not only a
+        # prepared reference-class one. ``sync_upload`` decides from the row
+        # (``attachment_index.is_eligible``), so anything else is "not_eligible".
+        if outcome == "ready" and attachment_kb_enabled():
+            outcome += f", index: {await index_after_prepare(message['user_id'], message['upload_id'])}"
+        return outcome
+    if kind == "thumbnail":
+        return await render_thumbnail(message["user_id"], message["upload_id"], final_attempt=final_attempt)
+    if kind == "preview":
+        return await render_preview(message["user_id"], message["upload_id"], final_attempt=final_attempt)
     if not attachment_kb_enabled():
         return "attachment KB off; acknowledged"
     return await _run_index_message(message)

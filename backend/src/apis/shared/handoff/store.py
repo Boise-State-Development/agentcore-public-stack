@@ -175,7 +175,7 @@ class HandoffStore:
         """Move a row to ``status`` if ``TRANSITIONS`` allows it from where it is.
 
         ``fields`` are camelCase attributes from ``_TRANSITION_FIELDS``; a ``None`` value is left
-        unset. Returns the updated row, or ``None`` when the row is missing, owned by someone else,
+        unset. A move to anything but ``needs_input`` also removes ``waitingOn``. Returns the updated row, or ``None`` when the row is missing, owned by someone else,
         or in a status the move isn't allowed from. The caller reads the row again if it needs to
         tell those apart. Leaving ``open`` for ``running`` goes through ``accept``.
         """
@@ -212,6 +212,12 @@ class HandoffStore:
             names[f"#{name}"] = name
             values[f":{name}"] = value
             sets.append(f"#{name} = :{name}")
+        update = "SET " + ", ".join(sets)
+        if status != "needs_input":
+            # What a row waited on stops being true when it stops waiting; a done row that still
+            # names the consent it once needed reads as a fact about the row it no longer is.
+            names["#waitingOn"] = "waitingOn"
+            update += " REMOVE #waitingOn"
         for index, source in enumerate(allowed):
             values[f":from{index}"] = source
         condition = "attribute_exists(SK) AND #status IN ({})".format(
@@ -220,10 +226,38 @@ class HandoffStore:
         try:
             resp = table.update_item(
                 Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{handoff_id}"},
-                UpdateExpression="SET " + ", ".join(sets),
+                UpdateExpression=update,
                 ConditionExpression=condition,
                 ExpressionAttributeNames=names,
                 ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if _is_conditional_failure(exc):
+                return None
+            raise
+        return _from_item(resp["Attributes"])
+
+    def complete_send_back(self, user_id: str, handoff_id: str) -> Optional[Handoff]:
+        """A ``send_back`` row's delivery was made: ``open`` → ``done``, exactly once (spec §4.3).
+
+        A send-back runs nothing, so it never passes through ``running``. The kind is part of the
+        condition, so a mention handoff can't be completed this way. ``None`` if it isn't the
+        caller's, isn't a send-back, or was already sent or dismissed.
+        """
+        table = self._require_table()
+        try:
+            resp = table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{handoff_id}"},
+                UpdateExpression="SET #status = :done, #updatedAt = :now",
+                ConditionExpression="attribute_exists(SK) AND #status = :open AND #kind = :send_back",
+                ExpressionAttributeNames={"#status": "status", "#updatedAt": "updatedAt", "#kind": "kind"},
+                ExpressionAttributeValues={
+                    ":done": "done",
+                    ":open": "open",
+                    ":send_back": "send_back",
+                    ":now": datetime.now(timezone.utc).isoformat(),
+                },
                 ReturnValues="ALL_NEW",
             )
         except ClientError as exc:

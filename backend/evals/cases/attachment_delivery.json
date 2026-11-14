@@ -1,0 +1,2684 @@
+[
+ {
+  "id": "attachment_delivery.lookup_md_5k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Pell Reach intake? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-96625"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-96652)[\\s\\S]){0,160}?WO\\-96625"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_5k.md"
+  ],
+  "notes": "Size ladder, ~5k tokens of Markdown. The fact is at 90% depth; the backup-style lookalike is in another section."
+ },
+ {
+  "id": "attachment_delivery.lookup_md_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Morrow Basin treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-78096"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-78069)[\\s\\S]){0,160}?WO\\-78096"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_30k.md"
+  ],
+  "notes": "Size ladder, ~30k tokens of Markdown. The fact is at 90% depth; the backup-style lookalike is in another section."
+ },
+ {
+  "id": "attachment_delivery.lookup_md_80k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Calder Tarn reservoir gauge? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-66685"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-66658)[\\s\\S]){0,160}?WO\\-66685"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_80k.md"
+  ],
+  "notes": "Size ladder, ~80k tokens of Markdown. The fact is at 90% depth; the backup-style lookalike is in another section."
+ },
+ {
+  "id": "attachment_delivery.lookup_md_150k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Quill Gap pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-24282"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-24228)[\\s\\S]){0,160}?WO\\-24282"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_150k.md"
+  ],
+  "notes": "Size ladder, ~150k tokens of Markdown. The fact is at 90% depth; the backup-style lookalike is in another section."
+ },
+ {
+  "id": "attachment_delivery.lookup_md_300k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Brack Cut intake? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-77180"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-77108)[\\s\\S]){0,160}?WO\\-77180"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_300k.md"
+  ],
+  "notes": "Size ladder, ~300k tokens of Markdown. The fact is at 90% depth; the backup-style lookalike is in another section."
+ },
+ {
+  "id": "attachment_delivery.lookup_txt_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Brack Reach treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-39741"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-39714)[\\s\\S]){0,160}?WO\\-39741"
+    ]
+   }
+  },
+  "files": [
+   "delivery_log_30k.txt"
+  ],
+  "notes": "Type coverage: txt, ~30k tokens. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.lookup_pdf_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Brack Crossing treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-60930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Type coverage: pdf, ~30k tokens. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.lookup_pdf_80k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Thorn Gap treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-58797"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-58779)[\\s\\S]){0,160}?WO\\-58797"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_80k.pdf"
+  ],
+  "notes": "Type coverage: pdf, ~80k tokens. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.lookup_pdf_150k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Morrow Reach sluice gate? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-66350"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-66305)[\\s\\S]){0,160}?WO\\-66350"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_150k.pdf"
+  ],
+  "notes": "Type coverage: pdf, ~150k tokens. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.lookup_docx_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Vane Shoals pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-25778"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-25787)[\\s\\S]){0,160}?WO\\-25778"
+    ]
+   }
+  },
+  "files": [
+   "delivery_memo_30k.docx"
+  ],
+  "notes": "Type coverage: docx, ~30k tokens. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.lookup_html_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Thorn Shoals reservoir gauge? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-28557"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-28575)[\\s\\S]){0,160}?WO\\-28557"
+    ]
+   }
+  },
+  "files": [
+   "delivery_bulletin_30k.html"
+  ],
+  "notes": "Type coverage: html, ~30k tokens. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.lookup_pptx_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached deck, what is the emergency work order number for the Ilsey Reach reservoir gauge? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [
+    "create_powerpoint_presentation"
+   ],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-95665"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-95656)[\\s\\S]){0,160}?WO\\-95665"
+    ]
+   }
+  },
+  "files": [
+   "delivery_briefing_30k.pptx"
+  ],
+  "notes": "A ~30k-token deck, one slide per paragraph. Decks go to the deck tools, never inline."
+ },
+ {
+  "id": "attachment_delivery.lookup_csv_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "In the attached spreadsheet, what is the Ticket for Calder Basin intake in week 12? Reply with just the ticket."
+   }
+  ],
+  "run": {
+   "enabled_tools": [
+    "list_spreadsheets",
+    "analyze_spreadsheet"
+   ],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-20975"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-20957)[\\s\\S]){0,160}?WO\\-20975"
+    ]
+   }
+  },
+  "files": [
+   "delivery_ledger_30k.csv"
+  ],
+  "notes": "A ~30k-token table (csv). The lookalike ticket is the same site one week later."
+ },
+ {
+  "id": "attachment_delivery.lookup_xlsx_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "In the attached spreadsheet, what is the Ticket for Saddle Mere sluice gate in week 38? Reply with just the ticket."
+   }
+  ],
+  "run": {
+   "enabled_tools": [
+    "list_spreadsheets",
+    "analyze_spreadsheet"
+   ],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-97893"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-97839)[\\s\\S]){0,160}?WO\\-97893"
+    ]
+   }
+  },
+  "files": [
+   "delivery_ledger_30k.xlsx"
+  ],
+  "notes": "A ~30k-token table (xlsx). The lookalike ticket is the same site one week later."
+ },
+ {
+  "id": "attachment_delivery.lookup_png",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached image, what is the operating permit number for the Wick Tor pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WP-60418"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WP\\-60481)[\\s\\S]){0,160}?WP\\-60418"
+    ]
+   }
+  },
+  "files": [
+   "delivery_permit_card.png"
+  ],
+  "notes": "A fact that exists only in pixels, beside its backup-permit lookalike."
+ },
+ {
+  "id": "attachment_delivery.cross_document_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Two documents are attached. What is the operating permit number for the Tamsin Basin treatment plant, and what is the calibration certificate number for the Thorn Levee reservoir gauge? Reply as: <permit>; <certificate>"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "WP-51759",
+    "CC-73502"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WP\\-51795)[\\s\\S]){0,160}?WP\\-51759",
+     "\\A(?:(?!CC\\-73520)[\\s\\S]){0,160}?CC\\-73502"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_30k.md",
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Each answer is in a different ~30k-token document (Markdown and PDF)."
+ },
+ {
+  "id": "attachment_delivery.cross_document_80k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Two documents are attached. What is the operating permit number for the Wren Bend treatment plant, and what is the calibration certificate number for the Saddle Cut pump station? Reply as: <permit>; <certificate>"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "WP-38313",
+    "CC-80537"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WP\\-38331)[\\s\\S]){0,160}?WP\\-38313",
+     "\\A(?:(?!CC\\-80573)[\\s\\S]){0,160}?CC\\-80537"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_80k.md",
+   "delivery_report_80k.pdf"
+  ],
+  "notes": "Each answer is in a different ~80k-token document (Markdown and PDF)."
+ },
+ {
+  "id": "attachment_delivery.absent_fact_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Does the attached document give the operating permit number for the Orrin Basin intake? If it does, reply with just the number. If the document doesn't say, reply exactly: NOT IN DOCUMENT"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "\\A(?:(?!WP\\-23562)[\\s\\S]){0,160}?NOT\\ IN\\ DOCUMENT"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_30k.md"
+  ],
+  "notes": "Hallucination guard at ~30k: the backup permit is there and must not be offered as the operating one. The refusal must lead; naming the backup after it is fine."
+ },
+ {
+  "id": "attachment_delivery.absent_fact_150k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Does the attached document give the operating permit number for the Saddle Shoals sluice gate? If it does, reply with just the number. If the document doesn't say, reply exactly: NOT IN DOCUMENT"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "\\A(?:(?!WP\\-19441)[\\s\\S]){0,160}?NOT\\ IN\\ DOCUMENT"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_150k.md"
+  ],
+  "notes": "Hallucination guard at ~150k: the backup permit is there and must not be offered as the operating one. The refusal must lead; naming the backup after it is fine."
+ },
+ {
+  "id": "attachment_delivery.follow_up_30k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Tamsin Basin treatment plant? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the emergency work order number for the Morrow Basin treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-78096"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-78069)[\\s\\S]){0,160}?WO\\-78096"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_30k.md"
+  ],
+  "notes": "Turn 2 must still read the ~30k-token document from the restored history (inside the cache TTL; the paced arm past it waits for the ceiling wave)."
+ },
+ {
+  "id": "attachment_delivery.follow_up_150k",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Orrin Bend treatment plant? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the emergency work order number for the Quill Gap pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-24282"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-24228)[\\s\\S]){0,160}?WO\\-24282"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_150k.md"
+  ],
+  "notes": "Turn 2 must still read the ~150k-token document from the restored history (inside the cache TTL; the paced arm past it waits for the ceiling wave)."
+ },
+ {
+  "id": "attachment_delivery.count_five_documents",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Five site notes are attached. What is the calibration certificate number for the Pell Levee treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "CC-63136"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!CC\\-63163)(?!CC\\-70074)(?!CC\\-33846)(?!CC\\-11897)(?!CC\\-22404)[\\s\\S]){0,160}?CC\\-63136"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_5k.md",
+   "delivery_note_a_5k.md",
+   "delivery_note_b_5k.md",
+   "delivery_note_c_5k.md",
+   "delivery_note_d_5k.md"
+  ],
+  "notes": "Five ~5k-token documents, today's per-message cap. Each holds a certificate; only one is the subject's."
+ },
+ {
+  "id": "attachment_delivery.count_twenty_documents",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Twenty site notes are attached. What is the calibration certificate number for the Kestrel Levee pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "CC-25686"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!CC\\-25668)(?!CC\\-70074)(?!CC\\-33846)(?!CC\\-11897)(?!CC\\-63136)(?!CC\\-22404)(?!CC\\-14635)(?!CC\\-31025)(?!CC\\-67372)(?!CC\\-56456)(?!CC\\-72770)(?!CC\\-84453)(?!CC\\-84138)(?!CC\\-86367)(?!CC\\-96857)(?!CC\\-83298)(?!CC\\-37681)(?!CC\\-56043)(?!CC\\-68596)(?!CC\\-46381)[\\s\\S]){0,160}?CC\\-25686"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_5k.md",
+   "delivery_note_a_5k.md",
+   "delivery_note_b_5k.md",
+   "delivery_note_c_5k.md",
+   "delivery_note_d_5k.md",
+   "delivery_note_e_5k.md",
+   "delivery_note_f_5k.md",
+   "delivery_note_g_5k.md",
+   "delivery_note_h_5k.md",
+   "delivery_note_i_5k.md",
+   "delivery_note_j_5k.md",
+   "delivery_note_k_5k.md",
+   "delivery_note_l_5k.md",
+   "delivery_note_m_5k.md",
+   "delivery_note_n_5k.md",
+   "delivery_note_o_5k.md",
+   "delivery_note_p_5k.md",
+   "delivery_note_q_5k.md",
+   "delivery_note_r_5k.md",
+   "delivery_note_s_5k.md"
+  ],
+  "notes": "Twenty ~5k-token documents, the token profile's per-message cap (~100k tokens together). Each holds a certificate; only the seventeenth is the subject's."
+ },
+ {
+  "id": "attachment_delivery.arm_pdf_30k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Brack Crossing treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-60930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Gating cell: pdf, ~30k tokens forced native. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_pdf_30k_text",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Brack Crossing treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "text",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-60930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Gating cell: pdf, ~30k tokens forced text. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_pdf_30k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Brack Crossing treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-60930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Gating cell: pdf, ~30k tokens forced on_demand. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_docx_30k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Vane Shoals pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-25778"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-25787)[\\s\\S]){0,160}?WO\\-25778"
+    ]
+   }
+  },
+  "files": [
+   "delivery_memo_30k.docx"
+  ],
+  "notes": "Gating cell: docx, ~30k tokens forced native. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_docx_30k_text",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Vane Shoals pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "text",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-25778"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-25787)[\\s\\S]){0,160}?WO\\-25778"
+    ]
+   }
+  },
+  "files": [
+   "delivery_memo_30k.docx"
+  ],
+  "notes": "Gating cell: docx, ~30k tokens forced text. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_docx_30k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Vane Shoals pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-25778"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-25787)[\\s\\S]){0,160}?WO\\-25778"
+    ]
+   }
+  },
+  "files": [
+   "delivery_memo_30k.docx"
+  ],
+  "notes": "Gating cell: docx, ~30k tokens forced on_demand. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_html_30k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Thorn Shoals reservoir gauge? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-28557"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-28575)[\\s\\S]){0,160}?WO\\-28557"
+    ]
+   }
+  },
+  "files": [
+   "delivery_bulletin_30k.html"
+  ],
+  "notes": "Gating cell: html, ~30k tokens forced native. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_html_30k_text",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Thorn Shoals reservoir gauge? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "text",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-28557"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-28575)[\\s\\S]){0,160}?WO\\-28557"
+    ]
+   }
+  },
+  "files": [
+   "delivery_bulletin_30k.html"
+  ],
+  "notes": "Gating cell: html, ~30k tokens forced text. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_html_30k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Thorn Shoals reservoir gauge? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-28557"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-28575)[\\s\\S]){0,160}?WO\\-28557"
+    ]
+   }
+  },
+  "files": [
+   "delivery_bulletin_30k.html"
+  ],
+  "notes": "Gating cell: html, ~30k tokens forced on_demand. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_pdf_80k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Thorn Gap treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-58797"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-58779)[\\s\\S]){0,160}?WO\\-58797"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_80k.pdf"
+  ],
+  "notes": "Holding against reading on demand at ~80k: forced native. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_pdf_80k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Thorn Gap treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-58797"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-58779)[\\s\\S]){0,160}?WO\\-58797"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_80k.pdf"
+  ],
+  "notes": "Holding against reading on demand at ~80k: forced on_demand. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_md_150k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Quill Gap pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-24282"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-24228)[\\s\\S]){0,160}?WO\\-24282"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_150k.md"
+  ],
+  "notes": "Holding against reading on demand at ~150k: forced native. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.arm_md_150k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the emergency work order number for the Quill Gap pump station? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-24282"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-24228)[\\s\\S]){0,160}?WO\\-24282"
+    ]
+   }
+  },
+  "files": [
+   "delivery_prose_150k.md"
+  ],
+  "notes": "Holding against reading on demand at ~150k: forced on_demand. Fact at 90% depth."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_30k_native_default_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Thorn Levee reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general."
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Brack Crossing treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-60930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~30k-token PDF held native at the default ceiling, warm pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_30k_native_default_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Thorn Levee reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general.",
+    "pause_seconds": 330
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Brack Crossing treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-60930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~30k-token PDF held native at the default ceiling, cold pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail; turn 5 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_30k_native_200k_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Thorn Levee reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general."
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Brack Crossing treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "200k"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-60930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~30k-token PDF held native at the 200k ceiling, warm pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_30k_native_200k_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Thorn Levee reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general.",
+    "pause_seconds": 330
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Brack Crossing treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "200k"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-60930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~30k-token PDF held native at the 200k ceiling, cold pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail; turn 5 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_30k_on_demand_default_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Thorn Levee reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general."
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Brack Crossing treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-60930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~30k-token PDF held on_demand at the default ceiling, warm pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_30k_on_demand_default_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Thorn Levee reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Corran Cut reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general.",
+    "pause_seconds": 330
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Brack Crossing treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-60930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-60903)[\\s\\S]){0,160}?WO\\-60930"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_30k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~30k-token PDF held on_demand at the default ceiling, cold pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail; turn 5 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_80k_native_default_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Saddle Cut pump station? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general."
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Thorn Gap treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-58797"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-58779)[\\s\\S]){0,160}?WO\\-58797"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_80k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~80k-token PDF held native at the default ceiling, warm pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_80k_native_default_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Saddle Cut pump station? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general.",
+    "pause_seconds": 330
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Thorn Gap treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-58797"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-58779)[\\s\\S]){0,160}?WO\\-58797"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_80k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~80k-token PDF held native at the default ceiling, cold pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail; turn 5 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_80k_native_200k_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Saddle Cut pump station? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general."
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Thorn Gap treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "200k"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-58797"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-58779)[\\s\\S]){0,160}?WO\\-58797"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_80k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~80k-token PDF held native at the 200k ceiling, warm pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_80k_native_200k_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Saddle Cut pump station? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general.",
+    "pause_seconds": 330
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Thorn Gap treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "200k"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-58797"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-58779)[\\s\\S]){0,160}?WO\\-58797"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_80k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~80k-token PDF held native at the 200k ceiling, cold pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail; turn 5 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_80k_on_demand_default_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Saddle Cut pump station? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general."
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Thorn Gap treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-58797"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-58779)[\\s\\S]){0,160}?WO\\-58797"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_80k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~80k-token PDF held on_demand at the default ceiling, warm pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_80k_on_demand_default_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Saddle Cut pump station? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Thorn Mere sluice gate? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general.",
+    "pause_seconds": 330
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Thorn Gap treatment plant? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-58797"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-58779)[\\s\\S]){0,160}?WO\\-58797"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_80k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~80k-token PDF held on_demand at the default ceiling, cold pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail; turn 5 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_150k_native_default_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Morrow Shoals intake? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general."
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Morrow Reach sluice gate? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-66350"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-66305)[\\s\\S]){0,160}?WO\\-66350"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_150k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~150k-token PDF held native at the default ceiling, warm pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_150k_native_default_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Morrow Shoals intake? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general.",
+    "pause_seconds": 330
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Morrow Reach sluice gate? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-66350"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-66305)[\\s\\S]){0,160}?WO\\-66350"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_150k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~150k-token PDF held native at the default ceiling, cold pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail; turn 5 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_150k_native_200k_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Morrow Shoals intake? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general."
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Morrow Reach sluice gate? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "200k"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-66350"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-66305)[\\s\\S]){0,160}?WO\\-66350"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_150k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~150k-token PDF held native at the 200k ceiling, warm pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_150k_native_200k_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Morrow Shoals intake? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general.",
+    "pause_seconds": 330
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Morrow Reach sluice gate? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "200k"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-66350"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-66305)[\\s\\S]){0,160}?WO\\-66350"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_150k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~150k-token PDF held native at the 200k ceiling, cold pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail; turn 5 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_150k_on_demand_default_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Morrow Shoals intake? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general."
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Morrow Reach sluice gate? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-66350"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-66305)[\\s\\S]){0,160}?WO\\-66350"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_150k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~150k-token PDF held on_demand at the default ceiling, warm pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail."
+ },
+ {
+  "id": "attachment_delivery.ceiling_pdf_150k_on_demand_default_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to the attached document, what is the operating permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the calibration certificate number for the Morrow Shoals intake? Reply with just the number."
+   },
+   {
+    "prompt": "According to the same document, what is the backup permit number for the Quill Shoals reservoir gauge? Reply with just the number."
+   },
+   {
+    "prompt": "Separate question, nothing to do with the document: write a two-sentence reminder asking field crews to log every inspection on the day it happens."
+   },
+   {
+    "prompt": "Thanks. Now give me three short bullet points on why consistent inspection logs matter for a water utility. Keep it general.",
+    "pause_seconds": 330
+   },
+   {
+    "prompt": "According to the document I attached at the start, what is the emergency work order number for the Morrow Reach sluice gate? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-66350"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-66305)[\\s\\S]){0,160}?WO\\-66350"
+    ]
+   }
+  },
+  "files": [
+   "delivery_report_150k.pdf"
+  ],
+  "notes": "Ceiling arm: a ~150k-token PDF held on_demand at the default ceiling, cold pace. Turn 6 asks the 90%-depth fact after the document's turn has left the protected tail; turn 5 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_30k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Corran Weir",
+    "Quill Levee",
+    "Brack Mere",
+    "Vane Gap",
+    "Vane Basin",
+    "Ashby Reach"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document list: a ~30k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_30k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Corran Weir",
+    "Quill Levee",
+    "Brack Mere",
+    "Vane Gap",
+    "Vane Basin",
+    "Ashby Reach"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document list: a ~30k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_30k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Orrin Tarn reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "4.4"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~30k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_30k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Orrin Tarn reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "4.4"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~30k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_30k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Orrin Cut",
+    "Morrow Mere",
+    "Kestrel Flats",
+    "Corran Tarn"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~30k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_30k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Orrin Cut",
+    "Morrow Mere",
+    "Kestrel Flats",
+    "Corran Tarn"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_30k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~30k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_80k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Vane Flats",
+    "Brack Hollow",
+    "Morrow Crossing",
+    "Ashby Bend",
+    "Vane Ford",
+    "Ilsey Cut"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document list: a ~80k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_80k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Vane Flats",
+    "Brack Hollow",
+    "Morrow Crossing",
+    "Ashby Bend",
+    "Vane Ford",
+    "Ilsey Cut"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document list: a ~80k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_80k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Ilsey Shoals reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "3.0"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~80k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_80k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Ilsey Shoals reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "3.0"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~80k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_80k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Hale Cut",
+    "Kestrel Cut",
+    "Morrow Hollow",
+    "Quill Basin"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~80k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_80k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Hale Cut",
+    "Kestrel Cut",
+    "Morrow Hollow",
+    "Quill Basin"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_80k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~80k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_150k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Hale Bend",
+    "Pell Gap",
+    "Thorn Hollow",
+    "Brack Weir",
+    "Wren Basin",
+    "Corran Flats"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document list: a ~150k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_list_pdf_150k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook records every boil-water notice issued during the year. List each site that received one, then say how many there were in total."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Hale Bend",
+    "Pell Gap",
+    "Thorn Hollow",
+    "Brack Weir",
+    "Wren Basin",
+    "Corran Flats"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(6|six)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document list: a ~150k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_150k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Quill Tarn reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "3.6"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~150k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_compare_pdf_150k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "The attached yearbook gives the Quill Tarn reservoir gauge level at the spring survey and again at the autumn survey, in different sections. By how many metres did the level change between the two surveys, and did it rise or fall?"
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "3.6"
+   ],
+   "regex": {
+    "search": [
+     "(?i)\\b(fell|fall|fallen|dropped|drop|decreas\\w*|lower\\w*|down)\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document compare: a ~150k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_150k_native",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "native",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Calder Crossing",
+    "Saddle Ford",
+    "Thorn Flats",
+    "Wren Crossing"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~150k-token PDF held native. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.whole_summarise_pdf_150k_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Summarise the major incidents the attached yearbook records: one line per incident, naming the site and what happened."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "Calder Crossing",
+    "Saddle Ford",
+    "Thorn Flats",
+    "Wren Crossing"
+   ]
+  },
+  "files": [
+   "delivery_yearbook_150k.pdf"
+  ],
+  "notes": "Whole-document summarise: a ~150k-token PDF held on_demand. Every scored value is planted, spread across the document."
+ },
+ {
+  "id": "attachment_delivery.overflow_2_documents_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Cut intake. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-31747"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-31774)(?!WO\\-18737)[\\s\\S]){0,160}?WO\\-31747"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 2 ~30k-token dossiers, two a turn, forced on_demand. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.overflow_2_documents_search",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Cut intake. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "search",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-31747"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-31774)(?!WO\\-18737)[\\s\\S]){0,160}?WO\\-31747"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 2 ~30k-token dossiers, two a turn, forced search. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.overflow_4_documents_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_c_30k.md`, what is the operating permit number for the Vane Crossing sluice gate? Reply with just the number.",
+    "files": [
+     "delivery_dossier_c_30k.md",
+     "delivery_dossier_d_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Cut intake. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-31747"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-31774)(?!WO\\-18737)(?!WO\\-83048)(?!WO\\-78537)[\\s\\S]){0,160}?WO\\-31747"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 4 ~30k-token dossiers, two a turn, forced on_demand. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.overflow_4_documents_search",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_c_30k.md`, what is the operating permit number for the Vane Crossing sluice gate? Reply with just the number.",
+    "files": [
+     "delivery_dossier_c_30k.md",
+     "delivery_dossier_d_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Cut intake. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "search",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-31747"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-31774)(?!WO\\-18737)(?!WO\\-83048)(?!WO\\-78537)[\\s\\S]){0,160}?WO\\-31747"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 4 ~30k-token dossiers, two a turn, forced search. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.overflow_8_documents_on_demand",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_c_30k.md`, what is the operating permit number for the Vane Crossing sluice gate? Reply with just the number.",
+    "files": [
+     "delivery_dossier_c_30k.md",
+     "delivery_dossier_d_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_e_30k.md`, what is the operating permit number for the Kestrel Tarn reservoir gauge? Reply with just the number.",
+    "files": [
+     "delivery_dossier_e_30k.md",
+     "delivery_dossier_f_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_g_30k.md`, what is the operating permit number for the Saddle Levee intake? Reply with just the number.",
+    "files": [
+     "delivery_dossier_g_30k.md",
+     "delivery_dossier_h_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Levee sluice gate. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "on_demand",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-98930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-98903)(?!WO\\-18737)(?!WO\\-31747)(?!WO\\-83048)(?!WO\\-78537)(?!WO\\-23870)(?!WO\\-52191)(?!WO\\-52686)[\\s\\S]){0,160}?WO\\-98930"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 8 ~30k-token dossiers, two a turn, forced on_demand. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.overflow_8_documents_search",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Here are two site dossiers. According to `delivery_dossier_a_30k.md`, what is the operating permit number for the Tamsin Hollow pump station? Reply with just the number.",
+    "files": [
+     "delivery_dossier_a_30k.md",
+     "delivery_dossier_b_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_c_30k.md`, what is the operating permit number for the Vane Crossing sluice gate? Reply with just the number.",
+    "files": [
+     "delivery_dossier_c_30k.md",
+     "delivery_dossier_d_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_e_30k.md`, what is the operating permit number for the Kestrel Tarn reservoir gauge? Reply with just the number.",
+    "files": [
+     "delivery_dossier_e_30k.md",
+     "delivery_dossier_f_30k.md"
+    ]
+   },
+   {
+    "prompt": "Here are two more site dossiers. According to `delivery_dossier_g_30k.md`, what is the operating permit number for the Saddle Levee intake? Reply with just the number.",
+    "files": [
+     "delivery_dossier_g_30k.md",
+     "delivery_dossier_h_30k.md"
+    ]
+   },
+   {
+    "prompt": "One of the site dossiers I've attached in this conversation gives the emergency work order number for the Ashby Levee sluice gate. What is it? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "search",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "WO-98930"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!WO\\-98903)(?!WO\\-18737)(?!WO\\-31747)(?!WO\\-83048)(?!WO\\-78537)(?!WO\\-23870)(?!WO\\-52191)(?!WO\\-52686)[\\s\\S]){0,160}?WO\\-98930"
+    ]
+   }
+  },
+  "files": [],
+  "notes": "Overflow cell (phase 5): 8 ~30k-token dossiers, two a turn, forced search. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ }
+]

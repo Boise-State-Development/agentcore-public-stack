@@ -223,6 +223,94 @@ class TestSkillsExemption:
         assert storage.objects == {}
 
 
+class TestKnowledgeBaseFilesExemption:
+    """``project_files`` / ``knowledge_files`` reads stay whole: the tool already pages.
+
+    Offloaded, a read came back as a preview of a ``json`` block the plugin
+    stores as one escaped line, so line-pattern retrieval could not reach a
+    section past the preview (eval case ``project_kb.large_read_file_by_name``).
+    """
+
+    def test_both_voices_are_exempt_by_their_real_names(self):
+        from agents.builtin_tools.project_files_tool import KNOWLEDGE_FILES_TOOL_NAME, PROJECT_FILES_TOOL_NAME
+
+        assert PROJECT_FILES_TOOL_NAME in tro.OFFLOAD_EXEMPT_TOOLS
+        assert KNOWLEDGE_FILES_TOOL_NAME in tro.OFFLOAD_EXEMPT_TOOLS
+        assert tro._should_offload(PROJECT_FILES_TOOL_NAME, 90_000) is False
+        assert tro._should_offload(KNOWLEDGE_FILES_TOOL_NAME, 90_000) is False
+
+    def test_the_exemption_rests_on_a_bounded_page(self):
+        # The per-call page is what keeps an exempt read out of the
+        # unbounded-pass-through class: 48 KB measured 9,149 tokens on Haiku 4.5.
+        # Raising it raises every read's share of the cached prefix; revisit
+        # the exemption if this moves.
+        from apis.shared.files.workspace import WORKSPACE_READ_MAX_BYTES
+
+        assert WORKSPACE_READ_MAX_BYTES <= 48 * 1024
+
+    @pytest.mark.parametrize("voice", ["project", "knowledge"])
+    @pytest.mark.asyncio
+    async def test_a_full_page_read_reaches_the_model_whole(self, offloader, monkeypatch, voice):
+        from agents.builtin_tools import project_files_tool as pf
+        from apis.shared.assistants.kb_access import granted
+        from apis.shared.auth.models import User
+        from apis.shared.files.workspace import WORKSPACE_READ_MAX_BYTES
+
+        user = User(user_id="u1", email="u1@example.edu", name="U", roles=["default"])
+        sections = "".join(
+            f"## Section {i}\n\n" + ("Policy text that fills the section. " * 40) + "\n\n" for i in range(1, 60)
+        )
+        assert len(sections.encode()) > WORKSPACE_READ_MAX_BYTES
+        doc = {
+            "documentId": "d1", "assistantId": "ast_1", "filename": "hr_handbook.md", "contentType": "text/markdown",
+            "sizeBytes": len(sections), "s3Key": "assistants/ast_1/documents/d1/hr_handbook.md", "status": "complete",
+        }
+        monkeypatch.setattr(pf, "list_kb_documents", lambda assistant_id: [doc])
+        monkeypatch.setattr(pf, "kb_document_text", lambda d, fmt, limit: sections)
+        monkeypatch.setattr(
+            "apis.shared.assistants.kb_access.resolve_kb_access", AsyncMock(return_value=granted("ast_1", "u1", "viewer"))
+        )
+        if voice == "project":
+            files_tool, name = pf.make_project_files_tool("prj_1", "ast_1", user), pf.PROJECT_FILES_TOOL_NAME
+        else:
+            files_tool, name = pf.make_knowledge_files_tool("ast_1", user), pf.KNOWLEDGE_FILES_TOOL_NAME
+        tool_result = await files_tool(filename="hr_handbook.md")
+        result = {"toolUseId": "t1", **tool_result}
+
+        plugin, storage = offloader
+        counter = AsyncMock(return_value=12_000)  # well over the fixture's 1,000-token gate
+        event = SimpleNamespace(
+            result=result,
+            tool_use={"toolUseId": "t1", "name": name},
+            selected_tool=None,
+            cancel_message=None,
+            agent=_Agent(SimpleNamespace(count_tokens=counter)),
+        )
+        await plugin._handle_tool_result(event)
+
+        counter.assert_not_called()
+        assert event.result is result and storage.objects == {}
+        page = event.result["content"][0]["json"]["content"]
+        assert len(page.encode()) == WORKSPACE_READ_MAX_BYTES
+        assert "## Section 7\n" in page
+
+    @pytest.mark.asyncio
+    async def test_a_tool_that_is_not_exempt_is_still_offloaded(self, offloader):
+        # The exemption is by name, not by shape: a json result from any other tool still offloads.
+        plugin, storage = offloader
+        result = {"toolUseId": "t1", "status": "success", "content": [{"json": {"content": "line\n" * 5000}}]}
+        event = SimpleNamespace(
+            result=result,
+            tool_use={"toolUseId": "t1", "name": "read_skill_file"},
+            selected_tool=None,
+            cancel_message=None,
+            agent=_Agent(SimpleNamespace(count_tokens=AsyncMock(return_value=5000))),
+        )
+        await plugin._handle_tool_result(event)
+        assert event.result["content"][0]["text"].startswith("[Offloaded:")
+        assert len(storage.objects) == 1
+
+
 class TestChatAgentWiring:
     def test_chat_agent_adds_the_offloader_plugin(self, monkeypatch):
         from unittest.mock import MagicMock

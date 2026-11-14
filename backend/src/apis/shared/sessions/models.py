@@ -63,7 +63,9 @@ class PendingInterrupt(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     interrupt_id: str = Field(..., alias="interruptId", description="Strands interrupt id used to resume the paused turn")
-    kind: Literal["oauth", "tool_approval", "user_question", "browser_login", "client_tool"] = Field(
+    kind: Literal[
+        "oauth", "tool_approval", "user_question", "browser_login", "client_tool", "mcp_elicitation"
+    ] = Field(
         default="oauth",
         description="Discriminator: which variant this interrupt represents",
     )
@@ -106,6 +108,16 @@ class PendingInterrupt(BaseModel):
     questions: Optional[str] = Field(
         default=None,
         description="(user_question) JSON-encoded list of questions to re-render",
+    )
+
+    # mcp_elicitation-only fields
+    elicitation: Optional[str] = Field(
+        default=None,
+        description=(
+            "(mcp_elicitation) JSON-encoded form a server asked the user to fill "
+            "in: toolName, serverName, message and the normalized fields. Never "
+            "the user's answer"
+        ),
     )
 
     # browser_login-only fields
@@ -673,6 +685,16 @@ class BrowserLiveViewResponse(BaseModel):
             "drive; 'agent' when the view is read-only because the agent holds it"
         ),
     )
+    viewer_origin: str = Field(
+        default="",
+        alias="viewerOrigin",
+        description=(
+            "Origin to frame the sign-in viewer from and the only origin the "
+            "SPA may post `url` to. Its own CloudFront distribution, never the "
+            "mcp-sandbox origin MCP Apps run on. Empty when no viewer is "
+            "deployed, in which case the SPA frames nothing"
+        ),
+    )
 
 
 AwaitingInputKind = Literal["oauth", "tool_approval", "user_question", "browser_login"]
@@ -1140,6 +1162,10 @@ class MessagesListResponse(BaseModel):
         None,
         alias="spawnedFrom",
         description="Set when this conversation was started by a handoff: {sessionId, handoffId, sourceTitle, agentName}. The SPA labels the first user bubble \"Context from {title}\" and links it to the source. Returned only on the first page.",
+    )
+    deliveries: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Pending deliveries into this conversation (handoffs spec §4.8), oldest first: {deliveryId, fromSessionId, fromTitle, handoffId, origin, text, artifacts: [{artifactId, version, title, contentType}], createdAt}. The SPA shows each as a card on the composer, labelled \"From {fromTitle}\", and the next send carries it as `deliveries: [{deliveryId, text?}]`. An attached card is not listed: its block is in the user message it was sent with. Empty while HANDOFFS_ENABLED is off. Returned only on the first page.",
     )
     from_archive: bool = Field(
         False,

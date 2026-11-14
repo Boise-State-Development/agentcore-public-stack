@@ -54,6 +54,7 @@ export default defineConfig({
 			],
 			sidebar: [
 				{ label: 'Getting Started', items: [{ autogenerate: { directory: 'getting-started' } }] },
+				{ label: 'Benchmarks', items: [{ autogenerate: { directory: 'benchmarks' } }] },
 				{
 					label: 'User Guide',
 					items: [{ label: 'Projects', items: [{ autogenerate: { directory: 'user-guide/projects' } }] }],

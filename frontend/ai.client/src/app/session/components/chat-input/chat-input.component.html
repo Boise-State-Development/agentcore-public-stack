@@ -110,52 +110,77 @@
     <!-- File Attachments Area -->
     @if (showFileAttachments()) {
       <div class="border-b border-gray-200 dark:border-gray-700">
-        <div
-          class="flex gap-2 overflow-x-auto px-4 py-3"
-          style="mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent); -webkit-mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent);"
-        >
+        @if (attachmentCards) {
           <!--
-            Restored first, matching `attachmentIds` — these came back with the
-            draft, so they were attached before anything uploaded in this
-            sitting. They take the card's `[file]` input (server metadata, no
-            local `File`) rather than `[pendingUpload]`, and offer no retry:
-            there is no upload in flight to retry.
+            The attachment cards (features.attachmentCards): the same three
+            sources in the same order, folding into a summary past five files.
+            Drive folders close the line, drawn as attachment cards too.
           -->
-          @for (attachment of restoredAttachments(); track attachment.uploadId) {
-            <app-file-card
-              [file]="attachment"
-              (remove)="onFileRemove($event)"
-            />
-          }
-          <!--
-            Files on their way from a connected file source. app-api fetches
-            them, so the card shows a label rather than a percentage; a
-            finished one moves into `restoredAttachments` above as metadata.
-          -->
-          @for (upload of importingAttachments(); track upload.uploadId) {
-            <app-file-card
-              [pendingUpload]="upload"
-              (remove)="onFileRemove($event)"
-              (retry)="onFileRetry($event)"
-            />
-          }
-          @for (upload of pendingUploads(); track upload.uploadId) {
-            <app-file-card
-              [pendingUpload]="upload"
-              (remove)="onFileRemove($event)"
-              (retry)="onFileRetry($event)"
-            />
-          }
-          <!-- Drive folders: one card each, whatever their file count (drive-folder spec §4.7) -->
-          @for (folder of attachedFolders(); track folder.localId) {
-            <app-folder-card
-              [folder]="folder"
-              (remove)="onFolderRemove($event)"
-              (retry)="onFolderRetry($event)"
-              (connect)="onFolderConnect($event)"
-            />
-          }
-        </div>
+          <app-composer-attachments
+            [restored]="restoredAttachments()"
+            [importing]="importingAttachments()"
+            [pending]="pendingUploads()"
+            (remove)="onFileRemove($event)"
+            (retry)="onFileRetry($event)"
+          >
+            <!-- Drive folders: one card each, whatever their file count (drive-folder spec §4.7) -->
+            @for (folder of attachedFolders(); track folder.localId) {
+              <app-composer-folder-card
+                [folder]="folder"
+                (remove)="onFolderRemove($event)"
+                (retry)="onFolderRetry($event)"
+                (connect)="onFolderConnect($event)"
+              />
+            }
+          </app-composer-attachments>
+        } @else {
+          <div
+            class="flex gap-2 overflow-x-auto px-4 py-3"
+            style="mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent); -webkit-mask-image: linear-gradient(to right, transparent, black 24px, black calc(100% - 24px), transparent);"
+          >
+            <!--
+              Restored first, matching `attachmentIds` — these came back with the
+              draft, so they were attached before anything uploaded in this
+              sitting. They take the card's `[file]` input (server metadata, no
+              local `File`) rather than `[pendingUpload]`, and offer no retry:
+              there is no upload in flight to retry.
+            -->
+            @for (attachment of restoredAttachments(); track attachment.uploadId) {
+              <app-file-card
+                [file]="attachment"
+                (remove)="onFileRemove($event)"
+              />
+            }
+            <!--
+              Files on their way from a connected file source. app-api fetches
+              them, so the card shows a label rather than a percentage; a
+              finished one moves into `restoredAttachments` above as metadata.
+            -->
+            @for (upload of importingAttachments(); track upload.uploadId) {
+              <app-file-card
+                [pendingUpload]="upload"
+                (remove)="onFileRemove($event)"
+                (retry)="onFileRetry($event)"
+              />
+            }
+            @for (upload of pendingUploads(); track upload.uploadId) {
+              <app-file-card
+                [pendingUpload]="upload"
+                (remove)="onFileRemove($event)"
+                (retry)="onFileRetry($event)"
+              />
+            }
+            <!-- Drive folders: one card each, whatever their file count (drive-folder spec §4.7) -->
+            @for (folder of attachedFolders(); track folder.localId) {
+              <app-folder-card
+                [folder]="folder"
+                (remove)="onFolderRemove($event)"
+                (retry)="onFolderRetry($event)"
+                (connect)="onFolderConnect($event)"
+              />
+            }
+          </div>
+        }
         <!--
           Files the message's combined inline budget leaves out, said before
           send. Always present with the cards, so its live region exists before
@@ -242,6 +267,7 @@
           [value]="composerText()"
           [readOnly]="isDictating()"
           (input)="onTextareaInput($event)"
+          (paste)="onTextareaPaste($event)"
           (keydown)="onKeyDown($event)"
           (keyup)="onTextareaCaretMove($event)"
           (click)="onTextareaCaretMove($event)"

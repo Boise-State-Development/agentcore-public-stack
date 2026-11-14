@@ -165,13 +165,12 @@ class TestCall:
         assert "are the same document" in _said(result)
 
     @pytest.mark.asyncio
-    async def test_a_bad_output_name_is_refused(self, monkeypatch, store):
-        result = await _call(
+    async def test_a_bad_output_name_is_made_safe(self, monkeypatch, store):
+        await _call(
             monkeypatch, original_name="services-agreement", revised_name="services-agreement-returned",
-            output_name="../x",
+            output_name="../Returned vs sent",
         )
-        assert "Invalid output name" in _said(result)
-        assert store.saved == {}
+        assert store.saved["filename"] == "Returned-vs-sent.docx"
 
 
 class TestDetails:

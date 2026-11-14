@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from apis.shared.evals.calls import summarize_calls
-from apis.shared.evals.cases import FAMILIES, JUDGED_FAMILIES, EvalCase
-from apis.shared.evals.score import FamilyComparison, compare_family, majority
+from apis.shared.evals.cases import ADVISORY_FAMILIES, FAMILIES, EvalCase
+from apis.shared.evals.efficiency import case_efficiency
+from apis.shared.evals.score import FamilyComparison, compare_family, failure_code, majority
 
 BASELINE_SCHEMA_VERSION = 1
 #: A baseline keeps one answer per case for ``--explain``. The corpus is
@@ -84,12 +85,55 @@ def case_outcomes(rows: Iterable[Mapping[str, Any]]) -> Dict[str, CaseOutcome]:
     return outcomes
 
 
+def case_ledger_entries(
+    rows: Iterable[Mapping[str, Any]],
+    baseline_cases: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Each case's outcome as the ledger row carries it: ids, counts and codes only (spec §16 D20).
+
+    ``{case_id: {pass, passes, samples, base?, codes?, names?}}``. ``pass`` is
+    the majority outcome :func:`case_outcomes` gives, ``base`` the baseline's
+    outcome for the case (absent for a case the baseline does not have),
+    ``codes`` every failure code any of the case's samples produced, and
+    ``names`` the tools and skills those failures are about, both sorted. No
+    answer, prompt or failure sentence: ``--explain`` on the run directory
+    has those, and the ledger row must hold nothing else.
+    """
+    rows = list(rows)
+    grouped: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row["case_id"])].append(row)
+    outcomes = case_outcomes(rows)
+    base = baseline_cases or {}
+
+    entries: Dict[str, Dict[str, Any]] = {}
+    for case_id in sorted(grouped):
+        outcome = outcomes[case_id]
+        codes: set = set()
+        names: set = set()
+        for sample in grouped[case_id]:
+            for failure in sample.get("failures") or ():
+                code, name = failure_code(str(failure))
+                codes.add(code)
+                if name:
+                    names.add(name)
+        entry: Dict[str, Any] = {"pass": outcome.passed, "passes": outcome.passes, "samples": outcome.samples}
+        if case_id in base:
+            entry["base"] = bool(base[case_id].get("passed"))
+        if codes:
+            entry["codes"] = sorted(codes)
+        if names:
+            entry["names"] = sorted(names)
+        entries[case_id] = entry
+    return entries
+
 def build_baseline(
     rows: Sequence[Mapping[str, Any]],
     *,
     cases: Sequence[EvalCase],
     meta: Mapping[str, Any],
     judgements: Sequence[Mapping[str, Any]] = (),
+    calls: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """A promotable baseline from a complete run, or :class:`ReportError` saying why not.
 
@@ -124,6 +168,9 @@ def build_baseline(
     judge_models = sorted({str(j.get("judge_model")) for j in judgements})
     if len(judge_models) > 1:
         raise ReportError(f"judgements mix judge models: {judge_models}")
+    # What each case cost to answer (tokens, tool calls, time), so a later run
+    # can be compared on efficiency as well as outcome. Numbers only.
+    efficiency = case_efficiency(rows, calls)
     baseline: Dict[str, Any] = {
         "schemaVersion": BASELINE_SCHEMA_VERSION,
         "modelId": model_id,
@@ -138,6 +185,7 @@ def build_baseline(
                 "passes": outcomes[c.id].passes,
                 "samples": outcomes[c.id].samples,
                 "answer": outcomes[c.id].answer[:MAX_BASELINE_ANSWER_CHARS],
+                **({"efficiency": efficiency[c.id]} if efficiency.get(c.id) else {}),
             }
             for c in cases
         },
@@ -146,6 +194,42 @@ def build_baseline(
         baseline["judgeModel"] = judge_models[0]
         baseline["judgeScores"] = {cid: scores[cid] for cid in sorted(scores)}
     return baseline
+
+
+def merge_family_baseline(existing: Mapping[str, Any], promoted: Mapping[str, Any]) -> Dict[str, Any]:
+    """``existing`` with ``promoted``'s families replaced by ``promoted``'s cases.
+
+    ``baseline --family`` promotes one family's run without re-running the
+    rest: every other family keeps its cases, and the promoted families'
+    old cases go (a case removed from the family leaves the baseline too).
+    Each promotion is recorded under ``familyPromotions`` with its own time
+    and source, since the file's ``promotedAt`` no longer describes every case.
+    """
+    if existing.get("modelId") != promoted.get("modelId"):
+        raise ReportError(f"the baseline is for {existing.get('modelId')}, the run is on {promoted.get('modelId')}")
+    if existing.get("schemaVersion") != promoted.get("schemaVersion"):
+        raise ReportError(f"unsupported baseline schema {existing.get('schemaVersion')}")
+    if existing.get("k") != promoted.get("k"):
+        raise ReportError(f"the baseline has k={existing.get('k')}, the run k={promoted.get('k')}")
+    families = set(promoted.get("families") or ())
+    merged = json.loads(json.dumps(existing))
+    merged["cases"] = {
+        cid: entry for cid, entry in (existing.get("cases") or {}).items() if entry.get("family") not in families
+    }
+    merged["cases"].update(promoted.get("cases") or {})
+    merged["families"] = sorted(set(existing.get("families") or ()) | families, key=FAMILIES.index)
+    scores = {
+        cid: v for cid, v in (existing.get("judgeScores") or {}).items()
+        if (existing.get("cases") or {}).get(cid, {}).get("family") not in families
+    }
+    scores.update(promoted.get("judgeScores") or {})
+    if scores:
+        merged["judgeScores"] = scores
+    promotions = dict(merged.get("familyPromotions") or {})
+    for family in sorted(families, key=FAMILIES.index):
+        promotions[family] = {"promotedAt": promoted.get("promotedAt"), "source": promoted.get("source")}
+    merged["familyPromotions"] = promotions
+    return merged
 
 
 def load_baseline(path: Path) -> Dict[str, Any]:
@@ -192,7 +276,7 @@ def compare_run(
                 family,
                 by_family_base.get(family, {}),
                 by_family_run[family],
-                gating=family not in JUDGED_FAMILIES,
+                gating=family not in ADVISORY_FAMILIES,
             )
         )
     return comparisons

@@ -294,6 +294,7 @@ class TestBackupCoversAllTables:
 # them loses no user data.
 NON_DATA_BUCKETS: dict[str, str] = {
     "mcp-sandbox": "static proxy shell deployed by CDK, no user data",
+    "browser-live-view": "static sign-in viewer page + build-time DCV SDK deployed by CDK, no user data",
     "frontend": "SPA build artifacts, reproducible from source",
     "alb-access-logs": "operational request logs on a short expiry lifecycle, not user data",
     "browser-policy": "Chromium policy rendered from CDK config by a BucketDeployment on every deploy",

@@ -1,8 +1,8 @@
-import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroExclamationTriangle } from '@ng-icons/heroicons/outline';
 import {
-  INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
+  AttachmentLimitsService,
   type BudgetedAttachment,
   type InlineBudgetOverflow,
 } from '../../../services/file-upload';
@@ -51,7 +51,7 @@ function budgetLabel(bytes: number): string {
           aria-hidden="true"
         />
         <p class="min-w-0 flex-1">
-          These attachments are over the {{ budget }} one message can include in full.
+          These attachments are over the {{ budget() }} one message can include in full.
           @if (over.byReference.length) {
             <span class="font-medium">{{ referenceNames() }}</span>
             will be read from storage instead, in the parts the answer needs.
@@ -69,7 +69,10 @@ function budgetLabel(bytes: number): string {
 export class InlineBudgetNoticeComponent {
   readonly overflow = input<InlineBudgetOverflow | null>(null);
 
-  protected readonly budget = budgetLabel(INLINE_ATTACHMENTS_MAX_TOTAL_BYTES);
+  private readonly limits = inject(AttachmentLimitsService).limits;
+
+  /** The served budget (`GET /files/limits`). An overflow implies there is one. */
+  protected readonly budget = computed(() => budgetLabel(this.limits().inlineBudgetBytes ?? 0));
   protected readonly referenceNames = computed(() => joinNames(this.overflow()?.byReference ?? []));
   protected readonly droppedNames = computed(() => joinNames(this.overflow()?.dropped ?? []));
 }

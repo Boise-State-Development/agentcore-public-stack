@@ -1,8 +1,9 @@
 # Structured extraction: a named field set over a document, as rows that carry their own verdict
 
-**Status:** PR-1 and PR-2 implemented (slice one), behind `DOCUMENT_EXTRACT_ENABLED`
-(off by default; only the literal `"true"` enables). PR-3 (the SPA render) is not
-built. Source-provenance verification (G2) merged to `develop` on 2026-10-20, which
+**Status:** PR-1, PR-2 and PR-3 implemented, behind `DOCUMENT_EXTRACT_ENABLED`
+(off by default; only the literal `"true"` enables) and `features.documentExtract`
+(on in the deployed dev build only). PR-3 renders the rows under the answer: a field
+list for one document, a documents × fields grid for several (§8.1, §17). Source-provenance verification (G2) merged to `develop` on 2026-10-20, which
 unblocked this. **§16 records where this spec was wrong** — it was written before the
 code, and five of its decisions needed correcting on contact. Decisions recorded in §11. Revised 2026-10-20 after
 reading `strands-agents==1.57.2`: the constrained call is
@@ -833,7 +834,7 @@ is **not** on the collision list, because this feature does not touch it (§2.1,
 | PR-0 | This spec. One new file | **No** — open now |
 | PR-1 | The pure layer: the field-set markdown parser, the field model, the `create_model` builder with its per-`(set, version)` cache, and unit tests (the subset rules of §6.3, nullable optionals staying in `required`, enum fields, `currency` as string, the authored-order guarantee, schema equality across two builds of one fixture, malformed-table errors). Plus the flag, the CDK wiring, the CDK tests and the SPA flag field. **Nothing wired to a turn** | Yes — flag and CDK files |
 | PR-2 | `document_extract` mounted in `ChatAgent._create_agent`; field-set resolution through the skill resource store; the dedicated `BedrockModel(strict_tools=True)` and its `structured_output` call, with the marked unenforced fallback; the `verify_claims` integration; the backend-authored artifact and the in-process `.xlsx`; the `document_extraction` SSE event and its broker; the `EXTR#` store and its `GET /messages` replay; the `C#` metering row; the content-free EMF record; the D15 single-call-site test. Backend complete and dev-verifiable by reading the stream | Yes — imports G2 |
-| PR-3 | SPA render behind `features.documentExtract`: the rows table with per-cell provenance in G2's vocabulary, the `schemaEnforced` disclosure, and reload replay | Yes — follows G2's PR-3 vocabulary |
+| PR-3 ✅ | SPA render behind `features.documentExtract`: the rows table with per-cell provenance in G2's vocabulary, the `schemaEnforced` disclosure, and reload replay | Yes — follows G2's PR-3 vocabulary |
 
 PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
 
@@ -881,6 +882,35 @@ PR-1 and PR-2 are slice one. PR-3 is stated as outside it rather than assumed.
 * **Distribution before badges.** The split across G2's `method` values over real runs
   is what says whether typed extraction is honest enough to put in front of a grants
   office. It is readable from PR-2, before PR-3 renders a single badge.
+
+### 14.1 Verified on dev, 2026-11-13 (1.35.0)
+
+Run in the SPA against the same synthetic two-page PDF as
+`source-provenance-verification.md` §12.1, with an eight-field set (date, currency,
+enum, number, boolean, two fields the document does not answer, list) in a skill
+created and uploaded through the API — still the only way to author one (§4,
+`field-set-authoring.md`). Haiku 5.5 as the turn model; extraction on
+`us.anthropic.claude-haiku-4-5-20251001-v1:0`.
+
+| Check | Result |
+|---|---|
+| Typed values with measured locators | Deadline `2027-03-14` (`date`), budget cap `$750,000` (`literal`), page limit `15` (`numeric`): `supported`, page 1, `measured` |
+| Fields the document does not answer | Program officer email and indirect-cost cap: `unverified` / `no_quote`, not invented. The value arrived as `""` rather than `null`; the state is honest either way |
+| The provoked case | The indirect-cost field points at a section that discusses indirect costs without a figure. The model declined to answer it, so it read `unverified`, not `supported`. This run did **not** produce a `quote_unsupported` row; §16–§17 record paraphrases caught as `quote_unsupported` in earlier dev runs |
+| Judgement and list types | Cost sharing `not required` (an enum member) and foreign lead `No`: `unassessed` / `enum_field`. Topics: `unassessed` / `non_scalar`, as §17.7 says until component-wise lists land |
+| Enforcement | `schemaEnforced: true` on both runs; the enum value was inside the declared set. The `minimum` fallback check was not run: the field-set format cannot declare one |
+| Grammar compilation | First run of the fresh set 32.7 s for the whole turn; an identical re-run 11.9 s, with identical states. About 20 s of compilation, consistent with §16.9. The next-day run was not taken |
+| Render, reload, files | The table renders under the answer; `GET /messages` replays it as `extractions`; the artifact reads back and the `.xlsx` download redirects to its object |
+| Cost | The extraction call's `C#` row is priced ($0.0050, 2,896 in / 338 out, `uncached`). Chat calls in the session kept one `toolConfigHash` and one `systemPromptHash` across both runs |
+
+**One defect found and fixed.** The extraction's `C#` row is written under
+`messageId = "extract:<toolUseId>"`, but the admin session anatomy passed the raw id
+into `SessionCallRow.message_id: Optional[int]`, so `GET /admin/costs/sessions/{id}/calls`
+returned 500 for any session that had run `document_extract` — the view §14 sends a
+reader to for the cost check. Voice's `voice:<n>` ids had the same shape. The anatomy
+now reads such an id as no message id and names its kind through
+`ledger_rollups.call_kind` (`document_extract`, `voice`), pinned by
+`tests/apis/app_api/admin/costs/test_non_turn_message_ids.py`.
 
 ## 15. Non-goals
 
@@ -1116,6 +1146,25 @@ recorded here rather than discovered by the first office to author a wide set.
 Chunking one logical set across several constrained calls is the obvious fix
 and is **not** built — see §15.
 
+**16.9a Correction, 2026-11-13: the shipped schema did not match the measured one.**
+The sweep above measured "a nullable `value` and a string `quote`". From the first
+commit the shipped schema also made `quote` nullable. Each nullable property is one
+union, so every non-enum field cost **two** unions. The 16-union counter then refused
+a set at its ninth non-enum field, not at 14. A dev pilot of a 14-field award-intake set
+(12 non-enum fields, 2 enums) was refused in under a second at 26 unions. Smaller sets
+were all that had been run on dev, so nothing had shown it.
+
+Fixed by making `quote` a plain `string`, empty when the document does not state the
+value. An empty quote already resolves to `unverified` / `no_quote`, so verification is
+unchanged. A `null` in a reply sent without the schema enforced still validates, as
+`""`. A field now costs at most one union, and an enum costs none, so 14 is again the
+true ceiling. `TestTheUnionBudget` in `tests/shared/test_extraction_schema.py` pins
+this, counting unions on the schema Strands actually sends.
+
+**Cost of the fix:** every field set's schema changes once, so its first run after the
+deploy pays one grammar compilation (§16.9, roughly 13–23 s by width). The extraction
+call is its own request, so no turn's cached prefix is touched.
+
 **16.10 A capacity failure must not fall back to unenforced.** D11 would have
 retried *any* schema-shaped `ValidationException` without `strict_tools`. But a
 field set one field too wide is not a transient fault: it would have produced
@@ -1144,6 +1193,27 @@ exceeds a capacity limit — which the measurements above show is an easy mistak
 to make — and (b) no N-fold redundant compilation, which matters against a
 deployment that already has a Bedrock throttle alarm. It is not a latency
 optimization and the spec should not claim it is.
+
+**16.12 Exact ids and exact set names cost a wasted round on most first
+calls.** §5 assumed the model would pass upload ids and the set's own name. In
+two live runs on dev (2026-11-08, Haiku 4.5, two small `.md` attachments) it did
+neither on its first try. A small attachment reaches the model as an inline
+block named by filename, with no upload id anywhere in the conversation, so it
+sent the filenames. In the other run it named the **skill** the user picked
+(`nsf-solicitation-review-test`) where the set inside it is called
+`nsf-solicitation`. Each mistake cost one or two failed calls and a
+`document_read` listing before the table appeared.
+
+Both are now resolved rather than refused. Documents go through
+`apis.shared.files.session_documents`, shared with `verify_sources` (#1784):
+an exact id, else a unique filename match, else the session's only document
+when exactly one is asked for. The tool lists the session's documents once per
+call to do this, after the set resolves. Set names go through
+`resolve_field_set`: the same name punctuated differently, else a turn skill
+that declares exactly one set. Neither ever picks between candidates: an
+ambiguous document or a skill with several sets is answered with the real
+choices. The `upload_ids` description now says filenames are accepted, which
+shortened the spec by 6 tokens.
 
 ---
 

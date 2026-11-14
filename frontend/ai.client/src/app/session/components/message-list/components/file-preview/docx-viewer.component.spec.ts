@@ -2,13 +2,22 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { DocxViewerComponent } from './docx-viewer.component';
 
+/** Stands in for docx-preview's render step: `(doc, host, options)`,
+ *  painting into `host` the nodes `renderDocument` would return. */
 const renderAsync = vi.fn();
+/** The parsed document `parseAsync` hands back (the model the review reads). */
+const parsed = vi.fn();
 
 // Intercepts the component's dynamic `import('docx-preview')` — the real
 // library parses OOXML with jszip, which is neither fast nor the thing
 // under test here.
 vi.mock('docx-preview', () => ({
-  renderAsync: (...args: unknown[]) => renderAsync(...args),
+  parseAsync: async () => parsed(),
+  renderDocument: async (doc: unknown, options: unknown) => {
+    const host = document.createElement('div');
+    await renderAsync(doc, host, options);
+    return Array.from(host.childNodes);
+  },
 }));
 
 describe('DocxViewerComponent', () => {
@@ -16,6 +25,8 @@ describe('DocxViewerComponent', () => {
 
   beforeEach(async () => {
     renderAsync.mockReset();
+    parsed.mockReset();
+    parsed.mockReturnValue({});
     // The component memoizes its dynamic import('docx-preview') on a static
     // field, and the builder runs vitest with isolate: false, so a sibling spec
     // that rendered first would pin *its* mocked module for this file too.
@@ -46,7 +57,9 @@ describe('DocxViewerComponent', () => {
   async function setBytes(bytes: ArrayBuffer | null): Promise<void> {
     fixture.componentRef.setInput('bytes', bytes);
     fixture.detectChanges();
-    for (let i = 0; i < 20; i++) await Promise.resolve();
+    // parse -> comments.xml read -> render -> decorate is a long chain of
+    // awaits; drain it fully before the final change detection.
+    for (let i = 0; i < 60; i++) await Promise.resolve();
     fixture.detectChanges();
   }
 
@@ -68,13 +81,22 @@ describe('DocxViewerComponent', () => {
     expect(rendered).toHaveBeenCalledOnce();
   });
 
-  it('passes the separate style container so injected CSS stays in our subtree', async () => {
+  it('puts the library stylesheet in the hidden style host, not the document', async () => {
+    renderAsync.mockImplementation((_doc, host: HTMLElement) => {
+      const style = document.createElement('style');
+      style.textContent = '.docx { color: black; }';
+      const page = document.createElement('section');
+      page.className = 'docx';
+      host.append(style, page);
+      return Promise.resolve();
+    });
+
     await setBytes(new ArrayBuffer(16));
 
-    const [, bodyContainer, styleContainer] = renderAsync.mock.calls[0];
-    expect(bodyContainer).toBeInstanceOf(HTMLElement);
-    expect(styleContainer).toBeInstanceOf(HTMLElement);
-    expect(bodyContainer).not.toBe(styleContainer);
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('.docx-host style')).toBeNull();
+    expect(el.querySelector('[hidden] style')).not.toBeNull();
+    expect(el.querySelector('.docx-host section.docx')).not.toBeNull();
   });
 
   it('clears the previous document before rendering a new one', async () => {
@@ -136,14 +158,14 @@ describe('DocxViewerComponent', () => {
     // own text, so it stops reading as a page at all.
     await setBytes(new ArrayBuffer(16));
 
-    const opts = renderAsync.mock.calls[0][3];
+    const opts = renderAsync.mock.calls[0][2];
     expect(opts.ignoreHeight).toBe(false);
     expect(opts.breakPages).toBe(true);
     expect(opts.inWrapper).toBe(true);
   });
 
   it('scales a US-Letter page down to fit a narrower pane', async () => {
-    const scroller = fixture.nativeElement.querySelector('.h-full');
+    const scroller = fixture.nativeElement.querySelector('.docx-host').parentElement;
     // 612pt = 816px natural width; report a 640px content box.
     vi.spyOn(scroller, 'clientWidth', 'get').mockReturnValue(640);
 
@@ -156,7 +178,7 @@ describe('DocxViewerComponent', () => {
   });
 
   it('never enlarges a page past its true size', async () => {
-    const scroller = fixture.nativeElement.querySelector('.h-full');
+    const scroller = fixture.nativeElement.querySelector('.docx-host').parentElement;
     vi.spyOn(scroller, 'clientWidth', 'get').mockReturnValue(1400);
 
     await setBytes(new ArrayBuffer(16));
@@ -167,7 +189,7 @@ describe('DocxViewerComponent', () => {
   });
 
   it('resets the zoom when the document is cleared', async () => {
-    const scroller = fixture.nativeElement.querySelector('.h-full');
+    const scroller = fixture.nativeElement.querySelector('.docx-host').parentElement;
     vi.spyOn(scroller, 'clientWidth', 'get').mockReturnValue(640);
 
     await setBytes(new ArrayBuffer(16));
@@ -281,6 +303,181 @@ describe('DocxViewerComponent', () => {
       // table's default styling (there is no `even-col` rule).
       expect(on.rows[0].cells[0].classList.contains('odd-col')).toBe(true);
       expect(on.rows[0].cells[1].classList.contains('odd-col')).toBe(false);
+    });
+  });
+
+  describe('review', () => {
+    type Node = { type?: string; children?: Node[]; text?: string; id?: string; author?: string; date?: string };
+
+    /** docx-preview's output for the parts the review reads (see
+     *  docx-review.spec.ts for the same stand-in, and why references
+     *  render as nothing). */
+    function paint(node: Node, into: globalThis.Node): void {
+      const tag = { paragraph: 'p', inserted: 'ins', deleted: 'del', run: 'span' }[node.type ?? ''];
+      if (tag) {
+        const el = document.createElement(tag);
+        if (node.type === 'inserted' || node.type === 'deleted') {
+          (el as HTMLModElement).dateTime = node.date ?? '';
+        }
+        into.appendChild(el);
+        node.children?.forEach((c) => paint(c, el));
+      } else if (node.type === 'text' || node.type === 'deletedText') {
+        into.appendChild(document.createTextNode(node.text ?? ''));
+      } else if (node.type === 'commentRangeStart' || node.type === 'commentRangeEnd') {
+        const edge = node.type === 'commentRangeStart' ? 'start' : 'end';
+        into.appendChild(document.createComment(`${edge} of comment #${node.id}`));
+      } else {
+        node.children?.forEach((c) => paint(c, into));
+      }
+    }
+
+    const run = (text: string): Node => ({ type: 'run', children: [{ type: 'text', text }] });
+    const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+    const W14 = 'http://schemas.microsoft.com/office/word/2010/wordml';
+
+    beforeEach(() => {
+      const body: Node = {
+        children: [
+          {
+            type: 'paragraph',
+            children: [
+              { type: 'commentRangeStart', id: '901' },
+              run('The term is twelve months'),
+              { type: 'commentRangeEnd', id: '901' },
+            ],
+          },
+          {
+            type: 'paragraph',
+            children: [
+              run('Governed by '),
+              { type: 'deleted', author: 'Assistant', date: '2026-11-12T17:20:00Z', children: [{ type: 'run', children: [{ type: 'deletedText', text: 'Idaho' }] }] },
+              { type: 'inserted', author: 'Assistant', date: '2026-11-12T17:20:00Z', children: [run('Delaware')] },
+            ],
+          },
+        ],
+      };
+      const comments = [
+        { id: '901', author: 'Dana Reviewer', initials: 'DR', date: '2026-11-01T09:30:00Z', children: [{ type: 'paragraph', children: [run('Can we do 24?')] }] },
+        { id: '902', author: 'Sam Counsel', initials: 'SC', date: '2026-11-01T11:12:00Z', children: [{ type: 'paragraph', children: [run('Pending finance.')] }] },
+      ];
+      const xml =
+        `<w:comments xmlns:w="${W}" xmlns:w14="${W14}">` +
+        `<w:comment w:id="901"><w:p w14:paraId="AA"/></w:comment>` +
+        `<w:comment w:id="902"><w:p w14:paraId="BB"/></w:comment></w:comments>`;
+
+      parsed.mockReturnValue({
+        documentPart: { body },
+        commentsPart: { comments, path: 'word/comments.xml', _package: { load: async () => xml } },
+        commentsExtendedPart: { commentMap: { AA: { done: false }, BB: { paraIdParent: 'AA' } } },
+      });
+      renderAsync.mockImplementation((doc: { documentPart: { body: Node } }, host: HTMLElement) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'docx-wrapper';
+        const page = document.createElement('section');
+        page.className = 'docx';
+        page.style.width = '612pt';
+        doc.documentPart.body.children?.forEach((c) => paint(c, page));
+        wrapper.appendChild(page);
+        host.appendChild(wrapper);
+        return Promise.resolve();
+      });
+    });
+
+    const el = (): HTMLElement => fixture.nativeElement as HTMLElement;
+    const cards = (): HTMLElement[] => Array.from(el().querySelectorAll<HTMLElement>('[data-review-key]'));
+
+    it('summarises what there is to review', async () => {
+      await setBytes(new ArrayBuffer(16));
+
+      expect(el().textContent).toContain('1 comment · 1 tracked change · 3 reviewers');
+    });
+
+    it('lists the comment thread with its reply, then the change, in page order', async () => {
+      await setBytes(new ArrayBuffer(16));
+
+      const [thread, change] = cards();
+      expect(cards()).toHaveLength(2);
+      expect(thread.textContent).toContain('Dana Reviewer');
+      expect(thread.textContent).toContain('Can we do 24?');
+      expect(thread.textContent).toContain('Sam Counsel');
+      expect(thread.textContent).toContain('Pending finance.');
+      expect(change.textContent).toContain('Assistant');
+      expect(change.textContent).toContain('Replaced');
+      expect(change.querySelector('del')?.textContent).toBe('Idaho');
+      expect(change.querySelector('ins')?.textContent).toBe('Delaware');
+    });
+
+    it('marks the commented passage with a numbered marker naming the thread', async () => {
+      await setBytes(new ArrayBuffer(16));
+
+      const markers = el().querySelectorAll('.docx-host .docx-review-marker');
+      expect(markers).toHaveLength(1);
+      expect(markers[0].textContent).toBe('1');
+      expect(markers[0].getAttribute('aria-label')).toBe('Comment 1 by Dana Reviewer, 1 reply');
+    });
+
+    it('selects the thread in the list when its marker is clicked', async () => {
+      await setBytes(new ArrayBuffer(16));
+
+      el().querySelector<HTMLElement>('.docx-review-marker')!.click();
+      fixture.detectChanges();
+
+      expect(cards()[0].getAttribute('aria-current')).toBe('true');
+      expect(el().querySelector('.docx-review-marker')?.getAttribute('aria-current')).toBe('true');
+    });
+
+    it('marks both halves of a replacement in the page when its card is clicked', async () => {
+      await setBytes(new ArrayBuffer(16));
+
+      cards()[1].click();
+      fixture.detectChanges();
+
+      const selected = Array.from(el().querySelectorAll('.docx-host .docx-review-selected'));
+      expect(selected.map((e) => e.tagName)).toEqual(['DEL', 'INS']);
+      expect(cards()[1].getAttribute('aria-current')).toBe('true');
+    });
+
+    it('filters the list to comments or changes', async () => {
+      await setBytes(new ArrayBuffer(16));
+
+      const filter = (label: string) =>
+        Array.from(el().querySelectorAll<HTMLButtonElement>('[role="group"] button')).find((b) =>
+          b.textContent?.includes(label),
+        )!;
+      filter('Changes').click();
+      fixture.detectChanges();
+
+      expect(cards().map((c) => c.dataset['reviewKey'])).toEqual(['r:1']);
+      expect(filter('Changes').getAttribute('aria-pressed')).toBe('true');
+    });
+
+    it('hides and shows the list from the toolbar', async () => {
+      await setBytes(new ArrayBuffer(16));
+      const toggle = el().querySelector<HTMLButtonElement>('[aria-controls="docx-review-panel"]')!;
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
+      toggle.click();
+      fixture.detectChanges();
+
+      expect(el().querySelector('#docx-review-panel')).toBeNull();
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(toggle.textContent).toContain('Show review');
+    });
+
+    it('shows no review chrome for a document with nothing to review', async () => {
+      parsed.mockReturnValue({ documentPart: { body: { children: [{ type: 'paragraph', children: [run('plain')] }] } } });
+
+      await setBytes(new ArrayBuffer(16));
+
+      expect(el().querySelector('[aria-controls="docx-review-panel"]')).toBeNull();
+      expect(el().querySelector('#docx-review-panel')).toBeNull();
+    });
+
+    it('drops the review when the document is cleared', async () => {
+      await setBytes(new ArrayBuffer(16));
+      await setBytes(null);
+
+      expect(cards()).toHaveLength(0);
     });
   });
 });

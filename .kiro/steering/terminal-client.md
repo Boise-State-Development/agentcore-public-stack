@@ -197,31 +197,27 @@ through `on_notice`, because all of it is end-of-turn fact rather than live stat
 that minted its own tokens, which is the design #850 reverted. `AuthProvider` is
 the seam; a provider is not.
 
-**Container keyring:** the image now ships one. A container has no login session,
-so `keyring` used to select `backends.fail.Keyring` and `login --sso` completed
-the flow only to fail at storage. `.devcontainer/Dockerfile` installs
-`gnome-keyring libsecret-1-0 dbus-x11` and
-`scripts/local-dev/keyring-init.sh` unlocks it with a passphrase you type once
-per container start — run it with `-it`, it prompts. No TUI code changed; the
-`SecretService` backend is selected automatically. Plaintext-file and env-var
-fallbacks were rejected: they would make the container the least safe place to
-sign in, and it is where we sign in most.
+**No OS keyring? An encrypted file instead.** Containers, VMs and SSH boxes
+have no Secret Service, so `keyring` selects `backends.fail.Keyring`. The client
+then keeps credentials in its own passphrase-encrypted file
+(`credential_file.py`, scrypt + AES-256-GCM, `~/.local/share/aps-tui/credentials.enc`)
+and asks for the passphrase once per launch. Nothing to install, and the
+devcontainer no longer ships gnome-keyring or `keyring-init.sh`. Design and
+rejected alternatives: the "Hosts with no OS keyring" section of the spec.
 
-Three traps, each of which yields a working keyring in one command and a broken
-one in the next — details in the spec:
+Rules that keep it working:
 
-- `gnome-keyring-daemon` needs **`--components=secrets`** or it never claims
-  `org.freedesktop.secrets`.
-- It needs **`--daemonize`**; `&` dies with the `docker exec`, and since the
-  service is D-Bus-activatable the next request spawns a *locked* replacement.
-  `setsid` is not a substitute — it detaches before the passphrase is read.
-- A stale bus socket **file** survives a container restart, so liveness must be a
-  real `ListNames` call, not `[ -S "$socket" ]`.
-
-The bus-address rejoin lives in **`/etc/profile.d/`**, not `~/.bashrc`:
-`bash -lc` is a non-interactive login shell and Ubuntu's stock `~/.bashrc`
-returns early for exactly that. The Dockerfile's pre-existing `~/.bashrc` PATH
-block has the same latent problem.
+- The store is chosen and unlocked in `cli._prepare_credential_store`, **before**
+  Textual starts. `getpass` cannot run inside the app, so nothing inside it may
+  prompt for a passphrase. A first run with no file creates it before setup opens.
+- `keyring_store.load/store/delete` are the only way to a credential; they
+  dispatch to whichever backend is active. Never `import keyring` elsewhere.
+- `login --sso` prepares the store before opening the browser, so an approved
+  sign-in can never be lost for want of storage.
+- `credential_store = auto|keyring|file` (or `AGENTCORE_CREDENTIAL_STORE`)
+  overrides the automatic choice. Tests get a no-op `_prepare_credential_store`
+  from an autouse fixture in `conftest.py`; `test_credential_store.py` calls the
+  real one.
 
 ## First-run setup restarts the app
 
@@ -369,7 +365,8 @@ tui/src/aps_tui/
 ├── cli.py            argparse entry: chat, login [--sso], logout, status
 ├── config.py         CLI flags > env > TOML file > keyring > defaults
 ├── credentials.py    which credential is held (API key / BFF session) + capabilities
-├── keyring_store.py  OS keyring access; owns APP_NAME
+├── keyring_store.py  credential access (OS keyring or encrypted file); owns APP_NAME
+├── credential_file.py the passphrase-encrypted store for hosts with no keyring
 ├── state.py          local bookkeeping the client writes (banner version)
 ├── conversation.py   domain: Message + ConversationStore
 ├── turn.py           BaseTurnController + TurnController/AgentTurnController,

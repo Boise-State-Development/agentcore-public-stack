@@ -158,4 +158,9 @@ export interface PlatformComputeRefs {
 
   // ── MCP sandbox edge
   mcpSandboxProxyOrigin: string;
+  /**
+   * The browser sign-in viewer's origin (`BrowserLiveViewConstruct`). app-api
+   * only: it rides the live-view mint response, so the Runtime never carries it.
+   */
+  browserLiveViewOrigin: string;
 }

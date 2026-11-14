@@ -433,6 +433,57 @@ describe('ChatInputComponent — the `/` skill-command menu', () => {
     expect(payload?.invokedSkillIds).toBeUndefined();
   });
 
+  describe('paste count (a length only, never the text)', () => {
+    function paste(text: string): void {
+      // jsdom has no DataTransfer, so the event carries a stub with the one
+      // method the composer reads.
+      const event = new Event('paste', { bubbles: true });
+      Object.defineProperty(event, 'clipboardData', {
+        value: { getData: (type: string) => (type === 'text/plain' ? text : '') },
+      });
+      textarea.dispatchEvent(event);
+      type(textarea.value + text);
+    }
+
+    function sent(): { pastedChars?: number } | undefined {
+      let payload: { pastedChars?: number } | undefined;
+      component.messageSubmitted.subscribe((event) => (payload = event));
+      component.submitChatRequest();
+      return payload;
+    }
+
+    it('sends how many characters were pasted', () => {
+      type('Summarise this: ');
+      paste('x'.repeat(5_000));
+      expect(sent()?.pastedChars).toBe(5_000);
+    });
+
+    it('omits the field when nothing was pasted', () => {
+      type('typed by hand');
+      expect(sent()?.pastedChars).toBeUndefined();
+    });
+
+    it('never counts more than the message holds', () => {
+      paste('y'.repeat(400));
+      type('short');
+      expect(sent()?.pastedChars).toBe(5);
+    });
+
+    it('forgets a paste once the text is cleared', () => {
+      paste('z'.repeat(300));
+      type('');
+      type('fresh message');
+      expect(sent()?.pastedChars).toBeUndefined();
+    });
+
+    it('starts again from zero after a send', () => {
+      paste('a'.repeat(50));
+      sent();
+      type('next one, typed');
+      expect(sent()?.pastedChars).toBeUndefined();
+    });
+  });
+
   it('tints the command in place, and deleting it un-invokes, because the text is the binding', () => {
     type('/brand-deck make me a deck');
     const marked = component['highlightSegments']()?.filter((segment) => segment.mark);
@@ -607,7 +658,7 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
 
   describe('when the turn ends in an error', () => {
     // A turn that fails slowly (a model read timeout: minutes of silence under
-    // "Still working…") is exactly when a user types "is this working?" or the
+    // the loader's silence hint) is exactly when a user types "is this working?" or the
     // next request. Sending that the instant the error lands started a new turn
     // under the failed one's "Please try again" — and the server re-sends the
     // failed turn's attachments with the first turn after a failure, so the
@@ -1539,7 +1590,6 @@ describe('ChatInputComponent — unsent text survives leaving the conversation',
       mimeType: 'application/pdf',
       sizeBytes: 2048,
       sessionId,
-      s3Uri: `s3://bucket/${uploadId}`,
       status: 'ready',
       createdAt: '2026-09-21T00:00:00Z',
     };
@@ -2546,7 +2596,8 @@ describe('ChatInputComponent voice mode options', () => {
     const voice = TestBed.inject(VoiceChatService);
     await openMenu();
     (menu()!.querySelector('[data-testid="voice-menu-start"]') as HTMLButtonElement).click();
-    expect(voice.connect).toHaveBeenCalledWith('s1');
+    // No Agent on this chat, so voice names none (#625).
+    expect(voice.connect).toHaveBeenCalledWith('s1', null);
   });
 });
 
@@ -2691,7 +2742,6 @@ describe('ChatInputComponent — the `+` menu hand-offs', () => {
     mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     sizeBytes: 1234,
     sessionId: 's1',
-    s3Uri: 's3://b/k',
     status: 'ready',
     createdAt: '2026-10-13T00:00:00Z',
   };
@@ -2750,6 +2800,33 @@ describe('ChatInputComponent — the `+` menu hand-offs', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     fixture.detectChanges();
   }
+
+  it('refuses a dropped sixth attachment when the five come from mixed sources', async () => {
+    // Restored, importing and folder attachments all fill slots; the drop
+    // path used to count pendingUploads() only (unified-attachment-delivery §1.3).
+    const upload = TestBed.inject(FileUploadService) as unknown as { uploadFile: ReturnType<typeof vi.fn> };
+    upload.uploadFile = vi.fn(async () => ({}));
+    const toast = TestBed.inject(ToastService);
+    const warning = vi.spyOn(toast, 'warning');
+
+    component.restoredAttachments.set([META, { ...META, uploadId: 'up-2' }, { ...META, uploadId: 'up-3' }]);
+    component.importingAttachments.set([
+      { file: new File(['x'], 'Doc.docx'), uploadId: 'import-1', status: 'uploading', progress: 0 },
+    ]);
+    component.attachedFolders.set([
+      {
+        localId: 'f1', folderAttachId: 'fa1', sessionId: 's1', name: 'Reports', source: 'Google Drive',
+        row: null, phase: 'attached', error: null,
+      },
+    ]);
+    expect(component.remainingFileSlots()).toBe(0);
+
+    const dropped = new File(['SELECT 1;'], 'q.sql', { type: 'text/plain' });
+    await (component as unknown as { processFiles(f: File[]): Promise<void> }).processFiles([dropped]);
+
+    expect(upload.uploadFile).not.toHaveBeenCalled();
+    expect(warning).toHaveBeenCalledWith('File Limit', 'Maximum 5 files per message. You can add 0 more.');
+  });
 
   it('shows a card while app-api fetches a file-source file, then holds it as metadata', async () => {
     let resolve!: (meta: FileMetadata) => void;
@@ -3066,7 +3143,7 @@ describe('ChatInputComponent — the combined inline budget, before send', () =>
   }
 
   function restored(uploadId: string, filename: string, sizeBytes: number): FileMetadata {
-    return { uploadId, filename, mimeType: 'application/pdf', sizeBytes, sessionId: 's1', s3Uri: '', status: 'ready', createdAt: '' };
+    return { uploadId, filename, mimeType: 'application/pdf', sizeBytes, sessionId: 's1', status: 'ready', createdAt: '' };
   }
 
   function notice(): HTMLElement | null {

@@ -83,6 +83,22 @@ class TestInvocations:
         svc.can_access_model.assert_awaited_once()
         assert svc.can_access_model.await_args.args[1] == "successor"
 
+    def test_id_missing_from_the_catalog_streams_not_offered(self):
+        """No row means no pricing: the shared rule refuses it, and the message says why."""
+        svc = _role_service(can_access=False)
+        with patch("apis.inference_api.chat.routes.resolve_effective_model", _resolve), \
+             patch("apis.inference_api.chat.routes.get_app_role_service", return_value=svc), \
+             patch("apis.inference_api.chat.routes.is_quota_enforcement_enabled", return_value=False):
+            resp = TestClient(_invocations_app(), raise_server_exceptions=False).post(
+                "/invocations",
+                json={"session_id": "s-1", "message": "hi", "model_id": "global.gone"},
+            )
+
+        assert resp.status_code == 200
+        assert "**global.gone** isn't offered on this platform" in resp.text
+        kwargs = svc.can_access_model.await_args.kwargs
+        assert kwargs["record"] is None and kwargs["catalog_read"] is True
+
     def test_retired_without_successor_streams_a_message_even_for_a_wildcard_holder(self):
         svc = _role_service(can_access=True)
         with patch("apis.inference_api.chat.routes.resolve_effective_model", _resolve), \
@@ -147,6 +163,11 @@ class TestApiConverse:
         resp = self._post("old-redirected", _role_service(can_access=False))
         assert resp.status_code == 403
         assert resp.json()["detail"] == "Access denied to model: successor"
+
+    def test_id_missing_from_the_catalog_is_refused_as_not_offered(self):
+        resp = self._post("global.gone", _role_service(can_access=False))
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Model is not offered on this platform: global.gone"
 
     def test_retired_without_successor_is_gone(self):
         svc = _role_service(can_access=True)

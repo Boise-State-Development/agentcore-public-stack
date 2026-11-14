@@ -56,7 +56,7 @@ class TestTool:
         listing = AsyncMock(return_value={"documents": [{"upload_id": "up-1"}], "count": 1})
         monkeypatch.setattr(f"{TOOL_MODULE}.list_session_documents", listing)
         result = await _call(make_document_read_tool("s1", "u1"))
-        listing.assert_awaited_once_with("u1", "s1")
+        listing.assert_awaited_once_with("u1", "s1", ancestor_session_ids=())
         assert result["status"] == "success"
         payload = result["content"][0]["json"]
         assert payload["count"] == 1 and "hint" in payload

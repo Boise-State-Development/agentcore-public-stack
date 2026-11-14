@@ -10,7 +10,7 @@ import os
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 import boto3
 from botocore.config import Config
@@ -25,6 +25,7 @@ from apis.shared.files.models import (
     Delivery,
     FileMetadata,
     FileStatus,
+    is_linked_reference,
     PresignRequest,
     PresignResponse,
     CompleteUploadResponse,
@@ -38,12 +39,16 @@ from apis.shared.files.models import (
     FileListResponse,
     QuotaResponse,
     is_allowed_mime_type,
-    is_presentation_file,
     is_reference_document,
     ALLOWED_EXTENSIONS,
     ALLOWED_MIME_TYPES,
-    LARGE_DOCUMENT_MAX_BYTES,
-    MAX_FILES_PER_MESSAGE,
+)
+from apis.shared.files.attachment_plan import (
+    UploadLimits,
+    current_limits_profile,
+    upload_download_ceiling,
+    upload_limits,
+    upload_size_limit,
 )
 from .sheet_preview import (
     MAX_WORKBOOK_BYTES,
@@ -52,6 +57,7 @@ from .sheet_preview import (
     read_workbook_preview,
 )
 from .thumbnails import (
+    ThumbnailPending,
     ThumbnailRenderer,
     ThumbnailRenderError,
     ThumbnailUnsupportedError,
@@ -128,6 +134,28 @@ class UploadSizeMismatchError(FileUploadError):
         )
 
 
+class ImageUnreadableUploadError(FileUploadError):
+    """Raised when an image over the general limit cannot be read to downscale it."""
+
+    def __init__(self, filename: str):
+        self.filename = filename
+        super().__init__(
+            f"{filename} could not be read as an image. Try saving it as a JPEG or PNG and attaching it again."
+        )
+
+
+class TooManyPagesError(FileUploadError):
+    """Raised when a PDF has more pages than the profile admits."""
+
+    def __init__(self, filename: str, pages: int, limit: int):
+        from apis.shared.files.pdf_page_count import too_many_pages_message
+
+        self.filename = filename
+        self.pages = pages
+        self.limit = limit
+        super().__init__(too_many_pages_message(filename, pages, limit))
+
+
 class FileNotFoundError(FileUploadError):
     """Raised when file is not found."""
     pass
@@ -160,6 +188,7 @@ class FileUploadService:
         bucket_name: Optional[str] = None,
         max_file_size: Optional[int] = None,
         presentation_max_file_size: Optional[int] = None,
+        spreadsheet_max_file_size: Optional[int] = None,
         max_files_per_message: Optional[int] = None,
         user_quota_bytes: Optional[int] = None,
         thumbnail_renderer: Optional[ThumbnailRenderer] = None,
@@ -190,30 +219,22 @@ class FileUploadService:
             "S3_USER_FILES_BUCKET_NAME", "user-files"
         )
 
-        # Upload limits from environment
-        self.max_file_size = max_file_size or int(
-            os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES", 4 * 1024 * 1024)  # 4MB
+        # Upload limits: the attachment planner's (``upload_limits``), the same
+        # numbers ``GET /files/limits`` serves the SPA and the TUI. A
+        # constructor value overrides one class (tests). Decks and spreadsheets
+        # never go inline, so their ceilings are the tools' (25 MB), not
+        # Bedrock's inline document limit.
+        planner_limits = upload_limits()
+        self.max_file_size = max_file_size or planner_limits.general_max_bytes
+        self.presentation_max_file_size = (
+            presentation_max_file_size or planner_limits.presentation_max_bytes
         )
-        # Presentations get a larger cap than the general limit. The general
-        # 4MB is sized for what Bedrock will accept as an inline document
-        # block; a .pptx never goes inline (Bedrock has no pptx document
-        # format — see `is_presentation_file`), so that ceiling does not
-        # apply to it. What does apply is the Code Interpreter hop in the
-        # PowerPoint tools: `_ci_write_bytes` base64-encodes the whole deck
-        # into a single writeFiles `text` field, inflating it ~4/3. That
-        # field is a MaxLenString (100MB), so 25MB of deck → ~33MB of base64
-        # stays well inside it. Real-world corporate templates with imagery
-        # routinely exceed 4MB, which is what made the template workflow
-        # unusable at the general cap.
-        self.presentation_max_file_size = presentation_max_file_size or int(
-            os.environ.get(
-                "FILE_UPLOAD_MAX_SIZE_BYTES_PRESENTATION", 25 * 1024 * 1024  # 25MB
-            )
+        self.spreadsheet_max_file_size = (
+            spreadsheet_max_file_size or planner_limits.spreadsheet_max_bytes
         )
-        # Single source of truth is the shared constant (the inference API
-        # enforces it per message; see ``_apply_message_file_cap``). Kept on
-        # the service so callers can read the effective limit.
-        self.max_files_per_message = max_files_per_message or MAX_FILES_PER_MESSAGE
+        self.max_files_per_message = (
+            max_files_per_message or current_limits_profile().max_files_per_message
+        )
         self.user_quota_bytes = user_quota_bytes or int(
             os.environ.get("FILE_UPLOAD_USER_QUOTA_BYTES", 1024 * 1024 * 1024)  # 1GB
         )
@@ -222,26 +243,31 @@ class FileUploadService:
         self.presign_expiration = 15 * 60  # 15 minutes
         self.preview_url_expiration = 10 * 60  # 10 minutes for GET previews
 
+    def upload_limits(self) -> UploadLimits:
+        """The planner's upload limits with this service's class overrides.
+
+        Read per call: the large-document and folder flags are inputs to it.
+        """
+        from dataclasses import replace
+
+        return replace(
+            upload_limits(),
+            general_max_bytes=self.max_file_size,
+            presentation_max_bytes=self.presentation_max_file_size,
+            spreadsheet_max_bytes=self.spreadsheet_max_file_size,
+        )
+
     def max_size_for(self, filename: str, mime_type: str) -> int:
         """Return the upload size cap that applies to this file.
 
-        Presentations get their own (larger) cap. With
-        ``LARGE_DOCUMENT_ATTACHMENTS_ENABLED`` on, a document-class file (pdf,
-        docx, txt, md, html) gets ``LARGE_DOCUMENT_MAX_BYTES``: one over the
-        inline limit is attached by reference (``is_reference_document``) and
-        prepared off the request path. Everything else gets the general
-        limit. Callers must use this rather than reading `max_file_size`
+        The planner decides (``upload_size_limit``): decks and spreadsheets get
+        their own caps, a document-class file gets the large-document ceiling
+        while large-document attachments are on, everything else the general
+        limit. Callers must use this rather than reading ``max_file_size``
         directly, or a file under its class's cap gets rejected by whichever
         gate was missed (presign and ``complete_upload`` both read it).
         """
-        from apis.shared.feature_flags import large_document_attachments_enabled
-        from apis.shared.files.document_read import is_document_class
-
-        if is_presentation_file(filename, mime_type):
-            return self.presentation_max_file_size
-        if large_document_attachments_enabled() and is_document_class(mime_type, filename):
-            return LARGE_DOCUMENT_MAX_BYTES
-        return self.max_file_size
+        return upload_size_limit(filename, mime_type, self.upload_limits())
 
     # =========================================================================
     # Pre-signed URL Flow
@@ -403,6 +429,15 @@ class FileUploadService:
             await self._reject_upload(file_meta)
             raise UploadSizeMismatchError(file_meta.size_bytes, stored_size)
 
+        # An image's model copy and a PDF's page count, before READY, so no
+        # turn reads the row without them.
+        try:
+            await self._store_model_image(file_meta)
+            await self._check_pdf_pages(file_meta)
+        except (ImageUnreadableUploadError, TooManyPagesError):
+            await self._reject_upload(file_meta)
+            raise
+
         # Update status to READY
         await self.repository.update_file_status(
             user_id, upload_id, FileStatus.READY
@@ -418,7 +453,6 @@ class FileUploadService:
         return CompleteUploadResponse(
             upload_id=upload_id,
             status=FileStatus.READY.value,
-            s3_uri=file_meta.s3_uri,
             filename=file_meta.filename,
             size_bytes=file_meta.size_bytes,
         )
@@ -435,12 +469,7 @@ class FileUploadService:
         told the widest cap and `import_file` applies the file's own class
         cap afterwards. Bounds memory to one over-cap file at most.
         """
-        from apis.shared.feature_flags import large_document_attachments_enabled
-
-        caps = [self.max_file_size, self.presentation_max_file_size]
-        if large_document_attachments_enabled():
-            caps.append(LARGE_DOCUMENT_MAX_BYTES)
-        return max(caps)
+        return upload_download_ceiling(self.upload_limits())
 
     async def import_file(
         self,
@@ -524,6 +553,13 @@ class FileUploadService:
             await self.repository.update_file_status(user_id, upload_id, FileStatus.FAILED)
             raise FileUploadError("The file could not be stored. Try again.")
 
+        try:
+            await self._store_model_image(file_meta, raw=content)
+            await self._check_pdf_pages(file_meta, raw=content)
+        except (ImageUnreadableUploadError, TooManyPagesError):
+            await self._reject_upload(file_meta)
+            raise
+
         await self.repository.update_file_status(user_id, upload_id, FileStatus.READY)
         file_meta.status = FileStatus.READY
         await self.repository.increment_quota(user_id, size_bytes)
@@ -554,6 +590,10 @@ class FileUploadService:
             FileNotFoundError: the row is gone or no longer READY
             FileUploadError: the object could not be stored
         """
+        if is_linked_reference(file_meta):
+            # Read-only (handoffs spec §4.9 rule 3): new bytes at a reference's key would
+            # overwrite another conversation's file.
+            raise FileNotFoundError("A file shared from another conversation can't be replaced")
         size_bytes = len(content)
         size_limit = self.max_size_for(file_meta.filename, file_meta.mime_type)
         if size_bytes > size_limit:
@@ -588,6 +628,16 @@ class FileUploadService:
         )
         if updated is None:
             raise FileNotFoundError(f"File '{file_meta.upload_id}' is gone")
+        # A refreshed image gets a new model copy; an unreadable one is sent as is.
+        try:
+            updated = await self._store_model_image(updated, raw=content)
+        except ImageUnreadableUploadError:
+            logger.warning("A replaced image could not be read; it is sent as uploaded")
+        try:
+            updated = await self._check_pdf_pages(updated, raw=content)
+        except TooManyPagesError:
+            # A refreshed folder file keeps its id; the turn's page rule sends it on demand.
+            logger.warning("A replaced PDF is over the page limit")
         if delta:
             await self.repository.adjust_quota_bytes(file_meta.user_id, delta)
         await self._after_upload_ready(updated)
@@ -615,6 +665,142 @@ class FileUploadService:
     def _s3_key_for(user_id: str, session_id: str, upload_id: str, filename: str) -> str:
         return f"user-files/{user_id}/{session_id}/{upload_id}/{filename}"
 
+    async def _store_model_image(
+        self, file_meta: FileMetadata, raw: Optional[bytes] = None
+    ) -> FileMetadata:
+        """Plan and store an image's model copy, and record it on the row.
+
+        Only under a profile that downscales (``token``); every other file and
+        profile returns the row unchanged, so the ``legacy`` profile sends an
+        image exactly as uploaded. The copy is deterministic
+        (``image_downscale``): the same bytes always store the same object, at
+        ``_derived/model-image.<ext>``.
+
+        An image that cannot be decoded is still accepted when it is within
+        the general upload limit (it is sent as uploaded, as before); over that
+        limit there is nothing a model could be sent, so it raises
+        :class:`ImageUnreadableUploadError` and the caller rejects the upload.
+        """
+        if not current_limits_profile().downscale_images:
+            return file_meta
+        if not (file_meta.mime_type or "").lower().startswith("image/"):
+            return file_meta
+        from apis.shared.files import image_downscale
+
+        if raw is None:
+            try:
+                response = await asyncio.to_thread(
+                    self._s3_client.get_object, Bucket=file_meta.s3_bucket, Key=file_meta.s3_key
+                )
+                raw = await asyncio.to_thread(response["Body"].read)
+            except ClientError:
+                logger.warning("Could not read an image to plan its model copy", exc_info=True)
+                return file_meta
+
+        try:
+            info, high, compact = await asyncio.to_thread(
+                image_downscale.plan_model_images, raw, file_meta.mime_type
+            )
+        except image_downscale.ImageUnreadableError:
+            if len(raw) > self.max_file_size:
+                raise ImageUnreadableUploadError(file_meta.filename)
+            logger.info("An image could not be decoded; it is sent as uploaded")
+            return file_meta
+
+        async def _stored(copy, tier) -> Optional[dict]:
+            """``{key, mimeType, sizeBytes, width, height}`` of one tier's bytes."""
+            if copy is None:
+                return {
+                    "key": file_meta.s3_key,
+                    "mimeType": file_meta.mime_type,
+                    "sizeBytes": len(raw),
+                    "width": info.width,
+                    "height": info.height,
+                }
+            key = image_downscale.model_image_key(file_meta.s3_key, copy.mime_type, tier)
+            try:
+                await asyncio.to_thread(
+                    self._s3_client.put_object,
+                    Bucket=file_meta.s3_bucket,
+                    Key=key,
+                    Body=copy.data,
+                    ContentType=copy.mime_type,
+                )
+            except ClientError:
+                logger.error("Could not store an image's model copy", exc_info=True)
+                return None
+            return {
+                "key": key,
+                "mimeType": copy.mime_type,
+                "sizeBytes": len(copy.data),
+                "width": copy.width,
+                "height": copy.height,
+            }
+
+        stored_high, stored_compact = await asyncio.gather(
+            _stored(high, image_downscale.HIGH), _stored(compact, image_downscale.COMPACT)
+        )
+        if stored_high is None:
+            if len(raw) > self.max_file_size:
+                raise FileUploadError("The image could not be prepared. Try again.")
+            return file_meta
+        record = image_downscale.model_image_record(
+            key=stored_high["key"],
+            mime_type=stored_high["mimeType"],
+            size_bytes=stored_high["sizeBytes"],
+            width=stored_high["width"],
+            height=stored_high["height"],
+            source=info,
+            downscaled=high is not None,
+            compact=stored_compact,
+        )
+        updated = await self.repository.update_file_model_image(
+            file_meta.user_id, file_meta.upload_id, record
+        )
+        file_meta.model_image = record
+        logger.info(
+            "Planned an image's model copy: %sx%s -> %sx%s, %s bytes",
+            info.width,
+            info.height,
+            record["width"],
+            record["height"],
+            record["sizeBytes"],
+        )
+        return updated or file_meta
+
+    async def _check_pdf_pages(self, file_meta: FileMetadata, raw: Optional[bytes] = None) -> FileMetadata:
+        """Count a PDF's pages under a profile with a page rule, and record the count.
+
+        Raises :class:`TooManyPagesError` over ``pdf_max_pages``. The count is
+        read by ranges from S3 when the bytes are not in hand (``pdf_page_count``),
+        so a 50 MB PDF is never held here. A count that cannot be read admits
+        the file: its facts, written by preparation, decide later.
+        """
+        limit = current_limits_profile().pdf_max_pages
+        if limit is None or (file_meta.mime_type or "").lower() != "application/pdf":
+            return file_meta
+        from apis.shared.files import pdf_page_count
+
+        try:
+            if raw is not None:
+                pages = await asyncio.to_thread(pdf_page_count.count_pages, raw)
+            else:
+                pages = await asyncio.to_thread(
+                    pdf_page_count.count_s3_pdf_pages,
+                    self._s3_client,
+                    file_meta.s3_bucket,
+                    file_meta.s3_key,
+                    file_meta.size_bytes,
+                )
+        except pdf_page_count.PageCountUnavailable:
+            logger.info("A PDF's page count could not be read at admission")
+            return file_meta
+        if pages > limit:
+            raise TooManyPagesError(file_meta.filename, pages, limit)
+        file_meta.page_count = pages
+        updated = await self.repository.update_file_page_count(file_meta.user_id, file_meta.upload_id, pages)
+        return updated or file_meta
+
     async def _after_upload_ready(self, file_meta: FileMetadata) -> None:
         """What every READY upload gets, however its bytes arrived.
 
@@ -627,11 +813,17 @@ class FileUploadService:
         A reference-class document (large-document spec §4A) is never read
         here: the preparation Lambda builds its digest along with the
         sidecars, so app-api never holds a 50 MB object in memory.
+
+        Every other document is also sent to the same Lambda for its file
+        facts only (unified-attachment-delivery spec §4.1, §7): no sidecars, no
+        ``preparation`` and no indexing, so its delivery is unchanged.
         """
         if is_reference_document(file_meta):
             await self._enqueue_preparation(file_meta)
         else:
             self._schedule_digest(file_meta)
+            await self._enqueue_facts(file_meta)
+            await self._enqueue_preview(file_meta)
 
     # =========================================================================
     # Preview URL
@@ -657,7 +849,7 @@ class FileUploadService:
         Raises:
             FileNotFoundError: If file not found, not owned by user, or not ready
         """
-        file_meta = await self.repository.get_file(user_id, upload_id)
+        file_meta = await self._readable_file(user_id, upload_id)
         if not file_meta:
             raise FileNotFoundError(f"File {upload_id} not found")
 
@@ -715,7 +907,7 @@ class FileUploadService:
         Raises:
             FileNotFoundError: If file not found, not owned by user, or not ready
         """
-        file_meta = await self.repository.get_file(user_id, upload_id)
+        file_meta = await self._readable_file(user_id, upload_id)
         if not file_meta:
             raise FileNotFoundError(f"File {upload_id} not found")
 
@@ -761,7 +953,7 @@ class FileUploadService:
         Raises:
             FileNotFoundError: If file not found, not owned, or not ready
         """
-        file_meta = await self.repository.get_file(user_id, upload_id)
+        file_meta = await self._readable_file(user_id, upload_id)
         if not file_meta:
             raise FileNotFoundError(f"File {upload_id} not found")
 
@@ -838,7 +1030,7 @@ class FileUploadService:
             WorkbookTooLargeError: past the reader's byte cap
             WorkbookUnreadableError: corrupt, encrypted, or not OOXML
         """
-        file_meta = await self.repository.get_file(user_id, upload_id)
+        file_meta = await self._readable_file(user_id, upload_id)
         if not file_meta:
             raise FileNotFoundError(f"File {upload_id} not found")
 
@@ -902,9 +1094,11 @@ class FileUploadService:
         """
         Return a presigned URL for a PNG thumbnail of the file's first page.
 
-        Lazy-renders on first request: checks for a cached ``_thumb.png``
-        sibling object in S3, generates one synchronously if missing, then
-        returns a short-lived presigned URL. Subsequent calls hit the cache.
+        Serves the prepare Lambda's ``_derived/thumb.png``, or the
+        ``_thumb.png`` this service rendered before that existed. When neither
+        exists it queues a render (``ThumbnailPending``) rather than running
+        PDFium here; only a deployment without the prepare queue still renders
+        in-process.
 
         Args:
             user_id: The owner's user ID.
@@ -916,9 +1110,10 @@ class FileUploadService:
         Raises:
             FileNotFoundError: File not found, not owned, or not ready.
             ThumbnailUnsupportedError: MIME type has no registered renderer.
+            ThumbnailPending: Not rendered yet; the prepare Lambda has been asked.
             ThumbnailRenderError: The file was unreadable / corrupt / encrypted.
         """
-        file_meta = await self.repository.get_file(user_id, upload_id)
+        file_meta = await self._readable_file(user_id, upload_id)
         if not file_meta:
             raise FileNotFoundError(f"File {upload_id} not found")
 
@@ -932,20 +1127,13 @@ class FileUploadService:
                 f"No thumbnail renderer for {file_meta.mime_type}"
             )
 
-        thumb_key = self._thumbnail_s3_key(file_meta)
-
-        # Cache check via HEAD — cheap, no body transfer.
-        cached = True
-        try:
-            self._s3_client.head_object(Bucket=self.bucket_name, Key=thumb_key)
-        except ClientError as e:
-            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
-                cached = False
-            else:
-                logger.error(f"HEAD failed for thumbnail {thumb_key}: {e}")
-                raise
-
-        if not cached:
+        thumb_key = await self._find_thumbnail(file_meta)
+        cached = thumb_key is not None
+        if thumb_key is None:
+            if await self._queue_thumbnail(file_meta):
+                raise ThumbnailPending(f"Thumbnail for {upload_id} is being rendered")
+            # No prepare queue in this deployment: render here, as before.
+            thumb_key = self._thumbnail_s3_key(file_meta)
             await self._render_and_store_thumbnail(file_meta, thumb_key)
 
         # Generate the presigned URL for the thumbnail. Use the same
@@ -975,6 +1163,45 @@ class FileUploadService:
             expires_at=expires_at,
             cached=cached,
         )
+
+    async def _find_thumbnail(self, file_meta: FileMetadata) -> Optional[str]:
+        """The key of a stored thumbnail, or ``None``.
+
+        The prepare Lambda's ``_derived/thumb.png`` first, then the
+        ``_thumb.png`` this service rendered for files uploaded before it.
+        """
+        from apis.shared.files.pdf_thumbnail import thumbnail_key
+
+        for key in (thumbnail_key(file_meta.s3_key), self._thumbnail_s3_key(file_meta)):
+            try:
+                await asyncio.to_thread(self._s3_client.head_object, Bucket=self.bucket_name, Key=key)
+                return key
+            except ClientError as e:
+                if e.response["Error"]["Code"] not in ("404", "NoSuchKey"):
+                    logger.error(f"HEAD failed for thumbnail {key}: {e}")
+                    raise
+        return None
+
+    async def _queue_thumbnail(self, file_meta: FileMetadata) -> bool:
+        """Ask the prepare Lambda to render this file's first page.
+
+        True when this deployment has the prepare queue, whether or not the
+        send succeeded: with the queue, app-api never runs PDFium itself, and
+        the next view asks again.
+        """
+        from apis.shared.feature_flags import large_document_attachments_enabled
+
+        queue_url = os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "").strip()
+        if not large_document_attachments_enabled() or not queue_url:
+            return False
+        try:
+            body = json.dumps(
+                {"action": "thumbnail", "user_id": file_meta.user_id, "upload_id": file_meta.upload_id}
+            )
+            await asyncio.to_thread(self._sqs().send_message, QueueUrl=queue_url, MessageBody=body)
+        except Exception:  # noqa: BLE001 - the card keeps its skeleton
+            logger.warning("Thumbnail render not queued", exc_info=True)
+        return True
 
     @staticmethod
     def _thumbnail_source_key(file_meta: FileMetadata) -> str:
@@ -1137,15 +1364,108 @@ class FileUploadService:
             except Exception:  # noqa: BLE001
                 logger.warning("Could not record the failed preparation", exc_info=True)
 
+    async def _enqueue_facts(self, file_meta: FileMetadata) -> None:
+        """Queue a document under the inline limit for its file facts. Never raises.
+
+        Only while large-document attachments are on and the queue exists;
+        otherwise the row simply has no facts, which every reader handles.
+        Nothing is written to the row here: a lost message leaves it without
+        facts, the same state as the flag off.
+        """
+        from apis.shared.feature_flags import large_document_attachments_enabled
+        from apis.shared.files.document_read import is_document_class
+
+        queue_url = os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "").strip()
+        if not large_document_attachments_enabled() or not queue_url:
+            return
+        if not is_document_class(file_meta.mime_type, file_meta.filename):
+            return
+        try:
+            body = json.dumps(
+                {"action": "facts", "user_id": file_meta.user_id, "upload_id": file_meta.upload_id}
+            )
+            await asyncio.to_thread(self._sqs().send_message, QueueUrl=queue_url, MessageBody=body)
+        except Exception:  # noqa: BLE001 - facts are never worth a failed upload
+            logger.warning("File facts not queued", exc_info=True)
+
+    @staticmethod
+    def _has_preview_format(file_meta: FileMetadata) -> bool:
+        from apis.shared.files.attachment_preview import preview_format
+
+        return preview_format(file_meta.filename, file_meta.mime_type) is not None
+
+    async def _enqueue_preview(self, file_meta: FileMetadata) -> None:
+        """Queue a spreadsheet, CSV or deck for its card preview. Never raises.
+
+        A Word file's preview is written by its facts or preparation pass;
+        these formats are not document-class, so nothing else reaches the
+        Lambda for them. Same queue and gate as the facts message.
+        """
+        from apis.shared.feature_flags import large_document_attachments_enabled
+        from apis.shared.files.attachment_preview import preview_format
+        from apis.shared.files.document_read import is_document_class
+
+        queue_url = os.environ.get("LARGE_DOCUMENT_PREPARE_QUEUE_URL", "").strip()
+        if not large_document_attachments_enabled() or not queue_url:
+            return
+        if preview_format(file_meta.filename, file_meta.mime_type) is None:
+            return
+        if is_document_class(file_meta.mime_type, file_meta.filename):
+            return  # its facts pass writes the preview
+        try:
+            body = json.dumps(
+                {"action": "preview", "user_id": file_meta.user_id, "upload_id": file_meta.upload_id}
+            )
+            await asyncio.to_thread(self._sqs().send_message, QueueUrl=queue_url, MessageBody=body)
+        except Exception:  # noqa: BLE001 - a preview is never worth a failed upload
+            logger.warning("Attachment preview not queued", exc_info=True)
+
+    async def get_previews(self, user_id: str, upload_ids: List[str]) -> Dict[str, Optional[dict]]:
+        """The card preview of each of ``upload_ids``, or ``None``.
+
+        Owner-scoped: an id that is not the caller's, not ready or has no
+        preview format answers ``None``, the same as one not written yet, so
+        the answer says nothing about another user's files. Rows and objects
+        are read concurrently.
+        """
+        from apis.shared.files.attachment_preview import decode_preview, preview_format, preview_key
+
+        async def one(upload_id: str) -> Optional[dict]:
+            meta = await self.repository.get_file(user_id, upload_id)
+            if meta is None or meta.status != FileStatus.READY:
+                return None
+            if preview_format(meta.filename, meta.mime_type) is None:
+                return None
+            try:
+                response = await asyncio.to_thread(
+                    self._s3_client.get_object, Bucket=self.bucket_name, Key=preview_key(meta.s3_key)
+                )
+                return decode_preview(response["Body"].read())
+            except ClientError as e:
+                if e.response["Error"]["Code"] not in ("404", "NoSuchKey"):
+                    logger.warning("Attachment preview not read", exc_info=True)
+                return None
+
+        unique = list(dict.fromkeys(upload_ids))
+        results = await asyncio.gather(*(one(upload_id) for upload_id in unique))
+        return dict(zip(unique, results))
+
     def _delete_derived_objects(self, file_meta: FileMetadata) -> None:
         """Best-effort delete of a prepared document's ``_derived/`` sidecars.
 
-        Only reference-class files can have any, so every other file skips the
-        LIST. A preparation still running when the row is deleted cleans up
+        Only a reference-class file (its preparation), a PDF (its first-page
+        thumbnail) or a Word, spreadsheet, CSV or deck file (its card preview)
+        can have any, so every other file skips the LIST. A preparation still running when the row is deleted cleans up
         after itself: its final row write is conditional on the row, and it
         deletes the prefix when that write fails.
         """
-        if not (file_meta.preparation or is_reference_document(file_meta)):
+        if not (
+            file_meta.preparation
+            or is_reference_document(file_meta)
+            or file_meta.mime_type == "application/pdf"  # its _derived/thumb.png
+            or self._has_preview_format(file_meta)  # its _derived/preview.json
+            or file_meta.model_image  # its _derived/model-image*.*
+        ):
             return
         from apis.shared.files.large_document import derived_prefix
 
@@ -1197,6 +1517,24 @@ class FileUploadService:
     # File Management
     # =========================================================================
 
+    async def _readable_file(self, user_id: str, upload_id: str) -> Optional[FileMetadata]:
+        """The row whose bytes a preview, download, snippet or thumbnail of ``upload_id`` reads.
+
+        The row itself, or for a reference (handoffs spec §4.9) its original, so a thumbnail is
+        queued and rendered under the original's ids and derived state is read from there. A
+        reference whose original is gone raises ``FileNotFoundError`` saying so (rule 5), never a
+        presigned URL that 404s at S3.
+        """
+        file_meta = await self.repository.get_file(user_id, upload_id)
+        if file_meta is None or not is_linked_reference(file_meta):
+            return file_meta
+        from apis.shared.files.linked_files import linked_file_gone_message, resolve_linked_file
+
+        original = await resolve_linked_file(file_meta, self.repository)
+        if original is None:
+            raise FileNotFoundError(linked_file_gone_message(file_meta))
+        return original
+
     async def get_file(self, user_id: str, upload_id: str) -> Optional[FileMetadata]:
         """
         Get a file's metadata.
@@ -1231,6 +1569,13 @@ class FileUploadService:
         file_meta = await self.repository.get_file(user_id, upload_id)
         if not file_meta:
             return False
+
+        if is_linked_reference(file_meta):
+            # A reference shares its original's bytes, thumbnail and sidecars, and was never
+            # counted against quota (handoffs spec §4.9 rules 1–2): remove the row and nothing else.
+            await self.repository.delete_file(user_id, upload_id)
+            logger.info("Deleted file reference")
+            return True
 
         # Delete S3 object
         try:
@@ -1332,18 +1677,37 @@ class FileUploadService:
         files = self._sort_files(files, sort_by, sort_order)
 
         # Apply pagination for session-based queries (already paginated for user queries)
+        page = files[:limit] if session_id else files
+        responses = await self._file_responses(page)
         if session_id:
             return FileListResponse(
-                files=[FileResponse.from_metadata(f) for f in files[:limit]],
+                files=responses,
                 next_cursor=None if len(files) <= limit else "more",
                 total_count=len(files),
             )
         else:
             return FileListResponse(
-                files=[FileResponse.from_metadata(f) for f in files],
+                files=responses,
                 next_cursor=next_cursor,
                 total_count=None,  # Not available with pagination
             )
+
+    async def _file_responses(self, files: List[FileMetadata]) -> List[FileResponse]:
+        """The listing's rows, each reference marked with whether its original still exists.
+
+        One batched read, and only when the page holds a reference (handoffs spec §4.9 rule 5),
+        so the Files panel can say "No longer available (deleted from {title})".
+        """
+        responses = [FileResponse.from_metadata(f) for f in files]
+        if not any(is_linked_reference(f) for f in files):
+            return responses
+        from apis.shared.files.linked_files import originals_available
+
+        available = await asyncio.to_thread(originals_available, files, self.repository)
+        for response in responses:
+            if response.upload_id in available:
+                response.original_available = available[response.upload_id]
+        return responses
 
     def _sort_files(
         self,
@@ -1425,6 +1789,13 @@ class FileUploadService:
 
         for file_meta in files:
             try:
+                if is_linked_reference(file_meta):
+                    # Row only: the bytes, thumbnail and sidecars are the original's, and a
+                    # reference never counted against quota (handoffs spec §4.9 rules 1–2).
+                    if await self.repository.delete_file(file_meta.user_id, file_meta.upload_id):
+                        deleted_count += 1
+                    continue
+
                 # Delete S3 object
                 try:
                     self._s3_client.delete_object(

@@ -93,6 +93,11 @@ _system_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
 # extra DynamoDB read.
 _disabled_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
 
+# Single-slot snapshot of (frozen_set_of_voice_tool_ids, monotonic_fetched_at).
+# Bare catalog ids flagged `voiceAvailable` (#625), filled by the same catalog
+# pass. Read by `keep_voice_tools` when a voice session starts.
+_voice_tool_ids_cache: List[Optional[Tuple[FrozenSet[str], float]]] = [None]
+
 # Single-slot snapshot of ({local_tool_id: oauth_provider_id}, monotonic_fetched_at).
 # The connector an admin bound to a first-party (``protocol == local``) tool via
 # the row's `requiresOauthProvider` — what the inference route needs to build
@@ -111,6 +116,7 @@ def _reset_for_tests() -> None:
     _always_on_tool_ids_cache[0] = None
     _system_tool_ids_cache[0] = None
     _disabled_tool_ids_cache[0] = None
+    _voice_tool_ids_cache[0] = None
     _local_oauth_providers_cache[0] = None
 
 
@@ -252,6 +258,15 @@ async def get_disabled_tool_ids() -> FrozenSet[str]:
     return await _get_snapshot(_disabled_tool_ids_cache, "disabled")
 
 
+async def get_voice_tool_ids() -> FrozenSet[str]:
+    """Return the ids of tools an admin marked as available in voice mode (#625).
+
+    Bare catalog ids. Same single catalog read and never-raise contract as
+    `get_all_tool_ids`.
+    """
+    return await _get_snapshot(_voice_tool_ids_cache, "voice")
+
+
 async def get_local_tool_oauth_providers() -> Mapping[str, str]:
     """``{tool_id: oauth_provider_id}`` for first-party tools bound to a connector.
 
@@ -289,6 +304,31 @@ async def drop_disabled_tools(tool_ids: Optional[List[str]]) -> Optional[List[st
         logger.info(
             "Dropped disabled tools from the turn: %s",
             sorted({base_tool_id(t) for t in tool_ids} & disabled),
+        )
+    return kept
+
+
+async def keep_voice_tools(tool_ids: Optional[List[str]]) -> Optional[List[str]]:
+    """``tool_ids`` with only the tools marked as available in voice mode (#625).
+
+    A voice session runs on Nova 2 Sonic, which goes quiet for the rest of the
+    session when a tool takes longer than about a second, so a tool loads in
+    voice only when an admin has said it is fit for it. Applies to every source
+    of ids (the picker, an Agent binding, an admin pin). A scoped id
+    (``base::tool``) follows its base. Order is kept.
+
+    **Fails closed**, unlike `drop_disabled_tools`: if the catalog can't be read
+    and nothing is cached, the session runs without tools. A voice session with
+    no tools still talks; one that calls a slow tool goes silent.
+    """
+    if not tool_ids:
+        return tool_ids
+    allowed = await get_voice_tool_ids()
+    kept = [tid for tid in tool_ids if base_tool_id(tid) in allowed]
+    if len(kept) != len(tool_ids):
+        logger.info(
+            "Left tools out of the voice session (not available in voice): %s",
+            sorted({base_tool_id(t) for t in tool_ids} - set(allowed)),
         )
     return kept
 
@@ -380,6 +420,10 @@ async def _get_snapshot(slot: List[Optional[Tuple[Any, float]]], which: str) -> 
         frozenset(t.tool_id for t in tools if is_disabled_status(getattr(t, "status", None))),
         now,
     )
+    _voice_tool_ids_cache[0] = (
+        frozenset(t.tool_id for t in tools if getattr(t, "voice_available", False) is True),
+        now,
+    )
     # First-party tools bound to a user OAuth connector. Protocol-filtered so
     # an MCP server's connector (resolved through its MCPClient) never lands
     # here; the consent hook would otherwise see one tool with two providers.
@@ -430,4 +474,5 @@ def invalidate(tool_id: Optional[str] = None) -> None:
     _always_on_tool_ids_cache[0] = None
     _system_tool_ids_cache[0] = None
     _disabled_tool_ids_cache[0] = None
+    _voice_tool_ids_cache[0] = None
     _local_oauth_providers_cache[0] = None

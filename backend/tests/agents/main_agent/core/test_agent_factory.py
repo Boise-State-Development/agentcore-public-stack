@@ -507,10 +507,18 @@ class TestConverseDocumentCap:
         monkeypatch.setenv("CONVERSE_DOCUMENT_CAP_ENABLED", "false")
         assert self._built_stream("CountTokensBedrockModel", _bedrock_config()) is self.HISTORY
 
-    def test_a_mantle_model_is_not_capped(self):
-        """Mantle is not Converse: prod's OpenAI models took 14 non-PDF documents in one call."""
+    def test_a_mantle_model_is_not_capped_and_reads_documents_as_text(self, monkeypatch):
+        """Mantle is not Converse: prod's OpenAI models took 14 non-PDF documents in
+        one call, so nothing is capped. Every renderable one goes as text, whatever
+        the Converse flags say, because Strands' OpenAI file part carries docx as
+        application/octet-stream (unified-attachment-delivery §1.3)."""
+        monkeypatch.setenv("CONVERSE_DOCUMENT_CAP_ENABLED", "false")
+        monkeypatch.delenv("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", raising=False)
         cfg = ModelConfig(model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE)
-        assert self._built_stream("build_mantle_model", cfg) is self.HISTORY
+        sent = self._built_stream("build_mantle_model", cfg)
+        assert not any("document" in b for b in sent[0]["content"])
+        assert sent[0]["content"][5] == {"text": '<document name="d5" format="txt">\nx\n</document>'}
+        assert sum("document" in b for b in self.HISTORY[0]["content"]) == 6, "the shared history is untouched"
 
     def test_documents_as_text_sends_every_renderable_document_as_text(self, monkeypatch):
         monkeypatch.setenv("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", "true")
@@ -529,10 +537,18 @@ class TestConverseDocumentCap:
         sent = self._built_stream("CountTokensBedrockModel", _bedrock_config())
         assert sum("document" in b for b in sent[0]["content"]) == 5
 
-    def test_documents_as_text_never_reaches_a_mantle_model(self, monkeypatch):
-        monkeypatch.setenv("CONVERSE_DOCUMENTS_AS_TEXT_ENABLED", "true")
+    def test_a_mantle_request_without_documents_is_sent_as_is(self):
         cfg = ModelConfig(model_id="openai.gpt-oss-120b", provider=ModelProvider.MANTLE)
-        assert self._built_stream("build_mantle_model", cfg) is self.HISTORY
+        history = [{"role": "user", "content": [{"text": "hi"}]}]
+        from agents.main_agent.core.agent_factory import AgentFactory
+
+        model = MagicMock()
+        inner_stream = model.stream
+        with patch("agents.main_agent.core.agent_factory.build_mantle_model", return_value=model), \
+             patch("agents.main_agent.core.agent_factory.Agent") as mock_agent_cls:
+            AgentFactory.create_agent(model_config=cfg, **_COMMON_KWARGS)
+        mock_agent_cls.call_args.kwargs["model"].stream(history, None, "system")
+        assert inner_stream.call_args.args[0] is history
 
 
 # ---------------------------------------------------------------------------
@@ -589,7 +605,10 @@ class TestReasoningHygiene:
             **_COMMON_KWARGS,
         )
 
-        assert mock_agent_cls.call_args.kwargs["model"].stream is inner_stream
+        # The only wrapper is the document projection, and it passes this
+        # history (no documents) through as the same list.
+        mock_agent_cls.call_args.kwargs["model"].stream(self.HISTORY, None, "system")
+        assert inner_stream.call_args.args[0] is self.HISTORY
 
     def test_strands_drops_unsigned_reasoning_before_sending_to_claude(self):
         """GPT -> Claude. Drives the real SDK formatter, not a stub."""

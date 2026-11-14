@@ -166,8 +166,8 @@ class FakeRepository:
     async def get_file(self, user_id: str, upload_id: str) -> FileMetadata:
         return self.meta
 
-    async def update_file_preparation(self, user_id, upload_id, preparation, digest=None):
-        self.meta = self.meta.model_copy(update={"preparation": preparation, "digest": digest})
+    async def update_file_preparation(self, user_id, upload_id, preparation, digest=None, facts=None):
+        self.meta = self.meta.model_copy(update={"preparation": preparation, "digest": digest, "facts": facts})
         return self.meta
 
 

@@ -4,6 +4,7 @@ import { PulsatingLoaderComponent } from './pulsating-loader.component';
 
 interface LoaderInputs {
   notice: string | null;
+  hint: string | null;
   status: string | null;
   statusTool: string | null;
   startedAt: number | null;
@@ -21,6 +22,7 @@ function render(
   const fixture = TestBed.createComponent(PulsatingLoaderComponent);
   setInputs(fixture, {
     notice: null,
+    hint: null,
     status: null,
     statusTool: null,
     startedAt: null,
@@ -94,7 +96,7 @@ describe('PulsatingLoaderComponent', () => {
 
     it('does not double the punctuation a notice already carries', () => {
       // Every notice string ends in its own punctuation.
-      expect(stateOf(render({ notice: 'Still working\u2026' }))).toBe('Still working\u2026');
+      expect(stateOf(render({ notice: 'The model is busy. Retrying\u2026' }))).toBe('The model is busy. Retrying\u2026');
       expect(stateOf(render({ notice: 'The model is busy. Retrying \u2014 attempt 2.' }))).toBe(
         'The model is busy. Retrying \u2014 attempt 2.',
       );
@@ -104,7 +106,8 @@ describe('PulsatingLoaderComponent', () => {
   describe('layout', () => {
     it('orders the line pulse, timer, state', () => {
       const fixture = render({ status: 'Thinking', startedAt: Date.now() });
-      const row = fixture.nativeElement.querySelector('[role="status"]')!;
+      // The status line itself; the hint, when there is one, sits below it.
+      const row = fixture.nativeElement.querySelector('[role="status"] > div')!;
       const kinds = [...row.children].map(el =>
         el.classList.contains('pulse-dot')
           ? 'dot'
@@ -130,7 +133,7 @@ describe('PulsatingLoaderComponent', () => {
 
     it('does not shimmer a notice', () => {
       // A warning that shimmers reads as decoration rather than a warning.
-      const state = render({ notice: 'Still working…' }).nativeElement.querySelector('.state');
+      const state = render({ notice: 'The model is busy. Retrying…' }).nativeElement.querySelector('.state');
       expect(state?.classList.contains('shimmer')).toBe(false);
       expect(state?.classList.contains('is-notice')).toBe(true);
     });
@@ -207,18 +210,54 @@ describe('PulsatingLoaderComponent', () => {
     it('changes colour for a notice', () => {
       // The dot is the part a user tracks peripherally; changing only the text
       // leaves the indicator looking routine during an outage.
-      const dot = render({ notice: 'Still working…' }).nativeElement.querySelector('.pulse-dot');
+      const dot = render({ notice: 'The model is busy. Retrying…' }).nativeElement.querySelector('.pulse-dot');
       expect(dot?.classList.contains('is-notice')).toBe(true);
+    });
+  });
+
+  describe('the hint', () => {
+    const HINT = 'Large tasks can take a few minutes.';
+    const hintOf = (fixture: { nativeElement: HTMLElement }) =>
+      fixture.nativeElement.querySelector('.hint') as HTMLElement | null;
+
+    it('is absent until there is one', () => {
+      expect(hintOf(render({ status: 'Thinking' }))).toBeNull();
+    });
+
+    it('adds a line under the status without replacing it', () => {
+      // The point of the change: a long tool call keeps saying what it is
+      // doing. The old stall copy took the status line over.
+      const fixture = render({ status: 'Running', statusTool: 'document_extract', hint: HINT });
+      expect(stateOf(fixture)).toBe('Running document_extract…');
+      expect(hintOf(fixture)?.textContent?.trim()).toBe(HINT);
+    });
+
+    it('leaves the indicator in its healthy colours', () => {
+      // Quiet because it is working hard is not a warning. Amber stays
+      // reserved for the notice.
+      const fixture = render({ status: 'Thinking', hint: HINT });
+      const dot = fixture.nativeElement.querySelector('.pulse-dot');
+      const state = fixture.nativeElement.querySelector('.state');
+      expect(dot?.classList.contains('is-notice')).toBe(false);
+      expect(state?.classList.contains('is-notice')).toBe(false);
+      expect(state?.classList.contains('shimmer')).toBe(true);
+    });
+
+    it('is announced once, through the accessible name', () => {
+      const fixture = render({ status: 'Running', statusTool: 'browse_web', hint: HINT });
+      const status = fixture.nativeElement.querySelector('[role="status"]');
+      expect(status?.getAttribute('aria-label')).toBe(`Running browse_web. ${HINT}`);
+      expect(hintOf(fixture)?.getAttribute('aria-hidden')).toBe('true');
     });
   });
 
   describe('accessibility', () => {
     it('announces the state politely', () => {
-      const status = render({ notice: 'Still working…' }).nativeElement.querySelector(
+      const status = render({ notice: 'The model is busy. Retrying…' }).nativeElement.querySelector(
         '[role="status"]',
       );
       expect(status?.getAttribute('aria-live')).toBe('polite');
-      expect(status?.getAttribute('aria-label')).toContain('Still working');
+      expect(status?.getAttribute('aria-label')).toContain('Retrying');
     });
 
     it('includes the tool name in the accessible name', () => {

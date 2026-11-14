@@ -257,6 +257,12 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     sourceProvenance: {
       enabled: false,
     },
+    attachmentPlan: {
+      enabled: false,
+    },
+    mcpElicitation: {
+      enabled: false,
+    },
     releaseLedger: {
       enabled: false,
     },
@@ -275,6 +281,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     documentExtract: {
       enabled: false,
       modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+    },
+    fieldSetAuthoring: {
+      enabled: false,
     },
     agents: {
       enabled: false,

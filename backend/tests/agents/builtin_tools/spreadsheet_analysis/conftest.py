@@ -16,6 +16,8 @@ service — so ``FakeCodeInterpreter`` below is a hand-rolled stand-in.
 from __future__ import annotations
 
 import asyncio
+import threading
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 from unittest.mock import patch
@@ -282,6 +284,16 @@ class FakeCodeInterpreter:
     invocations: list[InvocationRecord] = field(default_factory=list)
     started: bool = False
     stopped: bool = False
+    #: Unique per instance, like a real AgentCore session id.
+    session_id: str = ""
+    #: ``start`` kwargs, so tests can assert the remote session timeout.
+    start_kwargs: dict = field(default_factory=dict)
+    #: Thread ident of every ``start`` / ``invoke`` / ``stop`` call, so tests
+    #: can assert none of them ran on the event-loop thread.
+    thread_ids: list[int] = field(default_factory=list)
+    #: Set via ``expire()``: later ``invoke`` calls fail like a session that
+    #: timed out or was stopped remotely.
+    expired: bool = False
 
     # Inputs the test doesn't care about — bedrock_agentcore exposes these
     # as construction / lifecycle hooks. We keep no-op stubs.
@@ -290,14 +302,33 @@ class FakeCodeInterpreter:
         self.invocations = []
         self.started = False
         self.stopped = False
+        self.session_id = f"sess-{uuid.uuid4().hex[:8]}"
+        self.start_kwargs = {}
+        self.thread_ids = []
+        self.expired = False
 
-    def start(self, identifier: str) -> None:  # noqa: D401 — mock signature
+    def start(self, identifier: str, **kwargs) -> None:  # noqa: D401 — mock signature
+        self.thread_ids.append(threading.get_ident())
+        self.start_kwargs = {"identifier": identifier, **kwargs}
         self.started = True
 
     def stop(self) -> None:
+        self.thread_ids.append(threading.get_ident())
         self.stopped = True
 
+    def expire(self) -> None:
+        """Simulate the remote session timing out or being stopped."""
+        self.expired = True
+
     def invoke(self, name: str, payload: dict) -> dict:
+        self.thread_ids.append(threading.get_ident())
+        if self.expired:
+            from botocore.exceptions import ClientError
+
+            raise ClientError(
+                {"Error": {"Code": "ResourceNotFoundException", "Message": f"Session {self.session_id} not found"}},
+                "InvokeCodeInterpreter",
+            )
         self.invocations.append(InvocationRecord(name=name, payload=payload))
         if self.reply_for is not None:
             return self.reply_for(name, payload)

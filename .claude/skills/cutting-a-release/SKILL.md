@@ -371,9 +371,9 @@ harness's full golden set as the eval user, then paste the `score` table into th
 PR body. A `GATE: FAIL` is a release blocker until `--explain` shows why.
 
 Run it once for **each model that is the catalog default in some environment**.
-Each has its own committed baseline in `backend/evals/baselines/`. Haiku 5.5 has
-been dev's default since 2026-11-04, and prod stays on Haiku 4.5 until a release
-carries the Haiku 5.5 row and an admin makes it the default there:
+Each has its own committed baseline in `backend/evals/baselines/`. Read each
+environment's default from Admin → Models (the row marked default) rather than
+assuming it, and drop a model from the loop once no environment defaults to it:
 
 ```bash
 cd backend
@@ -381,12 +381,40 @@ for model in us.anthropic.claude-haiku-5-5 us.anthropic.claude-haiku-4-5-2025100
   AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py run --out /tmp/eval-release-x.y.z-${model} \
       --auth cognito --base-url https://dev.boisestate.ai/api --prefix dev-boisestateai-v2 \
       --model-id "${model}" --yes
-  uv run python scripts/eval_harness.py score --out /tmp/eval-release-x.y.z-${model}
+  AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py score --out /tmp/eval-release-x.y.z-${model} \
+      --publish --track release
 done
 ```
 
+`--publish --track release` writes the run into dev's release ledger as a
+`LEDGER#EVAL` row with each case's outcome, so the Evaluations page can draw
+the release pass as its own trend, apart from the k=1 nightly runs. It is
+best-effort and never changes the exit code.
+
 Re-promote the baseline (`eval_harness.py baseline`) only on purpose — after a
 deliberate model or prompt change — in its own PR with the score output.
+
+**Publish the benchmark.** The docs site's Benchmarks page and the README's
+headline table are cut from the release run, so publishing them is part of the
+release, not a marketing chore. Run the full set at `--k 3` (the default) for
+each model the page lists, today Haiku 5.5, Sonnet 5 and Opus 5.5, one after
+another so no run's timings carry another's load (about $14 and 70 minutes in
+all on 2026-11-13: Haiku 5.5 $0.27, Sonnet 5 $4.34, Opus 5.5 $9.39). Then:
+
+```bash
+cd backend
+AWS_PROFILE=dev-ai uv run python scripts/eval_harness.py publish \
+    --out /tmp/eval-release-x.y.z-us.anthropic.claude-haiku-5-5 \
+    --out /tmp/eval-release-x.y.z-us.anthropic.claude-sonnet-5 \
+    --out /tmp/eval-release-x.y.z-us.anthropic.claude-opus-5-5 \
+    --json ../docs-site/src/data/benchmarks.json --markdown /tmp/headline.md
+```
+
+Commit `benchmarks.json` on the release branch and replace the README's
+**Measured in the open** table with `headline.md`. `publish` refuses an
+incomplete run and anything that would carry a session id, user id or the
+deployment prefix; never hand-edit the JSON. A failing case stays in the table
+with its id: hiding one is the thing the page exists not to do.
 
 **Ledger readout of the outgoing release.** The smoke pass and the eval say
 whether this branch works; the release ledger says whether the release *now

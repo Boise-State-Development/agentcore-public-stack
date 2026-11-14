@@ -48,6 +48,7 @@ import {
 } from '../../../services/browser-login/browser-login.service';
 import { CompactionSummaryService } from '../../services/chat/compaction-summary.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
+import { OutageOffer, outageLabel } from '../../services/chat/provider-outage';
 import { ToolInsightService } from '../../services/chat/tool-insight.service';
 import { StreamParserService } from '../../services/chat/stream-parser.service';
 
@@ -161,21 +162,32 @@ export class MessageListComponent {
   private readonly SCROLL_PADDING = 16;
 
   /**
-   * Silence thresholds for the "still working" notice.
+   * Silence thresholds for the loader's quiet hint and its warning.
    *
    * A model call that produces nothing looks exactly like a hung one. In prod
    * session 5f34d2b0 two turns went ~95 seconds with no output and the user
    * abandoned both — the second one while the request was, as far as the
    * telemetry shows, still in flight.
    *
-   * 30s is comfortably past a normal first token (~5-7s) and past most tool
-   * calls, so a healthy turn rarely trips it. 90s is past anything routine and
-   * is where the phrasing stops reassuring and starts admitting something is
-   * wrong. The tick is coarse because the thresholds are: the notice appears
-   * within one tick of crossing them.
+   * But silence is usually the hard case, not the broken one: a long tool
+   * call and a model thinking without streaming a summary both send nothing
+   * for as long as they run. So silence on its own earns a muted hint under
+   * the status, never the amber warning:
+   *
+   * - 30s is comfortably past a normal first token (~5-7s) and past most tool
+   *   calls, so a healthy turn rarely trips it. It sets an expectation.
+   * - 3 minutes adds that the user can stop it, without claiming it is stuck.
+   * - 90s turns amber only when no `agent_status` has told us what the turn is
+   *   doing. With a known phase the server owns the hang case: a silent model
+   *   call ends at the read timeout (`RETRY_READ_TIMEOUT`, 600s) with an
+   *   explicit error, so an amber line here would only be guessing earlier.
+   *
+   * The tick is coarse because the thresholds are: each appears within one
+   * tick of crossing them.
    */
-  private readonly STALL_NOTICE_MS = 30_000;
-  private readonly LONG_STALL_NOTICE_MS = 90_000;
+  private readonly STALL_HINT_MS = 30_000;
+  private readonly LONG_STALL_HINT_MS = 180_000;
+  private readonly UNEXPLAINED_STALL_MS = 90_000;
   private readonly STALL_TICK_MS = 5_000;
 
   /**
@@ -242,6 +254,8 @@ export class MessageListComponent {
    *  assistant message. The page reuses the normal submit path with a
    *  canned prompt. */
   continueRequested = output<void>();
+  /** Bubbled up when the user clicks "Try again" after a provider outage. */
+  outageRetryRequested = output<void>();
 
   private consentService = inject(OAuthConsentService);
   private handoffState = inject(HandoffStateService);
@@ -318,7 +332,8 @@ export class MessageListComponent {
   }
 
   /**
-   * Copy for a response that has gone quiet for long enough to look broken.
+   * How long the viewed turn's stream has been silent, in ms, or null when
+   * no turn is pending.
    *
    * Deliberately client-side. The server cannot say anything during a stalled
    * model call without racing the agent stream against a timer, and that
@@ -329,7 +344,7 @@ export class MessageListComponent {
    * silence, so silence on an open stream really is "the server has not sent
    * anything yet".
    */
-  protected readonly stallNotice = computed<string | null>(() => {
+  private readonly silentForMs = computed<number | null>(() => {
     const sessionId = this.sessionId();
     if (!sessionId || !this.isChatLoading()) {
       return null;
@@ -338,12 +353,67 @@ export class MessageListComponent {
     if (!lastEventAt) {
       return null;
     }
-    const silentFor = this.nowMs() - lastEventAt;
-    if (silentFor >= this.LONG_STALL_NOTICE_MS) {
-      return 'Still working \u2014 this is taking longer than usual.';
+    return this.nowMs() - lastEventAt;
+  });
+
+  /**
+   * Whether this turn has told us what it is doing: the runtime has reported
+   * a phase, a tool is running, or the model is reasoning on screen.
+   *
+   * The status is cleared on every turn's falling edge, so a phase here always
+   * belongs to the turn that is running now, never the one before it.
+   */
+  private readonly hasKnownPhase = computed<boolean>(() => {
+    const sessionId = this.sessionId();
+    if (!sessionId) return false;
+    return (
+      !!this.toolInsight.status(sessionId) ||
+      !!this.loaderStatusTool() ||
+      this.isReasoningNow()
+    );
+  });
+
+  /**
+   * The amber warning for silence: only when nothing has said what the turn is
+   * doing. A turn in a known phase that goes quiet is working, not stuck, and
+   * gets `stallHint` instead (see the thresholds above).
+   */
+  protected readonly stallNotice = computed<string | null>(() => {
+    const silentFor = this.silentForMs();
+    if (silentFor === null || this.hasKnownPhase()) {
+      return null;
     }
-    if (silentFor >= this.STALL_NOTICE_MS) {
-      return 'Still working\u2026';
+    if (silentFor >= this.UNEXPLAINED_STALL_MS) {
+      return 'No response yet — still waiting…';
+    }
+    return null;
+  });
+
+  /**
+   * A muted line under the status while a turn is quiet for a long time.
+   *
+   * It adds to the status rather than replacing it: "Running
+   * document_extract…" stays on screen, because that is still the truest thing
+   * we can say, and the elapsed timer already shows the work going on. The copy
+   * claims nothing about what is normal for this request — we do not measure
+   * that — only that big requests take time and that Stop is there.
+   *
+   * Never shown beside an amber notice: a retry or an unexplained stall says
+   * something more specific, and two lines would contradict each other.
+   */
+  protected readonly stallHint = computed<string | null>(() => {
+    if (this.loaderNotice()) {
+      return null;
+    }
+    const silentFor = this.silentForMs();
+    if (silentFor === null) {
+      return null;
+    }
+    if (silentFor >= this.LONG_STALL_HINT_MS) {
+      return 'Large tasks can take several minutes. You can stop it at any time.';
+    }
+    if (silentFor >= this.STALL_HINT_MS) {
+      return 'Large tasks can take a few minutes.';
     }
     return null;
   });
@@ -363,9 +433,9 @@ export class MessageListComponent {
   });
 
   /**
-   * What the loading indicator says. A retry is a specific, known fact and
-   * outranks the generic stall notice, which is only ever an inference from
-   * elapsed silence.
+   * The amber line on the loading indicator. A retry is a specific, known fact
+   * and outranks the unexplained-stall notice, which is only ever an inference
+   * from elapsed silence.
    */
   protected readonly loaderNotice = computed<string | null>(
     () => this.retryNotice() ?? this.stallNotice(),
@@ -571,6 +641,20 @@ export class MessageListComponent {
   protected readonly showFeedbackLink = computed(
     () => !!this.feedbackAgent() && this.messages().length > 0 && !this.isChatLoading(),
   );
+
+  /** What the retry row under a provider-outage reply shows, once per outage;
+   *  gated per message by `outageOfferFor`. */
+  private readonly outageOffer = computed<OutageOffer | null>(() => {
+    const outage = this.chatStateService.lastTurnProviderOutage();
+    return outage ? { label: outageLabel(outage.provider), modelName: outage.modelName } : null;
+  });
+
+  /** The retry row for this message: only the final message of a turn the
+   *  provider failed, and never while a new response is streaming. */
+  protected outageOfferFor(messageId: string): OutageOffer | null {
+    if (this.isChatLoading() || messageId !== this.lastMessageId()) return null;
+    return this.outageOffer();
+  }
 
   /** Only the final message of a recoverable max_tokens turn gets the
    *  "Continue" affordance. Live-only state, never shown while a new

@@ -2,11 +2,10 @@
 
 Agents are cached across turns, and the MCP clients under them are shared by
 every agent built over the same (user, server) (`ExternalMCPIntegration`). When
-such a client's session dies on its own — the MCP SDK ends the whole session on
-any non-2xx answer to a POST, e.g. GitHub's MCP endpoint answering a
-`tools/call` with 503 — nothing on the turn path noticed: every model-driven
-call on it failed with "the client session is not running" until each agent
-holding it was evicted. See `apis.shared.tools.mcp_session`.
+such a client's session dies on its own (a dropped connection or transport
+error), nothing on the turn path noticed: every model-driven call on it failed
+with "the client session is not running" until each agent holding it was
+evicted. See `apis.shared.tools.mcp_session`.
 
 ``BeforeToolCallEvent``
     If the selected tool is an MCP tool whose client has no live session,
@@ -20,11 +19,13 @@ holding it was evicted. See `apis.shared.tools.mcp_session`.
     the next call tries again.
 
 ``AfterToolCallEvent``
-    A call whose session ended while it was out may well have been performed
-    — GitHub created the issue, then answered 503 — so its result says the
-    outcome is unknown instead of "Tool execution failed". Now that the next
-    call reconnects, a model told only "failed" would retry the write and
-    duplicate it. The failed call itself is never re-run here.
+    Two kinds of failed call may well have been performed by the server, so
+    their result says the outcome is unknown instead of "Tool execution
+    failed": a call whose session ended while it was out, and a call the
+    server answered with an HTTP 5xx on a session that stayed up. GitHub
+    created the issue, then answered 503; mcp 2.x reports that as the second
+    kind. A model told only "failed" would retry the write and duplicate it.
+    The failed call itself is never re-run here.
 
 Registered after the consent and approval gates, so a call they cancel is not
 reconnected for nothing. Nothing reaches the cacheable prefix except that one
@@ -50,6 +51,7 @@ from apis.shared.tools.mcp_session import (
     SESSION_LOCK,
     connection_lost_message,
     revive_provider_session,
+    server_error_outcome_unknown,
     session_is_active,
 )
 
@@ -119,13 +121,19 @@ class MCPSessionHealHook(HookProvider):
             getattr(client, "_background_thread", None) is thread
             and session_is_active(client)
         )
-        if still_up:
-            return  # An ordinary tool error on a healthy session.
         tool_name = event.tool_use.get("name") or ""
-        logger.warning(
-            "MCP session ended while %s was out; outcome unknown",
-            scrub_log(tool_name),
-        )
+        if still_up:
+            if not server_error_outcome_unknown(result):
+                return  # An ordinary tool error on a healthy session.
+            logger.warning(
+                "MCP server answered %s with a 5xx; outcome unknown",
+                scrub_log(tool_name),
+            )
+        else:
+            logger.warning(
+                "MCP session ended while %s was out; outcome unknown",
+                scrub_log(tool_name),
+            )
         event.result = {
             **result,
             "content": [{"text": connection_lost_message(tool_name)}],

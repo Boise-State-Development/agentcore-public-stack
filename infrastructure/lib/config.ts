@@ -110,8 +110,11 @@ export interface AppConfig {
   folderAttachments: FolderAttachmentsConfig;
   folderSync: FolderSyncConfig;
   sourceProvenance: SourceProvenanceConfig;
+  attachmentPlan: AttachmentPlanConfig;
+  mcpElicitation: McpElicitationConfig;
   releaseLedger: ReleaseLedgerConfig;
   documentExtract: DocumentExtractConfig;
+  fieldSetAuthoring: FieldSetAuthoringConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
   wordSkillScripts: WordSkillScriptsConfig;
   converseDocumentsAsText: ConverseDocumentsAsTextConfig;
@@ -237,7 +240,6 @@ export interface FrontendConfig {
   certificateArn?: string;
   bucketName?: string;
   cloudFrontPriceClass: string;
-  additionalCorsOrigins?: string; // Extra CORS origins to append (comma-separated)
   /**
    * CloudFront standard access logging for the SPA distribution. Default ON
    * with a kill switch; `undefined` is treated as on so a hand-built config
@@ -933,6 +935,40 @@ export interface SourceProvenanceConfig {
 }
 
 /**
+ * Attachment planner, `token` profile (docs/specs/unified-attachment-delivery.md
+ * phase 3): each turn's attachments are decided in tokens against a per-model
+ * document budget of half the compaction ceiling. A PDF goes native within the
+ * model's page limit and the budget, other documents as text, and anything over
+ * it on demand (a digest plus `document_read`). **Opt-in while in development**:
+ * off unless CDK_ATTACHMENT_PLAN_ENABLED=true (or an `attachmentPlan.enabled:
+ * true` cdk.json context). A rollout switch, retired in the spec's phase 6.
+ * Sets ATTACHMENT_PLAN_ENABLED on the AgentCore Runtime (which plans the turn),
+ * written there **only while on**, and on app-api (`GET /files/limits` reports
+ * the active profile). No resources.
+ */
+export interface AttachmentPlanConfig {
+  enabled: boolean;
+}
+
+/**
+ * MCP form elicitation (docs/specs/mcp-elicitation.md): an external MCP server
+ * whose catalog row sets `elicitationEnabled` may ask the user for structured
+ * input partway through a tool call. The turn pauses on an interrupt, the SPA
+ * shows the server's form, and the call is replayed with the answer. Form mode
+ * on 2026-07-28 connections only. **Opt-in while in development**: off unless
+ * CDK_MCP_ELICITATION_ENABLED=true (or a `mcpElicitation.enabled: true` cdk.json
+ * context). A feature switch, and therefore permanent: it widens what users can
+ * do, since a server can expose tools gated on elicitation. Sets
+ * MCP_ELICITATION_ENABLED on the AgentCore Runtime (which advertises the
+ * capability, pauses and replays) and on app-api (admin discovery). Written to
+ * the Runtime's environment **only while on**, so the default spends none of the
+ * V2 payload budget. No resources.
+ */
+export interface McpElicitationConfig {
+  enabled: boolean;
+}
+
+/**
  * Release ledger writes (docs/specs/release-ledger.md §5.2, D8): each model
  * call's cost row also `ADD`s itself into version-keyed `LEDGER#VERSION` /
  * `#MODEL` / `#TOOL` / `#AGENT` / `#PROJECT` rollups in the existing
@@ -1056,6 +1092,24 @@ export interface DocumentExtractConfig {
    * impatience; the backend clamps to 1..16.
    */
   concurrency?: number;
+}
+
+/**
+ * Field-set authoring (docs/specs/field-set-authoring.md §7). On, app-api serves
+ * `/skills/mine/{skill_id}/field-sets`: list, read, write and validate one
+ * field set on a skill the caller owns, with the backend parsing and writing
+ * the file in both directions. **Opt-in while in development**: off unless
+ * CDK_FIELD_SET_AUTHORING_ENABLED=true (or a `fieldSetAuthoring.enabled: true`
+ * cdk.json context). A feature switch, and therefore permanent.
+ *
+ * Sets FIELD_SET_AUTHORING_ENABLED on **app-api only**: the Runtime resolves a
+ * field set the same way with this on or off, so it gets no variable and the
+ * V2 environment budget is untouched. No resources: a field set is a file in
+ * the skill's existing bundle. Separate from `documentExtract` because running
+ * extractions and letting users write their own schemas are separate decisions.
+ */
+export interface FieldSetAuthoringConfig {
+  enabled: boolean;
 }
 
 /**
@@ -1569,7 +1623,6 @@ export function loadConfig(scope: cdk.App): AppConfig {
       certificateArn: process.env.CDK_FRONTEND_CERTIFICATE_ARN || scope.node.tryGetContext('frontend').certificateArn,
       bucketName: process.env.CDK_FRONTEND_BUCKET_NAME || scope.node.tryGetContext('frontend')?.bucketName,
       cloudFrontPriceClass: process.env.CDK_FRONTEND_CLOUDFRONT_PRICE_CLASS || scope.node.tryGetContext('frontend')?.cloudFrontPriceClass,
-      additionalCorsOrigins: process.env.CDK_FRONTEND_CORS_ORIGINS || scope.node.tryGetContext('frontend')?.additionalCorsOrigins,
       // Default ON with a kill switch, same empty-string-safe ternary as
       // `projects` below: the workflow forwards an EMPTY STRING when the
       // variable is unset, so treat empty/unset as the default (on) and only
@@ -1971,6 +2024,20 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_SOURCE_PROVENANCE_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sourceProvenance')?.enabled ?? false,
     },
+    attachmentPlan: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_ATTACHMENT_PLAN_ENABLED
+        ? process.env.CDK_ATTACHMENT_PLAN_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('attachmentPlan')?.enabled ?? false,
+    },
+    mcpElicitation: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_MCP_ELICITATION_ENABLED
+        ? process.env.CDK_MCP_ELICITATION_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('mcpElicitation')?.enabled ?? false,
+    },
     releaseLedger: {
       // In development: only "true" enables, and an unset GitHub variable
       // arrives as "" rather than undefined.
@@ -2031,6 +2098,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
         const value = raw ? Number(raw) : fromContext;
         return Number.isInteger(value) && value > 0 ? { concurrency: value } : {};
       })(),
+    },
+    fieldSetAuthoring: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_FIELD_SET_AUTHORING_ENABLED
+        ? process.env.CDK_FIELD_SET_AUTHORING_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('fieldSetAuthoring')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

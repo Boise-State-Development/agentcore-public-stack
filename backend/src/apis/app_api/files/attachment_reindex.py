@@ -11,6 +11,11 @@ nothing to time to first token.
 Each evicted, still-eligible document gets one ``{"action": "index", "force":
 true}`` on the large-document queue; the pipeline re-checks eligibility and the
 per-user cap itself. Never raises.
+
+A fork's documents were attached in its parent or root and are indexed there
+(``apis.shared.sessions.fork.ancestor_session_ids``), so opening a fork also
+re-queues the caller's evicted documents in those sessions; otherwise a fork's
+search would go quiet once the conversation it came from fell idle.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ import logging
 import os
 
 from apis.shared.feature_flags import attachment_kb_enabled
+from apis.shared.files.models import is_linked_reference
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +42,29 @@ def _send_all(queue_url: str, user_id: str, upload_ids: list) -> None:
         )
 
 
-async def requeue_evicted_attachments(session_id: str, user_id: str, repository=None) -> int:
+async def _ancestor_session_ids(session_id: str, user_id: str) -> tuple:
+    """A fork's parent and root, from its own row; empty for any other session."""
+    from apis.shared.sessions.fork import ancestor_session_ids
+    from apis.shared.sessions.metadata import load_session_meta
+
+    meta = await load_session_meta(session_id, user_id)
+    if meta.owned_by_other:
+        return ()
+    return ancestor_session_ids(session_id, meta.row)
+
+
+async def requeue_evicted_attachments(
+    session_id: str,
+    user_id: str,
+    repository=None,
+    ancestor_session_ids=None,
+) -> int:
     """Queue a re-index for each of the caller's evicted documents in the session.
 
     Returns how many were queued. Rows are matched on the caller: the session
     index is keyed by conversation, not owner. ``repository`` defaults to the
-    shared file repository.
+    shared file repository. ``ancestor_session_ids`` (a fork's parent and root)
+    is read from the session's row when not given.
     """
     if not attachment_kb_enabled():
         return 0
@@ -53,8 +76,15 @@ async def requeue_evicted_attachments(session_id: str, user_id: str, repository=
         from apis.shared.files.repository import get_file_upload_repository
 
         repository = repository or get_file_upload_repository()
-        files = await repository.list_session_files(session_id)
-        upload_ids = evicted_upload_ids(f for f in files if f.user_id == user_id)
+        if ancestor_session_ids is None:
+            ancestor_session_ids = await _ancestor_session_ids(session_id, user_id)
+        session_ids = list(dict.fromkeys(s for s in (session_id, *ancestor_session_ids) if s))
+        per_session = await asyncio.gather(*(repository.list_session_files(s) for s in session_ids))
+        rows = [f for group in per_session for f in group if f.user_id == user_id]
+        rows = [f for f in rows if not is_linked_reference(f)] + await _originals_of_references(
+            repository, user_id, [f for f in rows if is_linked_reference(f)]
+        )
+        upload_ids = list(dict.fromkeys(evicted_upload_ids(rows)))
         if not upload_ids:
             return 0
         await asyncio.to_thread(_send_all, queue_url, user_id, upload_ids)
@@ -63,3 +93,16 @@ async def requeue_evicted_attachments(session_id: str, user_id: str, repository=
     except Exception:  # noqa: BLE001 - a re-index is never worth a failed page load
         logger.warning("Evicted attachments not re-queued", exc_info=True)
         return 0
+
+
+async def _originals_of_references(repository, user_id: str, references: list) -> list:
+    """The originals of a conversation's reference rows (handoffs spec §4.9 rule 4): a shared
+    file's index state is its original's, so opening the receiving conversation re-queues an
+    evicted original as opening its own would. One batched read, only when there are references."""
+    if not references:
+        return []
+    found = await asyncio.to_thread(
+        repository.batch_get_files_sync, user_id, [r.linked_from.upload_id for r in references]
+    )
+    keys = {r.s3_key for r in references}
+    return [m for m in found.values() if m.s3_key in keys]

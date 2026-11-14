@@ -97,4 +97,15 @@ describe('PolicySettingsPage', () => {
     expect(service['updatePolicy']).not.toHaveBeenCalled();
     expect(el.textContent).toContain('The fiscal year end is a month and day');
   });
+
+  it('warns while nobody is notified of new requests, and stops once someone is', async () => {
+    const empty = await render();
+    expect((empty.nativeElement as HTMLElement).querySelector('[data-testid="notify-empty-warning"]')).not.toBeNull();
+
+    service['getPolicy'].mockResolvedValue({ ...POLICY, notifyEmails: ['approver@example.edu'] });
+    const filled = await render();
+    const el = filled.nativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid="notify-empty-warning"]')).toBeNull();
+    expect(el.textContent).toContain('approver@example.edu');
+  });
 });

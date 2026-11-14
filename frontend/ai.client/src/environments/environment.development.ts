@@ -23,7 +23,12 @@ export const environment = {
         // The `development` GitHub environment sets CDK_FOLDER_SYNC_ENABLED=true.
         folderSync: true,
         sourceProvenance: true,
-        documentExtract: false,
+        // The `development` GitHub environment sets CDK_ATTACHMENT_PLAN_ENABLED=true.
+        attachmentPlan: true,
+        // The `development` GitHub environment sets CDK_DOCUMENT_EXTRACT_ENABLED=true.
+        documentExtract: true,
+        // The `development` GitHub environment sets CDK_FIELD_SET_AUTHORING_ENABLED=true.
+        fieldSetAuthoring: true,
         // The `development` GitHub environment sets CDK_HANDOFFS_ENABLED=true.
         handoffs: true,
         // The `development` GitHub environment sets CDK_HANDOFF_BRIEF_ENABLED=true.
@@ -43,5 +48,6 @@ export const environment = {
         knowledgeBaseMode: true,
         // CDK_RELEASE_LEDGER_ENABLED is on in the `development` GitHub environment.
         releaseLedger: true,
+        attachmentCards: true,
     } satisfies FeatureFlags,
 };

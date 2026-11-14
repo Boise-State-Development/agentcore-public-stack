@@ -8,7 +8,7 @@ Supports the pre-signed URL upload flow for S3.
 import os
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ConfigDict
 from apis.shared.timestamps import from_iso, to_iso
@@ -113,6 +113,18 @@ def is_tabular_file(filename: str, mime_type: str) -> bool:
     return False
 
 
+def spreadsheet_max_file_size() -> int:
+    """Upload cap for a tabular file (csv, xls, xlsx).
+
+    A spreadsheet never goes inline: it is read by ``analyze_spreadsheet`` in
+    Code Interpreter, whose own download cap is ``ANALYZE_MAX_FILE_SIZE_BYTES``
+    (25 MB). The 4 MB general cap is sized for an inline document block, so
+    applying it here refused files the tool would have read. Same default as
+    the tool, so admission is never the smaller of the two.
+    """
+    return int(os.environ.get("FILE_UPLOAD_MAX_SIZE_BYTES_SPREADSHEET", 25 * 1024 * 1024))
+
+
 # =============================================================================
 # Presentation File Detection
 # =============================================================================
@@ -182,6 +194,15 @@ LARGE_DOCUMENT_MAX_BYTES = int(
 DELIVERY_INLINE = "inline"
 DELIVERY_REFERENCE = "reference"
 Delivery = Literal["inline", "reference"]
+
+# The fixture-only override (docs/specs/unified-attachment-delivery.md §8.2):
+# DynamoDB ``deliveryOverride`` on a file row forces the planner's mode for that
+# file (``attachment_plan.FORCEABLE_MODES``), so an eval can hold a question
+# fixed and vary only the delivery. Separate from ``delivery`` above, which the
+# folder import sets for real users. Only a direct row write sets it: no request
+# field, no app-api route and no ``FileUploadService`` method takes it
+# (``tests/apis/shared/files/test_delivery_override_is_fixture_only.py``).
+DELIVERY_OVERRIDE_VALUES = frozenset({"native", "text", "on_demand", "search"})
 
 
 def is_reference_document(meta: "FileMetadata") -> bool:
@@ -260,9 +281,59 @@ MAX_FILES_PER_MESSAGE = int(
 )
 
 
+# A file shared into a linked conversation by reference (handoffs spec §4.9).
+# The reference row is an ordinary file row in the receiving conversation with
+# ``source = "linked"`` and ``linkedFrom`` naming the original; it shares the
+# original's ``s3Key`` and never owns bytes, quota or derived state.
+SOURCE_LINKED = "linked"
+
+
+class LinkedFrom(BaseModel):
+    """The original a reference row points at (``linkedFrom`` on the row)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    session_id: str = Field(..., alias="sessionId", description="The conversation the original lives in")
+    upload_id: str = Field(..., alias="uploadId", description="The original's upload id")
+    from_title: str = Field("", alias="fromTitle", description="That conversation's title when the reference was made")
+
+    def to_item(self) -> dict:
+        return {"sessionId": self.session_id, "uploadId": self.upload_id, "fromTitle": self.from_title}
+
+    @classmethod
+    def from_item(cls, value: Any) -> Optional["LinkedFrom"]:
+        if not isinstance(value, dict):
+            return None
+        session_id, upload_id = value.get("sessionId"), value.get("uploadId")
+        if not (isinstance(session_id, str) and session_id and isinstance(upload_id, str) and upload_id):
+            return None
+        title = value.get("fromTitle")
+        return cls(session_id=session_id, upload_id=upload_id, from_title=title if isinstance(title, str) else "")
+
+
+def is_linked_reference(meta: "FileMetadata") -> bool:
+    """Whether ``meta`` is a reference to a file in another conversation (handoffs spec §4.9).
+
+    The one predicate the reference rules key on: deleting such a row removes the row only (never
+    the shared S3 object, thumbnail or ``_derived/`` sidecars) and touches no quota; a tool that
+    would change a file in place writes a new file instead; and a reader that needs derived state
+    first resolves it to the original with ``resolve_linked_file``.
+    """
+    return getattr(meta, "linked_from", None) is not None
+
+
 # =============================================================================
 # Database Models (stored in DynamoDB)
 # =============================================================================
+
+
+def _optional_int(value) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class FileMetadata(BaseModel):
@@ -305,6 +376,10 @@ class FileMetadata(BaseModel):
     # changed. Absent on older rows, which read as ``inline``.
     delivery: Delivery = Field(default=DELIVERY_INLINE, description="inline or reference delivery")
 
+    # Fixture-only: forces the attachment planner's mode for this file (see
+    # ``DELIVERY_OVERRIDE_VALUES``). ``None`` on every row a user produced.
+    delivery_override: Optional[str] = Field(None, description="Eval fixture only: forced delivery mode")
+
     # DocumentDigest (docs/specs/document-context-offload.md §4A), built once
     # when a document upload completes and stored as a plain map — see
     # ``apis.shared.files.document_digest``. ``None`` = never generated (files
@@ -327,6 +402,33 @@ class FileMetadata(BaseModel):
     # ``None`` = never queued for indexing. Status fields only: never content.
     kb_index: Optional[dict] = Field(None, description="Attachments-KB index state, when queued")
 
+    # File facts (unified-attachment-delivery spec §4.1): ``{version, class,
+    # tokens: {text, native}, pages, hasTextLayer, units}``, written once per
+    # set of bytes by preparation (``apis.shared.files.file_facts``). ``None``
+    # until prepared, for non-documents, and with large-document attachments
+    # off. Numbers and enums only: never content.
+    facts: Optional[dict] = Field(None, description="File facts, once prepared")
+
+    # The image a model is sent (unified-attachment-delivery spec §4.3,
+    # ``apis.shared.files.image_downscale``): ``{version, key, mimeType,
+    # sizeBytes, width, height, sourceWidth, sourceHeight, downscaled}``,
+    # written once per set of bytes when an image upload completes under the
+    # ``token`` profile. ``key`` is the stored downscaled copy, or the original
+    # when it was sent as uploaded. ``None`` for every other file and for an
+    # image uploaded under the ``legacy`` profile, which is sent as uploaded.
+    model_image: Optional[dict] = Field(None, description="Model copy of an image, when one was planned")
+
+    # A PDF's page count, read at admission under the ``token`` profile
+    # (``apis.shared.files.pdf_page_count``) so a turn that arrives before the
+    # file's facts can judge it by its pages. ``None`` for every other file,
+    # under the ``legacy`` profile, and when the count could not be read.
+    page_count: Optional[int] = Field(None, description="PDF page count read at admission")
+
+    # A reference to a file in another of the user's conversations (handoffs
+    # spec §4.9), set only on a ``source = "linked"`` row. ``None`` on every
+    # file that owns its bytes. See ``is_linked_reference``.
+    linked_from: Optional[LinkedFrom] = Field(None, description="The original this row references, when it is a reference")
+
     # Timestamps
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -335,11 +437,6 @@ class FileMetadata(BaseModel):
     ttl: Optional[int] = Field(None, description="Unix epoch for TTL expiration")
 
     model_config = ConfigDict(use_enum_values=True)
-
-    @property
-    def s3_uri(self) -> str:
-        """Get S3 URI for Bedrock document block."""
-        return f"s3://{self.s3_bucket}/{self.s3_key}"
 
     @property
     def file_format(self) -> Optional[str]:
@@ -366,7 +463,6 @@ class FileMetadata(BaseModel):
             "sizeBytes": self.size_bytes,
             "s3Key": self.s3_key,
             "s3Bucket": self.s3_bucket,
-            "s3Uri": self.s3_uri,
             "source": self.source,
             "status": self.status if isinstance(self.status, str) else self.status.value,
             "createdAt": to_iso(self.created_at),
@@ -375,12 +471,22 @@ class FileMetadata(BaseModel):
         }
         if self.delivery != DELIVERY_INLINE:
             item["delivery"] = self.delivery
+        if self.delivery_override in DELIVERY_OVERRIDE_VALUES:
+            item["deliveryOverride"] = self.delivery_override
         if self.digest:
             item["digest"] = self.digest
         if self.preparation:
             item["preparation"] = self.preparation
         if self.kb_index:
             item["kbIndex"] = self.kb_index
+        if self.facts:
+            item["facts"] = self.facts
+        if self.model_image:
+            item["modelImage"] = self.model_image
+        if self.page_count is not None:
+            item["pageCount"] = int(self.page_count)
+        if self.linked_from is not None:
+            item["linkedFrom"] = self.linked_from.to_item()
         return item
 
     @classmethod
@@ -405,12 +511,21 @@ class FileMetadata(BaseModel):
                 if item.get("delivery") == DELIVERY_REFERENCE
                 else DELIVERY_INLINE
             ),
+            delivery_override=(
+                item.get("deliveryOverride")
+                if item.get("deliveryOverride") in DELIVERY_OVERRIDE_VALUES
+                else None
+            ),
             created_at=from_iso(created_at) if created_at else datetime.now(timezone.utc),
             updated_at=from_iso(updated_at) if updated_at else datetime.now(timezone.utc),
             ttl=item.get("ttl"),
             digest=item.get("digest") if isinstance(item.get("digest"), dict) else None,
             preparation=item.get("preparation") if isinstance(item.get("preparation"), dict) else None,
             kb_index=item.get("kbIndex") if isinstance(item.get("kbIndex"), dict) else None,
+            facts=item.get("facts") if isinstance(item.get("facts"), dict) else None,
+            model_image=item.get("modelImage") if isinstance(item.get("modelImage"), dict) else None,
+            page_count=_optional_int(item.get("pageCount")),
+            linked_from=LinkedFrom.from_item(item.get("linkedFrom")),
         )
 
 
@@ -502,7 +617,6 @@ class CompleteUploadResponse(BaseModel):
 
     upload_id: str = Field(..., alias="uploadId")
     status: str
-    s3_uri: str = Field(..., alias="s3Uri")
     filename: str
     size_bytes: int = Field(..., alias="sizeBytes")
 
@@ -603,6 +717,22 @@ class ThumbnailResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+#: Most ids one ``GET /files/previews`` call answers: a message's attachment limit.
+MAX_PREVIEW_IDS = 20
+
+
+class AttachmentPreviewsResponse(BaseModel):
+    """Response for GET /api/files/previews.
+
+    ``previews`` maps each asked id to its card preview
+    (``apis/shared/files/attachment_preview.py``) or ``null``: not the
+    caller's, not ready, no preview format, or not written yet (a file
+    uploaded before previews existed, or one still being prepared).
+    """
+
+    previews: Dict[str, Optional[Dict[str, Any]]]
+
+
 class SearchStatusResponse(BaseModel):
     """Response for GET /api/files/{upload_id}/search-status.
 
@@ -625,9 +755,13 @@ class FileResponse(BaseModel):
     mime_type: str = Field(..., alias="mimeType")
     size_bytes: int = Field(..., alias="sizeBytes")
     session_id: str = Field(..., alias="sessionId")
-    s3_uri: str = Field(..., alias="s3Uri")
     status: str
     created_at: str = Field(..., alias="createdAt")
+    # A reference to a file in another of the user's conversations (handoffs
+    # spec §4.9): the Files panel marks it "From {fromTitle}". Absent otherwise.
+    linked_from: Optional[LinkedFrom] = Field(None, alias="linkedFrom")
+    # For a reference: whether its original still exists. ``None`` for every other file.
+    original_available: Optional[bool] = Field(None, alias="originalAvailable")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -640,9 +774,9 @@ class FileResponse(BaseModel):
             mime_type=meta.mime_type,
             size_bytes=meta.size_bytes,
             session_id=meta.session_id,
-            s3_uri=meta.s3_uri,
             status=meta.status if isinstance(meta.status, str) else meta.status.value,
             created_at=to_iso(meta.created_at),
+            linked_from=meta.linked_from,
         )
 
 
@@ -662,6 +796,46 @@ class QuotaResponse(BaseModel):
     used_bytes: int = Field(..., alias="usedBytes")
     max_bytes: int = Field(..., alias="maxBytes")
     file_count: int = Field(..., alias="fileCount")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AttachmentClassMaxBytes(BaseModel):
+    """Per-class upload ceilings in bytes. ``largeDocument`` is null while off."""
+
+    document: int
+    image: int
+    spreadsheet: int
+    presentation: int
+    large_document: Optional[int] = Field(None, alias="largeDocument")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AttachmentFolderLimits(BaseModel):
+    enabled: bool
+    per_message: Optional[int] = Field(None, alias="perMessage")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AttachmentLimitsResponse(BaseModel):
+    """Response for GET /files/limits (unified-attachment-delivery §4.4).
+
+    Built by ``attachment_plan.client_limits`` from the active limits profile.
+    A null limit means none applies. ``imagesPerMessage`` and ``pdfMaxPages``
+    belong to the ``token`` profile and are null under ``legacy``.
+    """
+
+    profile: str
+    files_per_message: Optional[int] = Field(None, alias="filesPerMessage")
+    images_per_message: Optional[int] = Field(None, alias="imagesPerMessage")
+    pdf_max_pages: Optional[int] = Field(None, alias="pdfMaxPages")
+    inline_document_max_bytes: int = Field(..., alias="inlineDocumentMaxBytes")
+    inline_budget_bytes: Optional[int] = Field(None, alias="inlineBudgetBytes")
+    max_bytes: AttachmentClassMaxBytes = Field(..., alias="maxBytes")
+    large_documents: bool = Field(..., alias="largeDocuments")
+    folders: AttachmentFolderLimits
 
     model_config = ConfigDict(populate_by_name=True)
 

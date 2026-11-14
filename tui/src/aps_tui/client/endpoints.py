@@ -131,6 +131,11 @@ class Endpoints:
     def files_presign(self) -> str:
         return self._join("files/presign")
 
+    @property
+    def files_limits(self) -> str:
+        """What an attachment may be (count, per-class sizes): ``GET /files/limits``."""
+        return self._join("files/limits")
+
     def file_complete(self, upload_id: str) -> str:
         return f"{self._join('files')}/{quote(upload_id, safe='')}/complete"
 

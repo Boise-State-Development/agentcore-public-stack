@@ -117,3 +117,9 @@ class TestCreateContentBlock:
 
         assert block["image"]["format"] == "webp"
         assert block["image"]["source"]["bytes"] is data
+
+    def test_content_type_wins_over_the_filename(self):
+        """A stored model copy can be another format than its name (a PNG sent as WebP)."""
+        assert ImageHandler.get_image_format("image/webp", "shot.png") == "webp"
+        assert ImageHandler.get_image_format("image/jpeg", "scan.png") == "jpeg"
+        assert ImageHandler.get_image_format("", "shot.png") == "png"

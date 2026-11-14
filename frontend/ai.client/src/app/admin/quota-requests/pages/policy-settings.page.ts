@@ -236,7 +236,9 @@ const INPUT =
               }
             </ul>
           } @else {
-            <p class="text-sm/6 text-gray-600 dark:text-gray-400">No one yet. Requests still appear in the queue and badge.</p>
+            <p data-testid="notify-empty-warning" class="rounded-2xl bg-state-warning-50 px-4 py-3 text-sm/6 text-state-warning-800 dark:bg-state-warning-900/20 dark:text-state-warning-200">
+              No one is notified of new requests. They still appear in the queue and badge, but nobody gets an inbox entry. Add at least one person before users can ask.
+            </p>
           }
           <div class="max-w-md">
             <app-quota-user-picker label="Add someone" [clearOnPick]="true" (picked)="addNotify($event)" />

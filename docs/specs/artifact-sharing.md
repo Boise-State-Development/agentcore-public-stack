@@ -105,17 +105,18 @@ under a new key prefix. **Zero new CDK resources, zero new IAM statements.**
   Governance here is Entra JWT identity, not content inspection.
 - **Collaborative editing.** Shares are read-only. A recipient who wants to
   iterate forks (§6, deferred).
-- **Sharing `#HEAD` (a moving pointer).** A share pins one version. Sharing a
-  pointer that moves under the recipient is a different feature with different
-  consent semantics, and a moving pointer is the exact trap that bit agent
-  version snapshots.
+- **Sharing `#HEAD` by default.** A share pins one version unless its owner
+  explicitly opts that one link in to following the latest (§9). A pointer that
+  moves under the recipient has different consent semantics, so it is never
+  the default, and a moving pointer is the exact trap that bit agent version
+  snapshots.
 - **Changing the render Lambda's verification contract.**
 
 ## Decisions
 
 | Question | Decision |
 |---|---|
-| Share target | One **immutable `(artifactId, version)`** pair, never `#HEAD` |
+| Share target | One **immutable `(artifactId, version)`** pair by default; `#HEAD` only by the owner's per-share opt-in (`followsLatest`, §9) |
 | Access levels | `public` (any authenticated user) \| `specific` (email allowlist) — same literals as conversation shares |
 | Storage | New key prefix on the **existing** `user-artifacts` table |
 | Snapshot | **None** — version immutability is the snapshot |
@@ -385,6 +386,56 @@ conversation would then also share its artifacts), plus surfacing them in the
 shared view. That is a separate spec, and it depends on this one's share record
 existing first. Recording it here so it is a known gap rather than a discovered
 bug.
+
+## 9. Links that follow the latest version
+
+Added after users asked for "a link to whatever the latest version is". The
+owner's own `/artifacts/:id` route already opens HEAD; this extends that to
+people the owner shares with, as an **opt-in per share**. The default is
+unchanged: every existing share, and every new one without the box ticked, is
+pinned.
+
+**Data.** One optional attribute, `follows_latest: true`, on both share rows
+(absent means pinned, so existing rows need no backfill). `version` stays the
+version current when the link was made: it keys the owner row's SK, which never
+changes, and it is the version the owner was looking at when they consented.
+
+**Read path.** `_resolve_share_target` in `artifacts/service.py` is the one
+place a following share becomes a version. It runs after `_check_share_access`
+on every recipient read (metadata, render-token mint, content) and reads the
+owner's `ARTIFACT#{id}#HEAD` row for its version, title and content type. A
+pinned share is returned unchanged and costs no extra read. Following never
+widens who can read, only which version they see; the ACL check still runs
+first. The writer puts the version row before it re-points HEAD, so the version
+HEAD names always exists. A missing HEAD (the artifact was deleted) is a 404 on
+all three routes. The render Lambda is unchanged: the mint still signs one
+exact `ver`.
+
+**API.** `followsLatest` on `POST /artifacts/{id}/shares` and on
+`PATCH /artifacts/shares/{id}` (omitted leaves it as it is), and on every share
+response. On the recipient metadata, `version` is the version shown now. On the
+inbox, `version` is the one the link was made at and `followsLatest` says it
+opens the newest; the inbox does not read each HEAD.
+
+**Project shares can't follow.** A project's Outputs (§3.3 of the shared
+projects spec) record one version, with a preview of it. The request models
+refuse `followsLatest` with `accessLevel: "project"` (422), and the service
+refuses a following share becoming a project share (`ShareCannotFollowError`,
+400). Conversation shares are untouched: their snapshot pins each artifact at
+the version the transcript describes.
+
+**UI.** The share dialog has an "Always show the latest version" checkbox,
+unticked, hidden for Project members. The existing-links list labels a
+following link "Latest version" and offers **Follow latest** on a pinned,
+non-project link; turning following off is not offered there, because it would
+pin the link to the version it was made at, which may be several versions old.
+Revoke and re-share instead. The recipient page reads "Shared read-only · always
+the latest version" and "Latest version (vN)"; the library's Shared with you
+rows read "Latest version".
+
+No flag: it is a mode of an existing feature whose default is today's
+behaviour, gated by whatever gates artifact sharing. No table, index, IAM or
+Lambda change, nothing on the turn path.
 
 ## Effort estimate
 

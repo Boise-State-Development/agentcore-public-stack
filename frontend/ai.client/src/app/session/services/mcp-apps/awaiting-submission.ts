@@ -3,10 +3,10 @@
  * form waits for the user (GitHub's `NewToolResultAwaitingFormSubmission`).
  *
  * Such a result is `status: 'error'` on purpose, so an agent does not chain
- * calls or claim the write happened. It has not failed. The backend writes
- * this marker onto the result at intake even when the server sent the bare
- * stub (our MCP protocol version predates the marker), so the live stream and
- * a reloaded conversation both carry it (`apis/shared/mcp_apps/awaiting_submission.py`).
+ * calls or claim the write happened. It has not failed. The server sends this
+ * marker itself on MCP 2026-07-28, and it rides the result through the live
+ * stream and the persisted message, so a reload agrees with what streamed
+ * (`apis/shared/mcp_apps/awaiting_submission.py`).
  */
 export const AWAITING_USER_SUBMISSION = 'awaiting_user_submission';
 

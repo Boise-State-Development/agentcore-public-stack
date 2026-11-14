@@ -91,16 +91,69 @@ class TestCompleteUpload:
     @pytest.mark.parametrize(
         "size,mime,filename",
         [
-            (1000, "application/pdf", "small.pdf"),
             (LARGE, "text/csv", "big.csv"),
             (LARGE, "application/vnd.openxmlformats-officedocument.presentationml.presentation", "deck.pptx"),
+            (1000, "image/png", "photo.png"),
         ],
     )
     async def test_everything_else_keeps_the_in_process_digest_path(self, enabled, size, mime, filename):
         service, repository, _, sqs, _ = _service(_meta(size, mime, filename))
         await service.complete_upload("u1", "up-1")
         await _drain(service)
+        # Never prepared; a spreadsheet or deck is only queued for its card preview.
+        actions = [json.loads(call.kwargs["MessageBody"]).get("action") for call in sqs.send_message.call_args_list]
+        assert actions == ([] if filename.endswith(".png") else ["preview"])
+        repository.update_file_preparation.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "mime,filename",
+        [
+            ("application/pdf", "small.pdf"),
+            ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "memo.docx"),
+            ("text/markdown", "plan.md"),
+            ("text/plain", "notes.txt"),
+            ("text/html", "page.html"),
+        ],
+    )
+    async def test_small_document_keeps_its_digest_and_is_queued_for_facts_only(
+        self, enabled, monkeypatch, mime, filename
+    ):
+        """Unified-attachment-delivery spec §4.1/§7: every document is prepared, but
+        a small one only for its facts, so nothing about its delivery changes."""
+
+        async def _abstract(*args, **kwargs):
+            return "A stub abstract."
+
+        monkeypatch.setattr("apis.shared.files.document_digest.generate_abstract", _abstract)
+        service, repository, _, sqs, calls = _service(_meta(1000, mime, filename))
+        await service.complete_upload("u1", "up-1")
+        assert len(await _drain(service)) == 1  # the in-process digest, as before
+        repository.update_file_preparation.assert_not_awaited()  # never pending, never prepared
+        sends = [c[1] for c in calls if c[0] == "send"]
+        assert len(sends) == 1 and sends[0]["QueueUrl"] == QUEUE_URL
+        assert json.loads(sends[0]["MessageBody"]) == {"action": "facts", "user_id": "u1", "upload_id": "up-1"}
+
+    @pytest.mark.parametrize(
+        "env",
+        [
+            {"LARGE_DOCUMENT_ATTACHMENTS_ENABLED": "false", "LARGE_DOCUMENT_PREPARE_QUEUE_URL": QUEUE_URL},
+            {"LARGE_DOCUMENT_ATTACHMENTS_ENABLED": "true", "LARGE_DOCUMENT_PREPARE_QUEUE_URL": ""},
+        ],
+    )
+    async def test_small_document_is_not_queued_with_the_feature_off(self, monkeypatch, env):
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        service, _, _, sqs, _ = _service(_meta(1000))
+        await service.complete_upload("u1", "up-1")
+        await _drain(service)
         sqs.send_message.assert_not_called()
+
+    async def test_a_failed_facts_send_never_fails_the_upload(self, enabled):
+        sqs = MagicMock()
+        sqs.send_message.side_effect = RuntimeError("queue down")
+        service, repository, _, _, _ = _service(_meta(1000), sqs=sqs)
+        response = await service.complete_upload("u1", "up-1")
+        assert response.status == "ready"
         repository.update_file_preparation.assert_not_awaited()
 
     @pytest.mark.parametrize(
@@ -211,7 +264,7 @@ class TestDeletion:
         assert _keys(bucket) == []
 
     async def test_an_inline_class_file_skips_the_listing(self, bucket):
-        meta = _meta(size=1000, status=FileStatus.READY)
+        meta = _meta(size=1000, status=FileStatus.READY, filename="notes.txt", mime="text/plain")
         _seed(bucket, meta, derived=())
         s3 = MagicMock(wraps=bucket)
         assert await _deleting_service(s3, [meta]).delete_file("u1", "up-1") is True

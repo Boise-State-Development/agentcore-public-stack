@@ -1,6 +1,6 @@
 {
   "name": "infrastructure",
-  "version": "1.35.0",
+  "version": "1.36.0",
   "bin": {
     "infrastructure": "bin/infrastructure.js"
   },
@@ -28,6 +28,15 @@
     "picomatch": ">=2.3.2",
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "4.3.2"
+    },
+    "@jest/reporters": {
+      "glob": "14.0.4"
+    },
+    "jest-config": {
+      "glob": "14.0.4"
+    },
+    "jest-runtime": {
+      "glob": "14.0.4"
     }
   }
 }

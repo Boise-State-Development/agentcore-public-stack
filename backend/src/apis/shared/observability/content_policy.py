@@ -65,7 +65,7 @@ CONTENT_BEARING: FrozenSet[str] = frozenset({
     # FILE# upload rows
     "filename",                       # user-chosen
     "s3Key",                          # embeds the filename
-    "s3Uri",
+    "s3Uri",                          # no longer written; rows from before keep it
     "digest.abstract",                # model-generated abstract of the document
     "digest.sections",                # heading text lifted from the document
 })
@@ -208,6 +208,15 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     "documentSliceTokens",
     "documentMime",
     "documentReads",
+    # The turn's wall time, on its last row only: what tells one turn's calls
+    # from the next (release-ledger spec §5.1). A number.
+    "turnDurationMs",
+    # How the turn's attachments were delivered (``attachment_plan``): per file
+    # a mode, a class, a reason code, a token estimate and an upload id.
+    "attachmentPlan",
+    # Characters of the user's message the composer counted as pasted, on the
+    # turn's last row only. A number, never the text.
+    "pastedChars",
 )
 
 #: C# rows as the release ledger reads them (``apis.shared.sessions.ledger_rollups``):

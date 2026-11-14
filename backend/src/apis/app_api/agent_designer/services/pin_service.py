@@ -64,6 +64,7 @@ from apis.shared.assistants.service import (
     resolve_assistant_permission,
 )
 from apis.shared.auth.models import User
+from apis.shared.feature_flags import agent_marketplace_enabled
 from apis.shared.rbac.service import get_app_role_service
 
 logger = logging.getLogger(__name__)
@@ -108,20 +109,14 @@ def _pin_row(
     contradicted that.
     """
     listing = assistant.listing
-    profile: Optional[PublisherProfile] = (
-        publishers.get(listing.publisher_id) if listing else None
-    )
+    profile: Optional[PublisherProfile] = publishers.get(listing.publisher_id) if listing else None
     return PinnedAgentResponse(
         agent_id=assistant.assistant_id,
         name=assistant.name,
         tagline=assistant.tagline,
         emoji=assistant.emoji,
         icon_url=icon_url(assistant.assistant_id, assistant.icon_key),
-        publisher=(
-            ListingPublisher(label=profile.label, kind=profile.kind, verified=profile.verified)
-            if profile
-            else None
-        ),
+        publisher=(ListingPublisher(label=profile.label, kind=profile.kind, verified=profile.verified) if profile else None),
         category=(listing.category if listing else ""),
         source="user" if ref is not None else "role",
         locked=bool(seed and seed.locked),
@@ -142,7 +137,14 @@ async def _role_seeds(user: User) -> Dict[str, _Seed]:
     a user holding both ``staff`` and ``faculty`` gets; the only per-Agent decisions are
     that a lock from *any* role wins (the strictest claim is the honest one) and that the
     ordering hints come from the highest-priority role that seeds it.
+
+    **None while the marketplace is off (#1897).** Role pins are managed from the
+    marketplace admin console, which 404s with the switch off. Applying them anyway would
+    leave admins unable to change a seed and members unable to drop a locked one.
     """
+    if not agent_marketplace_enabled():
+        return {}
+
     service = get_app_role_service()
     try:
         permissions = await service.resolve_user_permissions(user)
@@ -184,9 +186,7 @@ async def _role_seeds(user: User) -> Dict[str, _Seed]:
     return seeds
 
 
-def _shelf_key(
-    ref: Optional[PinnedAgentRef], seed: Optional[_Seed], name: str
-) -> Tuple[int, int, int, int, str]:
+def _shelf_key(ref: Optional[PinnedAgentRef], seed: Optional[_Seed], name: str) -> Tuple[int, int, int, int, str]:
     """``(locked desc, role priority desc, order asc, name asc)`` from the spec's Data model.
 
     The extra term is where a pin with no role sits: a user's own pins have no role
@@ -229,9 +229,7 @@ async def list_pins(user: User) -> List[PinnedAgentResponse]:
     rows: List[Tuple[Tuple[int, int, int, int, str], PinnedAgentResponse]] = []
     for agent_id, ref, seed in candidates:
         try:
-            assistant, permission = await get_assistant_with_access_check(
-                agent_id, user.user_id, user.email
-            )
+            assistant, permission = await get_assistant_with_access_check(agent_id, user.user_id, user.email)
         except Exception:
             logger.warning(f"Failed to resolve pinned agent {agent_id}", exc_info=True)
             continue
@@ -259,9 +257,7 @@ async def pin_agent(user: User, agent_id: str) -> PinnedAgentResponse:
     menu (D11) is scoped to exactly "your own and pinned Agents". Publication decides what
     the store *offers*, not what a user may bookmark.
     """
-    assistant, permission = await get_assistant_with_access_check(
-        agent_id, user.user_id, user.email
-    )
+    assistant, permission = await get_assistant_with_access_check(agent_id, user.user_id, user.email)
     if is_project_harness(assistant):
         # A project member reaches the harness through the project; pinning would put a
         # project's working agent in the personal agent menu, detached from its project.
@@ -290,14 +286,10 @@ async def pin_agent(user: User, agent_id: str) -> PinnedAgentResponse:
             )
             existing = None
         if existing is not None and existing.listing and is_listed(existing.listing.state):
-            logger.warning(
-                f"Pin denied on published agent {agent_id} for {user.user_id}: "
-                f"visibility is {existing.visibility}"
-            )
+            logger.warning(f"Pin denied on published agent {agent_id} for {user.user_id}: " f"visibility is {existing.visibility}")
             raise PinError(
                 403,
-                "This agent is listed in the store but its owner has restricted who can "
-                "open it, so it can't be added right now.",
+                "This agent is listed in the store but its owner has restricted who can " "open it, so it can't be added right now.",
             )
         raise PinError(404, f"Agent not found: {agent_id}")
 

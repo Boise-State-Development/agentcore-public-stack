@@ -13,12 +13,14 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Tuple, Union
+from dataclasses import replace as dataclass_replace
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Literal, Optional, Sequence, Tuple, Union
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from agents.main_agent.core.model_config import KNOWN_CANONICAL_PARAMS
+from agents.main_agent.multimodal.image_handler import ImageHandler
 from agents.main_agent.session.session_factory import SessionFactory
 from apis.shared.auth.dependencies import get_current_user_trusted
 from apis.shared.auth.models import User
@@ -30,6 +32,7 @@ from apis.shared.errors import (
 )
 from apis.inference_api.runtime_health import ping_payload
 from apis.shared.handoff.context import build_handoff_message
+from apis.shared.handoff.delivery_turn import DeliveryTurn, join_delivery_blocks
 from apis.shared.handoff.turn import HandoffTurn
 from apis.shared.feature_flags import (
     agent_build_shared_session_enabled,
@@ -39,23 +42,67 @@ from apis.shared.feature_flags import (
     agents_enabled,
     assistant_kb_full_context_enabled,
     attachment_kb_enabled,
-    attachment_turn_guard_enabled,
     folder_attachments_enabled,
     inline_attachment_persist_enabled,
-    inline_budget_by_reference_enabled,
     memory_spaces_enabled,
     mid_turn_steering_enabled,
     project_file_readiness_enabled,
     skills_enabled,
 )
 from apis.shared.files.document_read import is_document_class
-from apis.shared.files.file_resolver import get_file_resolver
+from apis.shared.files.file_kinds import KIND_DOCUMENT, KIND_PRESENTATION, KIND_TABULAR, any_hint
+from apis.shared.files.file_resolver import get_file_resolver, model_image_source
 from apis.shared.files.inline_persist import get_inline_attachment_persister
-from apis.shared.files.models import (
-    INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
-    MAX_FILES_PER_MESSAGE,
-    TEXT_ONLY_DOCUMENTS_MAX_CHARS,
-    is_tabular_file,
+from apis.shared.files.attachment_handle import (
+    ImageRef,
+    image_fingerprint_b64,
+    remember_session_uploads,
+    remember_turn_images,
+)
+from apis.shared.files.document_estimate import remember_session_documents
+from apis.shared.files.attachment_plan import (
+    CLASS_PRESENTATION,
+    CLASS_TABULAR,
+    FORCED_TEXT_MAX_CHARS,
+    MODE_NATIVE,
+    MODE_TEXT,
+    ON_DEMAND_MODES,
+    PROFILE_TOKEN,
+    REASON_DOCUMENTS_AS_TEXT,
+    REASON_FORCED,
+    REASON_FACTS_PENDING,
+    REASON_NO_ROW,
+    REASON_PDF_PAGE_LIMIT,
+    REASON_REQUEST_PAGE_LIMIT,
+    REASON_WITHIN_BUDGET,
+    VARIANT_COMPACT,
+    VARIANT_HIGH,
+    persist_document_handles,
+    REASON_PROVIDER_NEEDS_TEXT,
+    REASON_OVER_BUDGET,
+    REASON_OVER_BUDGET_REFERENCE,
+    REASON_OVERSIZED,
+    REASON_PERSIST_FAILED,
+    REASON_PRESENTATION,
+    REASON_TABULAR,
+    REASON_TEXT_ONLY_IMAGE,
+    REASON_TEXT_ONLY_MODEL,
+    REASON_TEXT_ONLY_UNREADABLE,
+    REASON_TEXT_UNAVAILABLE,
+    AttachmentPlan,
+    ConversationFacts,
+    ConversationPlan,
+    FileFacts,
+    LimitsProfile,
+    ModelFacts,
+    cap_message_attachments,
+    current_limits_profile,
+    facts_from_row,
+    file_class,
+    plan_attachments,
+    plan_conversation,
+    reads_from_original,
+    refine_for_model,
 )
 from apis.shared.files.folder_attachments import FOLDERS_PER_MESSAGE, FolderAttachment
 from apis.shared.files.folder_manifest import (
@@ -92,6 +139,7 @@ from apis.inference_api.chat.agent_binding_resolver import (
     ResolvedSkills,
     resolve_agent_invocation,
 )
+from apis.shared.sessions.fork import ancestor_session_ids as fork_ancestor_session_ids
 from apis.shared.sessions.metadata import (
     ensure_session_metadata_exists,
     load_session_meta,
@@ -114,10 +162,10 @@ from apis.shared.tools.injected import (
     injected_tools_are_key_described,
 )
 from apis.shared.user_settings.models import (
-    MAX_PERSONAL_INSTRUCTIONS_CHARS,
     cap_memory_mode,
     memory_capabilities,
     memory_mode_from,
+    personal_instructions_from,
 )
 from apis.shared.user_settings.repository import UserSettingsRepository
 
@@ -465,8 +513,7 @@ async def _load_user_settings(user_id: Optional[str]) -> dict:
 
 
 def _personal_instructions(settings: dict) -> Optional[str]:
-    text = (settings.get("personalInstructions") or "").strip()
-    return text[:MAX_PERSONAL_INSTRUCTIONS_CHARS] or None
+    return personal_instructions_from(settings)
 
 
 def _memory_mode_for_turn(
@@ -793,10 +840,14 @@ def _merge_inference_params(
     return merged
 
 
+_UNRESOLVED = object()
+
+
 async def _resolve_model_settings(
     model_id: str | None,
     explicit_caching_enabled: bool | None,
     request_inference_params: dict | None,
+    managed_model: Any = _UNRESOLVED,
 ) -> tuple[bool | None, dict, str | None, str | None, str | None, list[str] | None]:
     """Resolve runtime model knobs from the managed-model registry.
 
@@ -821,7 +872,8 @@ async def _resolve_model_settings(
     if not model_id:
         return explicit_caching_enabled, request_params, None, None, None, None
 
-    managed_model = await _find_managed_model(model_id)
+    if managed_model is _UNRESOLVED:
+        managed_model = await _find_managed_model(model_id)
 
     if explicit_caching_enabled is not None:
         caching = explicit_caching_enabled
@@ -1283,6 +1335,8 @@ async def _session_has_documents(
     session_id: str,
     user_id: str,
     turn_has_document: bool = False,
+    ancestor_session_ids: Sequence[str] = (),
+    document_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> bool:
     """Whether ``document_read`` should exist on this turn.
 
@@ -1306,6 +1360,11 @@ async def _session_has_documents(
     because the memo is per-process while the DynamoDB query is not, the tool
     (and therefore the cacheable prefix) flapped A→B→A→B as microVMs
     recycled. Each flip re-writes the whole prefix at 1.25x input.
+
+    ``document_hint`` is a classified answer that arrives late: a handoff or delivery this turn
+    carries whose files include a document (handoffs spec §4.9). Its reference rows are written
+    during the stream, so the query can't see them yet; the hint, started before the lease, is
+    awaited beside the query and only when the memo hasn't already answered yes.
     """
     if turn_has_document:
         _remember_document_session(session_id)
@@ -1315,7 +1374,35 @@ async def _session_has_documents(
     try:
         from apis.shared.files.document_read import session_has_documents
 
-        present = await session_has_documents(user_id, session_id)
+        if document_hint is not None:
+            began = time.perf_counter()
+            hint_done_before = document_hint.done()
+            present, hinted = await asyncio.gather(
+                session_has_documents(user_id, session_id), _hint_answer(document_hint)
+            )
+            # The hint's whole cost before the first token: how long the gate waited with it beside
+            # the query it runs anyway. Read on dev for the PR-0.4a TTFT number (§4.9).
+            logger.info(
+                "document_hint %s",
+                json.dumps(
+                    {
+                        "hinted": hinted,
+                        "present": present,
+                        "readyAtGate": hint_done_before,
+                        "gateMs": round((time.perf_counter() - began) * 1000, 1),
+                    }
+                ),
+            )
+            present = present or hinted
+        else:
+            present = await session_has_documents(user_id, session_id)
+        # A fork's copied messages carry documents attached in its parent or
+        # root (``ancestor_session_ids``). Asked only when the fork has none
+        # of its own, and once per process: the positive answer is memoized.
+        for ancestor in ancestor_session_ids:
+            if present:
+                break
+            present = await session_has_documents(user_id, ancestor)
     except Exception:  # noqa: BLE001 - the gate must never fail a turn
         logger.warning("document_read gate lookup failed; tool not injected this turn", exc_info=True)
         return False
@@ -1324,10 +1411,21 @@ async def _session_has_documents(
     return present
 
 
+async def _hint_answer(hint: "asyncio.Task[bool]") -> bool:
+    """A document hint's answer; ``False`` if it failed. Never raises."""
+    try:
+        return bool(await hint)
+    except Exception:  # noqa: BLE001 - a failed hint is "no document", as before the feature
+        logger.warning("document hint failed; gate answers from the session query", exc_info=True)
+        return False
+
+
 async def _document_tools_gate(
     session_id: str,
     user_id: str,
     turn_has_document: bool = False,
+    ancestor_session_ids: Sequence[str] = (),
+    document_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> bool:
     """The single answer to "does this turn carry ``document_read``" — the
     builder and the resume path's cache key both read it, so the two can
@@ -1346,7 +1444,24 @@ async def _document_tools_gate(
         return False
     if not session_id or not user_id:
         return False
-    return await _session_has_documents(session_id, user_id, turn_has_document)
+    return await _session_has_documents(
+        session_id, user_id, turn_has_document, ancestor_session_ids, document_hint=document_hint
+    )
+
+
+def _turn_file_hint(
+    handoff_turn: Optional[HandoffTurn], delivery_turn: Optional[DeliveryTurn], kind: str
+) -> Optional["asyncio.Task[bool]"]:
+    """Whether this send's handoff or deliveries carry a file of ``kind``, or ``None`` (§4.9)."""
+    return any_hint(
+        handoff_turn.kind_hint(kind) if handoff_turn is not None else None,
+        delivery_turn.kind_hint(kind) if delivery_turn is not None else None,
+    )
+
+
+async def _optional_hint(hint: Optional["asyncio.Task[bool]"]) -> bool:
+    """``_hint_answer`` for a hint that may be absent."""
+    return False if hint is None else await _hint_answer(hint)
 
 
 def _resolved_files_include_a_document(resolved_files: list | None) -> bool:
@@ -1374,6 +1489,8 @@ async def _build_document_tools(
     user_id: str,
     turn_has_document: bool = False,
     text_only: bool = False,
+    ancestor_session_ids: Sequence[str] = (),
+    document_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> list:
     """Context-bound ``document_read`` for a session that has a readable attachment.
 
@@ -1391,12 +1508,18 @@ async def _build_document_tools(
     page-range reads return text; the model is in the cache key, so the flag
     needs no key element of its own.
     """
-    if not await _document_tools_gate(session_id, user_id, turn_has_document):
+    if not await _document_tools_gate(
+        session_id, user_id, turn_has_document, ancestor_session_ids, document_hint=document_hint
+    ):
         return []
 
     from agents.builtin_tools.document_read_tool import make_document_read_tool
 
-    tools = [make_document_read_tool(session_id, user_id, text_only=text_only)]
+    tools = [
+        make_document_read_tool(
+            session_id, user_id, text_only=text_only, ancestor_session_ids=ancestor_session_ids
+        )
+    ]
 
     # Source provenance rides the same gate, for the same reason: the governing
     # capability is the user's own attachment, and there is nothing to verify a
@@ -1446,6 +1569,7 @@ async def _session_has_tabular(
     user_id: str,
     turn_has_tabular: bool = False,
     kb_assistant_id: Optional[str] = None,
+    tabular_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> bool:
     """Whether this session's turns need the Spreadsheet Analysis tools.
 
@@ -1458,6 +1582,10 @@ async def _session_has_tabular(
     ``enabled_tools`` and therefore the agent-cache key, so it must not flip
     between the attach turn and the follow-up. Fail-closed on error: a turn
     without the tools is today's behavior, never a broken turn.
+
+    ``tabular_hint`` is a spreadsheet a handoff or delivery carries in (handoffs spec §4.9): its
+    reference row is written during the stream, so the query can't see it on this turn. Awaited
+    beside the query, never before it, so the gate costs what it did.
     """
     if turn_has_tabular:
         _remember_tabular_session(session_id)
@@ -1474,11 +1602,17 @@ async def _session_has_tabular(
 
             # Both reads at once: neither waits on the other, and the gate sits on the
             # path to the first token.
-            in_session, in_kb = await asyncio.gather(
+            in_session, in_kb, hinted = await asyncio.gather(
                 session_has_tabular_files(user_id, session_id),
                 assistant_kb_has_tabular_documents(kb_assistant_id),
+                _optional_hint(tabular_hint),
             )
-            present = in_session or in_kb
+            present = in_session or in_kb or hinted
+        elif tabular_hint is not None:
+            in_session, hinted = await asyncio.gather(
+                session_has_tabular_files(user_id, session_id), _hint_answer(tabular_hint)
+            )
+            present = in_session or hinted
         else:
             present = await session_has_tabular_files(user_id, session_id)
     except Exception:  # noqa: BLE001 - the gate must never fail a turn
@@ -1486,6 +1620,59 @@ async def _session_has_tabular(
         return False
     if present:
         _remember_tabular_session(session_id)
+    return present
+
+
+#: Sessions known to hold a PowerPoint deck. Same contract as
+#: ``_TABULAR_SESSIONS``: positives memoized, negatives never.
+_PRESENTATION_SESSIONS: "OrderedDict[str, bool]" = OrderedDict()
+_PRESENTATION_SESSIONS_MAX = 10_000
+
+
+def _remember_presentation_session(session_id: str) -> None:
+    _PRESENTATION_SESSIONS[session_id] = True
+    _PRESENTATION_SESSIONS.move_to_end(session_id)
+    while len(_PRESENTATION_SESSIONS) > _PRESENTATION_SESSIONS_MAX:
+        _PRESENTATION_SESSIONS.popitem(last=False)
+
+
+async def _session_has_presentation(
+    session_id: str,
+    user_id: str,
+    turn_has_presentation: bool = False,
+    presentation_hint: Optional["asyncio.Task[bool]"] = None,
+) -> bool:
+    """Whether this session's turns need the PowerPoint tools to read a deck.
+
+    The deck counterpart of ``_session_has_tabular``: True when this turn
+    attaches a .pptx (already partitioned, no query), when the session was
+    seen holding one earlier in this process, or when the session's READY
+    uploads include one. Sticky for the same reason (the answer feeds the
+    agent-cache key) and fail-closed on error. ``presentation_hint`` is a deck a handoff or
+    delivery carries in, exactly as ``tabular_hint`` is for ``_session_has_tabular``.
+    """
+    if turn_has_presentation:
+        _remember_presentation_session(session_id)
+        return True
+    if _PRESENTATION_SESSIONS.get(session_id):
+        return True
+    if not session_id or not user_id:
+        return False
+    try:
+        from apis.shared.files.document_read import session_has_presentation_files
+
+        if presentation_hint is not None:
+            in_session, hinted = await asyncio.gather(
+                session_has_presentation_files(user_id, session_id), _hint_answer(presentation_hint)
+            )
+            present = in_session or hinted
+        else:
+            present = await session_has_presentation_files(user_id, session_id)
+    except Exception:  # noqa: BLE001 - the gate must never fail a turn
+        logger.warning("presentation auto-enable lookup failed; tools not injected this turn", exc_info=True)
+        return False
+    if present:
+        _remember_presentation_session(session_id)
     return present
 
 
@@ -1506,22 +1693,91 @@ async def _auto_enabled_attachment_tool_ids(
     user_id: str,
     turn_has_tabular: bool = False,
     kb_assistant_id: Optional[str] = None,
+    turn_has_presentation: bool = False,
+    enabled_tools: list | None = None,
+    tabular_hint: Optional["asyncio.Task[bool]"] = None,
+    presentation_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> list[str]:
-    """The Spreadsheet Analysis ids this turn should carry regardless of the
-    picker, in a fixed order: every id in ``SPREADSHEET_TOOL_IDS`` the
-    caller's RBAC grant admits, when the session holds a spreadsheet (or,
-    given ``kb_assistant_id``, when that assistant's knowledge base does).
+    """The attachment-driven tool ids this turn should carry regardless of the
+    picker, in a fixed order: the Spreadsheet Analysis ids for a session that
+    holds a spreadsheet, then the PowerPoint id for one that holds a deck.
 
-    Enables, never grants: ``can_access_tool`` is the same predicate the
-    picker and Agent bindings answer to (role grant ∪ public tools). A user
-    whose roles do not carry the tool gets today's behavior — the attachment
-    note tells them the tool is not available to their account.
+    Enables, never grants: every id passes ``can_access_tool``, the same
+    predicate the picker and Agent bindings answer to (role grant ∪ public
+    tools). A user whose roles do not carry the tool gets today's behavior —
+    the attachment note tells them the tool is not available to their
+    account.
+
+    The two gates run concurrently, so a session with neither memoized pays
+    one DynamoDB round trip of wall time, as it did before decks had a gate.
     """
     from apis.shared.feature_flags import attachment_tool_autoenable_enabled
 
     if not attachment_tool_autoenable_enabled():
         return []
-    if not await _session_has_tabular(session_id, user_id, turn_has_tabular, kb_assistant_id):
+    spreadsheet_ids, presentation_ids = await asyncio.gather(
+        _auto_enabled_spreadsheet_tool_ids(
+            current_user, session_id, user_id, turn_has_tabular, kb_assistant_id, tabular_hint
+        ),
+        _auto_enabled_presentation_tool_ids(
+            current_user, session_id, user_id, turn_has_presentation, enabled_tools, presentation_hint
+        ),
+    )
+    return spreadsheet_ids + presentation_ids
+
+
+async def _auto_enabled_presentation_tool_ids(
+    current_user: User,
+    session_id: str,
+    user_id: str,
+    turn_has_presentation: bool,
+    enabled_tools: list | None,
+    presentation_hint: Optional["asyncio.Task[bool]"] = None,
+) -> list[str]:
+    """``POWERPOINT_PRESENTATION_TOOL_IDS`` the caller's grant admits, when the
+    session holds a deck.
+
+    Decks never go inline, and the PowerPoint read tools are provisioned only
+    by the ``create_powerpoint_presentation`` toggle, which ships off — so on
+    the default tool set an attached deck was a dead end, and the note sent
+    the user to a sidebar toggle. Unlike the spreadsheet gate, the cheap
+    checks come first: an id already on, or one the role does not admit,
+    needs no session query, which keeps the query off turns it cannot change.
+    """
+    wanted = sorted(POWERPOINT_PRESENTATION_TOOL_IDS.difference(enabled_tools or ()))
+    if not wanted:
+        return []
+    role_service = get_app_role_service()
+    allowed: list[str] = []
+    for tool_id in wanted:
+        try:
+            if await role_service.can_access_tool(current_user, tool_id):
+                allowed.append(tool_id)
+        except Exception:  # noqa: BLE001 - an RBAC lookup failure must not fail the turn
+            logger.warning("RBAC check for %s failed; not auto-enabling", tool_id, exc_info=True)
+    if not allowed:
+        return []
+    if not await _session_has_presentation(session_id, user_id, turn_has_presentation, presentation_hint):
+        return []
+    logger.info(
+        "Auto-enabled %s for a session with a presentation attachment (session=%s)",
+        allowed, scrub_log(session_id),
+    )
+    return allowed
+
+
+async def _auto_enabled_spreadsheet_tool_ids(
+    current_user: User,
+    session_id: str,
+    user_id: str,
+    turn_has_tabular: bool,
+    kb_assistant_id: Optional[str],
+    tabular_hint: Optional["asyncio.Task[bool]"] = None,
+) -> list[str]:
+    """Every id in ``SPREADSHEET_TOOL_IDS`` the caller's RBAC grant admits,
+    when the session holds a spreadsheet (or, given ``kb_assistant_id``, when
+    that assistant's knowledge base does)."""
+    if not await _session_has_tabular(session_id, user_id, turn_has_tabular, kb_assistant_id, tabular_hint):
         return []
     role_service = get_app_role_service()
     allowed: list[str] = []
@@ -1546,18 +1802,26 @@ async def _apply_attachment_tool_autoenable(
     user_id: str,
     turn_has_tabular: bool = False,
     kb_assistant_id: Optional[str] = None,
+    turn_has_presentation: bool = False,
+    tabular_hint: Optional["asyncio.Task[bool]"] = None,
+    presentation_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> list | None:
     """``enabled_tools`` for this turn with the attachment auto-enable applied.
 
     The single seam every ``get_agent`` caller on the invocation path goes
     through, so the main turn and the MCP App dispatch paths compute the same
     effective list — and therefore the same agent-cache slot — for a session
-    holding a spreadsheet. ``kb_assistant_id`` extends the gate to that
-    assistant's knowledge base; only an Agent that binds no tools passes it.
+    holding a spreadsheet or a deck. ``kb_assistant_id`` extends the
+    spreadsheet gate to that assistant's knowledge base; only an Agent that
+    binds no tools passes it.
     """
     auto_ids = await _auto_enabled_attachment_tool_ids(
         current_user, session_id, user_id, turn_has_tabular=turn_has_tabular,
         kb_assistant_id=kb_assistant_id,
+        turn_has_presentation=turn_has_presentation,
+        enabled_tools=enabled_tools,
+        tabular_hint=tabular_hint,
+        presentation_hint=presentation_hint,
     )
     return _with_auto_enabled_tools(enabled_tools, auto_ids)
 
@@ -1624,166 +1888,111 @@ def _estimate_decoded_size(file: "FileContent") -> int:
         return 0
 
 
-def _partition_attachments(
-    all_files: list,
-) -> tuple[list, list, list, list, list]:
-    """Split attachments into
-    (inline_for_bedrock, tabular, presentations, oversized_non_tabular, reference).
+def _row_token_facts(meta) -> dict:
+    """The row's §4.1 facts as planner fields, when it carries a current set. No read."""
+    from apis.shared.files.file_facts import facts_current
 
-    - Reference files (``ReferenceAttachment``: a reference-class upload the
-      resolver returned without its bytes, large-document spec §4B.2) are
-      never inline. They carry no bytes, so they add nothing to the inline
-      byte budget, and they reach the model as a digest or a stub in the user
-      message. Only an upload row can be one: direct ``files`` bytes over the
-      inline limit stay oversized (§4B.6).
-    - Tabular files (csv/xlsx) are never sent inline — they route through
-      the spreadsheet analysis tools. Keeps Bedrock's 4.5MB document limit
-      from exploding on XLSX files that expand during internal parsing.
-    - Presentations (pptx) are never sent inline either, but for a harder
-      reason: Bedrock's document-block format enum has no `pptx`, so an
-      inline deck is a guaranteed ValidationException. They route through
-      the PowerPoint tools (see `is_presentation_file`).
-    - Non-tabular files larger than INLINE_DOCUMENT_MAX_BYTES are dropped
-      from the inline set with a user-facing note, to prevent mid-stream
-      ValidationException on the raw AWS error path.
-    - Everything else rides along as a regular document/image content block.
+    if meta is None or not facts_current(meta):
+        return {}
+    facts = meta.facts
+    tokens = facts.get("tokens") if isinstance(facts.get("tokens"), dict) else {}
 
-    Both diverted classes are checked before the size gate: they never go
-    inline at any size, so an oversized note would misdescribe them.
+    def _int(value):
+        try:
+            return int(value) if value is not None and not isinstance(value, bool) else None
+        except (TypeError, ValueError):
+            return None
+
+    out: dict = {
+        "text_tokens": _int(tokens.get("text")),
+        "native_tokens": _int(tokens.get("native")),
+        "has_text_layer": facts.get("hasTextLayer") if isinstance(facts.get("hasTextLayer"), bool) else None,
+    }
+    pages = _int(facts.get("pages"))
+    if pages:
+        out["page_count"] = pages
+    return out
+
+
+def _file_facts(file, upload_rows: dict) -> FileFacts:
+    """The planner's facts for one resolved attachment, from what is already in hand.
+
+    A reference (``ReferenceAttachment``) carries its row; an inline file is
+    sized from the base64 it already holds and paired with the row the resolver
+    read for it, if it came from an upload. No read, no parse.
     """
-    from apis.shared.files.models import (
-        INLINE_DOCUMENT_MAX_BYTES,
-        is_presentation_file,
-        is_tabular_file,
+    if isinstance(file, ReferenceAttachment):
+        meta = file.meta
+        pages = meta.preparation.get("pageCount") if isinstance(meta.preparation, dict) else None
+        try:
+            page_count = int(pages) if pages is not None else None
+        except (TypeError, ValueError):
+            page_count = None
+        facts = {"page_count": page_count, **_row_token_facts(meta)}
+        return FileFacts(
+            filename=file.filename,
+            mime_type=file.content_type,
+            size_bytes=int(meta.size_bytes or 0),
+            upload_id=meta.upload_id,
+            by_reference=True,
+            has_row=True,
+            forced_mode=meta.delivery_override,
+            searchable=_row_searchable(meta),
+            **facts,
+        )
+    row = upload_rows.get(id(file))
+    facts = {**_row_admission_facts(row), **_row_token_facts(row)}
+    return FileFacts(
+        filename=file.filename,
+        mime_type=file.content_type,
+        size_bytes=_estimate_decoded_size(file),
+        upload_id=row.upload_id if row is not None else None,
+        has_row=row is not None,
+        forced_mode=getattr(row, "delivery_override", None),
+        searchable=_row_searchable(row),
+        **facts,
     )
 
-    inline: list = []
-    tabular: list = []
-    presentations: list = []
-    oversized: list = []
-    reference: list = []
 
-    for file in all_files:
-        if isinstance(file, ReferenceAttachment):
-            reference.append(file)
-            continue
-        if is_tabular_file(file.filename, file.content_type):
-            tabular.append(file)
-            continue
-        if is_presentation_file(file.filename, file.content_type):
-            presentations.append(file)
-            continue
-        # Only size-gate non-image documents. Images have their own Bedrock
-        # limits (much larger) and the prompt builder reroutes them as
-        # image blocks, which are not affected by the document-size cap.
-        content_type = (file.content_type or "").lower()
-        is_image = content_type.startswith("image/")
-        if not is_image and _estimate_decoded_size(file) > INLINE_DOCUMENT_MAX_BYTES:
-            oversized.append(file)
-            continue
-        inline.append(file)
+def _row_searchable(meta) -> bool:
+    """Whether the attachments KB can search this row now: what ``document_read``'s
+    query mode would say (``attachment_index.search_status``). From the row; no read."""
+    if meta is None or not attachment_kb_enabled():
+        return False
+    from apis.shared.files.attachment_index import SEARCH_SEARCHABLE, search_status
 
-    return inline, tabular, presentations, oversized, reference
+    try:
+        return search_status(meta, kb_enabled=True) == SEARCH_SEARCHABLE
+    except Exception:  # noqa: BLE001 - an unreadable row is not searchable, never a failed turn
+        return False
 
 
-def _apply_message_file_cap(
-    direct_files: list,
-    upload_ids: list,
-    max_files: int,
-) -> tuple[list, list, list, int]:
-    """Hold a message to ``max_files`` attachments across both request paths.
+def _row_admission_facts(meta) -> dict:
+    """What admission recorded on the row (phase 4b): an image's two stored
+    copies (``modelImage``) and a PDF's page count (``pageCount``). No read."""
+    if meta is None:
+        return {}
+    out: dict = {}
+    pages = getattr(meta, "page_count", None)
+    if isinstance(pages, int) and not isinstance(pages, bool) and pages > 0:
+        out["page_count"] = pages
+    record = getattr(meta, "model_image", None)
+    if isinstance(record, dict):
 
-    Returns ``(direct_files, upload_ids, dropped_names, dropped_total)``.
-    Direct ``files`` come first (they are already in the request body), then
-    ``file_upload_ids`` fill whatever budget remains. Attachment order is
-    kept, so the first N the user attached are the N that survive.
+        def _int(value):
+            try:
+                return int(value) if value is not None and not isinstance(value, bool) else None
+            except (TypeError, ValueError):
+                return None
 
-    The cap is applied to the upload IDs *before* they are resolved: the old
-    resolver default truncated silently after the fact, and letting every ID
-    through just to name the losers would fan out one S3 read per ID a client
-    chose to send. IDs beyond the budget are therefore counted, not named —
-    ``dropped_names`` holds the direct files (names known) and
-    ``dropped_total`` counts both. ``max_files <= 0`` disables the cap.
-    """
-    if max_files <= 0:
-        return direct_files, upload_ids, [], 0
-
-    kept_direct = direct_files[:max_files]
-    dropped_names = [f.filename for f in direct_files[max_files:]]
-    id_budget = max(0, max_files - len(kept_direct))
-    kept_ids = upload_ids[:id_budget]
-    dropped_total = len(dropped_names) + (len(upload_ids) - len(kept_ids))
-    return kept_direct, kept_ids, dropped_names, dropped_total
-
-
-def _apply_inline_byte_budget(
-    inline: list,
-    max_total_bytes: int,
-) -> tuple[list, list, int]:
-    """Hold the inline set (documents *and* images) to one message's byte
-    budget. Returns ``(kept, over_budget, requested_bytes)``.
-
-    Why this exists: the turn's inline attachments are persisted as one
-    AgentCore Memory event, and past ~7.5 MB of raw bytes that write fails
-    with ``SessionException`` — a hole in history, not a degraded turn. See
-    ``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES`` for the derivation.
-
-    Policy — first-fit in attachment order: walk the files as the user
-    attached them, keep each one that still fits, and move any that would
-    push the running total over the budget to ``over_budget``. Earlier
-    attachments win, and a later, smaller file that still fits rides along
-    rather than being punished for a large neighbour. Order within both
-    lists is the attachment order, so the marker text and the guidance note
-    are deterministic (they land in the cacheable prefix on later turns).
-
-    Images count toward the budget: they are part of the same message and
-    the same event, even though the per-file document gate skips them.
-    ``max_total_bytes <= 0`` disables the budget.
-    """
-    requested = sum(_estimate_decoded_size(f) for f in inline)
-    if max_total_bytes <= 0:
-        return list(inline), [], requested
-
-    kept: list = []
-    over: list = []
-    running = 0
-    for file in inline:
-        size = _estimate_decoded_size(file)
-        if running + size > max_total_bytes:
-            over.append(file)
-            continue
-        running += size
-        kept.append(file)
-    return kept, over, requested
-
-
-def _over_budget_as_references(
-    over_budget: list,
-    upload_rows: dict,
-) -> tuple[list, list]:
-    """Split the files ``_apply_inline_byte_budget`` moved out into the ones
-    that can go by reference and the ones that are still dropped.
-
-    Returns ``(references, dropped)``, both in attachment order; each reference
-    is paired with the file it replaces, so the caller can place it among the
-    turn's other references in attachment order. A file goes by
-    reference when it is a document ``document_read`` can read *and* it came
-    from an upload, so the resolver has its row (``upload_rows``, keyed by the
-    ``FileContent``'s identity): the reference renders from that row and the
-    tool reads the original, so nothing is fetched, prepared or built here.
-    Images have nothing ``document_read`` could return, and direct ``files``
-    bytes have no row to read later (large-document spec §4B.6): both stay
-    dropped with the "combined size limit" note.
-    """
-    references: list = []
-    dropped: list = []
-    for file in over_budget:
-        row = upload_rows.get(id(file))
-        if row is not None and is_document_class(row.mime_type, row.filename):
-            references.append((file, ReferenceAttachment(meta=row, over_budget=True)))
-        else:
-            dropped.append(file)
-    return references, dropped
+        out["image_width"] = _int(record.get("width"))
+        out["image_height"] = _int(record.get("height"))
+        compact = record.get("compact") if isinstance(record.get("compact"), dict) else None
+        if compact:
+            out["compact_bytes"] = _int(compact.get("sizeBytes"))
+            out["compact_width"] = _int(compact.get("width"))
+            out["compact_height"] = _int(compact.get("height"))
+    return out
 
 
 def _emit_attachment_over_quota_metric(
@@ -1845,6 +2054,136 @@ def _attachment_marker_names(all_files: list, oversized_inline: list) -> list:
     return [f.filename for f in all_files if f.filename not in oversized_names]
 
 
+def _start_session_files_read(
+    session_id: Optional[str],
+    user_id: str,
+    *,
+    is_brief: bool,
+    is_resume: bool,
+    is_continuation: bool,
+    ancestor_session_ids: Sequence[str] = (),
+) -> Optional["asyncio.Task[list]"]:
+    """Start reading the conversation's file rows for phase 5's on-demand set.
+
+    Unified attachment delivery §4.3 (the ``search`` row): the turn's guidance
+    needs the conversation's earlier documents, which the route has not read.
+    One ``SessionIndex`` Query in a worker thread, started before attachment
+    resolution and awaited at message assembly (``_plan_conversation_set``), so
+    it overlaps the S3 fetches and the agent build instead of adding to the
+    time to first token. Only under the ``token`` profile with the attachments
+    KB on (with the KB off nothing is searchable and the set changes nothing),
+    and never on a turn whose message is not composed (a brief, a resume, a
+    continuation). Rows are the caller's own: a session id alone does not name
+    a conversation.
+
+    A fork (``ancestor_session_ids``, its parent and root off the row the turn
+    already read) also reads those sessions' rows, concurrently in their own
+    threads: its copied messages carry the documents attached there, so they
+    are its earlier documents too. Deduplicated by upload id, the fork's own
+    rows first.
+    """
+    if is_brief or is_resume or is_continuation or not session_id:
+        return None
+    if not attachment_kb_enabled() or current_limits_profile().name != PROFILE_TOKEN:
+        return None
+    from apis.shared.files.models import FileStatus
+    from apis.shared.files.repository import get_file_upload_repository
+
+    session_ids = list(dict.fromkeys(sid for sid in (session_id, *ancestor_session_ids) if sid))
+
+    async def _read() -> list:
+        started = time.monotonic()
+        repo = get_file_upload_repository()
+        per_session = await asyncio.gather(
+            *(asyncio.to_thread(repo.list_session_files_sync, sid, FileStatus.READY) for sid in session_ids)
+        )
+        logger.debug("session files read in %.1f ms", (time.monotonic() - started) * 1000)
+        seen: set = set()
+        rows = []
+        for r in (row for batch in per_session for row in batch):
+            if r.user_id != user_id or r.upload_id in seen:
+                continue
+            # A file shared from a linked conversation already has its own <file> line,
+            # and its facts are its original's (handoffs spec §4.9): left out of the set.
+            if r.linked_from is not None:
+                continue
+            seen.add(r.upload_id)
+            rows.append(r)
+        return rows
+
+    task = asyncio.create_task(_read())
+    # A turn that ends before message assembly never awaits it; retrieve its
+    # exception so a failed read is not reported as an unretrieved one.
+    task.add_done_callback(lambda t: t.cancelled() or t.exception())
+    return task
+
+
+async def _plan_conversation_set(attachments: "TurnAttachments") -> Optional[ConversationPlan]:
+    """Await the session-files read and plan the conversation's on-demand set (phase 5).
+
+    Records the result on ``attachments.plan`` (``attachmentPlan.conversation``
+    on the turn's ``C#`` row). Never raises: a failed read is a turn with no
+    conversation-level steering, exactly as before phase 5. Logs how long the
+    await waited, which is the read's only cost to the first token.
+    """
+    task = attachments.session_files_task
+    if task is None or attachments.profile is None or attachments.model_facts is None:
+        return None
+    waited = time.monotonic()
+    try:
+        rows = await task
+    except Exception:  # noqa: BLE001 - steering is an improvement, never a failed turn
+        logger.warning("Conversation file rows unavailable; no search steering this turn", exc_info=True)
+        return None
+    wait_ms = (time.monotonic() - waited) * 1000
+    try:
+        earlier = tuple(facts_from_row(r, searchable=_row_searchable(r)) for r in rows)
+        conversation = plan_conversation(
+            attachments.plan,
+            attachments.plan_facts,
+            ConversationFacts(earlier=earlier),
+            attachments.model_facts,
+            profile=attachments.profile,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("Conversation on-demand set not planned", exc_info=True)
+        return None
+    logger.info(
+        "attachment conversation set: rows=%d documents=%d searchable=%d steer=%s wait_ms=%.1f",
+        len(rows),
+        conversation.documents if conversation else 0,
+        conversation.searchable if conversation else 0,
+        conversation.reason if conversation else "none",
+        wait_ms,
+    )
+    if conversation is not None:
+        base = attachments.plan or AttachmentPlan(profile=attachments.profile.name)
+        attachments.plan = dataclass_replace(base, conversation=conversation)
+    return conversation
+
+
+def _conversation_search_sentence(conversation: Optional[ConversationPlan], search_available: bool) -> str:
+    """The phase 5 steering line, or ``""``.
+
+    In the turn's user message, never the system prompt or a tool spec, so the
+    cacheable prefix is the same whether or not it is there; it is persisted
+    with the message like the rest of the guidance. Counts only, no names: the
+    query searches every indexed document in the conversation, so the model
+    needs no list. Present on every turn the planner steers, so a conversation
+    whose earlier guidance said ``pattern`` is told once per turn what changed.
+    """
+    if conversation is None or not conversation.steer or not search_available:
+        return ""
+    n, k = conversation.documents, conversation.searchable
+    indexed = "all of them are" if k >= n else f"{k} of them {'is' if k == 1 else 'are'}"
+    return (
+        f"_This conversation has {n} documents that are read on demand rather than kept in "
+        f"context, and {indexed} indexed for search. To find something in them, call "
+        f"`document_read` with `query` and no `upload_id` first: one search covers every "
+        f"indexed document. Then read the pages or passages it points to._"
+    )
+
+
 def _reference_search_available(document_read_available: bool) -> bool:
     """Whether this turn's ``document_read`` has its ``query`` argument.
 
@@ -1869,6 +2208,7 @@ def _build_attachment_guidance(
     references: list | None = None,
     document_read_available: bool = True,
     search_available: bool = False,
+    conversation_set: ConversationPlan | None = None,
 ) -> str:
     """Return a short markdown addendum describing how attachments will be
     handled, to append to the user's message so the agent (and the user)
@@ -1891,6 +2231,12 @@ def _build_attachment_guidance(
     ``document_read`` when this turn has it (``document_read_available``).
     ``search_available`` is whether that tool has its ``query`` argument (the
     deployment's attachments KB, §4F); the sentence then names search first.
+    A file the planner sent ``search`` because it is over a budget still gets
+    ``pattern`` first: on the phase 5 overflow cells, naming ``query`` first for
+    such a file cost Haiku 5.5 more input tokens at the same answers
+    (``docs/testing/attachment-overflow-search-2026-11.md``).
+    ``conversation_set`` is the conversation's on-demand set;
+    when the planner steers it, one more sentence says to search across it first.
     """
     parts: list[str] = []
 
@@ -1900,9 +2246,16 @@ def _build_attachment_guidance(
     # the tool, the call and the id.
     for ref in references or ():
         over_budget_ref = getattr(ref, "over_budget", False)
-        if over_budget_ref:
+        if getattr(ref, "token_budget", False):
+            # The ``token`` profile's ``document_budget`` (attachment_plan): the
+            # file fits a message, but holding it costs more than reading it.
+            lead = (
+                f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached, but it is larger "
+                f"than this conversation keeps in context at once, so its content is not in this message."
+            )
+        elif over_budget_ref:
             # Each file fits on its own; together they exceed what one message
-            # can carry in full (`_over_budget_as_references`).
+            # can carry in full (the planner's ``over_budget_reference``).
             lead = (
                 f"_`{ref.filename}` ({format_size(ref.size_bytes)}) is attached, but this "
                 f"message's attachments together exceed the combined size limit for a "
@@ -1940,6 +2293,10 @@ def _build_attachment_guidance(
                 f"{lead} To answer from it, {call}: {find} to find the "
                 f"relevant passages, then read on from there._"
             )
+
+    steer = _conversation_search_sentence(conversation_set, document_read_available and search_available)
+    if steer:
+        parts.append(steer)
 
     if diverted_tabular:
         names = ", ".join(f"`{f.filename}`" for f in diverted_tabular)
@@ -1979,11 +2336,16 @@ def _build_attachment_guidance(
                 f"`create_powerpoint_presentation` to build on its layouts._"
             )
         else:
+            # Reached only when the auto-enable did not apply: the caller's
+            # roles do not carry the tool, or the kill switch is set. Same
+            # wording contract as the spreadsheet note above.
             parts.append(
-                f"_Attached presentation(s) {names} can't be read inline. To "
-                f"work with them, enable **PowerPoint Presentations** under "
-                f"Customize → Tools in the sidebar, then re-send your "
-                f"message._"
+                f"_Attached presentation(s) {names} can't be read inline. "
+                f"Reading them needs the **PowerPoint Presentations** tool, "
+                f"which isn't available in this conversation — if it is listed "
+                f"under Customize → Tools in the sidebar, enable it and re-send "
+                f"your message; if it isn't, your account doesn't have access "
+                f"to it._"
             )
 
     if oversized_inline:
@@ -2745,6 +3107,39 @@ class TurnAttachments:
     extracted_documents: list = field(default_factory=list)
     unreadable_images: list = field(default_factory=list)
     unreadable_documents: list = field(default_factory=list)
+    # The planner's decision for every resolved file (``attachment_plan``), the
+    # facts it was made from and the profile it used. ``inline_indices[k]`` is
+    # the plan entry of ``files_to_send[k]``: the two lists stay aligned, since
+    # nothing after the plan reorders the inline set. Written on the turn's
+    # ``C#`` row after the stream (``AttachmentPlan.to_row``).
+    plan: Optional[AttachmentPlan] = None
+    plan_facts: list = field(default_factory=list)
+    inline_indices: list = field(default_factory=list)
+    profile: Optional[LimitsProfile] = None
+    # The plan index of each ``reference_documents`` entry, so a file the
+    # ``token`` profile moves on demand after the model is known lands in
+    # attachment order; and the rows behind the inline uploads, which that move
+    # renders from (no read).
+    reference_indices: list = field(default_factory=list)
+    upload_rows: dict = field(default_factory=dict)
+    # An image's compact copy (``image_downscale``), by the identity of the
+    # ``FileContent`` built from its high copy: ``(base64, mime_type)``. Read
+    # only when the plan sends that image's ``compact`` variant.
+    compact_images: dict = field(default_factory=dict)
+    # The ``FileContent`` objects ``_send_compact_images`` swapped to their
+    # compact copy, so the persisted handle names the copy actually sent.
+    compact_image_ids: set = field(default_factory=set)
+    # The conversation's file rows (phase 5's on-demand set), read by a task
+    # started before resolution and awaited at message assembly, so its one
+    # Query overlaps the turn's build (``_start_session_files_read``). ``None``
+    # unless the ``token`` profile and the attachments KB are both on.
+    session_files_task: Optional["asyncio.Task[list]"] = None
+    # The turn model's facts, kept by ``_plan_for_model`` for the conversation plan.
+    model_facts: Optional[ModelFacts] = None
+
+    @property
+    def max_files_per_message(self) -> int:
+        return (self.profile or current_limits_profile()).max_files_per_message
 
 
 async def _persist_inline_diverted(
@@ -2930,38 +3325,30 @@ async def _resolve_turn_attachments(
     all_files = list(input_data.files) if input_data.files else []
     upload_ids_to_resolve = list(input_data.file_upload_ids or [])
 
-    # Per-message file count (spec §4E / PR-6). Applied here, before the
-    # S3 fetch, so a sixth file is reported to the user instead of silently
-    # truncated by the resolver — and so a client cannot fan out unbounded
-    # S3 reads. With the guard off, the resolver's own backstop (5) applies
-    # exactly as it did before.
-    turn_guard_on = attachment_turn_guard_enabled()
-    dropped_over_count_names: list[str] = []
-    dropped_over_count_total = 0
-    if turn_guard_on:
-        (
-            all_files,
-            upload_ids_to_resolve,
-            dropped_over_count_names,
-            dropped_over_count_total,
-        ) = _apply_message_file_cap(all_files, upload_ids_to_resolve, MAX_FILES_PER_MESSAGE)
-
-    # Folders (drive-folder spec §4.4, §9 D1): each one counts ONE against the
-    # same cap, after the files, whatever its file count. Never on a resume or
-    # a continuation: those replay a turn whose message was already built.
+    # Per-message file count (spec §4E / PR-6), decided by the planner on the
+    # request's ids before the S3 fetch, so a sixth file is reported to the user
+    # instead of silently truncated by the resolver, and so a client cannot fan
+    # out unbounded S3 reads. Folders (drive-folder spec §4.4, §9 D1) count ONE
+    # each, after the files. Never on a resume or a continuation: those replay a
+    # turn whose message was already built.
+    profile = current_limits_profile()
     folder_ids: list[str] = []
+    dropped_folders = 0
     if not is_resume and not is_continuation:
         folder_ids, dropped_folders = _requested_folder_ids(input_data)
-        dropped_over_count_total += dropped_folders
-        if turn_guard_on and MAX_FILES_PER_MESSAGE > 0:
-            budget = max(0, MAX_FILES_PER_MESSAGE - len(all_files) - len(upload_ids_to_resolve))
-            dropped_over_count_total += max(0, len(folder_ids) - budget)
-            folder_ids = folder_ids[:budget]
-    if turn_guard_on and dropped_over_count_total:
+    count = cap_message_attachments(
+        all_files, upload_ids_to_resolve, folder_ids, profile, folders_dropped=dropped_folders
+    )
+    all_files = count.direct_files
+    upload_ids_to_resolve = count.upload_ids
+    folder_ids = count.folder_ids
+    dropped_over_count_names = count.dropped_names
+    dropped_over_count_total = count.dropped_total
+    if profile.turn_guard and dropped_over_count_total:
         logger.warning(
             "Dropped %d attachment(s) over the %d-per-message cap",
             dropped_over_count_total,
-            MAX_FILES_PER_MESSAGE,
+            profile.max_files_per_message,
         )
     # Started now so its GetItems overlap the uploads' S3 reads below.
     folders_task = (
@@ -2980,6 +3367,7 @@ async def _resolve_turn_attachments(
     # ``FileContent`` built from it. Read only if that file falls out of the
     # combined inline budget below and goes by reference instead.
     upload_rows: dict = {}
+    compact_images: dict = {}
     if upload_ids_to_resolve:
         try:
             file_resolver = get_file_resolver()
@@ -2988,20 +3376,34 @@ async def _resolve_turn_attachments(
                 upload_ids=upload_ids_to_resolve,
                 # Already capped above when the guard is on; the resolver's
                 # own backstop is the pre-guard behaviour.
-                max_files=None if turn_guard_on else 5,
+                max_files=count.resolver_max_files,
             )
             for rf in resolved_files:
+                # The resolver asked the planner (``delivers_by_reference``)
+                # before any S3 read: a reference comes back as its row alone.
                 reference_meta = getattr(rf, "reference", None)
                 if reference_meta is not None:
-                    all_files.append(ReferenceAttachment(meta=reference_meta))
+                    all_files.append(
+                        ReferenceAttachment(meta=reference_meta, over_budget=reads_from_original(reference_meta))
+                    )
                     continue
                 content = FileContent(filename=rf.filename, content_type=rf.content_type, bytes=rf.bytes)
                 row = getattr(rf, "meta", None)
                 if row is not None:
                     upload_rows[id(content)] = row
+                if getattr(rf, "compact_bytes", None):
+                    compact_images[id(content)] = (rf.compact_bytes, rf.compact_content_type)
                 all_files.append(content)
             turn_has_document = _resolved_files_include_a_document(resolved_files)
             logger.info(f"Resolved {len(resolved_files)} files from upload IDs")
+            # Keep the rows' token facts for this session's compaction and
+            # offload estimates (unified-attachment-delivery §9.1, phase 2).
+            # In memory only: the rows are already read, so this adds no I/O.
+            turn_rows = [getattr(rf, "reference", None) or getattr(rf, "meta", None) for rf in resolved_files]
+            remember_session_documents(user_id, input_data.session_id, turn_rows)
+            # And their ids, so the message persisted to Memory can carry a
+            # handle in place of each document's bytes (§6.2). No I/O.
+            remember_session_uploads(user_id, input_data.session_id, turn_rows)
         except Exception:
             logger.warning("Failed to resolve file upload IDs", exc_info=True)
             # Continue without files rather than failing the request
@@ -3044,13 +3446,27 @@ async def _resolve_turn_attachments(
             )
         all_files = deduped_files
 
-    (
-        files_to_send,
-        diverted_tabular,
-        diverted_presentations,
-        oversized_inline,
-        reference_documents,
-    ) = _partition_attachments(all_files)
+    # One decision for every file, by the planner (``attachment_plan``): which
+    # go inline, which by reference, which to their tools and which are dropped
+    # with a note. The model is not known yet (stage B11), so this plans the
+    # byte rules; `_plan_for_model` refines the inline set once it is.
+    plan_facts = [_file_facts(f, upload_rows) for f in all_files]
+    plan = plan_attachments(
+        plan_facts, None, profile=profile, dropped_over_count=dropped_over_count_total
+    )
+
+    def _planned(*reasons: str) -> list:
+        return [all_files[i] for i in plan.with_reason(*reasons)]
+
+    # Before the model is known only a forced ``text`` row plans as text; its
+    # bytes ride inline until ``_carry_out_forced_modes`` decides how.
+    inline_indices = plan.indices(MODE_NATIVE, MODE_TEXT)
+    files_to_send = [all_files[i] for i in inline_indices]
+    diverted_tabular = _planned(REASON_TABULAR)
+    diverted_presentations = _planned(REASON_PRESENTATION)
+    oversized_inline = _planned(REASON_OVERSIZED)
+    reference_indices = [i for i in plan.indices(*ON_DEMAND_MODES) if isinstance(all_files[i], ReferenceAttachment)]
+    reference_documents = [all_files[i] for i in reference_indices]
     if reference_documents:
         logger.info(
             "Attached %d large document(s) by reference (no S3 read on the turn path)",
@@ -3077,52 +3493,50 @@ async def _resolve_turn_attachments(
     diverted_tabular, diverted_presentations, unpersisted_inline = await _persist_inline_diverted(
         input_data, user_id, diverted_tabular, diverted_presentations
     )
+    if unpersisted_inline:
+        position = {id(f): i for i, f in enumerate(all_files)}
+        for failure in unpersisted_inline:
+            plan = plan.with_outcome(position[id(failure.file)], REASON_PERSIST_FAILED)
 
-    # Aggregate budget for the turn (spec §4E / PR-6): the inline set is one
-    # persisted message, and a message over ~7.5 MB raw fails the AgentCore
-    # Memory write with SessionException. Trim first-fit in attachment order;
-    # the trimmed files join the oversized note path, never the exception.
-    over_budget_inline: list = []
-    if turn_guard_on and files_to_send:
-        files_to_send, over_budget_inline, requested_inline_bytes = _apply_inline_byte_budget(
-            files_to_send, INLINE_ATTACHMENTS_MAX_TOTAL_BYTES
+    # The combined budget (spec §4E / PR-6): the inline set is one persisted
+    # message, and a message over ~7.5 MB raw fails the AgentCore Memory write
+    # with SessionException. The planner trimmed it first-fit in attachment
+    # order; an uploaded document that did not fit goes by reference (its
+    # digest or a ready stub, rendered from the row the resolver already read,
+    # so no I/O before the first token), anything else is dropped with a note.
+    over_budget_inline = _planned(REASON_OVER_BUDGET)
+    over_budget_indices = plan.with_reason(REASON_OVER_BUDGET, REASON_OVER_BUDGET_REFERENCE)
+    if over_budget_indices:
+        logger.warning(
+            "Attachment turn over quota: requested_bytes=%d cap_bytes=%d "
+            "inline_files=%d dropped_files=%d",
+            plan.requested_inline_bytes,
+            profile.inline_total_max_bytes,
+            len(files_to_send) + len(over_budget_indices),
+            len(over_budget_indices),
         )
-        if over_budget_inline:
-            logger.warning(
-                "Attachment turn over quota: requested_bytes=%d cap_bytes=%d "
-                "inline_files=%d dropped_files=%d",
-                requested_inline_bytes,
-                INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
-                len(files_to_send) + len(over_budget_inline),
-                len(over_budget_inline),
-            )
-            _emit_attachment_over_quota_metric(
-                requested_bytes=requested_inline_bytes,
-                cap_bytes=INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
-                inline_count=len(files_to_send) + len(over_budget_inline),
-                dropped_count=len(over_budget_inline),
-            )
-        # An uploaded document that did not fit goes by reference instead of
-        # being dropped: its digest (or a ready stub) in the message and
-        # `document_read` on the original. Rendered from the row the resolver
-        # already read, so it adds no I/O before the first token. A turn within
-        # the budget never reaches this, so its message is unchanged.
-        if over_budget_inline and inline_budget_by_reference_enabled():
-            budget_references, over_budget_inline = _over_budget_as_references(
-                over_budget_inline, upload_rows
-            )
-            if budget_references:
-                logger.info(
-                    "Attached %d over-budget document(s) by reference instead of dropping them",
-                    len(budget_references),
-                )
-                record_reference_attachments([ref for _, ref in budget_references])
-                # One list in attachment order, so the message's reference
-                # blocks read in the order the user attached the files.
-                position = {id(f): i for i, f in enumerate(all_files)}
-                placed = [(position[id(ref)], ref) for ref in reference_documents]
-                placed += [(position[id(src)], ref) for src, ref in budget_references]
-                reference_documents = [ref for _, ref in sorted(placed, key=lambda pair: pair[0])]
+        _emit_attachment_over_quota_metric(
+            requested_bytes=plan.requested_inline_bytes,
+            cap_bytes=profile.inline_total_max_bytes,
+            inline_count=len(files_to_send) + len(over_budget_indices),
+            dropped_count=len(over_budget_indices),
+        )
+    budget_indices = plan.with_reason(REASON_OVER_BUDGET_REFERENCE)
+    if budget_indices:
+        budget_references = [
+            ReferenceAttachment(meta=upload_rows[id(all_files[i])], over_budget=True) for i in budget_indices
+        ]
+        logger.info(
+            "Attached %d over-budget document(s) by reference instead of dropping them",
+            len(budget_references),
+        )
+        record_reference_attachments(budget_references)
+        # One list in attachment order, so the message's reference blocks read
+        # in the order the user attached the files.
+        by_index = {i: all_files[i] for i in plan.indices(*ON_DEMAND_MODES)}
+        by_index.update(zip(budget_indices, budget_references))
+        reference_indices = sorted(by_index)
+        reference_documents = [by_index[i] for i in reference_indices]
 
     # All three classes were dropped from the turn entirely; the marker must
     # not promise a card for any of them.
@@ -3146,6 +3560,13 @@ async def _resolve_turn_attachments(
         unpersisted_inline=unpersisted_inline,
         reference_documents=reference_documents,
         folders=folders,
+        plan=plan,
+        plan_facts=plan_facts,
+        inline_indices=inline_indices,
+        profile=profile,
+        reference_indices=reference_indices,
+        upload_rows=upload_rows,
+        compact_images=compact_images,
     )
 
 
@@ -3210,11 +3631,9 @@ class ExtractedDocument:
     truncated: bool
     unit: str
     count: int
-
-
-#: Floor on one document's share of ``TEXT_ONLY_DOCUMENTS_MAX_CHARS``, so five
-#: attachments still get a useful excerpt each.
-_TEXT_ONLY_DOCUMENT_MIN_CHARS = 4_000
+    #: An eval fixture forced this file to ``text`` (``attachment_plan``); the
+    #: model is not text-only, so the section's header says neither.
+    forced: bool = False
 
 
 def _extract_document_text(file, fmt: str, limit: int) -> Optional[ExtractedDocument]:
@@ -3235,59 +3654,212 @@ def _extract_document_text(file, fmt: str, limit: int) -> Optional[ExtractedDocu
     )
 
 
+def _plan_for_model(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
+    """Refine the turn's plan with what its model reads (map stage B11).
+
+    ``_resolve_turn_attachments`` plans before the model is known; the byte
+    decisions do not depend on it, and this applies the model's rules to the
+    inline set: documents as text for a TEXT-only model (and its images
+    dropped), renderable non-PDF documents as text for a Converse model with
+    ``CONVERSE_DOCUMENTS_AS_TEXT_ENABLED``. Pure; no I/O. Idempotent, so
+    each stage that carries out a model rule calls it first.
+    """
+    if attachments.plan is None or attachments.profile is None:
+        return
+    budgeted = attachments.profile.document_budget_share > 0
+    if attachments.model_facts is None:
+        attachments.model_facts = ModelFacts(
+            text_only=turn_model.text_only,
+            converse=_is_converse_model(turn_model),
+            context_window=turn_model.context_window,
+            model_id=turn_model.model_id,
+            chat_ceiling=_chat_ceiling(turn_model.context_window) if budgeted else None,
+        )
+    attachments.plan = refine_for_model(
+        attachments.plan,
+        attachments.plan_facts,
+        attachments.model_facts,
+        profile=attachments.profile,
+    )
+
+
+def _chat_ceiling(context_window: Optional[int]) -> Optional[int]:
+    """The compaction ceiling this turn's model runs under: what the token
+    profile's ``document_budget`` is a share of (spec §5.2). Environment reads
+    and arithmetic only. ``None`` when compaction is off."""
+    from agents.main_agent.session.compaction_models import CompactionConfig
+    from agents.main_agent.session.compaction_policy import CompactionPolicy
+
+    try:
+        config = CompactionConfig.from_env()
+        if not config.enabled:
+            return None
+        return CompactionPolicy.resolve(config, context_window).ceiling
+    except Exception:  # noqa: BLE001 - no budget is the legacy behaviour, never a failed turn
+        logger.warning("Compaction ceiling unavailable; planning without a document budget", exc_info=True)
+        return None
+
+
+def _carry_out_token_plan(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
+    """Move the files the ``token`` profile sent on demand out of the inline set (map stage B11).
+
+    ``_resolve_turn_attachments`` fetched their bytes before the model was known;
+    with the model, the planner judged them over the turn's ``document_budget``
+    (``over_document_budget``). Each becomes a by-reference attachment rendered
+    from the row the resolver already read (its upload digest, or a ready stub;
+    ``document_read`` reads the original), exactly like an over-byte-budget one,
+    so nothing is read before the first token. Pure; returns at once on the
+    ``legacy`` profile and on any turn with nothing over budget.
+    """
+    _plan_for_model(attachments, turn_model)
+    if attachments.plan is None or not attachments.files_to_send:
+        return
+    attachments.compact_image_ids = _send_compact_images(attachments)
+    # Every file the model's plan sent on demand that the byte pass had kept
+    # inline: over the document budget, a PDF judged by its pages before its
+    # facts (``facts_pending``), or one past the request's native pages.
+    over = set(attachments.plan.indices(*ON_DEMAND_MODES)) & set(attachments.inline_indices)
+    if not over:
+        return
+    moved: list = []
+    kept: list = []
+    for index, file in zip(attachments.inline_indices, attachments.files_to_send):
+        row = attachments.upload_rows.get(id(file))
+        if index in over and row is not None:
+            moved.append((index, ReferenceAttachment(meta=row, over_budget=True, token_budget=True)))
+        else:
+            kept.append((index, file))
+    if not moved:
+        return
+    attachments.inline_indices = [i for i, _ in kept]
+    attachments.files_to_send = [f for _, f in kept]
+    by_index = dict(zip(attachments.reference_indices, attachments.reference_documents))
+    by_index.update(moved)
+    attachments.reference_indices = sorted(by_index)
+    attachments.reference_documents = [by_index[i] for i in attachments.reference_indices]
+    record_reference_attachments([ref for _, ref in moved])
+    logger.info("token plan: %d attachment(s) sent on demand", len(moved))
+
+
+def _send_compact_images(attachments: TurnAttachments) -> set:
+    """Swap in the compact copy of every image the plan sends as ``compact``.
+
+    The resolver fetched both stored copies concurrently, so this reads
+    nothing. A ``FileContent`` whose compact copy is missing keeps its high
+    copy, which the plan's byte pass already counted. In place; returns the
+    ids of the ``FileContent`` objects now holding a compact copy.
+    """
+    swapped_ids: set = set()
+    if not attachments.compact_images or attachments.plan is None:
+        return swapped_ids
+    variants = {e.index: e.variant for e in attachments.plan.entries}
+    swapped = 0
+    files = list(attachments.files_to_send)
+    for k, (index, file) in enumerate(zip(attachments.inline_indices, files)):
+        compact = attachments.compact_images.get(id(file))
+        if variants.get(index) != VARIANT_COMPACT or compact is None:
+            continue
+        encoded, mime = compact
+        replacement = file.model_copy(update={"bytes": encoded, "content_type": mime})
+        row = attachments.upload_rows.pop(id(file), None)
+        if row is not None:
+            attachments.upload_rows[id(replacement)] = row
+        files[k] = replacement
+        swapped_ids.add(id(replacement))
+        swapped += 1
+    if swapped:
+        attachments.files_to_send = files
+        logger.info("token plan: %d image(s) sent as their compact copy", swapped)
+    return swapped_ids
+
+
+def _remember_sent_images(attachments: TurnAttachments, user_id: Optional[str], session_id: Optional[str]) -> None:
+    """Name the stored copy each inline image is sent from, so the message
+    persisted to Memory carries a handle in place of its bytes
+    (unified-attachment-delivery §6.2). Reads nothing and decodes only each
+    image's first and last 64 base64 characters. Never raises.
+    """
+    try:
+        if not user_id or not session_id or not persist_document_handles():
+            return
+        refs = []
+        for file in attachments.files_to_send:
+            row = attachments.upload_rows.get(id(file))
+            if row is None or not ImageHandler.is_image(file.content_type, file.filename):
+                continue
+            variant = VARIANT_COMPACT if id(file) in attachments.compact_image_ids else VARIANT_HIGH
+            key, mime = model_image_source(row, variant)
+            size, head, tail = image_fingerprint_b64(file.bytes)
+            refs.append(ImageRef(
+                upload_id=row.upload_id, variant=variant, mime_type=mime or file.content_type,
+                bucket=row.s3_bucket, key=key, size_bytes=size, head=head, tail=tail,
+            ))
+        remember_turn_images(user_id, session_id, refs)
+    except Exception:  # noqa: BLE001 - an image without a handle keeps its bytes
+        logger.debug("Image handles skipped for this turn", exc_info=True)
+
+
+def _inline_by_reason(attachments: TurnAttachments, *reasons: str) -> list:
+    """``(index, file)`` of the inline files the plan gave one of ``reasons``, in attachment order."""
+    if attachments.plan is None:
+        return []
+    chosen = set(attachments.plan.with_reason(*reasons))
+    return [
+        (index, file)
+        for index, file in zip(attachments.inline_indices, attachments.files_to_send)
+        if index in chosen
+    ]
+
+
 async def _adapt_attachments_for_model(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
-    """Fit the inline set to what the turn's model can read (map stage B11).
+    """Carry out the plan's TEXT-only decisions (map stage B11).
 
     A model whose catalog row declares TEXT input only (``zai.glm-5``, and the
     text-only Mantle rows) rejects every document and image block with a
     ValidationException — measured on dev 2026-10-06, "This model doesn't
     support documents." for pdf *and* txt — so a turn that inlined one failed
-    outright. Runs after `_resolve_turn_model` because `_resolve_turn_attachments`
-    runs before the model is known. For such a model only:
+    outright. The planner (``refine_for_model``) chose, for such a model only:
 
-    - documents become text (``ExtractedDocument``), bounded by
-      ``TEXT_ONLY_DOCUMENTS_MAX_CHARS`` across the turn and rendered into the
-      user message by `_build_extracted_documents_section`;
-    - images, and documents with no text layer to extract (a scan, legacy
-      ``.doc``), are dropped and named in the attachment guidance, exactly like
-      oversized files, and leave the marker for the same reason.
+    - documents become text (``ExtractedDocument``), each held to the plan's
+      per-document share of ``text_only_max_chars`` and rendered into the user
+      message by `_build_extracted_documents_section`;
+    - images, and documents with no format to extract, are dropped and named in
+      the attachment guidance, exactly like oversized files, and leave the
+      marker for the same reason. A document whose extraction finds no text
+      layer (a scan, legacy ``.doc``) is dropped the same way, and recorded on
+      the plan as ``text_unavailable``.
 
     Mutates ``attachments`` in place. Every other turn returns on the first
-    line, so it costs nothing before the first token there; the extraction
+    lines, so it costs nothing before the first token there; the extraction
     itself runs off the event loop, and only on a turn that used to fail.
     """
-    if not attachments.files_to_send or not turn_model.text_only:
+    _plan_for_model(attachments, turn_model)
+    if not attachments.files_to_send:
+        return
+    planned_text = _inline_by_reason(attachments, REASON_TEXT_ONLY_MODEL)
+    images = [f for _, f in _inline_by_reason(attachments, REASON_TEXT_ONLY_IMAGE)]
+    unreadable = [f for _, f in _inline_by_reason(attachments, REASON_TEXT_ONLY_UNREADABLE)]
+    if not planned_text and not images and not unreadable:
         return
 
     from apis.shared.files.document_read import document_format_for
 
-    images: list = []
-    documents: list = []
-    unreadable: list = []
-    for file in attachments.files_to_send:
-        if (file.content_type or "").lower().startswith("image/"):
-            images.append(file)
-            continue
-        fmt = document_format_for(file.content_type or "", file.filename or "")
-        if fmt is None:
-            unreadable.append(file)
-            continue
-        documents.append((file, fmt))
-
+    documents = [(i, f, document_format_for(f.content_type or "", f.filename or "")) for i, f in planned_text]
     extracted: list = []
     if documents:
-        limit = max(_TEXT_ONLY_DOCUMENT_MIN_CHARS, TEXT_ONLY_DOCUMENTS_MAX_CHARS // len(documents))
+        limit = attachments.plan.text_char_limit
         results = await asyncio.gather(
-            *(asyncio.to_thread(_extract_document_text, f, fmt, limit) for f, fmt in documents),
+            *(asyncio.to_thread(_extract_document_text, f, fmt, limit) for _, f, fmt in documents),
             return_exceptions=True,
         )
-        for (file, fmt), result in zip(documents, results):
+        for (index, file, fmt), result in zip(documents, results):
             if isinstance(result, ExtractedDocument):
                 extracted.append(result)
                 continue
             if isinstance(result, BaseException):
                 logger.warning("Text extraction failed for a %s attachment: %s", fmt, result)
             unreadable.append(file)
+            attachments.plan = attachments.plan.with_outcome(index, REASON_TEXT_UNAVAILABLE)
 
     logger.info(
         "Text-only model: %d document(s) converted to text (%d sampled), "
@@ -3303,6 +3875,7 @@ async def _adapt_attachments_for_model(attachments: TurnAttachments, turn_model:
     unreadable = [f for f in attachments.files_to_send if id(f) in unreadable_ids]
     dropped_names = {f.filename for f in images + unreadable}
     attachments.files_to_send = []
+    attachments.inline_indices = []
     attachments.extracted_documents = extracted
     attachments.unreadable_images = images
     attachments.unreadable_documents = unreadable
@@ -3324,16 +3897,77 @@ def _is_converse_model(turn_model: "TurnModel") -> bool:
     return not model_id.startswith(("gpt-", "o1-", "gemini-"))
 
 
-def _renderable_format(file) -> Optional[str]:
-    """The document format ``PromptBuilder`` gives ``file``'s block, when it is
-    one ``document_cap`` renders as text (docx, txt, md, csv, html)."""
-    from apis.shared.models.document_cap import RENDERABLE_FORMATS
+def _pin_native_one(fmt: str, encoded: str) -> None:
+    import base64
 
-    if (file.content_type or "").lower().startswith("image/"):
-        return None
-    name = (file.filename or "").lower()
-    ext = name.rsplit(".", 1)[-1] if "." in name else ""
-    return ext if ext in RENDERABLE_FORMATS else None
+    from apis.shared.models.document_cap import pin_native
+
+    pin_native(fmt, base64.b64decode(encoded or ""))
+
+
+async def _carry_out_forced_modes(attachments: TurnAttachments, turn_model: "TurnModel") -> None:
+    """Carry out an eval fixture's forced ``native`` and ``text`` rows (map stage B11).
+
+    Only a row whose ``deliveryOverride`` a direct table write set reaches
+    either branch (``attachment_plan``), so every user turn returns on the
+    first lines. A forced ``native`` document is pinned in the Converse
+    projection, so documents-as-text leaves its block alone. A forced
+    ``text`` document the projection would not render here (a PDF, or any
+    document on a Converse model with documents-as-text off) becomes its
+    extracted text layer in the user message, as a text-only model's does,
+    held to ``FORCED_TEXT_MAX_CHARS``; one the projection renders is
+    pre-rendered with the rest by ``_prerender_documents_as_text``.
+    """
+    _plan_for_model(attachments, turn_model)
+    if attachments.plan is None or not attachments.files_to_send:
+        return
+    # A PDF the token profile sends as text (past the model's page limit) takes
+    # the same extraction as a forced ``text`` PDF.
+    forced = _inline_by_reason(attachments, REASON_FORCED, REASON_PDF_PAGE_LIMIT, REASON_REQUEST_PAGE_LIMIT)
+    if not forced:
+        return
+    entries = {e.index: e for e in attachments.plan.entries}
+    converse = _is_converse_model(turn_model)
+    renders = (not converse) or bool(attachments.profile and attachments.profile.documents_as_text)
+
+    def ext(f) -> str:
+        return (f.filename or "").lower().rsplit(".", 1)[-1]
+
+    pins = [f for i, f in forced if entries[i].mode == MODE_NATIVE and entries[i].reason == REASON_FORCED and converse]
+    if pins:
+        await asyncio.gather(*(asyncio.to_thread(_pin_native_one, ext(f), f.bytes) for f in pins))
+
+    from apis.shared.files.attachment_plan import DOCUMENTS_AS_TEXT_EXTENSIONS
+    from apis.shared.files.document_read import document_format_for
+
+    to_extract = [
+        (i, f, document_format_for(f.content_type or "", f.filename or ""))
+        for i, f in forced
+        if entries[i].mode == MODE_TEXT and not (renders and ext(f) in DOCUMENTS_AS_TEXT_EXTENSIONS)
+    ]
+    if not to_extract:
+        logger.info("forced delivery: %d native pinned, 0 converted to text", len(pins))
+        return
+    results = await asyncio.gather(
+        *(asyncio.to_thread(_extract_document_text, f, fmt, FORCED_TEXT_MAX_CHARS) for _, f, fmt in to_extract),
+        return_exceptions=True,
+    )
+    gone = set()
+    for (index, file, fmt), result in zip(to_extract, results):
+        gone.add(index)
+        if isinstance(result, ExtractedDocument):
+            result.forced = True
+            attachments.extracted_documents.append(result)
+            continue
+        if isinstance(result, BaseException):
+            logger.warning("Forced text extraction failed for a %s attachment: %s", fmt, result)
+        attachments.unreadable_documents.append(file)
+        attachments.plan = attachments.plan.with_outcome(index, REASON_TEXT_UNAVAILABLE)
+        attachments.marker_names = [n for n in attachments.marker_names if n != file.filename]
+    kept = [(i, f) for i, f in zip(attachments.inline_indices, attachments.files_to_send) if i not in gone]
+    attachments.inline_indices = [i for i, _ in kept]
+    attachments.files_to_send = [f for _, f in kept]
+    logger.info("forced delivery: %d native pinned, %d converted to text", len(pins), len(to_extract))
 
 
 def _prerender_one(fmt: str, encoded: str) -> bool:
@@ -3356,17 +3990,29 @@ async def _prerender_documents_as_text(attachments: TurnAttachments, turn_model:
     are already written out by ``_write_out_tracked_changes``, so the text
     renders the same bytes the block carries.
 
-    Returns at once with the flag off, for any other model, and on a turn with
-    no such attachment. A failure here only means the projection renders the
-    file itself.
+    Which files: the plan's ``documents_as_text`` entries (a Converse model with
+    the flag on) and ``provider_needs_text`` entries (any other provider, whose
+    projection always renders; ``refine_for_model``). None on a Converse model
+    with the flag off, or on a turn with no such attachment. A failure here only
+    means the projection renders the file itself.
     """
-    if not attachments.files_to_send or not _is_converse_model(turn_model):
-        return
-    from apis.shared.feature_flags import converse_documents_as_text_enabled
-
-    if not converse_documents_as_text_enabled():
-        return
-    jobs = [(fmt, f.bytes) for f in attachments.files_to_send if (fmt := _renderable_format(f))]
+    _plan_for_model(attachments, turn_model)
+    jobs = [
+        ((f.filename or "").lower().rsplit(".", 1)[-1], f.bytes)
+        for _, f in _inline_by_reason(attachments, REASON_DOCUMENTS_AS_TEXT, REASON_PROVIDER_NEEDS_TEXT)
+    ]
+    # A forced ``text`` file still inline after ``_carry_out_forced_modes`` is
+    # one the projection renders.
+    # So is a ``token`` profile text entry (``within_budget``, ``no_row``, ``facts_pending``).
+    if attachments.plan is not None:
+        text_entries = {e.index for e in attachments.plan.entries if e.mode == MODE_TEXT}
+        jobs += [
+            ((f.filename or "").lower().rsplit(".", 1)[-1], f.bytes)
+            for i, f in _inline_by_reason(
+                attachments, REASON_FORCED, REASON_WITHIN_BUDGET, REASON_NO_ROW, REASON_FACTS_PENDING
+            )
+            if i in text_entries
+        ]
     if not jobs:
         return
     started = time.perf_counter()
@@ -3391,11 +4037,15 @@ def _build_extracted_documents_section(extracted: list, document_read_available:
     """
     if not extracted:
         return ""
-    parts = [
-        "_The selected model reads text only, so the attached document(s) below "
+    header = (
+        "_The attached document(s) below were converted to text. Layout, images, charts and scanned "
+        "pages are not included._"
+        if all(getattr(doc, "forced", False) for doc in extracted)
+        else "_The selected model reads text only, so the attached document(s) below "
         "were converted to text. Layout, images, charts and scanned pages are not "
         "included._"
-    ]
+    )
+    parts = [header]
     for doc in extracted:
         name = doc.filename.replace('"', "'")
         body = doc.text.replace("</attached-document", "<\\/attached-document")
@@ -3615,6 +4265,10 @@ class TurnModel:
     # `is_text_only_model`, which keeps documents and images off a model
     # that rejects them.
     input_modalities: Optional[list] = None
+    # The context window compaction uses for this model (the catalog's
+    # ``maxInputTokens``, else Strands' table): the attachment planner's token
+    # profile sizes its document budget from it.
+    context_window: Optional[int] = None
 
     @property
     def text_only(self) -> bool:
@@ -3683,6 +4337,16 @@ async def _resolve_turn_model(
     if agent_model_override is not None and agent_model_override.params:
         request_inference_params = {**agent_model_override.params, **request_inference_params}
 
+    # One registry lookup: the row feeds the settings below and the window.
+    managed_model = await _find_managed_model(effective_model_id) if effective_model_id else None
+    context_window = None
+    if effective_model_id:
+        from apis.shared.models.context_window import resolve_context_window
+
+        context_window, _ = resolve_context_window(
+            effective_model_id, getattr(managed_model, "max_input_tokens", None)
+        )
+
     # Single registry lookup resolves caching + inference params +
     # the Mantle endpoint path + provider, merging admin defaults with
     # request overrides.
@@ -3697,6 +4361,7 @@ async def _resolve_turn_model(
         model_id=effective_model_id,
         explicit_caching_enabled=input_data.caching_enabled,
         request_inference_params=request_inference_params,
+        managed_model=managed_model,
     )
 
     # Recover the provider from the registry when neither the request nor
@@ -3720,6 +4385,7 @@ async def _resolve_turn_model(
         mantle_api_mode=mantle_api_mode,
         mantle_region=mantle_region,
         input_modalities=input_modalities,
+        context_window=context_window,
     )
 
 
@@ -3730,13 +4396,16 @@ async def _resolve_effective_tools(
     agent_tools_override,
     *,
     turn_has_tabular: bool,
+    turn_has_presentation: bool = False,
+    tabular_hint: Optional["asyncio.Task[bool]"] = None,
+    presentation_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> Optional[list]:
     """Map stage B11 (in ``tools``): the tool ids this turn actually carries.
 
     On an Agent turn, the Agent's bindings — empty when it binds none, never
     the request's picker; on a plain chat, the request's picker. Then the
-    spreadsheet auto-enable for a session holding a spreadsheet (or an unbound
-    Agent whose knowledge base holds one), then the admin's always-on set
+    attachment auto-enable for a session holding a spreadsheet (or an unbound
+    Agent whose knowledge base holds one) or a deck, then the admin's always-on set
     unless the Agent binds its own tools, then the platform's system tools.
     One value, so the cache key, every builder, the attachment guidance and
     the paused-turn snapshot all see the same list.
@@ -3768,8 +4437,8 @@ async def _resolve_effective_tools(
     # tools, which the picker used to supply.
     agent_unbound = agent_tools_override is not None and not agent_tools_override.owns_toolset
     # A session holding a spreadsheet gets the Spreadsheet Analysis
-    # tools whether or not the picker has them on, gated on the
-    # caller's RBAC grant. Applied to the *effective* list so it
+    # tools, and one holding a deck the PowerPoint tools, whether or
+    # not the picker has them on, gated on the caller's RBAC grant. Applied to the *effective* list so it
     # flows into the cache key, every builder below, the attachment
     # guidance and the paused-turn snapshot as one value. Sticky
     # across the session (see `_session_has_tabular`), so the key
@@ -3781,6 +4450,9 @@ async def _resolve_effective_tools(
         user_id,
         turn_has_tabular=turn_has_tabular,
         kb_assistant_id=input_data.rag_assistant_id if agent_unbound else None,
+        turn_has_presentation=turn_has_presentation,
+        tabular_hint=tabular_hint,
+        presentation_hint=presentation_hint,
     )
 
     # Tools an admin pinned are unioned in for users whose roles grant
@@ -3827,6 +4499,8 @@ async def _build_turn_tools(
     turn_has_document: bool,
     text_only_model: bool = False,
     turn_project_id: Optional[str] = None,
+    document_ancestor_session_ids: Sequence[str] = (),
+    document_hint: Optional["asyncio.Task[bool]"] = None,
 ) -> TurnTools:
     """Map stage B11 (in ``tools``): every injected tool, and the key material
     that describes them. Closures only — no IO except the ``document_read``
@@ -3924,6 +4598,8 @@ async def _build_turn_tools(
         user_id=user_id,
         turn_has_document=turn_has_document,
         text_only=text_only_model,
+        ancestor_session_ids=document_ancestor_session_ids,
+        document_hint=document_hint,
     )
     extra_tools = extra_tools + document_tools
 
@@ -4276,6 +4952,7 @@ async def resolve_turn_agent(
     *,
     is_continuation: bool,
     record_use: bool = True,
+    kb_budget_tokens: Optional[int] = None,
 ) -> Union[StreamingResponse, ResolvedTurnAgent]:
     """Resolve the Agent a turn runs, for this caller (route step 8, the ``rag`` stage's first half).
 
@@ -4290,7 +4967,8 @@ async def resolve_turn_agent(
     the same access rules; both call this rather than a copy. ``record_use=False`` skips
     the share-interaction and last-used writes, for a call that is not the user using
     the Agent. A turn that must not run gets its conversational refusal back instead, to
-    stream as is.
+    stream as is. ``kb_budget_tokens`` replaces the full-context budget: voice mode (#625)
+    has no retrieval, so it asks for the whole knowledge base under its own ceiling.
     """
     from apis.shared.assistants.kb_access import granted
     from apis.shared.assistants.service import (
@@ -4554,10 +5232,12 @@ async def resolve_turn_agent(
     if assistant_kb_full_context_enabled():
         from apis.shared.assistants.kb_full_context import load_full_kb_context
 
+        kb_access = granted(input_data.rag_assistant_id, user_id, assistant_permission)
         kb_full_context_task = asyncio.create_task(
-            load_full_kb_context(
-                input_data.rag_assistant_id,
-                access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
+            load_full_kb_context(input_data.rag_assistant_id, access=kb_access)
+            if kb_budget_tokens is None
+            else load_full_kb_context(
+                input_data.rag_assistant_id, access=kb_access, budget_tokens=kb_budget_tokens
             )
         )
 
@@ -5123,7 +5803,11 @@ async def _run_invocation(
     if input_data.model_id and not (retired_model_denial and not is_resume):
         app_role_service = get_app_role_service()
         known_record = requested_model is not None and requested_model.model_id == input_data.model_id
-        access_kwargs = {"record": requested_model.record} if known_record else {}
+        access_kwargs = (
+            {"record": requested_model.record, "catalog_read": requested_model.catalog_read}
+            if known_record
+            else {}
+        )
         if not await app_role_service.can_access_model(
             current_user, input_data.model_id, **access_kwargs
         ):
@@ -5139,7 +5823,9 @@ async def _run_invocation(
                     input_data,
                     user_id,
                     model_access_denied_message(
-                        input_data.model_id, requested_model.record if known_record else None
+                        input_data.model_id,
+                        requested_model.record if known_record else None,
+                        uncataloged=known_record and requested_model.uncataloged,
                     ),
                     persist=False,
                 )
@@ -5150,6 +5836,16 @@ async def _run_invocation(
     # Attachments: recover the previous turn's unanswered uploads, fetch this
     # turn's from S3, dedupe, partition (inline / spreadsheet / deck /
     # oversized) and hold the inline set to one message's byte budget.
+    # Phase 5's on-demand set: the conversation's file rows, read alongside
+    # resolution and the build, awaited only at message assembly.
+    session_files_task = _start_session_files_read(
+        input_data.session_id,
+        user_id,
+        is_brief=is_brief,
+        is_resume=is_resume,
+        is_continuation=is_continuation,
+        ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
+    )
     attachments = TurnAttachments() if is_brief else await _resolve_turn_attachments(
         input_data,
         user_id,
@@ -5157,6 +5853,7 @@ async def _run_invocation(
         is_resume=is_resume,
         is_continuation=is_continuation,
     )
+    attachments.session_files_task = session_files_task
 
     # Covers the unconsumed-attachment recovery read (answered from the
     # snapshot), the S3 fetch behind `resolve_files`, and the partitioning.
@@ -5596,6 +6293,24 @@ async def _run_invocation(
         is_preview=is_preview_session(input_data.session_id),
         user_email=current_user.email,
     )
+    # Deliveries (§4.8): the composer cards this send carries. Decided with no IO; the attaches
+    # start beside the agent build and are awaited only where the message is assembled.
+    delivery_turn = DeliveryTurn.for_turn(
+        user_id=user_id,
+        session_id=input_data.session_id,
+        deliveries=input_data.deliveries,
+        is_resume=is_resume,
+        is_continuation=is_continuation,
+        is_preview=is_preview_session(input_data.session_id),
+    )
+
+    # Read-only prefetches for the files a handoff or delivery carries (§4.9): started now, so
+    # they overlap the lease and the attachments phase, and classify for the document_read gate.
+    # A send without files starts nothing.
+    if handoff_turn is not None:
+        handoff_turn.prefetch()
+    if delivery_turn is not None:
+        delivery_turn.prefetch()
 
     session_lease = None
     if not is_preview_session(input_data.session_id):
@@ -5712,7 +6427,8 @@ async def _run_invocation(
                 # readable document; the gate is monotonic, so re-asking it
                 # rebuilds the same key (an orphaned paused agent otherwise).
                 has_document_tools=await _document_tools_gate(
-                    input_data.session_id, user_id
+                    input_data.session_id, user_id,
+                    ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
                 ),
                 # The assistant the original turn ran against is a key element
                 # (spreadsheet tools close over it). Replay the snapshot's
@@ -5782,12 +6498,19 @@ async def _run_invocation(
             )
 
             # A model whose row declares TEXT input only rejects document and
-            # image blocks; convert or drop them now that the model is known.
-            # Returns immediately for every other model.
+            # image blocks; convert or drop them as planned (the plan's model
+            # rules apply first, `_plan_for_model`). Returns immediately for
+            # every other model.
             await _adapt_attachments_for_model(attachments, turn_model)
+            # The token profile's over-budget files go on demand; returns at once otherwise.
+            _carry_out_token_plan(attachments, turn_model)
+            # An eval fixture's forced native / text rows; returns at once otherwise.
+            await _carry_out_forced_modes(attachments, turn_model)
             # With documents-as-text on, render the turn's non-PDF attachments
             # now, in worker threads, so the per-call projection finds them.
             await _prerender_documents_as_text(attachments, turn_model)
+            # The stored copy each inline image is sent from, for its handle (§6.2).
+            _remember_sent_images(attachments, user_id, input_data.session_id)
 
             # The tool ids this turn carries — one value for the cache key,
             # every builder, the attachment guidance and the paused snapshot.
@@ -5797,7 +6520,12 @@ async def _run_invocation(
                 user_id,
                 agent_tools_override,
                 turn_has_tabular=bool(attachments.diverted_tabular)
-                or _folders_have(attachments.folders, is_tabular_file),
+                or _folders_have(attachments.folders, lambda n, m: file_class(n, m) == CLASS_TABULAR),
+                turn_has_presentation=bool(attachments.diverted_presentations)
+                or _folders_have(attachments.folders, lambda n, m: file_class(n, m) == CLASS_PRESENTATION),
+                # A spreadsheet or deck a handoff or delivery carries in (handoffs spec §4.9).
+                tabular_hint=_turn_file_hint(handoff_turn, delivery_turn, KIND_TABULAR),
+                presentation_hint=_turn_file_hint(handoff_turn, delivery_turn, KIND_PRESENTATION),
             )
 
             # Reassigning these function-scope locals here (before the main-turn
@@ -5816,6 +6544,12 @@ async def _run_invocation(
                 turn_has_document=attachments.turn_has_document,
                 text_only_model=turn_model.text_only,
                 turn_project_id=turn_project_id,
+                # A fork's parent and root, off the row this turn already
+                # read: its copied documents' upload rows live there.
+                document_ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
+                # Files a handoff or delivery carries in (handoffs spec §4.9), classified from
+                # rows read before the lease; None when the send carries neither.
+                document_hint=_turn_file_hint(handoff_turn, delivery_turn, KIND_DOCUMENT),
             )
             # Client-executed tools (terminal only; the SPA never declares any).
             # Key-described by construction: the digest is a cache-key element,
@@ -6031,6 +6765,9 @@ async def _run_invocation(
             #   3. Attachment guidance is appended (tabular routed to tools, etc.)
             # The original text becomes the single source of truth for UI display,
             # while the full augmented prompt stays in AgentCore Memory for the LLM.
+            # Phase 5: the conversation's on-demand set, from the rows read
+            # alongside the build; awaited here, never before.
+            conversation_set = await _plan_conversation_set(attachments)
             attachment_guidance = _build_attachment_guidance(
                 attachments.diverted_tabular,
                 attachments.diverted_presentations,
@@ -6039,13 +6776,14 @@ async def _run_invocation(
                 over_budget=attachments.over_budget_inline,
                 dropped_over_count_names=attachments.dropped_over_count_names,
                 dropped_over_count_total=attachments.dropped_over_count_total,
-                max_files=MAX_FILES_PER_MESSAGE,
+                max_files=attachments.max_files_per_message,
                 unpersisted=attachments.unpersisted_inline,
                 unreadable_images=attachments.unreadable_images,
                 unreadable_documents=attachments.unreadable_documents,
                 references=attachments.reference_documents,
                 document_read_available=document_read_available,
                 search_available=_reference_search_available(document_read_available),
+                conversation_set=conversation_set,
             )
             # When multiple spreadsheets are visible, ship the full inventory
             # up front so the agent can disambiguate intentionally instead of
@@ -6060,6 +6798,10 @@ async def _run_invocation(
             # the outer function; reassigning it here would make the whole
             # name local and UnboundLocalError before the assignment runs).
             final_message = augmented_message
+            # Cards from the user's other conversations (§4.8), oldest first, before what they
+            # typed. Hidden from the bubble by the same `original_message` displayText split.
+            if delivery_turn is not None:
+                final_message = join_delivery_blocks(await delivery_turn.blocks(), final_message)
             # A handoff's context card, wrapped (§4.2). First, so it reads as the setting for
             # everything after it; the bubble still shows only what the user typed, through the
             # `original_message` displayText split below.
@@ -6208,6 +6950,13 @@ async def _run_invocation(
                 # The project whose harness ran this turn, for the same cost row and the
                 # project's monthly rollup. Per turn for the same reason as turn_agent_id.
                 turn_project_id=turn_project_id,
+                # How each attachment was delivered (the planner's decision),
+                # for the turn's cost row. Ids, codes and numbers only; the
+                # coordinator writes it after the stream.
+                turn_attachment_plan=attachments.plan.to_row() if attachments.plan else None,
+                # Characters of the message the composer counted as pasted, for the
+                # same row (a count, never text; clamped to the message on validation).
+                turn_pasted_chars=input_data.pasted_chars,
                 # This turn's lease doubles as the mid-turn steering inbox
                 # (docs/specs/mid-turn-steering.md). Passed per turn for the
                 # same reason as turn_agent_id — the agent is cached, the lease
@@ -6287,6 +7036,8 @@ async def _run_invocation(
             if handoff_turn is not None:
                 # Beside the build, so the acceptance round trips cost the first token nothing.
                 handoff_turn.start()
+            if delivery_turn is not None:
+                delivery_turn.start()
             try:
                 # The deferred agent build (PR-3). Narrated, because this is
                 # where a cold turn spends over a second with nothing on the
