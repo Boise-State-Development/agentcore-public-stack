@@ -14,6 +14,15 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 - **An image from a compacted turn can be seen again.** Once compaction summarized the turn that attached an image, the image was no longer in the request, while a PDF attached alongside it stayed readable through `document_read`. On dev, a model asked about one of eight PNGs said it "isn't attached to this conversation". `document_read` now lists the conversation's images and, given an image's upload id, returns its stored compact copy (1,568 px, at most 340 KB). The read counts against the tool round's byte budget, and a text-only model is told it can't view images. The tool's description now names images, which adds 32 tokens to its spec and rewrites the cached prefix once per deployment. A conversation with only images still has no `document_read` (`docs/specs/unified-attachment-delivery.md` §6.2). (#2066)
 
+### 🗑️ Removed
+
+Four default-on rollout switches retire, each shipped by 1.24.0 and never turned off in any environment since. Their "on" behaviour stays exactly as it was; only the opt-out goes. None was forwarded through CDK or a workflow, and none was written to the AgentCore Runtime's environment, so no CDK, workflow or Runtime-environment change comes with them.
+
+- **`AGENT_STATUS_LIVE_DRAIN_ENABLED`.** `agent_status` transitions (and the first turn's `session_title`) are always drained while the agent stream is silent, so a running tool is named while it runs. A deployment that set it `=false` loses that opt-out and can no longer go back to draining only between agent events.
+- **`AGENT_PREPARING_PHASE_ENABLED`.** A non-resume turn always builds its agent inside the response stream, between the `preparing` and `prepared` `agent_status` frames. A deployment that set it `=false` loses that opt-out and can no longer go back to building the agent before the response opens.
+- **`CONFIG_CACHE_ENABLED`.** The model catalog, tool catalog, system-prompt list and connector list are always served from the in-process config cache. `CONFIG_CACHE_TTL_SECONDS` still sets its lifetime. A deployment that set it `=false` loses that opt-out and can no longer read these catalogs from DynamoDB on every request.
+- **`ATTACHMENT_TURN_GUARD_ENABLED`.** A turn's attachments are always held to the per-message file count and the combined inline budget before anything is fetched. `FILE_UPLOAD_MAX_FILES_PER_MESSAGE=0` and `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES=0` still turn off each limit on its own. A deployment that set it `=false` loses that opt-out. The legacy planner profile's `turn_guard` field and the file resolver's five-id fallback that only that switch reached go with it.
+
 ## [1.36.1] - 2026-11-13
 
 A patch that gets the 1.36.0 release published and turns attachment cards on in our prod. The 1.36.0 Release workflow stopped on a formatting check in a terminal-client test, so v1.36.0 has no tag or GitHub release; 1.36.1 is the first tagged release carrying 1.36.0's changes. No backend changes, no new flags, no manual steps, no GSI changes.

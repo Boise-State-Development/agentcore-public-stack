@@ -446,10 +446,9 @@ export interface AgentNoticeEvent {
  * streaming because the deltas are arriving. A backend-derived duplicate of a
  * fact the client holds first-hand would only disagree at the edges.
  *
- * Gated by `AGENT_STATUS_ENABLED` (default on with a kill switch); `preparing`
- * rides its own `AGENT_PREPARING_PHASE_ENABLED`, since deferring the build
- * into the stream is a change to the turn path rather than to narration.
- * Absence is the pre-feature behaviour — cycling phrases and no durations —
+ * Gated by `AGENT_STATUS_ENABLED` (default on with a kill switch), except
+ * `preparing` / `prepared`, which every non-resume turn sends around its
+ * agent build. Absence is the pre-feature behaviour — cycling phrases and no durations —
  * never an error.
  */
 export interface AgentStatusEvent {

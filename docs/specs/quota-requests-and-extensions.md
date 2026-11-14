@@ -612,7 +612,7 @@ PK = QUOTA_POLICY#REQUESTS   SK = METADATA
 ```
 
 The fields in §4.4 plus `updatedBy`, `updatedAt`. Read through the existing
-config cache (`CONFIG_CACHE_ENABLED` TTL), since every request-form open and
+config cache (`CONFIG_CACHE_TTL_SECONDS` TTL), since every request-form open and
 every submit validates against it. A missing item means defaults.
 
 ### 7.6 Request states

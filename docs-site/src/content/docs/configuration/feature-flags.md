@@ -134,8 +134,6 @@ removing it).
 |---|:---:|---|:---:|---|
 | `TOOL_SUMMARIES_ENABLED` | **ON** | Feature | **small — Nova Micro** | Model-generated one-line summary per tool batch. Off ⇒ falls back to free client-side formatters |
 | `AGENT_STATUS_ENABLED` | ON | Feature | none | Live "what the agent is doing" status line + per-tool durations |
-| `AGENT_STATUS_LIVE_DRAIN_ENABLED` | ON | Rollout — eligible now (shipped ≤ 1.24.0) | none | Drains status during tool-execution silence (fixes bundled-late narration) |
-| `AGENT_PREPARING_PHASE_ENABLED` | ON | Rollout — eligible now (shipped ≤ 1.24.0) | none | Builds the agent inside the stream so a cold start is narrated, not dead air |
 | `MID_TURN_STEERING_ENABLED` | ON | Feature | none | Inject a follow-up into a running turn at tool boundaries |
 | `ANNOUNCEMENTS_ENABLED` | ON | Feature | none | Feature-announcement authoring + user-facing surfaces |
 | `RESPONSE_FEEDBACK_ENABLED` | ON | Feature | none | Thumbs up/down on assistant messages |
@@ -146,10 +144,8 @@ removing it).
 | `WORKSPACE_TOOLS_ENABLED` | ON | Feature | none | `workspace_list` / `read` / `write` file tools |
 | `DOCUMENT_READ_ENABLED` | ON | Feature | none | `document_read` tool for sessions carrying a readable attachment |
 | `ATTACHMENT_TOOL_AUTOENABLE_ENABLED` | ON | Feature | none | Auto-injects spreadsheet-analysis tools when a spreadsheet is attached, and the PowerPoint tools when a .pptx deck is, for users whose roles grant them |
-| `ATTACHMENT_TURN_GUARD_ENABLED` | ON | Rollout — eligible now (shipped ≤ 1.24.0) | none | Enforces per-message file count + inline-byte budget |
 | `ADMIN_ALWAYS_ON_TOOLS_ENABLED` | ON | Feature | none | Unions admin-flagged `alwaysOn` tools into every turn (inert with no data) |
 | `COST_DIAGNOSTICS_ENABLED` | ON | Feature | none | Content-free behavioral counters for the admin session profile |
-| `CONFIG_CACHE_ENABLED` | ON | Rollout — eligible now (shipped ≤ 1.24.0) | **saves** money | In-process cache of tenant-global catalogs (fewer DynamoDB reads) |
 | `AGENT_BUILD_SHARED_SESSION_ENABLED` | ON | Rollout — retires after the Runtime V2 migration, once a V2 snapshot restore is clean | none (**saves** ~0.5s on a cold first turn) | One process-wide boto3 session for the agent build's SDK clients (Memory session manager, strategy-id discovery, Bedrock model), built at container warm-up. Off ⇒ each SDK builds its own session, as before |
 | `MCP_PARALLEL_PREFLIGHT_ENABLED` | ON | Rollout — retires after one prod release + 2 weeks clean | none (**saves** all but the slowest server's startup on a first turn with several external MCP servers — ~9.5s measured on dev with two cold servers) | Pre-flights an agent's external MCP servers concurrently when the agent is built, instead of one after another; clients are still registered in catalog order, so tool order (and the prompt-cache prefix) is unchanged. Off ⇒ servers load one at a time, as before |
 | `KB_SEARCH_AHEAD_ENABLED` | ON | Rollout — retires after one prod release + 2 weeks clean | none (**saves** up to the knowledge-base search's round trips — ~0.4s measured on dev — on an agent turn with a knowledge base) | Starts an agent turn's knowledge-base search where it always ran but awaits it after the agent build, ahead of the citation frames; the augmented message and citations are byte-identical. Off ⇒ the search is awaited before the build, as before |

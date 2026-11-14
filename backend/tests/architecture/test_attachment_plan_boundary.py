@@ -59,7 +59,6 @@ _DELIVERY_INPUTS = {
     "is_reference_document",
     "is_tabular_file",
     "is_presentation_file",
-    "attachment_turn_guard_enabled",
     "inline_budget_by_reference_enabled",
     "converse_documents_as_text_enabled",
     "attachment_plan_enabled",

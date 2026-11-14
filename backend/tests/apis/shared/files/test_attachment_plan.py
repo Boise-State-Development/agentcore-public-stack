@@ -62,7 +62,6 @@ LEGACY = LimitsProfile(
     max_files_per_message=5,
     inline_document_max_bytes=4 * MIB,
     inline_total_max_bytes=7_000_000,
-    turn_guard=True,
     over_budget_by_reference=True,
     documents_as_text=False,
     text_only_max_chars=60_000,
@@ -162,12 +161,6 @@ CASES: List[Case] = [
         [(N, "pdf", "inline"), (N, "pdf", "inline")],
         profile=_budget(0),
         requested=8 * MIB,
-    ),
-    Case(
-        "the guard off disables the budget",
-        [f("a.pdf", size=4 * MIB), f("b.pdf", size=4 * MIB)],
-        [(N, "pdf", "inline"), (N, "pdf", "inline")],
-        profile=replace(LEGACY, turn_guard=False),
     ),
     Case(
         "files that each pass the per-file gate are caught by the budget; a sheet never counts",
@@ -432,7 +425,7 @@ def test_the_table(case: Case):
 
 #: sha256 over every row's inputs and the plan the planner produced for them.
 #: A change here is a change to who gets what: say so in the PR.
-TABLE_DIGEST = "c0a65269a994c043930829c3444b51c5d2a2fa7347157657d5f99d7fe1b83ecd"
+TABLE_DIGEST = "9fd16d12b16fc5e8bb71affc5344ef7b83d6158acac1b89eab25740393a0df85"
 
 
 #: Fields added for the ``token`` profile (phase 3). Omitted from a payload while
@@ -539,22 +532,21 @@ def _named(*names: str) -> list:
 
 
 COUNT_CASES = [
-    # (name, direct, ids, folders, folders_dropped, profile, kept_direct, kept_ids, kept_folders, dropped_names, dropped_total, resolver_max)
-    ("under the cap", 1, 2, 0, 0, LEGACY, 1, 2, 0, [], 0, None),
-    ("ids beyond the cap are counted, not fetched", 0, 7, 0, 0, LEGACY, 0, 5, 0, [], 2, None),
-    ("direct files beyond the cap are named", 6, 0, 0, 0, LEGACY, 5, 0, 0, ["d5.pdf"], 1, None),
-    ("direct first, ids fill the remainder", 2, 5, 0, 0, LEGACY, 2, 3, 0, [], 2, None),
-    ("direct overflow leaves no room for ids", 6, 1, 0, 0, LEGACY, 5, 0, 0, ["d5.pdf"], 2, None),
-    ("a non-positive cap disables it", 9, 9, 0, 0, replace(LEGACY, max_files_per_message=0), 9, 9, 0, [], 0, None),
-    ("folders count one each, after the files", 0, 2, 2, 0, replace(LEGACY, max_files_per_message=3), 0, 2, 1, [], 1, None),
-    ("the folder limit of its own is always counted", 0, 0, 2, 1, LEGACY, 0, 0, 2, [], 1, None),
-    ("the guard off: nothing capped, the resolver's old backstop", 9, 9, 2, 1, replace(LEGACY, turn_guard=False), 9, 9, 2, [], 1, 5),
+    # (name, direct, ids, folders, folders_dropped, profile, kept_direct, kept_ids, kept_folders, dropped_names, dropped_total)
+    ("under the cap", 1, 2, 0, 0, LEGACY, 1, 2, 0, [], 0),
+    ("ids beyond the cap are counted, not fetched", 0, 7, 0, 0, LEGACY, 0, 5, 0, [], 2),
+    ("direct files beyond the cap are named", 6, 0, 0, 0, LEGACY, 5, 0, 0, ["d5.pdf"], 1),
+    ("direct first, ids fill the remainder", 2, 5, 0, 0, LEGACY, 2, 3, 0, [], 2),
+    ("direct overflow leaves no room for ids", 6, 1, 0, 0, LEGACY, 5, 0, 0, ["d5.pdf"], 2),
+    ("a non-positive cap disables it", 9, 9, 0, 0, replace(LEGACY, max_files_per_message=0), 9, 9, 0, [], 0),
+    ("folders count one each, after the files", 0, 2, 2, 0, replace(LEGACY, max_files_per_message=3), 0, 2, 1, [], 1),
+    ("the folder limit of its own is always counted", 0, 0, 2, 1, LEGACY, 0, 0, 2, [], 1),
 ]
 
 
 @pytest.mark.parametrize("case", COUNT_CASES, ids=[c[0] for c in COUNT_CASES])
 def test_the_count_cap(case):
-    (_, n_direct, n_ids, n_folders, folders_dropped, profile, k_direct, k_ids, k_folders, names, total, backstop) = case
+    (_, n_direct, n_ids, n_folders, folders_dropped, profile, k_direct, k_ids, k_folders, names, total) = case
     direct = _named(*[f"d{i}.pdf" for i in range(n_direct)])
     ids = [f"u{i}" for i in range(n_ids)]
     folders = [f"fa-{i}" for i in range(n_folders)]
@@ -566,7 +558,6 @@ def test_the_count_cap(case):
     assert cap.folder_ids == folders[:k_folders]
     assert cap.dropped_names == names
     assert cap.dropped_total == total
-    assert cap.resolver_max_files == backstop
 
 
 # ---------------------------------------------------------------------------
@@ -676,7 +667,6 @@ def test_the_forceable_modes_are_the_row_values():
 
 def test_the_legacy_profile_reads_todays_constants(monkeypatch):
     for var in (
-        "ATTACHMENT_TURN_GUARD_ENABLED",
         "INLINE_BUDGET_BY_REFERENCE_ENABLED",
         "CONVERSE_DOCUMENTS_AS_TEXT_ENABLED",
     ):
@@ -692,16 +682,9 @@ def test_the_legacy_profile_reads_todays_constants(monkeypatch):
     assert replace(ap.legacy_profile(), name="legacy") == LEGACY
 
 
-@pytest.mark.parametrize(
-    "env,field_name",
-    [
-        ("ATTACHMENT_TURN_GUARD_ENABLED", "turn_guard"),
-        ("INLINE_BUDGET_BY_REFERENCE_ENABLED", "over_budget_by_reference"),
-    ],
-)
-def test_a_kill_switch_is_a_profile_input(monkeypatch, env, field_name):
-    monkeypatch.setenv(env, "false")
-    assert getattr(ap.legacy_profile(), field_name) is False
+def test_a_kill_switch_is_a_profile_input(monkeypatch):
+    monkeypatch.setenv("INLINE_BUDGET_BY_REFERENCE_ENABLED", "false")
+    assert ap.legacy_profile().over_budget_by_reference is False
 
 
 def test_documents_as_text_is_a_profile_input(monkeypatch):
@@ -748,9 +731,7 @@ def test_the_token_profile_is_the_legacy_byte_limits_plus_the_budget(monkeypatch
     assert (token.max_files_per_message, token.images_per_message, token.pdf_max_pages) == (20, 20, 1_000)
     assert token.request_attachment_max_bytes == 16 * MIB
     # The table's TOKEN is the real profile.
-    assert replace(TOKEN, turn_guard=token.turn_guard, over_budget_by_reference=True) == replace(
-        token, turn_guard=token.turn_guard
-    )
+    assert replace(TOKEN, over_budget_by_reference=True) == token
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +763,6 @@ def test_no_attachments_writes_nothing():
         "files": [],
         "droppedOverCount": 2,
     }
-
 
 
 # ---------------------------------------------------------------------------
@@ -957,7 +937,7 @@ def test_the_token_table(case: Case):
 
 
 #: The ``token`` table's own digest. A change here is a change to who gets what.
-TOKEN_TABLE_DIGEST = "31ab7e3c2fea7066a25e43961edab8d233f2ecd7be10699b26ad3d787235786e"
+TOKEN_TABLE_DIGEST = "20d298b9ce23b12cc4c5102abbea1c21760448e6c657335a0c14a4cad1e7f9a1"
 
 
 def test_the_token_table_digest_is_pinned():
@@ -1121,7 +1101,7 @@ def test_the_search_table(case: Case):
 
 
 #: The ``search`` table's digest (phase 5). A change here is a change to who gets what.
-SEARCH_TABLE_DIGEST = "733bcbf398131d658c2d874da826dba577f1137ed22933248cbafc3297556264"
+SEARCH_TABLE_DIGEST = "68cb59d1176d269ded2deb0b8263724208624f0e6d3eeae0062155251736adc3"
 
 
 def test_the_search_table_digest_is_pinned():

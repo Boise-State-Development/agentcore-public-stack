@@ -36,7 +36,6 @@ from apis.shared.handoff.delivery_turn import DeliveryTurn, join_delivery_blocks
 from apis.shared.handoff.turn import HandoffTurn
 from apis.shared.feature_flags import (
     agent_build_shared_session_enabled,
-    agent_preparing_phase_enabled,
     kb_search_ahead_enabled,
     agent_knowledge_files_enabled,
     agents_enabled,
@@ -3344,7 +3343,7 @@ async def _resolve_turn_attachments(
     folder_ids = count.folder_ids
     dropped_over_count_names = count.dropped_names
     dropped_over_count_total = count.dropped_total
-    if profile.turn_guard and dropped_over_count_total:
+    if dropped_over_count_total:
         logger.warning(
             "Dropped %d attachment(s) over the %d-per-message cap",
             dropped_over_count_total,
@@ -3374,9 +3373,9 @@ async def _resolve_turn_attachments(
             resolved_files = await file_resolver.resolve_files(
                 user_id=user_id,
                 upload_ids=upload_ids_to_resolve,
-                # Already capped above when the guard is on; the resolver's
-                # own backstop is the pre-guard behaviour.
-                max_files=count.resolver_max_files,
+                # Already capped above (`cap_message_attachments`), so the
+                # resolver's own backstop is off.
+                max_files=None,
             )
             for rf in resolved_files:
                 # The resolver asked the planner (``delivers_by_reference``)
@@ -5579,9 +5578,9 @@ async def _run_invocation(
     # stage owns it. Pure timing: nothing reaches the model.
     # See `turn_timing.py` and docs/specs/agent-state-feedback.md.
     prelude = TurnPrelude()
-    # Whether this turn's agent is built inside the stream (PR-3). Recorded on
-    # the `turn_prelude` line so the two shapes stay distinguishable in the
-    # logs once the flag has been on for a while.
+    # Whether this turn's agent is built inside the stream (PR-3): every
+    # non-resume turn. Recorded on the `turn_prelude` line so the two shapes
+    # stay distinguishable in the logs.
     deferred_build = False
 
     # Refuse a turn against a session id another user already owns.
@@ -6671,15 +6670,8 @@ async def _run_invocation(
             # A warm turn spends 0-38ms here, so this changes nothing for the
             # common case; it exists for the cold one.
             # See docs/specs/agent-state-feedback.md PR-3.
-            if agent_preparing_phase_enabled():
-                agent = None
-                deferred_build = True
-            else:
-                agent = await _build_main_agent()
-                # The remainder after the sub-stages the build itself recorded;
-                # `groups.agent_build` sums them, keeping the pre-split
-                # number comparable exactly as it did for the preamble.
-                prelude.mark("agent_build.rest")
+            agent = None
+            deferred_build = True
 
         # Resume requests must target interrupts that the cached agent
         # actually has paused; see `_validate_resume_interrupts`.
@@ -6703,7 +6695,7 @@ async def _run_invocation(
             # the coordinator's live status merge (every 100ms, so a title
             # that lands during the model's time-to-first-token or a long
             # tool call goes out right away) and between agent events below
-            # (the only route while that merge is switched off). A stream
+            # (a backstop for a title that lands between polls). A stream
             # that outruns Nova Micro simply never emits and the SPA's
             # post-close metadata refresh covers it.
             title_emitted = False
