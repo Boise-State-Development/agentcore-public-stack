@@ -1075,6 +1075,30 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Field-set authoring feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Field-set authoring feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_FIELD_SET_AUTHORING_ENABLED;
+    });
+
+    test('defaults to disabled when unset or empty', () => {
+      delete process.env.CDK_FIELD_SET_AUTHORING_ENABLED;
+      expect(loadConfig(app).fieldSetAuthoring.enabled).toBe(false);
+      process.env.CDK_FIELD_SET_AUTHORING_ENABLED = '';
+      expect(loadConfig(app).fieldSetAuthoring.enabled).toBe(false);
+    });
+
+    test('only "true" turns it on', () => {
+      process.env.CDK_FIELD_SET_AUTHORING_ENABLED = ' True ';
+      expect(loadConfig(app).fieldSetAuthoring.enabled).toBe(true);
+      process.env.CDK_FIELD_SET_AUTHORING_ENABLED = 'yes';
+      expect(loadConfig(app).fieldSetAuthoring.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // AWS Limits feature flag — opt-in while in development
   // ============================================================
 

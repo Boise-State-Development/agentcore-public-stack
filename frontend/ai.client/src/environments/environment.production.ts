@@ -30,6 +30,7 @@ export const environment = {
         // from the release that ships this (a rollout switch, #1798).
         attachmentPlan: true,
         documentExtract: false,
+        fieldSetAuthoring: false,
         handoffs: false,
         handoffBrief: false,
         sessionRewind: true,

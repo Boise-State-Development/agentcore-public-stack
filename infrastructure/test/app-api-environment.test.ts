@@ -96,6 +96,12 @@ describe('buildAppApiEnvironment — quota requests', () => {
     expect(on.QUOTA_REQUESTS_ENABLED).toBe('true');
   });
 
+  it('forwards the field-set authoring flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).FIELD_SET_AUTHORING_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ fieldSetAuthoring: { enabled: true } }), stubParams());
+    expect(on.FIELD_SET_AUTHORING_ENABLED).toBe('true');
+  });
+
   it('forwards the AWS Limits flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).AWS_LIMITS_ENABLED).toBe('false');
     const on = buildAppApiEnvironment(createMockConfig({ awsLimits: { enabled: true } }), stubParams());

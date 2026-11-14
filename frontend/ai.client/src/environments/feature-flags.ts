@@ -114,6 +114,15 @@ export interface FeatureFlags {
   documentExtract: boolean;
 
   /**
+   * Field-set authoring (docs/specs/field-set-authoring.md): a structured editor
+   * for the field sets on a skill the user owns. Backend:
+   * FIELD_SET_AUTHORING_ENABLED (app-api serves `/skills/mine/{id}/field-sets`,
+   * which 404s while off). The editor itself arrives in a later PR; until then
+   * nothing reads this. In development: off everywhere.
+   */
+  fieldSetAuthoring: boolean;
+
+  /**
    * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0): a mid-thread
    * `@`-mention opens a review sheet instead of sending, then starts the Agent's
    * conversation in the background while the user stays put, tracked by a
