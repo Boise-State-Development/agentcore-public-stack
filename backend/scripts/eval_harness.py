@@ -359,6 +359,13 @@ def cmd_cases(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- run
 
 
+def _rewrite_results(out: Path, rows: Sequence[Dict[str, Any]]) -> None:
+    """Replace ``results.jsonl`` with ``rows``, keeping the previous file as ``results.jsonl.bak``."""
+    results_file = out / RESULTS_FILE
+    results_file.with_suffix(".jsonl.bak").write_text(results_file.read_text(encoding="utf-8"), encoding="utf-8")
+    results_file.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
 def _done_samples(rows: Sequence[Dict[str, Any]]) -> Set[Tuple[str, int]]:
     return {(str(r["case_id"]), int(r["sample"])) for r in rows}
 
@@ -459,6 +466,16 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
     out = Path(args.out)
     rows = read_rows(out / RESULTS_FILE)
+    # ``--rerun-outages``: a sample the provider failed twice is not a
+    # measurement of the agent, and ``publish`` refuses a run that holds one.
+    # Its row is dropped so the resume below runs the sample again.
+    selected = {c.id for c in cases}
+    outages = ([r for r in rows if is_provider_outage(r) and r.get("case_id") in selected]
+               if getattr(args, "rerun_outages", False) else [])
+    if outages:
+        dropped = {id(r) for r in outages}
+        rows = [r for r in rows if id(r) not in dropped]
+        print(f"--rerun-outages: {len(outages)} sample(s) ended in a provider outage and will run again")
     done = _done_samples(rows)
     todo = [(case, s) for case in cases for s in range(args.k) if (case.id, s) not in done]
     turns, dollars, note = estimate(todo, args.model_id)
@@ -472,6 +489,8 @@ async def cmd_run(args: argparse.Namespace) -> int:
     if not args.yes:
         print("estimate only; pass --yes to spend")
         return 0
+    if outages:
+        _rewrite_results(out, rows)
 
     from smoke_turns import resolve_runtime_env
 
@@ -669,7 +688,8 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
     if not args.keep:
         unrun = _unrun_staged(out, read_rows(results_path))
-        await _cleanup(new_rows + unrun, args.user_id,
+        # A dropped outage row's sessions too, in case its run kept them.
+        await _cleanup(new_rows + unrun + outages, args.user_id,
                        member2_user_id=accounts.member2_user_id if accounts is not None else None)
         _forget_staged(out, unrun)
     if uploader is not None:
@@ -1382,6 +1402,12 @@ def cmd_publish(args: argparse.Namespace) -> int:
         if missing:
             print(f"{out}: {len(missing)} sample(s) have no metered cost, e.g. {missing[0]}; "
                   "run without --no-cost-rows with access to the run's account", file=sys.stderr)
+            outages = [r["case_id"] for r in rows if is_provider_outage(r)]
+            if outages:
+                # A provider outage is not a result, so it is never published as
+                # one (spec D35): the samples run again instead.
+                print(f"{out}: {len(outages)} of them ended in a provider outage, e.g. {outages[0]}; re-run them "
+                      "with the run's own `run` command plus --rerun-outages, then publish", file=sys.stderr)
             return 2
         runs.append(public_report.run_document(meta, rows, calls))
         forbidden += [meta.get("user_id"), meta.get("member2_user_id"), meta.get("prefix"), meta.get("target")]
@@ -1506,6 +1532,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--workers", type=int, default=4, help="cases run concurrently; turns within a case never are")
     s.add_argument("--timeout", type=float, default=300.0, help="per-turn stream budget in seconds")
     s.add_argument("--keep", action="store_true", help="do not delete the sessions and uploads this run created")
+    s.add_argument("--rerun-outages", action="store_true",
+                   help="run again every selected sample whose row ended in a provider_unavailable error "
+                        f"(the old rows are kept in {RESULTS_FILE}.bak); what publish needs before it accepts the run")
     s.add_argument("--provider-retry-delay", type=float, default=PROVIDER_RETRY_DELAY_SECONDS,
                    help="seconds before a sample's one retry, in a fresh session, when its turn ended in a "
                         f"provider_unavailable error (default {PROVIDER_RETRY_DELAY_SECONDS:.0f})")
