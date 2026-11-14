@@ -1755,6 +1755,7 @@ async def build_transport(args: argparse.Namespace) -> Transport:
         return RuntimeTransport(args.user_id, args.prefix, args.region, args.invocations_url)
     if not args.base_url:
         raise SystemExit("--base-url is required unless --auth headless-grant")
+    user, pw = "", ""
     if args.auth == "eval-user":
         user, pw = eval_user_credentials(args.prefix, args.region)
     elif args.auth == "cognito":

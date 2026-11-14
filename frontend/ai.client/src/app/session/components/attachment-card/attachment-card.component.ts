@@ -134,7 +134,7 @@ export type AttachmentCardState = 'uploading' | 'preparing' | 'ready' | 'failed'
         </button>
       }
 
-      @if (state() === 'failed' && pendingUpload()) {
+      @if (canRetry()) {
         <button
           contentCardAction
           type="button"
@@ -234,6 +234,16 @@ export class AttachmentCardComponent {
       if (file.status === 'pending') return 'preparing';
     }
     return 'ready';
+  });
+
+  /**
+   * Retry only a failed upload that could go through next time. A refusal the
+   * same file would meet again (`PendingUpload.permanent`) keeps its reason
+   * and the Remove button, and nothing else.
+   */
+  protected readonly canRetry = computed(() => {
+    const pending = this.pendingUpload();
+    return this.state() === 'failed' && !!pending && !pending.permanent;
   });
 
   /** The bar along the tray: only while bytes move and there is a percentage. */

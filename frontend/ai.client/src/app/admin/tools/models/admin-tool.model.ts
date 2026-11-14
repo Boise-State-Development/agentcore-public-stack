@@ -208,6 +208,8 @@ export interface AdminTool {
    * docs/specs/admin-always-on-tools.md §10.1.
    */
   alwaysOn?: boolean;
+  /** #625: the tool runs in voice mode. Optional on the wire; absent ⇒ off. */
+  voiceAvailable?: boolean;
   createdAt: string;
   updatedAt: string;
   createdBy: string | null;
@@ -263,6 +265,7 @@ export interface ToolCreateRequest {
   isPublic?: boolean;
   enabledByDefault?: boolean;
   alwaysOn?: boolean;
+  voiceAvailable?: boolean;
   mcpConfig?: MCPServerConfig;
   a2aConfig?: A2AAgentConfig;
   mcpGatewayConfig?: MCPGatewayConfig;
@@ -315,6 +318,7 @@ export interface ToolUpdateRequest {
   isPublic?: boolean;
   enabledByDefault?: boolean;
   alwaysOn?: boolean;
+  voiceAvailable?: boolean;
   mcpConfig?: MCPServerConfig | null;
   a2aConfig?: A2AAgentConfig | null;
   mcpGatewayConfig?: MCPGatewayConfig | null;

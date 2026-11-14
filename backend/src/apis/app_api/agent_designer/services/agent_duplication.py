@@ -78,6 +78,8 @@ async def duplicate_agent(agent_id: str, user: User) -> Assistant:
         show_citations=source.show_citations,
         allow_document_download=source.allow_document_download,
         response_strictness=source.response_strictness,
+        voice_enabled=source.voice_enabled,
+        voice_instructions_only=source.voice_instructions_only,
     )
     await _copy_icon(source, new)
     return new

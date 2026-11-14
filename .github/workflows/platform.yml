@@ -458,6 +458,10 @@ jobs:
       CDK_DOCUMENT_EXTRACT_ENABLED: ${{ vars.CDK_DOCUMENT_EXTRACT_ENABLED }}
       CDK_DOCUMENT_EXTRACT_MODEL_ID: ${{ vars.CDK_DOCUMENT_EXTRACT_MODEL_ID }}
       CDK_DOCUMENT_EXTRACT_CONCURRENCY: ${{ vars.CDK_DOCUMENT_EXTRACT_CONCURRENCY }}
+      # Field-set authoring: the /skills/mine/{id}/field-sets routes. In
+      # development, so only "true" enables. Sets the flag on app-api only; no
+      # resources. The SPA half is features.fieldSetAuthoring.
+      CDK_FIELD_SET_AUTHORING_ENABLED: ${{ vars.CDK_FIELD_SET_AUTHORING_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —

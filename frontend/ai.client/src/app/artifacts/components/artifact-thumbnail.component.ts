@@ -3,6 +3,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  Injector,
   OnDestroy,
   computed,
   inject,
@@ -21,6 +22,7 @@ import {
 
 import { ArtifactHttpService } from '../../session/services/artifacts/artifact-http.service';
 import { ArtifactShareService } from '../../session/services/artifacts/artifact-share.service';
+import { ShareService } from '../../session/services/share/share.service';
 
 /**
  * Which access path this thumbnail mints through.
@@ -47,6 +49,15 @@ export type ArtifactThumbnailSource =
   | {
       readonly kind: 'shared';
       readonly shareId: string;
+      readonly contentType: string;
+    }
+  | {
+      /** An artifact inside a shared conversation, minted through the
+       *  conversation share: the (shareId, artifactId) pair is the whole
+       *  handle a recipient has. */
+      readonly kind: 'conversation';
+      readonly shareId: string;
+      readonly artifactId: string;
       readonly contentType: string;
     };
 
@@ -86,7 +97,7 @@ const TYPE_ICONS: Record<string, string> = {
 
 /**
  * A live, scaled-down render of one artifact, for the library's grid
- * cards.
+ * cards and the conversation's artifact cards (owner and recipient).
  *
  * ## Why a real iframe and not a screenshot
  *
@@ -131,7 +142,8 @@ const TYPE_ICONS: Record<string, string> = {
  * so a library of any size costs only what is looked at. And a mounted
  * preview is never unmounted: scrolling back up must not re-mint and
  * re-invoke. The ceiling is therefore "artifacts the user actually
- * scrolled past", which is fine while `/artifacts/library` is
+ * scrolled past" — in a conversation, the artifact cards scrolled past
+ * — which is fine while `/artifacts/library` is
  * unpaginated (a user's whole library fits well inside one DynamoDB
  * page). If that endpoint ever gains paging, this needs LRU eviction of
  * off-screen frames to go with it.
@@ -202,6 +214,9 @@ export class ArtifactThumbnailComponent implements AfterViewInit, OnDestroy {
   private readonly shares = inject(ArtifactShareService);
   private readonly sanitizer = inject(DomSanitizer);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  /** Resolves the conversation-share mint only for the cards that use it,
+   *  so the library and owner cards don't take its dependencies. */
+  private readonly injector = inject(Injector);
 
   readonly source = input.required<ArtifactThumbnailSource>();
 
@@ -320,7 +335,11 @@ export class ArtifactThumbnailComponent implements AfterViewInit, OnDestroy {
               source.version,
               source.sessionId,
             )
-          : await this.shares.mintSharedRenderToken(source.shareId);
+          : source.kind === 'conversation'
+            ? await this.injector
+                .get(ShareService)
+                .mintConversationArtifactToken(source.shareId, source.artifactId)
+            : await this.shares.mintSharedRenderToken(source.shareId);
       if (this.destroyed) {
         return;
       }

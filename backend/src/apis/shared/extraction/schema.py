@@ -55,6 +55,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Type
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field as PydanticField,
     WithJsonSchema,
@@ -94,6 +95,14 @@ _StringList = Annotated[
     Optional[List[str]],
     WithJsonSchema({"type": ["array", "null"], "items": {"type": "string"}}),
 ]
+
+
+#: The quote's type: a plain ``string`` in the schema (one union fewer per
+#: field than a nullable one; see :func:`_answer_model`), while a ``null`` in a
+#: reply still validates, as ``""``. A reply can carry one when the schema was
+#: not enforced (the unenforced fallback), and refusing a whole row over an
+#: absent quote would throw away values that verification can still judge.
+_Quote = Annotated[str, BeforeValidator(lambda quote: "" if quote is None else quote)]
 
 
 def _value_annotation(field: Field) -> Any:
@@ -142,20 +151,30 @@ def _answer_model(field: Field, set_name: str) -> Type[BaseModel]:
     The quote is a *sibling* of the value rather than a separate top-level
     property (§7), which keeps the two inseparable: a value cannot arrive
     without the slot for its evidence, and the pairing is what G2 verifies.
+
+    **The quote is a plain string, empty when there is nothing to quote, never
+    nullable.** Bedrock refuses a constrained schema with more than 16
+    union-typed parameters (structured-extraction §16.9), and every nullable
+    property is one. The value has to stay nullable (D5), so a nullable quote
+    made every non-enum field cost two unions, and a set refused at nine such
+    fields, not at the 14 :data:`MAX_FIELDS` promises. That ceiling was measured
+    with exactly this shape, a nullable value beside a string quote. An empty
+    quote reads as no quote downstream: ``source_provenance`` returns
+    ``unverified`` / ``no_quote``, and the rows show nothing.
     """
     return create_model(
         f"{_class_stem(set_name)}_{field.name}",
         __config__=ConfigDict(extra="forbid"),
         value=(_value_annotation(field), _value_field_info(field)),
         quote=(
-            Optional[str],
+            _Quote,
             PydanticField(
                 ...,
                 description=(
                     "The exact, verbatim passage from the document that this "
                     "value is taken from — copied character for character, not "
-                    "paraphrased or reconstructed. Null if the document does "
-                    "not state the value."
+                    "paraphrased or reconstructed. An empty string if the "
+                    "document does not state the value."
                 ),
             ),
         ),
@@ -202,8 +221,8 @@ def build_model(field_set: FieldSet) -> Type[BaseModel]:
         __config__=ConfigDict(extra="forbid", populate_by_name=True),
         __doc__=(
             f"Values for the '{field_set.title}' field set, read from one "
-            "document. Every field must be present; use a null value and a "
-            "null quote for anything the document does not state."
+            "document. Every field must be present; use a null value and an "
+            "empty quote for anything the document does not state."
         ),
         **definitions,
     )

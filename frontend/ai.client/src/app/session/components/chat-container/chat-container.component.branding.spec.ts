@@ -37,6 +37,7 @@ class ChatInputStub {
   readonly isChatLoading = input<boolean>(false);
   readonly showFileControls = input<boolean>(true);
   readonly showVoiceControl = input<boolean>(true);
+  readonly voiceAgentId = input<string | null>(null);
   readonly showAnnouncements = input<boolean>(true);
   readonly announcementPlacement = input<'above' | 'below'>('above');
   readonly messageSubmitted = output<unknown>();

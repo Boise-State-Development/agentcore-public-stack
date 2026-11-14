@@ -34,6 +34,12 @@ def memory_mode_from(settings: Mapping[str, Any]) -> MemoryMode:
     return normalize_memory_mode(settings.get("memoryMode"))
 
 
+def personal_instructions_from(settings: Mapping[str, Any]) -> Optional[str]:
+    """The personal instructions of a settings dict, trimmed and capped; None if blank."""
+    text = (settings.get("personalInstructions") or "").strip()
+    return text[:MAX_PERSONAL_INSTRUCTIONS_CHARS] or None
+
+
 def cap_memory_mode(mode: Any, cap: Any) -> MemoryMode:
     """The lower of two modes: a conversation cap can only reduce memory."""
     a, b = normalize_memory_mode(mode), normalize_memory_mode(cap)

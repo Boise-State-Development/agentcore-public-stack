@@ -417,3 +417,56 @@ async def test_drop_disabled_tools_fails_open_on_a_catalog_error():
         return_value=repo,
     ):
         assert await freshness.drop_disabled_tools(["zoom_race_2"]) == ["zoom_race_2"]
+
+
+# --- voice availability (#625) ------------------------------------------------
+
+
+def _voice_tool(tool_id: str, voice_available: bool):
+    return SimpleNamespace(
+        tool_id=tool_id, is_public=False, system=False, status="active", voice_available=voice_available
+    )
+
+
+@pytest.mark.asyncio
+async def test_voice_snapshot_holds_only_flagged_tools():
+    repo = _repo_with_tools(
+        _voice_tool("calculator", True),
+        _voice_tool("browse_web", False),
+        _sys_tool("legacy_row"),  # written before the flag: no attribute at all
+    )
+    with patch("apis.shared.tools.repository.get_tool_catalog_repository", return_value=repo):
+        assert await freshness.get_voice_tool_ids() == frozenset({"calculator"})
+
+
+@pytest.mark.asyncio
+async def test_keep_voice_tools_keeps_flagged_bare_and_scoped_ids_in_order():
+    repo = _repo_with_tools(_voice_tool("calculator", True), _voice_tool("campus_directory", True))
+    with patch("apis.shared.tools.repository.get_tool_catalog_repository", return_value=repo):
+        kept = await freshness.keep_voice_tools(
+            ["browse_web", "campus_directory::lookup", "calculator", "create_visualization"]
+        )
+    assert kept == ["campus_directory::lookup", "calculator"]
+
+
+@pytest.mark.asyncio
+async def test_keep_voice_tools_passes_none_and_empty_through_without_a_read():
+    repo = _repo_with_tools()
+    with patch("apis.shared.tools.repository.get_tool_catalog_repository", return_value=repo):
+        assert await freshness.keep_voice_tools(None) is None
+        assert await freshness.keep_voice_tools([]) == []
+    repo.list_tools.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_keep_voice_tools_fails_closed_on_a_catalog_error():
+    """A voice session with no tools still talks; one calling a slow tool goes silent."""
+    repo = SimpleNamespace(list_tools=AsyncMock(side_effect=RuntimeError("boom")))
+    with patch("apis.shared.tools.repository.get_tool_catalog_repository", return_value=repo):
+        assert await freshness.keep_voice_tools(["calculator"]) == []
+
+
+def test_invalidate_clears_the_voice_snapshot():
+    freshness._voice_tool_ids_cache[0] = (frozenset({"calculator"}), 0.0)
+    freshness.invalidate()
+    assert freshness._voice_tool_ids_cache[0] is None

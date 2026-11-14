@@ -9,6 +9,8 @@ import {
   AfterViewInit,
   OnDestroy,
   inject,
+  Injector,
+  afterNextRender,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -254,6 +256,7 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
             }
             @if (copyText()) {
             <button
+              #copyButton
               type="button"
               class="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
               [appTooltip]="copied() ? 'Copied' : 'Copy'"
@@ -410,11 +413,22 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   }
 
   private rewinder = inject(ConversationRewindService);
+  private injector = inject(Injector);
+  private copyButton = viewChild<ElementRef<HTMLButtonElement>>('copyButton');
 
-  /** Only on messages the server numbered and could cut before; see ConversationRewindService. */
+  /**
+   * Only on messages the server numbered and could cut before, and not on one
+   * the compaction summary covers (learned from a refusal); see ConversationRewindService.
+   */
   showRewind = computed(() => {
     const message = this.message();
-    return this.rewinder.enabled && !message.steering && !message.sendFailure && message.id.startsWith('msg-');
+    return (
+      this.rewinder.enabled &&
+      !message.steering &&
+      !message.sendFailure &&
+      message.id.startsWith('msg-') &&
+      !this.rewinder.isSummarized(message)
+    );
   });
 
   /** False while this conversation streams or another rewind is in flight. */
@@ -423,14 +437,22 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   rewinding = computed(() => this.rewinder.pendingMessageId() === this.message().id);
 
   rewind(): void {
-    void this.rewinder.rewind(this.message());
+    void this.rewinder.rewind(this.message()).then((done) => {
+      if (!done) this.keepFocusInRow();
+    });
   }
 
   private forker = inject(ConversationForkService);
 
   showFork = computed(() => {
     const message = this.message();
-    return this.forker.enabled && !message.steering && !message.sendFailure && message.id.startsWith('msg-');
+    return (
+      this.forker.enabled &&
+      !message.steering &&
+      !message.sendFailure &&
+      message.id.startsWith('msg-') &&
+      !this.rewinder.isSummarized(message)
+    );
   });
 
   canFork = computed(() => this.forker.canFork(this.message()));
@@ -438,7 +460,24 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   forking = computed(() => this.forker.pendingMessageId() === this.message().id);
 
   fork(): void {
-    void this.forker.fork(this.message());
+    void this.forker.fork(this.message()).then((sessionId) => {
+      if (sessionId === null) this.keepFocusInRow();
+    });
+  }
+
+  /**
+   * A summary refusal removes the button that was just pressed, which would
+   * drop keyboard focus onto the page. Land it on Copy in the same row instead.
+   */
+  private keepFocusInRow(): void {
+    afterNextRender(
+      () => {
+        const active = document.activeElement;
+        if (active && active !== document.body) return;
+        this.copyButton()?.nativeElement.focus();
+      },
+      { injector: this.injector },
+    );
   }
 
   readonly maxHeightPx = MAX_HEIGHT_PX;

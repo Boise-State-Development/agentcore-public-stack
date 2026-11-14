@@ -144,6 +144,14 @@ describe('AttachmentCardComponent', () => {
     expect(el.querySelector('button[aria-label="Remove report.pdf"]')).not.toBeNull();
   });
 
+  it('offers only Remove on a refusal the same file would meet again', async () => {
+    const reason = 'report.pdf has 1,200 pages. A PDF can have at most 1,000 pages; split it and attach the parts.';
+    const el = await card({ pendingUpload: upload('report', 'error', { error: reason, permanent: true }) });
+    expect(text(el)).toContain(reason);
+    expect(el.querySelector('button[aria-label^="Retry"]')).toBeNull();
+    expect(el.querySelector('button[aria-label="Remove report.pdf"]')).not.toBeNull();
+  });
+
   it('marks a large document attached by reference, in short and in full', async () => {
     const big = upload('manual', 'ready', { file: sizedFile('manual.pdf', 'application/pdf', 38 * MB) });
     const el = await card({ pendingUpload: big });

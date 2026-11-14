@@ -1087,6 +1087,18 @@ class ToolDefinition(BaseModel):
         ),
     )
 
+    voice_available: bool = Field(
+        default=False,
+        description=(
+            "If true, the tool loads in voice mode (#625). Off by default: Nova 2 "
+            "Sonic goes quiet for the rest of a voice session when a tool takes "
+            "longer than about a second, and a tool whose result is something to "
+            "look at (a chart, a document) does nothing for a listener. Voice drops "
+            "every tool without this flag, whatever enabled it (the picker, an "
+            "Agent binding or an admin pin)."
+        ),
+    )
+
     @model_validator(mode="after")
     def _normalize_always_on(self) -> "ToolDefinition":
         """An always-on (or system) tool is necessarily on by default.
@@ -1203,6 +1215,7 @@ class ToolDefinition(BaseModel):
             "alwaysOn": self.always_on,
             "system": self.system,
             "hidden": self.hidden,
+            "voiceAvailable": self.voice_available,
             "createdAt": to_iso(self.created_at) if self.created_at else None,
             "updatedAt": to_iso(self.updated_at) if self.updated_at else None,
             "createdBy": self.created_by,
@@ -1279,6 +1292,9 @@ class ToolDefinition(BaseModel):
             # visible tool (backward compatible).
             system=item.get("system", False),
             hidden=item.get("hidden", False),
+            # Absent on every row written before voice availability shipped
+            # (#625): those tools stay out of voice until an admin opts them in.
+            voice_available=item.get("voiceAvailable", False),
             mcp_config=mcp_config,
             a2a_config=a2a_config,
             mcp_gateway_config=mcp_gateway_config,
@@ -1408,6 +1424,12 @@ class UserToolAccess(BaseModel):
             "caller's roles actually grant the tool, because always-on enables "
             "and never grants."
         ),
+    )
+
+    voice_available: bool = Field(
+        default=False,
+        alias="voiceAvailable",
+        description="The tool loads in voice mode (#625); display only for the SPA.",
     )
 
     # Current user state
@@ -1647,6 +1669,7 @@ class ToolCreateRequest(BaseModel):
     is_public: bool = Field(default=False, alias="isPublic")
     enabled_by_default: bool = Field(default=False, alias="enabledByDefault")
     always_on: bool = Field(default=False, alias="alwaysOn")
+    voice_available: bool = Field(default=False, alias="voiceAvailable")
 
     # External tool configurations (optional based on protocol)
     mcp_config: Optional[MCPServerConfigRequest] = Field(None, alias="mcpConfig")
@@ -1684,6 +1707,8 @@ class ToolUpdateRequest(BaseModel):
     # That partial-update semantic is load-bearing for backward compatibility
     # (docs/specs/admin-always-on-tools.md §10.1) — do not "simplify" it.
     always_on: Optional[bool] = Field(None, alias="alwaysOn")
+    # Same partial-update contract as `always_on`: absent leaves it alone (#625).
+    voice_available: Optional[bool] = Field(None, alias="voiceAvailable")
 
     # External tool configurations (optional based on protocol)
     mcp_config: Optional[MCPServerConfigRequest] = Field(None, alias="mcpConfig")
@@ -1889,6 +1914,7 @@ class AdminToolResponse(BaseModel):
     allowed_app_roles: List[str] = Field(..., alias="allowedAppRoles")
     enabled_by_default: bool = Field(..., alias="enabledByDefault")
     always_on: bool = Field(default=False, alias="alwaysOn")
+    voice_available: bool = Field(default=False, alias="voiceAvailable")
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
     created_by: Optional[str] = Field(None, alias="createdBy")
@@ -1939,6 +1965,7 @@ class AdminToolResponse(BaseModel):
             allowed_app_roles=allowed_roles or tool.allowed_app_roles,
             enabled_by_default=tool.enabled_by_default,
             always_on=tool.always_on,
+            voice_available=tool.voice_available,
             created_at=to_iso(tool.created_at) if tool.created_at else "",
             updated_at=to_iso(tool.updated_at) if tool.updated_at else "",
             created_by=tool.created_by,

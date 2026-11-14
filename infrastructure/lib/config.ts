@@ -114,6 +114,7 @@ export interface AppConfig {
   mcpElicitation: McpElicitationConfig;
   releaseLedger: ReleaseLedgerConfig;
   documentExtract: DocumentExtractConfig;
+  fieldSetAuthoring: FieldSetAuthoringConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
   wordSkillScripts: WordSkillScriptsConfig;
   converseDocumentsAsText: ConverseDocumentsAsTextConfig;
@@ -1091,6 +1092,24 @@ export interface DocumentExtractConfig {
    * impatience; the backend clamps to 1..16.
    */
   concurrency?: number;
+}
+
+/**
+ * Field-set authoring (docs/specs/field-set-authoring.md §7). On, app-api serves
+ * `/skills/mine/{skill_id}/field-sets`: list, read, write and validate one
+ * field set on a skill the caller owns, with the backend parsing and writing
+ * the file in both directions. **Opt-in while in development**: off unless
+ * CDK_FIELD_SET_AUTHORING_ENABLED=true (or a `fieldSetAuthoring.enabled: true`
+ * cdk.json context). A feature switch, and therefore permanent.
+ *
+ * Sets FIELD_SET_AUTHORING_ENABLED on **app-api only**: the Runtime resolves a
+ * field set the same way with this on or off, so it gets no variable and the
+ * V2 environment budget is untouched. No resources: a field set is a file in
+ * the skill's existing bundle. Separate from `documentExtract` because running
+ * extractions and letting users write their own schemas are separate decisions.
+ */
+export interface FieldSetAuthoringConfig {
+  enabled: boolean;
 }
 
 /**
@@ -2079,6 +2098,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
         const value = raw ? Number(raw) : fromContext;
         return Number.isInteger(value) && value > 0 ? { concurrency: value } : {};
       })(),
+    },
+    fieldSetAuthoring: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_FIELD_SET_AUTHORING_ENABLED
+        ? process.env.CDK_FIELD_SET_AUTHORING_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('fieldSetAuthoring')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

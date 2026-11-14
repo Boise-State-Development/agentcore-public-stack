@@ -10,3 +10,4 @@ The authoring method is kept: capturing intent with an interview, writing a desc
 - It was rewritten for this platform's skill tools (`my_skill_*`), its approval step for every write, and its rules: skills are off until turned on under Customize → Skills; a new skill is not usable in the conversation that created it; files are flat; scripts are stored but never run; `allowed-tools` is advisory; and per-person and per-skill limits apply.
 - A fallback for users without the tools was added: copying the skill into Customize → Skills → Add.
 - Guidance was added against carrying unreviewed third-party text, or secrets, into a skill.
+- Guidance on adding a structured extraction (a field set) to a skill was added (`references/structured-extraction.md`). It is original to this platform.

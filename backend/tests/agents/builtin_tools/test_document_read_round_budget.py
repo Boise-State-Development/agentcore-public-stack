@@ -146,15 +146,42 @@ class TestRoundBudget:
 
         assert caps == [7_000_000, 7_000_000]
 
-    @pytest.mark.parametrize("kwargs", [{"pattern": "termination"}, {}])
-    async def test_reads_that_return_no_pdf_take_no_share(self, monkeypatch, kwargs):
+    async def test_a_pattern_read_takes_no_share(self, monkeypatch):
         caps: list = []
         monkeypatch.setattr(drt, "read_document", _fake_read(caps=caps))
         tool = drt.make_document_read_tool("s1", "u1", searchable=False)
 
-        await _call(tool, upload_id="up-1", tool_context=_context("t1", _round("t1")), **kwargs)
+        await _call(tool, upload_id="up-1", pattern="termination", tool_context=_context("t1", _round("t1")))
 
         assert caps == [None]
+
+    async def test_a_bare_upload_id_is_offered_the_budget_but_only_bytes_spend_it(self, monkeypatch):
+        """A bare id may name an image, which comes back whole, so it is read under the
+        round's budget. A text or index read returns no bytes and spends none of it."""
+        caps: list = []
+        calls: list = []
+
+        async def read(user_id, session_id, upload_id, *, max_document_bytes=None, **kwargs):
+            caps.append(max_document_bytes)
+            calls.append(upload_id)
+            if upload_id.startswith("img"):
+                return DocumentReadResult(mode="image", payload={"upload_id": upload_id},
+                                          extra_blocks=[{"image": {"format": "png", "source": {"bytes": b"x" * 300_000}}}],
+                                          bytes_returned=300_000, format="png")
+            return DocumentReadResult(mode="text", payload={"upload_id": upload_id}, format="txt")
+
+        monkeypatch.setattr(drt, "read_document", read)
+        tool = drt.make_document_read_tool("s1", "u1", searchable=False)
+        ids = ("txt-1", "img-1", "img-2", "txt-2")
+
+        messages = _round(*ids)
+        results = await asyncio.gather(*(
+            _call(tool, upload_id=i, tool_context=_context(i, messages)) for i in ids
+        ))
+
+        assert all(r["status"] == "success" for r in results)
+        # Serialized under the round's lock, in call order: each image spends its bytes.
+        assert caps == [7_000_000, 7_000_000, 6_700_000, 6_400_000]
 
     async def test_the_searchable_tool_shares_the_budget_too(self, monkeypatch):
         monkeypatch.setattr(drt, "read_document", _fake_read())

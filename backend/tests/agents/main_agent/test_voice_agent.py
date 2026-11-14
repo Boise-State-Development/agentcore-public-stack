@@ -372,6 +372,55 @@ class TestVoiceSystemPrompt:
         prompt = agent._build_voice_system_prompt()
         assert "Base prompt here." in prompt
 
+    def test_guidelines_follow_the_personal_instructions(self):
+        """#2020: the voice guidelines come after the user's own sections."""
+        from agents.main_agent.voice_agent import VoiceAgent
+
+        agent = VoiceAgent.__new__(VoiceAgent)
+        agent.system_prompt = "Base.\n\n## Personal Instructions\n\nCall me Captain."
+
+        prompt = agent._build_voice_system_prompt()
+        assert prompt.index("Call me Captain.") < prompt.index("Voice Interaction Guidelines")
+
+    def test_an_agent_without_guidelines_keeps_its_persona_and_the_voice_line(self):
+        """#625: the guidelines fight a role-play persona, so an Agent leaves them out
+        by default. The voice-presentation line stays: it fixes grammar."""
+        from agents.main_agent.voice_agent import VoiceAgent
+
+        agent = VoiceAgent.__new__(VoiceAgent)
+        agent.system_prompt = "You are Captain Ahab. Stay in character."
+        agent._voice_guidelines = False
+        agent._voice = "tiffany"
+
+        prompt = agent._build_voice_system_prompt()
+        assert prompt.startswith("You are Captain Ahab. Stay in character.")
+        assert "Voice Interaction Guidelines" not in prompt
+        assert "Confirm understanding" not in prompt
+        assert '\n\n- You speak with the voice "Tiffany"' in prompt
+
+    def test_the_knowledge_base_follows_the_instructions(self):
+        from agents.main_agent.voice_agent import VoiceAgent
+
+        agent = VoiceAgent.__new__(VoiceAgent)
+        agent.system_prompt = "Teach Spanish."
+        agent.memory_context = None
+        agent.knowledge_context = "<knowledge_base>hola</knowledge_base>"
+        agent._voice_guidelines = False
+
+        prompt = agent._build_voice_system_prompt()
+        assert prompt.index("Teach Spanish.") < prompt.index("<knowledge_base>hola</knowledge_base>")
+
+    def test_the_constructor_keeps_the_guidelines_unless_told_otherwise(self):
+        from agents.main_agent.voice_agent import VoiceAgent
+
+        with patch.object(BaseAgent, "__init__", return_value=None):
+            plain = VoiceAgent.__new__(VoiceAgent)
+            VoiceAgent.__init__(plain)
+            agent = VoiceAgent.__new__(VoiceAgent)
+            VoiceAgent.__init__(agent, voice_guidelines=False)
+        assert plain._voice_guidelines is True
+        assert agent._voice_guidelines is False
+
 
 class TestPyAudioMock:
     """Req VA-6: PyAudio mock is in place."""

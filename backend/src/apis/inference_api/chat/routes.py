@@ -162,10 +162,10 @@ from apis.shared.tools.injected import (
     injected_tools_are_key_described,
 )
 from apis.shared.user_settings.models import (
-    MAX_PERSONAL_INSTRUCTIONS_CHARS,
     cap_memory_mode,
     memory_capabilities,
     memory_mode_from,
+    personal_instructions_from,
 )
 from apis.shared.user_settings.repository import UserSettingsRepository
 
@@ -513,8 +513,7 @@ async def _load_user_settings(user_id: Optional[str]) -> dict:
 
 
 def _personal_instructions(settings: dict) -> Optional[str]:
-    text = (settings.get("personalInstructions") or "").strip()
-    return text[:MAX_PERSONAL_INSTRUCTIONS_CHARS] or None
+    return personal_instructions_from(settings)
 
 
 def _memory_mode_for_turn(
@@ -4953,6 +4952,7 @@ async def resolve_turn_agent(
     *,
     is_continuation: bool,
     record_use: bool = True,
+    kb_budget_tokens: Optional[int] = None,
 ) -> Union[StreamingResponse, ResolvedTurnAgent]:
     """Resolve the Agent a turn runs, for this caller (route step 8, the ``rag`` stage's first half).
 
@@ -4967,7 +4967,8 @@ async def resolve_turn_agent(
     the same access rules; both call this rather than a copy. ``record_use=False`` skips
     the share-interaction and last-used writes, for a call that is not the user using
     the Agent. A turn that must not run gets its conversational refusal back instead, to
-    stream as is.
+    stream as is. ``kb_budget_tokens`` replaces the full-context budget: voice mode (#625)
+    has no retrieval, so it asks for the whole knowledge base under its own ceiling.
     """
     from apis.shared.assistants.kb_access import granted
     from apis.shared.assistants.service import (
@@ -5231,10 +5232,12 @@ async def resolve_turn_agent(
     if assistant_kb_full_context_enabled():
         from apis.shared.assistants.kb_full_context import load_full_kb_context
 
+        kb_access = granted(input_data.rag_assistant_id, user_id, assistant_permission)
         kb_full_context_task = asyncio.create_task(
-            load_full_kb_context(
-                input_data.rag_assistant_id,
-                access=granted(input_data.rag_assistant_id, user_id, assistant_permission),
+            load_full_kb_context(input_data.rag_assistant_id, access=kb_access)
+            if kb_budget_tokens is None
+            else load_full_kb_context(
+                input_data.rag_assistant_id, access=kb_access, budget_tokens=kb_budget_tokens
             )
         )
 
@@ -6951,6 +6954,9 @@ async def _run_invocation(
                 # for the turn's cost row. Ids, codes and numbers only; the
                 # coordinator writes it after the stream.
                 turn_attachment_plan=attachments.plan.to_row() if attachments.plan else None,
+                # Characters of the message the composer counted as pasted, for the
+                # same row (a count, never text; clamped to the message on validation).
+                turn_pasted_chars=input_data.pasted_chars,
                 # This turn's lease doubles as the mid-turn steering inbox
                 # (docs/specs/mid-turn-steering.md). Passed per turn for the
                 # same reason as turn_agent_id — the agent is cached, the lease

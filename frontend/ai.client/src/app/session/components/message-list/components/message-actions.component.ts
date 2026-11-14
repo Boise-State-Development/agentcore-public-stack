@@ -11,7 +11,7 @@ import {
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroSquare2Stack, heroCheck, heroArrowPath, heroArrowUturnLeft, heroHandThumbUp, heroHandThumbDown } from '@ng-icons/heroicons/outline';
+import { heroSquare2Stack, heroCheck, heroArrowPath, heroArrowUturnLeft, heroCloud, heroHandThumbUp, heroHandThumbDown } from '@ng-icons/heroicons/outline';
 import { heroHandThumbUpSolid, heroHandThumbDownSolid } from '@ng-icons/heroicons/solid';
 import { MarkdownService } from 'ngx-markdown';
 import { FeedbackReason, Message, isTextContentBlock } from '../../../services/models/message.model';
@@ -22,6 +22,7 @@ import { shortcutAria, withShortcut } from '../../../../components/shortcuts/sho
 import { FEATURES } from '../../../../services/features';
 import { DeliveryService } from '../../../services/handoff/delivery.service';
 import { HandoffStateService } from '../../../services/handoff/handoff-state.service';
+import { OutageOffer } from '../../../services/chat/provider-outage';
 
 @Component({
   selector: 'app-message-actions',
@@ -33,6 +34,7 @@ import { HandoffStateService } from '../../../services/handoff/handoff-state.ser
       heroCheck,
       heroArrowPath,
       heroArrowUturnLeft,
+      heroCloud,
       heroHandThumbUp,
       heroHandThumbDown,
       heroHandThumbUpSolid,
@@ -40,7 +42,7 @@ import { HandoffStateService } from '../../../services/handoff/handoff-state.ser
     }),
   ],
   template: `
-    <div class="flex items-center gap-1">
+    <div class="flex flex-wrap items-center gap-1">
       <!-- Copy + thumbs are revealed on hover of the response (the .group
            wrapper in message-list), like the metadata row below them. Opacity
            only — never visibility or display, which would drop these buttons
@@ -187,6 +189,29 @@ import { HandoffStateService } from '../../../services/handoff/handoff-state.ser
           You stopped this response
         </span>
       }
+
+      <!-- Provider outage: not hover-gated, like Continue. The label says
+           whose fault it is; Try again is the reply's own advice ("send it
+           again in a moment") made into one click. -->
+      @if (outageOffer(); as offer) {
+        <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Retry after a model provider issue" data-testid="provider-outage-row">
+          <span class="ml-1 inline-flex items-center gap-1 rounded-md bg-state-warning-50 px-2 py-0.5 text-xs/5 font-medium text-state-warning-800 ring-1 ring-state-warning-600/20 ring-inset dark:bg-state-warning-900/30 dark:text-state-warning-200">
+            <ng-icon name="heroCloud" class="size-3.5" aria-hidden="true" />
+            {{ offer.label }}
+          </span>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-primary-accessible transition-colors hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-gray-700 dark:hover:text-primary-50"
+            appTooltip="Send your last message again"
+            appTooltipPosition="top"
+            [attr.aria-label]="offer.modelName ? 'Send your last message again on ' + offer.modelName : 'Send your last message again'"
+            (click)="outageRetryRequested.emit()"
+          >
+            <ng-icon name="heroArrowPath" class="size-4" aria-hidden="true" />
+            <span>Try again</span>
+          </button>
+        </div>
+      }
     </div>
   `,
   styles: `
@@ -249,6 +274,13 @@ export class MessageActionsComponent {
   /** Emitted when the user asks to continue the truncated / interrupted
    *  response. */
   continueRequested = output<void>();
+
+  /** Set on the last message of a turn the model provider failed: shows who
+   *  is at fault and a "Try again" that resends the last message. */
+  outageOffer = input<OutageOffer | null>(null);
+
+  /** Emitted when the user clicks "Try again" on a provider-outage reply. */
+  outageRetryRequested = output<void>();
 
   private readonly features = inject(FEATURES);
   private readonly handoffState = inject(HandoffStateService);
