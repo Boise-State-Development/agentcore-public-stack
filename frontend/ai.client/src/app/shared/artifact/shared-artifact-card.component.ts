@@ -17,6 +17,14 @@ import {
 
 import type { SharedConversationArtifact } from '../../session/services/share/share.service';
 import {
+  CONTENT_CARD_ACTION_CLASS,
+  ContentCardComponent,
+} from '../../components/content-card/content-card.component';
+import {
+  ArtifactThumbnailComponent,
+  type ArtifactThumbnailSource,
+} from '../../artifacts/components/artifact-thumbnail.component';
+import {
   SharedArtifactDialogComponent,
   type SharedArtifactDialogData,
 } from './shared-artifact-dialog.component';
@@ -82,22 +90,26 @@ export function artifactTypeStyle(contentType: string): TypeStyle {
 }
 
 /**
- * An artifact inside a shared conversation, as its recipient sees it.
+ * An artifact inside a shared conversation, as its recipient sees it,
+ * drawn with the same content card as the owner's artifact card: a live
+ * miniature (minted through the conversation share) in the tray, the
+ * title and type, and Open.
  *
  * Deliberately a separate component from `ArtifactCardComponent` rather
  * than a mode of it. That one opens the docked owner panel and carries
  * download, share and rename/delete — all keyed on endpoints a
  * conversation-share recipient has no handle for. Sharing the markup
  * would mean guarding every one of those on a flag, and the failure
- * mode of a missed guard is a visible button that 403s.
+ * mode of a missed guard is a visible button that 403s. So this card has
+ * no overflow menu at all.
  *
- * What is shared instead is the *viewer* underneath the dialog, which is
- * presentational and already serves three mint paths.
+ * What is shared instead is the card shell, the thumbnail and the
+ * *viewer* underneath the dialog, which are presentational.
  */
 @Component({
   selector: 'app-shared-artifact-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [ContentCardComponent, ArtifactThumbnailComponent, NgIcon],
   viewProviders: [
     provideIcons({
       heroCodeBracket,
@@ -107,35 +119,31 @@ export function artifactTypeStyle(contentType: string): TypeStyle {
       heroTableCells,
     }),
   ],
+  host: { class: 'block w-80 max-w-full' },
   template: `
-    <button
-      type="button"
-      (click)="open()"
-      [attr.aria-label]="ariaLabel()"
-      class="flex w-full items-center gap-3 rounded-2xl border border-gray-200 bg-white px-3 py-2.5 text-left transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700"
-    >
-      <span
-        class="grid size-9 shrink-0 place-items-center rounded-2xl"
-        [class]="style().bg"
-        aria-hidden="true"
-      >
-        <ng-icon [name]="style().icon" class="size-5" [class]="style().text" />
-      </span>
-
-      <span class="min-w-0 flex-1">
+    <app-content-card [title]="title()" [label]="cardLabel()" [meta]="meta()">
+      <div contentCardChrome class="flex min-w-0 flex-1 items-center gap-1.5" aria-hidden="true">
+        <span class="flex shrink-0" [class]="style().text">
+          <ng-icon [name]="style().icon" size="13" />
+        </span>
         <span
-          class="block truncate text-sm/6 font-semibold text-gray-900 dark:text-white"
+          class="min-w-0 flex-1 truncate rounded-full bg-gray-100 px-2 text-[10px]/4 text-gray-600 dark:bg-white/5 dark:text-gray-400"
+          >{{ style().label }}</span
         >
-          {{ artifact().title || 'Untitled artifact' }}
-        </span>
-        <span class="block text-xs/5 text-gray-500 dark:text-gray-400">
-          {{ style().label }}
-          @if (artifact().version > 1) {
-            <span aria-hidden="true"> · </span>v{{ artifact().version }}
-          }
-        </span>
-      </span>
-    </button>
+      </div>
+
+      <app-artifact-thumbnail contentCardPreview [source]="thumbnail()" />
+
+      <button
+        contentCardAction
+        type="button"
+        [class]="actionClass"
+        [attr.aria-label]="ariaLabel()"
+        (click)="open()"
+      >
+        Open
+      </button>
+    </app-content-card>
   `,
 })
 export class SharedArtifactCardComponent {
@@ -152,6 +160,29 @@ export class SharedArtifactCardComponent {
         this.artifact().contentType.split(';')[0].trim().toLowerCase()
       ] ?? DEFAULT_TYPE_STYLE,
   );
+
+  protected readonly actionClass = CONTENT_CARD_ACTION_CLASS;
+
+  protected readonly title = computed(
+    () => this.artifact().title || 'Untitled artifact',
+  );
+
+  /** The version only once there is more than one. */
+  protected readonly meta = computed(() => {
+    const { version } = this.artifact();
+    return version > 1 ? `${this.style().label} · v${version}` : this.style().label;
+  });
+
+  protected readonly cardLabel = computed(
+    () => `${this.style().label} artifact ${this.title()}`,
+  );
+
+  protected readonly thumbnail = computed<ArtifactThumbnailSource>(() => ({
+    kind: 'conversation',
+    shareId: this.shareId(),
+    artifactId: this.artifact().artifactId,
+    contentType: this.artifact().contentType,
+  }));
 
   protected readonly ariaLabel = computed(
     () =>
