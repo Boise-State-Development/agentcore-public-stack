@@ -85,8 +85,10 @@ class TestCredentialFile:
         path = tmp_path / "credentials.enc"
         store = CredentialFile.create(path, "pw")
         store.set(SESSION_SERVICE, BASE_URL, "x")
-        assert store.delete(SESSION_SERVICE, BASE_URL) is True
-        assert store.delete(SESSION_SERVICE, BASE_URL) is False
+        first = store.delete(SESSION_SERVICE, BASE_URL)
+        second = store.delete(SESSION_SERVICE, BASE_URL)
+        assert first is True
+        assert second is False
         assert CredentialFile.unlock(path, "pw").get(SESSION_SERVICE, BASE_URL) is None
 
     def test_repr_hides_secrets(self, tmp_path: Path) -> None:
@@ -103,13 +105,15 @@ class TestDispatch:
         keyring_store.use_file_store(store)
         keyring_store.store(SESSION_SERVICE, BASE_URL + "/", "sealed", hint="")
         assert keyring_store.load(SESSION_SERVICE, BASE_URL) == ("sealed", None)
-        assert keyring_store.delete(SESSION_SERVICE, BASE_URL) is True
+        deleted = keyring_store.delete(SESSION_SERVICE, BASE_URL)
+        assert deleted is True
         assert keyring_store.load(SESSION_SERVICE, BASE_URL) == (None, None)
 
     def test_a_locked_file_degrades_on_read_and_raises_on_write(self) -> None:
         keyring_store.use_file_store(None, locked_reason="locked: no terminal")
         assert keyring_store.load(SESSION_SERVICE, BASE_URL) == (None, "locked: no terminal")
-        assert keyring_store.delete(SESSION_SERVICE, BASE_URL) is False
+        deleted = keyring_store.delete(SESSION_SERVICE, BASE_URL)
+        assert deleted is False
         with pytest.raises(ConfigError) as caught:
             keyring_store.store(SESSION_SERVICE, BASE_URL, "x", hint="")
         assert "locked: no terminal" in caught.value.hint

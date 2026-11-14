@@ -227,9 +227,11 @@ def format_delivery_readout(readouts: Sequence[CaseReadout], *, title: Optional[
     """A Markdown table, one row per case, then the run's totals."""
     lines = [f"### {title}", ""] if title else []
     lines += [
-        "| Case | Arm | Ceiling | Pass | $/sample | Input tokens/sample | First token | Turn | "
-        "Last turn (TTFT / duration) | Last-turn reads | Doc tokens | "
-        "Delivery | Turn-2 cache | Turn-5 cache | Cuts/sample | Offloads/sample | Failures |",
+        (
+            "| Case | Arm | Ceiling | Pass | $/sample | Input tokens/sample | First token | Turn | "
+            "Last turn (TTFT / duration) | Last-turn reads | Doc tokens | "
+            "Delivery | Turn-2 cache | Turn-5 cache | Cuts/sample | Offloads/sample | Failures |"
+        ),
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in readouts:
