@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TestBed } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { ErrorService, ErrorCode, StreamErrorEvent, ConversationalStreamError } from './error.service';
 
 describe('ErrorService', () => {
@@ -49,6 +50,33 @@ describe('ErrorService', () => {
       
       expect(result.title).toBe('Access Denied');
       expect(result.code).toBe(ErrorCode.FORBIDDEN);
+    });
+
+    it('words a network failure the same for the fetch and XHR backends', () => {
+      // FetchBackend puts the thrown TypeError in `error`; HttpXhrBackend puts
+      // a ProgressEvent. Neither is a server message, so neither may become
+      // the toast text ("Failed to fetch").
+      const viaFetch = service.handleHttpError(
+        new HttpErrorResponse({ error: new TypeError('Failed to fetch'), status: 0 }),
+      );
+      const viaXhr = service.handleHttpError(
+        new HttpErrorResponse({ error: new ProgressEvent('error'), status: 0 }),
+      );
+
+      expect(viaFetch.message).toBe('An error occurred. Please try again.');
+      expect(viaFetch.message).toBe(viaXhr.message);
+      expect(viaFetch.title).toBe(viaXhr.title);
+      // Fetch leaves statusText undefined, so Angular's own message would end
+      // "0 undefined"; the details name the thrown error instead.
+      expect(viaFetch.detail).toContain('Network error: Failed to fetch');
+      expect(viaFetch.detail).not.toContain('undefined');
+    });
+
+    it('still reads a server body that has a message', () => {
+      const result = service.handleHttpError(
+        new HttpErrorResponse({ error: { message: 'Quota exceeded' }, status: 429 }),
+      );
+      expect(result.message).toBe('Quota exceeded');
     });
 
     it('never includes the request URL in the technical details', () => {
