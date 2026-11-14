@@ -18,6 +18,8 @@ import {
   resolveMimeTypeFor,
   ALLOWED_EXTENSIONS,
   presignRetryDelay,
+  isPermanentUploadRefusal,
+  FileUploadError,
 } from './file-upload.service';
 import { ConfigService } from '../config.service';
 import { FEATURES } from '../features';
@@ -439,6 +441,63 @@ describe('FileUploadService', () => {
 
           const err = await upload.catch(e => e);
           expect(err.message).toBe('File too large: 3 MB. Maximum: 25 MB');
+        });
+      });
+
+      describe('permanent refusals', () => {
+        class OkXhr {
+          upload = { onprogress: null };
+          status = 200;
+          statusText = 'OK';
+          onload: (() => void) | null = null;
+          onerror: (() => void) | null = null;
+          open() {}
+          setRequestHeader() {}
+          send() { setTimeout(() => this.onload?.()); }
+        }
+
+        async function completeWith(body: { detail: string }, status: number, statusText: string) {
+          vi.stubGlobal('XMLHttpRequest', OkXhr);
+          try {
+            const upload = service.uploadFile('session1', sizedFile('scan.pdf', 'application/pdf', 10));
+            const presign = await vi.waitFor(() => httpMock.expectOne(r => r.url.endsWith('/presign')));
+            presign.flush({ uploadId: 'u1', presignedUrl: 'https://s3.example/put', expiresAt: '' });
+            const complete = await vi.waitFor(() => httpMock.expectOne(r => r.url.includes('/u1/complete')));
+            complete.flush(body, { status, statusText });
+            await upload.catch(() => undefined);
+            return service.pendingUploads().get('u1');
+          } finally {
+            vi.unstubAllGlobals();
+          }
+        }
+
+        it('marks a page-count refusal at /complete as one a retry cannot fix', async () => {
+          const detail = 'scan.pdf has 1,200 pages. A PDF can have at most 1,000 pages; split it and attach the parts.';
+          const pending = await completeWith({ detail }, 400, 'Bad Request');
+          expect(pending?.status).toBe('error');
+          expect(pending?.error).toBe(detail);
+          expect(pending?.permanent).toBe(true);
+        });
+
+        it('leaves a transient /complete failure retryable', async () => {
+          const pending = await completeWith({ detail: 'Upload not found in storage' }, 409, 'Conflict');
+          expect(pending?.status).toBe('error');
+          expect(pending?.permanent).toBe(false);
+        });
+
+        it('classifies refusals by what a retry with the same file would do', () => {
+          expect(isPermanentUploadRefusal(new FileTooLargeError(10, 5))).toBe(true);
+          expect(isPermanentUploadRefusal(new InvalidFileTypeError('application/exe'))).toBe(true);
+          expect(isPermanentUploadRefusal(new FileUploadError('too many pages', 'API_ERROR', { status: 400 }))).toBe(true);
+          expect(isPermanentUploadRefusal(Object.assign(new Error('too many pages'), { status: 400 }))).toBe(true);
+          expect(isPermanentUploadRefusal(new HttpErrorResponse({ status: 400 }))).toBe(true);
+
+          expect(isPermanentUploadRefusal(new FileUploadError('S3 upload failed', 'S3_UPLOAD_FAILED', { status: 400 }))).toBe(false);
+          expect(isPermanentUploadRefusal(new FileUploadError('down', 'API_ERROR', { status: 502 }))).toBe(false);
+          expect(isPermanentUploadRefusal(new QuotaExceededError(1, 1, 1))).toBe(false);
+          expect(isPermanentUploadRefusal(new FileUploadError('offline', 'NETWORK_ERROR'))).toBe(false);
+          expect(isPermanentUploadRefusal(Object.assign(new Error('consent'), { status: 409 }))).toBe(false);
+          expect(isPermanentUploadRefusal('nope')).toBe(false);
         });
       });
 

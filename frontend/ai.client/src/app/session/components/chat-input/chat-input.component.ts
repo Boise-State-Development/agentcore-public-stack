@@ -50,6 +50,7 @@ import {
   maxFileSizeFor,
   formatBytes,
   resolveMimeTypeFor,
+  isPermanentUploadRefusal,
   inlineBudgetOverflow,
   type BudgetedAttachment,
 } from '../../../services/file-upload';
@@ -3250,7 +3251,7 @@ export class ChatInputComponent {
       // Still wanted? A card removed mid-flight has nothing to report to.
       if (!this.importRequests.has(uploadId)) return;
       const message = err instanceof Error ? err.message : 'Could not add the file';
-      this.upsertImporting({ ...pending, status: 'error', error: message });
+      this.upsertImporting({ ...pending, status: 'error', error: message, permanent: isPermanentUploadRefusal(err) });
       return;
     }
 
