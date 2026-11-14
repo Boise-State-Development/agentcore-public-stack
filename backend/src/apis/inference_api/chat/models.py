@@ -33,9 +33,14 @@ class FileContent(BaseModel):
 class InterruptResponseEntry(BaseModel):
     """One user response to a Strands interrupt, in the SDK's prompt shape.
 
-    Posted by the frontend after the user completes (or declines) an OAuth
-    consent popup. The backend forwards the list verbatim to
+    Posted by a client after the user answers a paused turn's prompt (OAuth
+    consent, tool approval, a question, a browser sign-in, a client tool, an
+    MCP form). The backend forwards the list verbatim to
     `agent.stream_async(...)` to resume the paused turn.
+
+    ``response`` stays optional here so an omitted one reaches the route,
+    which streams the refusal (`_null_interrupt_response_turn`) rather than
+    answering a 422: a null is never a valid answer to any kind.
     """
 
     interruptId: str
