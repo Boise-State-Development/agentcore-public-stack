@@ -70,7 +70,7 @@ dependencies = [
 [project.optional-dependencies]
 # AgentCore-specific dependencies (for inference_api)
 agentcore = [
-    "strands-agents==1.63.0",
+    "strands-agents==1.65.0",
     "strands-agents-tools==0.8.8",
 
     "aws-opentelemetry-distro==0.22.0",
@@ -85,7 +85,7 @@ agentcore = [
 
 # Voice/BidiAgent dependencies (Nova Sonic speech-to-speech)
 bidi = [
-    "strands-agents[bidi]==1.63.0",
+    "strands-agents[bidi]==1.65.0",
 ]
 
 # Document ingestion pipeline dependencies (for Lambda deployment)
@@ -134,7 +134,7 @@ all = [
 # Exact pins on TRANSITIVE dependencies — the MCP SDK line is chosen here.
 #
 # `mcp` arrives only via `strands-agents`; we do not depend on it directly and
-# deliberately do not promote it to a direct dependency. `strands-agents==1.63.0`
+# deliberately do not promote it to a direct dependency. `strands-agents==1.65.0`
 # declares `mcp>=1.23.0,<2.4`, so without this constraint the resolver would
 # move the SDK whenever it got the chance. 2.3.0 is the newest release inside
 # that range: it negotiates MCP 2026-07-28 (`server/discover`, per-request

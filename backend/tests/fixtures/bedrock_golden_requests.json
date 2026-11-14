@@ -611,6 +611,7 @@
          "text": "{\"n\": 1}"
         }
        ],
+       "status": "success",
        "toolUseId": "t1"
       }
      }

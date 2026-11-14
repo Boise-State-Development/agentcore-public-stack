@@ -400,3 +400,54 @@ class TestUsageNormalizationStillApplies:
         assert usage["inputTokens"] == 100
         assert usage["cacheReadInputTokens"] == 30_000
         assert usage["cacheWriteInputTokens"] == 400
+
+
+class TestNoUpstreamMessageCheckpoints:
+    """No OpenAI-family builder may hand Strands a ``cache_config``.
+
+    Since strands-agents 1.64.0 (#5418), an ``OpenAIResponsesModel`` with any
+    ``cache_config`` places ``prompt_cache_breakpoint`` checkpoints through the
+    conversation history on models whose ``model_info`` says they take cache
+    points, which GPT-5.6 does (``strategy="auto"`` is the default). That is
+    the end-of-history breakpoint measured at +11.8% cost in the module
+    docstring of ``bedrock_responses.py``: it re-writes the growing history
+    every turn and never reads it back. Today the only thing keeping it off is
+    that no builder passes a ``cache_config``, so pin that. Retiring
+    ``build_prompt_cache_key`` in favour of upstream's ``apply_cache_config``
+    (docs/kaizen/standing-watches.md) needs ``messages_ttl=False`` with it.
+    """
+
+    @pytest.mark.parametrize(
+        "model_id", ["us.openai.gpt-5.6-sol", "global.openai.gpt-5.6-luna", "us.moonshotai.kimi-k3"]
+    )
+    def test_bedrock_runtime_builder_sets_no_cache_config(self, model_id):
+        model = build_bedrock_responses_model(model_id, region="us-west-2")
+
+        assert model.get_config().get("cache_config") is None
+
+    @pytest.mark.parametrize("api_mode", ["CHAT_COMPLETIONS", "RESPONSES"])
+    def test_mantle_builder_sets_no_cache_config(self, api_mode):
+        from apis.shared.models.mantle import MantleApiMode, build_mantle_model
+
+        model = build_mantle_model(
+            model_id="openai.gpt-5.6-sol", api_mode=MantleApiMode[api_mode], region="us-west-2"
+        )
+
+        assert model.get_config().get("cache_config") is None
+
+    def test_a_cache_config_would_mark_the_history(self):
+        """Why the pin exists: the upstream behaviour it keeps switched off."""
+        from strands.models import CacheConfig
+
+        model = build_bedrock_responses_model("us.openai.gpt-5.6-sol", region="us-west-2")
+        model.update_config(cache_config=CacheConfig(strategy="auto"))
+
+        request = _format(model)
+
+        marked_roles = [
+            item.get("role")
+            for item in request["input"]
+            if isinstance(item.get("content"), list)
+            and any(isinstance(b, dict) and "prompt_cache_breakpoint" in b for b in item["content"])
+        ]
+        assert "user" in marked_roles
