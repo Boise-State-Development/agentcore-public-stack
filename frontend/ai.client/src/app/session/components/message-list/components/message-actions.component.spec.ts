@@ -359,7 +359,7 @@ describe('MessageActionsComponent — provider outage row', () => {
       imports: [MessageActionsComponent],
       providers: [provideMarkdown()],
     }).compileComponents();
-    TestBed.inject(MarkdownService).parse = () => '';
+    TestBed.inject(MarkdownService).parse = async () => '';
 
     fixture = TestBed.createComponent(MessageActionsComponent);
     component = fixture.componentInstance;
