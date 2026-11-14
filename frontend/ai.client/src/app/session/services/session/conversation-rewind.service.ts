@@ -34,6 +34,18 @@ export class ConversationRewindService {
   /** The message a rewind is in flight for, so its button can show it and not double-fire. */
   readonly pendingMessageId = signal<string | null>(null);
 
+  /**
+   * Per conversation, the highest message index the server has refused
+   * because the compaction summary covers it. The SPA is not told the
+   * checkpoint (`GET /messages` carries only `totalSummarizedTurns`), so it
+   * learns it from the first refusal. That is enough to stop offering the
+   * dead buttons: the checkpoint only moves forward, and a rewind or fork
+   * before it is refused (rewind_service `_compaction_after_cut`), so every
+   * message at or before a refused one is covered too. Fork and rewind share
+   * the rule, so a refusal from either hides both.
+   */
+  private readonly summarizedThrough = signal<ReadonlyMap<string, number>>(new Map());
+
   /** Whether the feature is on at all; the bubble renders nothing without it. */
   get enabled(): boolean {
     return this.features.sessionRewind;
@@ -47,8 +59,27 @@ export class ConversationRewindService {
   canRewind(message: Message): boolean {
     if (!this.enabled || message.role !== 'user' || message.steering || message.sendFailure) return false;
     const ref = parseMessageRef(message.id);
-    if (!ref) return false;
+    if (!ref || this.isSummarized(message)) return false;
     return !this.chatState.isSessionLoading(ref.sessionId) && this.pendingMessageId() === null;
+  }
+
+  /** Whether the server has said the summary covers `message`; neither rewind nor fork is offered there. */
+  isSummarized(message: Message): boolean {
+    const ref = parseMessageRef(message.id);
+    if (!ref) return false;
+    const through = this.summarizedThrough().get(ref.sessionId);
+    return through !== undefined && ref.index <= through;
+  }
+
+  /** Remember a summary refusal for `message`, from a rewind or a fork. Other refusals are ignored. */
+  noteRefusal(message: Message, error: unknown): void {
+    if (!isSummaryRefusal(error)) return;
+    const ref = parseMessageRef(message.id);
+    if (!ref) return;
+    this.summarizedThrough.update((current) => {
+      if ((current.get(ref.sessionId) ?? -1) >= ref.index) return current;
+      return new Map(current).set(ref.sessionId, ref.index);
+    });
   }
 
   async rewind(message: Message): Promise<boolean> {
@@ -67,6 +98,7 @@ export class ConversationRewindService {
       this.injector.get(ComposerDraftService).request(ref.sessionId, result.prefillText);
       return true;
     } catch (error) {
+      this.noteRefusal(message, error);
       this.injector.get(ToastService).error("Couldn't rewind", rewindErrorMessage(error));
       return false;
     } finally {
@@ -82,4 +114,16 @@ export function rewindErrorMessage(error: unknown): string {
     if (typeof detail === 'string' && detail && error.status !== 500) return detail;
   }
   return 'Something went wrong. Try again in a moment.';
+}
+
+/**
+ * The refusal for a message the compaction summary covers: a 409 whose detail
+ * names the summary. Matched on the wording because the route answers every
+ * refusal as `{detail}` with no code, and the other 409s (a turn streaming,
+ * a message already rewound, a race) are all worth trying again.
+ */
+export function isSummaryRefusal(error: unknown): boolean {
+  if (!(error instanceof HttpErrorResponse) || error.status !== 409) return false;
+  const detail = (error.error as { detail?: unknown } | null)?.detail;
+  return typeof detail === 'string' && /\bsummary\b/i.test(detail);
 }
