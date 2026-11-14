@@ -1,9 +1,9 @@
 # Field set authoring
 
-**Status:** PRs 1 and 2 implemented (§8): `serialize_field_set` and the unconditional
+**Status:** PRs 1–3 implemented (§8): `serialize_field_set` and the unconditional
 check on every skill-file write (PR 1); the app-api routes, the parser's
-`FieldSetLayout` and the `FIELD_SET_AUTHORING_ENABLED` flag (PR 2). PR 3 (the editor)
-not built.
+`FieldSetLayout` and the `FIELD_SET_AUTHORING_ENABLED` flag (PR 2); the SPA editor
+(PR 3). Off everywhere until an environment turns both halves on.
 **Closes:** `docs/specs/structured-extraction.md` §4, "what is given up" #1.
 **Depends on:** structured extraction (`DOCUMENT_EXTRACT_ENABLED`), in development.
 
@@ -364,7 +364,7 @@ would be inventing a permission for a capability the user demonstrably has.
 |---|---|
 | **1** ✅ | `serialize_field_set` in `apis.shared.extraction.field_sets`, both pinned tests (§6), validate-on-write in `SkillBundleFiles` (§4.2) |
 | **2** ✅ | The app-api routes (§4.1), the flag, CDK config + ceilings entry, docs-site row. Also the parser reporting what it ignores (`FieldSetLayout`, below), so the structured `PUT` can carry it |
-| **3** | The SPA: route, list section on the skill form, the card editor, markdown mode |
+| **3** ✅ | The SPA: route, list section on the skill form, the card editor, markdown mode (§8.1) |
 
 PR 1 is useful on its own: it stops a malformed field set being storable at all, through
 any path, whether or not the editor is ever turned on.
@@ -391,6 +391,63 @@ extra column headed with an alias, which would read as a real column, and a `|` 
 text after the table, which would read as a row. The layout is a separate object from
 `FieldSet`, so extraction, its schema and its grammar-cache key are unchanged.
 
+### 8.1 As built (PR 3)
+
+All under `frontend/ai.client/src/app/customize/skills/`, behind `features.fieldSetAuthoring`:
+
+* **Routes.** `customize/skills/:skillId/field-sets/new` and `…/:name`, both `canMatch` on
+  the flag, declared above `customize/skills/:skillId`. They render `FieldSetEditorPage`.
+* **The Field sets section** (`FieldSetsSectionComponent`) sits on the skill's **edit**
+  form, above Supporting files. It lists each set with its title, field count and
+  version (§3), by opening each one, because the list route carries names only (§4.1).
+  A skill holds a handful of sets at most, and the reads run in parallel. A set whose
+  file no longer parses still lists, marked "Can't be opened as a form".
+* **Supporting files keeps the file.** A `reference` named `field-set.<name>.md` gains an
+  Edit link beside View and Delete. It is never hidden.
+* **Cards** follow §5:
+  * Title first, and Name derived from it until the author types in the name box. An
+    existing field's rename is called out as a new column.
+  * The seven types by label.
+  * **What to look for** as a three-row textarea, with its helper line and a placeholder
+    drawn from the card's title.
+  * Allowed values as chips, shown only for `enum`, and sent only for `enum`.
+  * Optional.
+  * Move up / Move down keep keyboard focus on the moved card (D4).
+  * "N of 14" comes from the backend's `maxFields`. Add field disables at the ceiling and
+    says why.
+* **What the form doesn't show** rides along unchanged: `## Rules` (shown read-only),
+  prose, extra frontmatter lines and note columns. A banner names any note column and
+  points at markdown mode. A new card gets empty cells for those columns, so the
+  structured `PUT` lines up.
+* **Version.** A save sends exactly the version in the box. When the field list changes
+  shape (a name, type, allowed values, optional, or the order) and the version has not
+  moved, a link offers the next number. A changed `find` or title does not count as a
+  new shape.
+* **Markdown mode (D7).** Form → markdown is `PUT …?validate=true` with the structured
+  body, so the backend writes the file. Markdown → form is `PUT …?validate=true` with
+  `{markdown}`, so the backend reads it. A body the backend refuses keeps you where you
+  are, with its message. Save in markdown mode stores the text as typed. A stored file
+  that no longer parses opens here with the parser's message.
+* **Create, rename and delete.**
+  * A new set takes its name from the title when none is typed.
+  * Create or rename first checks the list and refuses a name already in use, because
+    a `PUT` replaces.
+  * A rename writes the new name, then deletes the old file, then replaces the URL.
+  * Delete confirms in a destructive `alertdialog` and uses the existing resource
+    `DELETE`.
+
+Checked in the in-app browser against a local app-api from this branch, with the flag
+on, on 2026-11-13. A structured save of a hand-written set:
+* kept its `note` column and that column's cells;
+* kept the prose on both sides of the table, an extra frontmatter line and `## Rules`;
+* left `version` at 2, while the edited phrase changed.
+
+Also checked in the same session:
+* reorder plus markdown mode carried the note cell with its row;
+* broken markdown stayed in markdown mode with the parser's message;
+* a new set was created and then deleted through the dialog;
+* at 375 px in dark mode, nothing scrolled sideways.
+
 ---
 
 ## 9. Open questions for review
@@ -398,8 +455,9 @@ text after the table, which would read as a row. The layout is a separate object
 1. ~~**Unconditional validation (§4.2).**~~ **Decided 2026-11-13: unconditional.** A
    flag-gated check would let invalid files collect quietly until a deployment turned
    extraction on, then fail in front of users who did not write them.
-2. **Does the escape hatch earn its place in slice one (§5.4)?** It is small, and it is
-   the honest answer to `## Rules` and unknown columns. It is also a second editor over
-   one file.
+2. ~~**Does the escape hatch earn its place in slice one (§5.4)?**~~ **Shipped in PR 3.**
+   It is the only way to edit `## Rules`, a note column or the prose, and the only way
+   to fix a stored file that no longer parses. Both switches go through the backend,
+   so it adds no second parser.
 3. ~~**Sequencing against the render gap (§1.2).**~~ **Settled:** the render shipped
    first, in structured extraction's PR-3 (#1940).
