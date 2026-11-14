@@ -18,8 +18,10 @@ could break us (#1012, #1694, #1850), never for what we could take.
    strands-agents/harness-sdk`). Dropped site, docs, CI, CLI, harness-package, Bidi and
    TypeScript-only commits. About 150 Python items remained.
 2. For each remaining item, read the shipped code by diffing the PyPI wheels `1.54.0` against
-   `1.63.0` in a scratchpad. Checked each PR's file list to confirm it is Python, because five "Python
-   or both" items turned out to touch only `strands-ts/`. Grepped our import surface and opt-in config
+   `1.63.0` in a scratchpad. Checked each PR's file list to confirm it is Python, meaning it touches
+   `strands-py/src/` or `shared/`. `shared/model-info.json` ships in the wheel as
+   `strands/models/model_info.json`, so a data-only PR counts. Five items whose release-note lines read
+   as Python or shared touch neither and were dropped. Grepped our import surface and opt-in config
    under `backend/src`.
 3. Scored every candidate on four lenses. The first three are **speed** (TTFT, then turn latency),
    **answer quality**, and **cost** (prompt-cache stability, token waste, metering accuracy). A
@@ -170,7 +172,7 @@ costs speed, quality and cost nothing, or it names the cost. Every row below is 
   neither should merge on this document's estimates.
 - Per-tool durations are live-only (`agent_status.durationMs`), so the prod size of #1's win needs
   the ledger's tool counts or a dev fan-out. It can't be computed from `C#` rows.
-- The TS-only misreadings (#4408 here; #4863, #4569, #5065 and #4851, whose release-note lines read
-  as shared or Python) suggest
-  the per-release review should check each PR's file list, not the release-note line. Passed to the
-  `strands-release-review` session as a method note.
+- Five items read as Python or shared but touch only TypeScript: #4408 (listed as a Python unlock in
+  research/2026-09-25), #4863, #4569, #5065 and #4851. Each has 0 files under `strands-py/src/` or
+  `shared/`. That is why each PR's file list is checked, not the release-note line. The check is now
+  step 1 of the `strands-release-review` skill (PR #2080), which also counts `shared/` as Python.
