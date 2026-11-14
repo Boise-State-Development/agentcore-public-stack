@@ -313,7 +313,7 @@ class TestTheTurn:
         from apis.inference_api.chat import routes
         from apis.inference_api.chat.models import InvocationRequest
 
-        monkeypatch.setattr(routes, "_build_document_tools", AsyncMock(return_value=[]))
+        monkeypatch.setattr(routes, "_build_document_tools", AsyncMock(return_value=([], "")))
         tools = asyncio.run(routes._build_turn_tools(
             InvocationRequest(session_id="s1"), VIEWER, VIEWER.user_id, [],
             project_memory=project_memory, turn_has_document=False,

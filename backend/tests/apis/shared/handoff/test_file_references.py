@@ -20,7 +20,7 @@ from moto import mock_aws
 from apis.app_api.files.service import FileUploadService
 from apis.shared.files import repository as repository_module
 from apis.shared.files.document_read import is_document_class
-from apis.shared.files.file_kinds import KIND_DOCUMENT, KIND_PRESENTATION, KIND_TABULAR
+from apis.shared.files.file_kinds import KIND_DOCUMENT, KIND_IMAGE, KIND_PRESENTATION, KIND_TABULAR
 from apis.shared.files.linked_files import (
     HANDOFF_MAX_FILES,
     linked_file_gone_message,
@@ -537,15 +537,15 @@ def test_the_targets_first_turn_carries_document_read_without_a_gate_query(monke
 
     async def query(user_id, session_id):
         queried.append(session_id)
-        return False
+        return ""
 
-    monkeypatch.setattr("apis.shared.files.document_read.session_has_documents", query)
+    monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", query)
 
     async def run():
         hint = asyncio.ensure_future(asyncio.sleep(0, result=True))
-        return await routes._session_has_documents("tgt-new", "alice", False, (), document_hint=hint)
+        return await routes._session_attachment_kind("tgt-new", "alice", "", (), document_hint=hint)
 
-    assert asyncio.run(run()) is True
+    assert asyncio.run(run()) == "documents"
 
 
 def test_on_a_fresh_process_the_next_turn_still_carries_it(aws, handoffs):
@@ -556,7 +556,7 @@ def test_on_a_fresh_process_the_next_turn_still_carries_it(aws, handoffs):
     asyncio.run(_accept(_first_turn(handoffs, ["orig-1"])))
     routes._DOCUMENT_SESSIONS.clear()  # a recycled microVM
 
-    assert asyncio.run(routes._session_has_documents("tgt", "alice")) is True
+    assert asyncio.run(routes._session_attachment_kind("tgt", "alice")) == "documents"
 
 
 # ----------------------------------------------------------------------------- deliveries
@@ -721,6 +721,7 @@ def test_two_concurrent_sends_attaching_one_delivery_write_one_set_of_rows(aws, 
         ("budget.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", {KIND_TABULAR}),
         ("deck.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", {KIND_PRESENTATION}),
         ("rubric.docx", DOCX, {KIND_DOCUMENT}),
+        ("diagram.png", "image/png", {KIND_IMAGE}),
     ],
 )
 def test_a_handoff_hints_each_gate_that_reads_its_kind_of_file(aws, handoffs, filename, mime, kinds):
@@ -731,7 +732,7 @@ def test_a_handoff_hints_each_gate_that_reads_its_kind_of_file(aws, handoffs, fi
 
     async def run():
         turn.prefetch()
-        return {k: await turn.kind_hint(k) for k in (KIND_DOCUMENT, KIND_TABULAR, KIND_PRESENTATION)}
+        return {k: await turn.kind_hint(k) for k in (KIND_DOCUMENT, KIND_TABULAR, KIND_PRESENTATION, KIND_IMAGE)}
 
     answers = asyncio.run(run())
     # A CSV is also a readable document; the other kinds are each exactly their own.

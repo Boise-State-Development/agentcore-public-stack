@@ -359,5 +359,102 @@
       "sync_error.png"
     ],
     "notes": "A deck through the PowerPoint tools and a native PDF in one turn; the screenshot is a bystander."
+  },
+  {
+    "id": "attachment_tools.image_after_compaction",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "I've attached the badge photos from today's Quarry Ridge site walk and the site memo. For now, only this: according to the memo, what time does the gate close? Reply in one sentence."
+      },
+      {
+        "prompt": "Unrelated: suggest three names for a neighbourhood book club."
+      },
+      {
+        "prompt": "Back to the site walk. What badge number is printed on site_badge_07.png? Reply with just the badge number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "VB-38007"
+      ],
+      "forbidden": [
+        "VB-38070",
+        "VB-36907",
+        "VB-39107"
+      ]
+    },
+    "files": [
+      "site_badge_01.png",
+      "site_badge_02.png",
+      "site_badge_03.png",
+      "site_badge_04.png",
+      "site_badge_05.png",
+      "site_badge_06.png",
+      "site_badge_07.png",
+      "site_badge_08.png",
+      "site_badge_09.png",
+      "site_badge_10.png",
+      "site_badge_11.png",
+      "site_badge_12.png",
+      "site_badge_13.png",
+      "site_badge_14.png",
+      "site_badge_15.png",
+      "site_badge_16.png",
+      "site_walk_memo.md"
+    ],
+    "notes": "The 1.36.0 QA repro: one turn of sixteen ~4.8k-token images passes Haiku 5.5's 70k hard compaction ceiling (~84k measured), so the turn after it cuts the attach turn into the summary. Turn 3 asks about one image that no earlier turn read out: only document_read's image listing and read return it. On a model whose ceiling the turn does not cross, the image is still inline and the case measures reading it."
+  },
+  {
+    "id": "attachment_tools.image_only_after_compaction",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "I've attached the badge photos from today's Quarry Ridge site walk. For now, only this: how many badge photos did I attach? Reply with just the number."
+      },
+      {
+        "prompt": "Unrelated: suggest three names for a neighbourhood book club."
+      },
+      {
+        "prompt": "Back to the site walk. What badge number is printed on site_badge_11.png? Reply with just the badge number."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": []
+    },
+    "expect": {
+      "contains_any": [
+        "VB-42407"
+      ],
+      "forbidden": [
+        "VB-42470",
+        "VB-41307",
+        "VB-43507"
+      ]
+    },
+    "files": [
+      "site_badge_01.png",
+      "site_badge_02.png",
+      "site_badge_03.png",
+      "site_badge_04.png",
+      "site_badge_05.png",
+      "site_badge_06.png",
+      "site_badge_07.png",
+      "site_badge_08.png",
+      "site_badge_09.png",
+      "site_badge_10.png",
+      "site_badge_11.png",
+      "site_badge_12.png",
+      "site_badge_13.png",
+      "site_badge_14.png",
+      "site_badge_15.png",
+      "site_badge_16.png"
+    ],
+    "notes": "image_after_compaction without the memo: a conversation of images alone. document_read's gate used to count documents only, so after the cut no image could be reached (dev, 2026-11-14: \"I don't have access to the image contents\")."
   }
 ]

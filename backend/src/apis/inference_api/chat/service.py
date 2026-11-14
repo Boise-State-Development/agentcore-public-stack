@@ -10,7 +10,7 @@ import logging
 import hashlib
 import os
 import threading
-from typing import Any, Callable, Dict, Optional, List, Tuple
+from typing import Any, Callable, Dict, Optional, List, Tuple, Union
 
 import boto3
 
@@ -64,7 +64,7 @@ def _create_cache_key(
     freshness_hash: str,
     agent_type: Optional[str],
     skills_hash: str = "",
-    document_tools: bool = False,
+    document_tools: Union[bool, str] = False,
     assistant_id: Optional[str] = None,
     memory_binding: str = "",
     memory_context: Optional[str] = None,
@@ -106,13 +106,15 @@ def _create_cache_key(
     string when no assistant is attached, so keys for assistant-less turns are
     byte-identical to the pre-field ones.
 
-    `document_tools` is whether the turn built the session-state-gated
-    ``document_read`` tool (the session has a readable attachment). It is not
-    in `enabled_tools`, so without this element an agent cached before the
-    first upload would be served — without the tool — to every turn after it.
-    The gate is monotonic in practice (files stay once uploaded), so the key
-    flips at most once per session, on the attach turn, when restored history
-    carries no document yet to lose.
+    `document_tools` is what the session-state-gated ``document_read`` tool
+    was built for: ``"documents"`` (or ``True``), ``"images"`` for a session
+    holding only images, or nothing. It is not in `enabled_tools`, so without
+    this element an agent cached before the first upload would be served —
+    without the tool — to every turn after it. The gate is monotonic in
+    practice (files stay once uploaded), so the key flips at most twice per
+    session: on the first image, and on the first document, which adds
+    ``verify_sources`` where it is on. A documents answer keys exactly as the
+    boolean did (:func:`_document_tools_key`).
 
     `freshness_hash` is a short digest of the enabled tools' current
     `updated_at` values (see `freshness.get_freshness_hash`). When an
@@ -165,10 +167,22 @@ def _create_cache_key(
         agent_type or "chat",
         memory_mode or "on",
         memory_binding,  # ahead of the rest so their positions ([-1]..[-3]) stay put
-        bool(document_tools),
+        _document_tools_key(document_tools),
         assistant_id or "",
         skills_hash,  # stays the trailing element; tests index it as [-1]
     )
+
+
+def _document_tools_key(document_tools: Union[bool, str, None]) -> Union[bool, str]:
+    """The cache-key element for the ``document_read`` gate's answer.
+
+    ``True`` / ``False`` exactly as before for documents and for nothing, so
+    every existing key is unchanged; ``"images"`` only for a session whose
+    tool was built for images alone (its toolset lacks ``verify_sources``).
+    """
+    if document_tools == "images":
+        return "images"
+    return bool(document_tools)
 
 
 def _conversation_owner_key(session_id: str, user_id: Optional[str]) -> Tuple[str, str]:
@@ -525,7 +539,7 @@ async def get_agent(
     accessible_skill_ids: Optional[List[str]] = None,
     extra_tools_key_described: bool = False,
     cache_write: bool = True,
-    has_document_tools: bool = False,
+    has_document_tools: Union[bool, str] = False,
     assistant_id: Optional[str] = None,
     build_stage_recorder: Optional[Callable[[str], None]] = None,
     build_detail_recorder: Optional[Callable[[str, Any], None]] = None,

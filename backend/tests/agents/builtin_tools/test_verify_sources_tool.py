@@ -485,9 +485,9 @@ class TestRoutesGate:
 
         monkeypatch.delenv("SOURCE_PROVENANCE_ENABLED", raising=False)
         monkeypatch.setattr(
-            "apis.shared.files.document_read.session_has_documents", AsyncMock(return_value=True)
+            "apis.shared.files.document_read.session_attachment_kind", AsyncMock(return_value="documents")
         )
-        tools = await _build_document_tools("s1", "u1", turn_has_document=True)
+        tools, _kind = await _build_document_tools("s1", "u1", turn_has_document=True)
         assert [t.tool_name for t in tools] == ["document_read"]
 
     @pytest.mark.asyncio
@@ -496,9 +496,9 @@ class TestRoutesGate:
 
         monkeypatch.setenv("SOURCE_PROVENANCE_ENABLED", "true")
         monkeypatch.setattr(
-            "apis.shared.files.document_read.session_has_documents", AsyncMock(return_value=True)
+            "apis.shared.files.document_read.session_attachment_kind", AsyncMock(return_value="documents")
         )
-        tools = await _build_document_tools("s1", "u1", turn_has_document=True)
+        tools, _kind = await _build_document_tools("s1", "u1", turn_has_document=True)
         assert [t.tool_name for t in tools] == ["document_read", "verify_sources"]
 
     @pytest.mark.asyncio
@@ -509,20 +509,20 @@ class TestRoutesGate:
 
         monkeypatch.setenv("SOURCE_PROVENANCE_ENABLED", "true")
         monkeypatch.setattr(
-            "apis.shared.files.document_read.session_has_documents", AsyncMock(return_value=False)
+            "apis.shared.files.document_read.session_attachment_kind", AsyncMock(return_value="")
         )
-        assert await _build_document_tools("s1", "u1") == []
+        assert (await _build_document_tools("s1", "u1"))[0] == []
 
     @pytest.mark.asyncio
     async def test_in_development_only_the_literal_true_enables(self, monkeypatch, clear_memo):
         from apis.inference_api.chat.routes import _build_document_tools
 
         monkeypatch.setattr(
-            "apis.shared.files.document_read.session_has_documents", AsyncMock(return_value=True)
+            "apis.shared.files.document_read.session_attachment_kind", AsyncMock(return_value="documents")
         )
         for value in ("", "yes", "1", "on", "false", "True "):
             monkeypatch.setenv("SOURCE_PROVENANCE_ENABLED", value)
-            tools = await _build_document_tools("s1", "u1", turn_has_document=True)
+            tools, _kind = await _build_document_tools("s1", "u1", turn_has_document=True)
             expected = ["document_read", "verify_sources"] if value.strip().lower() == "true" else ["document_read"]
             assert [t.tool_name for t in tools] == expected, value
 

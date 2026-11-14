@@ -1,7 +1,7 @@
 """What kinds of file a handoff or delivery carries in, for the turn's tool gates (handoffs spec §4.9).
 
-Three gates decide tools from the conversation's files: ``document_read`` (a readable document),
-the Spreadsheet Analysis tools (a CSV or workbook) and the PowerPoint tools (a deck). Each one
+Three gates decide tools from the conversation's files: ``document_read`` (a readable document or
+an image), the Spreadsheet Analysis tools (a CSV or workbook) and the PowerPoint tools (a deck). Each one
 queries the conversation's READY uploads. A shared file's reference row is written during the
 stream, after those queries ran, so on the first turn none of them could see it. The gate then
 answered no on turn 1 and yes on turn 2, which rewrote the whole cached prefix once and left the
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 KIND_DOCUMENT = "document"
 KIND_TABULAR = "tabular"
 KIND_PRESENTATION = "presentation"
+KIND_IMAGE = "image"
 
 
 def file_kinds(files: Iterable[Tuple[str, str]]) -> FrozenSet[str]:
@@ -31,7 +32,7 @@ def file_kinds(files: Iterable[Tuple[str, str]]) -> FrozenSet[str]:
     The same predicates the three session queries apply to READY uploads, so a hint never says
     yes where the next turn's query would say no.
     """
-    from apis.shared.files.document_read import is_document_class
+    from apis.shared.files.document_read import image_format_for, is_document_class
     from apis.shared.files.models import is_presentation_file, is_tabular_file
 
     kinds = set()
@@ -42,6 +43,8 @@ def file_kinds(files: Iterable[Tuple[str, str]]) -> FrozenSet[str]:
             kinds.add(KIND_TABULAR)
         if is_presentation_file(filename, mime_type):
             kinds.add(KIND_PRESENTATION)
+        if image_format_for(mime_type) is not None:
+            kinds.add(KIND_IMAGE)
     return frozenset(kinds)
 
 

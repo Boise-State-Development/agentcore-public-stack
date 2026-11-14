@@ -269,7 +269,7 @@ def _no_live_infrastructure_reads(monkeypatch):
     stubs = [
         # Inference invocation path.
         ("apis.inference_api.chat.system_prompt_resolver.get_session_metadata", None),
-        ("apis.shared.files.document_read.session_has_documents", False),
+        ("apis.shared.files.document_read.session_attachment_kind", ""),
         ("apis.shared.files.document_read.session_has_tabular_files", False),
         ("apis.shared.files.document_read.session_has_presentation_files", False),
         # The tool-catalog snapshot behind `freshness.get_always_on_tool_ids`.
