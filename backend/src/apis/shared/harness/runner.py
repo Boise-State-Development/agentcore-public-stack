@@ -325,6 +325,8 @@ async def run_agent_headless(
     result.client_tool_calls = acc.client_tool_calls
     result.title = acc.title
     result.events_seen = acc.events_seen
+    if not result.error and acc.error:
+        result.error_code = acc.error_code
     result.error = result.error or acc.error
     if result.status != "timeout":
         if result.error:

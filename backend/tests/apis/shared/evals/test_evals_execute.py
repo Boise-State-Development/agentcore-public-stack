@@ -7,7 +7,17 @@ import json
 import pytest
 
 from apis.shared.evals.cases import parse_case
-from apis.shared.evals.execute import EVAL_SESSION_PREFIX, OAuthRequiredError, StagedSample, run_sample, sum_usage
+from apis.shared.evals.execute import (
+    EVAL_SESSION_PREFIX,
+    PROVIDER_UNAVAILABLE,
+    OAuthRequiredError,
+    StagedSample,
+    is_provider_outage,
+    retried_sessions,
+    run_sample,
+    run_with_provider_retry,
+    sum_usage,
+)
 from apis.shared.harness.models import OAuthConsentRequired, RunResult, ToolTraceEntry
 
 
@@ -455,3 +465,114 @@ async def test_the_search_arm_without_a_wait_is_a_setup_error():
     with pytest.raises(ValueError, match="searchability wait"):
         await run_sample(_overflow_case("search"), sample=0, model_id="m", run_turn=FakeRunner(["a", "b", "c"]),
                          register_fixture=register)
+
+
+# --------------------------------------------------------------------------- provider outages
+
+
+class OutageRunner(FakeRunner):
+    """The first ``outages`` turns end in the provider's failure, as the Runtime streams it."""
+
+    def __init__(self, answers, *, outages=1, code=PROVIDER_UNAVAILABLE):
+        super().__init__(answers)
+        self.outages = outages
+        self.code = code
+
+    async def __call__(self, **kwargs):
+        result = await super().__call__(**kwargs)
+        if len(self.calls) <= self.outages:
+            result.status = "error"
+            result.error = "⚠️ The model provider is unavailable right now."
+            result.error_code = self.code
+            result.final_message = result.error
+        return result
+
+
+def _one_turn_case():
+    return parse_case(
+        {"id": "document_qa.limit", "family": "document_qa", "turns": [{"prompt": "How many?"}],
+         "expect": {"first_number": ["17"]}},
+        family="document_qa",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_provider_outage_is_recorded_on_the_row():
+    row = await run_sample(_one_turn_case(), sample=0, model_id="m", run_turn=OutageRunner(["17"]))
+    assert row["status"] == "error" and row["error_code"] == PROVIDER_UNAVAILABLE
+    assert is_provider_outage(row) and not row["passed"]
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_row_carries_no_error_code():
+    row = await run_sample(_one_turn_case(), sample=0, model_id="m", run_turn=FakeRunner(["17"]))
+    assert "error_code" not in row and not is_provider_outage(row)
+
+
+class _Attempts:
+    """``attempt(n)`` for ``run_with_provider_retry``: each attempt a fresh sample on one runner."""
+
+    def __init__(self, runner):
+        self.runner = runner
+        self.seen = []
+
+    async def __call__(self, n):
+        self.seen.append(n)
+        return await run_sample(_one_turn_case(), sample=0, model_id="m", run_turn=self.runner)
+
+
+@pytest.mark.asyncio
+async def test_an_outage_is_retried_once_in_a_fresh_session_after_the_delay():
+    runner = OutageRunner(["", "17"], outages=1)
+    attempts, slept = _Attempts(runner), []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+
+    row = await run_with_provider_retry(attempts, delay_seconds=30.0, sleep=sleep)
+    assert attempts.seen == [0, 1] and slept == [30.0]
+    assert row["passed"] and row["status"] == "completed"
+    first, second = (call["session_id"] for call in runner.calls)
+    assert first != second and row["session_id"] == second
+    [replaced] = row["retried"]
+    assert replaced["session_id"] == first and replaced["error_code"] == PROVIDER_UNAVAILABLE
+    assert replaced["status"] == "error" and replaced["error"].startswith("⚠️")
+    assert retried_sessions(row) == [first]
+
+
+@pytest.mark.asyncio
+async def test_an_outage_twice_is_an_honest_failure_that_says_it_was_retried():
+    attempts = _Attempts(OutageRunner(["", ""], outages=2))
+
+    async def sleep(seconds):
+        pass
+
+    row = await run_with_provider_retry(attempts, delay_seconds=1.0, sleep=sleep)
+    assert attempts.seen == [0, 1]
+    assert not row["passed"] and row["failures"] == ["status: error"]
+    assert is_provider_outage(row) and len(row["retried"]) == 1
+
+
+@pytest.mark.parametrize("runner,delay", [
+    (OutageRunner([""], code="agent_error"), 30.0),     # the agent's own error is the thing under test
+    (FakeRunner(["40"]), 30.0),                         # a wrong answer is never retried
+    (OutageRunner([""]), None),                         # retries switched off
+])
+@pytest.mark.asyncio
+async def test_anything_but_a_provider_outage_runs_once(runner, delay):
+    attempts = _Attempts(runner)
+
+    async def sleep(seconds):
+        raise AssertionError("no retry, so no wait")
+
+    row = await run_with_provider_retry(attempts, delay_seconds=delay, sleep=sleep)
+    assert attempts.seen == [0] and "retried" not in row
+
+
+def test_retried_sessions_covers_every_session_of_a_replaced_attempt():
+    row = {"session_id": "eval-2", "retried": [
+        {"session_id": "eval-1", "sessions": [{"session_id": "eval-1"}, {"session_id": "eval-1b", "as_user": "member2"}]},
+        "not an attempt",
+    ]}
+    assert retried_sessions(row) == ["eval-1", "eval-1b"]
+    assert retried_sessions({"session_id": "eval-3"}) == []

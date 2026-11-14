@@ -407,6 +407,21 @@ class TestListingAndGate:
         assert await dr.session_has_documents("u1", "s1") is True
 
     @pytest.mark.asyncio
+    async def test_attachment_kind_prefers_documents_then_images(self, monkeypatch):
+        self._repo(monkeypatch, [_meta("up-2", "data.csv", "text/csv")])
+        assert await dr.session_attachment_kind("u1", "s1") == ""
+        self._repo(monkeypatch, [_meta("up-2", "data.csv", "text/csv"), _meta("up-3", "a.png", "image/png")])
+        assert await dr.session_attachment_kind("u1", "s1") == "images"
+        assert await dr.session_has_documents("u1", "s1") is False
+        self._repo(monkeypatch, [_meta("up-3", "a.png", "image/png"), _meta("up-1", "a.pdf")])
+        assert await dr.session_attachment_kind("u1", "s1") == "documents"
+
+    @pytest.mark.asyncio
+    async def test_attachment_kind_ignores_another_users_rows(self, monkeypatch):
+        self._repo(monkeypatch, [_meta("up-3", "a.png", "image/png", user="u2")])
+        assert await dr.session_attachment_kind("u1", "s1") == ""
+
+    @pytest.mark.asyncio
     async def test_identity_is_mandatory(self):
         with pytest.raises(Exception):
             await dr.list_session_documents("", "s1")

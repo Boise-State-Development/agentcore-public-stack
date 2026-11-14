@@ -48,7 +48,7 @@ def _no_live_session_reads():
     """Stub the two session-scoped reads the invocation path makes.
 
     ``system_prompt_resolver.resolve_active_prompt_text`` reads session
-    metadata, and ``_session_has_documents`` asks the file index whether to
+    metadata, and ``_session_attachment_kind`` asks the file index whether to
     inject ``document_read``. Both build real DynamoDB clients, and both are
     fail-open — so these property tests were issuing live AWS calls on every
     Hypothesis example while still passing. See the off-box socket guard in
@@ -59,8 +59,8 @@ def _no_live_session_reads():
         new=AsyncMock(return_value=None),
     ), patch(
         # Imported inside the function, so patch it at the source module.
-        "apis.shared.files.document_read.session_has_documents",
-        new=AsyncMock(return_value=False),
+        "apis.shared.files.document_read.session_attachment_kind",
+        new=AsyncMock(return_value=""),
     ):
         yield
 

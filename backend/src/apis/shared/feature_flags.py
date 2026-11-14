@@ -516,71 +516,6 @@ def agent_status_enabled() -> bool:
     return os.environ.get("AGENT_STATUS_ENABLED", "").strip().lower() != "false"
 
 
-def agent_status_live_drain_enabled() -> bool:
-    """Whether ``agent_status`` transitions are drained DURING agent-stream silence.
-
-    The hook records its transitions from inside Strands' event loop, which has
-    no route to the SSE stream — so the coordinator drains them. Draining
-    between yields of the agent stream means a transition can only leave the
-    container when the agent stream next produces an event, and during tool
-    execution the agent stream produces nothing. A ``tool_start`` therefore
-    queued for exactly the silence it existed to explain and arrived bundled
-    with its own ``tool_end`` (measured: a three-tool browse turn narrated
-    nothing for 4.5s). This flag turns on the concurrent drain that fixes it.
-
-    **Default ON with a kill switch** (house style): unset or empty resolves to
-    enabled; only the literal ``"false"`` (case-insensitive) disables.
-
-    Its own kill switch rather than riding ``AGENT_STATUS_ENABLED`` because the
-    two carry different risk. That flag gates what the hook *records*, all of
-    it in-process. This one changes how the turn's stream is consumed — the
-    merge races the agent stream against a short timer — so a regression here
-    would be a streaming bug, not a missing status line. Turning it off
-    restores the original between-yields drain exactly, leaving every other
-    part of the feature intact.
-
-    Costs nothing against the model: it changes only when an already-recorded
-    transition is written to the SSE channel. Nothing reaches the prompt.
-    """
-    return (
-        os.environ.get("AGENT_STATUS_LIVE_DRAIN_ENABLED", "").strip().lower()
-        != "false"
-    )
-
-
-def agent_preparing_phase_enabled() -> bool:
-    """Whether the agent build runs INSIDE the response stream, narrated.
-
-    Measured on dev (docs/specs/agent-state-feedback.md): a cold agent-cache
-    miss spends **1478ms** in ``get_agent`` against a 2542ms pre-stream window,
-    while a warm turn spends 0-38ms there. Because FastAPI flushes response
-    headers when the handler returns its ``StreamingResponse``, and
-    ``get_agent`` is awaited before that return, the whole of that 1478ms is
-    dead air: the client has no channel and the server has nothing to say on.
-
-    With this on, the non-resume path defers the build into the stream
-    generator and emits one ``agent_status`` ``preparing`` frame before it, so
-    the response opens immediately and the wait is narrated instead of silent.
-
-    **Default ON with a kill switch** (house style): unset or empty resolves to
-    enabled; only the literal ``"false"`` (case-insensitive) disables, which
-    restores the eager build exactly.
-
-    Deliberately NOT applied to resume turns. Resume validates the submitted
-    interrupt ids against the rebuilt agent's paused state and **400s** on a
-    mismatch; that guard has to run before any byte is sent, and it needs the
-    agent to run at all. Resume also reuses a cached agent by construction, so
-    it is the case with the least to gain.
-
-    Costs nothing against the model: one SSE frame, and the same build either
-    way. Nothing reaches the prompt.
-    """
-    return (
-        os.environ.get("AGENT_PREPARING_PHASE_ENABLED", "").strip().lower()
-        != "false"
-    )
-
-
 def tool_summaries_enabled() -> bool:
     """Whether tool batches get a model-generated one-line summary.
 
@@ -629,27 +564,6 @@ def cost_diagnostics_enabled() -> bool:
     Nothing reaches the prompt; the cacheable prefix is untouched.
     """
     return os.environ.get("COST_DIAGNOSTICS_ENABLED", "").strip().lower() != "false"
-
-
-def config_cache_enabled() -> bool:
-    """Whether tenant-global config catalogs are served from the in-process cache.
-
-    Covers the model catalog, tool catalog, system-prompt list and connector
-    list — the lists every user's first load reads and that only an admin edit
-    changes. **Default ON with a kill switch** (house style, mirroring
-    ``scheduled_runs_enabled``): unset or empty resolves to enabled; only the
-    literal ``"false"`` (case-insensitive) disables.
-
-    While off, every read goes straight to DynamoDB exactly as before — the
-    loaders are unchanged and still correct, they simply stop being memoized.
-    Turning this off costs latency and read units, never correctness, which is
-    what makes it a safe switch to flip if a stale catalog is ever suspected.
-
-    Note the cache is per process (see ``apis.shared.caching.config_cache``), so
-    a write invalidates only the task that served it; other tasks catch up
-    within ``CONFIG_CACHE_TTL_SECONDS`` (default 60).
-    """
-    return os.environ.get("CONFIG_CACHE_ENABLED", "").strip().lower() != "false"
 
 
 def ask_user_question_enabled() -> bool:
@@ -748,24 +662,6 @@ def response_feedback_enabled() -> bool:
     ``docs/specs/document-context-offload.md`` §5 row 7 / §6.1.
     """
     return os.environ.get("RESPONSE_FEEDBACK_ENABLED", "").strip().lower() != "false"
-def attachment_turn_guard_enabled() -> bool:
-    """Whether a turn's attachments are held to the per-message file count and
-    the aggregate inline-bytes budget before the message is built.
-
-    Read as an input of the attachment planner's ``legacy`` profile
-    (``apis.shared.files.attachment_plan``: its count cap and its combined
-    budget; docs/specs/document-context-offload.md §4E, PR-6). **Default ON with a kill switch** (house style): unset or empty
-    resolves to enabled; only the literal ``"false"`` (case-insensitive)
-    disables.
-
-    While off the route behaves as before this shipped: the ``file_upload_ids``
-    resolver silently truncates at five, direct ``files`` are uncounted, and
-    a turn whose attachments sum past the AgentCore Memory event quota fails
-    at ``create_message`` with a ``SessionException``. The tuning knobs
-    (``INLINE_ATTACHMENTS_MAX_TOTAL_BYTES``, ``FILE_UPLOAD_MAX_FILES_PER_MESSAGE``)
-    live in ``apis.shared.files.models``.
-    """
-    return os.environ.get("ATTACHMENT_TURN_GUARD_ENABLED", "").strip().lower() != "false"
 
 
 def inline_budget_by_reference_enabled() -> bool:
@@ -1192,7 +1088,6 @@ def compaction_summary_extract_enabled() -> bool:
     every planted fact on the quality harness, Nova Micro 88%.
     """
     return os.environ.get("COMPACTION_SUMMARY_EXTRACT_ENABLED", "").strip().lower() != "false"
-
 
 
 def agent_build_shared_session_enabled() -> bool:

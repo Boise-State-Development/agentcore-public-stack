@@ -410,7 +410,7 @@ other mode, then documents in attachment order:
 **What an image's `on_demand` is.** For an uploaded image the compact copy is the
 overflow mode, so `on_demand` is never reached: no image reader is added to
 `document_read`. That reader would change `toolConfig` for every image session, the
-rotation class `_session_has_documents` was hardened against. Only an image with no
+rotation class the `document_read` gate was hardened against. Only an image with no
 upload row and no stored copy, sent as base64 by a client, can still be dropped over
 the budget (`over_budget`), as before.
 
@@ -630,9 +630,27 @@ a page read, and a text-only model is told it cannot view it. The image rides th
 tool result, which Memory keeps with its bytes, so a restore re-sends it byte for
 byte. Nothing runs before the first token and nothing is re-sent per turn: the read
 happens only when the model asks. The tool's description names images, which moved
-its spec once per deployment: +32 tokens on CountTokens (Haiku 4.5; 664 → 696 without the KB, 837 → 869 with it). Image-only
-sessions do not get the tool: its gate is still a readable document
-(`_session_has_documents`).
+its spec once per deployment: +32 tokens on CountTokens (Haiku 4.5; 664 → 696 without the KB, 837 → 869 with it).
+
+Image-only sessions get the tool too (2026-11-14). Its gate
+(`_session_attachment_kind`) answers `documents`, `images` or nothing from the one
+upload-row query it already ran, with the turn's own uploads classified the same way
+(`_resolved_files_include_an_image`) and a handed-over image counted by its hint
+(`file_kinds.KIND_IMAGE`), so the attach turn, a later turn on another microVM and a
+resume all agree and `toolConfig` cannot flap (the rotation class above came from
+the turn and the query disagreeing, not from images as such). An image-only session
+gets `document_read` alone (`verify_sources` needs a document); the cache key
+carries `"images"` for it and keys every other session exactly as before. Only
+`documents` is memoized, so an image session still queries per turn, as it did.
+Cost: the tool's spec in that session's `toolConfig` from its first image (696
+tokens on Haiku 4.5's CountTokens, 869 with the KB; Haiku 5.5 has no CountTokens, and
+turn 3 of the image-only case measured 6,144 input tokens on dev against 5,015
+without the tool, so ~1,130), read from cache on later turns;
+a first image on turn 2 or later rewrites the prefix once, as a first document does.
+The regression cases are `attachment_tools.image_after_compaction` (the QA repro:
+sixteen ~4.8k-token badge images and a memo, cut after turn 2 at ~84k input on
+Haiku 5.5) and `attachment_tools.image_only_after_compaction` (cut at ~82k; on develop the
+model answered "I don't have access to the image contents").
 
 ## 7. Flags
 

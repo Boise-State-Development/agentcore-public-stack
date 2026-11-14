@@ -43,7 +43,7 @@ def _captured_users(fn) -> list:
 
 
 def _names(monkeypatch, *, project_memory, turn_project_id, assistant_id="ast_harness"):
-    monkeypatch.setattr(routes, "_build_document_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr(routes, "_build_document_tools", AsyncMock(return_value=([], "")))
     tools = asyncio.run(routes._build_turn_tools(
         InvocationRequest(session_id="s1", rag_assistant_id=assistant_id), MEMBER, MEMBER.user_id, [],
         project_memory=project_memory, turn_has_document=False, turn_project_id=turn_project_id,
@@ -71,7 +71,7 @@ class TestTheTurn:
         assert "project_files" not in _names(monkeypatch, project_memory=None, turn_project_id="prj_1", assistant_id=None)
 
     def test_the_default_leaves_every_existing_caller_unchanged(self, monkeypatch):
-        monkeypatch.setattr(routes, "_build_document_tools", AsyncMock(return_value=[]))
+        monkeypatch.setattr(routes, "_build_document_tools", AsyncMock(return_value=([], "")))
         tools = asyncio.run(routes._build_turn_tools(
             InvocationRequest(session_id="s1", rag_assistant_id="ast_1"), MEMBER, MEMBER.user_id, [],
             project_memory=None, turn_has_document=False,

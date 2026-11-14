@@ -16,8 +16,7 @@ from apis.shared.caching.config_cache import ConfigListCache
 
 @pytest.fixture(autouse=True)
 def _clean_cache(monkeypatch):
-    """Every test starts on an empty, enabled, default-TTL cache."""
-    monkeypatch.delenv("CONFIG_CACHE_ENABLED", raising=False)
+    """Every test starts on an empty, default-TTL cache."""
     monkeypatch.delenv("CONFIG_CACHE_TTL_SECONDS", raising=False)
     config_cache.get_config_cache().clear()
     yield
@@ -213,28 +212,3 @@ class TestIsolationContract:
         assert len(calls) == 1
 
 
-class TestKillSwitch:
-    @pytest.mark.asyncio
-    async def test_disabled_bypasses_the_cache_entirely(self, monkeypatch):
-        monkeypatch.setenv("CONFIG_CACHE_ENABLED", "false")
-        cache = ConfigListCache()
-        calls = []
-        loader = _counting_loader([{"id": "a"}], calls)
-
-        await cache.get_or_load("k", loader)
-        await cache.get_or_load("k", loader)
-
-        assert len(calls) == 2
-
-    @pytest.mark.asyncio
-    async def test_empty_value_is_still_enabled(self, monkeypatch):
-        """House style: unset or empty resolves to ON; only literal 'false' disables."""
-        monkeypatch.setenv("CONFIG_CACHE_ENABLED", "")
-        cache = ConfigListCache()
-        calls = []
-        loader = _counting_loader([{"id": "a"}], calls)
-
-        await cache.get_or_load("k", loader)
-        await cache.get_or_load("k", loader)
-
-        assert len(calls) == 1

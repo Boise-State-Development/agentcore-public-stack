@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -352,6 +353,38 @@ def test_cleaned_up_staged_samples_are_forgotten_so_a_resume_stages_them_again(t
     assert [e["session_id"] for e in remaining] == ["eval-ran"]
 
 
+def test_a_retried_sample_s_first_session_is_not_unrun_and_cleanup_deletes_it(tmp_path, monkeypatch):
+    out = tmp_path / "run"
+    out.mkdir()
+    staged = [
+        {"case_id": "document_qa.a", "sample": 0, "session_id": "eval-first", "upload_ids": ["u1"], "documents": ["manual"]},
+        {"case_id": "document_qa.a", "sample": 0, "session_id": "eval-retry", "upload_ids": ["u2"], "documents": ["manual"]},
+    ]
+    (out / eval_harness.STAGED_FILE).write_text("".join(json.dumps(e) + "\n" for e in staged), encoding="utf-8")
+    row = {"session_id": "eval-retry", "upload_ids": ["u2"],
+           "retried": [{"session_id": "eval-first", "upload_ids": ["u1"], "error_code": "provider_unavailable"}]}
+    assert eval_harness._unrun_staged(out, [row]) == []
+
+    import apis.app_api.sessions.services.session_service as session_service
+    import apis.shared.evals.fixtures as fixtures
+
+    deleted = {"sessions": [], "uploads": []}
+
+    class FakeService:
+        async def delete_session(self, *, user_id, session_id):
+            deleted["sessions"].append(session_id)
+            return True
+
+    async def fake_delete_upload(user_id, upload_id):
+        deleted["uploads"].append(upload_id)
+        return True
+
+    monkeypatch.setattr(session_service, "SessionService", FakeService)
+    monkeypatch.setattr(fixtures, "delete_upload", fake_delete_upload)
+    assert asyncio.run(eval_harness._cleanup([row], "user-1")) == (2, 2)
+    assert deleted == {"sessions": ["eval-retry", "eval-first"], "uploads": ["u2", "u1"]}
+
+
 class TestOrphanSweep:
     def test_cleanup_needs_a_run_or_a_sweep(self, capsys):
         with pytest.raises(SystemExit):
@@ -649,6 +682,55 @@ def test_publish_refuses_samples_without_a_metered_cost(tmp_path, golden, capsys
     out = tmp_path / "public.json"
     assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out), "--no-cost-rows"]) == 2
     assert "no metered cost" in capsys.readouterr().err and not out.exists()
+
+
+def _mark_outage(run: Path, case_id: str, sample: int) -> None:
+    rows = eval_harness.read_rows(run / "results.jsonl")
+    for row in rows:
+        if row["case_id"] == case_id and row["sample"] == sample:
+            row.update(status="error", error_code="provider_unavailable", passed=False, failures=["status: error"])
+    (run / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
+def test_publish_keeps_refusing_a_provider_outage_and_says_how_to_rerun_it(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_measured_run(run, output_tokens=200, duration_ms=3000)
+    _mark_outage(run, "tool_selection.c", 1)
+    out = tmp_path / "public.json"
+    assert eval_harness.main(flags + ["publish", "--out", str(run), "--json", str(out), "--no-cost-rows"]) == 2
+    err = capsys.readouterr().err
+    assert "1 of them ended in a provider outage, e.g. tool_selection.c" in err and "--rerun-outages" in err
+    assert not out.exists()
+
+
+def test_rerun_outages_counts_them_again_and_only_spends_with_yes(tmp_path, golden, capsys):
+    flags, _ = golden
+    run = tmp_path / "run"
+    _write_run(run)
+    _mark_outage(run, "tool_selection.c", 1)
+    before = (run / "results.jsonl").read_text()
+    base = flags + ["run", "--out", str(run), "--model-id", MODEL, "--user-id", "u", "--prefix", "dev-example",
+                    "--family", "tool_selection"]
+
+    assert eval_harness.main(base) == 0
+    assert "nothing to run" in capsys.readouterr().out  # without the flag an outage row is a done sample
+
+    assert eval_harness.main(base + ["--rerun-outages"]) == 0
+    printed = capsys.readouterr().out
+    assert "1 sample(s) ended in a provider outage" in printed and "1 samples to run" in printed
+    assert "estimate only" in printed
+    assert (run / "results.jsonl").read_text() == before and not (run / "results.jsonl.bak").exists()
+
+
+def test_rewriting_results_keeps_the_previous_file(tmp_path):
+    run = tmp_path / "run"
+    _write_run(run, samples=1)
+    before = (run / "results.jsonl").read_text()
+    kept = eval_harness.read_rows(run / "results.jsonl")[:2]
+    eval_harness._rewrite_results(run, kept)
+    assert eval_harness.read_rows(run / "results.jsonl") == kept
+    assert (run / "results.jsonl.bak").read_text() == before
 
 
 def test_publish_writes_the_document_and_the_headline(tmp_path, golden, capsys):
