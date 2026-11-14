@@ -6,8 +6,12 @@ import {
   heroArrowLeft,
   heroArrowUpTray,
   heroEye,
+  heroPencilSquare,
   heroTrash,
 } from '@ng-icons/heroicons/outline';
+import { FEATURES } from '../../services/features';
+import { FieldSetsSectionComponent } from './components/field-sets-section.component';
+import { fieldSetNameFor } from './models/field-set.model';
 import { parseSkillMarkdown } from '../../admin/skills/models/skill-import.util';
 import {
   DISALLOWED_RESOURCE_MESSAGE,
@@ -38,16 +42,19 @@ import { MySkillService } from './services/my-skill.service';
  */
 @Component({
   selector: 'app-skill-form',
-  imports: [ReactiveFormsModule, RouterLink, NgIcon],
+  imports: [ReactiveFormsModule, RouterLink, NgIcon, FieldSetsSectionComponent],
   templateUrl: './skill-form.page.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  viewProviders: [provideIcons({ heroArrowLeft, heroArrowUpTray, heroEye, heroTrash })],
+  viewProviders: [
+    provideIcons({ heroArrowLeft, heroArrowUpTray, heroEye, heroPencilSquare, heroTrash }),
+  ],
 })
 export class SkillFormPage {
   private fb = inject(FormBuilder);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private skillService = inject(MySkillService);
+  protected readonly features = inject(FEATURES);
 
   protected readonly resourceKinds = RESOURCE_KINDS;
   protected readonly maxFiles = MAX_RESOURCES_PER_SKILL;
@@ -262,6 +269,18 @@ export class SkillFormPage {
     } catch {
       this.error.set(`Couldn't delete ${filename}.`);
     }
+  }
+
+  /**
+   * The set name a supporting file declares, when the editor can open it: a
+   * `reference` named `field-set.<name>.md`. The file stays in this list as the
+   * file it is, and gains an Edit link (field-set-authoring §3).
+   */
+  protected editableFieldSet(resource: MySkillResourceRef): string | null {
+    if (!this.features.fieldSetAuthoring || resource.kind !== 'reference') {
+      return null;
+    }
+    return fieldSetNameFor(resource.filename);
   }
 
   protected kindHint(kind: SkillResourceKind): string {

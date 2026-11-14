@@ -117,8 +117,11 @@ export interface FeatureFlags {
    * Field-set authoring (docs/specs/field-set-authoring.md): a structured editor
    * for the field sets on a skill the user owns. Backend:
    * FIELD_SET_AUTHORING_ENABLED (app-api serves `/skills/mine/{id}/field-sets`,
-   * which 404s while off). The editor itself arrives in a later PR; until then
-   * nothing reads this. In development: off everywhere.
+   * which 404s while off). The UI's share is the editor routes
+   * (`/customize/skills/:skillId/field-sets/new` and `/:name`, behind
+   * `canMatch`), the Field sets section on a skill's edit form, and an Edit
+   * link on a field-set file in its supporting files. In development: on only
+   * in the deployed dev build, whose backend is on; off locally and in prod.
    */
   fieldSetAuthoring: boolean;
 
