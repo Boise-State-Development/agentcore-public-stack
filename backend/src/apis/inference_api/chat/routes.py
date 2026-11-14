@@ -4845,6 +4845,47 @@ async def _resume_unavailable_turn(
     )
 
 
+_NULL_INTERRUPT_RESPONSE_MESSAGE = (
+    "Your answer arrived empty, so nothing was resumed. The request is still "
+    "waiting for you: answer the prompt again to continue."
+)
+
+
+def _null_interrupt_response_turn(
+    input_data: InvocationRequest, user_id: str
+) -> Optional[StreamingResponse]:
+    """Refuse a resume whose entries carry no ``response``, before anything resumes.
+
+    Every interrupt kind answers with a value: ``"consented"`` (OAuth), ``"approved"``
+    / ``"declined"`` (tool approval), or an object (``user_question``,
+    ``browser_login``, ``client_tool``, ``mcp_elicitation``; their skip and decline
+    are objects too). A null is never an answer. Strands 1.63/1.64 store it and
+    re-raise the interrupt, so the turn pauses again forever, and from 1.65
+    ``_InterruptState.resume()`` raises ``ValueError`` (harness-sdk #4471).
+
+    Checked on the request alone, so it costs no IO. Nothing is retired: the
+    snapshot and breadcrumbs stay, and a correct answer still resumes the turn.
+    Streamed, unpersisted, like ``_resume_unavailable_turn``.
+    """
+    entries = input_data.interrupt_responses or []
+    if all(entry.response is not None for entry in entries):
+        return None
+    logger.warning("Resume rejected: interrupt response missing")
+    return _refuse_turn(
+        input_data,
+        user_id,
+        message=_NULL_INTERRUPT_RESPONSE_MESSAGE,
+        stop_reason="error",
+        metadata_event=ConversationalErrorEvent(
+            code=ErrorCode.BAD_REQUEST,
+            message=_NULL_INTERRUPT_RESPONSE_MESSAGE,
+            recoverable=True,
+            metadata={"error_kind": "invalid_interrupt_response"},
+        ),
+        persist=False,
+    )
+
+
 def _validate_resume_interrupts(agent, input_data: InvocationRequest) -> None:
     """Reject a resume that names interrupts the cached agent has not paused.
 
@@ -5713,6 +5754,10 @@ async def _run_invocation(
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
     is_resume = bool(input_data.interrupt_responses)
+    if is_resume:
+        refusal = _null_interrupt_response_turn(input_data, user_id)
+        if refusal is not None:
+            return refusal
     # Resolve the effective agent type: the client's explicit choice, else the
     # compiled-in default ("chat"). Used for the skill resolution below and the
     # non-resume get_agent calls (resume reuses the snapshot's type). An Agent

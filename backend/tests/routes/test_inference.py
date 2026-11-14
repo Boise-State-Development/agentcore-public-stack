@@ -778,6 +778,163 @@ class TestInvocationsResumeUnavailable:
         release.assert_awaited_with(lease)
 
 
+# One row per interrupt kind: (kind, interrupt id, the answers that kind sends).
+# Every kind's skip/decline is a value too, so it must keep resuming.
+_INTERRUPT_KIND_ANSWERS = [
+    ("oauth", "v1:before_tool_call:tu-oauth:consent", ["consented"]),
+    ("tool_approval", "v1:before_tool_call:tu-approve:approval", ["approved", "declined"]),
+    (
+        "user_question",
+        "v1:tool:tu-ask:ask_user_question",
+        [{"answers": {"Scope": {"selected": ["All"], "text": ""}}}, {"skipped": True}],
+    ),
+    ("browser_login", "v1:tool:tu-login:request_user_login", [{"completed": True}, {"skipped": True}]),
+    (
+        "client_tool",
+        "v1:tool:tu-shell:local_run_shell",
+        [{"output": "ok", "isError": False}, {"declined": True}],
+    ),
+    (
+        "mcp_elicitation",
+        "v1:middleware_execute_tool:tu-form:0:abc123",
+        [{"action": "accept", "content": {"repo": "x"}}, {"action": "decline"}, {"action": "cancel"}],
+    ),
+]
+
+
+class TestInvocationsNullInterruptResponse:
+    """A resume entry with no ``response`` is refused before anything resumes.
+
+    On Strands 1.63/1.64 a null re-raises the interrupt, so the turn re-paused
+    forever; from 1.65 ``_InterruptState.resume()`` raises ``ValueError``
+    (harness-sdk #4471). The route refuses it from the request alone, as a
+    streamed message, for every interrupt kind, and leaves the pause in place.
+    """
+
+    SESSION = "sess-null-response"
+
+    def _post(self, client, entries):
+        get_agent = MagicMock(
+            return_value=TestInvocationsResume._paused_agent(entries[0]["interruptId"])
+        )
+        get_paused_turn = AsyncMock(
+            return_value=TestInvocationsResume._snapshot(enabled_tools=[])
+        )
+        acquire = AsyncMock(return_value=None)
+        retire = {
+            "clear_paused_turn": AsyncMock(),
+            "clear_pending_interrupts": AsyncMock(),
+            "remove_pending_interrupts": AsyncMock(),
+        }
+        with patch("apis.inference_api.chat.routes.get_agent", get_agent), patch(
+            "apis.inference_api.chat.routes.is_quota_enforcement_enabled",
+            return_value=False,
+        ), patch("apis.shared.sessions.metadata.get_paused_turn", get_paused_turn), patch(
+            "apis.shared.sessions.session_lease.acquire_session_lease", acquire
+        ), patch.multiple("apis.shared.sessions.metadata", **retire), patch(
+            "agents.main_agent.session.persistence.persist_synthetic_messages"
+        ) as persist:
+            resp = client.post(
+                "/invocations",
+                json={"session_id": self.SESSION, "message": "", "interrupt_responses": entries},
+            )
+            body = resp.text
+        return resp, body, {
+            "get_agent": get_agent,
+            "get_paused_turn": get_paused_turn,
+            "acquire": acquire,
+            "persist": persist,
+            **retire,
+        }
+
+    @staticmethod
+    def _stream_errors(body):
+        import json
+
+        return [
+            json.loads(frame.split("data: ", 1)[1])
+            for frame in body.split("\n\n")
+            if frame.startswith("event: stream_error")
+        ]
+
+    def _assert_refused(self, resp, body, mocks):
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        errors = self._stream_errors(body)
+        assert len(errors) == 1
+        assert errors[0]["metadata"] == {"error_kind": "invalid_interrupt_response"}
+        assert errors[0]["recoverable"] is True
+        assert errors[0]["message"].startswith("Your answer arrived empty")
+        assert "event: done" in body
+        # Refused before the lease, the snapshot read or an agent build.
+        mocks["acquire"].assert_not_awaited()
+        mocks["get_paused_turn"].assert_not_awaited()
+        mocks["get_agent"].assert_not_called()
+        # The pause stays answerable, and nothing reaches history.
+        mocks["clear_paused_turn"].assert_not_awaited()
+        mocks["clear_pending_interrupts"].assert_not_awaited()
+        mocks["remove_pending_interrupts"].assert_not_awaited()
+        mocks["persist"].assert_not_called()
+
+    @pytest.mark.parametrize(
+        "kind,interrupt_id", [(k, iid) for k, iid, _ in _INTERRUPT_KIND_ANSWERS]
+    )
+    def test_explicit_null_is_refused(self, authed_client, kind, interrupt_id):
+        resp, body, mocks = self._post(
+            authed_client, [{"interruptId": interrupt_id, "response": None}]
+        )
+        self._assert_refused(resp, body, mocks)
+
+    @pytest.mark.parametrize(
+        "kind,interrupt_id", [(k, iid) for k, iid, _ in _INTERRUPT_KIND_ANSWERS]
+    )
+    def test_omitted_response_is_refused(self, authed_client, kind, interrupt_id):
+        resp, body, mocks = self._post(authed_client, [{"interruptId": interrupt_id}])
+        self._assert_refused(resp, body, mocks)
+
+    def test_one_null_among_valid_answers_refuses_the_whole_resume(self, authed_client):
+        """Strands applies the list together, so a partial resume is never started."""
+        resp, body, mocks = self._post(
+            authed_client,
+            [
+                {"interruptId": "v1:before_tool_call:tu-oauth:consent", "response": "consented"},
+                {"interruptId": "v1:tool:tu-ask:ask_user_question", "response": None},
+            ],
+        )
+        self._assert_refused(resp, body, mocks)
+
+    @pytest.mark.parametrize(
+        "kind,interrupt_id,response",
+        [(k, iid, r) for k, iid, answers in _INTERRUPT_KIND_ANSWERS for r in answers],
+    )
+    def test_every_kinds_real_answers_still_resume(
+        self, authed_client, kind, interrupt_id, response
+    ):
+        resp, body, mocks = self._post(
+            authed_client, [{"interruptId": interrupt_id, "response": response}]
+        )
+
+        assert resp.status_code == 200
+        assert "event: done" in body
+        assert not any(
+            e.get("metadata", {}).get("error_kind") == "invalid_interrupt_response"
+            for e in self._stream_errors(body)
+        )
+        mocks["get_paused_turn"].assert_awaited_once()
+        mocks["get_agent"].assert_called()
+
+    @pytest.mark.parametrize("falsy", [False, 0, "", [], {}])
+    def test_falsy_but_present_answers_are_not_null(self, authed_client, falsy):
+        """Only ``None`` is refused; whether a falsy value is a valid answer is the kind's call."""
+        interrupt_id = "v1:tool:tu-shell:local_run_shell"
+        resp, body, mocks = self._post(
+            authed_client, [{"interruptId": interrupt_id, "response": falsy}]
+        )
+
+        assert resp.status_code == 200
+        mocks["get_paused_turn"].assert_awaited_once()
+
+
 class TestPausedTurnTtl:
     def test_headless_runs_get_a_week_attended_turns_an_hour(self):
         from datetime import timedelta
