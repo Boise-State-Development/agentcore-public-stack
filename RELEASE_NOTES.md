@@ -1,3 +1,60 @@
+# Release Notes — v1.36.1
+
+**Release Date:** November 13, 2026
+**Previous Release:** v1.36.0 (November 13, 2026)
+
+---
+
+## Highlights
+
+A patch with two changes and no backend changes.
+
+**1.36.0 is now published.** Its Release workflow stopped on a formatting check in a terminal-client test, `tui/tests/test_catalog.py`. All 939 TUI tests passed, but the failed check meant v1.36.0 got no git tag, GitHub release or TUI wheel. The file is now formatted, so 1.36.1 is the first tagged release carrying everything in 1.36.0. Prod already runs 1.36.0's code.
+
+**Attachment cards in our prod.** Attached files are drawn as preview cards: a PDF's first page, the opening of a Word, Markdown or text file, a sheet's first rows, an image full-bleed, a Drive folder's files. Past five files the composer folds them into a summary, and a sent message shows a mosaic with a "+N more" tile. They were checked on dev in light and dark with a 20-file message. The flag is frontend-only and stays off by default.
+
+No new flags, no manual steps, no GSI or dependency changes.
+
+---
+
+## 🔧 CI/CD
+
+- `tui/tests/test_catalog.py` reformatted with `black`. The TUI's tests, lint and type checks run only in the Release workflow (`scripts/tui/build.sh --check`), after the merge to `main`; no PR workflow checks `tui/`. Adding that check to PR CI is a follow-up.
+
+## 🚩 Feature flags
+
+| Flag | Default | Set on | Kind | What on does |
+|---|---|---|---|---|
+| SPA `features.attachmentCards` (no backend switch) | **OFF** (in development): `true` in `environment.development.ts` and, from this release, `environment.production.ts` | SPA build only | In development; a feature switch once finished | Attached files drawn as preview cards: a rail that folds into a summary in the composer, and a mosaic in a message |
+
+**Turned on in our prod with this release:** `attachmentCards` (UI only, so there is nothing to set on the backend).
+
+**Default changes:** none. **Retired:** none.
+
+**Still opt-in, on in our prod** (#1798):
+- `sessionRewind` and `sessionFork`: on in prod since 1.32.0 with no flip; eligible for promotion.
+- `sessionPrewarm`: waits on the Runtime V2 readout.
+- `attachmentKb` and `CONVERSATION_INDEX_ENABLED`: a cost and retention decision each deployment makes.
+- `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`, `AGENT_KNOWLEDGE_FILES_ENABLED` with `knowledgeBaseMode`, and `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`: each to be promoted after two weeks in prod with no flip.
+- `attachmentPlan` with `ATTACHMENT_PLAN_ENABLED`: a rollout switch, on in prod from 1.36.0, which retires in phase 6.
+- `documentExtract`, `fieldSetAuthoring` and `sourceProvenance`, with `DOCUMENT_EXTRACT_ENABLED`, `FIELD_SET_AUTHORING_ENABLED` and `SOURCE_PROVENANCE_ENABLED`: on in prod from 1.36.0.
+- **New:** `attachmentCards`, on in prod from this release. It stays off by default while in development.
+
+## 🛠️ Manual steps
+
+None for this release. 1.36.0's manual steps still apply if they aren't done yet:
+- `backfill_voice_tool_flags.py`;
+- the prod catalog rows for Sonnet 5.5 and GPT-6.1 Sol.
+
+## 🚀 Deployment notes
+
+Standard order: `platform.yml`, `backend.yml`, `frontend-deploy.yml`.
+- **Platform and backend:** every image rebuilds because the version changed, but nothing behaves differently.
+- **Frontend:** the attachment cards appear once `frontend-deploy.yml` finishes.
+- **Release workflow:** tags v1.36.1 and attaches the TUI wheel.
+
+---
+
 # Release Notes — v1.36.0
 
 **Release Date:** November 13, 2026
