@@ -1,8 +1,13 @@
 import { ApplicationConfig, inject, provideAppInitializer, provideBrowserGlobalErrorListeners } from '@angular/core';
-import { provideRouter, withComponentInputBinding, withNavigationErrorHandler } from '@angular/router';
+import {
+  provideRouter,
+  withComponentInputBinding,
+  withNavigationErrorHandler,
+  withRouterConfig,
+} from '@angular/router';
 
 import { routes } from './app.routes';
-import { provideHttpClient, withInterceptors } from '@angular/common/http';
+import { provideHttpClient, withInterceptors, withXhr } from '@angular/common/http';
 import { csrfInterceptor } from './auth/csrf.interceptor';
 import { errorInterceptor } from './auth/error.interceptor';
 import { gatewayRetryInterceptor } from './auth/retry.interceptor';
@@ -47,6 +52,10 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideHttpClient(
+      // Angular 22 made FetchBackend the default. Keep XHR until the switch is
+      // tested on its own: errorInterceptor and gatewayRetryInterceptor branch
+      // on HttpErrorResponse shapes, which differ between the two backends.
+      withXhr(),
       // withCredentialsInterceptor flips the cookie-attaching flag on app-api
       // requests (cross-origin in local dev; no-op same-origin in prod).
       // csrfInterceptor attaches the X-CSRF-Token header on unsafe-method
@@ -71,6 +80,12 @@ export const appConfig: ApplicationConfig = {
     provideRouter(
       routes,
       withComponentInputBinding(),
+      // Angular 22 changed the default to 'always'. Keep 'emptyOnly': with
+      // 'always' a child route inherits its parent's params and data, so
+      // component input binding would hand a parent's `:id` to a child's `id`
+      // input. resolveRouteChrome (shared/utils/route-chrome.ts) is written
+      // against this behaviour too.
+      withRouterConfig({ paramsInheritanceStrategy: 'emptyOnly' }),
       // A tab opened before a deploy asks for lazy chunks the deploy deleted.
       // The navigation becomes a full load of its destination (or a Refresh
       // prompt when a stream/upload would be cut off, or it already tried).

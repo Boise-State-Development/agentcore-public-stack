@@ -1,10 +1,11 @@
-import type { KatexOptions } from 'ngx-markdown';
+import type { AutoRenderOptions } from 'katex/contrib/auto-render';
 
 /**
  * Delimiters handed to KaTeX's `renderMathInElement` for assistant markdown.
  *
- * This list exists to REMOVE one entry. ngx-markdown's own
- * `DEFAULT_KATEX_OPTIONS` adds `{ left: '$', right: '$' }`, which KaTeX
+ * This list exists to REMOVE one entry. ngx-markdown up to v21 rendered math
+ * through `renderMathInElement` with a `DEFAULT_KATEX_OPTIONS` that added
+ * `{ left: '$', right: '$' }`, which KaTeX
  * upstream deliberately leaves out of its defaults — the commented-out line in
  * `katex/dist/contrib/auto-render.js` says why:
  *
@@ -36,7 +37,7 @@ import type { KatexOptions } from 'ngx-markdown';
  * is assigned to `innerHTML`, which happens BEFORE KaTeX walks the DOM — the
  * entity form breaks identically. Verified against the app's own KaTeX build.
  */
-export const KATEX_DELIMITERS: KatexOptions['delimiters'] = [
+export const KATEX_DELIMITERS: AutoRenderOptions['delimiters'] = [
   { left: '$$', right: '$$', display: true },
   { left: '\\(', right: '\\)', display: false },
   { left: '\\[', right: '\\]', display: true },
@@ -52,7 +53,7 @@ export const KATEX_DELIMITERS: KatexOptions['delimiters'] = [
  * expression renders as red source text instead of aborting the whole pass —
  * during streaming, every partially-arrived formula is malformed.
  */
-export const KATEX_OPTIONS: KatexOptions = {
+export const KATEX_OPTIONS: AutoRenderOptions = {
   delimiters: KATEX_DELIMITERS,
   throwOnError: false,
 };
