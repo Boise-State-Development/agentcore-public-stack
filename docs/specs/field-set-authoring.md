@@ -149,7 +149,7 @@ is already broken is exactly the file someone needs to open.
 **As built (PR 2)**, in `apis/app_api/skills/routes.py` with the wire models and
 conversions in `apis/app_api/skills/field_sets.py`:
 
-* **The routes 404 while the flag is off, after authentication** (`require_field_set_author`).
+* **The routes 404 while the flag is off, after authentication**: each handler declares `get_current_user_from_session` and calls `_require_field_set_authoring()` first.
   The §4.2 check on upload does not depend on the flag.
 * **`GET …/field-sets`** returns `{skillId, fieldSets: [{name, filename, size, contentHash}], maxFields}`,
   read from the manifest. It counts only `reference` files, the only kind the resolver reads.

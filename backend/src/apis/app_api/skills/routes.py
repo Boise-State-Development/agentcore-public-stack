@@ -490,13 +490,16 @@ async def delete_my_skill_resource(
 # -----------------------------------------------------------------------------
 
 
-async def require_field_set_author(
-    user: User = Depends(get_current_user_from_session),
-) -> User:
-    """The signed-in user, or 404 while the flag is off. Authentication runs first."""
+def _require_field_set_authoring() -> None:
+    """404 while the flag is off.
+
+    Called first in each handler rather than as a wrapper dependency, so every
+    route declares ``get_current_user_from_session`` itself (the guard in
+    ``test_skills_feature_flag`` reads route-level dependencies) and
+    authentication still runs before the flag is consulted.
+    """
     if not field_set_authoring_enabled():
         raise HTTPException(status_code=404, detail="Not found")
-    return user
 
 
 def _set_name(name: str) -> str:
@@ -510,9 +513,10 @@ def _set_name(name: str) -> str:
 @router.get("/mine/{skill_id}/field-sets", response_model=FieldSetListResponse)
 async def list_my_field_sets(
     skill_id: str,
-    user: User = Depends(require_field_set_author),
+    user: User = Depends(get_current_user_from_session),
 ) -> FieldSetListResponse:
     """The field sets on an owned skill, from its manifest. No file is read."""
+    _require_field_set_authoring()
     try:
         resources = await get_user_skill_service().list_resources(skill_id, user)
     except UserSkillError as e:
@@ -525,7 +529,7 @@ async def list_my_field_sets(
 async def read_my_field_set(
     skill_id: str,
     name: str,
-    user: User = Depends(require_field_set_author),
+    user: User = Depends(get_current_user_from_session),
 ):
     """One field set, parsed, with its stored markdown.
 
@@ -534,6 +538,7 @@ async def read_my_field_set(
     is exactly the one its author needs to open (§4.1). Only a file written
     before every write path checked field sets can be in that state.
     """
+    _require_field_set_authoring()
     name = _set_name(name)
     try:
         ref, content = await get_user_skill_service().read_resource(
@@ -565,7 +570,7 @@ async def write_my_field_set(
     name: str,
     body: FieldSetWriteRequest,
     validate: bool = False,
-    user: User = Depends(require_field_set_author),
+    user: User = Depends(get_current_user_from_session),
 ) -> FieldSetResponse:
     """Create or replace one field set on an owned skill.
 
@@ -576,6 +581,7 @@ async def write_my_field_set(
     compiled grammar alone. The write itself is the ordinary bundle upload, so
     the file passes the same check every other write path runs (§4.2).
     """
+    _require_field_set_authoring()
     name = _set_name(name)
     service = get_user_skill_service()
     try:
