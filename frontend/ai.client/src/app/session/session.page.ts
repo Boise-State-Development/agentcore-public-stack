@@ -1,4 +1,4 @@
-import { Component, inject, effect, Signal, signal, computed, viewChild, OnDestroy, PLATFORM_ID } from '@angular/core';
+import { Component, inject, effect, Signal, signal, computed, viewChild, OnDestroy, PLATFORM_ID, ChangeDetectionStrategy } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -60,6 +60,7 @@ import { GreetingProvider } from '../../branding/greeting.provider';
   selector: 'app-session-page',
   imports: [ChatContainerComponent],
   templateUrl: './session.page.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './session.page.css',
 })
 export class ConversationPage implements OnDestroy {

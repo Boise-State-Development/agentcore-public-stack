@@ -32,7 +32,7 @@ describe('MessageActionsComponent — Continue affordance', () => {
     }).compileComponents();
 
     const markdownService = TestBed.inject(MarkdownService);
-    markdownService.parse = () => '';
+    markdownService.parse = async () => '';
 
     fixture = TestBed.createComponent(MessageActionsComponent);
     component = fixture.componentInstance;
@@ -89,7 +89,7 @@ describe('MessageActionsComponent — interrupted-turn chip', () => {
     }).compileComponents();
 
     const markdownService = TestBed.inject(MarkdownService);
-    markdownService.parse = () => '';
+    markdownService.parse = async () => '';
 
     fixture = TestBed.createComponent(MessageActionsComponent);
     component = fixture.componentInstance;
@@ -183,7 +183,7 @@ describe('MessageActionsComponent — thumbs feedback', () => {
       imports: [MessageActionsComponent],
       providers: [provideMarkdown(), { provide: MessageFeedbackService, useValue: feedback }],
     }).compileComponents();
-    TestBed.inject(MarkdownService).parse = () => '';
+    TestBed.inject(MarkdownService).parse = async () => '';
     fixture = TestBed.createComponent(MessageActionsComponent);
     fixture.componentRef.setInput('messages', [serverMessage('answer')]);
   });
@@ -289,7 +289,7 @@ describe('MessageActionsComponent — the copy shortcut', () => {
     }).compileComponents();
 
     const markdownService = TestBed.inject(MarkdownService);
-    markdownService.parse = () => '';
+    markdownService.parse = async () => '';
     targets = TestBed.inject(ShortcutTargetsService);
 
     fixture = TestBed.createComponent(MessageActionsComponent);
