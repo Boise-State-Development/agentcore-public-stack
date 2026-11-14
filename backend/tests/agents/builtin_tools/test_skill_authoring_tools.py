@@ -12,6 +12,9 @@ stand-ins. What these pin:
 - the create and update results carry the D6 / D11 instructions.
 """
 
+import hashlib
+import json
+
 import boto3
 import pytest
 from moto import mock_aws
@@ -160,6 +163,18 @@ class TestToolset:
         for t in build_skill_authoring_tools("s", "u", None):
             props = t.tool_spec["inputSchema"]["json"].get("properties", {})
             assert "confirm" not in props, t.tool_name
+
+    def test_the_specs_are_pinned(self):
+        """The seven specs sit in the cached ``toolConfig`` of every turn that has
+        them, so a change is one deliberate prefix rewrite per deployment. Field-set
+        support rides on the results, not the specs, and left this unchanged. If a
+        spec change is intended, re-measure with scripts/measure_tool_spec_tokens.py,
+        state the growth in the PR, and update the digest."""
+        specs = [t.tool_spec for t in build_skill_authoring_tools("s", "u", None)]
+        digest = hashlib.sha256(
+            json.dumps(specs, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        assert digest == "62bea023d9c5201b1cf4c7db0cb398006800db134aac37e64660b45ae6680862"
 
 
 class TestCreate:
@@ -385,6 +400,99 @@ class TestFiles:
         result = _tools()["my_skill_delete_file"](skill_id="grant_review", filename="nope.md")
         assert result["status"] == "error"
         assert "not found" in _text(result)
+
+
+FIELD_SET = """---
+title: Award notice
+version: 2
+---
+
+| name | title | type | find | enum | optional |
+|---|---|---|---|---|---|
+| sponsor | Sponsor | string | The agency making the award | | no |
+| award_amount | Award amount | currency | The total amount awarded | | no |
+| award_type | Award type | enum | The kind of award | grant, contract | yes |
+"""
+
+
+class TestFieldSets:
+    """A field set is a reference file the write path already parses
+    (field-set-authoring §4.2); the tools read it back into their results."""
+
+    def test_writing_one_lists_its_fields_in_order(self, service, monkeypatch):
+        monkeypatch.setenv("DOCUMENT_EXTRACT_ENABLED", "true")
+        _create()
+        result = _tools()["my_skill_write_file"](
+            skill_id="grant_review", filename="field-set.award-notice.md", content=FIELD_SET
+        )
+        assert result["status"] == "success", result
+        text = _text(result)
+        assert 'field set "award-notice" (Award notice, version 2) with 3 fields' in text
+        assert "sponsor (string), award_amount (currency), award_type (enum)" in text
+        assert "document_extract" in text
+        assert "turned off" not in text
+
+    @pytest.mark.parametrize("value", [None, "", "false"])
+    def test_it_says_when_extraction_is_off(self, service, monkeypatch, value):
+        """In development, only "true" enables; unset arrives as ""."""
+        if value is None:
+            monkeypatch.delenv("DOCUMENT_EXTRACT_ENABLED", raising=False)
+        else:
+            monkeypatch.setenv("DOCUMENT_EXTRACT_ENABLED", value)
+        _create()
+        result = _tools()["my_skill_write_file"](
+            skill_id="grant_review", filename="field-set.award-notice.md", content=FIELD_SET
+        )
+        assert result["status"] == "success"
+        assert "Structured extraction is turned off in this deployment" in _text(result)
+
+    def test_a_malformed_one_is_refused_with_the_parsers_message(self, service):
+        _create()
+        broken = FIELD_SET.replace("| enum | The kind of award | grant, contract |", "| enum | The kind of award | |")
+        result = _tools()["my_skill_write_file"](
+            skill_id="grant_review", filename="field-set.award-notice.md", content=broken
+        )
+        assert result["status"] == "error"
+        assert "type 'enum' needs allowed values" in _text(result)
+
+    def test_a_bad_set_name_is_refused(self, service):
+        _create()
+        result = _tools()["my_skill_write_file"](
+            skill_id="grant_review", filename="field-set.Award_Notice.md", content=FIELD_SET
+        )
+        assert result["status"] == "error"
+        assert "lowercase words joined by hyphens" in _text(result)
+
+    def test_one_saved_as_another_kind_is_flagged(self, service):
+        """Only references/ is read for field sets, so a script is not one."""
+        _create()
+        result = _tools()["my_skill_write_file"](
+            skill_id="grant_review", filename="field-set.award-notice.md", content=FIELD_SET, kind="script"
+        )
+        assert result["status"] == "success"
+        assert "not read as a field set, because it was saved as a script" in _text(result)
+
+    def test_an_ordinary_file_gets_no_field_set_note(self, service):
+        _create()
+        result = _tools()["my_skill_write_file"](skill_id="grant_review", filename="a.md", content="x")
+        assert "field set" not in _text(result)
+
+    def test_read_marks_field_set_files_only(self, service):
+        _create()
+        tools = _tools()
+        tools["my_skill_write_file"](skill_id="grant_review", filename="field-set.award-notice.md", content=FIELD_SET)
+        tools["my_skill_write_file"](skill_id="grant_review", filename="notes.md", content="x")
+        files = {f["filename"]: f for f in _text(tools["my_skill_read"](skill_id="grant_review"))["files"]}
+        assert files["field-set.award-notice.md"]["field_set"] == "award-notice"
+        assert "field_set" not in files["notes.md"]
+
+    def test_deleting_one_says_to_update_the_instructions(self, service):
+        _create()
+        tools = _tools()
+        tools["my_skill_write_file"](skill_id="grant_review", filename="field-set.award-notice.md", content=FIELD_SET)
+        result = tools["my_skill_delete_file"](skill_id="grant_review", filename="field-set.award-notice.md")
+        assert result["status"] == "success"
+        assert 'name the field set "award-notice", update them too' in _text(result)
 
 
 class TestRunsFromAnEventLoop:
