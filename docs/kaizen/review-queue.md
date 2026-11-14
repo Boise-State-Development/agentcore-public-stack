@@ -5,6 +5,32 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-11-14] Spike concurrent tool execution, serializing only the tools that can't run in parallel
+- **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #1; public middleware (harness-sdk#4976, 1.62)
+- **Surface**: backend (`agents/main_agent/core/agent_factory.py:372-385`, a new `ExecuteToolStage` middleware beside `integrations/mcp_elicitation.py`)
+- **Effort × Impact**: M × M–H
+- **Subtracts**: yes: a stale constraint. `SequentialToolExecutor` was chosen "to prevent concurrent browser operations … Playwright errors with NovaAct". NovaAct and Playwright are gone, the browser is raw CDP, and `browser/session_pool.py:107` already locks per session
+- **Unlocks**:
+  - a tool batch of N independent calls takes ≈ max d instead of Σd (a three-read fan-out saves ≈ 3 s; prod session `aecd387d` ran 18 calls in series)
+- **Notes**: TTFT 0 (after the first token), 0 tokens, `toolConfig` unchanged. Results land in completion order but are appended once and persisted, so history stays byte-stable. Serialize anything that writes a shared resource (browser, Code Interpreter, the Office writers, artifacts, `my_skill_*`) behind one per-session lock, and allowlist the parallel-safe reads. Settle first: harness-sdk#4713 (open: `ConcurrentToolExecutor` swallows a `BaseException`, so check `_CooperativeStopSignal` and `CancelledError`), two interrupts raised in one batch, and `agent_status` / `ui_resource` frame order. Behind a rollout switch. Measure turn duration on a dev fan-out, and the multi-tool-batch share of prod turns from the ledger's `#TOOL#` rows
+- **Status**: open
+
+### [2026-11-14] Pass a per-turn `cancel_signal` and stop clearing Strands' private `_cancel_signal`
+- **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #2; `agent.cancel` docstring (harness-sdk#4833, 1.62): "for cancellation driven from outside the agent … pass a `cancel_signal` into the invocation instead"
+- **Surface**: backend (`apis/inference_api/chat/routes.py:221-248`, `agents/main_agent/streaming/stream_coordinator.py:221-248` and `:709`)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: the `_cancel_signal` half of `reset_cancellation_state`, a write to a private SDK attribute, and with it the sticky-Stop class (#741/#751) for that signal
+- **Notes**: create a `threading.Event` per turn, pass `cancel_signal=` to `stream_async`, and have `_mark_session_cancelled` set it instead of calling `agent.cancel()`. Strands mirrors it onto the internal signal, in-flight MCP calls included. An event scoped to one invocation cannot leak onto the cached agent. Keep `session_manager.cancelled` and its reset (`StopHook` and the coordinator read it). Cost 0; one watcher task per turn
+- **Status**: open
+
+### [2026-11-14] Docs sync after the Strands 1.55 → 1.63 adoption audit
+- **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #3, #4, #5, #7
+- **Surface**: docs (`docs/kaizen/standing-watches.md` §2a rows 1 and 3; `docs/kaizen/decisions.md` 2026-05-18; this file's [2026-07-17] `Limits` entry)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: two stale instructions, one of which would ship a cost regression if followed
+- **Notes**: (a) Row 1 (`usage_normalization` cache-write shim) retired in #1683; strike it. (b) Row 3 says to adopt `apply_cache_config` and retire `build_prompt_cache_key`. Ours is prefix-derived and shared across conversations (`bedrock_responses.py:274-294`); upstream's is `strands-<session_id>` (#4083), so a swap makes every new GPT conversation's first call write the static prefix instead of reading it. Since 1.64 a `cache_config` also turns on the +11.8% checkpoint. Rewrite the row as "keep ours", with `probe_gpt56_cache_rates.py` as the gate. Coordinate with the 1.63 → 1.65 readout, which owns the 1.64 half. (c) Add to decisions.md 2026-05-18's re-open condition: since 1.63 (#5446) a Strands `context_manager` raises on any `RepositorySessionManager`, and `AgentCoreMemorySessionManager` is one. (d) Note on [2026-07-17] that #5288 makes limits and usage request-wide across nested agents (`InvocationContext`), and that the interactive lane has no `limits=` today
+- **Status**: open
+
 ### [2026-11-13] Escalation: delete the orphaned ALB access-log bucket and make the nightly self-heal (10 red nights)
 - **Source**: research/2026-11-13.md ▸ Top 5 #1; nightly runs 41804576559 → 43398420487
 - **Surface**: CI (`scripts/nightly/teardown.sh`, `scripts/nightly/clear-failed-stack.sh`)
@@ -216,6 +242,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**: see candidates
 - **Notes**: candidates found in the wheel diff, none evaluated: `Model.model_info` / `model_info.json` as a second source for catalog limits and capabilities (with the caveat that its Sonnet 4.6 output limit is wrong, so never authoritative); native structured output as the extraction path on models that support it; request-wide Graph/Swarm limits (harness-sdk#5306) against the [2026-07-17] headless `Limits` item and handoffs §9.5; the public `strands.middleware` module against hooks we wrote as workarounds; `vended_tools` `read`/`write`/`edit`/`stop`; `InvocationContext` usage (request-wide, across sub-agents) against our per-call usage aggregation. Read the 1.62.0 and 1.63.0 release notes end to end, with both lenses
 - **Status**: open
+- **Status 2026-11-14**: the 1.62/1.63 candidates are evaluated in `scoping/strands-1-55-to-1-63-adoption-audit.md` (whole 1.55 → 1.63 window): `model_info` Watch, native structured output covered by the [2026-11-03] `document_extract` entry, request-wide limits Watch (refreshes [2026-07-17]), `strands.middleware` the seam for the concurrent-tools spike, `read`/`write`/`edit`/`stop` Decline, `InvocationContext` usage Watch for the first nested agent. Close at review.
 
 ### [2026-11-03] Spike idle-time compaction after the cache TTL
 - **Source**: research/2026-11-03.md
@@ -981,6 +1008,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: yes — retires any hand-rolled `max_turns` guard on the headless lane (library-native)
 - **Unlocks**: first-class per-invocation cost/turn cap on the highest-blast-radius lane (a runaway loop there burns quota unattended) — the capability the [2026-07-03] Strands bump listed but that still needs wiring now the bump landed
 - **Status**: open — scope to the scheduled/headless lane first; dovetails with the queued quota-cooldown work.
+- **Status 2026-11-14**: still unbuilt. Since 1.63 (harness-sdk#5288) `Agent(limits=…)` bounds the whole request, including nested agents, Graph/Swarm and aux calls, and `result.invocation_context.usage` covers it. Build it on `InvocationContext` before handoffs or consults add nested agents. `structured_output_attempts` is a new key (#4926). See `scoping/strands-1-55-to-1-63-adoption-audit.md` ▸ #4.
 
 ### [2026-07-17] Harden the SPA SSE parser (unterminated-frame + line-ending handling)
 - **Source**: research/2026-07-17.md ▸ Top 5 #4 — assistant-stream@0.3.26 (Jul 16, spec-complete SSE decoder) — https://github.com/Yonom/assistant-ui/releases — reinforced by the 1.6.0 SSE/restore bug cluster (#653 tab-switch duplicate invocation, tool-pairing repair, single-flight lease)
