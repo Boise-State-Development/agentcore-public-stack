@@ -10,6 +10,18 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 - **An image from a compacted turn can be seen again.** Once compaction summarized the turn that attached an image, the image was no longer in the request, while a PDF attached alongside it stayed readable through `document_read`. On dev, a model asked about one of eight PNGs said it "isn't attached to this conversation". `document_read` now lists the conversation's images and, given an image's upload id, returns its stored compact copy (1,568 px, at most 340 KB). The read counts against the tool round's byte budget, and a text-only model is told it can't view images. The tool's description now names images, which adds 32 tokens to its spec and rewrites the cached prefix once per deployment. A conversation with only images still has no `document_read` (`docs/specs/unified-attachment-delivery.md` §6.2). (#2066)
 
+## [1.36.1] - 2026-11-13
+
+A patch that gets the 1.36.0 release published and turns attachment cards on in our prod. The 1.36.0 Release workflow stopped on a formatting check in a terminal-client test, so v1.36.0 has no tag or GitHub release; 1.36.1 is the first tagged release carrying 1.36.0's changes. No backend changes, no new flags, no manual steps, no GSI changes.
+
+### 🔧 CI/CD
+
+- `tui/tests/test_catalog.py` formatted with `black`, which the Release workflow's `scripts/tui/build.sh --check` failed on after the 1.36.0 merge; no PR workflow checks `tui/`, which is why it reached `main`
+
+### ✨ Improved
+
+- Attachment cards (`features.attachmentCards`, UI only) are on in our prod build (`environment.production.ts`); still off by default
+
 ## [1.36.0] - 2026-11-13
 
 Attachments are planned in tokens, per model: one pure planner (`attachment_plan.py`) decides every attachment, its `token` profile (`ATTACHMENT_PLAN_ENABLED`, a rollout switch, default off) budgets documents at half the model's compaction ceiling, sends anything over it on demand or to search, admits 20 files, 20 images and 1,000-page PDFs, and stores documents and images in Memory as handles; this release turns it on in our prod. Voice mode runs the conversation's Agent. The MCP SDK moves to 2.3.0 (protocol 2026-07-28), with form elicitation built dark. Handoffs gain deliveries and files by reference (dev only). Sonnet 5.5 and GPT-6.1 Sol are curated, model ids with no catalog row are refused, and Gateway tools honour "Needs approval". Release eval results are published as a public benchmark and an admin Evaluations page. New flags: `ATTACHMENT_PLAN_ENABLED`, `MCP_ELICITATION_ENABLED`, `FIELD_SET_AUTHORING_ENABLED` (each in development, default off), `ANALYZE_SANDBOX_REUSE_ENABLED` (rollout, default on) and SPA `features.attachmentCards`; none retired; `CDK_FRONTEND_CORS_ORIGINS` removed. Our prod also turns on structured extraction, field-set authoring and source provenance, each still off by default. Manual steps: `backfill_voice_tool_flags.py` per environment, catalog rows for Sonnet 5.5 and GPT-6.1 Sol in prod, and four `production` GitHub variables. No GSI changes.

@@ -12,7 +12,7 @@
 
 Chat, agents, skills, tools and connectors on Amazon Bedrock AgentCore. Every model, tool and connector is a role grant your admins control, every model call is metered to the token, and every release publishes its quality, speed and cost, failures included. Source-available, and free for universities, public research and government. Built by Boise State University.
 
-[![Release](https://img.shields.io/badge/Release-v1.36.0-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
+[![Release](https://img.shields.io/badge/Release-v1.36.1-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
 [![Nightly](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml)
 [![Docs](https://img.shields.io/badge/Docs-boise--state--development.github.io-0ea5e9?style=flat&logo=readthedocs&logoColor=white)](https://boise-state-development.github.io/agentcore-public-stack/)
 [![Benchmarks](https://img.shields.io/badge/Benchmarks-published_every_release-22c55e?style=flat)](https://boise-state-development.github.io/agentcore-public-stack/benchmarks/)
@@ -341,7 +341,7 @@ agentcore-public-stack/
 
 See [RELEASE_NOTES.md](RELEASE_NOTES.md) for every release: new features, fixes, platform upgrades, breaking changes and the manual steps a deployment needs.
 
-**Current release:** v1.36.0
+**Current release:** v1.36.1
 
 ---
 
