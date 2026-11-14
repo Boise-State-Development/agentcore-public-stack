@@ -21,7 +21,7 @@ wheels = [
 
 [[package]]
 name = "aps-tui"
-version = "1.36.0"
+version = "1.36.1"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
