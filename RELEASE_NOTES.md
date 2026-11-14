@@ -1,3 +1,368 @@
+# Release Notes — v1.36.0
+
+**Release Date:** November 13, 2026
+**Previous Release:** v1.35.0 (November 8, 2026)
+
+---
+
+## Highlights
+
+**Attachments are now planned in tokens, for the model actually answering.** A single planner decides how every file reaches the model. Its new `token` profile budgets documents at half that model's compaction ceiling, sends anything over the budget on demand or to search, and raises the limits to 20 files, 20 images and 1,000-page PDFs. Documents and images are stored in Memory as handles instead of bytes. On dev, holding a document on demand never answered worse than sending it whole, and it used 3–12× fewer input tokens on Haiku and 5–28× fewer on Sonnet. The profile is a rollout switch, `ATTACHMENT_PLAN_ENABLED`. It stays off by default, and this release turns it on in our prod.
+
+**Voice mode runs the conversation's Agent**, with that Agent's instructions, knowledge and voice-safe tools. Voice also applies the role and personal instructions a text chat does.
+
+**The MCP SDK moves to 2.3.0** (protocol 2026-07-28), with fixes for Zoom's Connect prompt and GitHub's App forms. MCP form elicitation is built, but behind a flag.
+
+**Guardrails on models:**
+- A model id with no catalog row is refused, so nothing runs unpriced.
+- Gateway tools honour "Needs approval".
+- A provider outage now names the model and the provider, with a one-click Try again.
+- Sonnet 5.5 and GPT-6.1 Sol are curated.
+
+**Release evals are published in the open**, as a docs-site Benchmarks page and an admin Evaluations page.
+
+**Handoffs** gain deliveries and file sharing by reference, still on dev only.
+
+Five new flags; see Feature flags. **Manual steps:**
+- run one new backfill (`backfill_voice_tool_flags.py`) per environment;
+- add two prod catalog rows;
+- set `CDK_ATTACHMENT_PLAN_ENABLED=true` on the `production` GitHub environment.
+
+There are no GSI changes.
+
+---
+
+## Attachments, planned per model in tokens
+
+1.35.0 decided attachments with byte rules spread across four selectors in the chat route. Those rules were the same for every model, so a document Haiku 4.5 could not hold went to Sonnet 4.6 exactly as it went to Haiku. Compaction estimated documents at bytes/4, which was 65% low on the dev repro. And every turn wrote the full document bytes into Memory. This release replaces all of that with one planner, measured per model (`docs/specs/unified-attachment-delivery.md`).
+
+### Backend
+- **One planner** (#1962). `apis/shared/files/attachment_plan.py` is a pure function of the file rows and the model. Its `legacy` profile reproduces the old rules byte for byte. `C#` rows and `GET /admin/costs/sessions/{id}/calls` gain an `attachmentPlan` entry naming each file's mode and reason (#1998).
+- **File facts at upload** (#1966). Every document's row now carries `facts`: text tokens, pages, and whether it renders. The existing prepare queue computes them, with one more SQS message per small-document upload, measured by the EMF metrics `FileFactsComputed` / `FileFactsMs`. A file still waiting on its facts is planned by the old rules (`facts_pending`, #1989).
+- **The `token` profile** (#1987, #1988, #2004; `ATTACHMENT_PLAN_ENABLED`):
+  - **Costing.** Each document is costed in the answering model's own tokens: `tokens.text × tokenizer_factor` (0.95 on Haiku 4.5 and Sonnet 4.6, 1.40 otherwise, measured), plus 1,565 tokens a page for a native PDF.
+  - **Budget.** Documents are planned against `document_budget = 0.5 × chat_ceiling`, the threshold the #1971 readout recommended.
+  - **Over budget.** A document that doesn't fit goes `on_demand`: a digest plus `document_read`, decided from the row the resolver already read, so nothing new is read before the first token.
+  - **Wiring.** The variable is written to the Runtime only while on (28 bytes). app-api reports the active profile on `GET /files/limits`.
+- **Search for large sets** (#2002, #2003). With the attachments KB on, an over-budget document is also indexed, and once it is indexed it is planned `search`. A conversation whose on-demand set reaches 9 documents gets one line (about 70 tokens) telling the model to call `document_read` with `query` first. The threshold started at 3 and moved to 9, because steering smaller sets to search cost more tokens and answered no better. Neither the tool spec nor the system prompt changes.
+- **Larger limits** (#1992, #1994; token profile):
+  - 20 files, 20 images and 1,000-page PDFs. A longer PDF is refused at `/complete`.
+  - Images are downscaled at upload into a high copy and a compact copy (≤340 KB), with a 20 MB limit.
+  - Images take the byte budget first and fall back to their compact copies.
+  - An unreadable image over 4 MB answers 400.
+- **Handles, not bytes, in Memory** (#1993, #1996; token profile):
+  - A turn now writes a reference to each document and image, and restore reads them back byte-identically from S3. The measured document event dropped from 4.5 MB to 518 B.
+  - **TTFT:** a cold restore with images in its history adds about 104 ms for 10 compact images, or about 350 ms for 10 high ones. The developer accepted this on 2026-11-11, and it is recorded as an `image_restored` ledger event.
+- **`GET /files/limits`** (#1967). One source for every limit. Upload admission, the SPA's `AttachmentLimitsService` (seven constants deleted) and the terminal client all read it, so the TUI now checks size and count before uploading.
+- **Accurate estimates, on every deployment** (#1976, #1991, #2001, #1978). These are unflagged, because they only make an estimate right.
+  - Compaction, offload and the cost row now estimate a document from its row facts at the model's tokenizer factor. On the dev repro the error went from −65% to −0.4%.
+  - Replayed reasoning is priced the way each model bills it (+22% → +0.4%).
+  - The `over_ceiling` offload uses the model's own ceiling before the first cut: 50k on Haiku 5.5, was 100k.
+  - Cut points can move, but prefix bytes do not.
+
+### Frontend
+- **Attachment cards** (#1964, #1974, #1977, #1985; `features.attachmentCards`, UI only, on in the dev build only).
+  - Files are drawn as browser-style cards that preview their real contents: a PDF's first page, the opening of a Word file, a sheet's first rows, a deck's first slide.
+  - The previews come from the new `GET /files/previews?ids=`: at most 20 ids per call, owner-scoped, each preview under 4 KB, written by the prepare Lambda.
+  - Images and Drive folders share the same layout. Past five files, the composer folds into a summary and a sent message shows a "+N more" tile.
+
+### Cost
+- The point is fewer input tokens per attachment turn, and the measured arms (#1968, #1971, #1980, #1984, #1995) say on-demand never answered worse than holding the document.
+- Expect compaction to fire at different points on document sessions, because the estimates are now right.
+- Nothing new enters the cacheable prefix.
+
+### Why it ships on in prod but off by default
+`ATTACHMENT_PLAN_ENABLED` is a **rollout switch**: what a deployment chooses is the profile's limits, not whether the planner runs. It retires in phase 6, together with the `legacy` profile, after two weeks in prod without a flip and with its `attachment_delivery` readout recorded (#1422). Until then a fresh install keeps the `legacy` rules.
+
+---
+
+## Voice mode runs your Agent
+
+Before this release, voice used one fixed persona with every voice tool, whatever conversation it was started from. Now a voice session runs the conversation's Agent (#2056, #625) and applies the user's role-based and personal instructions (#2052).
+
+- **Per-Agent switches.** "Available in voice mode" (off by default) and "Use only this agent's instructions" (on by default).
+  - Published Agents have to be resubmitted before voice works for them.
+  - Voice is hidden in Shared Projects.
+- **Knowledge.** An Agent's knowledge is sent whole, up to `VOICE_KB_MAX_TOKENS`. This is an optional env var on both APIs with no CDK wiring; the default is 800,000.
+- **Tools.** Voice offers only catalog tools marked `voiceAvailable`: fast lookups that make sense to a listener. The flag is off by default, and voice fails closed if the catalog can't be read. **Existing deployments must run `backfill_voice_tool_flags.py`**, or voice sessions run with no tools (Manual steps). Admins can change any tool later in Admin → Tools.
+- **Capacity.** When Bedrock refuses a session at its concurrent-session limit, the user gets a clear message instead of a dead socket.
+- **Fixed in passing.** `.md` knowledge documents stored as `application/octet-stream` are now read as text, in text chat too. That rewrites the system prompt once for each Agent whose knowledge held such a file.
+- A user with no role or personal instructions gets a byte-identical voice prompt.
+
+---
+
+## MCP SDK 2.3.0 and protocol 2026-07-28
+
+`mcp` 1.30.0 → 2.3.0 (#1666), with new pins for `mcp-types`, `httpx2`, `httpcore2` and `truststore`. The scheduled-runs Lambda gets the same pins. A new `mcp_transport.py` keeps the HTTP status on transport errors.
+
+- **Behaviour changes.**
+  - Redirects are followed only within the endpoint's own origin.
+  - A legacy (pre-2026-07-28) server's idle sessions expire after 30 minutes. Whether the reconnect after that heals cleanly is not yet verified.
+  - The first connect per process to a legacy server costs p50 325 ms (201 ms before). After that the result is cached for an hour (205 ms).
+- **Fixes it brought or needed:**
+  - Zoom's Connect prompt works again (#1950).
+  - GitHub's App forms load, because the SSE event cap rose to 16 MiB (#1956).
+  - `toolConfigHash` and the Responses cache key count only what a model is sent (#1955). Under 2.x every MCP tool's `outputSchema` was inflating them.
+  - Outbound requests no longer carry the conversation's `session.id` (#1957, Security).
+- **Removed:** the "Waiting for you" text-match fallback (#1951). A self-hosted `github-mcp-server` older than 2026-07-28 now shows a form left open as "Failed".
+- **MCP form elicitation** (#1953, behind `MCP_ELICITATION_ENABLED`, off everywhere).
+  - A server whose catalog row sets `elicitationEnabled` can pause a tool call on a form (`mcp_elicitation_required`). On resume the call is replayed from its first round.
+  - The client advertises form elicitation only, and only on 2026-07-28 connections.
+  - This release ships the backend; the SPA form follows.
+
+---
+
+## Model access, failures and new models
+
+- **Model ids with no catalog row are refused** (#2016).
+  - The prod `UnmeteredModelCall` alarm caught an Agent Designer preview running a `global.*` id that prod catalogs only as `us.*`. With no row there was no price, so both calls stored $0 and counted against no quota.
+  - `grants_model_access` now refuses an id with no row, wildcard holders included. A catalog that can't be read still fails open to role grants.
+  - The refusal says the model "isn't offered on this platform". **Other deployments:** add a priced row for any id you run.
+- **Gateway tools honour "Needs approval"** (#2015, closes #454). Gateway OAuth accepts only `client_credentials`.
+- **Provider failures read honestly.**
+  - When Bedrock, OpenAI or Gemini fails a call on its side and the retries run out, the reply names the model and the service and says the fault is the provider's (#2058).
+  - The `stream_error` event carries `code: "provider_unavailable"` plus metadata. The SPA shows an "AWS service issue" label with **Try again**. The terminal client is unaffected.
+  - A provider decline (`content_filtered`, `guardrail_intervened`) gives a fixed notice instead of a blank reply (#2031).
+  - A long quiet turn shows a muted hint at 30 s and at 3 min; amber is kept for a real retry (#2048).
+- **Sonnet 5.5** is curated (#2045): `us.` rates $2.20 / $11.00 input/output, $2.75 cache write, $0.11 read, with thinking bound like the other 5.5 models. Sonnet 5 is demoted.
+- **GPT-6.1 Sol** is curated (#1800): $2.20 / $11.00, cache read 0.05×. GPT-6 Sol is demoted.
+- Both need prod catalog rows (Manual steps).
+
+---
+
+## Measured in the open: benchmarks and the Evaluations page
+
+- **Public benchmark** (#2029).
+  - `eval_harness.py publish` turns a release run into `docs-site/src/data/benchmarks.json` and the README's **Measured in the open** table.
+  - The docs site gains Benchmarks, Methodology and Reproduce pages, and every number links back to its case and commit.
+  - Failing cases stay listed by id. `publish` refuses an incomplete run and anything carrying a session id, user id or deployment prefix.
+- **Evaluations page** (#1944). `/admin/evaluations` and `GET /admin/costs/ledger/evals` sit behind the existing `RELEASE_LEDGER_ENABLED` / `features.releaseLedger` and scope `admin.costs`. They chart the release and nightly tracks from `LEDGER#EVAL` rows, which now carry per-case outcomes and a `track` (#1928).
+- **Coverage.**
+  - New eval families for attachments, project agents, project memory, skill outcomes, the terminal client (EH-4 to EH-8), attachment delivery and usage patterns, plus a second eval user (#1931, #1933, #1934, #1936, #1938, #1963, #1968, #2027).
+  - An advisory efficiency table: tokens, tool calls, duration and first token (#2025).
+  - Baselines for Sonnet 4.6, Sonnet 5, Sonnet 5.5 and Opus 5.5 (#1995, #2027, #2054, #2042).
+  - The nightly runs every model in `EVAL_MODEL_IDS` (#2043).
+
+---
+
+## Handoffs: results come back, files by reference (in development)
+
+Behind `HANDOFFS_ENABLED` / `features.handoffs`, on dev only.
+
+- **Deliveries** (#2018, #2023).
+  - **Bring back result** in a handoff, and **Send to *{title}*** on an answer in a spawned conversation, create `DELIVERY#` rows. They show as cards above the receiving conversation's composer (Preview, Edit, Remove).
+  - Up to three are sent with a message. Each is attached by one conditional write beside the agent build: about 4.5 ms with three cards, measured on dev and accepted.
+- **Files by reference** (#2026, #2028).
+  - A handed-off or delivered file becomes a read-only reference row in the receiving conversation (`linked_files.py`). It is never counted against quota and never inlined. Deleting it never deletes the original.
+  - The model sees one `<file …/>` line for it, about 20 tokens.
+  - The review sheet lists the source's files as checkboxes, and the Files panel marks references "From *{title}*".
+  - A shared spreadsheet or deck turns on its tools on the turn the file arrives (#2033), not one turn later, which on dev had rewritten a 21,371-token prefix.
+
+---
+
+## Smaller additions
+
+- **Artifact share links can follow the latest version** (#2034). An "Always show the latest version" checkbox; an existing pinned link can be switched with **Follow latest** and keep its URL. Project shares always pin.
+- **Pin private Agents** (#1990).
+- **Structured extraction renders as a table** under the answer (#1940), with documents and field sets resolved by name (#1941). Both are in the dev build only, behind `DOCUMENT_EXTRACT_ENABLED`.
+- **Field-set authoring** (#2055, #2057; `FIELD_SET_AUTHORING_ENABLED`, in development).
+  - Routes under `/skills/mine/{id}/field-sets` and a structured editor on the skill edit form.
+  - On every deployment, a `field-set.*.md` skill file is now checked when it is saved (#2053); see Breaking changes.
+- **UI.** Thinking folds into the tool rail (#1982), the Word preview shows comments and change authors (#2011), and inline code takes a neutral colour (#2017).
+- **`analyze_spreadsheet`.**
+  - Its rejections say what was blocked and what to write instead, and `import time` is allowed (#2038, #2051).
+  - It reuses one Code Interpreter sandbox per turn (#1894, Performance).
+- **Cost diagnostics.** `C#` rows gain `toolCalls[].errorKinds`, `outputChars` and `pastedChars` (#2024, #2040).
+- **Terminal client.** An encrypted credential file for hosts with no keyring (#2009).
+
+---
+
+## 🐛 Bug fixes
+
+- **app-api no longer runs PDFium.** PDF thumbnails are drawn by the prepare Lambda. PDFium had crashed prod app-api tasks (#1972). `GET /files/{id}/thumbnail` can now answer **202** while a thumbnail renders.
+- **Fewer 502s from idle connections.** Idle timeouts now nest CloudFront 30 s < ALB 60 s < uvicorn 75 s, and the SPA retries a presign once on 502/503 (#1999).
+- **Forked conversations keep their documents.** A fork restores and searches its parent's and root's documents (#2000, #2006).
+- **A `.pptx` attachment turns on the deck tool** (#1932), under the existing `ATTACHMENT_TOOL_AUTOENABLE_ENABLED`. That adds 2,852 `toolConfig` tokens, only in sessions with a deck.
+- **`document_read` fixes.** It finds a PDF match wrapped across lines and searches HTML by rendered line (#1979, #1970). `project_files` / `knowledge_files` reads return the page, not an offload preview (#1943).
+- **Admin session cost view.** It no longer returns 500 for a conversation that ran extraction or voice (#2050).
+- **Office tools.** Five of them clean an output file name instead of refusing it (#2010).
+- **Role inheritance.** Connector, file-source and export access honour one level of it, as tool grants already did (#2013).
+- **Smaller fixes:**
+  - the composer's false "image will be left out" warning (#1997);
+  - a lone attachment card's name (#1985);
+  - handoff relay toasts and labels (#2014).
+
+## 🔒 Security
+
+- **Outbound requests from the Runtime no longer carry the conversation's `session.id`** (#1957).
+  - ADOT's baggage propagator had injected it into every outbound HTTP request and, since mcp 2.x, every MCP request's `_meta`. That reached third-party MCP servers and every site `fetch_url_content` opened. It was a stable hash of user and session, with no content.
+  - `traceparent` and `X-Amzn-Trace-Id` still go out, so an MCP server can still join its logs to the turn.
+  - Pinned on the real MCP wire by `tests/security/test_outbound_trace_context.py`.
+- **The browser sign-in viewer has its own origin** (#1952).
+  - `live-view.html`, where a user types a password into the takeover browser, was served from the same origin as untrusted MCP App HTML.
+  - It now has its own CloudFront distribution and bucket (`BrowserLiveViewConstruct`), on the distribution's default domain.
+  - app-api returns `viewerOrigin`, and the SPA frames and posts to that origin only.
+- **Gateway tools honour "Needs approval"** (#2015).
+- **File responses no longer include `s3Uri`** (#2012).
+- No CVE patches.
+
+## ⚡ Performance
+
+- **`analyze_spreadsheet` reuses one sandbox per turn** (#1894; `ANALYZE_SANDBOX_REUSE_ENABLED`, a rollout switch, default on).
+  - A second call on the same file skips the S3 download, session start, upload, XLSX bootstrap and schema probe.
+  - Its blocking calls moved off the event loop; that part is unflagged.
+  - Two calls in one response now run one after the other.
+- **Attachments are read concurrently and off the event loop** in the chat route, on every deployment (#1994).
+
+## ⚠️ Breaking changes
+
+- **Model ids with no catalog row are refused** (#2016). Add a priced row for any id your deployment runs, including ids Agents are bound to and ids API-key callers name.
+- **`field-set.<name>.md` skill files are validated on save** (#2053). A file that doesn't parse, or whose name breaks the naming rule, gets **400** from the user and admin upload routes (was 200), and an error result from `my_skill_write_file`. Stored files are untouched.
+- **Gateway OAuth accepts only `client_credentials`** (#2015). Create or update with `authorization_code` / `token_exchange` answers 400; older rows still load.
+- **`s3Uri` is gone from file responses** (#2012).
+- **Non-Bedrock providers receive non-PDF documents as text** (#1960), with no flag. In the same change, `.sql` uploads now reach the model and the spreadsheet upload limit rises to 25 MB (`FILE_UPLOAD_MAX_SIZE_BYTES_SPREADSHEET`).
+- **Self-hosted `github-mcp-server` before 2026-07-28.** A form left open reads "Failed", not "Waiting for you" (#1951).
+- **Removed: `CDK_FRONTEND_CORS_ORIGINS`** (`frontend.additionalCorsOrigins`, #2037). It never had an effect, and synth now ignores it.
+
+## 🏗️ Infrastructure
+
+- **New resources.** `BrowserLiveViewConstruct`, a CloudFront distribution and S3 bucket: +6 PlatformStack resources, no certificate or DNS record. app-api gets the new env `BROWSER_LIVE_VIEW_ORIGIN` (#1952).
+- **Timeouts.** The ALB idle timeout is 60 s and uvicorn keep-alive is 75 s (#1999).
+- **Prepare Lambda:**
+  - receives `ATTACHMENT_PLAN_ENABLED` while it is on (#2002);
+  - writes `facts`, PDF thumbnails and previews (#1966, #1972, #1977);
+  - skips linked reference rows (#2026).
+- No new tables or GSIs (`gsi-inventory.json` is unchanged) and no IAM changes. Nothing new is written to the AgentCore Runtime's environment at defaults.
+
+## 🔧 CI/CD
+
+- The nightly eval runs every model in `EVAL_MODEL_IDS` (Haiku 5.5 and Opus 5.5 by default) and installs uv with the pinned `setup-uv` action (#2043, #2054, #1945).
+
+## 📦 Dependencies
+
+| Package | From | To | Where |
+|---|---|---|---|
+| `mcp` | 1.30.0 | 2.3.0 | backend, scheduled-runs Lambda (#1666) |
+| `mcp-types` | — | 2.3.0 | backend (#1666) |
+| `httpx2`, `httpcore2` | — | 2.13.1 | backend (#1666) |
+| `truststore` | — | 0.10.4 | backend (#1666) |
+| `idna` | 3.15 | 3.20 | backend (#1666) |
+| `pydantic-settings`, `httpx-sse` | pinned | removed | backend (#1666) |
+| `cryptography` | 50.0.0 (transitive) | 50.0.1 (direct) | `tui/` (#2009) |
+| `glob` / `minimatch` | 13.0.6 / 10.2.5 | 14.0.4 / 11.0.5 | frontend and infrastructure dev tooling, via `overrides` (#2005) |
+
+## 🧪 Test coverage
+
+- Eval harness phases EH-4 to EH-8 and the `attachment_delivery` family; see the benchmarks spotlight.
+- Hermetic tests for the planner, its profiles and handles; voice Agent resolution; the MCP 2.x transport; and the outbound trace policy.
+
+## 📚 Docs
+
+- **`docs/specs/unified-attachment-delivery.md`**: spec, removal plan, per-model budget and readouts. Also the Bedrock document-ceilings probe (#1954, #1959, #1961, #1971, #1986).
+- **README and docs home** lead with governance, plus a new `configuration/governance` page (#2032). The docs site also gains the Benchmarks, Methodology and Reproduce pages (#2029).
+- **Specs and readouts:**
+  - handoffs §4.9, files by reference (#1942);
+  - quota-request decisions (#1949);
+  - idle-compaction cost replay (#1882);
+  - idle-return context sizing (#2039);
+  - model fallback profiles (#2059);
+  - admin model assignments (#2060).
+
+## 🚩 Feature flags
+
+| Flag | Default | Set on | Kind | What on does |
+|---|---|---|---|---|
+| `ATTACHMENT_PLAN_ENABLED` / `CDK_ATTACHMENT_PLAN_ENABLED` / SPA `features.attachmentPlan` | **OFF** (in development): only `"true"` enables; unset arrives as `""`. `features.attachmentPlan` is `false` in `environment.ts`, `true` in `environment.development.ts` and, from this release, `environment.production.ts` | AgentCore Runtime (written only while on), app-api, and the large-document prepare Lambda. The SPA field is read by nothing yet. It keeps the two sides in step | Rollout switch. Retires in phase 6 with the `legacy` profile, after two weeks in prod with no flip and the `attachment_delivery` readout recorded (#1422) | Attachments are planned in the model's own tokens against half its compaction ceiling: 20 files, 20 images, 1,000-page PDFs, handles in Memory, and on-demand or search past the budget |
+| `MCP_ELICITATION_ENABLED` / `CDK_MCP_ELICITATION_ENABLED` / SPA `features.mcpElicitation` | **OFF** (in development), everywhere | AgentCore Runtime (written only while on) and app-api. Keep both sides the same | Feature switch, permanent | An MCP server whose catalog row sets `elicitationEnabled` can ask the user for structured input partway through a tool call |
+| `FIELD_SET_AUTHORING_ENABLED` / `CDK_FIELD_SET_AUTHORING_ENABLED` / SPA `features.fieldSetAuthoring` | **OFF** (in development): `true` in `environment.development.ts` only | app-api only. Routes 404 after auth while off. The save-time check on field-set files runs regardless | Feature switch, permanent | A structured editor for the field sets on a skill the user owns |
+| `ANALYZE_SANDBOX_REUSE_ENABLED` | **ON**: unset means on, only `"false"` disables | AgentCore Runtime environment. No CDK variable | Rollout switch. Retires once the `analyze_sandbox outcome=` logs show the reuse is sound | `analyze_spreadsheet` keeps one Code Interpreter sandbox for the rest of the turn |
+| SPA `features.attachmentCards` | **OFF** (in development): `true` in `environment.development.ts` only | SPA build only. No backend switch | In development, landing over several PRs | Attached files drawn as preview cards, with a rail and fold in the composer and a mosaic in a message |
+
+**Default changes:** none. `features.documentExtract` and `features.fieldSetAuthoring` turned on in the dev build only.
+
+**Turned on in our prod with this release:** `ATTACHMENT_PLAN_ENABLED` / `attachmentPlan` (#2004). The SPA half is already in `environment.production.ts`. The backend half is a manual step, below.
+
+**Retired:** none. **Removed setting:** `CDK_FRONTEND_CORS_ORIGINS` (see Breaking changes).
+
+**Still opt-in, on in our prod** (#1798):
+- `sessionRewind` and `sessionFork`: on in prod since 1.32.0 (2026-10-30) with no flip. Their two-week condition is met, and promotion is its own change.
+- `sessionPrewarm`: waits on the Runtime V2 readout of what turnless warms cost.
+- `attachmentKb` and `CONVERSATION_INDEX_ENABLED`: a cost and retention decision each deployment makes.
+- `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`: on in prod since 2026-11-05; promote after two weeks.
+- `AGENT_KNOWLEDGE_FILES_ENABLED` with `knowledgeBaseMode`, and `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`: on in prod from 1.34.0; promote after two weeks with no flip.
+- **New:** `attachmentPlan` with `ATTACHMENT_PLAN_ENABLED`: a rollout switch on in prod from this release. It stays off by default until it retires in phase 6, and then the `token` profile is the only one.
+
+**On in our `development` environment only:** `RELEASE_LEDGER_ENABLED` / `releaseLedger`, `WORD_SKILL_SCRIPTS_ENABLED`, `HANDOFFS_ENABLED` and `HANDOFF_BRIEF_ENABLED`, `DOCUMENT_EXTRACT_ENABLED`, `FIELD_SET_AUTHORING_ENABLED`, `SOURCE_PROVENANCE_ENABLED`, `QUOTA_REQUESTS_ENABLED`, and `attachmentCards`.
+
+## 🛠️ Manual steps
+
+### Backfill: voice tool flags (every existing deployment, after `backend.yml`)
+
+Voice now loads only tools whose catalog row carries `voiceAvailable: true`. Every row written before this release reads as `false`, so **until this runs, voice sessions have no tools**.
+
+The script sets the flag on five fast lookups: `calculator`, `campus_directory`, `class_search`, `gateway_search_boise_state` and `gateway_policy_search`. An id the table doesn't have is reported and skipped. It only ever sets the flag to true, never resurrects a deleted row, and leaves `updatedAt` alone. It is dry-run by default.
+
+```bash
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_voice_tool_flags.py \
+    --table <prefix>-app-roles --region us-west-2          # dry run
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_voice_tool_flags.py \
+    --table <prefix>-app-roles --region us-west-2 --apply
+AWS_PROFILE=<env> backend/.venv/bin/python backend/scripts/backfill_voice_tool_flags.py \
+    --table <prefix>-app-roles --region us-west-2 --list   # confirm the flags read true
+```
+
+Run it against dev and then prod. Admins can adjust any tool afterwards in Admin → Tools. A fresh install doesn't need it: `seed_bootstrap_data.py` now writes `voiceAvailable` (true for `calculator`, false for the rest).
+
+### Agents in voice
+
+A **published** Agent must be resubmitted before "Available in voice mode" takes effect for it.
+
+### Catalog rows (prod)
+
+Add each of these through Admin → Models, or the admin API, before the model takes traffic.
+- **Sonnet 5.5:** `global.anthropic.claude-sonnet-5-5` at $2.00 / $10.00 input/output, $2.50 cache write, $0.10 cache read (#2045).
+- **GPT-6.1 Sol:** `global.openai.gpt-6.1-sol` at $2.00 / $10.00, $2.50 cache write, $0.10 cache read (#1800). Its Global TPM quota is still at the AWS default, so keep it an added option, not the default, until the quota is raised.
+
+Since #2016, an id with no row is refused rather than run unpriced. Check that nothing (an Agent binding, a saved default, an API-key caller) names an uncataloged id. Also apply the #2016 data fixes, if they aren't done yet:
+- the `global.*` Haiku 4.5 id;
+- the duplicate `isDefault` row;
+- the `us.*` Haiku 4.5 input rate, which should be $1.10, not $1.00.
+
+### Environment variables to set
+
+- **`CDK_ATTACHMENT_PLAN_ENABLED=true` on the `production` GitHub environment**, set when this release merges and before its `platform.yml` run. It was left unset on purpose so that no earlier platform deploy could turn the planner on (#2004). Add a line to #1798.
+- **Optional:** drop `CDK_FRONTEND_CORS_ORIGINS` wherever it is set. It has no effect.
+
+### Re-seed
+
+None for existing deployments. `seed_bootstrap_data.py` gained only the `voiceAvailable` field, and the backfill above covers existing rows.
+
+### Local development
+
+Delete the stale `infrastructure/assets/mcp-sandbox/dcvjs/` and re-run `fetch-dcv-sdk.sh`. The DCV SDK moved to `infrastructure/assets/browser-live-view/dcvjs/` (#1952).
+
+## 🚀 Deployment notes
+
+**Order:** set `CDK_ATTACHMENT_PLAN_ENABLED`, run `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`, then the voice backfill.
+
+- **Platform.**
+  - The Platform deploy is not a no-op. It adds the sign-in viewer's distribution and bucket (+6 resources), changes the ALB idle timeout, and writes `ATTACHMENT_PLAN_ENABLED` to the Runtime, app-api and the prepare Lambda where it is on.
+  - Every image rebuilds, because the version is in each hash manifest.
+- **Order between services.**
+  - If the SPA ships before app-api, the sign-in viewer fails closed until app-api returns `viewerOrigin`.
+  - Older PDFs keep the thumbnail app-api rendered for them. A PDF that has none is queued to the prepare Lambda, and `GET /files/{id}/thumbnail` answers 202 until the Lambda renders it.
+- **Expected one-time prompt-cache rewrites** on the first turn after deploy:
+  - users with `analyze_spreadsheet`: 1,013 → 1,164 tokens of `toolConfig`;
+  - project harnesses: `memory_save` 790 → 817 tokens;
+  - each Agent whose knowledge held a `.md` file stored as `application/octet-stream`: its system prompt;
+  - each live GPT conversation on the Responses transport: one cache write.
+- **Not a regression:** `toolConfigHash` rotates once for sessions whose MCP tools carry `outputSchema` or `annotations`. That is observability only; Bedrock's `toolConfig` itself is unchanged.
+- **Attachment sessions.** With the token profile on, expect fewer input tokens per attachment turn and compaction at different points on document sessions. The `attachmentPlan` entry on each `C#` row names every file's mode and reason.
+
+**Ledger readout of the outgoing release** (1.35.0 vs 1.34.0) is in the release PR body. It is read from dev, because the ledger is not on in prod yet.
+
+---
+
 # Release Notes — v1.35.0
 
 **Release Date:** November 8, 2026
