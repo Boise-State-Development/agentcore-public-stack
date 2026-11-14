@@ -19,6 +19,7 @@ describe('ConversationRewindService', () => {
     isSessionLoading: ReturnType<typeof vi.fn>;
     setLastTurnContinuable: ReturnType<typeof vi.fn>;
     setLastTurnInterrupted: ReturnType<typeof vi.fn>;
+    setLastTurnProviderOutage: ReturnType<typeof vi.fn>;
   };
   let toast: { error: ReturnType<typeof vi.fn> };
   let composerDraft: ComposerDraftService;
@@ -37,6 +38,7 @@ describe('ConversationRewindService', () => {
       isSessionLoading: vi.fn().mockReturnValue(false),
       setLastTurnContinuable: vi.fn(),
       setLastTurnInterrupted: vi.fn(),
+      setLastTurnProviderOutage: vi.fn(),
     };
     toast = { error: vi.fn() };
     TestBed.resetTestingModule();
@@ -68,6 +70,7 @@ describe('ConversationRewindService', () => {
     expect(sessionService.rewindSession).toHaveBeenCalledWith('sess-1', 'msg-sess-1-4');
     expect(messageMap.rewindToMessage).toHaveBeenCalledWith('sess-1', 'msg-sess-1-4', 8);
     expect(chatState.setLastTurnContinuable).toHaveBeenCalledWith('sess-1', false);
+    expect(chatState.setLastTurnProviderOutage).toHaveBeenCalledWith('sess-1', null);
     expect(composerDraft.consume('sess-1')?.text).toBe('what changed?');
     expect(service.pendingMessageId()).toBeNull();
   });
