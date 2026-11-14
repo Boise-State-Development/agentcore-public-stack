@@ -335,9 +335,9 @@ deferred path can need an HTTP status after the first byte.
    relaxation is scoped to `preparing`; the other phases still require a cycle,
    because the SPA uses it to tell event-loop passes apart.
 
-**Kill switch:** `AGENT_PREPARING_PHASE_ENABLED` (default on). Off restores the
-eager build exactly. Its own flag rather than riding `AGENT_STATUS_ENABLED`,
-which gates narration — this changes when the agent is built.
+**Kill switch:** none since its retirement in the rollout-switch cleanup after
+1.36.1. It shipped behind `AGENT_PREPARING_PHASE_ENABLED` (default on), which
+was never turned off in any environment.
 
 **Cost:** the label is one SSE frame. Nothing reaches the model.
 

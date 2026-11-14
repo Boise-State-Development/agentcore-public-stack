@@ -39,7 +39,6 @@ def _default_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "FILE_UPLOAD_MAX_SIZE_BYTES_SPREADSHEET",
         "LARGE_DOCUMENT_ATTACHMENTS_ENABLED",
         "FOLDER_ATTACHMENTS_ENABLED",
-        "ATTACHMENT_TURN_GUARD_ENABLED",
         "SKIP_AUTH",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -101,12 +100,6 @@ class TestEndpoint:
 
 
 class TestClientLimits:
-    def test_no_turn_guard_means_no_budget_and_the_resolver_backstop(self) -> None:
-        profile = replace(attachment_plan.legacy_profile(), turn_guard=False)
-        out = attachment_plan.client_limits(profile, attachment_plan.upload_limits())
-        assert out["inlineBudgetBytes"] is None
-        assert out["filesPerMessage"] == profile.resolver_backstop_without_guard
-
     def test_a_non_positive_cap_is_no_limit(self) -> None:
         profile = replace(attachment_plan.legacy_profile(), max_files_per_message=0, inline_total_max_bytes=0)
         out = attachment_plan.client_limits(profile, attachment_plan.upload_limits())

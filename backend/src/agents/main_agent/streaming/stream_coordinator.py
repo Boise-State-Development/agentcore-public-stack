@@ -23,7 +23,6 @@ from agents.main_agent.session.hooks.context_attribution import (
 from apis.shared.observability.prefix_tokens import prompt_tokens_from_usage
 from apis.shared.conversation_archive.live import appended_since, tail_anchor
 from apis.shared.feature_flags import (
-    agent_status_live_drain_enabled,
     cost_diagnostics_enabled,
     history_count_prefetch_enabled,
 )
@@ -450,7 +449,7 @@ class StreamCoordinator:
                 on every pass of the live status merge, so the frame goes out within
                 one poll interval of being ready instead of waiting for the agent
                 stream's next event. Must be idempotent: the caller keeps checking it
-                between events too, which is its only route while the merge is off.
+                between events too.
             turn_clock: The turn's ``TurnPrelude`` (duck-typed), continued here
                 past the agent build: ``head_of_turn.*`` sub-stages, then
                 ``pre_model`` (closed at the status hook's first
@@ -715,17 +714,13 @@ class StreamCoordinator:
             #
             # The status merge sits between the two so a transition recorded
             # while the agent stream is SILENT still reaches the client — see
-            # `_merge_agent_status`. With its kill switch off this is the bare
-            # `process_agent_stream(...)` the loop has always consumed, and no
-            # `_StatusFrame` is ever produced.
-            processed_stream: AsyncGenerator[Any, None] = process_agent_stream(
-                agent_stream
+            # `_merge_agent_status`.
+            processed_stream: AsyncGenerator[Any, None] = self._merge_agent_status(
+                process_agent_stream(agent_stream),
+                main_agent_wrapper,
+                session_id,
+                poll_side_frame=poll_side_frame,
             )
-            if agent_status_live_drain_enabled():
-                processed_stream = self._merge_agent_status(
-                    processed_stream, main_agent_wrapper, session_id,
-                    poll_side_frame=poll_side_frame,
-                )
 
             async for event in processed_stream:
                 if first_token_emit_pending:
@@ -1563,11 +1558,10 @@ class StreamCoordinator:
                 # has no route to the SSE stream. Drained here, before the
                 # event it precedes is yielded.
                 #
-                # With the live drain on, `_merge_agent_status` has usually
-                # taken these already and this finds nothing — it is kept
-                # because it is the ONLY drain when that kill switch is off,
-                # and because a transition recorded in the gap between the
-                # merge's last poll and this event still lands in order.
+                # `_merge_agent_status` has usually taken these already and
+                # this finds nothing — it is kept because a transition
+                # recorded in the gap between the merge's last poll and this
+                # event still lands in order.
                 for status_sse in self._drain_agent_status_events(
                     main_agent_wrapper, session_id
                 ):
