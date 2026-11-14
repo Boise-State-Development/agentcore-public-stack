@@ -23,7 +23,7 @@ Read this before drafting, because it shapes what a good skill looks like on thi
 
 ## Workflow
 
-1. **Capture intent.** If this conversation already shows the workflow ("turn this into a skill"), take the steps, tools, corrections and output formats from it first, then ask only about the gaps. Otherwise find out: what the skill should do, when it should be used (what would someone actually say?), what the output should look like, and what separates a good result from a bad one. Ask a few questions at a time, not a form.
+1. **Capture intent.** If this conversation already shows the workflow ("turn this into a skill"), take the steps, tools, corrections and output formats from it first, then ask only about the gaps. Otherwise find out: what the skill should do, when it should be used (what would someone actually say?), what the output should look like, and what separates a good result from a bad one. Ask a few questions at a time, not a form. If the skill pulls the same facts out of a kind of document every time (deadlines, amounts, eligibility, page limits), offer to add a structured extraction and read `references/structured-extraction.md`.
 2. **Draft.** Read `references/writing-guide.md` first. It covers the description, the structure of the instructions, and writing style. Produce a display name, a description, the instructions, and any reference files.
 3. **Review with the user.** Show the description and the instructions, and say in a line what each reference file is for. Revise until they're happy with it.
 4. **Save** it, as described below.
@@ -36,7 +36,7 @@ Read this before drafting, because it shapes what a good skill looks like on thi
 
 Use this path only if `my_skill_create` appears in your list of tools for this conversation. If it doesn't, the tools aren't turned on for this user and calling one just fails, so go straight to the next section.
 
-- **New skill:** call `my_skill_create` with the display name, description and instructions. Then call `my_skill_write_file` once per reference file, with the `skill_id` it returned.
+- **New skill:** call `my_skill_create` with the display name, description and instructions. Then call `my_skill_write_file` once per reference file, with the `skill_id` it returned. A field set is one of these files (`references/structured-extraction.md` covers its name and format).
 - **Existing skill:** find it with `my_skill_list`, read its fields and file list with `my_skill_read`, and read one file with `my_skill_read_file`. Change only what needs changing. `my_skill_update` replaces the instructions whole, so start from the current text.
 - **Every write asks the user first.** They see an approval card showing exactly what will be written. Say what you're about to save before you call, so the card isn't a surprise. If they decline, ask what to change rather than retrying the same call.
 - **An edit reaches other people.** The card for an edit says which of the user's shared agents and projects use the skill. Any that use it unpinned get the new version on their next turn. When that list is not empty, point it out.
