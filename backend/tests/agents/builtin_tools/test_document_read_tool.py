@@ -56,10 +56,11 @@ class TestTool:
         listing = AsyncMock(return_value={"documents": [{"upload_id": "up-1"}], "count": 1})
         monkeypatch.setattr(f"{TOOL_MODULE}.list_session_documents", listing)
         result = await _call(make_document_read_tool("s1", "u1"))
-        listing.assert_awaited_once_with("u1", "s1", ancestor_session_ids=())
+        listing.assert_awaited_once_with("u1", "s1", ancestor_session_ids=(), include_images=True)
         assert result["status"] == "success"
         payload = result["content"][0]["json"]
         assert payload["count"] == 1 and "hint" in payload
+        assert "image" not in payload["hint"]
 
     @pytest.mark.asyncio
     async def test_page_read_appends_the_native_block_after_the_metadata(self, monkeypatch):
@@ -69,13 +70,54 @@ class TestTool:
         ))
         monkeypatch.setattr(f"{TOOL_MODULE}.read_document", read)
         result = await _call(make_document_read_tool("s1", "u1"), upload_id="up-1", page_range="4-7", max_pages=6)
-        # A page range is the one read that can return a native PDF, so it is
-        # the one that carries the round's byte budget (all of it, alone).
+        # A page range can return a native PDF, so it carries the round's
+        # byte budget (all of it, alone).
         read.assert_awaited_once_with(
             "u1", "s1", "up-1", page_range="4-7", pattern=None, max_pages=6, offset=0, text_only=False,
             max_document_bytes=7_000_000,
         )
         assert result["content"] == [{"json": {"pages_returned": 4}}, block]
+
+    @pytest.mark.asyncio
+    async def test_an_image_comes_back_after_the_metadata_and_restores_byte_for_byte(self, monkeypatch):
+        """The recovery path for an image whose turn compaction summarized: the
+        image block rides the tool result, which Memory keeps with its bytes,
+        so a restore re-sends exactly what this turn sent."""
+        from apis.shared.files.attachment_handle import persisted_message
+
+        image = {"image": {"format": "jpeg", "source": {"bytes": b"\xff\xd8compact"}}}
+        read = AsyncMock(return_value=DocumentReadResult(
+            mode="image", payload={"upload_id": "img-1", "variant": "compact"},
+            extra_blocks=[image], bytes_returned=9, format="jpeg",
+        ))
+        monkeypatch.setattr(f"{TOOL_MODULE}.read_document", read)
+        result = await _call(make_document_read_tool("s1", "u1"), upload_id="img-1")
+
+        # A bare id may be an image, so it is read under the round's budget.
+        assert read.await_args.kwargs["max_document_bytes"] == 7_000_000
+        assert result["content"] == [{"json": {"upload_id": "img-1", "variant": "compact"}}, image]
+
+        message = {"role": "user", "content": [
+            {"toolResult": {"toolUseId": "t1", "status": "success", "content": result["content"]}}
+        ]}
+        assert persisted_message(message, lambda *a: "img-1", images=[]) is message
+
+    @pytest.mark.asyncio
+    async def test_the_listing_hint_names_images_when_there_are_some(self, monkeypatch):
+        listing = AsyncMock(return_value={
+            "documents": [], "count": 0,
+            "images": [{"upload_id": "img-1", "filename": "qa-badge-3.png", "format": "png", "size_bytes": 1}],
+        })
+        monkeypatch.setattr(f"{TOOL_MODULE}.list_session_documents", listing)
+        payload = (await _call(make_document_read_tool("s1", "u1")))["content"][0]["json"]
+        assert payload["images"][0]["upload_id"] == "img-1"
+        assert "image's upload_id alone returns the image" in payload["hint"]
+
+    def test_the_spec_tells_the_model_images_are_here(self):
+        for searchable in (False, True):
+            description = make_document_read_tool("s1", "u1", searchable=searchable).tool_spec["description"]
+            assert "documents and its\n  images with their upload_id" in description
+            assert "An image's upload_id alone: returns that image" in description
 
     @pytest.mark.asyncio
     async def test_text_only_tool_reads_text_with_an_identical_spec(self, monkeypatch):
