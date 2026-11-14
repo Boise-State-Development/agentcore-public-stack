@@ -36,7 +36,8 @@ Friday late morning (~10am MT), ~4 hours after `kaizen-research` runs. Phil revi
    - `gh run list --status=failure --limit 30` — fresh CI failures.
 7. **`CLAUDE.md` + skill inventory** — surface concerns only; never propose unilateral edits to these.
 8. **`CHANGELOG.md` / `RELEASE_NOTES.md`** — most recent ~14 days, for the "what shipped this week" celebration block + the don't-re-propose filter.
-9. **Spec sync rows** — the research doc's "Spec sync" table (kaizen-research source 2b) and the matching `Spec sync:` queue entries. They keep the multi-agent living specs (`docs/specs/multi-agent-patterns.md`, `docs/specs/agent-handoffs-and-consults.md`) true to upstream and to our own code. If the research doc has no Spec sync table, or no "no drift found" line, say the watch didn't run; don't treat it as a clean week.
+9. **The Strands readout**: the newest `docs/kaizen/scoping/strands-*-readout.md` (written by `strands-release-review`) and the research doc's `strands-agents` pin-lag row. Also check whether a bump PR is open: `gh pr list --state all --search "strands-agents in:title" --limit 5`. This feeds the standing Strands slot below.
+10. **Spec sync rows** — the research doc's "Spec sync" table (kaizen-research source 2b) and the matching `Spec sync:` queue entries. They keep the multi-agent living specs (`docs/specs/multi-agent-patterns.md`, `docs/specs/agent-handoffs-and-consults.md`) true to upstream and to our own code. If the research doc has no Spec sync table, or no "no drift found" line, say the watch didn't run; don't treat it as a clean week.
 
 ## Output
 
@@ -68,6 +69,31 @@ check before decisions.]
 <!-- What WASN'T used: skills not referenced this week, features not invoked,
      CI workflows that haven't run, etc. -->
 - **[Silence]** — [what wasn't used + what that might mean]
+
+## Strands bump — standing slot
+<!-- Every review, ahead of Proposals and outside the 10-proposal cap. Strands
+     releases are the biggest single source of platform change, and a released
+     version must not wait a week behind a gate it doesn't need. Fill it from the
+     latest strands-release-review readout.
+     - Pin lag 0: one line, "On X, the latest python release. Nothing to bump."
+     - Lag > 0 with a readout: the readout's Verdict, its gates (each with the
+       file:line that makes it reachable for us), and its Adopt / Subtract rows.
+       Recommend Ship this week unless a gate is unresolved AND reachable on a
+       path we run. Name that gate and its owner. A gate the readout marks
+       unreachable (a config we don't pass, a model we don't curate) is a Guard
+       test in the bump PR, never a reason to hold.
+     - Lag > 0, no readout: "Readout missing: run strands-release-review"
+       (Recommendation: Ship the readout today). Never rank the bump from
+       release notes.
+     - A bump PR already open: its status, and which readout checklist items are
+       still unticked.
+     Subtract rows become their own proposals only if they rank; the bump
+     itself is decided here. -->
+
+- **Pin → latest**: X → Y (N releases / N days) — readout: `scoping/strands-Y-readout.md`
+- **Gates**: [gate — file:line — reachable? — owner] or "none"
+- **Adopt / Subtract**: [one line each]
+- **Recommendation**: Ship the bump this week / Hold for [gate] until [date] — [why]
 
 ## Proposals — ranked
 
@@ -141,11 +167,12 @@ pulling its weight, say so.]
 ## Review Protocol (for Phil)
 
 1. Read Friction (2 min).
-2. Scan Proposals — mark ✅ Ship / ❌ Decline / ⏸ Defer on each (3-5 min).
-3. Scan Retirement Candidates — same marks (1-2 min).
-4. Resolve Carried Over items (1-2 min).
-5. Resolve Risks block.
-6. Pick 1-3 to ship this week. Decline or defer the rest with a reason.
+2. Decide the Strands slot: ✅ bump / ⏸ hold, with the gate named (1 min).
+3. Scan Proposals — mark ✅ Ship / ❌ Decline / ⏸ Defer on each (3-5 min).
+4. Scan Retirement Candidates — same marks (1-2 min).
+5. Resolve Carried Over items (1-2 min).
+6. Resolve Risks block.
+7. Pick 1-3 to ship this week. Decline or defer the rest with a reason.
 
 Target: 10-15 minutes.
 
@@ -201,9 +228,11 @@ After Phil reviews and the decisions are logged in the review doc, this skill (o
    - **Capability-unlock items** (proposals with a substantive `Unlocks` field — new product capability, UX surface, or platform primitive adoption) rank on their strategic merit. Do not auto-defer just because `Subtracts: no`. A High-impact unlock can rank above a Low-impact subtraction.
    - Items with **measured evidence** rank above asserted ones at the same effort/impact.
 
-8. **Cap the proposal count at 10.** If more than 10 candidates, defer the lowest-ranked to next week with a note. The review is supposed to take 10-15 minutes, not be exhaustive.
+8. **Fill the Strands slot** from input 9, per the template's comment. It sits outside the cap. If pin lag is above 0 and there's no readout, the slot says so; don't write the readout here (this skill only writes the review doc and the queue), and don't rank the bump from release notes.
 
-9. **Open a PR** — see "PR creation".
+9. **Cap the proposal count at 10.** If more than 10 candidates, defer the lowest-ranked to next week with a note. The review is supposed to take 10-15 minutes, not be exhaustive.
+
+10. **Open a PR** — see "PR creation".
 
 ## PR creation
 
@@ -233,13 +262,15 @@ gh pr create --base develop --head "$BRANCH" \
 - N proposals ranked Effort × Impact (retirement candidates boosted).
 - Friction patterns from the week's commits, PRs, and CI surfaced.
 - Carried-over deferred items now due for re-decision.
+- Strands bump slot: pin lag, the readout's verdict and gates, bump or hold.
 - Scorecard of the prior review's proposals: what shipped, what didn't, and what the merged PRs found.
 
 ## Review
 1. Read Friction (2 min).
-2. Mark each Proposal: ✅ Ship / ❌ Decline / ⏸ Defer.
-3. Same for Retirement Candidates and Risks.
-4. Pick 1-3 to ship this week.
+2. Decide the Strands slot: bump or hold, with the gate named.
+3. Mark each Proposal: ✅ Ship / ❌ Decline / ⏸ Defer.
+4. Same for Retirement Candidates and Risks.
+5. Pick 1-3 to ship this week.
 
 Target: 10-15 minutes.
 
@@ -262,6 +293,7 @@ EOF
 - **No fabrication.** If a week was quiet, the review is short. Length tracks signal, not target word count.
 - **Never edit `CLAUDE.md` or skill files unilaterally.** A proposal can recommend a change to them, but the change itself is always Phil-approved in review and shipped in a separate PR.
 - **Cap at 10 proposals.** A 15-item list defeats the 10-15 min target.
+- **The Strands slot is never empty and never deferred silently.** A hold names the gate, the file:line that makes it reachable for us, and a date. "Measure first" on a path the readout marks Inert is not a gate.
 
 ## Confirmation
 
