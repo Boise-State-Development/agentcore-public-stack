@@ -439,17 +439,14 @@
       "enabled_skills": []
     },
     "expect": {
-      "contains_any": [
+      "first_number": [
         "17"
-      ],
-      "forbidden": [
-        "40"
       ]
     },
     "large_documents": [
       "handbook"
     ],
-    "notes": "15 MB Word handbook (mostly one embedded image), paraphrase. 40 is the visiting-scholars limit planted elsewhere. Question docx-borrow."
+    "notes": "15 MB Word handbook (mostly one embedded image), paraphrase. 40 is the visiting-scholars limit planted elsewhere: an answer that leads with 17 and then names 40 for visiting scholars is right, one that leads with 40 is not, so this checks the first number rather than forbidding 40. 'Just the number' is not scored. Question docx-borrow."
   },
   {
     "id": "document_qa.large_handbook_fines_age",

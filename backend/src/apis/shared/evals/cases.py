@@ -92,6 +92,8 @@ JUDGE_EVALUATORS = CASE_EVALUATORS
 
 _ID_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
 _FIXTURE_RE = re.compile(r"^[a-z0-9_]+$")
+#: What ``expect.first_number`` may list: the digits a scorer can compare.
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 
 #: Tools a case may require that are not catalog ids, and the catalog id that
 #: provisions each (``apis/shared/tools/injected.py``). ``None`` means the turn
@@ -183,6 +185,12 @@ class Expect:
     #: refuse to write), where naming the same term in prose, as a refusal may,
     #: is not the failure.
     forbidden_in_code: Tuple[str, ...] = ()
+    #: The first number the answer states is one of these (``score.first_number``).
+    #: For a question with one numeric answer whose document also plants a
+    #: scoped distractor: an answer that gives the right value and then names
+    #: the distractor for its scope passes, and one that leads with the
+    #: distractor fails. ``forbidden`` would fail both.
+    first_number: Tuple[str, ...] = ()
     tools: Optional[ToolExpect] = None
     refuses: Optional[bool] = None
     regex: Optional[RegexExpect] = None
@@ -197,6 +205,7 @@ class Expect:
             or self.contains_all
             or self.forbidden
             or self.forbidden_in_code
+            or self.first_number
             or self.tools
             or self.refuses is not None
             or self.regex
@@ -336,8 +345,8 @@ def _compile(pattern: str, where: str) -> None:
 
 def _parse_expect(raw: Mapping[str, Any], where: str) -> Expect:
     _check_keys(
-        raw, ("contains_any", "contains_all", "forbidden", "forbidden_in_code", "tools", "refuses", "regex", "skill",
-              "memory", "proposals"),
+        raw, ("contains_any", "contains_all", "forbidden", "forbidden_in_code", "first_number", "tools", "refuses",
+              "regex", "skill", "memory", "proposals"),
         where,
     )
 
@@ -412,11 +421,17 @@ def _parse_expect(raw: Mapping[str, Any], where: str) -> Expect:
     if proposals is not None and (not isinstance(proposals, int) or isinstance(proposals, bool) or proposals < 0):
         raise CaseError(f"{where}.proposals: expected a non-negative integer")
 
+    first_number = _str_tuple(raw.get("first_number"), f"{where}.first_number")
+    for value in first_number:
+        if not _NUMBER_RE.fullmatch(value):
+            raise CaseError(f"{where}.first_number: {value!r} is not a plain number like '17' or '26.5'")
+
     return Expect(
         contains_any=_str_tuple(raw.get("contains_any"), f"{where}.contains_any"),
         contains_all=_str_tuple(raw.get("contains_all"), f"{where}.contains_all"),
         forbidden=_str_tuple(raw.get("forbidden"), f"{where}.forbidden"),
         forbidden_in_code=_str_tuple(raw.get("forbidden_in_code"), f"{where}.forbidden_in_code"),
+        first_number=first_number,
         tools=tools,
         refuses=refuses,
         regex=regex,
