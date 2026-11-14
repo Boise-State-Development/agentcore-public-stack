@@ -23,10 +23,12 @@
 
 **Handoffs** gain deliveries and file sharing by reference, still on dev only.
 
+**Our prod also turns on three features that stay off by default:** structured extraction, field-set authoring and source provenance verification. A 14-field set now fits Bedrock's schema limit (#2063).
+
 Five new flags; see Feature flags. **Manual steps:**
 - run one new backfill (`backfill_voice_tool_flags.py`) per environment;
 - add two prod catalog rows;
-- set `CDK_ATTACHMENT_PLAN_ENABLED=true` on the `production` GitHub environment.
+- set four variables on the `production` GitHub environment: `CDK_ATTACHMENT_PLAN_ENABLED`, `CDK_DOCUMENT_EXTRACT_ENABLED`, `CDK_FIELD_SET_AUTHORING_ENABLED` and `CDK_SOURCE_PROVENANCE_ENABLED`.
 
 There are no GSI changes.
 
@@ -280,7 +282,11 @@ Behind `HANDOFFS_ENABLED` / `features.handoffs`, on dev only.
 
 **Default changes:** none. `features.documentExtract` and `features.fieldSetAuthoring` turned on in the dev build only.
 
-**Turned on in our prod with this release:** `ATTACHMENT_PLAN_ENABLED` / `attachmentPlan` (#2004). The SPA half is already in `environment.production.ts`. The backend half is a manual step, below.
+**Turned on in our prod with this release.** For each, the SPA half is already set in `environment.production.ts` and the backend half is a manual step (below):
+- `ATTACHMENT_PLAN_ENABLED` / `attachmentPlan` (#2004);
+- `DOCUMENT_EXTRACT_ENABLED` / `documentExtract`;
+- `FIELD_SET_AUTHORING_ENABLED` / `fieldSetAuthoring`;
+- `SOURCE_PROVENANCE_ENABLED` / `sourceProvenance`.
 
 **Retired:** none. **Removed setting:** `CDK_FRONTEND_CORS_ORIGINS` (see Breaking changes).
 
@@ -291,8 +297,9 @@ Behind `HANDOFFS_ENABLED` / `features.handoffs`, on dev only.
 - `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`: on in prod since 2026-11-05; promote after two weeks.
 - `AGENT_KNOWLEDGE_FILES_ENABLED` with `knowledgeBaseMode`, and `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`: on in prod from 1.34.0; promote after two weeks with no flip.
 - **New:** `attachmentPlan` with `ATTACHMENT_PLAN_ENABLED`: a rollout switch on in prod from this release. It stays off by default until it retires in phase 6, and then the `token` profile is the only one.
+- **New:** `documentExtract` with `DOCUMENT_EXTRACT_ENABLED`, `fieldSetAuthoring` with `FIELD_SET_AUTHORING_ENABLED`, and `sourceProvenance` with `SOURCE_PROVENANCE_ENABLED`. These are feature switches on in our prod from this release; each stays off by default while it is in development. Promote each to default-on once it has been finished and in prod for two weeks with no flip, since each adds a tool or an editor a deployment may not want.
 
-**On in our `development` environment only:** `RELEASE_LEDGER_ENABLED` / `releaseLedger`, `WORD_SKILL_SCRIPTS_ENABLED`, `HANDOFFS_ENABLED` and `HANDOFF_BRIEF_ENABLED`, `DOCUMENT_EXTRACT_ENABLED`, `FIELD_SET_AUTHORING_ENABLED`, `SOURCE_PROVENANCE_ENABLED`, `QUOTA_REQUESTS_ENABLED`, and `attachmentCards`.
+**On in our `development` environment only:** `RELEASE_LEDGER_ENABLED` / `releaseLedger`, `WORD_SKILL_SCRIPTS_ENABLED`, `HANDOFFS_ENABLED` and `HANDOFF_BRIEF_ENABLED`, `QUOTA_REQUESTS_ENABLED`, and `attachmentCards`.
 
 ## 🛠️ Manual steps
 
@@ -330,7 +337,11 @@ Since #2016, an id with no row is refused rather than run unpriced. Check that n
 
 ### Environment variables to set
 
-- **`CDK_ATTACHMENT_PLAN_ENABLED=true` on the `production` GitHub environment**, set when this release merges and before its `platform.yml` run. It was left unset on purpose so that no earlier platform deploy could turn the planner on (#2004). Add a line to #1798.
+Set all four on the `production` GitHub environment when this release merges, before its `platform.yml` run, and add a line to #1798 for each. Each was left unset on purpose, so that no earlier platform deploy could turn it on ahead of the SPA build that matches it.
+- **`CDK_ATTACHMENT_PLAN_ENABLED=true`** (#2004).
+- **`CDK_DOCUMENT_EXTRACT_ENABLED=true`**. Extraction runs on `CDK_DOCUMENT_EXTRACT_MODEL_ID`, which defaults to `us.anthropic.claude-haiku-4-5-20251001-v1:0`. That id must have a prod catalog row, or every extraction call prices to $0 and fires `UnmeteredModelCall`. Set the variable only to use another catalogued id. A turn gets `document_extract` only when its active skills declare a field set (`references/field-set.<name>.md`), so the demo needs one such skill granted to the demo users.
+- **`CDK_FIELD_SET_AUTHORING_ENABLED=true`** (app-api only).
+- **`CDK_SOURCE_PROVENANCE_ENABLED=true`**. This adds `verify_sources` to sessions with a readable document. It is one `toolConfig` rewrite at deploy for those sessions.
 - **Optional:** drop `CDK_FRONTEND_CORS_ORIGINS` wherever it is set. It has no effect.
 
 ### Re-seed
@@ -343,7 +354,7 @@ Delete the stale `infrastructure/assets/mcp-sandbox/dcvjs/` and re-run `fetch-dc
 
 ## 🚀 Deployment notes
 
-**Order:** set `CDK_ATTACHMENT_PLAN_ENABLED`, run `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`, then the voice backfill.
+**Order:** set the four `production` variables (Manual steps), run `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`, then the voice backfill.
 
 - **Platform.**
   - The Platform deploy is not a no-op. It adds the sign-in viewer's distribution and bucket (+6 resources), changes the ALB idle timeout, and writes `ATTACHMENT_PLAN_ENABLED` to the Runtime, app-api and the prepare Lambda where it is on.
