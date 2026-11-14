@@ -3,7 +3,8 @@
 **Status:** PRs 1–3 implemented (§8): `serialize_field_set` and the unconditional
 check on every skill-file write (PR 1); the app-api routes, the parser's
 `FieldSetLayout` and the `FIELD_SET_AUTHORING_ENABLED` flag (PR 2); the SPA editor
-(PR 3). Off everywhere until an environment turns both halves on.
+(PR 3). On in dev since 2026-11-13 (the `development` GitHub variable and
+`environment.development.ts`); off by default and in prod.
 **Closes:** `docs/specs/structured-extraction.md` §4, "what is given up" #1.
 **Depends on:** structured extraction (`DOCUMENT_EXTRACT_ENABLED`), in development.
 
