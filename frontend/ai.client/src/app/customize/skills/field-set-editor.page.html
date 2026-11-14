@@ -1,0 +1,450 @@
+<div class="min-h-dvh">
+  <div class="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
+    <a
+      [routerLink]="['/customize/skills', skillId(), 'edit']"
+      class="inline-flex items-center gap-1.5 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:text-white"
+    >
+      <ng-icon name="heroArrowLeft" class="size-4" aria-hidden="true" />
+      Skill
+    </a>
+
+    <div class="mt-4 flex flex-wrap items-end justify-between gap-4">
+      <h1 class="text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl dark:text-white">
+        {{ isNew() ? 'New field set' : 'Edit field set' }}
+      </h1>
+
+      <!-- Form ⇄ markdown, over the same file (D7) -->
+      <div
+        role="group"
+        aria-label="Editing mode"
+        class="inline-flex rounded-2xl border border-gray-300 p-0.5 dark:border-gray-600"
+      >
+        <button
+          type="button"
+          (click)="showForm()"
+          [attr.aria-pressed]="mode() === 'form'"
+          [disabled]="switching() || loading()"
+          class="rounded-2xl px-3 py-1 text-sm/6 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50"
+          [class]="
+            mode() === 'form'
+              ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
+              : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
+          "
+        >
+          Form
+        </button>
+        <button
+          type="button"
+          (click)="showMarkdown()"
+          [attr.aria-pressed]="mode() === 'markdown'"
+          [disabled]="switching() || loading()"
+          class="rounded-2xl px-3 py-1 text-sm/6 font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50"
+          [class]="
+            mode() === 'markdown'
+              ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
+              : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
+          "
+        >
+          Markdown
+        </button>
+      </div>
+    </div>
+
+    @if (error()) {
+      <div
+        role="alert"
+        class="mt-6 rounded-2xl bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-400"
+      >
+        {{ error() }}
+      </div>
+    }
+    <p role="status" class="sr-only">{{ notice() }}</p>
+    @if (notice()) {
+      <div
+        aria-hidden="true"
+        class="mt-6 rounded-2xl bg-state-success-50 px-4 py-3 text-sm/6 text-state-success-800 dark:bg-state-success-900/20 dark:text-state-success-300"
+      >
+        {{ notice() }}
+      </div>
+    }
+
+    @if (loading()) {
+      <p role="status" class="mt-8 text-sm/6 text-gray-600 dark:text-gray-400">Loading…</p>
+    } @else {
+      <form [formGroup]="form" (ngSubmit)="save()" class="mt-8 space-y-6">
+        <!-- Set name, title, version -->
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-6">
+          @if (mode() === 'form') {
+          <div class="sm:col-span-4">
+            <label for="set-title" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+              Title
+            </label>
+            <input
+              id="set-title"
+              type="text"
+              formControlName="title"
+              class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            />
+          </div>
+          <div class="sm:col-span-2">
+            <label for="set-version" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+              Version
+            </label>
+            <input
+              id="set-version"
+              type="text"
+              formControlName="version"
+              aria-describedby="set-version-hint"
+              class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            />
+          </div>
+          }
+          <div class="sm:col-span-6">
+            <label for="set-name" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+              Name
+            </label>
+            <input
+              id="set-name"
+              type="text"
+              formControlName="setName"
+              [placeholder]="isNew() ? 'Taken from the title if left blank' : ''"
+              aria-describedby="set-name-hint"
+              class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            />
+            <p id="set-name-hint" class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
+              Lowercase words joined by hyphens, like <span class="font-mono">nsf-solicitation</span>.
+              The agent asks for the set by this name.
+              @if (renaming()) {
+                <strong class="font-medium text-gray-900 dark:text-white">
+                  Saving renames it, and anything that asks for the old name won't find it.
+                </strong>
+              }
+            </p>
+          </div>
+        </div>
+        @if (mode() === 'form') {
+        <p id="set-version-hint" class="-mt-3 text-sm/6 text-gray-600 dark:text-gray-400">
+          Saving never changes the version. Change it when the fields change, so new results
+          aren't mixed up with old ones.
+          @if (suggestBump() && nextVersion()) {
+            <button
+              type="button"
+              (click)="bumpVersion()"
+              class="ml-1 font-medium text-primary-700 underline hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-300"
+            >
+              The fields changed. Use version {{ nextVersion() }}
+            </button>
+          }
+        </p>
+        }
+
+        @if (mode() === 'form') {
+          <!-- What the form keeps but doesn't show (§5.4) -->
+          @if (carried().unmanagedColumns.length > 0) {
+            <div
+              class="flex gap-3 rounded-2xl bg-state-info-50 px-4 py-3 text-sm/6 text-state-info-800 dark:bg-state-info-900/20 dark:text-state-info-300"
+            >
+              <ng-icon name="heroInformationCircle" class="mt-0.5 size-5 shrink-0" aria-hidden="true" />
+              <p>
+                This set has
+                {{ carried().unmanagedColumns.length === 1 ? 'a column' : 'columns' }} the form doesn't show:
+                @for (column of carried().unmanagedColumns; track $index) {
+                  <strong class="font-medium">{{ column || '(no heading)' }}</strong>{{ $last ? '.' : ', ' }}
+                }
+                Saving keeps
+                {{ carried().unmanagedColumns.length === 1 ? 'it' : 'them' }} as written. To edit
+                {{ carried().unmanagedColumns.length === 1 ? 'it' : 'them' }}, switch to Markdown.
+              </p>
+            </div>
+          }
+          @if (carried().preamble || carried().postscript || carried().frontmatter.length > 0) {
+            <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+              The text around the table
+              {{ carried().frontmatter.length > 0 ? 'and the extra header lines are' : 'is' }} kept as
+              written. Switch to Markdown to edit
+              {{ carried().frontmatter.length > 0 ? 'them' : 'it' }}.
+            </p>
+          }
+
+          <!-- Field cards (D3), in authored order (D4) -->
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">Fields</h2>
+            @if (maxFields(); as max) {
+              <p class="text-sm/6 text-gray-600 dark:text-gray-400" aria-live="polite">
+                {{ fieldCount() }} of {{ max }} fields
+              </p>
+            }
+          </div>
+
+          <ol formArrayName="fields" class="space-y-4">
+            @for (group of fields.controls; track group; let i = $index; let first = $first; let last = $last) {
+              <li
+                [formGroupName]="i"
+                class="rounded-2xl border border-gray-200 p-4 dark:border-gray-700"
+                [attr.aria-labelledby]="'field-' + i + '-heading'"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <h3
+                    [id]="'field-' + i + '-heading'"
+                    class="text-sm/6 font-semibold text-gray-900 dark:text-white"
+                  >
+                    Field {{ i + 1 }}
+                    @if (group.controls.title.value) {
+                      <span class="font-normal text-gray-600 dark:text-gray-400">· {{ group.controls.title.value }}</span>
+                    }
+                  </h3>
+                  <div class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      [id]="'field-' + i + '-move-up'"
+                      (click)="moveField(i, -1)"
+                      [disabled]="first"
+                      [attr.aria-label]="'Move field ' + (i + 1) + ' up'"
+                      class="rounded-2xl p-1.5 text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-40 dark:text-gray-400 dark:hover:bg-gray-700"
+                    >
+                      <ng-icon name="heroArrowUp" class="size-4" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      [id]="'field-' + i + '-move-down'"
+                      (click)="moveField(i, 1)"
+                      [disabled]="last"
+                      [attr.aria-label]="'Move field ' + (i + 1) + ' down'"
+                      class="rounded-2xl p-1.5 text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-40 dark:text-gray-400 dark:hover:bg-gray-700"
+                    >
+                      <ng-icon name="heroArrowDown" class="size-4" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      (click)="removeField(i)"
+                      [attr.aria-label]="'Remove field ' + (i + 1)"
+                      class="rounded-2xl p-1.5 text-state-danger-700 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
+                    >
+                      <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+
+                <div class="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label [for]="'field-' + i + '-title'" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                      Title
+                    </label>
+                    <input
+                      [id]="'field-' + i + '-title'"
+                      type="text"
+                      formControlName="title"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label [for]="'field-' + i + '-name'" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                      Name
+                    </label>
+                    <input
+                      [id]="'field-' + i + '-name'"
+                      type="text"
+                      formControlName="name"
+                      (input)="markNameEdited(i)"
+                      [attr.aria-describedby]="'field-' + i + '-name-hint'"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    />
+                    <p [id]="'field-' + i + '-name-hint'" class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
+                      @if (group.controls.originalName.value && group.controls.name.value.trim() !== group.controls.originalName.value) {
+                        Renamed from <span class="font-mono">{{ group.controls.originalName.value }}</span>. A
+                        renamed field is a new column, so earlier results won't line up with it.
+                      } @else {
+                        The column's key, in <span class="font-mono">snake_case</span>.
+                      }
+                    </p>
+                  </div>
+                  <div>
+                    <label [for]="'field-' + i + '-type'" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                      Type
+                    </label>
+                    <select
+                      [id]="'field-' + i + '-type'"
+                      formControlName="type"
+                      class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                    >
+                      @for (type of fieldTypes; track type) {
+                        <option [value]="type">{{ fieldTypeLabels[type] }}</option>
+                      }
+                    </select>
+                  </div>
+                  <div class="flex items-end">
+                    <div class="flex gap-3">
+                      <div class="flex h-6 shrink-0 items-center">
+                        <input
+                          [id]="'field-' + i + '-optional'"
+                          type="checkbox"
+                          formControlName="optional"
+                          [attr.aria-describedby]="'field-' + i + '-optional-hint'"
+                          class="size-4 rounded-sm border-gray-300 text-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                        />
+                      </div>
+                      <div class="text-sm/6">
+                        <label [for]="'field-' + i + '-optional'" class="font-medium text-gray-900 dark:text-white">
+                          Optional
+                        </label>
+                        <p [id]="'field-' + i + '-optional-hint'" class="text-gray-600 dark:text-gray-400">
+                          The document may legitimately not state this.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Find is the field (§5.1) -->
+                <div class="mt-4">
+                  <label [for]="'field-' + i + '-find'" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                    What to look for
+                  </label>
+                  <p [id]="'field-' + i + '-find-hint'" class="text-sm/6 text-gray-600 dark:text-gray-400">
+                    Say what to look for, the way you would tell a new colleague. A full sentence
+                    costs nothing extra.
+                  </p>
+                  <textarea
+                    [id]="'field-' + i + '-find'"
+                    rows="3"
+                    formControlName="find"
+                    [placeholder]="findPlaceholder(group.controls.title.value)"
+                    [attr.aria-describedby]="'field-' + i + '-find-hint'"
+                    class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                  ></textarea>
+                </div>
+
+                <!-- Allowed values: only for enum, which is the only type that reads them -->
+                @if (group.controls.type.value === 'enum') {
+                  <div class="mt-4">
+                    <label [for]="'field-' + i + '-enum'" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+                      Allowed values
+                    </label>
+                    @if (group.controls.enum.value.length > 0) {
+                      <ul role="list" class="mt-2 flex flex-wrap gap-2" [attr.aria-label]="'Allowed values for field ' + (i + 1)">
+                        @for (value of group.controls.enum.value; track value) {
+                          <li
+                            class="inline-flex items-center gap-1 rounded-full bg-gray-100 py-0.5 pr-1 pl-2.5 text-xs/5 font-medium text-gray-800 dark:bg-gray-700 dark:text-gray-200"
+                          >
+                            {{ value }}
+                            <button
+                              type="button"
+                              (click)="removeEnumValue(i, value)"
+                              [attr.aria-label]="'Remove ' + value"
+                              class="rounded-full p-0.5 hover:bg-gray-200 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary-500 dark:hover:bg-gray-600"
+                            >
+                              <ng-icon name="heroXMark" class="size-3" aria-hidden="true" />
+                            </button>
+                          </li>
+                        }
+                      </ul>
+                    }
+                    <div class="mt-2 flex gap-2">
+                      <input
+                        #enumInput
+                        [id]="'field-' + i + '-enum'"
+                        type="text"
+                        (keydown)="onEnumKeydown($event, i)"
+                        [attr.aria-describedby]="'field-' + i + '-enum-hint'"
+                        class="block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        (click)="addEnumValue(i, enumInput)"
+                        class="shrink-0 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    <p [id]="'field-' + i + '-enum-hint'" class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
+                      Press Enter after each value. The answer will always be one of these.
+                    </p>
+                  </div>
+                }
+              </li>
+            }
+          </ol>
+
+          <div>
+            <button
+              type="button"
+              (click)="addField()"
+              [disabled]="atCeiling()"
+              [attr.aria-describedby]="atCeiling() ? 'ceiling-hint' : null"
+              class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+            >
+              <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
+              Add field
+            </button>
+            @if (atCeiling()) {
+              <p id="ceiling-hint" class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
+                {{ maxFields() }} fields is the most one set can hold: that's the limit of what the
+                model service will compile, measured rather than chosen. Split the rest into a
+                second field set and run the two separately.
+              </p>
+            }
+          </div>
+
+          <!-- Rules: carried verbatim, read-only (§2) -->
+          @if (carried().rules; as rules) {
+            <section aria-labelledby="rules-heading" class="rounded-2xl border border-gray-200 p-4 dark:border-gray-700">
+              <h2 id="rules-heading" class="text-sm/6 font-medium text-gray-900 dark:text-white">Rules</h2>
+              <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+                Kept as written. Nothing reads them yet. Switch to Markdown to edit them.
+              </p>
+              <pre class="mt-2 max-h-60 overflow-auto rounded-2xl bg-gray-50 p-3 font-mono text-xs/5 whitespace-pre-wrap text-gray-800 dark:bg-gray-900 dark:text-gray-200">{{ rules }}</pre>
+            </section>
+          }
+        } @else {
+          <!-- Markdown mode -->
+          <div>
+            <label for="set-markdown" class="block text-sm/6 font-medium text-gray-900 dark:text-white">
+              Markdown
+            </label>
+            <p id="set-markdown-hint" class="text-sm/6 text-gray-600 dark:text-gray-400">
+              The whole file, including anything the form doesn't show. It's checked when you save
+              or switch back to the form.
+            </p>
+            <textarea
+              id="set-markdown"
+              rows="22"
+              [formControl]="markdown"
+              aria-describedby="set-markdown-hint"
+              spellcheck="false"
+              class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 font-mono text-sm/6 text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            ></textarea>
+          </div>
+        }
+
+        <!-- Actions -->
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <button
+              type="submit"
+              [disabled]="saving() || switching()"
+              class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50"
+            >
+              {{ saving() ? 'Saving…' : isNew() ? 'Create field set' : 'Save' }}
+            </button>
+            <a
+              [routerLink]="['/customize/skills', skillId(), 'edit']"
+              class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-gray-700"
+            >
+              Back to skill
+            </a>
+          </div>
+          @if (!isNew()) {
+            <button
+              type="button"
+              (click)="deleteSet()"
+              class="inline-flex items-center gap-1.5 rounded-2xl px-3 py-2 text-sm/6 font-medium text-state-danger-700 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
+            >
+              <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+              Delete field set
+            </button>
+          }
+        </div>
+      </form>
+    }
+  </div>
+</div>

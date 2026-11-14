@@ -48,6 +48,41 @@ export const KNOWLEDGE_MODE_UNKNOWN: KnowledgeModeStatus = {
   skippedDocuments: [],
 };
 
+/**
+ * How an Agent's knowledge base reaches a voice conversation (#625;
+ * `GET /assistants/{id}/knowledge-base/voice-mode`). Voice has no search step,
+ * so the documents go to it whole or not at all.
+ *
+ * - `whole`: sent whole, within the size full context was tuned for.
+ * - `large`: sent whole, but over `largeTokens`: slower to start and costlier.
+ * - `too_large`: over `budgetTokens`; voice leaves the knowledge base out.
+ * - `unreadable`: nothing voice can read (scans, or only spreadsheets and decks).
+ * - `off`: this deployment keeps knowledge bases out of voice.
+ * - `empty` / `unknown`: as for the text mode.
+ */
+export type VoiceKnowledgeMode =
+  'whole' | 'large' | 'too_large' | 'unreadable' | 'off' | 'empty' | 'unknown';
+
+export interface VoiceKnowledgeModeStatus {
+  mode: VoiceKnowledgeMode;
+  reason: string | null;
+  documentCount: number;
+  estimatedTokens: number;
+  largeTokens: number;
+  budgetTokens: number;
+  skippedDocuments: string[];
+}
+
+export const VOICE_KNOWLEDGE_MODE_UNKNOWN: VoiceKnowledgeModeStatus = {
+  mode: 'unknown',
+  reason: null,
+  documentCount: 0,
+  estimatedTokens: 0,
+  largeTokens: 0,
+  budgetTokens: 0,
+  skippedDocuments: [],
+};
+
 @Injectable({ providedIn: 'root' })
 export class KnowledgeModeService {
   private readonly http = inject(HttpClient);
@@ -63,6 +98,20 @@ export class KnowledgeModeService {
       return { ...KNOWLEDGE_MODE_UNKNOWN, ...status };
     } catch {
       return KNOWLEDGE_MODE_UNKNOWN;
+    }
+  }
+
+  /** Resolves, never rejects: a failure is `unknown`, which renders nothing. */
+  async getVoiceMode(entityId: string): Promise<VoiceKnowledgeModeStatus> {
+    try {
+      const status = await firstValueFrom(
+        this.http.get<VoiceKnowledgeModeStatus>(
+          `${this.baseUrl()}/${entityId}/knowledge-base/voice-mode`,
+        ),
+      );
+      return { ...VOICE_KNOWLEDGE_MODE_UNKNOWN, ...status };
+    } catch {
+      return VOICE_KNOWLEDGE_MODE_UNKNOWN;
     }
   }
 }

@@ -25,11 +25,17 @@ export const environment = {
         folderAttachments: true,
         attachmentKb: true,
         folderSync: true,
-        sourceProvenance: false,
+        // The `production` GitHub environment sets CDK_SOURCE_PROVENANCE_ENABLED=true
+        // from 1.36.0 (in development, off by default; #1798).
+        sourceProvenance: true,
         // The `production` GitHub environment sets CDK_ATTACHMENT_PLAN_ENABLED=true
         // from the release that ships this (a rollout switch, #1798).
         attachmentPlan: true,
-        documentExtract: false,
+        // The `production` GitHub environment sets CDK_DOCUMENT_EXTRACT_ENABLED=true
+        // and CDK_FIELD_SET_AUTHORING_ENABLED=true from 1.36.0 (in development,
+        // off by default; #1798).
+        documentExtract: true,
+        fieldSetAuthoring: true,
         handoffs: false,
         handoffBrief: false,
         sessionRewind: true,
@@ -39,6 +45,7 @@ export const environment = {
         awsLimits: false,
         knowledgeBaseMode: true,
         releaseLedger: false,
-        attachmentCards: false,
+        // On in our prod from 1.36.1 (UI only; in development, off by default; #1798).
+        attachmentCards: true,
     } satisfies FeatureFlags,
 };

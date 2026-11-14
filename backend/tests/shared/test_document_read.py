@@ -507,3 +507,152 @@ def test_pdf_pattern_finds_a_phrase_the_layout_wrapped_across_two_lines():
     assert "Thorn Flats" in hits[0]["text"]
     # Line-oriented formats keep matching one line at a time.
     assert [h["line"] for h in _grep_lines(lines, regex, 10)] == [3]
+
+
+# ---------------------------------------------------------------------------
+# Images: listed, and returned whole as their compact copy (read_image)
+# ---------------------------------------------------------------------------
+#
+# The failure this pins (dev QA, 2026-11-13): compaction summarized the turn
+# that carried eight PNGs, a PDF and eleven text files. The PDF stayed
+# readable through this tool; the PNGs were gone, and the model told the user
+# one "isn't attached to this conversation". An image now answers to its
+# upload id with the stored compact copy, and the listing names it.
+
+
+def _image_meta(upload_id="img-1", filename="qa-badge-3.png", mime="image/png", model_image=None):
+    meta = _meta(upload_id, filename, mime, size=2_000_000)
+    return meta.model_copy(update={"model_image": model_image}) if model_image is not None else meta
+
+
+def _model_image(meta, compact=True):
+    base = meta.s3_key.rsplit("/", 1)[0]
+    record = {"key": f"{base}/_model/high.png", "mimeType": "image/png", "sizeBytes": 900_000}
+    record["compact"] = (
+        {"key": f"{base}/_model/compact.jpg", "mimeType": "image/jpeg", "sizeBytes": 200_000} if compact else None
+    )
+    return record
+
+
+def patch_objects(monkeypatch, meta, objects):
+    """The owned-row lookup returns ``meta``; S3 serves ``objects`` by key and records reads."""
+    reads = []
+
+    async def _owned(user_id, upload_id):
+        if meta.user_id != user_id or meta.upload_id != upload_id:
+            raise WorkspaceFileNotFoundError(f"No file with id '{upload_id}'")
+        return meta
+
+    def _get(bucket, key):
+        reads.append((bucket, key))
+        return objects[key]
+
+    monkeypatch.setattr(f"{MODULE}._get_owned_ready_file", _owned)
+    monkeypatch.setattr(f"{MODULE}._get_object_bytes", _get)
+    return reads
+
+
+class TestImages:
+    @pytest.mark.parametrize("mime, expected", [
+        ("image/png", "png"), ("image/jpeg", "jpeg"), ("image/webp", "webp"), ("image/gif", "gif"),
+        ("application/pdf", None), ("text/plain", None), ("", None),
+    ])
+    def test_image_format(self, mime, expected):
+        assert dr.image_format_for(mime) == expected
+
+    @pytest.mark.asyncio
+    async def test_an_image_returns_its_compact_copy_as_a_native_block(self, monkeypatch):
+        meta = _image_meta()
+        meta = meta.model_copy(update={"model_image": _model_image(meta)})
+        compact = b"\xff\xd8compact-bytes"
+        reads = patch_objects(monkeypatch, meta, {meta.model_image["compact"]["key"]: compact})
+
+        result = await dr.read_document("u1", "s1", "img-1")
+
+        assert reads == [("b", meta.model_image["compact"]["key"])]
+        assert result.mode == "image" and result.document_block is None
+        assert result.extra_blocks == [{"image": {"format": "jpeg", "source": {"bytes": compact}}}]
+        assert result.bytes_returned == len(compact)
+        assert result.payload == {
+            "upload_id": "img-1", "filename": "qa-badge-3.png", "format": "jpeg",
+            "size_bytes": len(compact), "variant": "compact",
+        }
+
+    @pytest.mark.asyncio
+    async def test_without_a_compact_copy_the_high_copy_then_the_original(self, monkeypatch):
+        meta = _image_meta()
+        meta = meta.model_copy(update={"model_image": _model_image(meta, compact=False)})
+        patch_objects(monkeypatch, meta, {meta.model_image["key"]: b"high"})
+        result = await dr.read_document("u1", "s1", "img-1")
+        assert result.payload["variant"] == "high" and result.format == "png"
+
+        legacy = _image_meta()
+        patch_objects(monkeypatch, legacy, {legacy.s3_key: b"orig"})
+        result = await dr.read_document("u1", "s1", "img-1")
+        assert result.payload["variant"] == "original"
+        assert result.extra_blocks[0]["image"]["source"]["bytes"] == b"orig"
+
+    @pytest.mark.asyncio
+    async def test_the_other_modes_do_not_apply_to_an_image(self, monkeypatch):
+        """An image has no pages or text: a page range or pattern still returns the image."""
+        meta = _image_meta()
+        patch_objects(monkeypatch, meta, {meta.s3_key: b"orig"})
+        result = await dr.read_document("u1", "s1", "img-1", page_range="1-2", pattern="badge")
+        assert result.mode == "image"
+
+    @pytest.mark.asyncio
+    async def test_a_text_only_model_is_told_it_cannot_view_it(self, monkeypatch):
+        meta = _image_meta()
+        reads = patch_objects(monkeypatch, meta, {meta.s3_key: b"orig"})
+        with pytest.raises(dr.DocumentReadError, match="text only"):
+            await dr.read_document("u1", "s1", "img-1", text_only=True)
+        assert reads == []
+
+    @pytest.mark.asyncio
+    async def test_an_image_past_the_rounds_budget_or_bedrocks_limit_is_refused(self, monkeypatch):
+        from apis.shared.files.image_downscale import MODEL_IMAGE_MAX_BYTES
+
+        meta = _image_meta()
+        patch_objects(monkeypatch, meta, {meta.s3_key: b"x" * 1000})
+        with pytest.raises(dr.DocumentReadError, match="call of its own"):
+            await dr.read_document("u1", "s1", "img-1", max_document_bytes=999)
+        assert (await dr.read_document("u1", "s1", "img-1", max_document_bytes=1000)).mode == "image"
+
+        patch_objects(monkeypatch, meta, {meta.s3_key: b"x" * (MODEL_IMAGE_MAX_BYTES + 1)})
+        with pytest.raises(dr.DocumentReadError, match="too large"):
+            await dr.read_document("u1", "s1", "img-1")
+
+    @pytest.mark.asyncio
+    async def test_another_users_image_is_not_found(self, monkeypatch):
+        patch_objects(monkeypatch, _image_meta(), {})
+        with pytest.raises(WorkspaceFileNotFoundError):
+            await dr.read_document("someone-else", "s1", "img-1")
+
+    @pytest.mark.asyncio
+    async def test_the_tool_listing_names_images_and_document_callers_never_see_them(self, monkeypatch):
+        repo = MagicMock()
+        repo.list_session_files = AsyncMock(return_value=[
+            _meta("up-1", "memo.pdf"),
+            _image_meta("img-1", "qa-badge-3.png"),
+            _image_meta("img-2", "photo.jpg", "image/jpeg"),
+            _meta("img-3", "theirs.png", "image/png", user="someone-else"),
+        ])
+        monkeypatch.setattr(f"{MODULE}.get_file_upload_repository", lambda: repo)
+
+        listing = await dr.list_session_documents("u1", "s1", include_images=True)
+        assert [d["upload_id"] for d in listing["documents"]] == ["up-1"]
+        assert listing["count"] == 1
+        assert listing["images"] == [
+            {"upload_id": "img-1", "filename": "qa-badge-3.png", "format": "png", "size_bytes": 2_000_000},
+            {"upload_id": "img-2", "filename": "photo.jpg", "format": "jpeg", "size_bytes": 2_000_000},
+        ]
+
+        # verify_sources and document_extract resolve documents from this listing.
+        assert "images" not in await dr.list_session_documents("u1", "s1")
+
+    @pytest.mark.asyncio
+    async def test_no_images_no_key(self, monkeypatch):
+        repo = MagicMock()
+        repo.list_session_files = AsyncMock(return_value=[_meta("up-1", "memo.pdf")])
+        monkeypatch.setattr(f"{MODULE}.get_file_upload_repository", lambda: repo)
+        assert "images" not in await dr.list_session_documents("u1", "s1", include_images=True)

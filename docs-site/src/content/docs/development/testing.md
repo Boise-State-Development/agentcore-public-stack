@@ -24,13 +24,14 @@ The backend suite is hermetic: a conftest guard fails any test that opens a sock
 
 | Changed paths | Suites |
 |---|---|
-| `docs/`, `docs-site/`, `tui/`, root markdown, `LICENSE` | none |
+| `docs/`, `docs-site/`, root markdown, `LICENSE` | none |
 | `backend/` | backend, load-test unit |
 | `backend/scripts/` | backend, load-test unit, infrastructure (jest asserts the backfill scripts exist) |
 | `frontend/` | frontend, frontend under `--coverage` |
 | `infrastructure/`, `RELEASE_NOTES.md` | infrastructure, plus the backend supply-chain and architecture suites that read the CDK tree |
 | `.claude/` | infrastructure (one jest test reads the release skill) |
 | `tests/load/` | load-test unit |
+| `tui/`, `backend/src/apis/shared/files/models.py` | terminal client (`scripts/tui/build.sh --check`); the backend file also runs backend and load-test unit |
 | `.github/`, `scripts/`, anything unrecognised | everything |
 
 The mapping is fail-open. A new top-level directory, an empty file list, or a `workflow_dispatch` run turns every suite on; only the explicit list in the first row turns none on. The rules are pinned by `backend/tests/supply_chain/test_ci_path_filter.py`, so extend the script and the test together.

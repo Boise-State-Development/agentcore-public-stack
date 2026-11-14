@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 
-from . import __version__
+from . import __version__, keyring_store
 from .config import (
     ENV_BASE_URL,
     Config,
@@ -22,11 +22,14 @@ from .config import (
     delete_session_from_keyring,
     load_session_from_keyring,
     resolve_config,
+    resolve_store_preference,
     save_key_to_keyring,
     save_session_to_keyring,
     write_config_file,
 )
-from .errors import AgentCoreTuiError
+from .credential_file import CredentialFile, WrongPassphraseError
+from .errors import AgentCoreTuiError, ConfigError
+from .keyring_store import StorePreference
 from .logging_setup import (
     ENV_LOG_CONTENT,
     ENV_LOG_LEVEL,
@@ -146,6 +149,102 @@ def _print_error(exc: AgentCoreTuiError) -> None:
         print(f"  {exc.hint}", file=sys.stderr)
 
 
+# ---------------------------------------------------------------------------
+# Credential store
+# ---------------------------------------------------------------------------
+#
+# Chosen and unlocked here, before any command reads a credential, because the
+# encrypted file needs a passphrase and `getpass` cannot run inside Textual.
+
+#: Attempts allowed at an unlock or a new-passphrase confirmation.
+PASSPHRASE_ATTEMPTS = 3
+
+
+def _interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+def _ask(prompt: str) -> str:
+    """A hidden prompt. EOF means the user is not there to answer."""
+    try:
+        return getpass.getpass(prompt)
+    except EOFError:
+        raise ConfigError("No passphrase given.") from None
+
+
+def _prepare_credential_store(args: argparse.Namespace, *, create: bool) -> None:
+    """Select the OS keyring or the encrypted file, unlocking the file if needed.
+
+    ``create`` says whether this command is about to store a credential, and so
+    may ask for a new passphrase when no file exists yet. Commands that only
+    read leave a missing file alone: there is nothing in it to read.
+    """
+    preference = resolve_store_preference(args.config_file)
+    if preference is StorePreference.KEYRING or (preference is StorePreference.AUTO and keyring_store.os_keyring_available()):
+        keyring_store.use_os_keyring()
+        return
+
+    path = keyring_store.credential_file_path()
+    if path.exists():
+        keyring_store.use_file_store(None, locked_reason=f"{path} is locked: run aps-tui in a terminal to enter its passphrase")
+        if _interactive():
+            keyring_store.use_file_store(_unlock_credential_file(path))
+        return
+
+    keyring_store.use_file_store(None)
+    if create:
+        _create_credential_file(path, automatic=preference is StorePreference.AUTO)
+
+
+def _unlock_credential_file(path: Path) -> CredentialFile:
+    for attempt in range(1, PASSPHRASE_ATTEMPTS + 1):
+        passphrase = _ask(f"Passphrase for {path}: ")
+        try:
+            return CredentialFile.unlock(path, passphrase)
+        except WrongPassphraseError:
+            if attempt < PASSPHRASE_ATTEMPTS:
+                print("That passphrase does not open it. Try again.", file=sys.stderr)
+    raise ConfigError(
+        "That passphrase does not open the credential file.",
+        hint=f"Forgotten it? Delete {path} and sign in again; what it held is lost.",
+    )
+
+
+def _create_credential_file(path: Path, *, automatic: bool) -> None:
+    """Ask for a new passphrase and make the (still unwritten) file active."""
+    if not _interactive():
+        raise ConfigError(
+            "No OS keyring is available, and the encrypted credential file needs a passphrase.",
+            hint="Run this from an interactive terminal, or set AGENTCORE_API_KEY instead of signing in.",
+        )
+    if automatic:
+        print("No OS keyring was found on this machine, so aps-tui will keep your")
+        print(f"credentials in an encrypted file: {path}")
+    print("Choose a passphrase for it. You will be asked for it each time aps-tui starts,")
+    print("and it is not saved anywhere, so there is no way to recover it.\n")
+    for _ in range(PASSPHRASE_ATTEMPTS):
+        first = _ask("New passphrase: ")
+        if not first:
+            print("The passphrase cannot be empty.", file=sys.stderr)
+            continue
+        if _ask("Repeat it: ") != first:
+            print("Those did not match. Try again.", file=sys.stderr)
+            continue
+        print()
+        keyring_store.use_file_store(CredentialFile.create(path, first))
+        return
+    raise ConfigError("No passphrase was set, so nothing can be stored.")
+
+
+def _describe_store() -> str:
+    if not keyring_store.using_file_store():
+        return "OS keyring"
+    path = keyring_store.credential_file_path()
+    if keyring_store.file_store_unlocked():
+        return f"encrypted file ({path})"
+    return f"encrypted file ({path}, {'locked' if path.exists() else 'not created yet'})"
+
+
 def _command_login(args: argparse.Namespace) -> int:
     if getattr(args, "sso", False):
         return _command_login_sso(args)
@@ -167,6 +266,10 @@ def _command_login_sso(args: argparse.Namespace) -> int:
     if not config.base_url:
         print(f"error: no base URL. Pass --base-url, or set {ENV_BASE_URL}.", file=sys.stderr)
         return 2
+
+    # Before the browser opens, not after: finding out there is nowhere to keep
+    # the session once the user has approved it would waste the sign-in.
+    _prepare_credential_store(args, create=True)
 
     async def run() -> int:
         async with DeviceAuthClient(config.base_url) as client:
@@ -196,7 +299,7 @@ def _command_login_sso(args: argparse.Namespace) -> int:
         written = write_config_file({"base_url": config.base_url}, args.config_file)
         who = session.username or session.user_id or "your account"
         print(f"Signed in as {who}.")
-        print(f"Session stored in the OS keyring; valid for about {session.expires_in // 3600} hours of inactivity.")
+        print(f"Session stored in {keyring_store.describe_backend()}; valid for about {session.expires_in // 3600} hours of inactivity.")
         print(f"Wrote base URL to {written}.")
         print("Run `aps-tui` to start chatting.")
         return 0
@@ -247,9 +350,10 @@ def _command_login_api_key(args: argparse.Namespace) -> int:
         print("error: empty API key", file=sys.stderr)
         return 2
 
+    _prepare_credential_store(args, create=True)
     save_key_to_keyring(config.base_url, api_key)
     written = write_config_file({"base_url": config.base_url}, args.config_file)
-    print(f"Stored key for {config.base_url} in the OS keyring.")
+    print(f"Stored key for {config.base_url} in {keyring_store.describe_backend()}.")
     print(f"Wrote base URL to {written}.")
     print("Run `aps-tui` to start chatting.")
     return 0
@@ -270,6 +374,7 @@ def _command_logout(args: argparse.Namespace) -> int:
         print(f"error: no base URL. Pass --base-url, or set {ENV_BASE_URL}.", file=sys.stderr)
         return 2
 
+    _prepare_credential_store(args, create=False)
     removed_any = False
 
     if delete_session_from_keyring(config.base_url):
@@ -289,7 +394,7 @@ def _command_logout(args: argparse.Namespace) -> int:
 def _describe_key(config: Config) -> str:
     if not config.api_key:
         return "missing"
-    source = "config file (plain text)" if config.api_key_from_plaintext_file else "env or keyring"
+    source = "config file (plain text)" if config.api_key_from_plaintext_file else "env or credential store"
     # Never print the key itself, not even partially.
     return f"present ({len(config.api_key)} chars, from {source})"
 
@@ -298,16 +403,18 @@ def _describe_session(base_url: str) -> str:
     """Whether a sealed session is held. Presence only — see the probe's note."""
     sealed, unavailable = load_session_from_keyring(base_url)
     if sealed:
-        return f"present ({len(sealed)} chars, in the OS keyring)"
+        return f"present ({len(sealed)} chars, in {keyring_store.describe_backend()})"
     return f"none ({unavailable})" if unavailable else "none"
 
 
 def _command_status(args: argparse.Namespace) -> int:
+    _prepare_credential_store(args, create=False)
     config = resolve_config(base_url=args.base_url, model_id=args.model_id, config_file=args.config_file)
     print(f"aps-tui {__version__}")
     print(f"config file : {args.config_file or config_path()}")
     print(f"base URL    : {config.base_url or 'missing'}")
     print(f"credential  : {config.credential_source.label}")
+    print(f"stored in   : {_describe_store()}")
     print(f"API key     : {_describe_key(config)}")
     print(f"session     : {_describe_session(config.base_url) if config.base_url else 'none'}")
     print(f"model       : {config.model_id}")
@@ -316,8 +423,9 @@ def _command_status(args: argparse.Namespace) -> int:
     print(f"log content : {'yes' if content_logging_enabled() else f'no (set {ENV_LOG_CONTENT}=1)'}")
     if config.keyring_unavailable_reason:
         print(f"keyring     : unavailable ({config.keyring_unavailable_reason})")
-        # The variable's NAME (config.ENV_API_KEY), never a key value.
-        print("              set AGENTCORE_API_KEY in your environment instead")
+        if not keyring_store.using_file_store():
+            # The variable's NAME (config.ENV_API_KEY), never a key value.
+            print("              set AGENTCORE_API_KEY in your environment instead")
 
     if not config.base_url:
         return 1
@@ -343,6 +451,7 @@ def _command_chat(args: argparse.Namespace) -> int:
     from .screens.setup import RESTART
 
     force_banner = banner is True
+    _prepare_credential_store(args, create=False)
     while True:
         config = resolve_config(
             base_url=args.base_url,
@@ -352,6 +461,16 @@ def _command_chat(args: argparse.Namespace) -> int:
             force_banner=force_banner,
             local_tools=getattr(args, "local_tools", None),
         )
+        if (
+            not config.is_complete
+            and keyring_store.using_file_store()
+            and not keyring_store.file_store_unlocked()
+            and not keyring_store.credential_file_path().exists()
+        ):
+            # First-run setup is about to collect a credential and has nowhere
+            # to put it. Ask for the passphrase now, while the terminal is
+            # still ours; inside the app there is no way to.
+            _create_credential_file(keyring_store.credential_file_path(), automatic=True)
         result = ChatApp(config, config_file=args.config_file).run()
         if result != RESTART:
             return 0

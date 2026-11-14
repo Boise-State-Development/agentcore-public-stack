@@ -73,7 +73,7 @@ describe('ChatRequestService', () => {
         ChatRequestService,
         { provide: ChatHttpService, useValue: mockChatHttpService },
         { provide: Router, useValue: mockRouter },
-        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false), lastTurnEndedAt: vi.fn().mockReturnValue(null), takeResumeRefusal: vi.fn().mockReturnValue(null) } },
+        { provide: ChatStateService, useValue: { setChatLoading: vi.fn(), setLastTurnContinuable: vi.fn(), setLastTurnInterrupted: vi.fn(), setLastTurnProviderOutage: vi.fn(), setViewedSession: vi.fn(), isSessionLoading: vi.fn().mockReturnValue(false), lastTurnEndedAt: vi.fn().mockReturnValue(null), takeResumeRefusal: vi.fn().mockReturnValue(null) } },
         { provide: HandoffRelayService, useValue: mockRelay },
         { provide: MessageMapService, useValue: { addUserMessage: vi.fn(), startStreaming: vi.fn(), beginContinuationStreaming: vi.fn(), endStreaming: vi.fn(), reloadMessagesForSession: vi.fn().mockResolvedValue(undefined), markSendFailed: vi.fn(), removeTrailingMessage: vi.fn().mockReturnValue(true) } },
         { provide: SessionService, useValue: { addSessionToCache: vi.fn() } },
@@ -232,6 +232,18 @@ describe('ChatRequestService', () => {
     it('omits the field on a turn without folders', async () => {
       await service.submitChatRequest('Hello', 'session1');
       expect(mockChatHttpService.sendChatRequest.mock.calls[0][0]).not.toHaveProperty('folder_attachment_ids');
+    });
+  });
+
+  describe('pasted characters (a count for the cost row, never the text)', () => {
+    it('sends the count when some of the message was pasted', async () => {
+      await service.submitChatRequest('Hello', 'session1', undefined, undefined, undefined, undefined, undefined, 5);
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(expect.objectContaining({ pasted_chars: 5 }));
+    });
+
+    it('omits the field on a typed turn, so its payload is unchanged', async () => {
+      await service.submitChatRequest('Hello', 'session1');
+      expect(mockChatHttpService.sendChatRequest.mock.calls[0][0]).not.toHaveProperty('pasted_chars');
     });
   });
 
@@ -603,7 +615,7 @@ describe('ChatRequestService', () => {
         new StreamNotStartedError('A response was still finishing for this conversation.', 409),
       );
       await service
-        .submitChatRequest('Hello', 'session1', ['up-1'], undefined, undefined, undefined, [folder])
+        .submitChatRequest('Hello', 'session1', ['up-1'], undefined, undefined, undefined, [folder], 4)
         .catch(() => undefined);
 
       TestBed.inject(FailedSendService).retry('msg-session1-6');
@@ -612,6 +624,7 @@ describe('ChatRequestService', () => {
       expect(mockChatHttpService.sendChatRequest.mock.calls[1][0]).toMatchObject({
         file_upload_ids: ['up-1'],
         folder_attachment_ids: ['fa-1'],
+        pasted_chars: 4,
       });
       const messageMap = TestBed.inject(MessageMapService) as any;
       expect(messageMap.addUserMessage).toHaveBeenLastCalledWith('session1', 'Hello', undefined, [folder]);

@@ -104,6 +104,10 @@ export interface Agent {
   allowDocumentDownload?: boolean;
   /** #112: how strictly answers stay within the knowledge base. Absent ⇒ 'balanced'. */
   responseStrictness?: ResponseStrictness;
+  /** #625: people can talk to this agent in voice mode. Absent ⇒ off. */
+  voiceEnabled?: boolean;
+  /** #625: voice uses only the agent's instructions, without the built-in voice guidelines. Absent ⇒ on. */
+  voiceInstructionsOnly?: boolean;
   // Marketplace listing (Phase 1) + the detail read (Phase 3). All are absent on the
   // list route and on an agent that was never submitted.
   tagline?: string;
@@ -191,6 +195,10 @@ export interface CreateAgentRequest {
   allowDocumentDownload?: boolean;
   /** #112 — default 'balanced' when omitted. */
   responseStrictness?: ResponseStrictness;
+  /** #625 — default off when omitted. */
+  voiceEnabled?: boolean;
+  /** #625 — default on when omitted. */
+  voiceInstructionsOnly?: boolean;
 }
 
 export interface UpdateAgentRequest {
@@ -210,6 +218,9 @@ export interface UpdateAgentRequest {
   allowDocumentDownload?: boolean;
   /** #112 — omit to leave the stored value unchanged. */
   responseStrictness?: ResponseStrictness;
+  /** #625 — omit to leave the stored value unchanged. */
+  voiceEnabled?: boolean;
+  voiceInstructionsOnly?: boolean;
 }
 
 export interface AgentsListResponse {

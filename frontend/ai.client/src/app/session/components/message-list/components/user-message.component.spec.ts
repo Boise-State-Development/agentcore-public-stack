@@ -189,6 +189,8 @@ describe('UserMessageComponent — rewind', () => {
     enabled: boolean;
     canRewind: ReturnType<typeof vi.fn>;
     rewind: ReturnType<typeof vi.fn>;
+    isSummarized: () => boolean;
+    summarized: ReturnType<typeof signal<boolean>>;
     pendingMessageId: ReturnType<typeof signal<string | null>>;
   };
 
@@ -199,12 +201,17 @@ describe('UserMessageComponent — rewind', () => {
     ...overrides,
   });
 
-  async function render(message: Message, { enabled = true, canRewind = true } = {}): Promise<HTMLElement> {
+  async function render(
+    message: Message,
+    { enabled = true, canRewind = true, summarized = false, rewindResult = true } = {},
+  ): Promise<HTMLElement> {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     rewinder = {
       enabled,
       canRewind: vi.fn().mockReturnValue(canRewind),
-      rewind: vi.fn().mockResolvedValue(true),
+      rewind: vi.fn().mockResolvedValue(rewindResult),
+      summarized: signal(summarized),
+      isSummarized: () => rewinder.summarized(),
       pendingMessageId: signal<string | null>(null),
     };
     TestBed.resetTestingModule();
@@ -217,11 +224,12 @@ describe('UserMessageComponent — rewind', () => {
     })
       .overrideComponent(UserMessageComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
       .compileComponents();
-    const fixture = TestBed.createComponent(UserMessageComponent);
+    fixture = TestBed.createComponent(UserMessageComponent);
     fixture.componentRef.setInput('message', message);
     fixture.detectChanges();
     return fixture.nativeElement;
   }
+  let fixture: ComponentFixture<UserMessageComponent>;
 
   const rewindButton = (el: HTMLElement) =>
     el.querySelector('button[aria-label="Rewind to here"]') as HTMLButtonElement | null;
@@ -246,11 +254,43 @@ describe('UserMessageComponent — rewind', () => {
     expect(rewindButton(await render(sent({ steering: true })))).toBeNull();
     expect(rewindButton(await render(sent({ sendFailure: { reason: 'x' } })))).toBeNull();
   });
+
+  it('is absent on a message the compaction summary covers', async () => {
+    expect(rewindButton(await render(sent(), { summarized: true }))).toBeNull();
+  });
+
+  it('keeps keyboard focus in the row when a summary refusal takes the button away', async () => {
+    const el = await render(sent(), { rewindResult: false });
+    document.body.appendChild(el);
+    try {
+      rewinder.rewind.mockImplementation(async () => {
+        rewinder.summarized.set(true);
+        return false;
+      });
+      const button = rewindButton(el)!;
+      button.focus();
+      button.click();
+      await fixture.whenStable();
+      fixture.detectChanges();
+      await fixture.whenStable();
+
+      expect(rewindButton(el)).toBeNull();
+      expect(document.activeElement?.getAttribute('aria-label')).toBe('Copy message');
+    } finally {
+      el.remove();
+    }
+  });
 });
 
 describe('UserMessageComponent — fork', () => {
-  async function render(message: Message, { enabled = true, canFork = true } = {}) {
+  async function render(message: Message, { enabled = true, canFork = true, summarized = false } = {}) {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const rewinder = {
+      enabled: false,
+      canRewind: () => false,
+      isSummarized: () => summarized,
+      pendingMessageId: signal<string | null>(null),
+    };
     const forker = {
       enabled,
       canFork: vi.fn().mockReturnValue(canFork),
@@ -263,6 +303,7 @@ describe('UserMessageComponent — fork', () => {
       providers: [
         { provide: LocalSettingsService, useValue: { showDebugOutput: signal(false) } },
         { provide: ConversationForkService, useValue: forker },
+        { provide: ConversationRewindService, useValue: rewinder },
       ],
     })
       .overrideComponent(UserMessageComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
@@ -287,6 +328,10 @@ describe('UserMessageComponent — fork', () => {
   it('is disabled while it cannot run and absent with the flag off', async () => {
     expect(forkButton((await render(sent, { canFork: false })).el)?.disabled).toBe(true);
     expect(forkButton((await render(sent, { enabled: false })).el)).toBeNull();
+  });
+
+  it('is absent on a message the compaction summary covers', async () => {
+    expect(forkButton((await render(sent, { summarized: true })).el)).toBeNull();
   });
 });
 

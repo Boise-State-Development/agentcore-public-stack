@@ -58,8 +58,8 @@ drain is therefore a precondition for PR-3, not a cleanup task.
   (Already settled in `agent_status.py`; restated here so it is not re-litigated.)
 * **"Almost done thinking…".** Claude can say this because it knows the
   thinking budget and how much is spent. Deriving it from elapsed time is an
-  inference wearing a fact's clothes. The existing stall ladder — `Still
-  working…` → `…longer than usual` — gives the same reassurance and claims only
+  inference wearing a fact's clothes. The silence hint — `Large tasks can take
+  a few minutes.` under the status — gives the same reassurance and claims only
   what it knows.
 * **Per-tool invented phrasing** ("Searching the catalog…", "Browsing…").
   A tool's own name is the most accurate label available and invents nothing.
@@ -426,6 +426,31 @@ turn's last message. One field, one meaning, identical live and reloaded.
 
 ---
 
+## Long-running turns: silence is not a warning
+
+The first stall ladder turned the loader amber after 30s of silence and
+replaced the status with `Still working…`, reusing the retry notice's styling.
+Silence on an open stream is usually the hard case, not the broken one: a long
+tool call (code interpreter, browsing, `document_extract`) and a model thinking
+without a streamed summary both send nothing for as long as they run. So a
+user watching `Running document_extract…` lose its label to an amber line read
+the hardest work as latency.
+
+The rule now:
+
+* **Amber is for facts that are not the healthy path.** A retry, and silence
+  that nothing explains: 90s with no `agent_status` for this turn at all.
+* **A known phase keeps its label.** Silence during it adds a muted hint
+  under the status (30s, then 3 minutes with a pointer to Stop) and never
+  changes the dot. A known phase that truly hangs is the server's to end: a
+  silent model call stops at the read timeout (`RETRY_READ_TIMEOUT`, 600s)
+  with an explicit error.
+* **The copy claims nothing about what is usual for the request.** We do not
+  measure that, so `…longer than usual` was a guess that read as a complaint.
+
+`stallHint` and `stallNotice` in `message-list.component.ts`; the hint line is
+the loader's `hint` input. SPA only, nothing reaches the model.
+
 ## Closing summary
 
 ### What a turn says now
@@ -433,7 +458,8 @@ turn's last message. One field, one meaning, identical live and reloaded.
 | When | What the user sees | Source |
 |------|--------------------|--------|
 | Model call being retried | `The model is busy. Retrying…` (amber) | `model_retry` |
-| 30s / 90s of silence | `Still working…` → `…longer than usual.` (amber) | client timer |
+| 30s / 3 min of silence | Status unchanged, plus a muted hint under it: `Large tasks can take a few minutes.` → `…several minutes. You can stop it at any time.` | client timer |
+| 90s of silence with no phase reported this turn | `No response yet — still waiting…` (amber) | client timer + no `agent_status` |
 | Tool executing | `Running <tool_name>…` | `agent_status` `tool_start`, content stream as fallback |
 | Agent being built (>250ms) | `Getting ready…` | `agent_status` `preparing` / `prepared` |
 | Model call in flight | `Waiting for the model…` | `agent_status` `thinking` |

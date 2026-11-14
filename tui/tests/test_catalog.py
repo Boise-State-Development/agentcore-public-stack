@@ -477,9 +477,7 @@ class TestUploadFile:
             if request.url.host == "bucket.example":
                 return httpx.Response(200)
             if request.url.path.endswith("/files/up-1/complete"):
-                return httpx.Response(
-                    200, json={"uploadId": "up-1", "status": "completed", "filename": "notes.md", "sizeBytes": 5}
-                )
+                return httpx.Response(200, json={"uploadId": "up-1", "status": "completed", "filename": "notes.md", "sizeBytes": 5})
             return httpx.Response(404)
 
         return respond
@@ -620,8 +618,7 @@ def test_upload_mime_types_mirror_the_servers_allowlist():
     server = next(
         ast.literal_eval(node.value)
         for node in tree.body
-        if isinstance(node, ast.Assign)
-        and any(getattr(t, "id", None) == "ALLOWED_EXTENSIONS" for t in node.targets)
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "ALLOWED_EXTENSIONS" for t in node.targets)
     )
     assert UPLOAD_MIME_TYPES == server
     assert UPLOAD_MIME_TYPES[".sql"] == "text/plain"

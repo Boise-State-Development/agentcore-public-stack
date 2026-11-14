@@ -407,7 +407,7 @@ Each PR targets `develop`, lands behind `PROJECTS_ENABLED` (opt-in while in deve
     - A user with them moves plain chats from the bare default prompt onto the safety-floor-wrapped prompt, the same shape agent chats already use. That costs one cache write per user when they first save.
     - Project members share the project part of the prompt byte for byte. Only their own tail differs.
   - **Where it applies:** every turn except Agent Designer previews, where an author is testing their agent. That covers plain chats, agents, project harnesses and `@`-mentions. Resumed turns reuse the paused snapshot's prompt. The two MCP App dispatch paths add the same text for plain sessions, so they reuse the turn's cached agent; an App's pushed model context lives on that agent's state.
-  - **Cost:** one settings `GetItem` per turn, shared with the default-model lookup, which used to read the same row separately. Voice mode does not read personal instructions yet.
+  - **Cost:** one settings `GetItem` per turn, shared with the default-model lookup, which used to read the same row separately. Voice mode reads them too, from the settings read it already makes for the memory mode (#2020).
   - **Not built:** an SPA field. Until the settings page gains one, personal instructions can only be set through the API.
 - **1.5 Knowledge + tools + skills tabs:** proxy routes, `addedBy` on documents, upload-time "shared with all members" notice, instruction versions on save.
   **Split in two.** 1.5a covers settings (instructions, model, tools, skills) and history. 1.5b covers knowledge (the document proxy, `addedBy`, the upload notice). **1.5a (as built):**

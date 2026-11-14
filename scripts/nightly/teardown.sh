@@ -206,6 +206,34 @@ failed_resources() {
         --output text 2>/dev/null | tr '\t' '\n' | sed '/^$/d' || true
 }
 
+# Empty the stack's buckets that a delete attempt left in DELETE_FAILED.
+#
+# The buckets are emptied once before the stack delete, but log delivery keeps
+# writing until its writer is gone: the ALB delivers access logs every five
+# minutes, CloudFront delivers its standard logs late. An object that lands
+# after that first pass fails the bucket's delete with "bucket not empty", and
+# a retry against the same bucket fails the same way. CloudFormation deletes a
+# bucket only after the ALB or distribution that logs to it, so by the time a
+# bucket fails its writer is gone and emptying it again lets the retry through.
+# Seen 2026-11-04: nightly-develop-alb-access-logs failed all three attempts,
+# was retained, refused its Cloud Control delete for the same reason, and every
+# nightly after it failed to create the bucket that was still there.
+empty_failed_buckets() {
+    local stack_name="$1"
+    local buckets
+    buckets=$(aws cloudformation list-stack-resources \
+        --stack-name "${stack_name}" \
+        --region "${CDK_AWS_REGION}" \
+        --query "StackResourceSummaries[?ResourceType=='AWS::S3::Bucket' && ResourceStatus=='DELETE_FAILED'].PhysicalResourceId" \
+        --output text 2>/dev/null | tr '\t' '\n' | sed '/^$/d;/^None$/d' || true)
+    [ -n "${buckets}" ] || return 0
+    local bucket
+    while IFS= read -r bucket; do
+        log_warn "Bucket ${bucket} refused to delete; emptying it again (log delivery wrote after the first pass)"
+        empty_bucket "${bucket}"
+    done <<< "${buckets}"
+}
+
 # Print why a delete failed, so the run is debuggable.
 report_delete_failure() {
     local stack_name="$1"
@@ -246,6 +274,11 @@ delete_stack_once() {
 delete_retained_resource() {
     local resource_type="$1"
     local physical_id="$2"
+    # S3 refuses to delete a bucket that still holds an object, and a bucket
+    # is retained here precisely because it did.
+    if [ "${resource_type}" = "AWS::S3::Bucket" ]; then
+        empty_bucket "${physical_id}"
+    fi
     log_info "Deleting retained ${resource_type} ${physical_id} via Cloud Control..."
     local token
     if ! token=$(aws cloudcontrol delete-resource \
@@ -308,8 +341,9 @@ destroy_stacks() {
         fi
         report_delete_failure "${stack_name}"
         if [ "${attempt}" -lt "${attempts}" ]; then
-            log_warn "Delete attempt ${attempt}/${attempts} failed; retrying in 30s"
-            sleep 30
+            log_warn "Delete attempt ${attempt}/${attempts} failed; retrying in ${TEARDOWN_RETRY_DELAY_SECONDS:-30}s"
+            sleep "${TEARDOWN_RETRY_DELAY_SECONDS:-30}"
+            empty_failed_buckets "${stack_name}"
         fi
     done
 

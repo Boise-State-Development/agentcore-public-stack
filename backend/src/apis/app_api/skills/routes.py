@@ -38,9 +38,12 @@ import logging
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from apis.shared.auth import User, get_current_user_from_session
+from apis.shared.extraction.field_sets import FieldSetError, require_field_set_name
+from apis.shared.feature_flags import field_set_authoring_enabled
 from apis.shared.skills.access import resolve_accessible_skill_ids
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.models import (
@@ -51,11 +54,21 @@ from apis.shared.skills.models import (
     SkillStatus,
 )
 from apis.shared.skills.repository import get_skill_catalog_repository
+from apis.shared.skills.resource_store import compute_content_hash
 from apis.shared.skills.resource_types import (
     resource_download_headers,
     safe_download_content_type,
 )
 
+from .field_sets import (
+    FieldSetListResponse,
+    FieldSetResponse,
+    FieldSetWriteRequest,
+    field_set_filename,
+    field_set_response,
+    list_field_sets,
+    markdown_for,
+)
 from .service import get_skill_catalog_service
 from apis.shared.skills.user_service import (
     UserSkillError,
@@ -464,6 +477,153 @@ async def delete_my_skill_resource(
         raise _resource_value_error(e)
 
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
+
+
+# -----------------------------------------------------------------------------
+# My Skills — field sets (docs/specs/field-set-authoring.md §4.1)
+#
+# A field set is a `references/field-set.<name>.md` file on a skill the caller
+# owns, so ownership is `UserSkillService`'s and there is no new table, index or
+# RBAC noun (D9). The backend reads and writes the format in both directions
+# (D2); the routes trade JSON. Deleting a set is the existing
+# `DELETE /mine/{id}/resources/{filename}`, not duplicated here.
+# -----------------------------------------------------------------------------
+
+
+def _require_field_set_authoring() -> None:
+    """404 while the flag is off.
+
+    Called first in each handler rather than as a wrapper dependency, so every
+    route declares ``get_current_user_from_session`` itself (the guard in
+    ``test_skills_feature_flag`` reads route-level dependencies) and
+    authentication still runs before the flag is consulted.
+    """
+    if not field_set_authoring_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+def _set_name(name: str) -> str:
+    """``name`` if it is a valid set name, else a 400 naming the rule."""
+    try:
+        return require_field_set_name(field_set_filename(name))
+    except FieldSetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/mine/{skill_id}/field-sets", response_model=FieldSetListResponse)
+async def list_my_field_sets(
+    skill_id: str,
+    user: User = Depends(get_current_user_from_session),
+) -> FieldSetListResponse:
+    """The field sets on an owned skill, from its manifest. No file is read."""
+    _require_field_set_authoring()
+    try:
+        resources = await get_user_skill_service().list_resources(skill_id, user)
+    except UserSkillError as e:
+        raise _user_skill_error(e)
+
+    return FieldSetListResponse(skill_id=skill_id, field_sets=list_field_sets(resources))
+
+
+@router.get("/mine/{skill_id}/field-sets/{name}", response_model=FieldSetResponse)
+async def read_my_field_set(
+    skill_id: str,
+    name: str,
+    user: User = Depends(get_current_user_from_session),
+):
+    """One field set, parsed, with its stored markdown.
+
+    A stored file that does not parse answers **400 with the parser's message
+    and the raw markdown**, never a 500 and never an empty form: a broken file
+    is exactly the one its author needs to open (§4.1). Only a file written
+    before every write path checked field sets can be in that state.
+    """
+    _require_field_set_authoring()
+    name = _set_name(name)
+    try:
+        ref, content = await get_user_skill_service().read_resource(
+            skill_id, field_set_filename(name), user
+        )
+    except UserSkillError as e:
+        raise _user_skill_error(e)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"Field set '{name}' not found")
+    if ref.kind != "reference":
+        raise HTTPException(status_code=404, detail=f"Field set '{name}' not found")
+
+    try:
+        markdown = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"field set '{name}' is not UTF-8 text", "markdown": None},
+        )
+    try:
+        return field_set_response(skill_id, name, markdown)
+    except FieldSetError as e:
+        return JSONResponse(status_code=400, content={"detail": str(e), "markdown": markdown})
+
+
+@router.put("/mine/{skill_id}/field-sets/{name}", response_model=FieldSetResponse)
+async def write_my_field_set(
+    skill_id: str,
+    name: str,
+    body: FieldSetWriteRequest,
+    validate: bool = False,
+    user: User = Depends(get_current_user_from_session),
+) -> FieldSetResponse:
+    """Create or replace one field set on an owned skill.
+
+    The body is the structured set or raw ``markdown`` (``FieldSetWriteRequest``).
+    ``?validate=true`` answers with what would be stored, ``markdown`` included,
+    and writes nothing. A save whose file is byte-identical to the stored one
+    writes nothing either, so it leaves the skill's row, its version and the
+    compiled grammar alone. The write itself is the ordinary bundle upload, so
+    the file passes the same check every other write path runs (§4.2).
+    """
+    _require_field_set_authoring()
+    name = _set_name(name)
+    service = get_user_skill_service()
+    try:
+        skill = await service.require_owned(skill_id, user)
+    except UserSkillError as e:
+        raise _user_skill_error(e)
+
+    try:
+        markdown = markdown_for(name, body)
+        response = field_set_response(skill_id, name, markdown)
+    except FieldSetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if validate:
+        return response
+
+    filename = field_set_filename(name)
+    content = markdown.encode("utf-8")
+    stored = next((r for r in skill.resources if r.filename == filename), None)
+    if stored is not None and stored.kind != "reference":
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{filename}' is already one of this skill's {stored.kind} files",
+        )
+    if stored is not None and stored.content_hash == compute_content_hash(content):
+        return response
+
+    logger.info("Writing a field set on an authored skill")
+    try:
+        await service.add_resource(
+            skill_id,
+            filename=filename,
+            content=content,
+            content_type="text/markdown",
+            user=user,
+            kind="reference",
+        )
+    except UserSkillError as e:
+        raise _user_skill_error(e)
+    except ValueError as e:
+        raise _resource_value_error(e)
+
+    return response
 
 
 # -----------------------------------------------------------------------------

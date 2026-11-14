@@ -397,7 +397,12 @@ class TestThinkingBinding:
         monkeypatch.setenv("AGENTCORE_MCP_APPS_HOST_ENABLED", "false")
 
     @pytest.mark.parametrize(
-        "model_id", ["us.anthropic.claude-haiku-5-5", "us.anthropic.claude-opus-5-5"]
+        "model_id",
+        [
+            "us.anthropic.claude-haiku-5-5",
+            "us.anthropic.claude-opus-5-5",
+            "us.anthropic.claude-sonnet-5-5",
+        ],
     )
     def test_default_request_gets_summarized_adaptive_thinking_with_drop_block(self, model_id):
         arf = ModelConfig(

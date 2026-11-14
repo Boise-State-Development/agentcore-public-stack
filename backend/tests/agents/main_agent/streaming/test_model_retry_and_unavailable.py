@@ -106,8 +106,8 @@ class TestServiceUnavailableCopy:
         message, recoverable = _format_force_stop_message(
             "An error occurred (ServiceUnavailableException) when calling ConverseStream"
         )
-        assert "temporarily unavailable" in message
-        assert "already retried" in message
+        assert "isn't responding right now" in message
+        assert "retried automatically" in message
         assert recoverable is True
 
     def test_force_stop_no_longer_falls_through_to_the_generic_text(self):
@@ -124,14 +124,14 @@ class TestServiceUnavailableCopy:
             code=code,
             error=Exception("ServiceUnavailableException: Bedrock is busy"),
         )
-        assert "temporarily unavailable" in event.message
+        assert "isn't responding right now" in event.message
         assert "I ran into a problem with the AI model" not in event.message
         assert event.recoverable is True
 
     def test_throttling_keeps_its_own_wording(self):
         message, _ = _format_force_stop_message("ThrottlingException: too many requests")
         assert "too many requests" in message
-        assert "temporarily unavailable" not in message
+        assert "isn't responding" not in message
 
 
 class TestOpenAIResponsesFaultCopy:
@@ -149,7 +149,7 @@ class TestOpenAIResponsesFaultCopy:
     def test_force_stop_explains_the_outage(self, reason):
         message, recoverable = _format_force_stop_message(reason)
         assert "Agent force-stopped" not in message
-        assert "temporarily unavailable" in message
+        assert "isn't responding right now" in message
         assert recoverable is True
 
     def test_conversational_event_recognizes_openai_wording(self):
@@ -157,7 +157,7 @@ class TestOpenAIResponsesFaultCopy:
             code=ErrorCode.STREAM_ERROR,
             error=Exception("The server had an error while processing your request."),
         )
-        assert "temporarily unavailable" in event.message
+        assert "isn't responding right now" in event.message
         assert event.recoverable is True
 
 

@@ -27,6 +27,8 @@ CACHE_CAPABLE_IDS = [
     "us.anthropic.claude-opus-4-7",
     "global.anthropic.claude-opus-4-7",
     "global.anthropic.claude-sonnet-5",
+    "us.anthropic.claude-sonnet-5-5",
+    "global.anthropic.claude-sonnet-5-5",
     "us.anthropic.claude-sonnet-4-6",
     "global.anthropic.claude-sonnet-4-6",
     "us.anthropic.claude-haiku-4-5-20251001-v1:0",

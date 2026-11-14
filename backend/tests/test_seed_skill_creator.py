@@ -85,7 +85,7 @@ class TestContent:
         )
         named = set(re.findall(r"references/([A-Za-z0-9._-]+)", text))
         # Examples of a *user's* skill paths, not files of this bundle.
-        named -= {"forms.md", "<filename>"}
+        named -= {"forms.md", "<filename>", "field-set."}
         assert named <= files, named - files
 
     def test_reference_files_are_valid_uploads(self, bundle):
@@ -135,6 +135,20 @@ class TestContent:
         assert "Apache License" in files["LICENSE.txt"]
         assert "Anthropic" in files["NOTICE.md"] and "Changes from the original" in files["NOTICE.md"]
         assert "references/NOTICE.md" in bundle.instructions
+
+    def test_the_field_set_example_parses_and_states_the_real_limits(self, bundle):
+        """Drift guard: the guidance teaches the format by example, so the example
+        must be a file the write path accepts, and the stated limit and types must
+        be the parser's."""
+        from apis.shared.extraction.field_sets import FIELD_TYPES, MAX_FIELDS, parse_field_set
+
+        files = {name: content.decode("utf-8") for name, content, _ in bundle.references}
+        guide = files["structured-extraction.md"]
+        example = re.search(r"```markdown\n(.*?)```", guide, re.DOTALL).group(1)
+        field_set = parse_field_set(example, name="award-notice")
+        assert {f.type for f in field_set.fields} == set(FIELD_TYPES)
+        assert f"At most {MAX_FIELDS} fields" in guide
+        assert "references/structured-extraction.md" in bundle.instructions
 
     def test_the_instructions_stay_lean(self, bundle):
         """Instructions load on every activation; detail goes to references."""

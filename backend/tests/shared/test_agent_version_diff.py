@@ -39,6 +39,8 @@ def version(**overrides) -> AgentVersion:
         "modelConfig": {"modelId": "claude-opus-5"},
         "bindings": [{"kind": "tool", "ref": "wikipedia", "config": {}}],
         "responseStrictness": "balanced",
+        "voiceEnabled": False,
+        "voiceInstructionsOnly": True,
         "category": "Administration",
         "publisherId": "pub-registrar",
     }
@@ -64,6 +66,8 @@ def test_each_field_is_detected_on_its_own(field):
         "bindings": [{"kind": "tool", "ref": "browser", "config": {}}],
         "model_settings": {"modelId": "some-other-model"},
         "response_strictness": "strict",
+        "voice_enabled": True,
+        "voice_instructions_only": False,
         "name": "Renamed",
         "description": "A different summary",
         "tagline": "A different subtitle",
@@ -78,6 +82,8 @@ def test_each_field_is_detected_on_its_own(field):
         "icon_key": "iconKey",
         "publisher_id": "publisherId",
         "response_strictness": "responseStrictness",
+        "voice_enabled": "voiceEnabled",
+        "voice_instructions_only": "voiceInstructionsOnly",
     }
     after = version(**{alias.get(field, field): mutations[field]})
 
@@ -110,6 +116,8 @@ def test_record_metadata_is_never_reported_as_a_change():
         ("bindings", [{"kind": "tool", "ref": "browser", "config": {}}]),
         ("modelConfig", {"modelId": "cheap-model"}),
         ("responseStrictness", "flexible"),
+        ("voiceEnabled", True),
+        ("voiceInstructionsOnly", False),
     ],
 )
 def test_behavior_fields_flag_a_behavior_change(field, value):
@@ -269,3 +277,59 @@ def test_the_listing_edit_model_rejects_strictness():
 
     with pytest.raises(ValidationError):
         AdminListingPatchRequest(responseStrictness="flexible")
+
+
+# ── voice mode (#625) ────────────────────────────────────────────────────────────────
+def _live(**fields):
+    from apis.shared.assistants.models import Assistant
+
+    return Assistant(
+        assistantId="ast-001", ownerId="u1", ownerName="U", name="n", description="d",
+        instructions="i", vectorIndexId="v", visibility="PRIVATE", status="COMPLETE",
+        createdAt="2026-01-01T00:00:00Z", updatedAt="2026-01-01T00:00:00Z", **fields,
+    )
+
+
+def test_voice_settings_snapshot_and_apply_round_trip():
+    from apis.shared.assistants.versions import apply_version, snapshot_of
+
+    live = _live(voiceEnabled=True, voiceInstructionsOnly=False)
+    snap = snapshot_of(live, created_at="2026-01-01T00:00:00Z", created_by="u1")
+    assert snap.voice_enabled is True
+    assert snap.voice_instructions_only is False
+
+    live.voice_enabled = False
+    live.voice_instructions_only = True
+    ran = apply_version(live, snap)
+    assert ran.voice_enabled is True
+    assert ran.voice_instructions_only is False
+
+
+def test_a_version_from_before_voice_runs_with_voice_off():
+    """Voice never ran an Agent before #625, so an owner cannot turn it on for a
+    published Agent without review by editing the live record."""
+    from apis.shared.assistants.versions import apply_version
+
+    live = _live(voiceEnabled=True, voiceInstructionsOnly=False)
+    old = AgentVersion(agentId="ast-001", name="n", description="d", instructions="i")
+    ran = apply_version(live, old)
+    assert ran.voice_enabled is False
+    assert ran.voice_instructions_only is True
+
+
+def test_an_unchanged_resubmission_of_a_pre_voice_version_reports_no_change():
+    legacy_dump = version().model_dump(by_alias=True)
+    legacy_dump.pop("voiceEnabled")
+    legacy_dump.pop("voiceInstructionsOnly")
+    legacy = AgentVersion(**legacy_dump)
+    assert changed_fields(legacy, version()) == []
+    assert behavior_changed(legacy, version()) is False
+
+
+def test_the_listing_edit_model_rejects_voice_settings():
+    from pydantic import ValidationError
+
+    from apis.shared.assistants.models import AdminListingPatchRequest
+
+    with pytest.raises(ValidationError):
+        AdminListingPatchRequest(voiceEnabled=True)

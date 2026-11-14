@@ -323,3 +323,19 @@ def sample_models() -> list[Model]:
         Model(model_id=MODEL_ID, provider="bedrock", name="Claude Haiku 4.5", provider_name="Bedrock", max_input_tokens=200_000),
         Model(model_id=MODEL_B, provider="mantle", name="GPT-5.4", provider_name="Mantle", max_input_tokens=272_000),
     ]
+
+
+@pytest.fixture(autouse=True)
+def isolate_credential_store(monkeypatch: pytest.MonkeyPatch) -> Iterable[None]:
+    """Never select, prompt for or touch the developer's credential store.
+
+    ``cli`` picks the OS keyring or the encrypted file before every command, and
+    the file path prompts for a passphrase. Tests that exercise that choice
+    call ``REAL_PREPARE`` from ``test_credential_store`` directly.
+    """
+    from aps_tui import cli, keyring_store
+
+    monkeypatch.setattr(cli, "_prepare_credential_store", lambda args, *, create: None)
+    keyring_store.use_os_keyring()
+    yield
+    keyring_store.use_os_keyring()

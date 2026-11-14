@@ -140,6 +140,8 @@ _WIRE_FIELD_NAMES = {
     "icon_key": "iconKey",
     "publisher_id": "publisherId",
     "response_strictness": "responseStrictness",
+    "voice_enabled": "voiceEnabled",
+    "voice_instructions_only": "voiceInstructionsOnly",
 }
 
 
