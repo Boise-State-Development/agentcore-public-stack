@@ -345,97 +345,6 @@
       "samples": 3,
       "answer": "**Pilot sites:** The deck lists **14** pilot sites this quarter (slide 3). It also notes that two of them joined in March.\n\n**Last weekday shuttle:** According to the campus shuttle timetable, the last weekday departure from the Library stop is **21:40**. Service doesn't run on university holidays, so check the academic calendar before relying on that time for a specific date.\n\nThe sync error image isn't related to either question, so I didn't use it."
     },
-    "project_kb.small_literal_training_deadline": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "10\n\nSource: project files"
-    },
-    "project_kb.small_word_table_blank_cell": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "7\n\nSource: project files"
-    },
-    "project_kb.small_pdf_spring_trip": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "April 22\n\nSource: project files"
-    },
-    "project_kb.small_mixed_format_spreadsheet_value": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "**$1,940**\n\nThis is the sum of the two Glassware line items in the supply budget excerpt: Beakers ($640) and Flasks ($1,300). I worked from that excerpt only and didn't open the full `supply_budget.xlsx`, so if the file has more Glassware rows, the total could be higher.\n\nSource: project files"
-    },
-    "project_kb.small_absent_fact": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "I can't give you a confirmed answer, so I'm not going to reply with the exact \"NOT IN PROJECT FILES\" phrase.\n\n- **The text files** (`onboarding_policy.md`, `equipment_loans.docx`, `field_trips.pdf`) contain nothing about parking permits or their cost.\n- **`supply_budget.xlsx`** is the only file I haven't been able to check. The search surfaced a passage from it under \"Budget,\" but that passage doesn't mention parking. I tried to read the spreadsheet, and the analysis request was rejected by platform policy, so I couldn't see its full contents.\n\nTo settle this, you can open `supply_budget.xlsx`"
-    },
-    "project_kb.small_synthesis_across_files": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "New lab members must complete the safety training within **10 working days** of their start date.\n\nThe spring field trip departs on **April 22** from the north lot at **07:00**.\n\nSource: project files"
-    },
-    "project_kb.small_project_instructions_followed": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "A camera can be loaned out for **3 days**. The equipment loan policy also lists a $50 deposit and a $10 late fee for the camera.\n\nSource: project files"
-    },
-    "project_kb.large_literal_international_travel": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "45"
-    },
-    "project_kb.large_paraphrase_quotes": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "You need **three written quotes from different vendors**. The procurement policy requires this for any purchase above $7,500, and a $9,000 instrument is above that threshold.\n\nThe excerpts I can see don't cover exceptions, such as sole-source purchases, so check the full Procurement handbook or with your purchasing office before you proceed."
-    },
-    "project_kb.large_same_field_two_files": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "Tuesday"
-    },
-    "project_kb.large_replaced_file_new_value": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "30"
-    },
-    "project_kb.large_read_file_by_name": {
-      "family": "project_kb",
-      "passed": false,
-      "passes": 1,
-      "samples": 3,
-      "answer": "I couldn't read the full title of Section 7. The handbook is large, and the search tool truncates its output before the heading appears, so I can only confirm part of it.\n\nWhat I can confirm:\n- Section 7 is not titled \"Hr procedures 7\" (the pattern used for Sections 1–3, 8 and 9).\n- Its title begins with a letter from G to M.\n\nTo get the exact title, open `hr_handbook.md` directly and search for \"## Section 7\". If you'd like, I can keep narrowing it down with more targeted searches."
-    },
-    "project_kb.large_list_files": {
-      "family": "project_kb",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "This project has six files, all ready to read:\n\n1. `facilities_handbook.md`\n2. `grants_handbook.md`\n3. `hr_handbook.md`\n4. `it_handbook.md`\n5. `procurement_handbook.md`\n6. `travel_handbook.md`\n\nAll six were added by eval-harness@example.invalid. I can read any of them in full if you tell me which one you need."
-    },
     "agent_harness.format_instructions_json": {
       "family": "agent_harness",
       "passed": true,
@@ -1271,6 +1180,201 @@
         "durationMs": 12813.0,
         "firstTokenMs": 1361.0
       }
+    },
+    "project_kb.small_literal_training_deadline": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "10\n\nSource: project files",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 237.0,
+        "inputTokens": 11194.0,
+        "toolCalls": 0.0,
+        "durationMs": 8721.0,
+        "firstTokenMs": 4232.0
+      }
+    },
+    "project_kb.small_word_table_blank_cell": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "7\n\nSource: project files",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 294.0,
+        "inputTokens": 10939.0,
+        "toolCalls": 0.0,
+        "durationMs": 6840.0,
+        "firstTokenMs": 5036.0
+      }
+    },
+    "project_kb.small_pdf_spring_trip": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "April 22\n\nSource: project files",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 182.0,
+        "inputTokens": 10934.0,
+        "toolCalls": 0.0,
+        "durationMs": 6668.0,
+        "firstTokenMs": 4572.0
+      }
+    },
+    "project_kb.small_mixed_format_spreadsheet_value": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$1,940\n\nSource: project files",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 429.0,
+        "inputTokens": 11196.0,
+        "toolCalls": 0.0,
+        "durationMs": 7016.0,
+        "firstTokenMs": 2966.0
+      }
+    },
+    "project_kb.small_absent_fact": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "NOT IN PROJECT FILES\n\nSource: project files",
+      "efficiency": {
+        "modelCalls": 4.0,
+        "outputTokens": 943.0,
+        "inputTokens": 47505.0,
+        "toolCalls": 3.0,
+        "durationMs": 21318.0,
+        "firstTokenMs": 4467.0
+      }
+    },
+    "project_kb.small_synthesis_across_files": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**New lab members:** Safety training must be completed within **10 working days** of the start date (from the field station onboarding policy).\n\n**Spring field trip:** It departs on **April 22** from the **north lot at 07:00** (from the field trips document).\n\nSource: project files",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 361.0,
+        "inputTokens": 10947.0,
+        "toolCalls": 0.0,
+        "durationMs": 6266.0,
+        "firstTokenMs": 4489.0
+      }
+    },
+    "project_kb.small_project_instructions_followed": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "A camera is loaned out for **3 days**, according to the equipment loans document. The camera loan also requires a $50 deposit, and the late fee is $10.\n\nSource: project files",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 319.0,
+        "inputTokens": 10928.0,
+        "toolCalls": 0.0,
+        "durationMs": 6014.0,
+        "firstTokenMs": 3958.0
+      }
+    },
+    "project_kb.large_literal_international_travel": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "45",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 155.0,
+        "inputTokens": 10245.0,
+        "toolCalls": 0.0,
+        "durationMs": 5373.0,
+        "firstTokenMs": 3476.0
+      }
+    },
+    "project_kb.large_paraphrase_quotes": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "You need **three written quotes from different vendors**. The procurement guidance requires this for any purchase above $7,500, and a $9,000 instrument is above that threshold.\n\nCheck with your procurement or finance office before you start, since they can confirm the current policy and any exceptions for equipment purchases.",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 243.0,
+        "inputTokens": 9802.0,
+        "toolCalls": 0.0,
+        "durationMs": 6753.0,
+        "firstTokenMs": 4973.0
+      }
+    },
+    "project_kb.large_same_field_two_files": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Tuesday",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 79.0,
+        "inputTokens": 9754.0,
+        "toolCalls": 0.0,
+        "durationMs": 4681.0,
+        "firstTokenMs": 2698.0
+      }
+    },
+    "project_kb.large_replaced_file_new_value": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "30",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 96.0,
+        "inputTokens": 9802.0,
+        "toolCalls": 0.0,
+        "durationMs": 4817.0,
+        "firstTokenMs": 3070.0
+      }
+    },
+    "project_kb.large_read_file_by_name": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "Leave Requests",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 323.0,
+        "inputTokens": 32713.0,
+        "toolCalls": 1.0,
+        "durationMs": 8290.0,
+        "firstTokenMs": 3164.0
+      }
+    },
+    "project_kb.large_list_files": {
+      "family": "project_kb",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "This project has 6 files, all ready to read:\n\n1. `facilities_handbook.md`\n2. `grants_handbook.md`\n3. `hr_handbook.md`\n4. `it_handbook.md`\n5. `procurement_handbook.md`\n6. `travel_handbook.md`\n\nAll six were added by eval-harness@example.invalid. I can read any of them in full or answer questions from them.",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 139.0,
+        "inputTokens": 18934.0,
+        "toolCalls": 1.0,
+        "durationMs": 4812.0,
+        "firstTokenMs": 1150.0
+      }
     }
   },
   "judgeModel": "us.anthropic.claude-sonnet-4-6",
@@ -1399,27 +1503,6 @@
     "document_qa.follow_up_turn_same_document": {
       "grounded": 1.0
     },
-    "project_kb.small_literal_training_deadline": {
-      "grounded": 1.0
-    },
-    "project_kb.small_word_table_blank_cell": {
-      "grounded": 1.0
-    },
-    "project_kb.small_pdf_spring_trip": {
-      "grounded": 1.0
-    },
-    "project_kb.small_mixed_format_spreadsheet_value": {
-      "grounded": 0.6667
-    },
-    "project_kb.small_absent_fact": {
-      "grounded": 0.5
-    },
-    "project_kb.small_synthesis_across_files": {
-      "grounded": 1.0
-    },
-    "project_kb.small_project_instructions_followed": {
-      "grounded": 1.0
-    },
     "skill_outcome.web_research_cites_each_point": {
       "skill_following": 0.3333
     },
@@ -1467,6 +1550,18 @@
         "imageTags": {
           "inference-api": "acb66ec29d5e93bf",
           "app-api": "ba5307ffa6118431"
+        }
+      }
+    },
+    "project_kb": {
+      "promotedAt": "2026-11-14T17:21:04.136411Z",
+      "source": {
+        "startedAt": "2026-11-14T17:14:53.007200Z",
+        "target": "runtime:dev-boisestateai-v2",
+        "gitCommit": "e256bded53830c556e03b035930bcc893a059bc9",
+        "imageTags": {
+          "inference-api": "a04cc849817efdc2",
+          "app-api": "55fcdb64eff147cd"
         }
       }
     }
