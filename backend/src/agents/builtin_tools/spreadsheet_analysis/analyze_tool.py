@@ -595,7 +595,9 @@ def make_analyze_tool(
         try:
             validate_diagram_code(python_code)
         except PolicyError as exc:
-            return _error(_policy_rejection(exc, filename))
+            return _error(
+                _policy_rejection(exc, filename, _staged_sheet_note(session_id, user_id, filename))
+            )
 
         # 2. Find the file in accessible sources
         file_info = await _find_file(filename, assistant_id, session_id)
@@ -756,7 +758,7 @@ def _build_bootstrap_code(stem: str, primary_csv_filename: str) -> str:
     workbooks.
     """
     return f"""
-import base64, io, csv, re
+import base64, io, csv, os, re
 from openpyxl import load_workbook
 
 MAX_SHEETS = {MAX_SHEETS_TO_CONVERT}
@@ -764,9 +766,31 @@ MAX_ROWS = {MAX_ROWS_PER_SHEET}
 STEM = {stem!r}
 PRIMARY_CSV = {primary_csv_filename!r}
 
-def _sanitize(name):
-    cleaned = re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_').lower()
+def _sanitize(name, lower=True):
+    cleaned = re.sub(r'[^A-Za-z0-9]+', '_', name).strip('_')
+    if lower:
+        cleaned = cleaned.lower()
     return cleaned or 'sheet'
+
+def _link_cased_alias(sheet_name, safe, out_path):
+    # The sheet's own capitalisation is the name a model guesses first
+    # (Budget.Expenses.csv), and the sandbox's filesystem is case-sensitive.
+    # A symlink makes that guess read the same file; it costs no copy. Only
+    # an undeduplicated name gets one, and never over a real file. Called
+    # after the CSV is written, so on a case-insensitive filesystem the
+    # cased name already resolves to it and nothing is linked.
+    cased = _sanitize(sheet_name, lower=False)
+    if cased == safe or safe != _sanitize(sheet_name):
+        return
+    alias = f"{{STEM}}.{{cased}}.csv"
+    try:
+        if os.path.islink(alias):
+            os.remove(alias)
+        elif os.path.exists(alias):
+            return
+        os.symlink(os.path.basename(out_path), alias)
+    except OSError:
+        pass
 
 with open('_encoded.b64', 'r') as f:
     raw = base64.b64decode(f.read())
@@ -813,6 +837,9 @@ for idx, sheet_name in enumerate(sheets_to_convert):
                 break
             writer.writerow([str(cell) if cell is not None else '' for cell in row])
             rows_written += 1
+
+    if total_sheets > 1:
+        _link_cased_alias(sheet_name, safe, out_path)
 
     # Alias the first sheet of a multi-sheet workbook to the legacy
     # <stem>.csv path too, so the single-sheet fast path and the
@@ -927,29 +954,64 @@ def _error(text: str) -> Dict[str, Any]:
 _FILE_LOOKUP_MODULES = frozenset({"os", "glob", "pathlib", "shutil", "sys"})
 
 
-def _policy_rejection(exc: Exception, filename: str) -> str:
+def _sheet_naming_rule(filename: str) -> str:
+    """How a workbook's other sheets are named, for when their list isn't known yet.
+
+    A rejection happens before the file is staged, so it cannot list the
+    sheets. Without this, a model looking for a second sheet guessed the
+    sheet's own capitalisation (``Budget.Expenses.csv``) and missed: on the
+    2026-11 nightly evals, Haiku 5.5 and Sonnet 5.5 each spent one or two
+    extra calls on a two-sheet workbook that way.
+    """
+    stem = os.path.splitext(filename)[0]
+    return (
+        f"A workbook with several sheets also has one CSV per sheet, `{stem}.<sheet>.csv`: "
+        f"the sheet name in lowercase, spaces and punctuation as `_` "
+        f"(a sheet named `Q1 Budget` is `{stem}.q1_budget.csv`)."
+    )
+
+
+def _staged_sheet_note(session_id: str, user_id: str, filename: str) -> str:
+    """The sheet list for ``filename``, if this turn's sandbox has staged it already."""
+    if not filename.lower().endswith(".xlsx"):
+        return ""
+    entry = sandbox_pool.acquire(session_id, user_id)
+    if entry is None:
+        return ""
+    staged = entry.staged.get(_csv_name_for(filename, True))
+    return staged.multi_sheet_note if staged is not None else ""
+
+
+def _policy_rejection(exc: Exception, filename: str, sheet_note: str = "") -> str:
     """The policy rejection, named, with what to write instead.
 
     It used to say only "rejected by policy", so the retry guessed: after an
     ``import glob`` was refused, the next call often tried ``os.listdir``.
+    For a workbook it also says where the other sheets are: the staged sheet
+    list when this turn's sandbox has one (``sheet_note``), else the naming
+    rule, because the model went looking for the file to find exactly that.
     """
     from apis.shared.security import ALLOWED_IMPORT_ROOTS, policy_violation
 
     label, name = policy_violation(exc)
-    csv_name = _csv_name_for(filename, filename.lower().endswith(".xlsx"))
+    is_xlsx = filename.lower().endswith(".xlsx")
+    csv_name = _csv_name_for(filename, is_xlsx)
     read_it = f"Read it directly: `pd.read_csv('{csv_name}', low_memory=False)`."
+    sheets = ""
+    if is_xlsx:
+        sheets = f"\n\n{sheet_note}" if sheet_note else f" {_sheet_naming_rule(filename)}"
     root = name.split(".", 1)[0]
     if (label == "forbidden import" and root in _FILE_LOOKUP_MODULES) or (
         label == "forbidden name" and name == "open"
     ):
         reason = (
             f"`{name}` is blocked. You don't need to find or open the file: it is already "
-            f"in the working directory as `{csv_name}`. {read_it}"
+            f"in the working directory as `{csv_name}`. {read_it}{sheets}"
         )
     elif label == "forbidden import" and root == "openpyxl":
         reason = (
             "`openpyxl` is blocked. Workbooks are already converted to CSV, one file per "
-            f"sheet; the first sheet is `{csv_name}`. {read_it} The response lists every sheet's CSV name."
+            f"sheet; the first sheet is `{csv_name}`. {read_it}{sheets}"
         )
     elif label == "forbidden attribute" and name == "compile":
         reason = (
