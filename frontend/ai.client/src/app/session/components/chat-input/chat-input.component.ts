@@ -13,6 +13,7 @@ import {
   EffectRef,
   ElementRef,
   Injector,
+  ChangeDetectionStrategy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { v4 as uuidv4 } from 'uuid';
@@ -364,6 +365,7 @@ export const PROJECT_SKILLS_HINT = "Skills for this project are chosen on its Sk
     })
   ],
   templateUrl: './chat-input.component.html',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './chat-input.component.css'
 })
 export class ChatInputComponent {
