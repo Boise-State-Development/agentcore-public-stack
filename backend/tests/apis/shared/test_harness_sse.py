@@ -140,6 +140,18 @@ def test_accumulator_flat_tool_shapes_and_errors():
     assert acc.tool_trace[0].result_preview == "boom"
     assert acc.error == "model exploded"
     assert acc.done is False
+    assert acc.error_code is None
+
+
+def test_accumulator_keeps_the_stream_error_code():
+    acc = InvocationStreamAccumulator()
+    acc.handle("stream_error", {"code": "provider_unavailable", "message": "⚠️ The provider failed"})
+    assert acc.error_code == "provider_unavailable"
+
+    # An older frame names it only on ``metadata.error_kind``.
+    acc = InvocationStreamAccumulator()
+    acc.handle("stream_error", {"message": "x", "metadata": {"error_kind": "provider_unavailable"}})
+    assert acc.error_code == "provider_unavailable"
 
 
 def test_accumulator_oauth_required_and_final_message_fallback():
