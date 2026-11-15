@@ -116,6 +116,7 @@ export interface AppConfig {
   documentExtract: DocumentExtractConfig;
   fieldSetAuthoring: FieldSetAuthoringConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
+  concurrentToolExecution: ConcurrentToolExecutionConfig;
   wordSkillScripts: WordSkillScriptsConfig;
   converseDocumentsAsText: ConverseDocumentsAsTextConfig;
   projectFileReadiness: ProjectFileReadinessConfig;
@@ -982,6 +983,24 @@ export interface McpElicitationConfig {
  * resources and no IAM: both roles already hold UpdateItem on the table.
  */
 export interface ReleaseLedgerConfig {
+  enabled: boolean;
+}
+
+/**
+ * Concurrent tool execution (backend/src/agents/main_agent/core/tool_concurrency.py).
+ * On, the chat agent runs a model's tool batch with Strands'
+ * ConcurrentToolExecutor: calls to tools known to be read-only overlap, and
+ * every other call stays serialized behind one lock per agent, so a batch of
+ * independent reads takes about the longest call instead of the sum. Nothing
+ * reaches the prompt or toolConfig, and results reach history in the order the
+ * model asked for them. **Opt-in while in development**: off unless
+ * CDK_CONCURRENT_TOOL_EXECUTION_ENABLED=true (or a
+ * `concurrentToolExecution.enabled: true` cdk.json context). A rollout switch
+ * once promoted. Sets CONCURRENT_TOOL_EXECUTION_ENABLED on the AgentCore
+ * Runtime only, and **only while on**, so the default spends none of the V2
+ * payload budget. No resources.
+ */
+export interface ConcurrentToolExecutionConfig {
   enabled: boolean;
 }
 
@@ -2051,6 +2070,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED
         ? process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('webSearchDefaultMaxResults')?.enabled ?? false,
+    },
+    concurrentToolExecution: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED
+        ? process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('concurrentToolExecution')?.enabled ?? false,
     },
     wordSkillScripts: {
       // In development: only "true" enables, and an unset GitHub variable

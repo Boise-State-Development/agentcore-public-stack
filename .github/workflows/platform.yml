@@ -438,6 +438,12 @@ jobs:
       # so only "true" enables. Sets the flag on the AgentCore Runtime only, and
       # only while on; no resources.
       CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: ${{ vars.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED }}
+      # Concurrent tool execution: a model's tool batch runs concurrently, with
+      # every call not known to be read-only still serialized behind one lock
+      # per agent (backend/src/agents/main_agent/core/tool_concurrency.py). In
+      # development, so only "true" enables. Sets the flag on the AgentCore
+      # Runtime only, and only while on; no resources.
+      CDK_CONCURRENT_TOOL_EXECUTION_ENABLED: ${{ vars.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED }}
       # Word skill scripts: create/modify_word_document can run a scripts/*.py
       # file from a skill bound to the turn inside Code Interpreter, so the
       # model never retypes it into python_code. In development, so only

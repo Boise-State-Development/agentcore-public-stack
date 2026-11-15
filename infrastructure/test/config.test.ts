@@ -887,6 +887,28 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Concurrent tool execution feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED;
+      expect(loadConfig(app).concurrentToolExecution.enabled).toBe(false);
+      process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED = '';
+      expect(loadConfig(app).concurrentToolExecution.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED = 'True';
+      expect(loadConfig(app).concurrentToolExecution.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED = value;
+        expect(loadConfig(app).concurrentToolExecution.enabled).toBe(false);
+      }
+    });
+  });
+
   describe('Web Search default maxResults feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED;

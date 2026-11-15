@@ -13,7 +13,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Unlocks**:
   - a tool batch of N independent calls takes ≈ max d instead of Σd (a three-read fan-out saves ≈ 3 s; prod session `aecd387d` ran 18 calls in series)
 - **Notes**: TTFT 0 (after the first token), 0 tokens, `toolConfig` unchanged. Results land in completion order but are appended once and persisted, so history stays byte-stable. Serialize anything that writes a shared resource (browser, Code Interpreter, the Office writers, artifacts, `my_skill_*`) behind one per-session lock, and allowlist the parallel-safe reads. Settle first: harness-sdk#4713 (open: `ConcurrentToolExecutor` swallows a `BaseException`, so check `_CooperativeStopSignal` and `CancelledError`), two interrupts raised in one batch, and `agent_status` / `ui_resource` frame order. Behind a rollout switch. Measure turn duration on a dev fan-out, and the multi-tool-batch share of prod turns from the ledger's `#TOOL#` rows
-- **Status**: open
+- **Status**: built 2026-11-14 behind the in-development `CONCURRENT_TOOL_EXECUTION_ENABLED` (off everywhere), in the PR that adds `core/tool_concurrency.py`. The policy fails closed: only `PARALLEL_SAFE_TOOLS`, `___WebSearch`, and MCP tools with `readOnlyHint` (not `destructiveHint`) overlap. Settled in tests against a real Strands agent: #4713 is guarded (a stray `BaseException` becomes an error result, and a real cancel still re-raises); interrupts pause and resume without re-running the batch's other calls; results keep toolUse order (after a resume, the pre-pause results come first). Abandoning the stream lets the batch finish under either executor, which is today's behaviour. Left: turn it on in dev, a three-read fan-out, and the turn-duration delta
 
 ### [2026-11-14] Pass a per-turn `cancel_signal` and stop clearing Strands' private `_cancel_signal`
 - **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #2; `agent.cancel` docstring (harness-sdk#4833, 1.62): "for cancellation driven from outside the agent … pass a `cancel_signal` into the invocation instead"
@@ -21,7 +21,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: L × M
 - **Subtracts**: yes: the `_cancel_signal` half of `reset_cancellation_state`, a write to a private SDK attribute, and with it the sticky-Stop class (#741/#751) for that signal
 - **Notes**: create a `threading.Event` per turn, pass `cancel_signal=` to `stream_async`, and have `_mark_session_cancelled` set it instead of calling `agent.cancel()`. Strands mirrors it onto the internal signal, in-flight MCP calls included. An event scoped to one invocation cannot leak onto the cached agent. Keep `session_manager.cancelled` and its reset (`StopHook` and the coordinator read it). Cost 0; one watcher task per turn
-- **Status**: open
+- **Status**: built 2026-11-14, PR 2091. It turned out to be a bug fix too: `_mark_session_cancelled` got the `ChatAgent` wrapper, which has no `cancel()`, so Stop had never reached Strands in production. Left: the dev smoke `stop_mid_answer` row and a Stop during a slow MCP call
 
 ### [2026-11-14] Docs sync after the Strands 1.55 → 1.63 adoption audit
 - **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #3, #4, #5, #7
