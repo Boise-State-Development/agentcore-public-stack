@@ -29,7 +29,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: L × M
 - **Subtracts**: yes: two stale instructions, one of which would ship a cost regression if followed
 - **Notes**: (a) Row 1 (`usage_normalization` cache-write shim) retired in #1683; strike it. (b) Row 3 says to adopt `apply_cache_config` and retire `build_prompt_cache_key`. Ours is prefix-derived and shared across conversations (`bedrock_responses.py:274-294`); upstream's is `strands-<session_id>` (#4083), so a swap makes every new GPT conversation's first call write the static prefix instead of reading it. Since 1.64 a `cache_config` also turns on the +11.8% checkpoint. Rewrite the row as "keep ours", with `probe_gpt56_cache_rates.py` as the gate. The 1.63 → 1.65 readout (PR #2080, its row 7) reaches the same verdict independently. Cite it for the 1.64 half. (c) Add to decisions.md 2026-05-18's re-open condition: since 1.63 (#5446) a Strands `context_manager` raises on any `RepositorySessionManager`, and `AgentCoreMemorySessionManager` is one. (d) Note on [2026-07-17] that #5288 makes limits and usage request-wide across nested agents (`InvocationContext`), and that the interactive lane has no `limits=` today
-- **Status**: open
+- **Status**: done 2026-11-14 for (a), (b) and (c), plus a correction note on research/ and reviews/2026-09-25 that `requestTimeout` (#4408) is TypeScript-only. (d) was already written onto the [2026-07-17] entry in the audit PR. Close at review.
 
 ### [2026-11-13] Escalation: delete the orphaned ALB access-log bucket and make the nightly self-heal (10 red nights)
 - **Source**: research/2026-11-13.md ▸ Top 5 #1; nightly runs 41804576559 → 43398420487
