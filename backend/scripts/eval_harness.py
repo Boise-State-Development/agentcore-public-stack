@@ -95,6 +95,7 @@ from apis.shared.evals.cases import (  # noqa: E402
     DELIVERY_FAMILY,
     FAMILIES,
     OPT_IN_FAMILIES,
+    PACED_FAMILIES,
     CaseError,
     EPHEMERAL_PROJECT,
     EvalCase,
@@ -447,11 +448,11 @@ async def cmd_run(args: argparse.Namespace) -> int:
             return 2
     # A ceiling is the Runtime's, not the request's: one run, one ceiling.
     ceiling = getattr(args, "ceiling", "default")
-    if any(c.family == DELIVERY_FAMILY for c in cases):
-        skipped = [c for c in cases if c.family == DELIVERY_FAMILY and c.run.ceiling != ceiling]
-        cases = [c for c in cases if not (c.family == DELIVERY_FAMILY and c.run.ceiling != ceiling)]
+    if any(c.family in PACED_FAMILIES for c in cases):
+        skipped = [c for c in cases if c.family in PACED_FAMILIES and c.run.ceiling != ceiling]
+        cases = [c for c in cases if not (c.family in PACED_FAMILIES and c.run.ceiling != ceiling)]
         if skipped:
-            print(f"--ceiling {ceiling}: skipping {len(skipped)} {DELIVERY_FAMILY} case(s) of other ceilings")
+            print(f"--ceiling {ceiling}: skipping {len(skipped)} paced case(s) of other ceilings")
         env = CEILING_ENV[ceiling]
         if env:
             if not args.invocations_url:
@@ -1546,7 +1547,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         "(needs --auth cognito)")
     s.add_argument("--match", help="run only the cases whose id matches this regex (e.g. 'ceiling_pdf_(30|80)k')")
     s.add_argument("--ceiling", choices=list(CEILINGS), default="default",
-                   help=f"{DELIVERY_FAMILY} only: run the cases of this compaction ceiling (a non-default one "
+                   help="paced families only: run the cases of this compaction ceiling (a non-default one "
                         "needs a local stack started with its environment; cases.CEILING_ENV)")
     s.add_argument("--yes", action="store_true", help="spend: without it, print the estimate and stop")
 

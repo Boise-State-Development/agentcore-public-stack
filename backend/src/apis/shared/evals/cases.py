@@ -33,6 +33,7 @@ FAMILIES: Tuple[str, ...] = (
     "terminal",
     "usage_patterns",
     "retention",
+    "idle_return_recall",
     "instruction_following",
     "refusal",
     "skill_selection",
@@ -45,16 +46,23 @@ JUDGED_FAMILIES = frozenset({"general_chat"})
 #: ``usage_patterns`` (spec §18) measures what the costliest production usage
 #: patterns cost to answer; it reports, and gates once its baselines have
 #: settled across models.
-ADVISORY_FAMILIES = JUDGED_FAMILIES | frozenset({"terminal", "attachment_delivery", "usage_patterns"})
+ADVISORY_FAMILIES = JUDGED_FAMILIES | frozenset({"terminal", "attachment_delivery", "usage_patterns", "idle_return_recall"})
 
 #: The delivery measurement family (unified-attachment-delivery spec §8.4).
 #: Advisory: its gating set is the cells where two arms are both legal for a
 #: file.
 DELIVERY_FAMILY = "attachment_delivery"
+#: Recall of a conversation's own early turns after an idle return, under a
+#: compaction ceiling low enough that the return applies a cut
+#: (``docs/one-pagers/idle-return-policy.md``). Advisory: it measures a trade.
+IDLE_RETURN_FAMILY = "idle_return_recall"
+#: Families whose cases may pause past the cache TTL, attach on a later turn
+#: and name a compaction ceiling. Both run for minutes a sample, so both opt in.
+PACED_FAMILIES = frozenset({DELIVERY_FAMILY, IDLE_RETURN_FAMILY})
 #: Families a run includes only when ``--family`` names them. The delivery
 #: family attaches documents up to ~300k tokens, so a release or nightly pass
 #: over "every family" must not start paying for it unannounced.
-OPT_IN_FAMILIES = frozenset({DELIVERY_FAMILY})
+OPT_IN_FAMILIES = frozenset(PACED_FAMILIES)
 #: What a run with no ``--family`` covers.
 DEFAULT_FAMILIES: Tuple[str, ...] = tuple(f for f in FAMILIES if f not in OPT_IN_FAMILIES)
 
@@ -76,16 +84,21 @@ RESERVED_ARMS: Tuple[str, ...] = ()
 #: ceiling is a property of the Runtime, not of a request, so a run takes one
 #: (``eval_harness.py run --ceiling``) and the target must be started with
 #: :data:`CEILING_ENV`'s variables.
-CEILINGS: Tuple[str, ...] = ("default", "200k")
+CEILINGS: Tuple[str, ...] = ("default", "200k", "idle_return")
 RESERVED_CEILINGS: Tuple[str, ...] = ()
 #: The Runtime environment each ceiling needs (``compaction_models.CompactionConfig``).
 CEILING_ENV: Dict[str, Dict[str, str]] = {
     "default": {},
     "200k": {"AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS": "200000"},
+    # Low enough that an idle_return_recall case crosses it on the turn before
+    # its pause, so the cut is decided after that turn and applied at the cold
+    # return: the shape the idle-return policy proposes, on today's code.
+    "idle_return": {"AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS": "7300"},
 }
 #: Longest pause a turn may ask for before it is sent: past the 5-minute
 #: prompt-cache TTL, short of the Runtime session's idle timeout.
 MAX_PAUSE_SECONDS = 600
+_PACED = " and ".join(sorted(PACED_FAMILIES))
 
 #: The strands-evals evaluators a case may name: exactly the ones the judge adapter maps.
 JUDGE_EVALUATORS = CASE_EVALUATORS
@@ -475,11 +488,11 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         pause = turn.get("pause_seconds", 0)
         if not isinstance(pause, int) or isinstance(pause, bool) or not 0 <= pause <= MAX_PAUSE_SECONDS:
             raise CaseError(f"{where}.turns[{i}].pause_seconds: expected 0..{MAX_PAUSE_SECONDS}")
-        if pause and family != DELIVERY_FAMILY:
-            raise CaseError(f"{where}.turns[{i}].pause_seconds: only {DELIVERY_FAMILY} cases pause")
+        if pause and family not in PACED_FAMILIES:
+            raise CaseError(f"{where}.turns[{i}].pause_seconds: only {_PACED} cases pause")
         turn_files = _str_tuple(turn.get("files"), f"{where}.turns[{i}].files")
-        if turn_files and (family != DELIVERY_FAMILY or session != 1):
-            raise CaseError(f"{where}.turns[{i}].files: only {DELIVERY_FAMILY} cases attach on a later turn, in session 1")
+        if turn_files and (family not in PACED_FAMILIES or session != 1):
+            raise CaseError(f"{where}.turns[{i}].files: only {_PACED} cases attach on a later turn, in session 1")
         turns.append(prompt)
         turn_meta.append(TurnMeta(session=session, as_user=as_user, pause_seconds=pause, files=turn_files))
 
@@ -494,8 +507,9 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         value = run_raw.get(key)
         if value is None:
             continue
-        if family != DELIVERY_FAMILY:
-            raise CaseError(f"{where}.run.{key}: only {DELIVERY_FAMILY} cases name a {key}")
+        owners = PACED_FAMILIES if key == "ceiling" else frozenset({DELIVERY_FAMILY})
+        if family not in owners:
+            raise CaseError(f"{where}.run.{key}: only {' and '.join(sorted(owners))} cases name a {key}")
         if value in reserved:
             raise CaseError(f"{where}.run.{key}: '{value}' is reserved")
         if value not in allowed:
