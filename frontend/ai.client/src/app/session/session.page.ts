@@ -39,13 +39,12 @@ import { FEATURES } from '../services/features';
 import { ComposerProject } from './components/chat-input/chat-input.component';
 import { ConversationBindingService } from './services/session/conversation-binding.service';
 import { AgentService } from '../agents/services/agent.service';
+import { AgentBindingLocksService } from '../agents/services/agent-binding-locks.service';
 import { AgentMentionService } from '../agents/services/agent-mention.service';
 import { routeMention, stripMention } from './services/chat/mention-routing';
 import { AgentHandoffService } from './services/handoff/agent-handoff.service';
 import { ToastService } from '../services/toast/toast.service';
 import { Agent, AgentRunnability } from '../agents/models/agent.model';
-import { ToolService } from '../services/tool/tool.service';
-import { SkillService } from '../services/skill/skill.service';
 import { ChatContainerComponent, ChatContainerConfig } from './components/chat-container/chat-container.component';
 import {
   ShareAgentDialogComponent,
@@ -89,8 +88,7 @@ export class ConversationPage implements OnDestroy {
   private artifactHttp = inject(ArtifactHttpService);
   private assistantService = inject(AssistantService);
   private agentService = inject(AgentService);
-  private toolService = inject(ToolService);
-  private skillService = inject(SkillService);
+  private bindingLocks = inject(AgentBindingLocksService);
   private router = inject(Router);
   private dialog = inject(Dialog);
   private voiceChatService = inject(VoiceChatService);
@@ -1080,68 +1078,16 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
-   * Lock each picker to the Agent's binding. Tools and skills are always locked, to
-   * none if the Agent binds none: the backend runs every Agent (a project's included)
-   * on its own tools and skills, never the viewer's picks. An Agent that binds no
-   * tools still gets the admin's always-on tools, so its lock keeps them; skills have
-   * no such floor.
+   * Lock each picker to the Agent's binding (`AgentBindingLocksService`). A skill
+   * resolve that lands after the conversation moved to another Agent is dropped.
    */
   private applyAgentBindingLocks(agent: Agent): void {
-    const modelId = agent.modelConfig?.modelId;
-    if (modelId) {
-      this.modelService.lockToAgentModel(modelId);
-    } else {
-      this.modelService.clearAgentModelLock();
-    }
-
-    const toolIds = agent.bindings.filter(b => b.kind === 'tool').map(b => b.ref);
-    if (toolIds.length > 0) {
-      this.toolService.lockToAgentTools(toolIds);
-    } else {
-      this.toolService.lockToAgentTools([], { keepAlwaysOn: true });
-    }
-
-    const skillIds = agent.bindings.filter(b => b.kind === 'skill').map(b => b.ref);
-    this.skillService.lockToAgentSkillIds(skillIds, { resolving: skillIds.length > 0 });
-    // Resolve the bound skills for this viewer. Only fires when an Agent actually
-    // binds skills (a skills-enabled context), so there is no fetch in flag-off
-    // environments.
-    if (skillIds.length > 0) {
-      void this.resolveAgentSkills(agent.agentId);
-    }
-  }
-
-  /**
-   * Replace the id lock with the Agent's skills as the backend resolved them for this
-   * viewer (`GET /agents/{id}/skills`), which is what the `/` menu and the picker rows
-   * are built from. The viewer's own `/skills/` list cannot do it: a skill another
-   * project member authored is not in it, so for every member but the author the
-   * locked set used to intersect to nothing and the menu never opened.
-   *
-   * Best-effort. A failure (an older backend without the route) keeps the id lock and
-   * loads the viewer's own list so the rows it can name still render, which is exactly
-   * the previous behaviour. A result for an Agent that is no longer the conversation's
-   * is dropped.
-   */
-  private async resolveAgentSkills(agentId: string): Promise<void> {
-    try {
-      const skills = await this.agentService.getBoundSkills(agentId);
-      if (this.agent()?.agentId !== agentId || !this.skillService.agentLocked()) return;
-      this.skillService.lockToAgentSkills(skills);
-    } catch {
-      if (this.agent()?.agentId !== agentId || !this.skillService.agentLocked()) return;
-      this.skillService.settleAgentLock();
-      if (!this.skillService.initialized()) {
-        void this.skillService.loadSkills();
-      }
-    }
+    this.bindingLocks.apply(agent, () => this.agent()?.agentId === agent.agentId);
   }
 
   /** Release every Agent picker lock (plain chat / navigating away). */
   private clearAgentBindingLocks(): void {
-    this.modelService.clearAgentModelLock();
-    this.toolService.clearAgentLock();
-    this.skillService.clearAgentLock();
+    this.bindingLocks.clear();
   }
 
   /**
