@@ -72,3 +72,32 @@ async def test_no_invocation_state_keeps_the_bare_call() -> None:
     await _run(agent, None)
 
     assert agent.calls == [{"prompt": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_the_turn_cancel_signal_reaches_the_strands_call() -> None:
+    """The route's per-turn Stop event must be the one Strands watches."""
+    import threading
+
+    agent = _RecordingAgent()
+    signal = threading.Event()
+
+    async for _ in StreamCoordinator().stream_response(
+        agent=agent,
+        prompt="hi",
+        session_manager=_SessionManager(),
+        session_id="sess-1",
+        user_id="user-1",
+        invocation_state={"browser_takeover_frame_height": 778},
+        cancel_signal=signal,
+    ):
+        pass
+
+    assert agent.calls == [
+        {
+            "prompt": "hi",
+            "invocation_state": {"browser_takeover_frame_height": 778},
+            "cancel_signal": signal,
+        }
+    ]
+    assert agent.calls[0]["cancel_signal"] is signal

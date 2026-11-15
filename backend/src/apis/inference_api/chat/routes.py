@@ -8,6 +8,7 @@ These endpoints are at the root level to comply with AWS Bedrock AgentCore Runti
 """
 
 import asyncio
+import threading
 import time
 import json
 import logging
@@ -217,39 +218,48 @@ PREVIEW_SESSION_PREFIX = "preview-"
 DEFAULT_AGENT_TYPE = "chat"
 
 
-def _mark_session_cancelled(agent) -> None:
+def _mark_session_cancelled(agent, cancel_signal: Optional[threading.Event] = None) -> None:
     """Arm cancellation for the running turn (cooperative stop).
 
     Two signals, because they stop different things:
 
     - ``session_manager.cancelled`` is read by StopHook (tool boundaries) and
       by the stream coordinator (mid-generation). It ends the turn, but only
-      at a point where our own code regains control.
-    - ``agent.cancel()`` is Strands' own signal. As of strands-agents 1.51.0 it
-      propagates into an **in-flight MCP tool call** and makes the sequential
-      tool executor skip the tools still queued behind it. That is the gap the
-      flag alone cannot close: StopHook fires only *before* a tool starts, so a
-      Stop pressed during a slow MCP call previously ran that call to
-      completion — the shape behind the MCP Apps proxy-call timeouts.
+      at a point where our own code regains control. Set FIRST, so the
+      coordinator's in-loop check always sees it before any event that
+      Strands' own cancellation produces, and the coordinator's stop arm
+      stays the single place a stopped turn is persisted.
+    - ``cancel_signal`` is this turn's caller-owned event, passed to
+      Strands' ``stream_async(cancel_signal=...)``. Strands mirrors it onto
+      its internal signal, which it forwards into an **in-flight MCP tool
+      call** and checks before each queued tool. That closes the gap the
+      flag alone cannot: StopHook fires only *before* a tool starts, so a
+      Stop pressed during a slow MCP call used to run that call to
+      completion.
 
-    Both are cleared at the head of the next turn by
-    ``reset_cancellation_state``; neither may leak onto the cached agent.
+    The event is created per turn and never stored on the agent, so a cancel
+    observed just as a turn ends dies with that turn: nothing is left set on
+    the cached agent for the next turn to trip over. This replaces calling
+    ``agent.cancel()``, which never reached Strands here: ``agent`` is our
+    ``ChatAgent`` wrapper, which has no ``cancel`` method, so the
+    ``getattr`` guard silently skipped it.
 
-    Defensive throughout: a nonstandard agent missing either surface is a
-    no-op, and cancelling is idempotent.
+    ``session_manager.cancelled`` is cleared at the head of the next turn by
+    ``reset_cancellation_state``. Defensive throughout: an agent without a
+    session manager is a no-op for the flag, and setting an event twice is
+    harmless.
     """
     session_manager = getattr(agent, "session_manager", None)
     if session_manager is not None:
         session_manager.cancelled = True
 
-    cancel = getattr(agent, "cancel", None)
-    if callable(cancel):
-        cancel()
+    if cancel_signal is not None:
+        cancel_signal.set()
 
     logger.info("Cooperative stop: cancel observed for the running turn")
 
 
-async def _lease_heartbeat_loop(lease, agent) -> None:
+async def _lease_heartbeat_loop(lease, agent, cancel_signal: Optional[threading.Event] = None) -> None:
     """Renew the single-flight session lease and observe cancel requests.
 
     Runs as a background task for the life of the SSE stream. Renewing on a wall
@@ -270,7 +280,7 @@ async def _lease_heartbeat_loop(lease, agent) -> None:
         await asyncio.sleep(LEASE_HEARTBEAT_SECONDS)
         cancel_requested = await renew_session_lease(lease)
         if cancel_requested:
-            _mark_session_cancelled(agent)
+            _mark_session_cancelled(agent, cancel_signal)
             return
 
 
@@ -6803,6 +6813,11 @@ async def _run_invocation(
             agent = None
             deferred_build = True
 
+        # This turn's own cancellation event: the lease heartbeat sets it on a
+        # Stop, and the coordinator hands it to Strands' `stream_async`. Per
+        # turn, never on the cached agent (see `_mark_session_cancelled`).
+        turn_cancel_signal = threading.Event()
+
         # Resume requests must target interrupts that the cached agent
         # actually has paused; see `_validate_resume_interrupts`.
         if is_resume:
@@ -7090,6 +7105,7 @@ async def _run_invocation(
                 # output and emitted as `turn_first_token` (turn-path P1b).
                 turn_clock=prelude,
                 invocation_state=turn_invocation_state,
+                cancel_signal=turn_cancel_signal,
             ):
                 yield event
                 # Interleave the finished title between agent events (same
@@ -7291,7 +7307,7 @@ async def _run_invocation(
                 # Started only once the agent exists — it is the heartbeat's
                 # first argument.
                 heartbeat_task = (
-                    asyncio.create_task(_lease_heartbeat_loop(session_lease, agent))
+                    asyncio.create_task(_lease_heartbeat_loop(session_lease, agent, turn_cancel_signal))
                     if session_lease is not None
                     else None
                 )
