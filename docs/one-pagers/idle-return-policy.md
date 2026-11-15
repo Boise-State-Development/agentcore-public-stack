@@ -6,7 +6,7 @@
 
 **Bottom line:**
 
-- **Go: compact at the idle return, with the original kept recoverable.** The cut is decided after a turn ends and applied only when the next call is cold. Replayed, it nets **+$200–300 over 28 days**, and it adds nothing before the first token.
+- **Go: compact at the idle return, but only with the original kept recoverable.** The cut is decided after a turn ends and applied only when the next call is cold. Replayed, it nets **+$200–300 over 28 days**, and it adds nothing before the first token. The Haiku 5.5 screen (below) shows the cut alone loses real recall: 22/36 recalls against 36/36 for the control. So the recoverable original is a requirement, not an option.
 - **No-go: a 1-hour TTL, in every form we replayed.** Combining it with compaction makes compaction worse, not better.
 - **Go: the notice.** It is an additive change to the `compaction` event and is safe for both clients.
 
@@ -70,7 +70,7 @@ All figures are input-side spend on Claude calls (base $2,457 over 28 days). Out
 | Policy | 28-day net | Quality risk | TTFT effect | Verdict |
 |---|---:|---|---|---|
 | (a) Today | $0 | — | — | baseline |
-| (b) Cut at return, T = 40K, decided after the turn (trigger T3) | **+$268 to +$324**, less ≤$14 decision cost and $4–20 reach-back | Lossy, on about 1,100–1,260 cuts in 380–450 conversations. Mostly recovered with the H3 original | None new. The apply is the existing head-of-turn step. The decision delays `done`, not the first token | **Go**, behind an in-development flag, gated on the eval |
+| (b) Cut at return, T = 40K, decided after the turn (trigger T3) | **+$268 to +$324**, less ≤$14 decision cost and $4–20 reach-back | Lossy, on about 1,100–1,260 cuts in 380–450 conversations. Screen without H3: 22/36 against 36/36, and every failure abstained. H3 arm not yet run | None new. The apply is the existing head-of-turn step. The decision delays `done`, not the first token | **Go**, behind an in-development flag, gated on the eval |
 | (b) T = 60K / 80K | +$253–308 / +$212–262 | Fewer cuts (893–1,059 / 611–736) | Same | Fallback if the eval fails at 40K |
 | (b) Decided concurrently with the return turn, applied next turn (T2) | +$10 to +$16 | Same as T3 | None | **No-go**: the second re-write eats the saving |
 | (b) Background cut a few minutes after the last turn (T1) | ≈ T3, less the summaries for the 47% who never return | Same | None, but it needs a timer in an idle microVM | **No-go**: T3 gets the same saving without the timer |
@@ -125,27 +125,58 @@ Today the `compaction` event fires when a cut is **decided**. With deferred appl
 
 ## Settling the quality trade
 
-- **New eval family `idle_return_recall`, about 12 cases.**
-  - Each case runs 6–8 turns. It plants facts in turns 1–3 (a number, a name, a decision with its reason) and does unrelated work in turns 4–6.
-  - It then forces a cold call with a 301-second wait (wall-clock only, no extra cost).
-  - Finally, it asks about each planted fact.
-- **Three arms:**
-  - today (no return cut)
-  - cut without the H3 line
-  - cut with the H3 line
-- **Re-run the existing `attachment_tools.*_after_compaction` cases on the cut-with-H3 arm.**
-- **Gate.** The pass rate of cut-with-H3 stays within noise of no-cut at k=3, and cut-without-H3 shows how much H3 is worth. Bench the input tokens per passing case on the return turn.
-- **Estimated cost (not run):**
-  - Haiku 5.5 screen: about 650 turns, roughly **$3**.
-  - Sonnet 5 confirmation: **$35–80**, at 40–60K context per turn.
-- **We ask before running either.**
+### The screen that ran (Haiku 5.5, 2026-11-14)
+
+**What it is.** A new opt-in, advisory eval family, `idle_return_recall` (`backend/evals/cases/idle_return_recall.json`), with 12 cases. In each case:
+
+- Turn 1 opens with a background line, and the fact sits on the line after it: a reference code, a corrected budget, a name, a moved date, a decision and its reason, a quantity, a standing instruction, a position in a list, a cost centre, a room, a deadline, or a replaced contact.
+- Four unrelated turns follow, with a pause past the TTL before turn 3 and another before the question.
+- Answers that use lookalike values are scored as failures.
+
+**The two arms** ran on a local inference stack from this branch, against dev:
+
+- **Control (`default`):** no cut.
+- **Cut (`idle_return` ceiling, capped at 7.3K):**
+  - Every one of the 36 samples decided a cut (`checkpoint 0 → 4`, summarizing turns 1–2) after a turn.
+  - All 36 cuts were applied at the cold return with `reason=cache_expired`.
+  - Today's code ran unchanged; the arm differs only by config.
+
+| Arm | Pass (k=3) | Cost |
+|---|---:|---:|
+| Control, no cut | **36/36** | $0.13 |
+| Cut at the cold return, no recoverable original | **22/36** (61%) | $0.12 |
+
+The whole screen cost about $0.31. That includes one probe sample and a first attempt that was discarded (below). It is well under the $3 estimate, because these conversations are 7–9K tokens, not 40K.
+
+**What it shows:**
+
+- **Recall survives the cut only when the model's own acknowledgment repeated the fact.** Five facts passed 3/3 under the cut (code, corrected budget, moved date, quantity, replaced contact). The model had echoed each of them in its turn-1 reply. The fallback summary keeps the first 150 characters of each message's first line, so that echo carried the fact through. A room, a list position, a deadline and a site lead's name were mostly lost.
+- **No sample hallucinated.** All 14 failures abstain: "the summary cuts off before…", and usually "please resend it". That is the best failure mode, and it is exactly the gap a `retrieve_offloaded_content` reference closes. The model already knows something is missing and asks for it.
+- **Every cut here used the fallback summary, not AWS Memory's.** No `Retrieved N summaries from LTM` lines appeared, even with the cut decided more than 5 minutes after turn 1. In prod the fallback is rarer: across the 729 sessions that record a summary source, 89% of the latest cuts used AWS Memory summaries (472 updated since 2026-10-17). A cut at 40K lands in younger conversations than today's 100K cuts, though, so its fallback share will be higher. **This screen measures the fallback regime: the floor, not the typical case.**
+- **The low cap first tripped document offload instead.** At a 14.8K cap, every sample crossing the ceiling offloaded the attached document on a warm turn. The context fell below the cap and no conversation cut ever happened. The run was discarded, and the cases were rebuilt without an attachment. At a 40K trigger the same interaction applies, so the design must keep a return cut from triggering a warm document offload.
+
+### What still has to run
+
+- **A third arm: cut with the H3 reference line.** This needs the application code. The gate is that cut-with-H3 stays within noise of the control (36/36 here) at k=3.
+- **A Sonnet 5 confirmation at 40–60K, estimated $35–80.** Run it after H3 exists. Ask before running it.
+- **Re-running `attachment_tools.*_after_compaction` on the H3 arm.**
+
+To reproduce:
+
+1. Start two local inference stacks with the dev Runtime's environment, one with `AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS=7300`.
+2. Run each arm:
+
+```bash
+eval_harness.py run --family idle_return_recall --ceiling {default|idle_return} --invocations-url … --k 3
+```
 
 ## Recommendation
 
 | Lever | Verdict |
 |---|---|
-| Compaction at the idle return (decided after the turn, applied only cold, T = 40K) | **Go**, behind an in-development flag, after the eval |
-| Recoverable original through `retrieve_offloaded_content` | **Go**, as part of the same change: it is what makes 40K defensible |
+| Compaction at the idle return (decided after the turn, applied only cold, T = 40K) | **Go only together with the recoverable original**, behind an in-development flag. Alone it scored 22/36 against 36/36 |
+| Recoverable original through `retrieve_offloaded_content` | **Go**, as part of the same change. The screen shows it is required: every failure was an abstention it would answer |
+| Summary source at decision time | **Investigate**: the fallback (first 150 characters per message) is what loses the facts. Re-reading AWS Memory summaries at apply time would sit on the TTFT path, so don't. Prefer a better post-turn summary |
 | 1h TTL (all, turn-open, per-conversation, after a cut, static-only) | **No-go** |
 | Concurrent or background compaction triggers | **No-go** |
 | Notice with reason and tokens saved | **Go**, independent of the rest; additive fields |

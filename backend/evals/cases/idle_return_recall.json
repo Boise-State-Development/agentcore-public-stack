@@ -4,19 +4,20 @@
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Quick context before we start: my ticket reference for this job is HX-58213, the crew lead is Dana, and we're on the north lot. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nQuick context before we start: my ticket reference for this job is HX-58213, the crew lead is Dana, and we're on the north lot.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
         "prompt": "What ticket reference did I give you at the start? Reply with just the reference.",
@@ -37,29 +38,27 @@
         "HX-85213"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.ticket_reference_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Quick context before we start: my ticket reference for this job is HX-58213, the crew lead is Dana, and we're on the north lot. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nQuick context before we start: my ticket reference for this job is HX-58213, the crew lead is Dana, and we're on the north lot.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
         "prompt": "What ticket reference did I give you at the start? Reply with just the reference.",
@@ -80,29 +79,27 @@
         "HX-85213"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.corrected_budget_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Setting the scene: our repair budget was $4,200, but the insurer came through, so it's now $5,750. The job starts Monday. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nSetting the scene: our repair budget was $4,200, but the insurer came through, so it's now $5,750. The job starts Monday.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
         "prompt": "What's our current repair budget? Just the amount.",
@@ -124,29 +121,27 @@
         "4200"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.corrected_budget_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Setting the scene: our repair budget was $4,200, but the insurer came through, so it's now $5,750. The job starts Monday. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nSetting the scene: our repair budget was $4,200, but the insurer came through, so it's now $5,750. The job starts Monday.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
         "prompt": "What's our current repair budget? Just the amount.",
@@ -168,29 +163,27 @@
         "4200"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.site_lead_name_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "For context: the site lead on this project is Marisol Okonkwo-Vance, and the inspector is from the county office. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nFor context: the site lead on this project is Marisol Okonkwo-Vance, and the inspector is from the county office.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
         "prompt": "Who did I say the site lead is? Reply with just the name.",
@@ -207,29 +200,27 @@
         "Okonkwo-Vance"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.site_lead_name_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "For context: the site lead on this project is Marisol Okonkwo-Vance, and the inspector is from the county office. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nFor context: the site lead on this project is Marisol Okonkwo-Vance, and the inspector is from the county office.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
         "prompt": "Who did I say the site lead is? Reply with just the name.",
@@ -246,29 +237,27 @@
         "Okonkwo-Vance"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.moved_date_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Heads up: the safety walkthrough moved from Tuesday 17 March to Thursday 19 March, same time as before. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nHeads up: the safety walkthrough moved from Tuesday 17 March to Thursday 19 March, same time as before.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
         "prompt": "Which day and date is the safety walkthrough now? Reply in a few words.",
@@ -290,29 +279,27 @@
         "March 17"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.moved_date_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Heads up: the safety walkthrough moved from Tuesday 17 March to Thursday 19 March, same time as before. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nHeads up: the safety walkthrough moved from Tuesday 17 March to Thursday 19 March, same time as before.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
         "prompt": "Which day and date is the safety walkthrough now? Reply in a few words.",
@@ -334,29 +321,27 @@
         "March 17"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.decision_reason_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Background: we chose Brightline as the scaffolding vendor over Corvex, because Corvex can't deliver at weekends. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nBackground: we chose Brightline as the scaffolding vendor over Corvex, because Corvex can't deliver at weekends.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
         "prompt": "Why did we choose Brightline over Corvex? One sentence.",
@@ -371,32 +356,32 @@
     "expect": {
       "contains_any": [
         "weekend",
-        "Weekend"
+        "Weekend",
+        "weekends",
+        "Weekends"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.decision_reason_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Background: we chose Brightline as the scaffolding vendor over Corvex, because Corvex can't deliver at weekends. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nBackground: we chose Brightline as the scaffolding vendor over Corvex, because Corvex can't deliver at weekends.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
         "prompt": "Why did we choose Brightline over Corvex? One sentence.",
@@ -411,32 +396,32 @@
     "expect": {
       "contains_any": [
         "weekend",
-        "Weekend"
+        "Weekend",
+        "weekends",
+        "Weekends"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.quantity_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Inventory note: we need 37 hard hats and 12 high-visibility vests for the new crew. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nInventory note: we need 37 hard hats and 12 high-visibility vests for the new crew.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
         "prompt": "How many hard hats did I say we need? Reply with just the number.",
@@ -458,29 +443,27 @@
         "73"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.quantity_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Inventory note: we need 37 hard hats and 12 high-visibility vests for the new crew. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nInventory note: we need 37 hard hats and 12 high-visibility vests for the new crew.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
         "prompt": "How many hard hats did I say we need? Reply with just the number.",
@@ -502,29 +485,27 @@
         "73"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.standing_instruction_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "One standing instruction for this conversation: whenever I ask you for a summary, start it with the label FIELD NOTE: in capitals. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nOne standing instruction for this conversation: whenever I ask you for a summary, start it with the label FIELD NOTE: in capitals.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
         "prompt": "Give me a one-sentence summary of what we have covered so far.",
@@ -541,29 +522,27 @@
         "FIELD NOTE:"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.standing_instruction_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "One standing instruction for this conversation: whenever I ask you for a summary, start it with the label FIELD NOTE: in capitals. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nOne standing instruction for this conversation: whenever I ask you for a summary, start it with the label FIELD NOTE: in capitals.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
         "prompt": "Give me a one-sentence summary of what we have covered so far.",
@@ -580,29 +559,27 @@
         "FIELD NOTE:"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.list_position_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "The three pump stations on this quarter's inspection list, in order, are Alder, Brannock and Quill. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nThe three pump stations on this quarter's inspection list, in order, are Alder, Brannock and Quill.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
         "prompt": "Which pump station was third on the inspection list I gave you? Reply with just the name.",
@@ -623,29 +600,27 @@
         "Alder"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.list_position_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "The three pump stations on this quarter's inspection list, in order, are Alder, Brannock and Quill. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nThe three pump stations on this quarter's inspection list, in order, are Alder, Brannock and Quill.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
         "prompt": "Which pump station was third on the inspection list I gave you? Reply with just the name.",
@@ -666,29 +641,27 @@
         "Alder"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.cost_centre_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Billing detail: charge everything on this job to cost centre 4417-B, not the default one. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nBilling detail: charge everything on this job to cost centre 4417-B, not the default one.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
         "prompt": "Which cost centre should this job be charged to? Reply with just the code.",
@@ -709,29 +682,27 @@
         "4417-D"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.cost_centre_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Billing detail: charge everything on this job to cost centre 4417-B, not the default one. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nBilling detail: charge everything on this job to cost centre 4417-B, not the default one.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
         "prompt": "Which cost centre should this job be charged to? Reply with just the code.",
@@ -752,29 +723,27 @@
         "4417-D"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.meeting_room_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Logistics: the planning meeting is in room R-214 of the Teller annex, not the main building. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nLogistics: the planning meeting is in room R-214 of the Teller annex, not the main building.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
         "prompt": "Where is the planning meeting? Reply with the room and building.",
@@ -794,29 +763,27 @@
         "R-241"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.meeting_room_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Logistics: the planning meeting is in room R-214 of the Teller annex, not the main building. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nLogistics: the planning meeting is in room R-214 of the Teller annex, not the main building.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
         "prompt": "Where is the planning meeting? Reply with the room and building.",
@@ -836,29 +803,27 @@
         "R-241"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.deadline_time_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Timing: the permit office needs our paperwork by 4:30 pm on Friday, and they won't take it late. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nTiming: the permit office needs our paperwork by 4:30 pm on Friday, and they won't take it late.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
         "prompt": "What time is the permit paperwork due? Reply with just the time.",
@@ -879,29 +844,27 @@
         "5:30"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.deadline_time_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Timing: the permit office needs our paperwork by 4:30 pm on Friday, and they won't take it late. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nTiming: the permit office needs our paperwork by 4:30 pm on Friday, and they won't take it late.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site."
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
         "prompt": "What time is the permit paperwork due? Reply with just the time.",
@@ -922,29 +885,27 @@
         "5:30"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   },
   {
     "id": "idle_return_recall.superseded_contact_default",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Contacts: the on-call electrician was Priya on extension 7731, but from today it's Tomas on extension 7740. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nContacts: the on-call electrician was Priya on extension 7731, but from today it's Tomas on extension 7740.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
         "prompt": "Who is the on-call electrician now, and on what extension? Reply in a few words.",
@@ -964,29 +925,27 @@
         "7731"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. Default ceiling: the conversation stays under it, so nothing is cut (the control)."
   },
   {
     "id": "idle_return_recall.superseded_contact_idle_return",
     "family": "idle_return_recall",
     "turns": [
       {
-        "prompt": "Contacts: the on-call electrician was Priya on extension 7731, but from today it's Tomas on extension 7740. I've also attached our operations report; for now, just tell me in one sentence what it covers."
+        "prompt": "Some background so you have context: we're refurbishing the pump house at the east reservoir over the next six weeks, with a small crew, a tight access window each morning and a county inspection at the end.\nContacts: the on-call electrician was Priya on extension 7731, but from today it's Tomas on extension 7740.\nNo need to do anything yet; just acknowledge in one short sentence."
       },
       {
-        "prompt": "Last unrelated one: in about 150 words, explain the difference between a checklist and a procedure."
+        "prompt": "Last unrelated one: in about 400 words, explain the difference between a checklist and a procedure."
       },
       {
-        "prompt": "Unrelated: write a short paragraph (about 150 words) on why clear signage matters on a construction site."
+        "prompt": "Unrelated: in about 400 words, explain why clear signage matters on a construction site.",
+        "pause_seconds": 330
       },
       {
-        "prompt": "Also unrelated: draft a friendly 120-word note reminding volunteers to bring water bottles to Saturday's park clean-up."
+        "prompt": "Also unrelated: draft a friendly note of about 350 words reminding volunteers what to bring to Saturday's park clean-up."
       },
       {
-        "prompt": "Different topic: give me five practical tips, two sentences each, for running a shorter weekly team meeting."
+        "prompt": "Different topic: give me eight practical tips, three sentences each, for running a shorter weekly team meeting."
       },
       {
         "prompt": "Who is the on-call electrician now, and on what extension? Reply in a few words.",
@@ -1006,9 +965,6 @@
         "7731"
       ]
     },
-    "files": [
-      "delivery_prose_5k.md"
-    ],
-    "notes": "A fact stated only in turn 1, asked after four unrelated turns and a pause past the cache TTL. idle_return ceiling: the conversation crosses it before the pause, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
+    "notes": "A fact stated only on the second line of turn 1 (past the fallback summary's 150-character first line), asked after four unrelated turns. Turn 3 follows a pause past the cache TTL so memory summaries exist when the cut is decided; turn 6 follows another, the cold return. idle_return ceiling: the conversation crosses it from turn 3, so the cut is decided after that turn and applied at the cold return, summarizing turn 1."
   }
 ]

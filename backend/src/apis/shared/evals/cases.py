@@ -93,7 +93,7 @@ CEILING_ENV: Dict[str, Dict[str, str]] = {
     # Low enough that an idle_return_recall case crosses it on the turn before
     # its pause, so the cut is decided after that turn and applied at the cold
     # return: the shape the idle-return policy proposes, on today's code.
-    "idle_return": {"AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS": "18000"},
+    "idle_return": {"AGENTCORE_MEMORY_COMPACTION_CEILING_CAP_TOKENS": "7300"},
 }
 #: Longest pause a turn may ask for before it is sent: past the 5-minute
 #: prompt-cache TTL, short of the Runtime session's idle timeout.
