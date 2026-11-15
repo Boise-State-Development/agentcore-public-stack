@@ -16,6 +16,11 @@ Evaluations and an architecture article pairing AgentCore with Jev (§2.1a). Fiv
 a self-hosted Strands Decider as a later backend (§5.5), an ordered `score` question type
 (§4.1), the quality signal moved to AgentCore Evaluations (§10.3), the three-labeler
 validation method (§16), and `outcome` / `policyVersion` on decision records (§7).
+**Revised again 2026-11-15** after reading the Strands decision-model docs and three
+Decider posts (§2.1b): reasons kept out of traces (§5.1, §9), D7's reason corrected, the
+engine checking its own answers (§5.1), Decider facts and a three-way rollout switch
+(§5.5), deterministic rendering and per-backend caps (§6.2), per-choice criteria (§4.1),
+and no zero-config models (D5, §9).
 **Related:** `docs/specs/structured-extraction.md` (the constrained side call this
 generalizes, and the measurements it already paid for), `docs/specs/field-set-authoring.md`
 (the authoring surface question sets reuse), `docs/specs/scheduled-agent-runs.md` (the
@@ -134,6 +139,55 @@ Read from the installed wheel; the SDK cites an internal design note
   the policy version and the final outcome. §7 adopts the last two.
 * **A Jev developer site** (`jevtypesafeai.com`) states in its footer that it is not
   affiliated with TypeSafe. Its endpoint and claims are not used here.
+
+### 2.1b The Strands docs and the Decider (read 2026-11-15)
+
+This spec was first written from the installed 1.65.0 source. The decision-models guide
+(Overview, Questions and answers, Decisions in an agent, Models, LLM decision model,
+Observability) and three Strands blog posts were read afterwards. The docs list Python
+SDK 1.64.0 as the latest release, so where the docs and the 1.65.0 code disagree, the
+code is taken.
+
+* **A custom backend is a `DecisionModel` subclass implementing `_ask`.** That is the
+  documented route for "a classifier you host". **The base class does not check the
+  answers `_ask` returns.**
+* **The `decision` span records every answer, including an `Uncertain` answer's reason**,
+  as `gen_ai.decision.answers`. The docs call it an event; the 1.65.0 code sets it as an
+  attribute. The question text and the input are not recorded. Our inference image keeps
+  conversation content out of traces with the variables
+  `tests/security/test_otel_content_capture.py` pins. Those gate message content, not
+  this attribute.
+* **`invocation_context`.** Given one, a decision's tokens add to the request's reported
+  usage and count toward its token limits, though not as a turn. Our code reads neither:
+  no module uses `invocation_context`, and no invocation limits are set.
+* **`LLMDecisionModel()` with no model** builds a zero-config `BedrockModel()`:
+  * the model is `global.anthropic.claude-sonnet-4-6` (`DEFAULT_BEDROCK_MODEL_ID`);
+  * the region is the session's, else `AWS_REGION`, else `us-west-2`;
+  * the credentials are whatever the process has.
+
+  The vended HITL handler's documented example constructs it exactly that way.
+* **Strands Decider:**
+  * Open source. The code, adapters and readout heads are Apache 2.0; the base weights
+    carry their own terms. The weights are on Hugging Face, with the training data.
+  * Models: a 2B on Qwen3.5-2B, then E2B, E4B, 12B and 26B-A4B on Gemma 4. Each is a
+    pre-trained model with its text-generating head replaced by a pointer head that scores
+    the options, fine-tuned with LoRA.
+  * Question types `noul`, `choice` and `score`, in a **4,096-token window**.
+  * On JevBench v1 (231 public tasks), accuracy runs from 77.9% (E2B, Brier 0.313) to
+    89.6% (26B-A4B, Brier 0.162). H100 median latencies are about 100–250 ms.
+  * Strands' own caveats: it can return the same answer when only the question changes;
+    it struggles with long, multi-step documents; and its calibration was fitted on short
+    classification tasks, so thresholds must be tested on your own traffic.
+* **A worked deployment (Strands blog, 2026-11-09).** Two Amazon engineers replaced Sonnet
+  4.6 with Decider E4B for 20-label ticket classification.
+  * The setup: an SQS-triggered Lambda calling a network-isolated SageMaker
+    `ml.g5.xlarge` endpoint, with weights copied in from S3.
+  * They report about 98% lower cost, and better accuracy than Sonnet on their own
+    tickets after tuning the confidence threshold.
+  * Three practices carry over whatever the backend: a three-way `BEDROCK` / `DUAL` /
+    `DECIDER` switch with every disagreement on real traffic reviewed; **sorted JSON
+    keys**, because key order alone moved probabilities by up to 0.19; and each label
+    rewritten as a one- or two-sentence criterion.
 
 ### 2.2 This repository
 
@@ -261,6 +315,26 @@ kind: questions
   * A backend that reports a distribution (§5.5) can also return the expected level.
   * `score` exists only in question sets. Field sets refuse it, because a level is a
     judgement, not a value quoted from the document.
+* **A choice can carry a criterion.** An optional `## Choices` table after the questions
+  gives each choice a one- or two-sentence criterion:
+
+  ```markdown
+  ## Choices
+
+  | question | choice | criterion |
+  |---|---|---|
+  | sponsor_type | federal | funded by a US federal agency, directly or as a pass-through |
+  | sponsor_type | foundation | funded by a private or community foundation |
+  ```
+
+  * The criterion travels to the backend with its choice. The label stays what tables and
+    counts show.
+  * It is a separate table rather than text inside `values`, because a criterion contains
+    commas and `values` is comma-separated.
+  * Strands reports that a Decider can return the same answer when only the question
+    changes and the options stay fixed. The Amazon team rewrote each label as a short
+    criterion for that reason (§2.1b).
+  * It helps the Bedrock engine as well: the options are where the distinction is drawn.
 * `find` becomes the question text the model sees. It is the field an office tunes, and
   the reason a question set beats a bare `question` string.
 * Order is authored, never derived, for the reason extraction gives: the schema's
@@ -307,6 +381,18 @@ It owns:
 * **No content in logs.** Log lines carry the purpose, question ids, item ids and error
   types, never the state or a reason. Strands' `ClassifierStrategy._warn_declined` takes
   the same line, for the same reason.
+* **Its own answer checks.** The base class does not check what `_ask` returns (§2.1b),
+  so the engine does: every question answered, and every answer one of its choices or
+  levels or `Uncertain`. Anything else is `Failed`. The Bedrock engine gets this from its
+  Pydantic schema; a future backend must run the same check rather than trust its
+  provider.
+* **Reasons kept out of traces.** Strands' `decision` span records the answers, and an
+  `Uncertain` answer's reason with them (§2.1b).
+  * So the engine's `_ask` returns `Uncertain()` with no reason in `answers`.
+  * It carries the reasons on its own result type, `PlatformDecisionResult`, a
+    `DecisionResult` subclass.
+  * The span still records which answers were uncertain. It never holds text derived from
+    the item.
 
 It does not own any policy about what `Uncertain` or `Failed` means (§8).
 
@@ -322,8 +408,8 @@ Three reasons, all from code we already measured:
 2. **It has no strict fallback.** Our fallback classification exists because "retry
    unenforced on any `ValidationException`" was measured to silently downgrade an
    over-wide set on every run.
-3. **It meters into the turn** when given an `invocation_context`, which is the wrong
-   price (D7), and has no hook for our `C#` rows.
+3. **It has no hook for our `C#` rows.** Its usage reaches the agent's request only
+   through `invocation_context`, which we don't pass (D7).
 
 Its system prompt's untrusted-content rules are good and are kept verbatim in ours.
 
@@ -376,17 +462,34 @@ these hold, measured on our own fixtures (§16) rather than taken from a provide
    right about *p* of the time. Until it is, no surface shows a percentage or sets
    `min_confidence` (§3.3).
 3. **Cost per decision, including hosting,** beats Bedrock at the deployment's actual
-   volume. An always-on server is a fixed cost that a few hundred decisions a day will not
-   repay, and it adds resources to a stack near its ceiling
+   volume. The one public figure: a network-isolated SageMaker `ml.g5.xlarge` endpoint
+   serving E4B at $1.408 an hour (us-east-1 list price), handling about 5,600 decisions
+   an hour (§2.1b). That is about $1,000 a month per always-on instance. A few hundred
+   decisions a day will not repay it, and it adds resources to a stack near its ceiling
    (`platform-stack-resource-budget.md`).
-4. **The weights' provenance and licence** are checked, and the dependency is pinned
-   exactly, like every other.
+4. **Licence and provenance** are checked per model. The Decider's code, adapters and
+   readout heads are Apache 2.0, but the base weights (Qwen3.5, Gemma 4) carry their own
+   terms, and the training-data inventory records terms per source. The dependency is
+   pinned exactly, like every other.
 5. **A client exists.** Strands 1.65 ships none for a self-hosted server, so either
    Strands adds one or we write a `DecisionModel` subclass against the server's documented
    API.
+6. **It rolls out through a three-way switch per surface:**
+   * `BEDROCK`, today's behaviour;
+   * `DUAL`, where both backends answer, the Bedrock answer is used, and every
+     disagreement is recorded for review;
+   * `DECIDER`.
+
+   Going back is a configuration change. This is the Amazon ticketing team's method
+   (§2.1b), and disagreements on real traffic are better evidence than a fixture alone.
 
 The volume that could justify it is project file labels and batch work over a lakehouse,
 not v1's interactive surfaces.
+
+**What a Decider cannot take.** Its window is 4,096 tokens, and Strands reports it
+struggles with long documents that need several reasoning steps. So input caps are per
+backend (§6.2). Rows, mail, tool calls and run answers fit. A whole document does not,
+and a surface that sends documents stays on Bedrock unless it narrows the input first.
 
 ---
 
@@ -409,11 +512,25 @@ A new use case is an adapter and a surface. Neither touches the engine.
 
 ### 6.2 Bounding
 
-Every adapter declares a character cap; the engine enforces it. Over the cap, the text is
-cut to head and tail around an omission marker, the shape Strands' `_truncate_text` uses,
-because the request is usually at the start and the conclusion at the end. Initial caps,
-to be measured: 24,000 characters for a document (narrowed with `pages`, as extraction
-allows), 2,000 for a row, 8,000 for a run answer.
+Every adapter declares a character cap **per backend**, and the engine enforces the one
+for the backend in use.
+* Over the cap, the text is cut to head and tail around an omission marker, the shape
+  Strands' `_truncate_text` uses, because the request is usually at the start and the
+  conclusion at the end.
+* Initial caps for the Bedrock engine, to be measured: 24,000 characters for a document
+  (narrowed with `pages`, as extraction allows), 2,000 for a row, 8,000 for a run answer.
+* A backend with a smaller window (§5.5) declares smaller caps. An item that cannot fit
+  even cut down is `Failed` with reason `too_large`, never silently reduced to nothing.
+
+**Rendering is deterministic.** An adapter renders the same item to the same text every
+time:
+* a row's columns in the sheet's own order;
+* a mail message's fields and a tool call's arguments in a fixed order;
+* any JSON with sorted keys.
+
+The Amazon ticketing team measured JSON key order alone moving a Decider's probabilities
+by up to 0.19 (§2.1b). Without fixed rendering, two runs of the same set over the same
+items are not comparable, and neither are two backends answering side by side in `DUAL`.
 
 ### 6.3 The batch
 
@@ -499,6 +616,9 @@ Two rules hold everywhere:
 | Questions never reach the turn's system prompt or `toolConfig`; the agent-facing tool spec is one constant per deployment | a digest-pinned spec test, as `document_extract` has |
 | No content is persisted: records hold answers and bounded reasons only | a store test that rejects a record carrying item text |
 | The model-facing tool result carries labels and answers only: never a reason, item text or cell value, and a row's label is its position | a result-builder test whose fixture plants a sentinel string in every reason, cell and document, and asserts it appears nowhere in the result at any size, below and above the cap |
+| No reason reaches a trace: the `decision` span's answers carry `Uncertain()` with no reason, and reasons travel on the engine's own result | a case in `tests/security/test_otel_content_capture.py` that plants a sentinel in a reason and asserts it is absent from the exported `decision` span |
+| Nothing is zero-config: no `LLMDecisionModel()`, `BedrockModel()`, `ClassifierStrategy` or `HumanInTheLoop` is built without an explicit model that has a catalog row | an architecture test over `decisions/` and every module that imports it |
+| The engine checks every answer it returns: each question answered with one of its choices or levels, `Uncertain`, or `Failed` | an engine test whose backend stub returns an out-of-set value and omits a question |
 | Records and in-process state are keyed by owner as well as scope id | the store's key builder; a test that two users on one session id never read each other's records |
 | Every call is metered against a catalog row, or names itself unmetered | the metering tests; `UnmeteredModelCall` |
 | `strict_tools=True` is set only on a dedicated side-call instance, never on a chat agent | `tests/architecture/test_strict_tools_single_call_site.py`: its `_ALLOWED` set moves from `extraction/extractor.py` to the module that builds the model once that code moves into `decisions/` (PR-1), so there is still exactly one site |
@@ -656,7 +776,8 @@ A reason is model text derived from the item and can quote it ("mentions her med
 leave"). A reason is stored **only where the item itself is visible to the same
 readers, for the same lifetime**: in the session that already holds the item, on the run
 history of the user's own schedule, on a project label readable by the members who can
-read the file. Anywhere else, the record keeps the answer and drops the reason.
+read the file. Anywhere else, the record keeps the answer and drops the reason. Traces
+count as anywhere else: no reason reaches a span (§5.1).
 
 ### 11.3 Decisions about people
 
@@ -734,14 +855,23 @@ Ad-hoc sets run non-strict and are validated on return.
 
 **D5. A separate `DECISION_MODEL_ID` with a required catalog row.** Not a fallback to
 `DOCUMENT_EXTRACT_MODEL_ID`: a silent fallback is how a deployment ends up running
-decisions on a model nobody chose. Missing id or row fails loudly at the surface.
+decisions on a model nobody chose. Missing id or row fails loudly at the surface. The
+same reasoning rules out zero-config construction anywhere (§9). `LLMDecisionModel()`
+with no model runs on `global.anthropic.claude-sonnet-4-6` with whatever credentials the
+process has (§2.1b). That id may have no catalog row in a deployment, which would leave
+every such call unmetered, and it is a large model for a closed question.
 
 **D6. Decisions never run before the first token,** enforced by an import-boundary test
 rather than by review.
 
-**D7. Never pass `invocation_context` to `ask`.** Strands would add the decision's tokens
-to the turn's usage, where they would be priced at the turn model's rate. Decisions are
-metered on their own row with their own model's price.
+**D7. Never pass `invocation_context` to `ask`.** Decisions are metered on their own `C#`
+rows at their own model's price.
+* Passing the context would add the same tokens to the request's reported usage too, so
+  that figure would stop agreeing with our rows.
+* If a deployment ever sets invocation token limits, a turn's decisions would spend its
+  budget.
+* Our code reads neither today (§2.1b). This rule prevents a future disagreement; it does
+  not fix a current mispricing, which an earlier draft wrongly claimed.
 
 **D8. Records hold answers; reasons only where §11.2 allows; content never.**
 
