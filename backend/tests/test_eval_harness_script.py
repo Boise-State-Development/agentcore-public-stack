@@ -506,7 +506,7 @@ def test_a_run_with_no_family_leaves_out_the_opt_in_family(tmp_path, capsys):
     # One run, one ceiling: the default run leaves out the 200k and documents-excluded cases.
     others = sum(1 for c in load_cases(eval_harness.CASES_DIR, families=["attachment_delivery"])
                  if c.run.ceiling != "default")
-    assert f"skipping {others} attachment_delivery case(s) of other ceilings" in second
+    assert f"skipping {others} paced case(s) of other ceilings" in second
     assert f"{delivery - others} cases × k=3" in second
 
 
