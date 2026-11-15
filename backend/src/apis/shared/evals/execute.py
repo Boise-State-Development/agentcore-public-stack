@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
-from apis.shared.evals.cases import DELIVERY_FAMILY, EvalCase
+from apis.shared.evals.cases import DELIVERY_FAMILY, PACED_FAMILIES, EvalCase
 from apis.shared.evals.score import score_sample
 from apis.shared.evals.session_mapper import build_session
 from apis.shared.harness.models import RunResult
@@ -410,7 +410,8 @@ async def run_sample(
         "usage": sum_usage(turns),
         "timing": turn_timing(turns),
         **({"upload_ms": upload_ms} if upload_ms is not None else {}),
-        **({"arm": case.run.arm, "ceiling": case.run.ceiling} if case.family == DELIVERY_FAMILY else {}),
+        **({"arm": case.run.arm} if case.family == DELIVERY_FAMILY else {}),
+        **({"ceiling": case.run.ceiling} if case.family in PACED_FAMILIES else {}),
         "started_at": started_at,
         "finished_at": _now_iso(),
         "turns": turns,
