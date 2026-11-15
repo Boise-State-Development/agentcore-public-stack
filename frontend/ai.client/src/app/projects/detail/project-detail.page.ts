@@ -70,8 +70,8 @@ export class ProjectDetailPage {
   protected readonly error = signal<string | null>(null);
 
   private readonly rail = viewChild(ProjectRailComponent);
-  /** The rail knows the model; the composer shows it beneath the input. */
-  protected readonly modelLabel = computed(() => this.rail()?.modelLabel() ?? null);
+  /** The rail reads the project's model; the composer locks its picker to it. */
+  protected readonly projectModelId = computed(() => this.rail()?.boundModelId());
 
   protected readonly isOwner = computed(() => this.project()?.role === 'owner');
   protected readonly archived = computed(() => this.project()?.status === 'archived');

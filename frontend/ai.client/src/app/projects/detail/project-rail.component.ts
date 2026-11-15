@@ -211,6 +211,13 @@ export class ProjectRailComponent {
   protected readonly canChooseModel = computed(() => this.canEdit() && this.loaded() && this.models().length > 0);
   protected readonly modelKnown = computed(() => this.models().some(m => m.ref === this.modelId()));
 
+  /**
+   * The model the project runs on once the rail has read it: an id, null for
+   * "each member's default", or undefined until loaded. The composer locks its
+   * model picker to this, so a change made here shows there without a reload.
+   */
+  readonly boundModelId = computed<string | null | undefined>(() => (this.loaded() ? this.modelId() : undefined));
+
   /** The model's display name; the id when the catalog lacks it; null for "each member's default". */
   readonly modelLabel = computed(() => {
     const id = this.modelId();

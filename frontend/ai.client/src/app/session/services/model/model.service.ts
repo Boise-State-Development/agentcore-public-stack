@@ -99,6 +99,16 @@ export class ModelService {
   // would be dishonest. Holds the pinned modelId, or null when not agent-bound.
   private readonly _agentLockedModelId = signal<string | null>(null);
 
+  /**
+   * The user's own selection while a lock shows the Agent's model instead, put
+   * back when the lock is released. A lock is the Agent's choice, not the
+   * user's: without this, leaving an Agent or project conversation left its
+   * model selected for the next plain chat. Null when there is no lock, or when
+   * nothing had been selected yet (the model list still loading); the release
+   * then falls back the way `loadModels` would.
+   */
+  private userSelectionUnderLock: ManagedModel | null = null;
+
   // Per-model canonical inference param overrides. Outer key = modelId, inner
   // key = canonical param name (temperature, top_p, thinking, ...). Sent on
   // each chat request as `inference_params`; backend layers them on top of
@@ -235,7 +245,7 @@ export class ModelService {
         if (this._selectedModel()?.modelId === lockedId) {
           return; // already showing the pinned model
         }
-        this.setSelectedModelById(lockedId);
+        this.showLockedModel(lockedId);
       });
     });
   }
@@ -328,6 +338,19 @@ export class ModelService {
         this.usingDefaultModel.set(true);
       }
 
+      // A lock applied before the list arrived: what was just chosen is the
+      // user's own pick, kept for the release, and the lock goes back on top.
+      // Done here rather than left to the effect above, because the user-default
+      // branch awaits a settings read *after* `models.set`, so its write can land
+      // after the effect has already shown the pinned model.
+      const lockedId = this._agentLockedModelId();
+      if (lockedId !== null) {
+        if (this.userSelectionUnderLock === null) {
+          this.userSelectionUnderLock = this._selectedModel();
+        }
+        this.showLockedModel(lockedId);
+      }
+
       this.isLoading.set(false);
     } catch (err: unknown) {
       console.error('Error loading models:', err);
@@ -404,7 +427,15 @@ export class ModelService {
    * default. Skipped while an Agent lock is active.
    */
   applyUserDefault(modelId: string | null): void {
-    if (this._agentLockedModelId() !== null) return;
+    if (this._agentLockedModelId() !== null) {
+      // The picker shows the Agent's model; the new default lands on release.
+      const next =
+        (modelId ? this.resolveSelectable(modelId, this.models(), false) : null) ??
+        this.models().find(m => m.isDefault) ??
+        null;
+      if (next) this.userSelectionUnderLock = next;
+      return;
+    }
     if (modelId && this.setSelectedModelById(modelId, { announceRetirement: false })) return;
     const adminDefault = this.models().find(m => m.isDefault);
     if (adminDefault) this.setSelectedModel(adminDefault);
@@ -419,15 +450,61 @@ export class ModelService {
    * silently pretend a different model.
    */
   lockToAgentModel(modelId: string): void {
+    // Only the move from unlocked to locked records the user's pick: a switch
+    // from one Agent to another must not remember the first Agent's model.
+    if (this._agentLockedModelId() === null) {
+      this.userSelectionUnderLock = this._selectedModel();
+    }
     this._agentLockedModelId.set(modelId);
-    // A retired pin shows the successor the backend will actually run — without
-    // a notice: the Agent's owner chose the model, not this user.
-    this.setSelectedModelById(modelId, { announceRetirement: false });
+    this.showLockedModel(modelId);
   }
 
-  /** Release an Agent model lock (e.g. navigating away from an agent conversation). */
+  /**
+   * Release an Agent model lock (e.g. navigating away from an agent
+   * conversation) and put back the model the user had chosen before it.
+   */
   clearAgentModelLock(): void {
+    if (this._agentLockedModelId() === null) return;
     this._agentLockedModelId.set(null);
+    const prior = this.userSelectionUnderLock;
+    this.userSelectionUnderLock = null;
+    this.restoreUserSelection(prior);
+  }
+
+  /**
+   * Show the pinned model without saving it as the tab's selection: a retired
+   * pin shows the successor the backend will actually run, and says nothing —
+   * the Agent's owner chose the model, not this user. Returns false while the
+   * id cannot be found (the list not loaded yet, or a model the user lacks).
+   */
+  private showLockedModel(modelId: string): boolean {
+    const model = this.resolveSelectable(modelId, this.models(), false);
+    if (!model) return false;
+    this._selectedModel.set(model);
+    this.usingDefaultModel.set(false);
+    return true;
+  }
+
+  /**
+   * After a lock: the user's own pick when it is still offered (or its
+   * successor), else the tab's saved pick, else the admin default. With no
+   * model list yet, nothing is chosen, so `loadModels` chooses as on a fresh tab.
+   */
+  private restoreUserSelection(prior: ManagedModel | null): void {
+    const models = this.models();
+    const savedId = this.getSavedModelId();
+    const model =
+      (prior ? this.resolveSelectable(prior.modelId, models, false) : null) ??
+      (savedId ? this.resolveSelectable(savedId, models, false) : null) ??
+      models.find(m => m.isDefault) ??
+      models.find(m => !isRetiring(m)) ??
+      models[0] ??
+      null;
+    if (!model) {
+      this._selectedModel.set(prior?.id === this.DEFAULT_MODEL.id ? prior : null);
+      return;
+    }
+    this.setSelectedModel(model);
   }
 
   /**
