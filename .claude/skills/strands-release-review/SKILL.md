@@ -18,6 +18,7 @@ It runs once per release, whenever our pin is behind. It's read-only: it writes 
 - **What we carry that upstream might retire:** `docs/kaizen/standing-watches.md` (2a caching, 2b multi-agent).
 - **The last readout:** the newest `docs/kaizen/scoping/strands-*-readout.md`. Items it marked Gate or Guard that never shipped carry forward.
 - **Memory:** "Strands bump readout recipe" holds the method and the findings from earlier bumps.
+- **Strands docs, if the `strands-docs` MCP server is available** (the `strands@strands-agents` Claude Code plugin; load `search_docs` / `fetch_doc` with `ToolSearch` query `strands-docs`). Use it for how upstream means a feature to be used, in step 5's Adopt rows and the Unlocks table. It documents the latest release, not our pin, so it never decides a verdict: the wheel diff does. Its search ranks loosely: on 2026-11-15, "concurrent tool executor" returned the MCP agent tool, structured-output tool and tool-provider pages, and not the executor's. So prefer `fetch_doc` on an API page named after the changed module (`https://strandsagents.com/docs/api/python/<module>/index.md`) over a broad query (`fetch_doc` with an empty `uri` lists every page, when the module name is unclear), and never read a search that misses as "not documented". Without the server, skip it and say so under "Not checked".
 
 ## How to run
 
@@ -98,6 +99,8 @@ Every verdict names a file and line in our tree. If you can't name one, the verd
 - **what it unlocks:** the product capability or UX, and the surface it would land on (a tool, an SSE event, a spec section such as handoffs §4 or patterns §4.2);
 - **what it costs speed, quality and cost:** an unlock must cost those three nothing, or say what it costs (a model call per tool round, a resource that bills, latency before the first token). "Unknown" is an answer, and it makes the next step a measurement;
 - **the next step:** a scoping item, a spec-sync row, or "watch". Never part of the bump.
+
+When the Strands docs are available (see Inputs), read the page for each Adopt row and each unlock before writing "Lands on": the documented usage is often what tells you whether the unlock fits an existing surface or needs a new one.
 
 **Prompt-cache impact line (required, one per readout).** List the request bytes that change at deploy, and for which model families. Our cached prefix is exact-match, so any bytes the bump changes get re-written once at the cache-write premium, in every live session. Answer per family (Bedrock Claude, Bedrock Nova/others, OpenAI Responses on bedrock-runtime, Mantle, Gemini). The proof for Bedrock Claude is `tests/agents/main_agent/core/test_bedrock_golden_requests.py`: run it on the new pin. A pass means byte-identical requests. A failure means a real prefix rewrite: price it and say so in the PR. For families the golden test doesn't cover, reason from the diff and say it's reasoned, not measured.
 
