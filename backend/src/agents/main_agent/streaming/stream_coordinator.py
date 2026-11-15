@@ -3,6 +3,7 @@ Stream coordinator for managing agent streaming lifecycle
 """
 
 import asyncio
+import threading
 import contextvars
 import json
 import logging
@@ -218,33 +219,29 @@ def _record_model_read_timeout(
 
 
 def reset_cancellation_state(agent: Any, session_manager: Any) -> None:
-    """Clear any cancellation armed by a PREVIOUS turn on this agent.
+    """Clear a cancel flag armed by a PREVIOUS turn on this agent.
 
-    Both cancellation flags live on objects the agent cache reuses across
-    turns (#741/#751): ``session_manager.cancelled`` is set by
-    ``_mark_session_cancelled`` and never reset, and Strands' ``_cancel_signal``
-    is normally cleared by ``stream_async``'s own ``finally`` — but only if an
-    invocation was actually running when ``cancel()`` landed. The lease
-    heartbeat can observe a cancel just as a turn finishes, which sets the
-    signal with no invocation left to clear it.
+    ``session_manager.cancelled`` lives on the ``TurnBasedSessionManager`` the
+    agent cache reuses across turns (#741/#751). It is set by
+    ``_mark_session_cancelled`` and never reset there, and the lease heartbeat
+    can observe a cancel just as a turn finishes, which sets the flag with no
+    turn left to consume it.
 
-    Left sticky, either flag silently breaks every later turn in the session:
+    Left sticky, it silently breaks every later turn in the session:
     ``StopHook`` cancels each tool at its boundary, ``append_message`` drops
     each message, and the in-loop check below raises ``_CooperativeStopSignal``
-    on the first event. Reset at the head of the turn — the same per-turn
+    on the first event. Reset at the head of the turn, the same per-turn
     discipline ``reset_prefix_fingerprints`` follows, and for the same reason.
 
-    ``_cancel_signal`` is private to Strands; there is no public un-cancel, so
-    the access is guarded and a differently-shaped agent is a no-op.
+    Strands' own signal needs no reset. The turn's cancellation reaches
+    Strands as a per-turn ``cancel_signal`` passed to ``stream_async``, never
+    as ``agent.cancel()``, so Strands' internal event is set only while an
+    invocation is running and is cleared by ``stream_async``'s own ``finally``.
+    ``agent`` is kept in the signature for callers and for symmetry.
     """
     if session_manager is not None and getattr(session_manager, "cancelled", False):
         logger.info("Clearing a stale cancel flag left by a previous turn")
         session_manager.cancelled = False
-
-    cancel_signal = getattr(agent, "_cancel_signal", None)
-    if cancel_signal is not None and cancel_signal.is_set():
-        logger.info("Clearing a stale Strands cancel signal left by a previous turn")
-        cancel_signal.clear()
 
 
 def _is_interrupt_resume_prompt(prompt: Any) -> bool:
@@ -407,6 +404,7 @@ class StreamCoordinator:
         poll_side_frame: Optional[Callable[[], Optional[str]]] = None,
         turn_clock: Any = None,
         invocation_state: Optional[Dict[str, Any]] = None,
+        cancel_signal: Optional[threading.Event] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -460,7 +458,12 @@ class StreamCoordinator:
                 panel's frame height), passed to Strands as its
                 ``invocation_state``. Strands gives it to tools and hooks and
                 never to the model, so it cannot touch the cacheable prefix.
-                None calls ``stream_async(prompt)`` exactly as before.
+            cancel_signal: This turn's caller-owned cancellation event, passed
+                to Strands as ``stream_async(cancel_signal=...)``. Strands
+                mirrors it onto its internal signal for this invocation only,
+                which reaches an in-flight MCP call and the tools queued behind
+                it. Set together with ``session_manager.cancelled`` (flag
+                first), so the in-loop check below still owns the stop.
 
         Yields:
             str: SSE formatted events
@@ -704,11 +707,12 @@ class StreamCoordinator:
         turn_archived = False
         try:
             # Get raw agent stream
-            agent_stream = (
-                agent.stream_async(prompt, invocation_state=invocation_state)
-                if invocation_state
-                else agent.stream_async(prompt)
-            )
+            stream_kwargs: Dict[str, Any] = {}
+            if invocation_state:
+                stream_kwargs["invocation_state"] = invocation_state
+            if cancel_signal is not None:
+                stream_kwargs["cancel_signal"] = cancel_signal
+            agent_stream = agent.stream_async(prompt, **stream_kwargs)
 
             # Process through new stream processor and format as SSE.
             #
