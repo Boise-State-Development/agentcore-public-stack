@@ -9,7 +9,7 @@ from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.models import BedrockModel, OpenAIResponsesModel
 from strands.models.openai import OpenAIModel
 from strands.models.gemini import GeminiModel
-from strands.tools.executors import SequentialToolExecutor
+from strands.tools.executors import ConcurrentToolExecutor, SequentialToolExecutor
 from agents.main_agent.core.bedrock_count_tokens import CountTokensBedrockModel
 from agents.main_agent.core.model_config import ModelConfig, ModelProvider
 from agents.main_agent.core.retry_strategy import TransientModelRetryStrategy
@@ -368,9 +368,27 @@ class AgentFactory:
         elif memory_context:
             agent_system_prompt = f"{system_prompt}\n\n{memory_context}" if system_prompt else memory_context
 
+        # Tool executor. Sequential by default: every call in a batch runs one
+        # after another, as it always has (the original reason, NovaAct's
+        # Playwright driver failing on concurrent browser operations, is gone
+        # with NovaAct). While CONCURRENT_TOOL_EXECUTION_ENABLED is on, the
+        # batch runs concurrently and ToolConcurrencyPlugin serializes every
+        # call that is not known to be read-only behind one lock per agent
+        # (core/tool_concurrency.py). Prepended so its middleware is the
+        # outermost ExecuteToolStage layer: the lock spans the whole chain,
+        # MCP elicitation's pause-and-replay included. A deployment constant,
+        # so no agent-cache key element.
+        from apis.shared.feature_flags import concurrent_tool_execution_enabled
+
+        if concurrent_tool_execution_enabled():
+            from agents.main_agent.core.tool_concurrency import ToolConcurrencyPlugin
+
+            tool_executor: Any = ConcurrentToolExecutor()
+            plugins = [ToolConcurrencyPlugin(), *(plugins or [])]
+        else:
+            tool_executor = SequentialToolExecutor()
+
         # Create agent with session manager, hooks, and system prompt
-        # Use SequentialToolExecutor to prevent concurrent browser operations
-        # This prevents "Failed to start and initialize Playwright" errors with NovaAct
         #
         # callback_handler=None is load-bearing. Left unset, Strands installs
         # PrintingCallbackHandler, which print()s every streamed text delta to
@@ -382,7 +400,7 @@ class AgentFactory:
             model=model,
             system_prompt=agent_system_prompt,
             tools=tools,
-            tool_executor=SequentialToolExecutor(),
+            tool_executor=tool_executor,
             session_manager=session_manager,
             conversation_manager=AgentFactory.build_conversation_manager(),
             hooks=hooks if hooks else None,

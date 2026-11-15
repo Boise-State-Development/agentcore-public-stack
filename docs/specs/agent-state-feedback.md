@@ -170,6 +170,9 @@ emits strictly interleaved `start,end,start,end,start,end` and more than one
 tool is never in flight. PR-2's description claimed "a parallel batch is finally
 legible"; that was wrong as shipped. `ToolInsightService.runningTools` keeps the
 list shape, which costs nothing and is what a concurrent executor would need.
+(Update 2026-11-14: `CONCURRENT_TOOL_EXECUTION_ENABLED` now builds the agent with
+`ConcurrentToolExecutor`, so read-only calls in one batch overlap, and the list
+shape carries more than one running tool. See `core/tool_concurrency.py`.)
 
 **The content-stream fallback still drives the visible label**, because it fires
 when the model starts streaming a tool's ARGUMENTS while `tool_start` fires when

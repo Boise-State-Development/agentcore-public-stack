@@ -411,6 +411,55 @@ class TestSequentialToolExecutor:
         agent_kwargs = mock_agent_cls.call_args.kwargs
         assert isinstance(agent_kwargs["tool_executor"], SequentialToolExecutor)
 
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_sequential_by_default_with_no_concurrency_plugin(
+        self, mock_bedrock_cls, mock_agent_cls, monkeypatch
+    ):
+        from agents.main_agent.core.agent_factory import AgentFactory
+        from strands.tools.executors import SequentialToolExecutor
+
+        monkeypatch.delenv("CONCURRENT_TOOL_EXECUTION_ENABLED", raising=False)
+        AgentFactory.create_agent(model_config=_bedrock_config(), **_COMMON_KWARGS)
+
+        agent_kwargs = mock_agent_cls.call_args.kwargs
+        assert isinstance(agent_kwargs["tool_executor"], SequentialToolExecutor)
+        assert agent_kwargs["plugins"] is None
+
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_concurrent_with_the_plugin_outermost_when_enabled(
+        self, mock_bedrock_cls, mock_agent_cls, monkeypatch
+    ):
+        from agents.main_agent.core.agent_factory import AgentFactory
+        from agents.main_agent.core.tool_concurrency import ToolConcurrencyPlugin
+        from strands.tools.executors import ConcurrentToolExecutor
+
+        monkeypatch.setenv("CONCURRENT_TOOL_EXECUTION_ENABLED", "true")
+        other = MagicMock()
+        AgentFactory.create_agent(
+            model_config=_bedrock_config(), plugins=[other], **_COMMON_KWARGS
+        )
+
+        agent_kwargs = mock_agent_cls.call_args.kwargs
+        assert isinstance(agent_kwargs["tool_executor"], ConcurrentToolExecutor)
+        plugins = agent_kwargs["plugins"]
+        # First registered is the outermost ExecuteToolStage layer.
+        assert isinstance(plugins[0], ToolConcurrencyPlugin)
+        assert plugins[1:] == [other]
+
+    @pytest.mark.parametrize("value", ["", "1", "yes", "on", "false"])
+    @patch("agents.main_agent.core.agent_factory.Agent")
+    @patch("agents.main_agent.core.agent_factory.CountTokensBedrockModel")
+    def test_only_true_enables_it(self, mock_bedrock_cls, mock_agent_cls, value, monkeypatch):
+        from agents.main_agent.core.agent_factory import AgentFactory
+        from strands.tools.executors import SequentialToolExecutor
+
+        monkeypatch.setenv("CONCURRENT_TOOL_EXECUTION_ENABLED", value)
+        AgentFactory.create_agent(model_config=_bedrock_config(), **_COMMON_KWARGS)
+
+        assert isinstance(mock_agent_cls.call_args.kwargs["tool_executor"], SequentialToolExecutor)
+
 
 # ---------------------------------------------------------------------------
 # A text-only model sees history with media blocks replaced by text

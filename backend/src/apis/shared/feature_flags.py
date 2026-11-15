@@ -1316,6 +1316,41 @@ def mcp_elicitation_enabled() -> bool:
     return os.environ.get("MCP_ELICITATION_ENABLED", "").strip().lower() == "true"
 
 
+def concurrent_tool_execution_enabled() -> bool:
+    """Whether a model's tool batch runs concurrently instead of one call at a time.
+
+    On, the chat agent is built with Strands' ``ConcurrentToolExecutor`` and
+    ``ToolConcurrencyPlugin`` (``agents/main_agent/core/tool_concurrency.py``):
+    calls to tools known to be read-only overlap, and every other call stays
+    serialized behind one lock per agent, so nothing that writes a shared
+    resource runs beside another such call. A batch of N independent reads
+    then takes about the longest one instead of the sum. Nothing reaches the
+    system prompt or ``toolConfig``, and Strands appends the batch's results in
+    the order the model asked for them, so history is byte-identical to a
+    sequential run's and the cached prefix never moves (a batch that pauses on
+    an interrupt lists the results that finished before the pause first; that
+    message is still written once). The other calls in a batch that pauses on
+    an interrupt run beside it rather than after the answer. Nothing runs
+    before the first token.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.concurrentToolExecution.enabled``. No SPA switch: the SPA already
+    keys tool rows and status by ``toolUseId``.
+
+    A **rollout switch** once promoted: the change is meant to be invisible
+    beyond speed. Retirement condition: shipped in a production release, then
+    at least two weeks there with the switch never flipped, the release
+    readout's turn duration and tool-error rate recorded, and harness-sdk#4713
+    either fixed upstream or still covered by the plugin's guard.
+    """
+    return (
+        os.environ.get("CONCURRENT_TOOL_EXECUTION_ENABLED", "").strip().lower()
+        == "true"
+    )
+
+
 def web_search_default_max_results_enabled() -> bool:
     """Whether an AgentCore Web Search call that names no ``maxResults`` asks
     for 5 results instead of the connector's 10.
