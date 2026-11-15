@@ -542,6 +542,76 @@ def test_non_424_errors_skip_the_lease_lookup(
     assert response.status_code == 500
 
 
+# The Runtime's 424 body names the status the container sent. That decides it
+# whenever it is there, because the lease can be released between the
+# container's answer and app-api's look (dev, 2026-11-14: a resend right
+# after Stop got the fatal 424 for what the container had refused as busy).
+_NAMED_409 = (
+    b'{"message":"Received error (409) from runtime. Please check your '
+    b'CloudWatch logs for more information."}'
+)
+_NAMED_500 = (
+    b'{"message":"Received error (500) from runtime. Please check your '
+    b'CloudWatch logs for more information."}'
+)
+
+
+def _upstream_424_body(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(424, content=body)
+
+    _patch_upstream(monkeypatch, handler)
+
+
+def test_424_naming_a_409_relays_as_409_after_the_lease_is_released(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
+    _upstream_424_body(monkeypatch, _NAMED_409)
+    _patch_lease_held(monkeypatch, False)
+    app = _build_app(record=_record(), user_override=_user())
+
+    response = TestClient(app).post(
+        chat_path, json={"message": "hi", "session_id": "conv-1"}
+    )
+
+    assert response.status_code == 409
+    assert "already streaming" in response.json()["detail"]
+
+
+def test_424_naming_a_409_needs_no_lease_lookup(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
+    import apis.shared.sessions.session_lease as session_lease
+
+    async def _must_not_run(session_id: str, user_id: str) -> bool:
+        raise AssertionError("the body already named the 409")
+
+    _upstream_424_body(monkeypatch, _NAMED_409)
+    monkeypatch.setattr(session_lease, "is_session_lease_held", _must_not_run)
+    app = _build_app(record=_record(), user_override=_user())
+
+    response = TestClient(app).post(
+        chat_path, json={"message": "hi", "session_id": "conv-1"}
+    )
+    assert response.status_code == 409
+
+
+def test_424_naming_a_500_stays_424_even_while_a_lease_is_held(
+    monkeypatch: pytest.MonkeyPatch, chat_path: str
+) -> None:
+    # Another turn streaming does not make this request's crash a conflict.
+    _upstream_424_body(monkeypatch, _NAMED_500)
+    _patch_lease_held(monkeypatch, True)
+    app = _build_app(record=_record(), user_override=_user())
+
+    response = TestClient(app).post(
+        chat_path, json={"message": "hi", "session_id": "conv-1"}
+    )
+
+    assert response.status_code == 424
+    assert "Received error (500)" in response.text
+
+
 # ── Runtime token refusal: exactly one retry ──────────────────────────────
 #
 # Dev, 2026-10-09: the Runtime's inbound JWT authorizer refused a token with
