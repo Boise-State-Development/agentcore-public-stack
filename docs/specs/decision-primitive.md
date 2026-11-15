@@ -20,7 +20,8 @@ validation method (§16), and `outcome` / `policyVersion` on decision records (�
 Decider posts (§2.1b): reasons kept out of traces (§5.1, §9), D7's reason corrected, the
 engine checking its own answers (§5.1), Decider facts and a three-way rollout switch
 (§5.5), deterministic rendering and per-backend caps (§6.2), per-choice criteria (§4.1),
-and no zero-config models (D5, §9).
+and no zero-config models (D5, §9). Then designed for a managed, serverless decision
+model that does not exist yet (§5.6, D16).
 **Related:** `docs/specs/structured-extraction.md` (the constrained side call this
 generalizes, and the measurements it already paid for), `docs/specs/field-set-authoring.md`
 (the authoring surface question sets reuse), `docs/specs/scheduled-agent-runs.md` (the
@@ -451,6 +452,7 @@ same interface (D1), so callers never change when it does.
 |---|---|---|---|
 | `PlatformDecisionModel` on Bedrock | Bedrock in the deployment's account | none | v1 |
 | Self-hosted Strands Decider | a server in the deployment's VPC | distribution and confidence | later, on the criteria below |
+| A managed, serverless decision model | an AWS service, in the deployment's account and region | expected | anticipated; adopted on §5.6's criteria once it exists |
 | Hosted Jev, `decisionapi.net` | the provider's API, outside the account | distribution and confidence | excluded (D12) |
 
 **Adopting a self-hosted Decider** is its own spec and PR. It happens only when all of
@@ -490,6 +492,93 @@ not v1's interactive surfaces.
 struggles with long documents that need several reasoning steps. So input caps are per
 backend (§6.2). Rows, mail, tool calls and run answers fit. A whole document does not,
 and a surface that sends documents stays on Bedrock unless it narrows the input first.
+
+### 5.6 Designed for a backend that does not exist yet
+
+**The assumption.** A managed, serverless decision model will arrive, in Bedrock,
+AgentCore or SageMaker's serverless inference. It will answer boolean, choice and score
+questions with probabilities, authenticate with IAM, run in the deployment's account and
+region, and price per token or per request. Its API is unknown.
+
+**The goal.** Adopting it should take a backend class, a catalog row, a calibration
+measurement and a shadow run. Nothing else changes: not the surfaces, records, question
+sets, SPA or Runtime environment. Six seams make that true, and each is cheap to build
+now and expensive to retrofit.
+
+**1. A catalog row chooses the backend, not code.**
+* `DECISION_MODEL_ID` names a model catalog row, as today (D5). The row's
+  `decisionBackend` (`bedrock_llm` now; `decider_http` or a managed service later)
+  picks the `DecisionModel` class, and the row carries that backend's settings (endpoint
+  ARN or URL, region).
+* Decision rows carry a `DECISION` output modality. An `is_decision_model` predicate
+  keeps them out of every chat surface, exactly as `is_speech_model` keeps Nova 2 Sonic
+  out (`apis/shared/models/modalities.py`).
+* No backend adds a Runtime environment variable, which matters against the V2 budget of
+  2,560 bytes.
+
+**2. Each backend declares what it can do, and the engine reads that instead of
+constants.**
+* The declaration covers: question types, questions per call, choices per question, input
+  window in tokens, content types, native batching, whether it reports confidence, and
+  `calibrated`.
+* `calibrated` is set by us after measurement (§5.5 criterion 2), never by the provider.
+* Adapters size their caps from the window (§6.2).
+* A question set the backend cannot take is either mapped by the backend (a score as an
+  ordered choice, a criterion folded into the option text) or refused by name before any
+  call. It never degrades silently.
+
+**3. One internal question model, mapped per backend.** A question set becomes a
+`DecisionQuestion`: boolean, choice or score, with criteria, uncertainty and
+`min_confidence`. Each backend maps that to its own wire form. Strands' `Question` is one
+wire form, not the internal model, because it has no score type and no criteria. If
+Strands adds them, the mapping shrinks and nothing else moves.
+
+**4. Confidence fields exist from day one, empty.**
+* Records (§7) and the `decision_run` event carry nullable `confidence` and
+  `distribution`, and a question set may declare `min_confidence` per question.
+* While the backend is not `calibrated`, the engine ignores thresholds, stores nothing
+  in those fields, and the SPA shows nothing.
+* Turning on a calibrated backend then needs no schema migration and no SPA release just
+  to start storing confidence. Showing it is a separate, deliberate SPA change.
+
+**5. The row names its pricing basis.**
+* Today's rows price per token. A serverless backend may price per request or per
+  decision, and a hosted one costs per instance-hour whatever the call count.
+* The row carries `pricingBasis`: `per_token`, `per_decision` (with
+  `pricePerThousandDecisions`) or `hosted`. The metering helper (§5.4) prices from it.
+* `hosted` writes `C#` rows with tokens and a zero call price on purpose, does not fire
+  `UnmeteredModelCall`, and reports the instance cost as platform cost instead.
+* The precedent is the speech prices added to the row for voice. Only `per_token` is
+  accepted until a second basis is needed.
+
+**6. Routing per surface is admin configuration.**
+* Each surface has `{primary, shadow?, shadowSample}`, read through the existing catalog
+  cache, so a change takes effect on the next cache fill. There's no deploy, which is
+  the fast rollback the Amazon team relied on (§2.1b).
+* Setting `shadow` is `DUAL`. The shadow call runs after the primary, never on its
+  critical path, under its own timeout, and is metered. Answers are compared, and
+  disagreements are recorded, answers only.
+* A backend may override `ask_many` with a native batch endpoint; the default is the
+  semaphore fan-out (§6.3).
+* Every backend maps its errors into the engine's own reasons (`throttled`, `too_large`,
+  `timeout`, `invalid_output`, `unavailable`), so a surface's mapping for `Failed` (§8)
+  never depends on the provider. Strands' System One adapter already raises
+  `ModelThrottledException` and `ContextWindowOverflowException` for the first two.
+
+**Criteria for a serverless backend.** §5.5's, minus the hosting term:
+* agreement and calibration measured on our fixtures;
+* cost per decision against Bedrock;
+* data handling: content stays in the account and region, or is covered by AWS service
+  terms that exclude training on it;
+* a client;
+* a `DUAL` run on real traffic.
+
+D12 still applies to any provider that takes content outside AWS.
+
+**What is not built now.** No backend class beyond `bedrock_llm`, no hosting, no
+`per_decision` or `hosted` pricing, and no shadow execution: the `shadow` field is
+refused until a second backend exists. Its shape is fixed now so the config, the records
+and the SPA never need it changed.
 
 ---
 
@@ -558,6 +647,7 @@ DecisionRecord {
   reasons:      {questionName: str}           # only where §11.2 allows
   outcome:      what the surface did          # notified | not_notified | card_skipped | asked | labelled | sent_to_review
   policyVersion                               # version of the surface's §8 mapping that chose the outcome
+  confidence?, distribution?                  # empty until a calibrated backend answers (§5.6)
   backend, modelId, schemaEnforced, createdAt, expiresAt
   correctedBy?, corrections?: {questionName: value}
 }
@@ -859,7 +949,9 @@ decisions on a model nobody chose. Missing id or row fails loudly at the surface
 same reasoning rules out zero-config construction anywhere (§9). `LLMDecisionModel()`
 with no model runs on `global.anthropic.claude-sonnet-4-6` with whatever credentials the
 process has (§2.1b). That id may have no catalog row in a deployment, which would leave
-every such call unmetered, and it is a large model for a closed question.
+every such call unmetered, and it is a large model for a closed question. The id names a catalog row, and the row
+chooses the backend (§5.6), so moving to another backend changes the row or this one
+value, never code.
 
 **D6. Decisions never run before the first token,** enforced by an import-boundary test
 rather than by review.
@@ -905,12 +997,29 @@ service already samples, collects spans and stores results; an evaluator Lambda 
 only new piece, and it adds nothing to any turn. It waits on the production-content
 decision (§10.3).
 
+**D16. Built for a backend that does not exist yet.** A managed, serverless decision model
+is likely, and its arrival should be a configuration change, not a redesign (§5.6). The
+six seams are built in PR-1 because each is cheap now and expensive later:
+* nullable confidence fields avoid a record migration;
+* a catalog row avoids an environment variable per backend;
+* a capability declaration avoids constants scattered through the adapters;
+* one internal question model avoids tying question sets to Strands' wire form;
+* a pricing basis avoids a metering rewrite;
+* a fixed routing shape avoids a config migration.
+
+What would be speculative, a second backend class or shadow execution, waits for a
+backend to exist.
+
 ---
 
 ## 15. PR sequence
 
 1. **PR-1, engine (dark).** `apis/shared/decisions/` with the engine, the schema builder,
-   the batch runner and the `document`, `sheet_row` and `run_answer` adapters; the shared
+   the batch runner and the `document`, `sheet_row` and `run_answer` adapters; §5.6's
+   seams (the backend chosen by catalog row with the `DECISION` modality and
+   `is_decision_model`, the capability declaration, the internal question model, empty
+   confidence fields, `pricingBasis` accepting only `per_token`, and per-surface routing
+   accepting only `primary`); the shared
    call code moved out of `extraction/` with extraction importing it unchanged in
    behaviour; metering helpers; `CALL_KINDS` gains `decision`; the §9 tests. Plus a
    measurement script run on dev: the widest question set and the longest choice list
@@ -933,6 +1042,10 @@ decision (§10.3).
    set of seeded runs.
 8. **Later, the ledger quality evaluator** (§10.3), once §17's production-content
    question is decided.
+9. **Later, a second backend**: a managed serverless model or a hosted Decider, whichever
+   clears its criteria first (§5.5, §5.6). Its own PR adds the backend class, its catalog
+   row, its pricing basis if new, and shadow execution, then runs `DUAL` before any
+   surface makes it primary.
 
 ---
 
@@ -978,6 +1091,9 @@ decision (§10.3).
    review, and for which deployments.
 8. **A self-hosted Decider** (§5.5): who would own the hosting, and whether the volume
    from project labels or lakehouse batches ever clears the cost criterion.
+9. **Where per-surface routing lives** (§5.6): on the decision model's catalog row, or in
+   a separate admin settings record read through the same cache. The row is simpler, but
+   one row would then hold the routing for every surface.
 
 ---
 
