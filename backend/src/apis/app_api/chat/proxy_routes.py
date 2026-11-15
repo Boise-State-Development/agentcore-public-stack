@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Dict, List, Optional, Set, Tuple
@@ -95,8 +96,18 @@ _SESSION_BUSY_DETAIL = (
 )
 
 
+# How the Runtime's 424 body names the status the container actually sent, e.g.
+# `{"message":"Received error (409) from runtime. Please check your CloudWatch
+# logs for more information."}` (dev, 2026-11-14). The container raises 409 on
+# `/invocations` only for the single-flight conflict.
+_RUNTIME_UPSTREAM_STATUS = re.compile(rb"Received error \((\d{3})\)")
+
+
 async def _resolve_upstream_error_status(
-    status_code: int, session_id: Optional[str], user_id: str
+    status_code: int,
+    session_id: Optional[str],
+    user_id: str,
+    error_body: bytes,
 ) -> tuple[int, Optional[str]]:
     """Undo the AgentCore Runtime's 424 rewrite of the single-flight 409.
 
@@ -106,16 +117,35 @@ async def _resolve_upstream_error_status(
     424 and surfaces as a "Chat Request Failed" toast, instead of the soft
     "Already responding" notice the SPA already implements for 409.
 
-    A 424 is ambiguous on its own: a genuine container 500 looks identical. So
-    the lease itself is the tiebreaker — re-map only when an unexpired turn
-    lease is actually held for this session, which is the exact fact the
-    container's 409 asserted a moment earlier. Best-effort: anything unproven
-    keeps the 424, so a real upstream failure is never disguised as a conflict.
+    The 424's body names the status the container sent, and that decides it
+    when present: a named 409 is re-mapped, any other named status keeps the
+    424. The lease cannot decide the 409 case: the turn can release it
+    between the container's 409 and this look (a resend just after Stop does
+    exactly that), which left the fatal 424 standing for a mere conflict. Nor
+    the 500 case: a container that fails while another turn streams would be
+    disguised as a conflict.
+
+    Only a 424 whose body names no status falls back to the lease as the
+    tiebreaker — re-map only when an unexpired turn lease is actually held for
+    this session, the exact fact a container 409 would have asserted.
+    Best-effort: anything unproven keeps the 424, so a real upstream failure
+    is never disguised as a conflict.
 
     Returns the status to relay and, when re-mapped, the detail to relay with
     it (the Runtime's 424 body no longer explains anything useful).
     """
-    if status_code != status.HTTP_424_FAILED_DEPENDENCY or not session_id:
+    if status_code != status.HTTP_424_FAILED_DEPENDENCY:
+        return status_code, None
+    named = _RUNTIME_UPSTREAM_STATUS.search(error_body)
+    if named is not None:
+        if int(named.group(1)) != status.HTTP_409_CONFLICT:
+            return status_code, None
+        logger.info(
+            "Upstream 424 names the container's 409 — relaying as 409 "
+            "(single-flight conflict)"
+        )
+        return status.HTTP_409_CONFLICT, _SESSION_BUSY_DETAIL
+    if not session_id:
         return status_code, None
     try:
         from apis.shared.sessions.session_lease import is_session_lease_held
@@ -326,7 +356,7 @@ async def chat_stream(
             await response.aclose()
             await client.aclose()
         relay_status, relay_detail = await _resolve_upstream_error_status(
-            response.status_code, session_id, current_user.user_id
+            response.status_code, session_id, current_user.user_id, error_body
         )
         raise HTTPException(
             status_code=relay_status,
