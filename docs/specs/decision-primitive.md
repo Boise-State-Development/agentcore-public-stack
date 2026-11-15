@@ -11,6 +11,11 @@ wrong is expected, not a failure.
 (`strands.decisions`) and a model router that consumes it (`strands.models.routing`).
 This spec decides how the platform uses the first, and why it mostly does not use the
 second.
+**Revised 2026-11-15** after reading the AWS ML blog on decision models in AgentCore
+Evaluations and an architecture article pairing AgentCore with Jev (§2.1a). Five changes:
+a self-hosted Strands Decider as a later backend (§5.5), an ordered `score` question type
+(§4.1), the quality signal moved to AgentCore Evaluations (§10.3), the three-labeler
+validation method (§16), and `outcome` / `policyVersion` on decision records (§7).
 **Related:** `docs/specs/structured-extraction.md` (the constrained side call this
 generalizes, and the measurements it already paid for), `docs/specs/field-set-authoring.md`
 (the authoring surface question sets reuse), `docs/specs/scheduled-agent-runs.md` (the
@@ -106,6 +111,30 @@ Read from the installed wheel; the SDK cites an internal design note
 * The vended **human-in-the-loop** handler (`vended_interventions/hitl/`) accepts a
   `DecisionModel` as a risk classifier at `BeforeToolCallEvent`.
 
+### 2.1a Outside the wheel (read 2026-11-15)
+
+* **AWS ML blog, 2026-11-04**, on using decision models with AgentCore Evaluations. Read
+  up to its validation section; any results reported after that are unread.
+  * It names two backends. **Jev** is hosted by TypeSafe. **Strands Decider** is described
+    as an open-source, 2-billion-parameter decision model from the Strands team, run as a
+    self-hosted server, locally or on EC2 inside a VPC.
+  * Both return a probability distribution and a confidence. Question types: boolean
+    (returning P(true)), `choice` (up to 255 options) and `score` (2–10 ordered levels).
+  * Decisions run as judges inside a **code-based evaluator** Lambda that receives the
+    turn's spans: on demand, in batch over stored sessions, or online over sampled
+    traffic. Never in the agent's request path.
+  * The authors position decision models as an addition to LLM judges for narrow,
+    well-defined checks, not a replacement.
+* **The 1.65.0 wheel has no client for a self-hosted Decider.** The name does not appear
+  in it, and `DecisionsAPIDecisionModel` points at the hosted `decisionapi.net`. Neither
+  source establishes whether that service runs the same model.
+* **An architecture article (2026-10-24)** pairing AgentCore with Jev argues the split
+  this spec already makes: the decision model evaluates, the generative model explains,
+  policy decides. It lists what to audit per decision: the question, the model version,
+  the policy version and the final outcome. §7 adopts the last two.
+* **A Jev developer site** (`jevtypesafeai.com`) states in its footer that it is not
+  affiliated with TypeSafe. Its endpoint and claims are not used here.
+
 ### 2.2 This repository
 
 * **`apis/shared/extraction/`** (3,198 lines):
@@ -142,6 +171,13 @@ Read from the installed wheel; the SDK cites an internal design note
   `NotificationKind` literal and 90-day retention.
 * **Approvals:** `ToolApprovalHook` pauses MCP tools whose catalog entry sets
   `needs_approval`, plus the skill-authoring writes.
+* **AgentCore Evaluations** works end to end on dev
+  (`agentcore-evaluations-spike-findings.md`, 2026-08-12): 16 built-in evaluators,
+  custom `llmAsAJudge` and `codeBased` (Lambda) evaluators, content delivered as OTLP log
+  records rather than span events, and a ~180 s ingestion delay on the on-demand runner.
+  The spike left one decision to make deliberately: an evaluator receives the full system
+  prompt and every user message, so pointing one at production conversations is a
+  choice, never a side effect.
 
 ---
 
@@ -153,7 +189,7 @@ Every item-question pair ends in exactly one of:
 
 | Outcome | Meaning | Who produced it |
 |---|---|---|
-| **Answer** | `true`/`false`, or one of the allowed choices | the model, committing |
+| **Answer** | `true`/`false`, one of the allowed choices, or one of a score's levels | the model, committing |
 | **Uncertain** | the item says something relevant, and the model will not commit; carries a bounded reason | the model, declining |
 | **Failed** | no answer exists: timeout, throttle, refused input, invalid output after retry | the engine |
 
@@ -169,10 +205,17 @@ document that never mentions it is answered `false`. Where an author wants "not 
 as an answer, it is a choice they write (`[required, not required, not stated]`), so it
 appears in the schema, the table and the counts like any other choice.
 
-### 3.3 Confidence is not a field
+### 3.3 Confidence is not a field in v1
 
-The only implementations that report confidence send content to third parties (D12).
-Ours reports none, so no surface shows a percentage. "Uncertain" is the whole signal.
+The Bedrock engine reports no confidence, so no v1 surface shows a percentage, and
+"Uncertain" is the whole signal.
+
+A backend that does report it (§5.5) adds `confidence` and a per-question distribution to
+the result. A caller may then set `min_confidence`: an answer below it becomes `Uncertain`
+with reason `low_confidence`. A threshold the caller chose then replaces the model's own
+judgement about when to decline, which is the better policy for approvals. Until a
+backend's calibration has been measured on our fixtures (§5.5), no surface shows a
+percentage or sets a threshold.
 
 ---
 
@@ -195,6 +238,7 @@ kind: questions
 | has_cost_share | Cost share | boolean | whether the sponsor requires institutional cost sharing of any amount | | yes |
 | sponsor_type | Sponsor type | enum | who is funding the award | federal, state, foundation, industry | yes |
 | needs_pi_signature | PI signature | boolean | whether the notice asks the PI to sign or accept terms | | no |
+| budget_completeness | Budget justification | score | how fully the budget justification explains each cost category | missing, partial, adequate, complete | yes |
 ```
 
 * It lives at `references/question-set.<name>.md` in a skill's reference bundle, so it
@@ -203,10 +247,20 @@ kind: questions
   `question-set.<name>.md` form follows §16.1 there: bundle filenames cannot contain a
   path separator.
 * The parser, serializer, `FieldSetLayout` round-trip and authoring page are the
-  field-set ones. A `kind: questions` file rejects any type outside `boolean` and `enum`
-  by name.
+  field-set ones. A `kind: questions` file rejects any type outside `boolean`, `enum` and
+  `score` by name.
 * `uncertain` defaults to `yes`. `no` means the question must commit, as Strands'
   `uncertainty: False` does.
+* **`type: score` is an ordered scale.** `values` lists 2–10 levels from lowest to
+  highest. The answer is one level's label, and counts and tables sort by level. It is for
+  rubric questions ("how complete is the budget justification?"), which a boolean
+  flattens and an unordered `choice` loses the order of. It matches the `score` type
+  AgentCore Evaluations uses (§2.1a).
+  * Strands' `Question` has no score type, so the engine passes the levels as `choices` and
+    keeps the order itself.
+  * A backend that reports a distribution (§5.5) can also return the expected level.
+  * `score` exists only in question sets. Field sets refuse it, because a level is a
+    judgement, not a value quoted from the document.
 * `find` becomes the question text the model sees. It is the field an office tunes, and
   the reason a question set beats a bare `question` string.
 * Order is authored, never derived, for the reason extraction gives: the schema's
@@ -279,7 +333,8 @@ Per question, an object `{answer: <enum>, reason: <string>}`, both required:
 
 * `answer` is a string enum of the choices, plus `"uncertain"` when the question permits
   it. A boolean question's enum is `["true", "false"]` (plus `"uncertain"`), parsed back
-  to `bool`. **No unions anywhere**, so the 16-union ceiling never applies.
+  to `bool`. A score's enum is its levels in authored order, so the order survives into
+  the schema. **No unions anywhere**, so the 16-union ceiling never applies.
 * `reason` is a required string the prompt asks to leave empty unless the answer is
   `"uncertain"`. Required rather than optional because optional costs a union; bounded at
   200 characters after return.
@@ -300,6 +355,38 @@ not assumed** (§15). Until then the authoring limit is the field-set one, 14.
 A call that reports no usage emits `UnmeteredModelCall` with the purpose as its surface,
 as `document_extract` does. `CALL_KINDS` gains `"decision"`, so the ledger counts these
 calls and never as turns.
+
+### 5.5 Backends
+
+The engine is one `DecisionModel`. A backend is another, chosen per deployment behind the
+same interface (D1), so callers never change when it does.
+
+| Backend | Where content goes | Confidence | Status |
+|---|---|---|---|
+| `PlatformDecisionModel` on Bedrock | Bedrock in the deployment's account | none | v1 |
+| Self-hosted Strands Decider | a server in the deployment's VPC | distribution and confidence | later, on the criteria below |
+| Hosted Jev, `decisionapi.net` | the provider's API, outside the account | distribution and confidence | excluded (D12) |
+
+**Adopting a self-hosted Decider** is its own spec and PR. It happens only when all of
+these hold, measured on our own fixtures (§16) rather than taken from a provider's claims:
+
+1. **Agreement** at least matches the Bedrock engine's on the same fixtures, per question
+   type.
+2. **Calibration** is measured: across the fixtures, answers given at confidence *p* are
+   right about *p* of the time. Until it is, no surface shows a percentage or sets
+   `min_confidence` (§3.3).
+3. **Cost per decision, including hosting,** beats Bedrock at the deployment's actual
+   volume. An always-on server is a fixed cost that a few hundred decisions a day will not
+   repay, and it adds resources to a stack near its ceiling
+   (`platform-stack-resource-budget.md`).
+4. **The weights' provenance and licence** are checked, and the dependency is pinned
+   exactly, like every other.
+5. **A client exists.** Strands 1.65 ships none for a self-hosted server, so either
+   Strands adds one or we write a `DecisionModel` subclass against the server's documented
+   API.
+
+The volume that could justify it is project file labels and batch work over a lakehouse,
+not v1's interactive surfaces.
 
 ---
 
@@ -352,7 +439,9 @@ DecisionRecord {
   setName, setVersion
   answers:      {questionName: value | "uncertain" | "failed"}
   reasons:      {questionName: str}           # only where §11.2 allows
-  modelId, schemaEnforced, createdAt, expiresAt
+  outcome:      what the surface did          # notified | not_notified | card_skipped | asked | labelled | sent_to_review
+  policyVersion                               # version of the surface's §8 mapping that chose the outcome
+  backend, modelId, schemaEnforced, createdAt, expiresAt
   correctedBy?, corrections?: {questionName: value}
 }
 ```
@@ -365,7 +454,15 @@ DecisionRecord {
   is that surface's PR, not this one.
 * **Corrections** are first-class: when a user changes a label, the record keeps both the
   model's answer and the correction. The agreement rate per question per set version
-  (§14) is computed from them, and it is how an office finds a badly worded question.
+  (§16) is computed from them, and it is how an office finds a badly worded question.
+* **The outcome is recorded, not just the answer.** The question, the set version and the
+  model say what was asked and what answered. `outcome` says what the surface did with the
+  answer, and `policyVersion` says which version of its mapping (§8) chose that.
+  * When approvals move from "skip on a confident not-risky" to a confidence threshold, a
+    card skipped last month stays attributable to the rule in force at the time.
+  * It turns D10's visible reason into a fact that can be counted. For example: how many
+    cards did classify mode skip this week, and how many of those did a user later
+    dispute?
 * Records hold answers, not content (§11).
 
 ---
@@ -389,7 +486,8 @@ Two rules hold everywhere:
   showing it.
 * **Every suppression leaves a visible reason.** A tool that ran without a card says so on
   its row. A run that did not notify says so in its run history. A decision that changed
-  what happened to the user must be explainable after the fact.
+  what happened to the user must be explainable after the fact, from the record's
+  `outcome` and `policyVersion` (§7).
 
 ---
 
@@ -527,8 +625,18 @@ A schedule with no condition behaves exactly as today: no notification on comple
 * **Mail triage.** The `mail_message` adapter behind `classify_items` and notify-if,
   once a mail connector is in the deployment. Labels and suggestions only; any write to
   the mailbox goes through approvals.
-* **Release-ledger quality signal.** After a turn, fire-and-forget: "did the user's next
-  message correct or redo the previous answer?". Answers only, counted per release.
+* **Release-ledger quality signal, through AgentCore Evaluations.** A code-based
+  evaluator Lambda wraps the engine and asks narrow questions over a session's spans:
+  "did the user's next message correct or redo the previous answer?", or a `score` for
+  how complete an answer was. It runs online over sampled traffic.
+  * Nothing is added to the Runtime, not even work after the turn. The service already
+    supplies sampling, span collection and result plumbing (§2.2).
+  * Results arrive minutes after the turn, which suits a per-release signal.
+  * **Precondition:** the evaluator receives the full system prompt and every user
+    message. Running it over production conversations is decided explicitly first, with
+    its own privacy review, as the evaluations spike asked. Until then it runs over the
+    eval harness's synthetic sessions only.
+  * Answers are counted per release; no content is stored.
 * **Batch library outside the platform.** The engine is plain Python over Bedrock; a
   lakehouse job may import it. That job, its data and its governance are out of scope
   here.
@@ -641,19 +749,31 @@ metered on their own row with their own model's price.
 mapping (§8), because "ask the user" is right for approvals and wrong for a 500-row
 batch.
 
-**D10. Every suppression leaves a visible reason** (§8).
+**D10. Every suppression leaves a visible reason** (§8), and the record keeps what the
+surface did and under which version of its mapping (§7).
 
 **D11. Build the primitive from two unlike consumers, then migrate `document_extract`.**
 An abstraction designed from one consumer fits only that consumer; `document_extract`
 works today and gains nothing from being rewritten first.
 
-**D12. No third-party decision providers.** They send content outside the account, and
-they are the only source of confidence scores, so the platform shows none.
+**D12. No hosted third-party decision providers.** Jev and `decisionapi.net` send content
+outside the account. They are no longer the only source of confidence: a self-hosted
+Strands Decider would report it from inside the VPC, and is a later backend under §5.5's
+criteria. v1 shows no confidence.
 
 **D13. Model routing is out of scope.** `ClassifierStrategy` picks a model before every
 invocation: mid-conversation that re-writes the cached prefix on each switch, and before
 the first token it adds a model round-trip. Failover with `FallbackStrategy` is a
 different question and belongs with `model-fallback-profiles.md`.
+
+**D14. `score` is a question type.** Ordered rubric questions are common in the first use
+cases and lose information as booleans or unordered choices. On the Bedrock engine it
+costs one enum in the schema.
+
+**D15. The ledger quality signal runs in AgentCore Evaluations, not the Runtime.** The
+service already samples, collects spans and stores results; an evaluator Lambda is the
+only new piece, and it adds nothing to any turn. It waits on the production-content
+decision (§10.3).
 
 ---
 
@@ -663,33 +783,45 @@ different question and belongs with `model-fallback-profiles.md`.
    the batch runner and the `document`, `sheet_row` and `run_answer` adapters; the shared
    call code moved out of `extraction/` with extraction importing it unchanged in
    behaviour; metering helpers; `CALL_KINDS` gains `decision`; the §9 tests. Plus a
-   measurement script run on dev: the widest question set strict mode compiles in §5.3's
-   shape, cold and warm latency, tokens per item per question, and agreement on a
+   measurement script run on dev: the widest question set and the longest choice list
+   strict mode compiles in §5.3's shape, cold and warm latency, tokens per item per question, and agreement on a
    labeled fixture for two candidate models. Numbers go in this spec.
 2. **PR-2, notify-if backend.** `ScheduledPrompt` fields, the worker's call and run-row
    result, the notification kind, worker IAM and environment in CDK, the flag and its
    `platform.yml` variable.
 3. **PR-3, notify-if SPA.** The condition field on the schedule form, the run-history
    line, the notification's rendering.
-4. **PR-4, question sets.** `kind: questions` and the `uncertain` column in the parser and
-   serializer, the resolver, and the authoring page's "Question sets" section.
+4. **PR-4, question sets.** `kind: questions`, the `uncertain` column and the `score` type
+   in the parser and serializer, the resolver, and the authoring page's "Question sets" section.
 5. **PR-5, `classify_items` backend.** The tool, its digest-pinned spec, the size and cost
    pause, the broker and `decision_run` event, session records, the artifact and
    workbook, metering. Adds `decision_run` to CLAUDE.md's SSE table.
 6. **PR-6, `classify_items` SPA.** The verdict table, the shared `Uncertain` treatment,
    the review list, "Save as a question set".
 7. **PR-7, evals.** Tool choice between `document_extract` and `classify_items`;
-   agreement and `Uncertain` rate on labeled fixtures; a notify-if false-negative set of
-   seeded runs.
+   agreement and `Uncertain` rate on labeled fixtures (§16); a notify-if false-negative
+   set of seeded runs.
+8. **Later, the ledger quality evaluator** (§10.3), once §17's production-content
+   question is decided.
 
 ---
 
 ## 16. How we'll know
 
-* **Agreement:** on a hand-labeled fixture per first use case, the share of committed
-  answers that match the label, and the `Uncertain` rate. Proposed bar for shipping a
-  surface: at least 90% agreement on committed answers with `Uncertain` under 15%. The bar
-  is a proposal until PR-1's numbers exist.
+* **Agreement, measured the way the AWS post validates a decision-model evaluator.**
+  * Three people label each fixture item independently, and the majority label is the
+    reference. An item where no two agree is set aside as ambiguous, never forced.
+  * Report per question: agreement of committed answers with the majority label, and the
+    `Uncertain` rate. Report both again split into **easy** items (all three labelers
+    agreed) and **hard** ones (two of three).
+  * The split is the point. A decider that is right on the easy items and declines the
+    hard ones is behaving well. One that commits on the hard ones and gets them wrong is
+    not, though the overall figure can look the same.
+  * Report agreement among the labelers too, because it is the ceiling. A question three
+    people can't agree on is worded badly, not answered badly.
+  * Proposed bar for shipping a surface: at least 90% agreement on committed easy items,
+    `Uncertain` under 15% overall, and hard-item agreement no lower than the labelers' own.
+    The bar is a proposal until PR-1's numbers exist.
 * **Corrections in use:** the per-question correction rate from §7's records, read per
   set version, so a reworded question shows up as a change.
 * **Latency:** warm per-item latency and batch wall time at the default concurrency.
@@ -712,13 +844,17 @@ different question and belongs with `model-fallback-profiles.md`.
 5. **A grant for `subject: person` sets** (§11.3), or only the triage wording?
 6. **Reasons on durable labels.** §11.2 allows them on project labels visible to the
    file's readers; confirm that matches how project files are actually shared.
+7. **Production conversations in AgentCore Evaluations** (§10.3): whether, under what
+   review, and for which deployments.
+8. **A self-hosted Decider** (§5.5): who would own the hosting, and whether the volume
+   from project labels or lakehouse batches ever clears the cost criterion.
 
 ---
 
 ## 18. Non-goals
 
 * **Model routing** (D13).
-* **Confidence scores** (D12).
+* **Confidence scores in v1** (§3.3, §5.5, D12).
 * **Acting on a verdict.** No surface sends, deletes, grants or denies anything because of
   a decision alone.
 * **Generative side calls.** Titles and tool summaries stay as they are; a decision is a
