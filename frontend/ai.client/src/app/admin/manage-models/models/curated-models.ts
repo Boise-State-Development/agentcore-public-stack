@@ -1055,6 +1055,74 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
     },
   },
   {
+    // Kimi K3.1 Pro – Highspeed: a post-trained K3 (same architecture, same
+    // 1M window), launched 2026-11-04. Bedrock lists no separate non-Highspeed
+    // K3.1 Pro; this is the only `kimi-k3.1` id. Same transport reasoning as
+    // K3 (block comment above): its card repeats every Converse caveat and
+    // marks bedrock-mantle unsupported. Measured on dev 2026-11-15, where a
+    // PDF `input_file` on Responses also worked (it does on K3 too).
+    key: 'kimi-k3-1',
+    tagline: 'Moonshot AI\'s post-trained K3 — stronger results at higher speed, 1M-token context with vision.',
+    capabilities: ['Reasoning', 'Vision', 'Long context', 'Prompt caching'],
+    pricingTier: 'regional',
+    template: {
+      ...bedrockResponsesDefaults(),
+      // `us.` because dev's SCP denies every `global.*` profile — see above.
+      // Prod uses `global.moonshotai.kimi-k3.1` at $4.00 / $20.00 / $0.20.
+      modelId: 'us.moonshotai.kimi-k3.1',
+      modelName: 'Kimi K3.1',
+      shortDescription: 'Faster long-context coding and knowledge work',
+      providerName: 'Moonshot AI',
+      // One price table per inference option, as on K3, so the whole window
+      // bills at one rate.
+      maxInputTokens: 1_000_000,
+      // Card, US CRIS: $4.40 / $22.00, cache write $5.50 (1.25x), cache read
+      // $0.22 — **0.05x**, half K3's 0.1x. The card is the only source: the
+      // Price List API's `AmazonBedrock` offer file carried K3's SKUs but none
+      // for K3.1 on 2026-11-15.
+      //
+      // ⚠️ The opposite of K3 on caching. K3.1's stock implicit caching works:
+      // on a unique 6.7k prefix over 4 turns it reported no write on turn 1
+      // and read the whole growing conversation back on every later turn
+      // ($0.03546 of input), where K3's explicit path pinned reads at the
+      // static prefix and billed a write on top ($0.04378, +23%). So this id
+      // is deliberately NOT in `_EXPLICIT_CACHE_REQUIRED_MODELS`, which now
+      // matches exactly rather than by the substring that swept it in. The
+      // write rate is the card's and applies only if a write is ever reported.
+      ...ratesWithDerivedCache(4.4, 22.0, 0.05),
+      // The card publishes no output cap (1,000,000 was accepted) and no
+      // knowledge cutoff. Claim neither.
+      maxOutputTokens: null,
+      knowledgeCutoffDate: null,
+      // MEASURED against `us.moonshotai.kimi-k3.1` in us-west-2 on
+      // 2026-11-15. Every bound matches K3's, probed again rather than copied.
+      supportedParams: {
+        params: {
+          // 400 on 2: "This model accepts 'temperature' between 0 and 1."
+          temperature: { supported: true, min: 0, max: 1, default: null },
+          // 400 on 0.9: "This model accepts 'top_p' only with the value
+          // 0.95." Its only legal value is what omitting it gives.
+          top_p: { supported: false },
+          // 400 on 1: "Expected a value >= 16, but got 1 instead."
+          max_tokens: { supported: true, min: 16 },
+          // 400 on a bogus level: "Supported values are: 'none', 'low',
+          // 'medium', 'high', 'xhigh', and 'max'." `minimal` also 400s.
+          reasoning_effort: {
+            supported: true,
+            allowed: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+            // Pins what the provider already does implicitly, the same rule
+            // as K3 — but here that is `max`, not `medium`. The card says
+            // "Default: max", and three samples each on a short arithmetic
+            // prompt gave reasoning tokens unset 565/666/652 (mean 628) vs max
+            // 629/787/511 (mean 642). Pinning `medium` would quietly change
+            // the model's answers; `max` is cost-neutral against today.
+            default: 'max',
+          },
+        },
+      },
+    },
+  },
+  {
     key: 'kimi-k3',
     tagline: 'Moonshot AI\'s open-weight frontier model — 1M-token context with native vision.',
     capabilities: ['Reasoning', 'Vision', 'Long context', 'Prompt caching'],
