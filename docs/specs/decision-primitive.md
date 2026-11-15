@@ -400,6 +400,7 @@ Two rules hold everywhere:
 | No decision runs before the first token: not in route phases, `BeforeInvocationEvent` or `BeforeModelCallEvent` | an architecture test allowlisting the modules that may import `apis.shared.decisions.engine`, in the style of `test_attachment_kb_retrieve_boundary.py` |
 | Questions never reach the turn's system prompt or `toolConfig`; the agent-facing tool spec is one constant per deployment | a digest-pinned spec test, as `document_extract` has |
 | No content is persisted: records hold answers and bounded reasons only | a store test that rejects a record carrying item text |
+| The model-facing tool result carries labels and answers only: never a reason, item text or cell value, and a row's label is its position | a result-builder test whose fixture plants a sentinel string in every reason, cell and document, and asserts it appears nowhere in the result at any size, below and above the cap |
 | Records and in-process state are keyed by owner as well as scope id | the store's key builder; a test that two users on one session id never read each other's records |
 | Every call is metered against a catalog row, or names itself unmetered | the metering tests; `UnmeteredModelCall` |
 | `strict_tools=True` is set only on a dedicated side-call instance, never on a chat agent | `tests/architecture/test_strict_tools_single_call_site.py`: its `_ALLOWED` set moves from `extraction/extractor.py` to the module that builds the model once that code moves into `decisions/` (PR-1), so there is still exactly one site |
@@ -418,13 +419,53 @@ classify_items(
   questions?: [{name, question, choices}],   # ad hoc, at most 8; exactly one of the two
   upload_ids?: [str],                 # documents
   sheet?: {upload_id, sheet?, range?},       # spreadsheet rows
+  from_run?: {run_id, where},         # read back an earlier run's answers; no model call
 )
 ```
 
-**What goes back to the model:** counts per question per answer, the `Uncertain` and
-`Failed` items by label, and the artifact reference, capped at 2,000 characters and
-dropping to counts past that. Never one row per item: at 500 rows that would put the
-whole table into the conversation and every later turn's prefix.
+**What goes back to the model.** The tool result is the Converse payload, so it becomes
+part of every later turn's cached prefix. It carries the least that lets the model answer
+the normal follow-up ("which ones need cost share?") without a re-run. `document_extract`
+learned that withholding values forces a document-sized re-run to answer exactly that
+(`structured-extraction.md` §5.1), and the same holds here.
+
+1. **Per-item answers, while they fit.** One line per item: its label and its answers,
+   in the set's authored order, as the choice values themselves plus `uncertain` and
+   `failed`:
+
+   ```
+   award-114.pdf: has_cost_share=true sponsor_type=federal needs_pi_signature=false
+   award-131.pdf: has_cost_share=uncertain sponsor_type=foundation needs_pi_signature=true
+   ```
+
+   Up to 2,000 characters for the whole result.
+2. **Past the cap, counts.** Per question, the count of each answer, then the labels of
+   every `Uncertain` and `Failed` item (capped in turn, with "and N more"), then the
+   artifact reference. The model can answer "how many" from the counts and says the table
+   holds the rest.
+3. **Reading answers back costs no model call.** `from_run` with a `where` such as
+   `has_cost_share=true` returns the matching items' labels from the session's records
+   (§7), under the same cap. A follow-up over a 500-row run is a record read, not 500
+   decisions.
+
+**What never reaches the model, whatever fits:**
+
+* **Reasons.** A reason is model text written about the item and can quote it. Reasons
+  travel on the `decision_run` event, the session records and the artifact only.
+* **Item content.** No document text, quote or cell value.
+* **Content inside labels.** A document's label is its filename, which the conversation
+  already shows on the attachment. A spreadsheet row's label is its position
+  (`Responses!14`), never a cell value, so classifying 500 survey answers puts none of
+  their text in the conversation. A mail message's label (later) is its sender and
+  received time, not its subject.
+
+**What the model has anyway.** The tool does not remove what the conversation already
+holds. Ad-hoc questions are written by the chat model, so they are in history by
+definition. A document the user attached is already in the context inline, as a digest or
+on demand, and classifying it adds nothing and hides nothing. What stays off the chat
+model is content it never read: rows of a sheet, files in a folder, an inbox. Acting on a
+result brings the acted-on items in: drafting replies to the ten messages that need one
+means reading those ten, and never the other 190.
 
 **What goes to the user:** a `decision_run` SSE event drained in `stream_coordinator`
 beside `document_extraction`, the session records (§7) for reload, and a backend-written
