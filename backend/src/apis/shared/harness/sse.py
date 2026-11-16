@@ -87,6 +87,7 @@ class InvocationStreamAccumulator:
     done: bool = False
     stop_reason: Optional[str] = None
     error: Optional[str] = None
+    error_code: Optional[str] = None
     title: Optional[str] = None
     tool_trace: List[ToolTraceEntry] = field(default_factory=list)
     oauth_required: List[OAuthConsentRequired] = field(default_factory=list)
@@ -250,6 +251,12 @@ class InvocationStreamAccumulator:
             self.error = str(
                 payload.get("message") or payload.get("error") or payload
             )[:2000]
+            metadata = payload.get("metadata")
+            code = payload.get("code") or (
+                metadata.get("error_kind") if isinstance(metadata, dict) else None
+            )
+            if isinstance(code, str) and code:
+                self.error_code = code
         elif name == "quota_exceeded":
             self.quota_exceeded = True
         elif name == "done":

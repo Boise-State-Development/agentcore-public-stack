@@ -206,6 +206,7 @@ class TestFailureCode:
         (dict(expect=Expect(contains_any=("4",)), answer="five"), {("missing_value", None)}),
         (dict(expect=Expect(contains_all=("bleach", "ammonia")), answer="bleach"), {("missing_value", None)}),
         (dict(expect=Expect(forbidden=("48",)), answer="48 hours"), {("forbidden_value", None)}),
+        (dict(expect=Expect(first_number=("17",)), answer="40 items"), {("first_number", None)}),
         (dict(expect=Expect(tools=ToolExpect(must_call=("calculator",)))), {("tool_missing", "calculator")}),
         (dict(expect=Expect(tools=ToolExpect(must_not_call=("whoami",))), tools=["whoami"]),
          {("tool_forbidden", "whoami")}),
@@ -271,3 +272,57 @@ def test_forbidden_in_code_failures_have_a_code():
     from apis.shared.evals.score import failure_code
 
     assert failure_code("code contains a forbidden value") == ("forbidden_value", None)
+
+
+# --------------------------------------------------------------------------- first_number
+
+
+class TestFirstNumber:
+    """``expect.first_number``: the answer's leading number, so a scoped distractor named after it is fine."""
+
+    #: The four handbook answers from the 2026-11-14 nightly, verbatim in shape.
+    @pytest.mark.parametrize("answer", [
+        "17",
+        "**17**\n\nThe handbook says each member may borrow up to 17 items. It also lists a higher limit "
+        "of 40 for members of the visiting scholars programme.",
+        "17\n\nThe handbook's general limit is 17 items at once. If you're in the visiting scholars "
+        "programme, your limit is 40.",
+        "You can have up to 17 items checked out (visiting scholars: 40).",
+    ])
+    def test_the_right_value_first_passes_even_with_the_distractor_after_it(self, answer):
+        assert _score(Expect(first_number=("17",)), answer=answer).passed
+
+    @pytest.mark.parametrize("answer,found", [
+        ("40", "40"),
+        ("Members may borrow up to 40 items at once; others, 17.", "40"),
+        ("Seventeen.", "none"),
+    ])
+    def test_the_distractor_first_or_no_number_fails(self, answer, found):
+        result = _score(Expect(first_number=("17",)), answer=answer)
+        assert result.failures == (f"first number: {found}, expected 17",)
+
+    def test_numbers_compare_by_value_not_spelling(self):
+        from apis.shared.evals.score import first_number
+
+        assert _score(Expect(first_number=("26.5",)), answer="**26.5%** of direct costs").passed
+        assert _score(Expect(first_number=("1700",)), answer="1,700 items").passed
+        assert _score(Expect(first_number=("17",)), answer="17.0").passed
+        assert _score(Expect(first_number=("17", "18")), answer="18").passed
+        # Not numbers of their own: a digit inside a word, or a decimal's fraction.
+        assert first_number("Q4 says 17") == "17"
+        assert first_number("v2.1 then 9") == "9"
+        assert first_number("$19 a day") == "19"
+        assert first_number("39{,}168 total") == "39168"
+        assert first_number("") is None
+
+    def test_a_case_must_list_plain_numbers(self):
+        from apis.shared.evals.cases import CaseError, parse_case
+
+        def case(values):
+            return {"id": "document_qa.x", "family": "document_qa", "turns": [{"prompt": "How many?"}],
+                    "expect": {"first_number": values}}
+
+        assert parse_case(case(["17", "26.5"]), family="document_qa").expect.first_number == ("17", "26.5")
+        for bad in (["17%"], ["seventeen"], ["-3"], ["1,700"]):
+            with pytest.raises(CaseError, match="first_number"):
+                parse_case(case(bad), family="document_qa")

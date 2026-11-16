@@ -35,7 +35,9 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~4 hours later (~10am 
    - https://github.com/strands-agents/harness-sdk/releases
    - https://github.com/strands-agents/harness-sdk/blob/main/strands-py/CHANGELOG.md
    - https://github.com/strands-agents/harness-sdk/issues?q=is%3Aissue+sort%3Aupdated-desc
-   - For each new release, identify: breaking changes, new hooks/features, fixes that map to current usage in `backend/src/agents/main_agent/`.
+   - **Released versions go to the `strands-release-review` skill, never an inline read of the notes.** When `strands-agents` pin lag (source 19) is above 0, run that skill for the pin → latest `python/v*` range, unless `docs/kaizen/scoping/strands-<latest, hyphenated>-readout.md` already exists. In that case cite it and check whether its bump PR has opened. The skill diffs the wheels and `model_info.json`, gives every change an Adopt / Gate / Guard / Subtract / Inert verdict with a file:line, and writes the readout. Put its Verdict line, its Adopt and Subtract rows and its Unlocks table in this doc's Strands section (an unlock worth building can be a Top 5 idea with its `*unlocks*:` line), and queue **one** entry, "Strands bump to X", whose Effort × Impact comes from the readout's gates. Reading notes inline is how 1.64.0 sat for 10 days behind a gate on a config we never pass.
+   - **Strands docs, if the `strands-docs` MCP server is available** (the `strands@strands-agents` Claude Code plugin; load `search_docs` / `fetch_doc` with `ToolSearch` query `strands-docs`, and tell the Strands subagent to do the same). Use it for the subtraction check: when we carry custom code for something, look up whether Strands now documents a native way to do it, and cite the page in the idea. The docs describe the latest release, not our pin, so a documented feature is a lead for `strands-release-review`, not proof we can use it today. Search ranks loosely ("concurrent tool executor" once returned three unrelated tool pages and not the executor's), so prefer `fetch_doc` on a page you can name (`https://strandsagents.com/docs/api/python/<module>/index.md`; an empty `uri` lists every page), and never read a search that misses as "Strands has no native way". Without the server, skip it and list it as not scanned in the Sources Scanned appendix.
+   - **Unreleased work on `main`** (merged PRs aimed at the next release) stays a light read here: list what would land, flag a pre-bump check only when a file:line in our tree makes it reachable, and leave the verdicts to the readout once it ships.
 
 2a. **Prompt caching across providers** and **2b. Multi-agent patterns and inter-agent communication** — standing watches. Their state (what is tracked, what upstream has landed, what measurement settled) lives in `docs/kaizen/standing-watches.md` under the same numbers; read it every run, check each watch's open items, and record what moved in that file in the same PR.
 
@@ -135,6 +137,7 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~4 hours later (~10am 
     - Frontend: `@angular/core`, `@analogjs/platform`, `vitest`
     - Infrastructure: `aws-cdk-lib`, `constructs`
     - Source files: `backend/pyproject.toml`, `frontend/ai.client/package.json`, `infrastructure/package.json`.
+    - `strands-agents` lag above 0 triggers the `strands-release-review` skill (source 2). The Notes column links its readout instead of summarising release notes.
 
 20. **Decisions log** — `docs/kaizen/decisions.md` (if it exists). Items previously declined; don't re-propose without materially new context.
 
@@ -234,7 +237,7 @@ Friday early morning (~6am MT). `kaizen-review-prep` runs ~4 hours later (~10am 
 ### Version-pin lag
 | Dep | Pinned | Latest | Lag | Notes |
 |---|---|---|---|---|
-| strands-agents | x.y.z | a.b.c | N releases / N days | [breaking? new feature relevant to us?] |
+| strands-agents | x.y.z | a.b.c | N releases / N days | [readout: scoping/strands-a-b-c-readout.md — its Verdict line] |
 
 ### Retirement candidates
 - **[Skill / file / config]** — [evidence: not modified in N days, replaced by X, never referenced]
@@ -340,6 +343,8 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
    Total budget across subagents targets ≤50. Track centrally; modest overage (~60) is acceptable when surfacing real signal — beyond that, stop and document the skip.
 
 5. **Version-pin diff.** For each tracked dep, fetch latest release version (WebFetch on the release page or registry equivalent — counts toward budget). Compute lag in releases and days. If a budget hit prevents a check, list the dep under "Skipped".
+
+5a. **Strands release review.** If `strands-agents` lag is above 0 and there's no readout for the latest version yet, run the `strands-release-review` skill now, in this session rather than a subagent, because its wheel diff needs the repo. Its readout is part of this PR: `git add docs/kaizen/` already covers `docs/kaizen/scoping/`. PyPI and `gh` calls count toward the web budget the same way as source 19's.
 
 6. **Synthesize.** Write the research doc per the shape above. Pull subagent reports verbatim into source sections; write the gestalt narrative (TL;DR, "What's moving", Take) yourself. **Top 5 weighting**:
    - **Library-native subtraction** opportunities (where upstream closed a custom-code need) get a subtraction boost.

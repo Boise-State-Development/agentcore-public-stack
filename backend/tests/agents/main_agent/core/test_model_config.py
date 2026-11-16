@@ -486,6 +486,27 @@ class TestThinkingBinding:
         assert arf["anthropic_beta"] == [self._BETA, self._FGTS_BETA]
 
     @pytest.mark.parametrize(
+        "model_id", ["us.anthropic.claude-sonnet-5", "global.anthropic.claude-sonnet-5"]
+    )
+    def test_sonnet_5_gets_summarized_display_without_the_binding(self, model_id):
+        arf = ModelConfig(
+            model_id=model_id, inference_params={"effort": "medium"}
+        ).to_bedrock_config()["additional_request_fields"]
+
+        assert arf == {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "medium"},
+        }
+
+    def test_sonnet_5_caller_set_display_is_kept(self):
+        own = {"type": "adaptive", "display": "omitted"}
+        arf = ModelConfig(
+            model_id="global.anthropic.claude-sonnet-5", inference_params={"thinking": own}
+        ).to_bedrock_config()["additional_request_fields"]
+
+        assert arf == {"thinking": own}
+
+    @pytest.mark.parametrize(
         "model_id",
         [
             "us.anthropic.claude-haiku-4-5-20251001-v1:0",

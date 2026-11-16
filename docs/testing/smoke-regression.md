@@ -115,8 +115,8 @@ new-event-name notes that do not change the status.
 | `ask_user_question_resume` | prompt forcing `ask_user_question` | `user_question_required` **after** the final `message_stop` with `interruptId` + `questions`; resume with `{answers: {<header>: {selected, text}}}` finishes without re-raising; `pendingInterrupts` empty afterwards | `ASK_USER_QUESTION_ENABLED` (default on), tool granted |
 | `tool_approval_resume` | prompt forcing `--approval-tool` | `tool_approval_required`, resume with `"approved"`, a `tool_result` follows | `--approval-tool <id>` for a tool flagged `needsApproval` (dev has an MCP server whose hello tool is) |
 | `client_tool_call_resume` | declare one `client_tools` spec (`echo_marker`), prompt forcing it | `client_tool_call` **after** the final `message_stop` with `interruptId`, the bare `toolName`, `arguments`; resume with `{output, isError}` finishes without re-raising (proves the snapshot rebuilt the tool) and the answer echoes the output; `pendingInterrupts` empty afterwards. This is the terminal client's local-tools protocol with the script standing in as the client | none — the field is request-only |
-| `duplicate_send_409` | second POST while the first streams | HTTP 409 with the single-flight detail | app-api target |
-| `stop_mid_answer` | abort the stream after 12 deltas, `POST /sessions/{id}/interrupt {reason: user_stopped}` | the next send is accepted within 45 s (lease released); reports whether the partial answer persisted. A short turn can finish server-side before the heartbeat and clear its own marker, which is by design | app-api target |
+| `duplicate_send_409` | second POST on the first response's **first frame**, before its `message_start`; the first stream stays open until the duplicate has answered | HTTP 409 with the single-flight detail. A FAIL says which case it is: `inconclusive: the first turn ended…` (it was over before the duplicate landed, so nothing was tested) or `…the single-flight guard let it through` (a real gap). `--json` carries the timeline (`firstFrameMs`, `dupSentMs`, `dupAnsweredMs`, `messageStartMs`, `firstEndedMs`) | app-api target |
+| `stop_mid_answer` | abort the stream after 12 deltas (and after the duplicate answered), `POST /sessions/{id}/interrupt {reason: user_stopped}` | the next send is accepted within 45 s (lease released; a 409, or the Runtime's 424 that names a 409, is retried); reports whether the partial answer persisted. A short turn can finish server-side before the heartbeat and clear its own marker, which is by design | app-api target |
 | `preview_session` | `preview-…` session id | completes; `GET /messages` empty or 404; absent from `GET /sessions` | — |
 | `steer_mid_turn` | three-tool prompt, `POST /sessions/{id}/steer` on the first `tool_use` | OBSERVED: whether `steering_applied` landed or the steer lost the race (then #916's end-of-turn flush sends it as a normal turn). FAIL only if the endpoint errors; SKIP on 404 (flag off) | app-api target, `MID_TURN_STEERING_ENABLED` |
 | `attach_pdf` | inline PDF generated in-script | completes; the restored user message carries a document block or the attachment marker; warns if the token was not read back. On a model whose row declares TEXT input only (`--model-id zai.glm-5` on dev) the PDF goes over as extracted text instead, and the row must still pass | `--with-attachments` |
@@ -142,7 +142,7 @@ latency per run; compare it against `turn_prelude` lines (turn-path-ttft §6C
 R1), never against a different day's run.
 
 **Reading a failure.** The detail names the frame or field that broke the
-contract. Three traps that look like product bugs:
+contract. Four traps that look like product bugs:
 
 - `tool_turn` with no `tool_use`: the tool is not granted to the user, or the
   model declined. Check `GET /tools` for the user before filing anything.
@@ -154,6 +154,14 @@ contract. Three traps that look like product bugs:
 - `stop_mid_answer` says the partial answer did not persist: the turn finished
   server-side inside the heartbeat window and the coordinator cleared the
   marker on purpose. Lengthen nothing; it is the documented control case.
+- `duplicate_send_409` getting HTTP 200 is a guard gap only if the first
+  turn still held its lease when the duplicate landed. On the V2 Runtime a
+  client disconnect reaches the container and the turn's `finally` releases
+  the lease, and Haiku 5.5 has streamed 600 lines within 250 ms of
+  `message_start`. Until 2026-11-14 the row sent the duplicate on
+  `message_start` and left 12 deltas (~70 ms) later, while the duplicate took
+  ~700 ms to land, so it failed four nightly runs in six with a working guard.
+  Read the timeline in `--json` before blaming the lease.
 
 ### 2.3 Adding a row
 

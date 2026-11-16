@@ -78,6 +78,18 @@ _BEDROCK_THINKING_BINDING_MARKERS = (
     "claude-mythos-5-2",
 )
 
+# Claude Sonnet 5 also thinks by default with display "omitted", but gets only
+# the display, not the binding. Prod 2026-11-14: a Sonnet 5 turn's first call
+# was silent for 160 s and its second for 600 s, which ended the turn in a
+# read timeout. On dev (`us.anthropic.claude-sonnet-5`, effort high, the same
+# prompt) a request with no `thinking` dict sent two empty reasoning deltas
+# with a 141.8 s gap between them; `{type: "adaptive", display: "summarized"}`
+# streamed 1,206 reasoning deltas with a largest gap of 4.4 s. The cache key
+# ignores `display` here too: across no dict → summarized → no dict, all
+# 6,016 cached tokens were read and none written. The binding is left off
+# because replay billing under it has not been measured for this model.
+_BEDROCK_SUMMARIZED_DISPLAY_MARKERS = ("claude-sonnet-5",)
+
 
 class ModelProvider(str, Enum):
     """Supported LLM providers"""
@@ -258,6 +270,7 @@ def _apply_thinking_binding(config: Dict[str, Any], model_id: Optional[str]) -> 
     """
     mid = (model_id or "").lower()
     if not any(marker in mid for marker in _BEDROCK_THINKING_BINDING_MARKERS):
+        _apply_summarized_display(config, mid)
         return
     arf = config.setdefault("additional_request_fields", {})
     thinking = arf.get("thinking", {"type": "adaptive"})
@@ -271,6 +284,22 @@ def _apply_thinking_binding(config: Dict[str, Any], model_id: Optional[str]) -> 
     if _THINKING_BINDING_BETA not in betas:
         betas.append(_THINKING_BINDING_BETA)
     arf["anthropic_beta"] = betas
+
+
+def _apply_summarized_display(config: Dict[str, Any], mid: str) -> None:
+    """Ask a model in ``_BEDROCK_SUMMARIZED_DISPLAY_MARKERS`` to stream its
+    reasoning. A request that names no ``thinking`` gets ``{type: "adaptive",
+    display: "summarized"}``, and an adaptive dict without a display gets
+    ``display: "summarized"``. Anything else is left as written. The caller
+    has already routed the binding models away, so ``claude-sonnet-5`` here
+    never means Sonnet 5.5."""
+    if not any(marker in mid for marker in _BEDROCK_SUMMARIZED_DISPLAY_MARKERS):
+        return
+    arf = config.get("additional_request_fields") or {}
+    thinking = arf.get("thinking", {"type": "adaptive"})
+    if not isinstance(thinking, dict) or thinking.get("type") != "adaptive" or "display" in thinking:
+        return
+    config.setdefault("additional_request_fields", arf)["thinking"] = {**thinking, "display": "summarized"}
 
 
 def _shape_thinking_value(

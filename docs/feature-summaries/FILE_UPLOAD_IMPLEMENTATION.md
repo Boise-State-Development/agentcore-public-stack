@@ -209,7 +209,6 @@ PK: USER#{userId}, SK: QUOTA
 | `FILE_UPLOAD_USER_QUOTA_BYTES` | User quota (default 1GB) |
 | `INLINE_DOCUMENT_MAX_BYTES` | Per-file inline document cap (default 4MB); larger non-tabular files are skipped with a note |
 | `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES` | Per-turn budget for all inline attachments, images included (default 7.5MB = the 10MB AgentCore Memory event quota ÷ base64's 4/3). Files that would push the turn over it are skipped with a note instead of failing the history write. `0` disables. |
-| `ATTACHMENT_TURN_GUARD_ENABLED` | Kill switch for the two caps above (default on; only `false` disables) |
 
 ## Quota Management
 

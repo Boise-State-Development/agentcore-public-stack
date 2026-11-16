@@ -267,6 +267,8 @@ describe('ModelCatalogPage', () => {
       //    Anthropic's first-party $0.20 cache read.
       //  - GPT-6.1 Sol reads at 0.05x: its card states the multiplier and
       //    publishes $0.11 against $2.20 US CRIS ($0.10 against $2.00 Global).
+      //  - Kimi K3.1 reads at 0.05x: its card publishes $0.22 against $4.40
+      //    US CRIS ($0.20 against $4.00 Global). K3 still reads at 0.1x.
       //  - GPT-5.5 has no write bucket: its card's cache-write cell is an em
       //    dash, and a live probe reported `cache_write_tokens: 0` on every turn
       //    while reading the prefix back from cache.
@@ -276,6 +278,7 @@ describe('ModelCatalogPage', () => {
         'claude-sonnet-5-5': 0.05,
         'claude-fable-5-2': 0.025,
         'gpt-6-1-sol': 0.05,
+        'kimi-k3-1': 0.05,
       };
       for (const model of tieredModels) {
         const t = model.template;
@@ -387,7 +390,7 @@ describe('ModelCatalogPage', () => {
 
     it('keeps both families on the tab', () => {
       expect(OPENAI_FAMILY.length).toBeGreaterThan(0);
-      expect(NON_OPENAI.map(m => m.key)).toEqual(['kimi-k3']);
+      expect(NON_OPENAI.map(m => m.key)).toEqual(['kimi-k3-1', 'kimi-k3']);
     });
 
     it('renders them on their own tab', () => {
@@ -525,6 +528,34 @@ describe('ModelCatalogPage', () => {
       expect(params['reasoning_effort'].allowed).toContain(
         params['reasoning_effort'].default,
       );
+    });
+
+    it('curates Kimi K3.1 on US CRIS, with its own probed spec and a max default', () => {
+      // Probed 2026-11-15 against us.moonshotai.kimi-k3.1 in us-west-2. The
+      // bounds match K3's; the default does not. Unset effort reasoned like
+      // `max` (mean 628 vs 642 tokens), as the card says, where K3's unset
+      // reasoned like `medium` — so pinning K3's default here would quietly
+      // change the model's answers.
+      const k31 = CURATED_BEDROCK_RESPONSES_MODELS.find(m => m.key === 'kimi-k3-1');
+      const t = k31!.template;
+
+      expect(t.modelId).toBe('us.moonshotai.kimi-k3.1');
+      expect(t.providerName).toBe('Moonshot AI');
+      expect(t.maxInputTokens).toBe(1_000_000);
+      expect(t.inputPricePerMillionTokens).toBeCloseTo(4.4, 6);
+      expect(t.outputPricePerMillionTokens).toBeCloseTo(22.0, 6);
+      expect(t.cacheWritePricePerMillionTokens).toBeCloseTo(5.5, 6);
+      expect(t.cacheReadPricePerMillionTokens).toBeCloseTo(0.22, 6);
+
+      const params = t.supportedParams!.params;
+      expect(params['temperature'].supported).toBe(true);
+      expect(params['temperature'].max).toBe(1);
+      expect(params['top_p'].supported).toBe(false);
+      expect(params['max_tokens'].min).toBe(16);
+      expect(params['reasoning_effort'].allowed?.join(',')).toBe(
+        'none,low,medium,high,xhigh,max',
+      );
+      expect(params['reasoning_effort'].default).toBe('max');
     });
 
     it('never lets a non-OpenAI entry inherit the OpenAI parameter spec', () => {

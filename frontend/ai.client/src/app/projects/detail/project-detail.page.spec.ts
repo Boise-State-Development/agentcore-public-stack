@@ -25,7 +25,7 @@ import { Project } from '../models/project.model';
 @Component({ selector: 'app-project-composer', template: 'composer' })
 class ComposerStub {
   readonly project = input<Project>();
-  readonly modelLabel = input<string | null>();
+  readonly projectModelId = input<string | null | undefined>();
 }
 @Component({ selector: 'app-project-tasks', template: 'tasks' })
 class TasksStub {

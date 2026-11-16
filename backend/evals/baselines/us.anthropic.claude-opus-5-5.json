@@ -164,366 +164,6 @@
         "firstTokenMs": 1641.0
       }
     },
-    "document_qa.policy_booking_lead_time": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "72",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 135.0,
-        "inputTokens": 14608.0,
-        "toolCalls": 1.0,
-        "durationMs": 6337.0,
-        "firstTokenMs": 3388.0
-      }
-    },
-    "document_qa.policy_room_capacity_paraphrase": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "**38**",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 142.0,
-        "inputTokens": 14613.0,
-        "toolCalls": 1.0,
-        "durationMs": 7026.0,
-        "firstTokenMs": 3480.0
-      }
-    },
-    "document_qa.policy_after_hours_form": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "**FAC-17**",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 177.0,
-        "inputTokens": 14628.0,
-        "toolCalls": 1.0,
-        "durationMs": 7655.0,
-        "firstTokenMs": 4018.0
-      }
-    },
-    "document_qa.policy_late_cancellation_fee": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "It's **$35**. That's the late cancellation fee for cancelling less than 24 hours before the booking starts.",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 153.0,
-        "inputTokens": 14611.0,
-        "toolCalls": 1.0,
-        "durationMs": 7388.0,
-        "firstTokenMs": 3733.0
-      }
-    },
-    "document_qa.budget_submission_deadline": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "**March 14**",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 164.0,
-        "inputTokens": 14393.0,
-        "toolCalls": 1.0,
-        "durationMs": 7207.0,
-        "firstTokenMs": 3887.0
-      }
-    },
-    "document_qa.budget_indirect_rate": {
-      "family": "document_qa",
-      "passed": false,
-      "passes": 1,
-      "samples": 3,
-      "answer": "**26.5%**, applied to modified total direct costs. The 24% rate from the previous award no longer applies.",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 166.0,
-        "inputTokens": 14358.0,
-        "toolCalls": 1.0,
-        "durationMs": 7157.0,
-        "firstTokenMs": 3580.0
-      }
-    },
-    "document_qa.log_highest_temperature": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "**18.6 °C**, recorded on Day 12 (June 13).",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 170.0,
-        "inputTokens": 14421.0,
-        "toolCalls": 1.0,
-        "durationMs": 6780.0,
-        "firstTokenMs": 3439.0
-      }
-    },
-    "document_qa.log_sensor_replacement_date": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "June 9 (Day 08)",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 188.0,
-        "inputTokens": 14458.0,
-        "toolCalls": 1.0,
-        "durationMs": 6618.0,
-        "firstTokenMs": 3373.0
-      }
-    },
-    "document_qa.absent_fact_is_not_invented": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "NOT IN DOCUMENT",
-      "efficiency": {
-        "modelCalls": 1.0,
-        "outputTokens": 14.0,
-        "inputTokens": 7236.0,
-        "toolCalls": 0.0,
-        "durationMs": 2981.0,
-        "firstTokenMs": 1685.0
-      }
-    },
-    "document_qa.large_manual_notice_period": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "You need to give at least **34 calendar days' written notice**.",
-      "efficiency": {
-        "modelCalls": 3.0,
-        "outputTokens": 350.0,
-        "inputTokens": 31721.0,
-        "toolCalls": 3.0,
-        "durationMs": 10366.0,
-        "firstTokenMs": 1873.0
-      }
-    },
-    "document_qa.large_manual_per_diem": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "**$47.50** (page 88)",
-      "efficiency": {
-        "modelCalls": 3.0,
-        "outputTokens": 297.0,
-        "inputTokens": 31357.0,
-        "toolCalls": 3.0,
-        "durationMs": 8804.0,
-        "firstTokenMs": 1487.0
-      }
-    },
-    "document_qa.large_scanned_abutment_cost": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "**$418,600** (estimated repair cost, Sheet 29). I read this off the scanned page image, but the source-check tool couldn't match it in the page text.",
-      "efficiency": {
-        "modelCalls": 5.0,
-        "outputTokens": 553.0,
-        "inputTokens": 52056.0,
-        "toolCalls": 4.0,
-        "durationMs": 21341.0,
-        "firstTokenMs": 1409.0
-      }
-    },
-    "document_qa.large_scanned_survey_reference": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "HV-SR-5512\n\nThis is on sheet 3. I read it off the scanned page image, but the source-checking tool couldn't match it automatically, probably because the scan has no exact text layer.",
-      "efficiency": {
-        "modelCalls": 4.0,
-        "outputTokens": 483.0,
-        "inputTokens": 38849.0,
-        "toolCalls": 3.0,
-        "durationMs": 16050.0,
-        "firstTokenMs": 1515.0
-      }
-    },
-    "document_qa.large_brochure_silver_price": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "$61",
-      "efficiency": {
-        "modelCalls": 3.0,
-        "outputTokens": 225.0,
-        "inputTokens": 26960.0,
-        "toolCalls": 2.0,
-        "durationMs": 9638.0,
-        "firstTokenMs": 1415.0
-      }
-    },
-    "document_qa.large_brochure_studio_rate": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "$27",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 141.0,
-        "inputTokens": 18475.0,
-        "toolCalls": 1.0,
-        "durationMs": 7359.0,
-        "firstTokenMs": 1408.0
-      }
-    },
-    "document_qa.large_handbook_borrow_limit": {
-      "family": "document_qa",
-      "passed": false,
-      "passes": 0,
-      "samples": 3,
-      "answer": "**17**\n\nIf you're in the visiting scholars programme, your limit is 40.",
-      "efficiency": {
-        "modelCalls": 3.0,
-        "outputTokens": 437.0,
-        "inputTokens": 29012.0,
-        "toolCalls": 3.0,
-        "durationMs": 12064.0,
-        "firstTokenMs": 1495.0
-      }
-    },
-    "document_qa.large_handbook_fines_age": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "12",
-      "efficiency": {
-        "modelCalls": 3.0,
-        "outputTokens": 185.0,
-        "inputTokens": 23028.0,
-        "toolCalls": 2.0,
-        "durationMs": 6865.0,
-        "firstTokenMs": 1493.0
-      }
-    },
-    "document_qa.word_table_blank_cell_column": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "6",
-      "efficiency": {
-        "modelCalls": 1.0,
-        "outputTokens": 89.0,
-        "inputTokens": 6864.0,
-        "toolCalls": 0.0,
-        "durationMs": 4870.0,
-        "firstTokenMs": 3316.0
-      }
-    },
-    "document_qa.word_tracked_change_current_value": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "**$58** per day.",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 104.0,
-        "inputTokens": 13883.0,
-        "toolCalls": 1.0,
-        "durationMs": 5161.0,
-        "firstTokenMs": 3358.0
-      }
-    },
-    "document_qa.native_pdf_weekday_shuttle": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "21:40",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 133.0,
-        "inputTokens": 16896.0,
-        "toolCalls": 1.0,
-        "durationMs": 7205.0,
-        "firstTokenMs": 3089.0
-      }
-    },
-    "document_qa.html_semester_permit_fee": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "$118",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 121.0,
-        "inputTokens": 13631.0,
-        "toolCalls": 1.0,
-        "durationMs": 5990.0,
-        "firstTokenMs": 2787.0
-      }
-    },
-    "document_qa.two_attachments_pick_the_right_year": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "$240",
-      "efficiency": {
-        "modelCalls": 2.0,
-        "outputTokens": 183.0,
-        "inputTokens": 13892.0,
-        "toolCalls": 1.0,
-        "durationMs": 7308.0,
-        "firstTokenMs": 3444.0
-      }
-    },
-    "document_qa.inline_budget_overflow_by_reference": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "RX-4417",
-      "efficiency": {
-        "modelCalls": 3.0,
-        "outputTokens": 221.0,
-        "inputTokens": 31206.0,
-        "toolCalls": 2.0,
-        "durationMs": 15208.0,
-        "firstTokenMs": 4528.0
-      }
-    },
-    "document_qa.follow_up_turn_same_document": {
-      "family": "document_qa",
-      "passed": true,
-      "passes": 3,
-      "samples": 3,
-      "answer": "19:15",
-      "efficiency": {
-        "modelCalls": 3.0,
-        "outputTokens": 352.0,
-        "inputTokens": 25937.0,
-        "toolCalls": 1.0,
-        "durationMs": 8400.0,
-        "firstTokenMs": 2962.0
-      }
-    },
     "attachment_tools.image_chart_value": {
       "family": "attachment_tools",
       "passed": true,
@@ -2170,6 +1810,380 @@
         "toolCalls": 0.0,
         "durationMs": 5884.0,
         "firstTokenMs": 1451.0
+      }
+    },
+    "document_qa.policy_booking_lead_time": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "72",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 154.0,
+        "inputTokens": 15021.0,
+        "toolCalls": 1.0,
+        "durationMs": 6786.0,
+        "firstTokenMs": 3935.0
+      }
+    },
+    "document_qa.policy_room_capacity_paraphrase": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**38**",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 130.0,
+        "inputTokens": 14994.0,
+        "toolCalls": 1.0,
+        "durationMs": 7560.0,
+        "firstTokenMs": 3761.0
+      }
+    },
+    "document_qa.policy_after_hours_form": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**FAC-17**",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 162.0,
+        "inputTokens": 15010.0,
+        "toolCalls": 1.0,
+        "durationMs": 7720.0,
+        "firstTokenMs": 4164.0
+      }
+    },
+    "document_qa.policy_late_cancellation_fee": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**$35**: that's the fee for cancelling less than 24 hours before the start.",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 167.0,
+        "inputTokens": 15001.0,
+        "toolCalls": 1.0,
+        "durationMs": 7549.0,
+        "firstTokenMs": 3686.0
+      }
+    },
+    "document_qa.budget_submission_deadline": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**March 14**",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 133.0,
+        "inputTokens": 14752.0,
+        "toolCalls": 1.0,
+        "durationMs": 6530.0,
+        "firstTokenMs": 3655.0
+      }
+    },
+    "document_qa.budget_indirect_rate": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**26.5%**, applied to modified total direct costs.",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 181.0,
+        "inputTokens": 14764.0,
+        "toolCalls": 1.0,
+        "durationMs": 7137.0,
+        "firstTokenMs": 3887.0
+      }
+    },
+    "document_qa.log_highest_temperature": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**18.6 °C** (Day 12, June 13)",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 163.0,
+        "inputTokens": 14807.0,
+        "toolCalls": 1.0,
+        "durationMs": 6973.0,
+        "firstTokenMs": 3699.0
+      }
+    },
+    "document_qa.log_sensor_replacement_date": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "June 9",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 159.0,
+        "inputTokens": 14823.0,
+        "toolCalls": 1.0,
+        "durationMs": 6300.0,
+        "firstTokenMs": 3375.0
+      }
+    },
+    "document_qa.absent_fact_is_not_invented": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "NOT IN DOCUMENT",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 14.0,
+        "inputTokens": 7432.0,
+        "toolCalls": 0.0,
+        "durationMs": 2986.0,
+        "firstTokenMs": 1636.0
+      }
+    },
+    "document_qa.large_manual_notice_period": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**34 calendar days, in writing** (page 37)\n\nNote: the manual's scanned pages and images are still being indexed, so I could only search its text.",
+      "efficiency": {
+        "modelCalls": 3.0,
+        "outputTokens": 480.0,
+        "inputTokens": 33192.0,
+        "toolCalls": 3.0,
+        "durationMs": 12193.0,
+        "firstTokenMs": 1715.0
+      }
+    },
+    "document_qa.large_manual_per_diem": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$47.50\n\nThis is from page 88 of the manual. A separate interstate rate of $63.20 is on page 119. The scanned pages are still being indexed, so they weren't included in this search.",
+      "efficiency": {
+        "modelCalls": 3.0,
+        "outputTokens": 410.0,
+        "inputTokens": 33297.0,
+        "toolCalls": 3.0,
+        "durationMs": 11972.0,
+        "firstTokenMs": 1638.0
+      }
+    },
+    "document_qa.large_scanned_abutment_cost": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**$418,600** (the report gives this as an estimate, on sheet 29). The automated source check couldn't confirm it because the PDF is a scan, but I read the figure directly from the page image.",
+      "efficiency": {
+        "modelCalls": 4.0,
+        "outputTokens": 585.0,
+        "inputTokens": 41497.0,
+        "toolCalls": 4.0,
+        "durationMs": 15888.0,
+        "firstTokenMs": 2001.0
+      }
+    },
+    "document_qa.large_scanned_survey_reference": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "HV-SR-5512 (Sheet 3)",
+      "efficiency": {
+        "modelCalls": 4.0,
+        "outputTokens": 462.0,
+        "inputTokens": 39492.0,
+        "toolCalls": 3.0,
+        "durationMs": 14730.0,
+        "firstTokenMs": 1453.0
+      }
+    },
+    "document_qa.large_brochure_silver_price": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$61",
+      "efficiency": {
+        "modelCalls": 3.0,
+        "outputTokens": 186.0,
+        "inputTokens": 27613.0,
+        "toolCalls": 2.0,
+        "durationMs": 10126.0,
+        "firstTokenMs": 1526.0
+      }
+    },
+    "document_qa.large_brochure_studio_rate": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$27",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 155.0,
+        "inputTokens": 18736.0,
+        "toolCalls": 1.0,
+        "durationMs": 7353.0,
+        "firstTokenMs": 1483.0
+      }
+    },
+    "document_qa.large_handbook_borrow_limit": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "**17**\n\nThat's the limit for regular members. If you're in the visiting scholars programme, the handbook lets you borrow up to 40.",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 257.0,
+        "inputTokens": 20109.0,
+        "toolCalls": 1.0,
+        "durationMs": 8658.0,
+        "firstTokenMs": 1984.0
+      }
+    },
+    "document_qa.large_handbook_fines_age": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "12 and under.",
+      "efficiency": {
+        "modelCalls": 3.0,
+        "outputTokens": 236.0,
+        "inputTokens": 23732.0,
+        "toolCalls": 2.0,
+        "durationMs": 7344.0,
+        "firstTokenMs": 1459.0
+      }
+    },
+    "document_qa.word_table_blank_cell_column": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "6",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 73.0,
+        "inputTokens": 7060.0,
+        "toolCalls": 0.0,
+        "durationMs": 5192.0,
+        "firstTokenMs": 3902.0
+      }
+    },
+    "document_qa.word_tracked_change_current_value": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$58",
+      "efficiency": {
+        "modelCalls": 1.0,
+        "outputTokens": 94.0,
+        "inputTokens": 7073.0,
+        "toolCalls": 0.0,
+        "durationMs": 5475.0,
+        "firstTokenMs": 4151.0
+      }
+    },
+    "document_qa.native_pdf_weekday_shuttle": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "21:40",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 162.0,
+        "inputTokens": 17317.0,
+        "toolCalls": 1.0,
+        "durationMs": 6771.0,
+        "firstTokenMs": 3801.0
+      }
+    },
+    "document_qa.html_semester_permit_fee": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$118",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 129.0,
+        "inputTokens": 14031.0,
+        "toolCalls": 1.0,
+        "durationMs": 6893.0,
+        "firstTokenMs": 3762.0
+      }
+    },
+    "document_qa.two_attachments_pick_the_right_year": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "$240",
+      "efficiency": {
+        "modelCalls": 2.0,
+        "outputTokens": 197.0,
+        "inputTokens": 14298.0,
+        "toolCalls": 1.0,
+        "durationMs": 6861.0,
+        "firstTokenMs": 3958.0
+      }
+    },
+    "document_qa.inline_budget_overflow_by_reference": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "RX-4417",
+      "efficiency": {
+        "modelCalls": 3.0,
+        "outputTokens": 223.0,
+        "inputTokens": 31805.0,
+        "toolCalls": 2.0,
+        "durationMs": 14513.0,
+        "firstTokenMs": 4145.0
+      }
+    },
+    "document_qa.follow_up_turn_same_document": {
+      "family": "document_qa",
+      "passed": true,
+      "passes": 3,
+      "samples": 3,
+      "answer": "19:15",
+      "efficiency": {
+        "modelCalls": 3.0,
+        "outputTokens": 360.0,
+        "inputTokens": 26523.0,
+        "toolCalls": 1.0,
+        "durationMs": 8671.0,
+        "firstTokenMs": 3496.0
+      }
+    }
+  },
+  "familyPromotions": {
+    "document_qa": {
+      "promotedAt": "2026-11-14T21:10:01.162145Z",
+      "source": {
+        "startedAt": "2026-11-14T17:14:52.029264Z",
+        "target": "runtime:dev-boisestateai-v2",
+        "gitCommit": "e256bded53830c556e03b035930bcc893a059bc9",
+        "imageTags": {
+          "inference-api": "a04cc849817efdc2",
+          "app-api": "55fcdb64eff147cd"
+        }
       }
     }
   }

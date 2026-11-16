@@ -280,8 +280,6 @@ class LimitsProfile:
     inline_document_max_bytes: int
     #: The combined inline budget for one message; ``<= 0`` disables.
     inline_total_max_bytes: int
-    #: ``ATTACHMENT_TURN_GUARD_ENABLED``: the count cap and the combined budget apply.
-    turn_guard: bool = True
     #: ``INLINE_BUDGET_BY_REFERENCE_ENABLED``: an uploaded document over the
     #: combined budget goes ``on_demand`` rather than being dropped.
     over_budget_by_reference: bool = True
@@ -290,8 +288,6 @@ class LimitsProfile:
     documents_as_text: bool = False
     #: Characters of extracted text per turn for a TEXT-only model.
     text_only_max_chars: int = 60_000
-    #: How many ids the resolver fetches when the guard is off (its old backstop).
-    resolver_backstop_without_guard: int = 5
     #: ``document_budget`` as a share of the model's chat ceiling. ``0`` is the
     #: ``legacy`` profile: no token budget, the byte rules only.
     document_budget_share: float = 0.0
@@ -501,8 +497,6 @@ class CountCap:
     dropped_names: list = field(default_factory=list)
     #: Everything over the cap: direct files, ids and folders.
     dropped_total: int = 0
-    #: The resolver's own backstop: ``None`` once the cap has been applied here.
-    resolver_max_files: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +507,6 @@ class CountCap:
 def legacy_profile() -> LimitsProfile:
     """Today's byte rules, with the flags they read as inputs (§9.1 rule 1)."""
     from apis.shared.feature_flags import (
-        attachment_turn_guard_enabled,
         converse_documents_as_text_enabled,
         inline_budget_by_reference_enabled,
     )
@@ -523,7 +516,6 @@ def legacy_profile() -> LimitsProfile:
         max_files_per_message=MAX_FILES_PER_MESSAGE,
         inline_document_max_bytes=INLINE_DOCUMENT_MAX_BYTES,
         inline_total_max_bytes=INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
-        turn_guard=attachment_turn_guard_enabled(),
         over_budget_by_reference=inline_budget_by_reference_enabled(),
         documents_as_text=converse_documents_as_text_enabled(),
         text_only_max_chars=TEXT_ONLY_DOCUMENTS_MAX_CHARS,
@@ -673,8 +665,8 @@ def client_limits(
     """
     profile = profile or current_limits_profile()
     uploads = uploads or upload_limits(profile)
-    count = profile.max_files_per_message if profile.turn_guard else profile.resolver_backstop_without_guard
-    budget = profile.inline_total_max_bytes if profile.turn_guard else 0
+    count = profile.max_files_per_message
+    budget = profile.inline_total_max_bytes
     return {
         "profile": profile.name,
         "filesPerMessage": count if count > 0 else None,
@@ -821,21 +813,12 @@ def cap_message_attachments(
     Order is kept, so the first N attached are the N that survive. Ids past the
     budget are counted, not named: resolving them only to name the losers would
     fan out a read per id a client chose to send. ``folders_dropped`` is what the
-    folder limit of its own already removed; it is counted whatever the guard.
+    folder limit of its own already removed; it is always counted.
     """
     direct = list(direct_files)
     ids = list(upload_ids)
     folders = list(folder_ids)
     dropped_total = int(folders_dropped)
-    if not profile.turn_guard:
-        return CountCap(
-            direct_files=direct,
-            upload_ids=ids,
-            folder_ids=folders,
-            dropped_total=dropped_total,
-            resolver_max_files=profile.resolver_backstop_without_guard,
-        )
-
     cap = profile.max_files_per_message
     dropped_names: list = []
     if cap > 0:
@@ -854,7 +837,6 @@ def cap_message_attachments(
         folder_ids=folders,
         dropped_names=dropped_names,
         dropped_total=dropped_total,
-        resolver_max_files=None,
     )
 
 
@@ -917,7 +899,7 @@ def plan_attachments(
         # The ``token`` profile: images first, since an image has no other
         # mode, then documents, which fall back to on_demand (§4.4.1).
         _images_first_budget(files, classes, candidates, modes, reasons, variants, budget)
-    elif profile.turn_guard and candidates and profile.inline_total_max_bytes > 0:
+    elif candidates and profile.inline_total_max_bytes > 0:
         running = 0
         for i in candidates:
             size = max(0, files[i].size_bytes)
@@ -965,7 +947,7 @@ def _request_byte_budget(profile: LimitsProfile) -> int:
     """Raw bytes of native blocks one turn may carry: the smaller of the persisted
     message's budget and the request's, ``0`` when neither applies."""
     caps = []
-    if profile.turn_guard and profile.inline_total_max_bytes > 0:
+    if profile.inline_total_max_bytes > 0:
         caps.append(profile.inline_total_max_bytes)
     if profile.request_attachment_max_bytes > 0:
         caps.append(profile.request_attachment_max_bytes)

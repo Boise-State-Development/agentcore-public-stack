@@ -450,6 +450,12 @@ export class InferenceAgentCoreConstruct extends Construct {
         ...(config.webSearchDefaultMaxResults.enabled
           ? { WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: 'true' }
           : {}),
+        // Concurrent tool execution: read-only calls in a tool batch overlap,
+        // everything else stays serialized. Written only while ON, so the
+        // default costs nothing against the V2 payload budget.
+        ...(config.concurrentToolExecution.enabled
+          ? { CONCURRENT_TOOL_EXECUTION_ENABLED: 'true' }
+          : {}),
         // Word skill scripts: create/modify_word_document can run a bound
         // skill's scripts/*.py in Code Interpreter. Written only while ON, so
         // the default costs nothing against the V2 payload budget.

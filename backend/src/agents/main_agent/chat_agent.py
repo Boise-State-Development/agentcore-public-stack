@@ -7,6 +7,7 @@ This is the default agent type for standard chat interactions.
 
 import logging
 import os
+import threading
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from agents.main_agent.base_agent import BaseAgent
@@ -306,6 +307,7 @@ class ChatAgent(BaseAgent):
         invocation_state: Optional[Dict[str, Any]] = None,
         turn_attachment_plan: Optional[Dict[str, Any]] = None,
         turn_pasted_chars: Optional[int] = None,
+        cancel_signal: Optional[threading.Event] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -357,6 +359,10 @@ class ChatAgent(BaseAgent):
                 pasted, as the composer counted them. Written as `pastedChars`
                 on the turn's last cost row; never reaches the prompt. Per turn,
                 like `turn_attachment_plan`.
+            cancel_signal: This turn's cancellation event, set by the route's
+                lease heartbeat on a Stop and handed to Strands'
+                `stream_async`. Per turn, like `turn_lease`, so a cancel can
+                never outlive the turn on the cached agent. None passes nothing.
 
         Yields:
             str: SSE formatted events
@@ -404,5 +410,6 @@ class ChatAgent(BaseAgent):
             poll_side_frame=poll_side_frame,
             turn_clock=turn_clock,
             invocation_state=invocation_state,
+            cancel_signal=cancel_signal,
         ):
             yield event

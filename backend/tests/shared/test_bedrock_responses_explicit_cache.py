@@ -300,9 +300,11 @@ class TestPerModelRequirement:
 
     KIMI = "us.moonshotai.kimi-k3"
 
-    @pytest.mark.parametrize("model_id", [KIMI, "global.moonshotai.kimi-k3"])
-    def test_enabled_for_both_inference_profiles(self, monkeypatch, model_id):
-        # Substring match, so `us.` and `global.` both hit without a second entry.
+    @pytest.mark.parametrize(
+        "model_id", [KIMI, "global.moonshotai.kimi-k3", "in.moonshotai.kimi-k3", "moonshotai.kimi-k3"]
+    )
+    def test_enabled_for_every_inference_profile(self, monkeypatch, model_id):
+        # Matched after the profile prefix, so every geo hits without a second entry.
         monkeypatch.delenv(EXPLICIT_CACHE_ENABLED_ENV, raising=False)
 
         assert explicit_prompt_cache_enabled(model_id) is True
@@ -357,6 +359,33 @@ class TestPerModelRequirement:
         assert explicit_prompt_cache_enabled("us.moonshotai.kimi-k2.5") is False
         assert explicit_prompt_cache_enabled("us.moonshot.kimi-k2-thinking") is False
 
+    @pytest.mark.parametrize(
+        "model_id", ["us.moonshotai.kimi-k3.1", "global.moonshotai.kimi-k3.1", "moonshotai.kimi-k3.1"]
+    )
+    def test_kimi_k3_1_stays_on_stock_implicit_caching(self, monkeypatch, model_id):
+        """K3.1 starts with K3's id but caches the other way round.
+
+        Measured 2026-11-15 (dev-ai, unique prefix per arm, 4 turns with
+        history): stock implicit read the whole growing conversation back with
+        no write ($0.03546 of input), full explicit pinned reads at the static
+        prefix and billed a write on top ($0.04378, +23%). The old substring
+        match on "moonshotai.kimi-k3" swept it onto the explicit path.
+        """
+        monkeypatch.delenv(EXPLICIT_CACHE_ENABLED_ENV, raising=False)
+
+        assert explicit_prompt_cache_enabled(model_id) is False
+
+    def test_kimi_k3_1_request_carries_no_explicit_controls(self, monkeypatch):
+        """End to end through the real _format_request."""
+        monkeypatch.delenv(EXPLICIT_CACHE_ENABLED_ENV, raising=False)
+        model = build_bedrock_responses_model("us.moonshotai.kimi-k3.1", region="us-west-2")
+
+        request = _format(model)
+
+        assert "prompt_cache_options" not in (request.get("extra_body") or {})
+        assert "prompt_cache_key" not in request
+        assert "instructions" in request
+
 
 class TestOtherTransportsUnaffected:
     def test_mantle_responses_gets_no_explicit_controls(self, explicit_on):
@@ -400,3 +429,54 @@ class TestUsageNormalizationStillApplies:
         assert usage["inputTokens"] == 100
         assert usage["cacheReadInputTokens"] == 30_000
         assert usage["cacheWriteInputTokens"] == 400
+
+
+class TestNoUpstreamMessageCheckpoints:
+    """No OpenAI-family builder may hand Strands a ``cache_config``.
+
+    Since strands-agents 1.64.0 (#5418), an ``OpenAIResponsesModel`` with any
+    ``cache_config`` places ``prompt_cache_breakpoint`` checkpoints through the
+    conversation history on models whose ``model_info`` says they take cache
+    points, which GPT-5.6 does (``strategy="auto"`` is the default). That is
+    the end-of-history breakpoint measured at +11.8% cost in the module
+    docstring of ``bedrock_responses.py``: it re-writes the growing history
+    every turn and never reads it back. Today the only thing keeping it off is
+    that no builder passes a ``cache_config``, so pin that. Retiring
+    ``build_prompt_cache_key`` in favour of upstream's ``apply_cache_config``
+    (docs/kaizen/standing-watches.md) needs ``messages_ttl=False`` with it.
+    """
+
+    @pytest.mark.parametrize(
+        "model_id", ["us.openai.gpt-5.6-sol", "global.openai.gpt-5.6-luna", "us.moonshotai.kimi-k3"]
+    )
+    def test_bedrock_runtime_builder_sets_no_cache_config(self, model_id):
+        model = build_bedrock_responses_model(model_id, region="us-west-2")
+
+        assert model.get_config().get("cache_config") is None
+
+    @pytest.mark.parametrize("api_mode", ["CHAT_COMPLETIONS", "RESPONSES"])
+    def test_mantle_builder_sets_no_cache_config(self, api_mode):
+        from apis.shared.models.mantle import MantleApiMode, build_mantle_model
+
+        model = build_mantle_model(
+            model_id="openai.gpt-5.6-sol", api_mode=MantleApiMode[api_mode], region="us-west-2"
+        )
+
+        assert model.get_config().get("cache_config") is None
+
+    def test_a_cache_config_would_mark_the_history(self):
+        """Why the pin exists: the upstream behaviour it keeps switched off."""
+        from strands.models import CacheConfig
+
+        model = build_bedrock_responses_model("us.openai.gpt-5.6-sol", region="us-west-2")
+        model.update_config(cache_config=CacheConfig(strategy="auto"))
+
+        request = _format(model)
+
+        marked_roles = [
+            item.get("role")
+            for item in request["input"]
+            if isinstance(item.get("content"), list)
+            and any(isinstance(b, dict) and "prompt_cache_breakpoint" in b for b in item["content"])
+        ]
+        assert "user" in marked_roles

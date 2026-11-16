@@ -72,6 +72,16 @@ CASES = [
         "",
         "true",
     ),
+    # Thinks by default with display "omitted"; gets the summarized adaptive
+    # dict and no binding (model_config._apply_summarized_display).
+    (
+        "sonnet5-thinking",
+        "global.anthropic.claude-sonnet-5",
+        {"max_tokens": 128000, "effort": "medium"},
+        True,
+        "",
+        "true",
+    ),
     (
         "opus47-thinking",
         "us.anthropic.claude-opus-4-7",

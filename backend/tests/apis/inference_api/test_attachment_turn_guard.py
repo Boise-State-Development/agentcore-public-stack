@@ -30,7 +30,6 @@ from apis.inference_api.chat.routes import (
     _emit_attachment_over_quota_metric,
     _estimate_decoded_size,
 )
-from apis.shared.feature_flags import attachment_turn_guard_enabled
 from apis.shared.files import models as file_models
 
 EVENT_QUOTA_BYTES = 10_000_000  # AgentCore Memory event payload quota
@@ -88,15 +87,6 @@ class TestTheRouteAppliesTheCountCapBeforeTheFetch:
         assert out.dropped_over_count_total == 1
         assert out.max_files_per_message == 5
         assert out.plan.to_row() == {"profile": "legacy", "files": [], "droppedOverCount": 1}
-
-    @pytest.mark.asyncio
-    async def test_with_the_guard_off_the_resolver_keeps_its_backstop(self, phase, monkeypatch):
-        monkeypatch.setenv("ATTACHMENT_TURN_GUARD_ENABLED", "false")
-        run, calls = phase
-        out = await run([f"u{i}" for i in range(6)])
-
-        assert calls[0]["max_files"] == 5 and len(calls[0]["upload_ids"]) == 6
-        assert out.dropped_over_count_total == 0
 
 
 class TestDefaults:
@@ -178,21 +168,6 @@ class TestMarkerNames:
         # Both were dropped from the turn; the SPA must not rebuild a card.
         a, b, c = _Attachment("a.pdf"), _Attachment("b.pdf"), _Attachment("c.pdf")
         assert _attachment_marker_names([a, b, c], [c] + [b]) == ["a.pdf"]
-
-
-class TestKillSwitch:
-    @pytest.mark.parametrize("value", [None, "", "true", "TRUE", "yes", "0"])
-    def test_default_on(self, monkeypatch, value):
-        if value is None:
-            monkeypatch.delenv("ATTACHMENT_TURN_GUARD_ENABLED", raising=False)
-        else:
-            monkeypatch.setenv("ATTACHMENT_TURN_GUARD_ENABLED", value)
-        assert attachment_turn_guard_enabled() is True
-
-    @pytest.mark.parametrize("value", ["false", "FALSE", " False "])
-    def test_only_literal_false_disables(self, monkeypatch, value):
-        monkeypatch.setenv("ATTACHMENT_TURN_GUARD_ENABLED", value)
-        assert attachment_turn_guard_enabled() is False
 
 
 class TestOverQuotaMetric:

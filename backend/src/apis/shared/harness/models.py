@@ -50,6 +50,11 @@ class RunResult:
     final_message: str = ""
     stop_reason: Optional[str] = None
     error: Optional[str] = None
+    #: The ``code`` of the turn's ``stream_error`` frame (``ErrorCode``), e.g.
+    #: ``provider_unavailable`` when the model provider failed after the
+    #: Runtime's own retries. ``None`` for an error that had no such frame
+    #: (HTTP, transport, timeout) and for a turn without an error.
+    error_code: Optional[str] = None
     title: Optional[str] = None
     tool_trace: List[ToolTraceEntry] = field(default_factory=list)
     # Accumulated usage/metrics from the stream's `metadata_summary` (turn

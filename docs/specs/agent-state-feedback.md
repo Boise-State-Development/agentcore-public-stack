@@ -170,6 +170,9 @@ emits strictly interleaved `start,end,start,end,start,end` and more than one
 tool is never in flight. PR-2's description claimed "a parallel batch is finally
 legible"; that was wrong as shipped. `ToolInsightService.runningTools` keeps the
 list shape, which costs nothing and is what a concurrent executor would need.
+(Update 2026-11-14: `CONCURRENT_TOOL_EXECUTION_ENABLED` now builds the agent with
+`ConcurrentToolExecutor`, so read-only calls in one batch overlap, and the list
+shape carries more than one running tool. See `core/tool_concurrency.py`.)
 
 **The content-stream fallback still drives the visible label**, because it fires
 when the model starts streaming a tool's ARGUMENTS while `tool_start` fires when
@@ -335,9 +338,9 @@ deferred path can need an HTTP status after the first byte.
    relaxation is scoped to `preparing`; the other phases still require a cycle,
    because the SPA uses it to tell event-loop passes apart.
 
-**Kill switch:** `AGENT_PREPARING_PHASE_ENABLED` (default on). Off restores the
-eager build exactly. Its own flag rather than riding `AGENT_STATUS_ENABLED`,
-which gates narration — this changes when the agent is built.
+**Kill switch:** none since its retirement in the rollout-switch cleanup after
+1.36.1. It shipped behind `AGENT_PREPARING_PHASE_ENABLED` (default on), which
+was never turned off in any environment.
 
 **Cost:** the label is one SSE frame. Nothing reaches the model.
 
