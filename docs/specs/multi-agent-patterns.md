@@ -289,6 +289,28 @@ Nothing here should jump the handoffs spec's gates. The point is to make each st
    an async `builder` that calls `resolve_turn_agent` (§4.2). That gets resume-not-re-run and the no-answer error
    from the SDK. Streaming, metering and the sub-session would still be ours, and a model-called tool still puts
    its spec in `toolConfig` (§3, Agents as Tools).
+
+   **Leaning (2026-11-16), to settle at the start of Phase 1:** for delegation the *model* starts (§8 steps 4 and
+   5), build on `make_subagent` / `make_graph` / `make_swarm` with an async builder instead of a child runner of
+   our own. §4's runner shrinks to the platform half: the builder (`resolve_turn_agent` + `get_agent`), the
+   sub-session and its metering, re-tagging `ToolStreamEvent`s into nested events, and the report cap. Four
+   settings are not optional:
+
+   - **The `context` axis is `Fixed("none")`.** The task carries our token-bounded excerpt. `all` forks the
+     parent's messages (alternative B's cost), and `last_messages` counts messages, not tokens.
+   - **Presets and axes are constant per deployment.** The tool's schema is derived from them, so a preset list
+     built from a user's agents would rewrite `toolConfig` whenever it changed.
+   - **The child's answer is capped.** The tool returns `str(result)`, the whole final answer, so the cap and
+     wrapper of handoffs spec §8.5 still apply.
+   - **No-answer and paused children map onto the report statuses** (§8.5), so both paths say the same thing.
+
+   The consult stays its own small runner, because a user-triggered call is not a tool call and the SDK's child
+   streamer (`multiagent/_agent_tool_streamer.py`) is private. It shares the builder and the statuses, so the two
+   paths agree. Not now: Phase 1 hasn't passed its gate, and the SDK side is still moving (harness-sdk#6088 is
+   open, `PresetOptions` is labelled `api/needs-review`). At the start of Phase 1, a dev spike with
+   `make_subagent` and an async builder settles it, by confirming four things: the child's snapshot fits in
+   AgentCore Memory; a child interrupt id gets through our breadcrumbs and the resume guard; `toolConfigHash`
+   holds between turns; and every child call writes a priced `C#` row.
 6. **Cost ceilings.** Should a composition carry a per-run `maxCostUsd` enforced by the runner, on top of the
    user's quota?
 
