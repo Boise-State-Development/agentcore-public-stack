@@ -208,6 +208,54 @@ class TestSkillsExemption:
 
     def test_read_skill_file_is_not_exempt(self):
         assert "read_skill_file" not in tro.OFFLOAD_EXEMPT_TOOLS
+        assert "read_skill_file" in tro.SKILL_FILE_INLINE_TOOLS
+
+
+class TestSkillFileInlineBound:
+    """A skill's reference file is read whole up to its own bound, offloaded past it."""
+
+    @pytest.mark.asyncio
+    async def test_a_reference_over_the_gate_but_under_the_bound_stays_inline(self, offloader, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_SKILL_FILE_INLINE_MAX_TOKENS", "8000")
+        plugin, storage = offloader
+        counter = AsyncMock(return_value=5000)
+        playbook = "=== START AI RULES ===\n" + ("[Mandatory] Payment Tied to Acceptance. " * 450)
+        ev = _event(playbook, tool_name="read_skill_file", count_tokens=counter)
+        before = ev.result
+        await plugin._handle_tool_result(ev)
+        counter.assert_not_called()
+        assert ev.result is before and storage.objects == {}
+
+    @pytest.mark.asyncio
+    async def test_a_reference_over_the_bound_is_still_offloaded(self, offloader, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_SKILL_FILE_INLINE_MAX_TOKENS", "2000")
+        plugin, storage = offloader
+        data = "id,value\n" + ("1234,abcdefgh\n" * 1200)
+        ev = _event(data, tool_name="read_skill_file", count_tokens=AsyncMock(return_value=4500))
+        await plugin._handle_tool_result(ev)
+        assert ev.result["content"][0]["text"].startswith("[Offloaded:")
+        assert len(storage.objects) == 1
+
+    @pytest.mark.asyncio
+    async def test_zero_restores_the_ordinary_gate(self, offloader, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_SKILL_FILE_INLINE_MAX_TOKENS", "0")
+        plugin, storage = offloader
+        ev = _event("x" * 20000, tool_name="read_skill_file", count_tokens=AsyncMock(return_value=5000))
+        await plugin._handle_tool_result(ev)
+        assert ev.result["content"][0]["text"].startswith("[Offloaded:")
+
+    @pytest.mark.asyncio
+    async def test_the_bound_is_only_for_skill_files(self, offloader, monkeypatch):
+        monkeypatch.setenv("AGENTCORE_SKILL_FILE_INLINE_MAX_TOKENS", "8000")
+        plugin, storage = offloader
+        ev = _event("x" * 20000, tool_name="gmail_search", count_tokens=AsyncMock(return_value=5000))
+        await plugin._handle_tool_result(ev)
+        assert ev.result["content"][0]["text"].startswith("[Offloaded:")
+
+    def test_the_default_bound_covers_a_large_playbook_and_no_more(self, monkeypatch):
+        monkeypatch.delenv("AGENTCORE_SKILL_FILE_INLINE_MAX_TOKENS", raising=False)
+        # ~48 KB of playbook text is ~12k tokens; a 1 MiB reference is ~260k.
+        assert 12_000 < tro._skill_file_inline_max_tokens() < 260_000
 
     @pytest.mark.asyncio
     async def test_oversized_skills_result_is_not_offloaded(self, offloader):
@@ -301,7 +349,7 @@ class TestKnowledgeBaseFilesExemption:
         result = {"toolUseId": "t1", "status": "success", "content": [{"json": {"content": "line\n" * 5000}}]}
         event = SimpleNamespace(
             result=result,
-            tool_use={"toolUseId": "t1", "name": "read_skill_file"},
+            tool_use={"toolUseId": "t1", "name": "gmail_search"},
             selected_tool=None,
             cancel_message=None,
             agent=_Agent(SimpleNamespace(count_tokens=AsyncMock(return_value=5000))),
