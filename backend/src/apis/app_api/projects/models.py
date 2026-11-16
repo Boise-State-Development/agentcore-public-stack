@@ -354,10 +354,49 @@ class SkillBindingRef(BindingRef):
     update_available: bool = Field(
         False, alias="updateAvailable", description="The skill has changed since the pinned version"
     )
+    available: bool = Field(
+        False,
+        description="The skill runs for the caller in this project, so they can read it "
+        "(GET /projects/{id}/skills/{skillId})",
+    )
+    display_name: Optional[str] = Field(
+        None, alias="displayName", description="The skill's name; only when ``available``"
+    )
+    description: Optional[str] = Field(None, description="The skill's description; only when ``available``")
 
 
 class SkillBindingsResponse(_SettingsResponse):
     bindings: List[SkillBindingRef]
+
+
+class ProjectSkillFile(BaseModel):
+    """One file in a bound skill's bundle (references/, scripts/, assets/)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    filename: str
+    kind: str = Field(..., description="reference | script | asset")
+    size: int
+    content_type: str = Field(..., alias="contentType")
+
+
+class ProjectSkillContentResponse(BaseModel):
+    """What a bound skill does, as this project runs it: the pinned version's content.
+
+    No owner id and no storage keys: a member reading a skill someone else wrote learns
+    what it says, not who stores it where.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    skill_id: str = Field(..., alias="skillId")
+    display_name: str = Field(..., alias="displayName")
+    description: str = ""
+    instructions: str = ""
+    version: Optional[int] = Field(None, description="The pinned version shown; null when the binding runs live")
+    compose: List[str] = Field(default_factory=list)
+    allowed_tools: List[str] = Field(default_factory=list, alias="allowedTools")
+    files: List[ProjectSkillFile] = Field(default_factory=list)
 
 
 class SettingsVersionSummary(BaseModel):

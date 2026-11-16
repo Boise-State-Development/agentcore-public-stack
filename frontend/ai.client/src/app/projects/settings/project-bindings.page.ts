@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { formatDate } from '@angular/common';
+import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { BindableItem } from '../../agents/models/agent.model';
 import { AgentService } from '../../agents/services/agent.service';
@@ -11,6 +12,11 @@ import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
 import { injectProjectPage } from './project-page-state';
 import { ProjectSettingsShellComponent } from './project-settings-shell.component';
+import {
+  ProjectSkillDialogComponent,
+  ProjectSkillDialogData,
+  ProjectSkillDialogResult,
+} from './components/project-skill-dialog.component';
 import { HasUnsavedChanges } from './unsaved-changes.guard';
 
 export type BindingKind = 'tools' | 'skills';
@@ -35,6 +41,10 @@ const KIND_COPY: Record<BindingKind, { title: string; description: string; noun:
 
 /** Shown on a row someone else bound, which the caller can't use and can't remove. */
 const FOREIGN_NOTE = 'Added by someone else. You don’t have access to it, but it stays.';
+/** A skill someone else added that the caller can't add themselves, but which runs for them here. */
+const FOREIGN_AVAILABLE_NOTE = 'Added by someone else. It runs for you in this project.';
+
+let nextInstance = 0;
 
 function sameRefs(a: ReadonlySet<string>, b: string[]): boolean {
   return a.size === b.length && b.every(ref => a.has(ref));
@@ -92,11 +102,36 @@ function sameRefs(a: ReadonlySet<string>, b: string[]): boolean {
           @if (error()) {
             <p role="alert" class="mb-4 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
           }
+          <div
+            class="mb-4 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/60"
+            [attr.aria-labelledby]="summaryId"
+            role="group"
+          >
+            <p class="flex flex-wrap items-baseline gap-x-2 text-sm/6">
+              <span [id]="summaryId" class="font-semibold text-gray-900 tabular-nums dark:text-white">{{ summary() }}</span>
+              @if (dirty()) {
+                <span class="text-xs/5 font-medium text-state-warning-700 dark:text-state-warning-300">Unsaved changes</span>
+              }
+            </p>
+            @if (selectedNames().length) {
+              <ul class="mt-2 flex flex-wrap gap-1.5">
+                @for (name of selectedNames(); track name) {
+                  <li class="rounded-full border border-gray-300 bg-white px-2.5 py-0.5 text-xs/5 font-medium text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white">{{ name }}</li>
+                }
+              </ul>
+            } @else {
+              <p class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
+                The assistant uses no {{ copy().nounPlural }} in this project{{ state.canEdit() ? '. Check one below to add it.' : '.' }}
+              </p>
+            }
+          </div>
           <app-tool-selector
             [items]="items()"
             [selected]="selected()"
             (selectedChange)="selected.set($event)"
             (itemAction)="updatePin($event)"
+            (itemDetail)="viewSkill($event)"
+            [markSelected]="true"
             [label]="copy().title"
             [noun]="copy().noun"
             [nounPlural]="copy().nounPlural"
@@ -113,6 +148,9 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
   private api = inject(ProjectApiService);
   private agents = inject(AgentService);
   private toast = inject(ToastService);
+  private dialog = inject(Dialog);
+
+  protected readonly summaryId = `project-bindings-summary-${nextInstance++}`;
 
   /** Route param and route data (`withComponentInputBinding`). */
   readonly id = input.required<string>();
@@ -146,9 +184,12 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
       if (!pin) return item;
       const line = pinLine(pin);
       const offer = canEdit && !item.locked && (pin.updateAvailable || !pin.version);
+      const foreign = pin.available ? FOREIGN_AVAILABLE_NOTE : FOREIGN_NOTE;
       return {
         ...item,
-        note: item.locked ? `${line} ${FOREIGN_NOTE}` : line,
+        note: item.locked ? `${line} ${foreign}` : line,
+        // Readable once saved: the project route serves what the project binds.
+        detail: pin.available ? { label: 'View', ariaLabel: `View ${item.name}` } : undefined,
         noteTone: pin.updateAvailable ? ('warning' as const) : ('muted' as const),
         action: offer
           ? {
@@ -162,6 +203,22 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
   });
 
   protected readonly dirty = computed(() => this.loaded() && !sameRefs(this.selected(), this.saved()));
+
+  /** Selected rows' names, in list order: what the assistant gets once saved. */
+  protected readonly selectedNames = computed(() => {
+    const selected = this.selected();
+    return this.choices()
+      .filter(c => selected.has(c.id))
+      .map(c => c.name);
+  });
+
+  /** "2 skills selected", or "No skills selected". */
+  protected readonly summary = computed(() => {
+    const count = this.selectedNames().length;
+    const copy = this.copy();
+    if (!count) return `No ${copy.nounPlural} selected`;
+    return `${count} ${count === 1 ? copy.noun : copy.nounPlural} selected`;
+  });
 
   constructor() {
     effect(() => {
@@ -182,7 +239,7 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
       ]);
       if (projectId !== this.id() || kind !== this.kind()) return;
       const refs = bound.bindings.map(b => b.ref);
-      this.choices.set(choices(refs, palette));
+      this.choices.set(choices(bound.bindings, palette));
       this.saved.set(refs);
       this.selected.set(new Set(refs));
       this.pins.set(pinsOf(bound));
@@ -242,6 +299,14 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
     }
   }
 
+  /** Open a bound skill's content, read-only. */
+  protected viewSkill(item: ToolSelectorItem): void {
+    if (this.kind() !== 'skills') return;
+    this.dialog.open<ProjectSkillDialogResult, ProjectSkillDialogData>(ProjectSkillDialogComponent, {
+      data: { projectId: this.id(), skillId: item.id, name: item.name },
+    });
+  }
+
   /** A save's response is the new saved state. */
   private adopt(written: BindingsResponse): void {
     const refs = written.bindings.map(b => b.ref);
@@ -268,14 +333,23 @@ function pinLine(pin: BoundBinding): string {
 /**
  * The palette in its own order (a save keeps that order, so an unchanged selection is
  * an unchanged list), then anything bound that the caller can't use, locked as it is.
+ * A skill someone else added that runs for the caller here comes with its name, so it
+ * reads as the skill it is rather than as a raw id.
  */
-function choices(bound: string[], palette: BindableItem[]): ToolSelectorItem[] {
+function choices(bound: BoundBinding[], palette: BindableItem[]): ToolSelectorItem[] {
   const known = new Set(palette.map(p => p.ref));
   return [
     ...palette.map(p => ({ id: p.ref, name: p.label, description: p.description, group: category(p) })),
     ...bound
-      .filter(ref => !known.has(ref))
-      .map(ref => ({ id: ref, name: ref, note: FOREIGN_NOTE, noteTone: 'muted' as const, locked: true })),
+      .filter(b => !known.has(b.ref))
+      .map(b => ({
+        id: b.ref,
+        name: b.displayName || b.ref,
+        description: b.description || undefined,
+        note: b.available ? FOREIGN_AVAILABLE_NOTE : FOREIGN_NOTE,
+        noteTone: 'muted' as const,
+        locked: true,
+      })),
   ];
 }
 

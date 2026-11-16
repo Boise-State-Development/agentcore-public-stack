@@ -41,6 +41,8 @@ const ITEMS: ToolSelectorItem[] = [
       [disabled]="disabled()"
       [helperText]="helper()"
       (itemAction)="actions.push($event.id)"
+      (itemDetail)="details.push($event.id)"
+      [markSelected]="markSelected()"
     />
   `,
 })
@@ -50,6 +52,8 @@ class HostComponent {
   readonly disabled = signal(false);
   readonly helper = signal('');
   readonly actions: string[] = [];
+  readonly details: string[] = [];
+  readonly markSelected = signal(false);
 }
 
 describe('ToolSelectorComponent', () => {
@@ -359,6 +363,44 @@ describe('ToolSelectorComponent', () => {
 
     expect(host.actions).toEqual(['calendar']);
     expect(mail.disabled).toBe(true);
+    expect(host.selected()).toEqual(new Set(['calendar', 'foreign']));
+  });
+
+  it('marks selected rows in text only when asked, so other surfaces look as they did', () => {
+    const rowOf = (name: string): HTMLElement =>
+      [...el.querySelectorAll('[id$="-name"]')].find((n) => n.textContent!.trim() === name)!.closest('li')!;
+    expect(rowOf('Calendar').textContent).not.toContain('Selected');
+
+    host.markSelected.set(true);
+    fixture.detectChanges();
+    expect(rowOf('Calendar').textContent).toContain('Selected');
+    expect(rowOf('Mail').textContent).not.toContain('Selected');
+    // The checkbox already names the state; the tag is for sighted users, not a second announcement.
+    expect(rowOf('Calendar').querySelector('[aria-hidden="true"]')!.textContent).toContain('Selected');
+
+    checkboxFor('Mail').click();
+    fixture.detectChanges();
+    expect(rowOf('Mail').textContent).toContain('Selected');
+  });
+
+  it('reports a detail button, on a locked row too, without toggling the row', () => {
+    host.items.set([
+      { ...ITEMS[0], detail: { label: 'View', ariaLabel: 'View Calendar' } },
+      { ...ITEMS[5], detail: { label: 'View' } },
+      { ...ITEMS[1], detail: { label: 'View', disabled: true } },
+    ]);
+    fixture.detectChanges();
+    const [calendar, foreign, mail] = [...el.querySelectorAll<HTMLButtonElement>('li button')];
+    expect(calendar.getAttribute('aria-label')).toBe('View Calendar');
+    expect(calendar.closest('label')).toBeNull();
+
+    calendar.click();
+    foreign.click();
+    mail.click();
+    fixture.detectChanges();
+
+    expect(host.details).toEqual(['calendar', 'foreign']);
+    expect(host.actions).toEqual([]);
     expect(host.selected()).toEqual(new Set(['calendar', 'foreign']));
   });
 });
