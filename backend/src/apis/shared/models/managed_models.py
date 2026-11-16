@@ -16,6 +16,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from apis.shared.caching import config_cache
+from .data_handling import DataHandling, requires_provider_review, resolve_data_handling
 from .models import ManagedModel, ManagedModelCreate, ManagedModelUpdate, ModelStatus
 
 logger = logging.getLogger(__name__)
@@ -311,6 +312,8 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         replaced_by=model_data.replaced_by,
         retires_on=model_data.retires_on,
         retirement_note=model_data.retirement_note,
+        data_handling=resolve_data_handling(model_data.model_id, model_data.data_handling),
+        data_handling_notice=model_data.data_handling_notice,
         created_at=now,
         updated_at=now,
     )
@@ -337,6 +340,7 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         'isDefault': model_data.is_default,
         'isFeatured': model_data.is_featured,
         'status': model_data.status.value,
+        'dataHandling': resolve_data_handling(model_data.model_id, model_data.data_handling).value,
         'createdAt': now.isoformat(),
         'updatedAt': now.isoformat(),
     }
@@ -372,6 +376,8 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         item['retiresOn'] = model_data.retires_on
     if model_data.retirement_note:
         item['retirementNote'] = model_data.retirement_note
+    if model_data.data_handling_notice:
+        item['dataHandlingNotice'] = model_data.data_handling_notice
 
     # Convert floats to Decimal for DynamoDB
     item = _python_to_dynamodb(item)
@@ -705,6 +711,22 @@ async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate
     # Get update data
     update_data = updates.model_dump(exclude_none=True, by_alias=True)
 
+    # An instruction to the route, not a field of the row.
+    update_data.pop('acknowledgeDataHandling', None)
+    # The covered-model floor: a row naming a covered model is provider_review
+    # whatever the update asked for (apis/shared/models/data_handling.py).
+    final_model_id = update_data.get('modelId') or existing_model.model_id
+    # Only written when it changes something, so a no-op save stays a no-op.
+    stored_short_of_floor = (
+        requires_provider_review(final_model_id)
+        and existing_model.data_handling != DataHandling.PROVIDER_REVIEW
+    )
+    if 'dataHandling' in update_data or stored_short_of_floor:
+        update_data['dataHandling'] = resolve_data_handling(
+            final_model_id,
+            DataHandling(update_data['dataHandling']) if 'dataHandling' in update_data else existing_model.data_handling,
+        ).value
+
     # Role access is owned by the AppRole records, not the model item. The admin
     # route writes allowedAppRoles through to each role's grantedModels and the
     # value is derived back on read, so persisting it here would only create a
@@ -755,7 +777,7 @@ async def _update_managed_model_cloud(model_id: str, updates: ManagedModelUpdate
     # PATCH. Removing the attribute rather than storing '' keeps the record
     # shaped like one that never had an icon.
     # The lifecycle strings share that contract (docs/specs/model-retirement.md §7).
-    for clearable in ('iconSlug', 'replacedBy', 'retiresOn', 'retirementNote'):
+    for clearable in ('iconSlug', 'replacedBy', 'retiresOn', 'retirementNote', 'dataHandlingNotice'):
         if update_data.get(clearable) == '':
             update_data.pop(clearable)
             remove_expression_parts.append(f'#{clearable}')

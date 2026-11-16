@@ -8,9 +8,11 @@ import { SessionService } from '../../session/services/session/session.service';
 import {
   ManagedModel,
   effortLevelLabel,
+  keepsConversationsForReview,
 } from '../../admin/manage-models/models/managed-model.model';
 import { ModelOptionComponent } from './components/model-option.component';
 import { PromptCacheGuardService } from '../../session/services/prompt-cache/prompt-cache-guard.service';
+import { ModelDataNoticeService } from '../../session/services/model/model-data-notice.service';
 
 @Component({
   selector: 'app-model-dropdown',
@@ -255,6 +257,7 @@ export class ModelDropdownComponent {
   protected modelService = inject(ModelService);
   protected sessionService = inject(SessionService);
   private cacheGuard = inject(PromptCacheGuardService);
+  private dataNotice = inject(ModelDataNoticeService);
 
   /**
    * Whether the model menu is open, driving the trigger's chevron. Fed by the
@@ -391,6 +394,11 @@ export class ModelDropdownComponent {
   protected async selectModel(model: ManagedModel): Promise<void> {
     const current = this.modelService.selectedModel();
     if (current.modelId === model.modelId) return;
+    // A model whose provider keeps conversations for review is chosen only
+    // after its notice; this comes first because it is about the user's data,
+    // not the cache. A standard model skips the await entirely, so its
+    // selection still applies in the same tick it always did.
+    if (keepsConversationsForReview(model) && !(await this.dataNotice.confirmBeforeChoosing(model))) return;
     if (current.modelId && this.sessionService.hasCurrentSession()) {
       const confirmed = await this.cacheGuard.confirm({ kind: 'model', from: current, to: model });
       if (!confirmed) return;

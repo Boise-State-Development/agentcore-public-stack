@@ -25,7 +25,14 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { heroStarSolid } from '@ng-icons/heroicons/solid';
 import { ManagedModelsService } from './services/managed-models.service';
-import type { ManagedModel } from './models/managed-model.model';
+import { Dialog } from '@angular/cdk/dialog';
+import {
+  PROVIDER_REVIEW_BADGE,
+  keepsConversationsForReview,
+  type ManagedModel,
+  type ManagedModelFormData,
+} from './models/managed-model.model';
+import { confirmProviderReviewEnable } from './services/provider-review-confirm';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 import { ModelIconComponent } from '../../components/model-icon/model-icon.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
@@ -59,6 +66,12 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 export class ManageModelsPage {
   protected managedModelsService = inject(ManagedModelsService);
   private injector = inject(Injector);
+  private dialog = inject(Dialog);
+
+  protected readonly providerReviewBadge = PROVIDER_REVIEW_BADGE;
+  protected keepsForReview(model: ManagedModel): boolean {
+    return keepsConversationsForReview(model);
+  }
 
   // Search and filter signals
   searchQuery = signal<string>('');
@@ -210,9 +223,18 @@ export class ManageModelsPage {
     if (this.isToggling(model.id)) {
       return;
     }
+    const update: Partial<ManagedModelFormData> = { enabled: !model.enabled };
+    // Enabling a model whose provider keeps conversations for review is a
+    // privacy decision: the admin confirms the notice, and the backend refuses
+    // the write without that acknowledgement.
+    if (!model.enabled && keepsConversationsForReview(model)) {
+      const confirmed = await confirmProviderReviewEnable(this.dialog, model.modelName, model.dataHandlingNoticeText);
+      if (!confirmed) return;
+      update.acknowledgeDataHandling = true;
+    }
     this.togglingIds.update(current => new Set(current).add(model.id));
     try {
-      await this.managedModelsService.updateModel(model.id, { enabled: !model.enabled });
+      await this.managedModelsService.updateModel(model.id, update);
     } catch (error) {
       console.error('Error updating model status:', error);
       alert('Failed to update model status. Please try again.');

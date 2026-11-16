@@ -61,9 +61,22 @@ _FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14"
 # gives it the same "omitted" default display and history-editing check. A
 # second probe the same day, at effort `max` with this binding, did think: the
 # call returned a summarized reasoning block (2,348 signature characters).
+#
+# Fable 5.2 and Mythos 5.2 are on the list from Bedrock's preserved-thinking
+# page (re-read 2026-11-14), not a dev probe: dev cannot invoke them until the
+# account's data retention mode is `aws_review` (#1845). Both run the
+# conversation-prefix check on every account, take `block_binding` through
+# `additionalModelRequestFields` with the same beta, think by default with no
+# way to disable it, and default to the "omitted" display like the 5.5 models.
 _THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
 _THINKING_BINDING_DROP_BLOCK = {"prefix_mismatch_behavior": "drop_block"}
-_BEDROCK_THINKING_BINDING_MARKERS = ("claude-haiku-5-5", "claude-opus-5-5", "claude-sonnet-5-5")
+_BEDROCK_THINKING_BINDING_MARKERS = (
+    "claude-haiku-5-5",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-fable-5-2",
+    "claude-mythos-5-2",
+)
 
 # Claude Sonnet 5 also thinks by default with display "omitted", but gets only
 # the display, not the binding. Prod 2026-11-14: a Sonnet 5 turn's first call
@@ -193,6 +206,9 @@ _BEDROCK_ADAPTIVE_THINKING_MARKERS = (
     "claude-opus-5-5",
     # Same as Opus 5.5: `budget_tokens` is a 400 on this model.
     "claude-sonnet-5-5",
+    # Always thinks; `{type: "enabled", budget_tokens}` and `disabled` are
+    # both 400s (card). Mythos 5.2 is already covered by "claude-mythos".
+    "claude-fable-5-2",
 )
 
 
@@ -215,6 +231,8 @@ def _bedrock_uses_adaptive_thinking(model_id: Optional[str]) -> bool:
 #:   when it was produced; once either changes (a compaction cut prepends the
 #:   summary to the first retained message) it is dropped and bills 0. A
 #:   thinking-only block (output cap hit while thinking) behaves the same.
+#:   Fable 5.2 and Mythos 5.2 are listed here by contract, not measurement:
+#:   they run the same prefix check, and dev cannot invoke them yet.
 #: - ``"preserved"`` — the other adaptive models (Sonnet 4.6, Opus 4.7): every
 #:   signed block is billed, whatever changed ahead of it.
 #: - ``"stripped"`` — budget ("enabled") thinking (Haiku 4.5): a block from an

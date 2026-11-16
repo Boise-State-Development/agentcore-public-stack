@@ -1,11 +1,17 @@
 """User settings API routes."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 import logging
 
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.user_settings.models import UserSettings, UserSettingsUpdate
+from apis.shared.timestamps import utc_now_iso
+from apis.shared.user_settings.models import (
+    MAX_MODEL_NOTICE_ACKNOWLEDGEMENTS,
+    UserSettings,
+    UserSettingsUpdate,
+)
 from apis.shared.user_settings.repository import UserSettingsRepository
 
 logger = logging.getLogger(__name__)
@@ -89,3 +95,56 @@ async def update_settings(
     except Exception as e:
         logger.error(f"Failed to update settings for user {current_user.user_id}: {e}")
         raise HTTPException(status_code=503, detail="Settings service temporarily unavailable.")
+
+
+class ModelNoticeAcknowledgementRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_id: str = Field(..., alias="modelId", min_length=1, max_length=256)
+
+
+@router.post("/model-notices", response_model=UserSettings)
+async def acknowledge_model_notice(
+    body: ModelNoticeAcknowledgementRequest,
+    current_user: User = Depends(get_current_user_from_session),
+    repo: UserSettingsRepository = Depends(get_user_settings_repository),
+):
+    """Record that the user confirmed a model's data-handling notice.
+
+    The server stamps the time and the digest of the notice as the catalog
+    has it now, so a client cannot record a wording it never showed. Only a
+    catalog model whose provider keeps conversations for review is recorded
+    (``apis/shared/models/data_handling.py``); anything else is a 404.
+    """
+    from apis.shared.models.data_handling import DataHandling
+    from apis.shared.models.managed_models import find_managed_model_by_model_id
+
+    model = await find_managed_model_by_model_id(body.model_id)
+    if model is None or model.effective_data_handling != DataHandling.PROVIDER_REVIEW:
+        raise HTTPException(status_code=404, detail="That model has no data-handling notice to confirm.")
+    if not repo.enabled:
+        raise HTTPException(status_code=503, detail="User settings storage is not configured on this server.")
+
+    current = await repo.get_settings(current_user.user_id)
+    acknowledgements = dict(current.get("modelNoticeAcknowledgements") or {})
+    acknowledgements.pop(model.model_id, None)
+    acknowledgements[model.model_id] = {
+        "acknowledgedAt": utc_now_iso(),
+        "noticeDigest": model.data_handling_notice_digest,
+    }
+    # Oldest first in insertion order; drop the oldest past the cap.
+    while len(acknowledgements) > MAX_MODEL_NOTICE_ACKNOWLEDGEMENTS:
+        acknowledgements.pop(next(iter(acknowledgements)))
+    try:
+        updated = await repo.update_settings(
+            current_user.user_id, {"modelNoticeAcknowledgements": acknowledgements}
+        )
+    except Exception as e:
+        logger.error(f"Failed to record a model notice acknowledgement for {current_user.user_id}: {e}")
+        raise HTTPException(status_code=503, detail="Settings service temporarily unavailable.")
+    logger.info(
+        "model notice acknowledged",
+        extra={"event": "model_notice_acknowledged", "model_id": model.model_id,
+               "notice_digest": model.data_handling_notice_digest},
+    )
+    return UserSettings(**updated)

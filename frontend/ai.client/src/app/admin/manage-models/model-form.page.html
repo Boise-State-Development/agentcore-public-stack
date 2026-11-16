@@ -644,6 +644,61 @@
               </div>
             </div>
           }
+
+          <!-- Data handling (apis/shared/models/data_handling.py). A covered model's
+               id locks it to provider_review, because the backend stores it that way. -->
+          <div>
+            <label for="dataHandling" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+              Data handling
+            </label>
+            <select
+              id="dataHandling"
+              formControlName="dataHandling"
+              aria-describedby="dataHandling-help"
+              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:opacity-60 sm:max-w-md dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+            >
+              @for (option of dataHandlingOptions; track option.value) {
+                <option [value]="option.value">{{ option.label }}</option>
+              }
+            </select>
+            <p id="dataHandling-help" class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+              @if (dataHandlingLocked()) {
+                AWS serves this model only to an account in the <code>aws_review</code> data-retention
+                mode, so it is always kept for provider review.
+              } @else {
+                Choose "Kept for provider review" for a model whose provider keeps conversations.
+              }
+            </p>
+          </div>
+
+          @if (selectedDataHandling() === 'provider_review') {
+            <div class="space-y-3 rounded-2xl border border-state-warning-200 bg-state-warning-50 p-4 dark:border-state-warning-800 dark:bg-state-warning-900/20">
+              <p class="text-xs/5 text-state-warning-800 dark:text-state-warning-200">
+                Users confirm this notice before their first message on the model, and again
+                whenever its wording changes. It can't be the default model or another model's
+                replacement. Enabling it asks you to confirm, and is recorded in the audit log.
+              </p>
+              <div>
+                <label for="dataHandlingNotice" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Notice for users
+                </label>
+                <textarea
+                  id="dataHandlingNotice"
+                  rows="4"
+                  formControlName="dataHandlingNotice"
+                  maxlength="1000"
+                  aria-describedby="dataHandlingNotice-help"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                ></textarea>
+                <p id="dataHandlingNotice-help" class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                  Leave it empty to use the platform's notice.
+                  @if (defaultNoticeText()) {
+                    It reads: “{{ defaultNoticeText() }}”
+                  }
+                </p>
+              </div>
+            </div>
+          }
         </section>
 
         <!-- Pricing Section -->

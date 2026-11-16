@@ -262,6 +262,9 @@ describe('ModelCatalogPage', () => {
       //  - Claude Sonnet 5.5 reads at 0.05x: Price List API, $0.11 against
       //    $2.20 Regional ($0.10 against $2.00 Global), 2026-11-13. Sonnet 5
       //    still reads at 0.1x.
+      //  - Claude Fable 5.2 reads at 0.025x: Price List API, $0.20 against
+      //    $8.00 Global ($0.22 against $8.80 Regional), 2026-11-14, matching
+      //    Anthropic's first-party $0.20 cache read.
       //  - GPT-6.1 Sol reads at 0.05x: its card states the multiplier and
       //    publishes $0.11 against $2.20 US CRIS ($0.10 against $2.00 Global).
       //  - Kimi K3.1 reads at 0.05x: its card publishes $0.22 against $4.40
@@ -273,6 +276,7 @@ describe('ModelCatalogPage', () => {
       const READ_MULTIPLIER: Record<string, number> = {
         'claude-opus-5-5': 0.05,
         'claude-sonnet-5-5': 0.05,
+        'claude-fable-5-2': 0.025,
         'gpt-6-1-sol': 0.05,
         'kimi-k3-1': 0.05,
       };
@@ -309,6 +313,43 @@ describe('ModelCatalogPage', () => {
         'effort',
         'max_tokens',
       ]);
+    });
+  });
+
+  describe('curated Claude Fable 5.2', () => {
+    const fable = CURATED_BEDROCK_MODELS.find(m => m.key === 'claude-fable-5-2')!;
+
+    it('names the Global id at Global rates, 0.025x cache read', () => {
+      expect(fable.template.modelId).toBe('global.anthropic.claude-fable-5-2');
+      expect(fable.pricingTier).toBe('global');
+      expect(fable.template.inputPricePerMillionTokens).toBeCloseTo(8.0, 6);
+      expect(fable.template.outputPricePerMillionTokens).toBeCloseTo(40.0, 6);
+      expect(fable.template.cacheWritePricePerMillionTokens).toBeCloseTo(10.0, 6);
+      expect(fable.template.cacheReadPricePerMillionTokens).toBeCloseTo(0.2, 6);
+    });
+
+    it('declares the 1M window, not the inherited 200K', () => {
+      expect(fable.template.maxInputTokens).toBe(1_000_000);
+      expect(fable.template.maxOutputTokens).toBe(128_000);
+    });
+
+    it('is marked as kept for provider review, so its card says so before the add', () => {
+      expect(fable.template.dataHandling).toBe('provider_review');
+    });
+
+    it('is added disabled, because the account must opt in to aws_review first', () => {
+      // A covered model: under any other data-retention mode every request
+      // 400s before inference. Enabling it is a governance decision (#1845).
+      expect(fable.template.enabled).toBe(false);
+      expect(fable.template.isDefault).toBe(false);
+    });
+
+    it('declares only effort and max_tokens; the backend owns thinking', () => {
+      expect(Object.keys(fable.template.supportedParams?.params ?? {}).sort()).toEqual([
+        'effort',
+        'max_tokens',
+      ]);
+      expect(fable.template.supportedParams?.params?.['effort']?.default).toBe('high');
     });
   });
 

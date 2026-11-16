@@ -86,6 +86,8 @@ class TestMinCacheablePrefixTokens:
             ("global.anthropic.claude-sonnet-5", 1_024),
             ("us.anthropic.claude-opus-5-5", 512),
             ("global.anthropic.claude-fable-5-1", 512),
+            ("global.anthropic.claude-fable-5-2", 512),
+            ("us.anthropic.claude-fable-5-2", 512),
             # The rest of the table.
             ("anthropic.claude-opus-4-6-v1", 4_096),
             ("anthropic.claude-opus-4-5-20251101-v1:0", 4_096),
@@ -96,6 +98,7 @@ class TestMinCacheablePrefixTokens:
             ("anthropic.claude-opus-5", 512),
             ("anthropic.claude-fable-5", 512),
             ("anthropic.claude-mythos-5-1", 512),
+            ("anthropic.claude-mythos-5-2", 512),
             ("anthropic.claude-3-7-sonnet-20250219-v1:0", 1_024),
             ("anthropic.claude-3-5-sonnet-20241022-v2:0", 1_024),
         ],

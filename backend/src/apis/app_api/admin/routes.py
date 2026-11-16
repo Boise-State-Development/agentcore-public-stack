@@ -48,6 +48,15 @@ from apis.shared.models.managed_models import (
     reorder_managed_models,
 )
 from apis.shared.models.retirement import validate_lifecycle
+from apis.shared.models.data_handling import (
+    ENABLE_ACKNOWLEDGEMENT_REQUIRED,
+    DataHandling,
+    enable_needs_acknowledgement,
+    resolve_data_handling,
+    validate_data_handling,
+)
+from apis.shared.audit.models import TARGET_MANAGED_MODEL, AuditAction
+from apis.shared.audit.service import get_audit_service
 from .services.model_icons import (
     ModelIconError,
     remove_model_icon,
@@ -615,6 +624,24 @@ async def reorder_managed_models_endpoint(
         )
 
 
+def _record_provider_review_enabled(admin_user: User, model: ManagedModel, before: dict) -> None:
+    """Audit a write that put a provider_review model in users' reach."""
+    get_audit_service().record(
+        action=AuditAction.MANAGED_MODEL_PROVIDER_REVIEW_ENABLED,
+        actor=admin_user,
+        target_id=model.id,
+        target_type=TARGET_MANAGED_MODEL,
+        changes=["enabled", "dataHandling"],
+        before=before,
+        after={
+            "modelId": model.model_id,
+            "enabled": model.enabled,
+            "dataHandling": model.effective_data_handling.value,
+            "noticeDigest": model.data_handling_notice_digest,
+        },
+    )
+
+
 @router.post("/managed-models", response_model=ManagedModel, status_code=status.HTTP_201_CREATED)
 async def create_managed_model_endpoint(
     model_data: ManagedModelCreate,
@@ -643,15 +670,34 @@ async def create_managed_model_endpoint(
     logger.info("Admin creating enabled model")
 
     try:
+        catalog = await list_all_managed_models()
         validate_lifecycle(
             model_id=model_data.model_id,
             status=model_data.status,
             replaced_by=model_data.replaced_by,
             is_default=model_data.is_default,
-            catalog=await list_all_managed_models(),
+            catalog=catalog,
         )
+        handling = resolve_data_handling(model_data.model_id, model_data.data_handling)
+        validate_data_handling(
+            model_id=model_data.model_id,
+            data_handling=handling,
+            is_default=model_data.is_default,
+            replaced_by=model_data.replaced_by,
+            catalog=catalog,
+        )
+        needs_ack = enable_needs_acknowledgement(
+            before_enabled=False,
+            before_handling=DataHandling.STANDARD,
+            after_enabled=model_data.enabled,
+            after_handling=handling,
+        )
+        if needs_ack and not model_data.acknowledge_data_handling:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ENABLE_ACKNOWLEDGEMENT_REQUIRED)
 
         model = await create_managed_model(model_data)
+        if needs_ack:
+            _record_provider_review_enabled(admin_user, model, before={})
 
         # Grant the model to the requested roles. This is the write that actually
         # controls access — the role record is the source of truth — after which
@@ -664,6 +710,8 @@ async def create_managed_model_endpoint(
 
         return model
 
+    except HTTPException:
+        raise
     except ValueError as e:
         # Model already exists, or an unknown AppRole was named
         logger.warning("Model creation failed")
@@ -771,6 +819,7 @@ async def update_managed_model_endpoint(
         # Validate the lifecycle fields against the row as it will be after the
         # write: a PATCH that only flips status must still meet the replacedBy
         # rules, and '' on replacedBy means "clear it".
+        catalog = await list_all_managed_models()
         validate_lifecycle(
             model_id=updates.model_id or existing.model_id,
             status=updates.status if updates.status is not None else existing.status,
@@ -780,8 +829,32 @@ async def update_managed_model_endpoint(
                 else existing.replaced_by
             ),
             is_default=updates.is_default if updates.is_default is not None else existing.is_default,
-            catalog=await list_all_managed_models(),
+            catalog=catalog,
         )
+        final_model_id = updates.model_id or existing.model_id
+        handling = resolve_data_handling(
+            final_model_id,
+            updates.data_handling if updates.data_handling is not None else existing.data_handling,
+        )
+        validate_data_handling(
+            model_id=final_model_id,
+            data_handling=handling,
+            is_default=updates.is_default if updates.is_default is not None else existing.is_default,
+            replaced_by=(
+                (updates.replaced_by or None)
+                if updates.replaced_by is not None
+                else existing.replaced_by
+            ),
+            catalog=catalog,
+        )
+        needs_ack = enable_needs_acknowledgement(
+            before_enabled=existing.enabled,
+            before_handling=existing.effective_data_handling,
+            after_enabled=updates.enabled if updates.enabled is not None else existing.enabled,
+            after_handling=handling,
+        )
+        if needs_ack and not updates.acknowledge_data_handling:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ENABLE_ACKNOWLEDGEMENT_REQUIRED)
 
         model = await update_managed_model(model_id, updates)
 
@@ -810,6 +883,12 @@ async def update_managed_model_endpoint(
             )
 
         await role_service.hydrate_model_roles([model])
+        if needs_ack:
+            _record_provider_review_enabled(
+                admin_user,
+                model,
+                before={"enabled": existing.enabled, "dataHandling": existing.effective_data_handling.value},
+            )
 
         return model
 

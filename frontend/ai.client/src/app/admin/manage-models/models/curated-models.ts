@@ -38,6 +38,8 @@ import { ManagedModelFormData, ModelProvider, SupportedParams } from './managed-
  * $1.10/$5.50 Regional, $1.00/$5.00 Global; Sonnet 4.6 $3.30/$16.50; Opus 4.7
  * $5.50/$27.50; Sonnet 5 $2.00/$10.00 Global; Fable 5.1 $10/$50 Global with a
  * $0.25 cache read that independently confirms its 0.025x multiplier).
+ * Fable 5.2 re-checked 2026-11-14: $8/$40 Global, $8.80/$44 Regional, cache
+ * read $0.20 / $0.22 (0.025x on both tiers), write 1.25x.
  *
  * The product schema now exposes only regionCode, usagetype, location,
  * servicename and operation — there is no `model` and no `tokenType`. Match on
@@ -130,13 +132,15 @@ const DEFAULT_CACHE_READ_MULTIPLIER = 0.1;
  *
  * **Cache read is NOT stable at 0.1x and must not be treated as a constant.**
  * It is the default because it holds for every row below, but there are live
- * counterexamples on Bedrock today — Claude Fable 5.1 reads at 0.025x (a 75%
- * cut Anthropic states explicitly) and xAI Grok 4.6 at 0.25x. Both are
- * deliberately absent from this table: encoding a specific rate needs a second
- * independent source, and Grok publishes no cache-write SKU at all (implicit
- * caching only), so there is nothing for our explicit-`cachePoint` contract to
- * place. Pass `cacheReadMultiplier` when a model's card says otherwise, so the
- * next model that breaks the ratio is a data change and not a code change.
+ * counterexamples on Bedrock today — the Fable line reads at 0.025x (a 75%
+ * cut Anthropic states explicitly) and xAI Grok 4.6 at 0.25x. Claude Fable 5.2
+ * is the one below that does: its 0.025x has two sources that agree (the Price
+ * List API and Anthropic's own $0.20 against $8.00). Fable 5.1 was never
+ * curated (5.2 replaced it at a lower price), and Grok publishes no cache-write
+ * SKU at all (implicit caching only), so there is nothing for our
+ * explicit-`cachePoint` contract to place. Pass `cacheReadMultiplier` when a
+ * model's card says otherwise, so the next model that breaks the ratio is a
+ * data change and not a code change.
  *
  * `input` and `output` are the only independently published numbers, and both
  * are TIER-SPECIFIC. Pass the rates for the tier the `modelId` names, and set
@@ -215,6 +219,72 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
             supported: true,
             allowed: ['low', 'medium', 'high', 'xhigh', 'max'],
             default: 'medium',
+          },
+        },
+      },
+    },
+  },
+  {
+    key: 'claude-fable-5-2',
+    tagline: 'Anthropic\'s frontier model for technical work — long-horizon coding, finance and the sciences.',
+    capabilities: ['Adaptive thinking', 'Effort control', 'Vision', 'Long context', 'Prompt caching'],
+    pricingTier: 'global',
+    template: {
+      ...claude4xDefaults(),
+      // ⚠️ A covered model: AWS serves it only to an account whose data
+      // retention mode is `aws_review` (card, "Data Retention"). Under any
+      // other mode every request is a 400 before inference ("data retention
+      // mode 'default' is not available for this model", dev 2026-11-14,
+      // where the mode is `inherit`). So a one-click add lands DISABLED: an
+      // admin enables it only after the account has opted in, which is a
+      // governance decision rather than a catalog one (issue #1845). A
+      // disabled row is refused by `grants_model_access`, wildcard holders
+      // included, so nothing reaches it by accident.
+      enabled: false,
+      // The backend stores a covered model as provider_review whatever is
+      // sent; declaring it here lets the catalog card say so before it is
+      // added. Users confirm the notice before their first turn on it.
+      dataHandling: 'provider_review',
+      // Global-first: Global is the cheaper tier, and prod has no SCP. Dev's
+      // SCP denies every `global.*` profile, so a dev row would name
+      // `us.anthropic.claude-fable-5-2` at the Regional rates ($8.80 / $44.00,
+      // read $0.22, also 0.025x) and flip `pricingTier` to match.
+      modelId: 'global.anthropic.claude-fable-5-2',
+      // Card: 1M context, 128K output, June 2026 cutoff, cache minimum 512.
+      maxInputTokens: 1_000_000,
+      modelName: 'Claude Fable 5.2',
+      shortDescription: 'For the hardest, longest-running work',
+      maxOutputTokens: 128_000,
+      // Global: $8.00 / $40.00, cache write $10.00 (1.25x), cache READ $0.20,
+      // **0.025x** input. Price List API (`AmazonBedrockFoundationModels`,
+      // servicename "Claude Fable 5.2 (Amazon Bedrock Edition)", us-west-2,
+      // 2026-11-14) and Anthropic's first-party rate card agree to the cent;
+      // the Bedrock card defers to the pricing page. Cheaper than Fable 5.1
+      // ($10 / $50, read $0.25), which this replaces and was never curated.
+      ...ratesWithDerivedCache(8.0, 40.0, 0.025),
+      knowledgeCutoffDate: '2026-06-01',
+      // Contract from the card (the account cannot be probed until it opts
+      // in): adaptive thinking is always on and cannot be disabled, so no
+      // `thinking` param; temperature only 1.0/unset and top_p only 0.99/unset,
+      // so no sampling params; top_k unsupported. Thinking blocks are bound to
+      // the conversation on every account, and the backend sends the
+      // summarized display + `drop_block` binding itself
+      // (`_apply_thinking_binding` in model_config.py). Forced `tool_choice`
+      // (`any` / `tool`) is a 400 (Anthropic's contract; Opus 5.5 and Sonnet
+      // 5.5 measured 400 on Bedrock Converse 2026-11-14), so memory
+      // maintenance refuses it as its model. CountTokens is unsupported.
+      //
+      // Effort defaults to the card's `high`: Anthropic's guidance for this
+      // model is to start there and step down per route, since gains above it
+      // are uneven. max_tokens defaults to 64K like Opus 5.5; a capped call
+      // costs ~$2.56 at $40/MTok, and a call bills only the tokens it writes.
+      supportedParams: {
+        params: {
+          max_tokens: { supported: true, min: 1, max: 128_000, default: 64_000 },
+          effort: {
+            supported: true,
+            allowed: ['low', 'medium', 'high', 'xhigh', 'max'],
+            default: 'high',
           },
         },
       },

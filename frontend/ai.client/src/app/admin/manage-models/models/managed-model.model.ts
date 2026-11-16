@@ -298,6 +298,24 @@ export interface ManagedModel {
   retiresOn?: string | null;
   /** Free text shown wherever a non-active model is surfaced. Display only. */
   retirementNote?: string | null;
+  /**
+   * How the provider handles conversations sent to this model, as stored
+   * (`apis/shared/models/data_handling.py`). Read `effectiveDataHandling` to
+   * decide what to show: it applies the covered-model floor.
+   */
+  dataHandling?: DataHandling | null;
+  /** The row's own notice; empty means the platform default. */
+  dataHandlingNotice?: string | null;
+  /**
+   * `provider_review` when the provider keeps conversations for review: the
+   * stored value, or the covered-model floor (Fable / Mythos 5.x). Computed by
+   * the backend; absent on an older API, which reads as `standard`.
+   */
+  effectiveDataHandling?: DataHandling | null;
+  /** The notice users and admins are shown; null for a standard model. */
+  dataHandlingNoticeText?: string | null;
+  /** Identifies the notice's wording; a user's acknowledgement records it. */
+  dataHandlingNoticeDigest?: string | null;
   /** Date the model was added to the system (ISO string from API) */
   createdAt?: string | Date;
   /** Date the model was last updated (ISO string from API) */
@@ -402,6 +420,43 @@ export interface ManagedModelFormData {
   replacedBy?: string;
   retiresOn?: string;
   retirementNote?: string;
+  /** See `ManagedModel.dataHandling`. A covered model is stored provider_review whatever is sent. */
+  dataHandling?: DataHandling;
+  /** `''` clears it back to the platform default on an update. */
+  dataHandlingNotice?: string;
+  /**
+   * The admin read the notice. The backend refuses (409) a write that enables
+   * a provider_review model, or marks an enabled one, without it. Not stored.
+   */
+  acknowledgeDataHandling?: boolean;
+}
+
+/** Mirrors `DataHandling` in `apis/shared/models/data_handling.py`. */
+export const DATA_HANDLING_VALUES = ['standard', 'provider_review'] as const;
+export type DataHandling = (typeof DATA_HANDLING_VALUES)[number];
+
+export const DATA_HANDLING_LABELS: Record<DataHandling, string> = {
+  standard: 'Standard',
+  provider_review: 'Kept for provider review',
+};
+
+/** Short badge text for a provider_review model, wherever it is listed. */
+export const PROVIDER_REVIEW_BADGE = 'Kept for review';
+
+/**
+ * Whether a model id names a covered model (Fable / Mythos 5.x), which the
+ * backend always stores as provider_review. Mirrors `requires_provider_review`
+ * in `apis/shared/models/data_handling.py`; the backend is the gate, this only
+ * locks the form's select so it doesn't offer a choice the save would ignore.
+ */
+export function requiresProviderReview(modelId: string | null | undefined): boolean {
+  const match = /claude-(fable|mythos)-(\d+)/.exec((modelId ?? '').toLowerCase());
+  return match !== null && Number(match[2]) >= 5;
+}
+
+/** Whether a model's provider keeps its conversations for review. */
+export function keepsConversationsForReview(model: Pick<ManagedModel, 'effectiveDataHandling'> | null | undefined): boolean {
+  return model?.effectiveDataHandling === 'provider_review';
 }
 
 /** Model lifecycle states (docs/specs/model-retirement.md §7). */

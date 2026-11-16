@@ -82,6 +82,9 @@ _MIN_CACHEABLE_PREFIX_TOKENS: Dict[Tuple[str, int, Optional[int]], int] = {
     ("opus", 5, None): 512,
     ("sonnet", 5, 5): 512,
     ("haiku", 5, 5): 512,
+    # Fable 5.2 card (re-read 2026-11-14): 512. Mythos 5.2 shares its surface.
+    ("fable", 5, 2): 512,
+    ("mythos", 5, 2): 512,
     ("fable", 5, 1): 512,
     ("fable", 5, None): 512,
     ("mythos", 5, 1): 512,

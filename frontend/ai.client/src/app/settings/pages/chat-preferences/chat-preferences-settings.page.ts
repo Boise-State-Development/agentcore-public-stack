@@ -11,9 +11,11 @@ import { heroSparkles, heroChatBubbleLeftRight, heroChevronRight, heroBugAnt, he
 import { HttpErrorResponse } from '@angular/common/http';
 import { ModelService } from '../../../session/services/model/model.service';
 import { MAX_PERSONAL_INSTRUCTIONS, UserSettingsService } from '../../../services/user-settings.service';
+import { ModelDataNoticeService } from '../../../session/services/model/model-data-notice.service';
 import { LocalSettingsService } from '../../../services/local-settings.service';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { isRetiring } from '../../../shared/utils/retirement';
+import { ManagedModel, keepsConversationsForReview } from '../../../admin/manage-models/models/managed-model.model';
 import { FEATURES } from '../../../services/features';
 import { HandoffNotificationService } from '../../../session/services/handoff/handoff-notification.service';
 
@@ -75,7 +77,7 @@ import { HandoffNotificationService } from '../../../session/services/handoff/ha
                     [value]="model.modelId"
                     [selected]="model.modelId === currentDefaultModelId()"
                     [disabled]="isRetiring(model) && model.modelId !== currentDefaultModelId()"
-                  >{{ model.modelName }} ({{ model.providerName }}){{ isRetiring(model) ? ' — being retired' : '' }}</option>
+                  >{{ model.modelName }} ({{ model.providerName }}){{ isRetiring(model) ? ' — being retired' : '' }}{{ keptForReview(model) ? ' — kept for provider review' : '' }}</option>
                 }
               </select>
               @if (retiredDefaultNotice(); as notice) {
@@ -277,6 +279,10 @@ import { HandoffNotificationService } from '../../../session/services/handoff/ha
 export class ChatPreferencesSettingsPage {
   readonly modelService = inject(ModelService);
   private userSettingsService = inject(UserSettingsService);
+  private dataNotice = inject(ModelDataNoticeService);
+  protected keptForReview(model: ManagedModel): boolean {
+    return keepsConversationsForReview(model);
+  }
   readonly localSettings = inject(LocalSettingsService);
   protected readonly features = inject(FEATURES);
   protected readonly handoffNotifications = inject(HandoffNotificationService);
@@ -330,6 +336,14 @@ export class ChatPreferencesSettingsPage {
   async onModelChange(event: Event): Promise<void> {
     const select = event.target as HTMLSelectElement;
     const modelId = select.value || null;
+    const chosen = modelId ? this.modelService.availableModels().find((m) => m.modelId === modelId) : undefined;
+    // A default whose provider keeps conversations for review would put every
+    // new chat on it, so its notice is confirmed first. Cancel puts the select
+    // back on the saved default.
+    if (chosen && !(await this.dataNotice.confirmBeforeChoosing(chosen))) {
+      select.value = this.currentDefaultModelId();
+      return;
+    }
     this.saving.set(true);
     this.saveError.set(null);
 

@@ -9,6 +9,12 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 from enum import Enum
 
+from apis.shared.models.data_handling import (
+    NOTICE_MAX_LENGTH,
+    DataHandling,
+    effective_notice,
+    notice_digest,
+)
 from apis.shared.models.model_icons import model_icon_url, normalize_icon_slug
 
 
@@ -354,7 +360,28 @@ class ManagedModelCreate(BaseModel):
         description="Free text shown wherever a non-active model is surfaced. Display only.",
     )
 
-    @field_validator("replaced_by", "retires_on", "retirement_note", mode="before")
+    # Data handling (apis/shared/models/data_handling.py). A covered model's id
+    # forces `provider_review` whatever is sent here.
+    data_handling: Optional[DataHandling] = Field(
+        None,
+        alias="dataHandling",
+        description="'standard', or 'provider_review' for a model whose provider keeps "
+                    "conversations for review. Users confirm a notice before choosing one.",
+    )
+    data_handling_notice: Optional[str] = Field(
+        None,
+        alias="dataHandlingNotice",
+        max_length=NOTICE_MAX_LENGTH,
+        description="The notice for a provider_review model. Empty uses the platform's default.",
+    )
+    acknowledge_data_handling: Optional[bool] = Field(
+        None,
+        alias="acknowledgeDataHandling",
+        description="The admin has read the data-handling notice. Required to create a "
+                    "provider_review model enabled. Not stored.",
+    )
+
+    @field_validator("replaced_by", "retires_on", "retirement_note", "data_handling_notice", mode="before")
     @classmethod
     def _blank_lifecycle_to_none(cls, value: object) -> object:
         return _blank_to_none(value)
@@ -505,7 +532,21 @@ class ManagedModelUpdate(BaseModel):
         None, alias="retirementNote", max_length=RETIREMENT_NOTE_MAX_LENGTH
     )
 
-    @field_validator("replaced_by", "retires_on", "retirement_note", mode="before")
+    # Data handling: same partial-update contract; '' on the notice clears it
+    # back to the platform default.
+    data_handling: Optional[DataHandling] = Field(None, alias="dataHandling")
+    data_handling_notice: Optional[str] = Field(
+        None, alias="dataHandlingNotice", max_length=NOTICE_MAX_LENGTH
+    )
+    # None, not False: an untouched field must drop out of the PATCH dump.
+    acknowledge_data_handling: Optional[bool] = Field(
+        None,
+        alias="acknowledgeDataHandling",
+        description="Required when the update enables a provider_review model, or marks "
+                    "an enabled one. Not stored.",
+    )
+
+    @field_validator("replaced_by", "retires_on", "retirement_note", "data_handling_notice", mode="before")
     @classmethod
     def _strip_lifecycle(cls, value: object) -> object:
         # Whitespace-only collapses to '' (clear), never to None (leave alone).
@@ -672,6 +713,40 @@ class ManagedModel(BaseModel):
     # Not length-capped on read, for the same reason as shortDescription: a
     # stored value over the write cap must not take the /models listing down.
     retirement_note: Optional[str] = Field(None, alias="retirementNote")
+    # Absent on every row written before data handling shipped: standard.
+    data_handling: DataHandling = Field(DataHandling.STANDARD, alias="dataHandling")
+    data_handling_notice: Optional[str] = Field(None, alias="dataHandlingNotice")
+
+    @field_validator("data_handling", mode="before")
+    @classmethod
+    def _tolerate_unknown_data_handling(cls, value: object) -> object:
+        # Unknown or missing reads as standard, so a bad value never drops the
+        # row from the catalog (an uncataloged model runs unmetered). The
+        # covered-model floor is applied on write, and again by the read below.
+        if isinstance(value, str) and value in {d.value for d in DataHandling}:
+            return value
+        return DataHandling.STANDARD
+
+    @computed_field(alias="effectiveDataHandling", return_type=DataHandling)  # type: ignore[prop-decorator]
+    @property
+    def effective_data_handling(self) -> DataHandling:
+        """The stored marking with the covered-model floor applied, so a row
+        written before the floor existed still reads as provider_review."""
+        from apis.shared.models.data_handling import resolve_data_handling
+
+        return resolve_data_handling(self.model_id, self.data_handling)
+
+    @computed_field(alias="dataHandlingNoticeText", return_type=Optional[str])  # type: ignore[prop-decorator]
+    @property
+    def data_handling_notice_text(self) -> Optional[str]:
+        """What users and admins are shown: the row's notice, else the default."""
+        return effective_notice(self.effective_data_handling, self.data_handling_notice)
+
+    @computed_field(alias="dataHandlingNoticeDigest", return_type=Optional[str])  # type: ignore[prop-decorator]
+    @property
+    def data_handling_notice_digest(self) -> Optional[str]:
+        """Identifies the notice's wording; a user's acknowledgement records it."""
+        return notice_digest(self.data_handling_notice_text)
 
     @field_validator("status", mode="before")
     @classmethod
