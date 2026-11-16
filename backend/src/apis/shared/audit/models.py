@@ -124,6 +124,12 @@ class AuditAction:
     # increase history joins on it.
     AWS_LIMIT_INCREASE_REQUESTED = "aws_limit.increase_requested"
 
+    # A model whose provider keeps conversations for review was put in users'
+    # reach (``apis/shared/models/data_handling.py``): enabled, or marked while
+    # enabled. Target ``managed_model`` keyed by the catalog row id; ``after``
+    # carries the notice digest the admin acknowledged.
+    MANAGED_MODEL_PROVIDER_REVIEW_ENABLED = "managed_model.provider_review_enabled"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -142,6 +148,7 @@ TARGET_QUOTA_REQUEST = "quota_request"
 TARGET_QUOTA_EXTENSION = "quota_extension"
 TARGET_QUOTA_PERIOD = "quota_period"
 TARGET_AWS_LIMIT_REQUEST = "aws_limit_request"
+TARGET_MANAGED_MODEL = "managed_model"
 
 
 @dataclass

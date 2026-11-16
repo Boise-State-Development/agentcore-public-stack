@@ -15,6 +15,9 @@ DEFAULT_SETTINGS = {
     "voiceId": None,
     "sidebarItems": None,
     "memoryMode": None,
+    # Every key the item can hold must be listed here and in get_settings:
+    # update_settings rewrites the whole item from them.
+    "modelNoticeAcknowledgements": None,
 }
 
 
@@ -88,6 +91,7 @@ class UserSettingsRepository:
                 "voiceId": item.get("voiceId"),
                 "sidebarItems": item.get("sidebarItems"),
                 "memoryMode": item.get("memoryMode"),
+                "modelNoticeAcknowledgements": item.get("modelNoticeAcknowledgements"),
             }
         except ClientError as e:
             logger.error(f"Error getting settings for user {user_id}: {e}")

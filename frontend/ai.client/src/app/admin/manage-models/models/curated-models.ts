@@ -241,6 +241,10 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       // disabled row is refused by `grants_model_access`, wildcard holders
       // included, so nothing reaches it by accident.
       enabled: false,
+      // The backend stores a covered model as provider_review whatever is
+      // sent; declaring it here lets the catalog card say so before it is
+      // added. Users confirm the notice before their first turn on it.
+      dataHandling: 'provider_review',
       // Global-first: Global is the cheaper tier, and prod has no SCP. Dev's
       // SCP denies every `global.*` profile, so a dev row would name
       // `us.anthropic.claude-fable-5-2` at the Regional rates ($8.80 / $44.00,

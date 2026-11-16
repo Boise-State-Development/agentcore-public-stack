@@ -1,7 +1,7 @@
 """Domain models for user settings."""
 
 from pydantic import BaseModel, ConfigDict, field_validator
-from typing import Annotated, Any, List, Literal, Mapping, Optional
+from typing import Annotated, Any, Dict, List, Literal, Mapping, Optional
 from pydantic import Field
 
 from apis.shared.voice_catalog import get_voice
@@ -62,6 +62,22 @@ class SidebarItemPreference(BaseModel):
     visible: bool
 
 
+class ModelNoticeAcknowledgement(BaseModel):
+    """The user confirmed a model's data-handling notice
+    (``apis/shared/models/data_handling.py``). Written only by
+    ``POST /users/me/settings/model-notices``, which stamps the time and the
+    notice's digest itself; a changed notice has a new digest and is asked again."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    acknowledged_at: Annotated[str, Field(alias="acknowledgedAt")]
+    notice_digest: Annotated[Optional[str], Field(alias="noticeDigest")] = None
+
+
+#: Bounds the map read on every settings load. Only provider_review models
+#: are ever recorded, and a catalog has a handful.
+MAX_MODEL_NOTICE_ACKNOWLEDGEMENTS = 50
+
+
 class UserSettings(BaseModel):
     """User settings stored in DynamoDB."""
     model_config = ConfigDict(populate_by_name=True)
@@ -79,6 +95,11 @@ class UserSettings(BaseModel):
     # Long-term memory mode. A missing value means on, and the setting can only
     # reduce memory (an Agent conversation is always off).
     memory_mode: Annotated[Optional[MemoryMode], Field(alias="memoryMode")] = "on"
+    # modelId -> the notice the user confirmed. Read-only on this model's
+    # PUT: UserSettingsUpdate has no such field.
+    model_notice_acknowledgements: Annotated[
+        Optional[Dict[str, ModelNoticeAcknowledgement]], Field(alias="modelNoticeAcknowledgements")
+    ] = None
 
     @field_validator("memory_mode", mode="before")
     @classmethod

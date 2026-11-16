@@ -333,6 +333,10 @@ describe('ModelCatalogPage', () => {
       expect(fable.template.maxOutputTokens).toBe(128_000);
     });
 
+    it('is marked as kept for provider review, so its card says so before the add', () => {
+      expect(fable.template.dataHandling).toBe('provider_review');
+    });
+
     it('is added disabled, because the account must opt in to aws_review first', () => {
       // A covered model: under any other data-retention mode every request
       // 400s before inference. Enabling it is a governance decision (#1845).

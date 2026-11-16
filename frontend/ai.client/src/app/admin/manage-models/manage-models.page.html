@@ -184,6 +184,13 @@
                       >{{ model.status }}</span
                     >
                   }
+                  @if (keepsForReview(model)) {
+                    <span
+                      class="shrink-0 rounded-sm bg-state-warning-50 px-1.5 text-[10px]/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300"
+                      title="Its provider keeps conversations for review. Users confirm a notice before using it."
+                      >{{ providerReviewBadge }}</span
+                    >
+                  }
                 </div>
                 <p
                   class="truncate font-mono text-xs/5 text-gray-500 dark:text-gray-400"

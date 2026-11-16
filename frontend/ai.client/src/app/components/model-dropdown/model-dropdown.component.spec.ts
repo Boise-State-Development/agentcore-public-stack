@@ -5,6 +5,7 @@ import { ModelDropdownComponent } from './model-dropdown.component';
 import { ModelService } from '../../session/services/model/model.service';
 import { SessionService } from '../../session/services/session/session.service';
 import { PromptCacheGuardService } from '../../session/services/prompt-cache/prompt-cache-guard.service';
+import { ModelDataNoticeService } from '../../session/services/model/model-data-notice.service';
 import {
   EffortControl,
   ManagedModel,
@@ -46,6 +47,8 @@ function setup(options: {
   hasSession?: boolean;
   /** What the prompt-cache guard answers when asked. */
   confirm?: boolean;
+  /** What the data-handling notice answers when asked. */
+  noticeAnswer?: boolean;
 } = {}) {
   const featured = signal(options.featured ?? [makeModel()]);
   const more = signal(options.more ?? []);
@@ -74,6 +77,7 @@ function setup(options: {
     hasCurrentSession: () => options.hasSession ?? false,
   };
   const confirm = vi.fn(async () => options.confirm ?? true);
+  const confirmBeforeChoosing = vi.fn(async () => options.noticeAnswer ?? true);
 
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -81,12 +85,13 @@ function setup(options: {
       { provide: ModelService, useValue: modelService },
       { provide: SessionService, useValue: sessionService },
       { provide: PromptCacheGuardService, useValue: { confirm } },
+      { provide: ModelDataNoticeService, useValue: { confirmBeforeChoosing } },
     ],
   });
 
   const fixture = TestBed.createComponent(ModelDropdownComponent);
   fixture.detectChanges();
-  return { fixture, modelService, setSelectedModel, setEffort, confirm };
+  return { fixture, modelService, setSelectedModel, setEffort, confirm, confirmBeforeChoosing };
 }
 
 /** Open the picker by clicking its trigger, then flush the overlay render. */
@@ -367,6 +372,60 @@ describe('ModelDropdownComponent', () => {
 
     expect(fixture.nativeElement.querySelector('button[aria-label="Select model"]')).toBeNull();
     expect(fixture.nativeElement.textContent).toContain('Model One');
+  });
+
+  describe('a model whose provider keeps conversations for review', () => {
+    const standard = makeModel({ id: 'a', modelId: 'a', modelName: 'Alpha' });
+    const reviewed = makeModel({
+      id: 'f',
+      modelId: 'global.anthropic.claude-fable-5-2',
+      modelName: 'Fable',
+      effectiveDataHandling: 'provider_review',
+      dataHandlingNoticeText: 'Kept for review.',
+      dataHandlingNoticeDigest: 'd1',
+    });
+
+    function pick(fixture: ReturnType<typeof setup>['fixture'], name: string) {
+      openMenu(fixture);
+      itemLabelled(name)!.click();
+      fixture.detectChanges();
+    }
+
+    it('says so on its row before it is picked', () => {
+      const { fixture } = setup({ featured: [standard, reviewed] });
+      openMenu(fixture);
+      const row = itemLabelled('Fable')!;
+      expect(row.textContent).toContain('Kept for review');
+      expect(row.textContent).toContain('Its provider keeps conversations for review.');
+      expect(itemLabelled('Alpha')!.textContent).not.toContain('Kept for review');
+    });
+
+    it('is chosen only once the user confirms its notice', async () => {
+      const { fixture, setSelectedModel, confirmBeforeChoosing } = setup({ featured: [standard, reviewed] });
+      pick(fixture, 'Fable');
+
+      await vi.waitFor(() => expect(setSelectedModel).toHaveBeenCalledWith(reviewed));
+      expect(confirmBeforeChoosing).toHaveBeenCalledWith(reviewed);
+    });
+
+    it('keeps the current model when the user declines', async () => {
+      const { fixture, setSelectedModel, confirmBeforeChoosing } = setup({
+        featured: [standard, reviewed],
+        noticeAnswer: false,
+      });
+      pick(fixture, 'Fable');
+
+      await vi.waitFor(() => expect(confirmBeforeChoosing).toHaveBeenCalled());
+      await Promise.resolve();
+      expect(setSelectedModel).not.toHaveBeenCalled();
+    });
+
+    it('asks nothing for a standard model', () => {
+      const { fixture, setSelectedModel, confirmBeforeChoosing } = setup({ featured: [reviewed, standard] });
+      pick(fixture, 'Alpha');
+      expect(setSelectedModel).toHaveBeenCalledWith(standard);
+      expect(confirmBeforeChoosing).not.toHaveBeenCalled();
+    });
   });
 
   describe('switching models in an open conversation', () => {

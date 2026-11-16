@@ -42,6 +42,19 @@ export interface UserSettings {
    * means `on`. Memory Spaces of projects and agents are separate.
    */
   memoryMode?: MemoryMode | null;
+  /**
+   * modelId -> the data-handling notice the user confirmed, keyed by the
+   * notice's digest so a reworded notice is asked again. Read-only here:
+   * written by {@link UserSettingsService.acknowledgeModelNotice}, which the
+   * server stamps itself.
+   */
+  modelNoticeAcknowledgements?: Record<string, ModelNoticeAcknowledgement> | null;
+}
+
+/** Mirrors `ModelNoticeAcknowledgement` in `apis/shared/user_settings/models.py`. */
+export interface ModelNoticeAcknowledgement {
+  acknowledgedAt: string;
+  noticeDigest: string | null;
 }
 
 /** `MAX_PERSONAL_INSTRUCTIONS_CHARS` in `apis/shared/user_settings/models.py`. */
@@ -99,6 +112,20 @@ export class UserSettingsService {
    * the in-memory state already applied and a storage-misconfiguration 503
    * shouldn't interrupt the user. Explicit settings-page saves stay loud.
    */
+  /**
+   * Record that the user confirmed a model's data-handling notice. The server
+   * stamps the time and the digest of the notice the catalog holds, so the
+   * client never claims a wording it did not show.
+   */
+  async acknowledgeModelNotice(modelId: string): Promise<UserSettings> {
+    const result = await firstValueFrom(
+      this.http.post<UserSettings>(`${this.baseUrl()}/model-notices`, { modelId }),
+    );
+    this.settingsPromise = null;
+    this.settingsResource.reload();
+    return result;
+  }
+
   async updateSettings(
     settings: Partial<UserSettings>,
     options?: { silent?: boolean },

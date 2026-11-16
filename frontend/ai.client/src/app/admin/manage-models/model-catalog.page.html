@@ -123,6 +123,20 @@
                     {{ model.tagline }}
                   </p>
 
+                  <!-- A covered model: its provider keeps conversations for review. Said
+                       before the add, because it is a privacy decision, not a setting. -->
+                  @if (model.template.dataHandling === 'provider_review') {
+                    <p
+                      class="mt-3 rounded-2xl bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-800 dark:bg-state-warning-900/30 dark:text-state-warning-200"
+                    >
+                      <span class="font-semibold">Kept for provider review.</span>
+                      AWS keeps this model's conversations for up to 30 days for abuse detection and may
+                      review flagged ones. The AWS account must opt in to the <code>aws_review</code>
+                      data-retention mode before it works. Added disabled; users confirm a notice before
+                      they use it.
+                    </p>
+                  }
+
                   <!-- Capability badges -->
                   <ul class="mt-3 flex flex-wrap gap-1.5">
                     @for (cap of model.capabilities; track cap) {

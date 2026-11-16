@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, signal, computed, OnInit } from '@angular/core';
+import { Component, ChangeDetectionStrategy, inject, signal, computed, effect, OnInit } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -19,7 +19,12 @@ import {
   AVAILABLE_PROVIDERS,
   CACHING_CAPABLE_PROVIDERS,
   CACHING_FORCED_PROVIDERS,
+  DATA_HANDLING_LABELS,
+  DATA_HANDLING_VALUES,
+  DataHandling,
   defaultSupportsCaching,
+  keepsConversationsForReview,
+  requiresProviderReview,
   supportsCachingForProvider,
   OPENAI_SURFACE_PROVIDERS,
   PROVIDER_LABELS,
@@ -44,6 +49,7 @@ import {
 } from './models/model-icons';
 import { ModelIconComponent } from '../../components/model-icon/model-icon.component';
 import { ManagedModelsService } from './services/managed-models.service';
+import { confirmProviderReviewEnable } from './services/provider-review-confirm';
 import { CuratedModelPrefillService } from './services/curated-model-prefill.service';
 import { RoleOptionsService } from '../roles/services/role-options.service';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
@@ -258,6 +264,8 @@ interface ModelFormGroup {
   replacedBy: FormControl<string>;
   retiresOn: FormControl<string>;
   retirementNote: FormControl<string>;
+  dataHandling: FormControl<DataHandling>;
+  dataHandlingNotice: FormControl<string>;
   inputPricePerMillionTokens: FormControl<number>;
   outputPricePerMillionTokens: FormControl<number>;
   cacheWritePricePerMillionTokens: FormControl<number | null>;
@@ -398,6 +406,8 @@ export class ModelFormPage implements OnInit {
     replacedBy: this.fb.control('', { nonNullable: true }),
     retiresOn: this.fb.control('', { nonNullable: true }),
     retirementNote: this.fb.control('', { nonNullable: true, validators: [Validators.maxLength(300)] }),
+    dataHandling: this.fb.control<DataHandling>('standard', { nonNullable: true }),
+    dataHandlingNotice: this.fb.control('', { nonNullable: true, validators: [Validators.maxLength(1000)] }),
     inputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     outputPricePerMillionTokens: this.fb.control(0, { nonNullable: true, validators: [Validators.required, Validators.min(0)] }),
     cacheWritePricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
@@ -917,6 +927,16 @@ export class ModelFormPage implements OnInit {
       // against the saved record — so it is held beside the form rather than in it.
       this.uploadedIconUrl.set(model.iconUrl ?? null);
 
+      // What users could reach before this edit: an enable, or marking an
+      // enabled model, is what needs the admin's acknowledgement.
+      this.loadedReach.set({
+        enabled: model.enabled,
+        dataHandling: model.effectiveDataHandling ?? model.dataHandling ?? 'standard',
+      });
+      // With no notice of its own the row shows the platform's, which only
+      // the backend has; the form quotes it so the admin sees what users will.
+      this.defaultNoticeText.set(model.dataHandlingNotice ? null : (model.dataHandlingNoticeText ?? null));
+
       // Roles that reach this model via a wildcard grant or inheritance. Held
       // outside the form: they're server-derived and not editable here.
       this.inheritedAppRoles.set(model.inheritedAppRoles ?? []);
@@ -944,6 +964,8 @@ export class ModelFormPage implements OnInit {
         replacedBy: model.replacedBy ?? '',
         retiresOn: model.retiresOn ?? '',
         retirementNote: model.retirementNote ?? '',
+        dataHandling: model.effectiveDataHandling ?? model.dataHandling ?? 'standard',
+        dataHandlingNotice: model.dataHandlingNotice ?? '',
         inputPricePerMillionTokens: model.inputPricePerMillionTokens,
         outputPricePerMillionTokens: model.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: model.cacheWritePricePerMillionTokens ?? null,
@@ -1002,6 +1024,8 @@ export class ModelFormPage implements OnInit {
       supportsCaching: template.supportsCaching ?? true,
       mantleApiMode: this.coerceMantleApiMode(template.apiMode),
       mantleRegion: template.region ?? '',
+      dataHandling: template.dataHandling ?? 'standard',
+      dataHandlingNotice: template.dataHandlingNotice ?? '',
     });
 
     this.rebuildInferenceParamRows(template.provider, template.supportedParams ?? null);
@@ -1119,7 +1143,48 @@ export class ModelFormPage implements OnInit {
     const self = this.modelIdValue();
     return this.managedModelsService
       .getManagedModels()
-      .filter((m) => (m.status ?? 'active') === 'active' && m.enabled && m.modelId !== self);
+      .filter(
+        (m) =>
+          (m.status ?? 'active') === 'active' &&
+          m.enabled &&
+          m.modelId !== self &&
+          // A redirect would move users onto it without its notice; the
+          // backend refuses it too.
+          !keepsConversationsForReview(m),
+      );
+  });
+
+  // ── data handling ──────────────────────────────────────────────────────────
+
+  protected readonly dataHandlingOptions = DATA_HANDLING_VALUES.map((value) => ({
+    value,
+    label: DATA_HANDLING_LABELS[value],
+  }));
+
+  readonly selectedDataHandling = toSignal(this.modelForm.controls.dataHandling.valueChanges, {
+    initialValue: this.modelForm.controls.dataHandling.value,
+  });
+
+  /** A covered model's id: the backend stores it provider_review whatever is sent. */
+  readonly dataHandlingLocked = computed(() => requiresProviderReview(this.modelIdValue()));
+
+  /** The platform's notice, quoted when this row has none of its own (edit mode). */
+  readonly defaultNoticeText = signal<string | null>(null);
+
+  /** Enabled state and marking as loaded; a new model starts unreachable. */
+  private readonly loadedReach = signal<{ enabled: boolean; dataHandling: DataHandling }>({
+    enabled: false,
+    dataHandling: 'standard',
+  });
+
+  private readonly lockDataHandling = effect(() => {
+    const control = this.modelForm.controls.dataHandling;
+    if (this.dataHandlingLocked()) {
+      if (control.value !== 'provider_review') control.setValue('provider_review');
+      if (control.enabled) control.disable({ emitEvent: false });
+    } else if (control.disabled) {
+      control.enable({ emitEvent: false });
+    }
   });
 
   private readonly providerNameValue = toSignal(
@@ -1251,6 +1316,9 @@ export class ModelFormPage implements OnInit {
         replacedBy: v.replacedBy,
         retiresOn: v.retiresOn,
         retirementNote: v.retirementNote.trim(),
+        dataHandling: v.dataHandling,
+        // '' clears a stored notice back to the platform's, like retirementNote.
+        dataHandlingNotice: v.dataHandlingNotice.trim(),
         inputPricePerMillionTokens: v.inputPricePerMillionTokens,
         outputPricePerMillionTokens: v.outputPricePerMillionTokens,
         cacheWritePricePerMillionTokens: v.cacheWritePricePerMillionTokens,
@@ -1270,6 +1338,21 @@ export class ModelFormPage implements OnInit {
           : null,
         supportedParams: this.collectSupportedParams(),
       };
+
+      // Putting a provider_review model in users' reach is a privacy decision:
+      // the admin confirms the notice, and the backend refuses the save (409)
+      // without that acknowledgement.
+      const before = this.loadedReach();
+      const needsAcknowledgement =
+        v.enabled &&
+        v.dataHandling === 'provider_review' &&
+        (!before.enabled || before.dataHandling !== 'provider_review');
+      if (needsAcknowledgement) {
+        const notice = v.dataHandlingNotice.trim() || this.defaultNoticeText();
+        const confirmed = await confirmProviderReviewEnable(this.dialog, v.modelName, notice);
+        if (!confirmed) return;
+        formData.acknowledgeDataHandling = true;
+      }
 
       if (this.isEditMode() && this.modelId()) {
         // Update existing model
