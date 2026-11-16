@@ -278,6 +278,25 @@ describe('ProjectBindingsPage', () => {
       expect(buttonIn(rowFor(el, 'Memo Style'), 'View')).toBeUndefined();
     });
 
+    it('opens a selected skill from its chip at the top, without finding it in the list', async () => {
+      const { el, harness } = await openSkills({
+        pdf: { ref: 'pdf', version: 2, pinnedAt: null, updateAvailable: false, available: true },
+      });
+      const chips = el.querySelector('[id^="project-bindings-summary-"]')!.closest('[role=group]')!;
+      const chip = chips.querySelector<HTMLButtonElement>('button[aria-label="View PDF Workflows"]')!;
+      expect(chip.textContent!.trim()).toBe('PDF Workflows');
+      chip.click();
+      expect(dialog.open).toHaveBeenCalledWith(ProjectSkillDialogComponent, {
+        data: { projectId: 'prj_1', skillId: 'pdf', name: 'PDF Workflows' },
+      });
+
+      // Checked but not saved: the project doesn't run it yet, so its chip is plain text.
+      checkboxFor(el, 'Memo Style').click();
+      await settlePage(harness);
+      const memo = [...chips.querySelectorAll('li')].find(li => li.textContent!.trim() === 'Memo Style')!;
+      expect(memo.querySelector('button')).toBeNull();
+    });
+
     it('names a private skill someone else added, and lets the member read it', async () => {
       const { el } = await openSkills(
         {

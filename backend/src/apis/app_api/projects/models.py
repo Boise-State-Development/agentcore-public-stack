@@ -397,6 +397,9 @@ class ProjectSkillContentResponse(BaseModel):
     compose: List[str] = Field(default_factory=list)
     allowed_tools: List[str] = Field(default_factory=list, alias="allowedTools")
     files: List[ProjectSkillFile] = Field(default_factory=list)
+    is_owned: bool = Field(
+        False, alias="isOwned", description="The caller wrote this skill, so they can edit it (Customize → Skills)"
+    )
 
 
 class SettingsVersionSummary(BaseModel):

@@ -2,6 +2,8 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, si
 import { formatDate } from '@angular/common';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import { heroEye } from '@ng-icons/heroicons/outline';
 import { BindableItem } from '../../agents/models/agent.model';
 import { AgentService } from '../../agents/services/agent.service';
 import { ToolSelectorComponent } from '../../components/tool-selector/tool-selector.component';
@@ -64,7 +66,8 @@ function sameRefs(a: ReadonlySet<string>, b: string[]): boolean {
 @Component({
   selector: 'app-project-bindings-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ProjectSettingsShellComponent, ToolSelectorComponent],
+  imports: [NgIcon, ProjectSettingsShellComponent, ToolSelectorComponent],
+  providers: [provideIcons({ heroEye })],
   host: { '(window:beforeunload)': 'onBeforeUnload($event)' },
   template: `
     <app-project-settings-shell
@@ -102,21 +105,33 @@ function sameRefs(a: ReadonlySet<string>, b: string[]): boolean {
           @if (error()) {
             <p role="alert" class="mb-4 text-sm/6 text-state-danger-600 dark:text-state-danger-400">{{ error() }}</p>
           }
-          <div
-            class="mb-4 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/60"
-            [attr.aria-labelledby]="summaryId"
-            role="group"
-          >
+          <div class="mb-5" [attr.aria-labelledby]="summaryId" role="group">
             <p class="flex flex-wrap items-baseline gap-x-2 text-sm/6">
               <span [id]="summaryId" class="font-semibold text-gray-900 tabular-nums dark:text-white">{{ summary() }}</span>
               @if (dirty()) {
                 <span class="text-xs/5 font-medium text-state-warning-700 dark:text-state-warning-300">Unsaved changes</span>
               }
             </p>
-            @if (selectedNames().length) {
+            @if (selectedChips().length) {
               <ul class="mt-2 flex flex-wrap gap-1.5">
-                @for (name of selectedNames(); track name) {
-                  <li class="rounded-full border border-gray-300 bg-white px-2.5 py-0.5 text-xs/5 font-medium text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white">{{ name }}</li>
+                @for (chip of selectedChips(); track chip.item.id) {
+                  <li>
+                    @if (chip.viewable) {
+                      <!-- Opens the same viewer as the row's View, so a selected skill can be
+                           read without finding it in the list. -->
+                      <button
+                        type="button"
+                        (click)="viewSkill(chip.item)"
+                        [attr.aria-label]="'View ' + chip.item.name"
+                        class="inline-flex items-center gap-1 rounded-full border border-gray-300 bg-white px-2.5 py-0.5 text-xs/5 font-medium text-gray-900 hover:border-gray-400 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white dark:hover:border-gray-500 dark:hover:bg-gray-800"
+                      >
+                        {{ chip.item.name }}
+                        <ng-icon name="heroEye" class="size-3.5 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+                      </button>
+                    } @else {
+                      <span class="inline-block rounded-full border border-gray-300 bg-white px-2.5 py-0.5 text-xs/5 font-medium text-gray-900 dark:border-gray-600 dark:bg-gray-900 dark:text-white">{{ chip.item.name }}</span>
+                    }
+                  </li>
                 }
               </ul>
             } @else {
@@ -204,17 +219,21 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
 
   protected readonly dirty = computed(() => this.loaded() && !sameRefs(this.selected(), this.saved()));
 
-  /** Selected rows' names, in list order: what the assistant gets once saved. */
-  protected readonly selectedNames = computed(() => {
+  /**
+   * Selected rows, in list order: what the assistant gets once saved. A chip opens the
+   * viewer when its row offers View (a saved skill the caller can read); a skill only
+   * checked, not yet saved, has nothing the project runs to show.
+   */
+  protected readonly selectedChips = computed(() => {
     const selected = this.selected();
-    return this.choices()
-      .filter(c => selected.has(c.id))
-      .map(c => c.name);
+    return this.items()
+      .filter(item => selected.has(item.id))
+      .map(item => ({ item, viewable: !!item.detail }));
   });
 
   /** "2 skills selected", or "No skills selected". */
   protected readonly summary = computed(() => {
-    const count = this.selectedNames().length;
+    const count = this.selectedChips().length;
     const copy = this.copy();
     if (!count) return `No ${copy.nounPlural} selected`;
     return `${count} ${count === 1 ? copy.noun : copy.nounPlural} selected`;

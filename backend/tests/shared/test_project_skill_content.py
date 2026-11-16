@@ -112,7 +112,11 @@ def test_the_read_is_the_pinned_content_without_owner_or_storage_details(pid, au
             {"filename": "playbook.md", "kind": "reference", "size": 12, "contentType": "text/markdown"},
             {"filename": "redline.py", "kind": "script", "size": 12, "contentType": "text/x-python"},
         ],
+        "isOwned": False,
     }
+    # Only the author is told they can edit it.
+    assert client(EDITOR).get(f"/projects/{pid}/skills/{AUTHORED}").json()["isOwned"] is True
+    assert client(OWNER).get(f"/projects/{pid}/skills/{AUTHORED}").json()["isOwned"] is False
 
 
 def test_a_changed_skill_still_reads_as_pinned_until_someone_updates_it(pid, authored, store):

@@ -151,6 +151,8 @@ export interface ProjectSkillContent {
   compose: string[];
   allowedTools: string[];
   files: ProjectSkillFile[];
+  /** The caller wrote this skill, so the viewer offers Edit (Customize → Skills). */
+  isOwned?: boolean;
 }
 
 export interface BindingsResponse extends SettingsResponse {

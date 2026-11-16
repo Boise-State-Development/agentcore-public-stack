@@ -407,6 +407,7 @@ async def get_project_skill(
             ProjectSkillFile(filename=r.filename, kind=r.kind, size=r.size, content_type=r.content_type)
             for r in record.resources
         ],
+        is_owned=record.owner_id == user.user_id,
     )
 
 

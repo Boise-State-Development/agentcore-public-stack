@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { HttpErrorResponse } from '@angular/common/http';
 import { provideMarkdown } from 'ngx-markdown';
@@ -37,6 +38,7 @@ async function settle(): Promise<void> {
 
 describe('ProjectSkillDialogComponent', () => {
   const api = { skillContent: vi.fn(), skillFile: vi.fn() };
+  const router = { navigate: vi.fn(() => Promise.resolve(true)) };
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -45,7 +47,9 @@ describe('ProjectSkillDialogComponent', () => {
     api.skillFile.mockImplementation((_p: string, _s: string, name: string) =>
       of(name === 'process.md' ? '## Step one\n\nCheck the parties.' : 'print("redline")'),
     );
-    TestBed.configureTestingModule({ providers: [provideMarkdown(), { provide: ProjectApiService, useValue: api }] });
+    TestBed.configureTestingModule({
+      providers: [provideMarkdown(), { provide: ProjectApiService, useValue: api }, { provide: Router, useValue: router }],
+    });
   });
 
   afterEach(() => TestBed.inject(Dialog).closeAll());
@@ -67,7 +71,6 @@ describe('ProjectSkillDialogComponent', () => {
     expect(container.textContent).toContain('Version 3, the one this project runs');
     // Rendered markdown, not literal `#`.
     expect(container.querySelector('markdown h1')?.textContent).toContain('Redline');
-    expect(container.textContent).toContain('Read-only.');
   });
 
   it('lists the bundle by directory, references first', async () => {
@@ -125,6 +128,23 @@ describe('ProjectSkillDialogComponent', () => {
     const { container } = await open();
     expectNamedDialog(container, { name: 'eds_redline' });
     expect(container.querySelector('[role=alert]')?.textContent).toContain('isn’t available to you');
+  });
+
+  it('offers no Edit to someone who did not write the skill', async () => {
+    const { container } = await open();
+    expect(buttonNamed(container, 'Edit skill')).toBeUndefined();
+    expect(container.textContent).toContain('Only its author can edit it.');
+  });
+
+  it('sends the author to the skill’s edit page, closing the viewer first', async () => {
+    api.skillContent.mockReturnValue(of({ ...SKILL, isOwned: true }));
+    const { ref, container } = await open();
+    let closed = false;
+    ref.closed.subscribe(() => (closed = true));
+    expect(container.textContent).toContain('You wrote this skill.');
+    buttonNamed(container, 'Edit skill')!.click();
+    expect(closed).toBe(true);
+    expect(router.navigate).toHaveBeenCalledWith(['/customize/skills', 'eds_redline', 'edit']);
   });
 
   it('closes with no result', async () => {

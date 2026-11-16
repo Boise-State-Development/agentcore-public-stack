@@ -1,8 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { DIALOG_DATA, DialogRef } from '@angular/cdk/dialog';
+import { Router } from '@angular/router';
 import { HttpErrorResponse } from '@angular/common/http';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChevronDown, heroCodeBracket, heroDocumentText, heroPhoto } from '@ng-icons/heroicons/outline';
+import { heroChevronDown, heroCodeBracket, heroDocumentText, heroPencilSquare, heroPhoto } from '@ng-icons/heroicons/outline';
 import { MarkdownComponent } from 'ngx-markdown';
 import { firstValueFrom } from 'rxjs';
 import { DialogShellComponent } from '../../../components/dialog/dialog-shell.component';
@@ -74,7 +75,7 @@ let nextInstance = 0;
   selector: 'app-project-skill-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [DialogShellComponent, MarkdownComponent, NgIcon, SpinnerComponent],
-  providers: [provideIcons({ heroChevronDown, heroCodeBracket, heroDocumentText, heroPhoto })],
+  providers: [provideIcons({ heroChevronDown, heroCodeBracket, heroDocumentText, heroPencilSquare, heroPhoto })],
   template: `
     <app-dialog-shell [title]="title()" size="xl" (closed)="close()">
       @if (skill(); as s) {
@@ -195,14 +196,33 @@ let nextInstance = 0;
       }
 
       <div dialogFooter class="flex items-center justify-between gap-3 border-t border-gray-200 px-6 py-4 dark:border-gray-700">
-        <p class="text-xs/5 text-gray-600 dark:text-gray-400">Read-only. Its author edits it in Customize → Skills.</p>
-        <button
-          type="button"
-          (click)="close()"
-          class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
-        >
-          Close
-        </button>
+        <p class="text-xs/5 text-gray-600 dark:text-gray-400">
+          @if (skill()?.isOwned) {
+            You wrote this skill. Edits reach this project once it’s updated to the new version.
+          } @else {
+            Read-only. Only its author can edit it.
+          }
+        </p>
+        <div class="flex shrink-0 items-center gap-3">
+          <button
+            type="button"
+            (click)="close()"
+            class="rounded-2xl px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-500 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+          >
+            Close
+          </button>
+          @if (skill()?.isOwned) {
+            <!-- Editing lives on the authoring form; the viewer never grows a second editor. -->
+            <button
+              type="button"
+              (click)="edit()"
+              class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+            >
+              <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+              Edit skill
+            </button>
+          }
+        </div>
       </div>
     </app-dialog-shell>
   `,
@@ -211,6 +231,7 @@ export class ProjectSkillDialogComponent {
   private dialogRef = inject<DialogRef<ProjectSkillDialogResult>>(DialogRef);
   private data = inject<ProjectSkillDialogData>(DIALOG_DATA);
   private api = inject(ProjectApiService);
+  private router = inject(Router);
 
   protected readonly uid = `project-skill-${nextInstance++}`;
   protected readonly skill = signal<ProjectSkillContent | null>(null);
@@ -248,6 +269,17 @@ export class ProjectSkillDialogComponent {
 
   protected close(): void {
     this.dialogRef.close(undefined);
+  }
+
+  /**
+   * To the skill's authoring form. Closed first, so the dialog never sits over the page it
+   * leads to; the Skills page still asks before leaving unsaved checkbox changes.
+   */
+  protected edit(): void {
+    const skill = this.skill();
+    if (!skill?.isOwned) return;
+    this.dialogRef.close(undefined);
+    void this.router.navigate(['/customize/skills', skill.skillId, 'edit']);
   }
 
   protected readable(file: ProjectSkillFile): boolean {
