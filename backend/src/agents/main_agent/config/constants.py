@@ -73,6 +73,9 @@ class EnvVars:
     TOOL_RESULT_OFFLOAD_ENABLED = "AGENTCORE_TOOL_RESULT_OFFLOAD_ENABLED"
     TOOL_RESULT_OFFLOAD_MAX_TOKENS = "AGENTCORE_TOOL_RESULT_OFFLOAD_MAX_TOKENS"
     TOOL_RESULT_OFFLOAD_PREVIEW_TOKENS = "AGENTCORE_TOOL_RESULT_OFFLOAD_PREVIEW_TOKENS"
+    # read_skill_file results stay inline up to this many (estimated) tokens;
+    # 0 offloads them at the ordinary gate again.
+    SKILL_FILE_INLINE_MAX_TOKENS = "AGENTCORE_SKILL_FILE_INLINE_MAX_TOKENS"
     # Selective long cache TTL on the STATIC prefix (thresholds spec §3.6,
     # PR-5). "1h" puts a 1-hour TTL on the tools and system cachePoints only;
     # the message-level point stays at Bedrock's 5-minute default. Unset/empty
@@ -211,6 +214,12 @@ class Defaults:
     TOOL_RESULT_OFFLOAD_ENABLED = True
     TOOL_RESULT_OFFLOAD_MAX_TOKENS = 4_000
     TOOL_RESULT_OFFLOAD_PREVIEW_TOKENS = 1_000
+    # A skill's reference file is the author's instructions (a process file, a
+    # playbook), which the model must read whole before it acts: offloaded, it
+    # always pulls the rest back, so the preview only adds a round trip and a
+    # second copy in history. Inline up to ~64 KB of text; a larger reference
+    # (a data dump, a schema) still offloads at the ordinary 4k gate.
+    SKILL_FILE_INLINE_MAX_TOKENS = 16_000
     TOOL_RESULT_OFFLOAD_S3_PREFIX = "compaction-offload"
     # Default OFF, deliberately against the flags-default-on house style: a
     # caching default adopted on inspection alone has already shipped wrong

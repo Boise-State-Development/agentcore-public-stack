@@ -83,10 +83,22 @@ PREFILTER_RATIO = 0.5
 #   preview (eval case ``project_kb.large_read_file_by_name``). A listing is
 #   bounded at 100 entries, under the gate either way.
 #
-# ``read_skill_file`` is deliberately NOT here: reference files run up to
-# 1 MiB of arbitrary text (schemas, data, inert scripts), which is exactly
-# the payload a preview plus pattern/line-range retrieval exists for.
+# ``read_skill_file`` is NOT here outright: reference files run up to 1 MiB
+# of arbitrary text (schemas, data, inert scripts), which is exactly the
+# payload a preview plus pattern/line-range retrieval exists for. It gets a
+# higher gate of its own instead (``SKILL_FILE_INLINE_TOOLS``).
 OFFLOAD_EXEMPT_TOOLS = frozenset({"document_read", "skills", "project_files", "knowledge_files"})
+
+# Tools whose results stay inline up to ``SKILL_FILE_INLINE_MAX_TOKENS``
+# rather than the ordinary gate. ``read_skill_file`` returns a reference the
+# skill's own instructions told the model to read, most often the rest of the
+# instructions (a process file, a playbook), and those have to be read whole:
+# a dev contract-redline run read a 9k-token process file and a 12k-token
+# playbook, got a 1k preview of each, and called ``retrieve_offloaded_content``
+# for both at once. Offloading such a file buys nothing (the full text reaches
+# the prompt anyway) and costs a round trip plus the preview, kept in history
+# beside the full text. The bound keeps a genuinely large reference offloaded.
+SKILL_FILE_INLINE_TOOLS = frozenset({"read_skill_file"})
 
 
 def tool_result_offload_enabled() -> bool:
@@ -117,6 +129,17 @@ def _exempt_tool(event: Any) -> bool:
     return name in OFFLOAD_EXEMPT_TOOLS
 
 
+def _skill_file_inline_max_tokens() -> int:
+    return max(0, _int_env(EnvVars.SKILL_FILE_INLINE_MAX_TOKENS, Defaults.SKILL_FILE_INLINE_MAX_TOKENS))
+
+
+def _tool_name(event: Any) -> Optional[str]:
+    try:
+        return (getattr(event, "tool_use", None) or {}).get("name")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _should_offload(tool_name: str, _token_count: int) -> bool:
     """The plugin's own ``should_offload`` hook — defense in depth behind the
     mixin's early return, for the path where the base class is reached."""
@@ -141,6 +164,11 @@ class _OffloaderMixin:
             # that cannot be anywhere near the gate.
             estimate = estimate_message_tokens({"role": "user", "content": [{"toolResult": result}]})
             if estimate < self._max_result_tokens * PREFILTER_RATIO:  # type: ignore[attr-defined]
+                return
+            # A skill file under its own bound stays inline. Judged on the
+            # estimate: the bound is a size class, so the heuristic's ±25%
+            # does not matter, and it spares the CountTokens call.
+            if _tool_name(event) in SKILL_FILE_INLINE_TOOLS and estimate <= _skill_file_inline_max_tokens():
                 return
             before = event.result
             await super()._handle_tool_result(event)  # type: ignore[misc]
