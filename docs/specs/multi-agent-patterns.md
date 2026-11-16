@@ -54,10 +54,12 @@ The spec's phases sit on one side each:
 
 ## 3. The five patterns, mapped
 
-All five are already in our pinned dependencies. `strands-agents==1.57.2` ships `strands.multiagent` (`Swarm`,
-`GraphBuilder`, `a2a`), and `strands-agents-tools==0.8.8` ships `workflow`, `swarm`, `agent_graph`, `use_agent` and
-`a2a_client` tools. **None is used in `backend/src`.** Our only A2A code is the client-side config model
-`A2AAgentConfig` (`apis/shared/tools/models.py`).
+All five are already in our pinned dependencies. `strands-agents==1.65.0` ships `strands.multiagent` (`Swarm`,
+`GraphBuilder`, `a2a`), `Agent.as_tool()`, and vended `subagent`, `graph` and `swarm` tools
+(`strands.vended_tools.*`, `make_subagent` / `make_graph` / `make_swarm`, new since 1.57.2; §4.2).
+`strands-agents-tools==0.8.8` ships `workflow`, `swarm`, `agent_graph`, `use_agent` and `a2a_client` tools.
+**None is used in `backend/src`.** Our only A2A code is the client-side config model `A2AAgentConfig`
+(`apis/shared/tools/models.py`).
 
 | Pattern | Who decides the order | In-turn version here | Cross-conversation version here |
 |---|---|---|---|
@@ -72,8 +74,10 @@ Notes on each:
 - **Agents as Tools.** The handoffs spec deliberately does *not* build the consult as a tool, for two reasons (§8.3).
   First, the tool's spec would have to sit in `toolConfig`, the first cachePoint, and registering it only on
   mention turns would re-write the prefix. Second, Strands re-runs an interrupted tool from the top, so an OAuth
-  pause inside the consult would re-run the whole consult on resume. Both problems come back for any agent-as-tool,
-  and §6.3 below is how a composed agent avoids the first.
+  pause inside the consult would re-run the whole consult on resume. Both problems come back for any agent-as-tool
+  we write by hand, and §6.3 below is how a composed agent avoids the first. The SDK's vended `subagent` tool now
+  answers the second for its own children (§4.2): it snapshots the paused child and restores it on resume instead
+  of re-running it.
 - **Swarm.** Strands' `Swarm` takes `max_handoffs`, `max_iterations`, `execution_timeout`, `node_timeout` and
   repetitive-handoff detection. It runs in **shared working memory**: every agent sees the team's context. Our
   cross-conversation version deliberately never shares history, only bounded wrapped text. In-turn, a swarm would
@@ -94,7 +98,7 @@ pattern-agnostic runner**, with the consult as its first caller.
 | Need | Why it's hard here | Where the handoffs spec already answers it |
 |---|---|---|
 | **Where the sub-agent's history lives** | Per-session state must never be cached on an `Agent` instance, and a session id alone doesn't name a conversation (#741, #751, the `(session, user)` rule) | A hidden, deterministic sub-session per (parent, agent): `consult-<parentSessionId>-<agentId>` (§8.4) |
-| **Resolving the sub-agent for this user** | Access, the published version snapshot for non-owners, RBAC-filtered tools, project-harness refusal, KB and Memory Space hydration. Today ~450 lines inline in `chat/routes.py` | `resolve_turn_agent(...) -> ResolvedTurnAgent`, extracted in PR-1.1 (§8.3) |
+| **Resolving the sub-agent for this user** | Access, the published version snapshot for non-owners, RBAC-filtered tools, project-harness refusal, KB and Memory Space hydration | `resolve_turn_agent(...) -> ResolvedTurnAgent` in `inference_api/chat/routes.py`, extracted in PR-1.1 (built 2026-11-03 with PR-0.3a; §8.3). It is async |
 | **What the sub-agent sees** | Full history is the most expensive option (alternative B, ~$0.21 per call on a 50k-token thread) | The excerpt renderer, watermarked (§4.5, §8.4) |
 | **What comes back** | Sub-agent output is untrusted and must be bounded | A capped, wrapped report with a status (§8.5) |
 | **Streaming** | The SPA builds the parent's message from raw content events | Re-tagged nested events: `consult_start` / `consult_status` / `consult_delta` / `consult_end` (§8.6) |
@@ -123,7 +127,7 @@ RBAC and session manager.
 
 ### 4.2 What Strands now handles, and what it doesn't
 
-Strands' multi-agent orchestrators have grown since the consult design was written. In our pinned 1.57.2:
+Strands' multi-agent orchestrators have grown since the consult design was written. In our pinned 1.65.0:
 
 - **`Swarm` and `Graph` both support user interrupts** raised from nodes (`BeforeNodeCallEvent` hooks and agent
   nodes), with their own `_InterruptState` and resume handling. The handoffs spec's "interrupts are the hardest
@@ -131,13 +135,38 @@ Strands' multi-agent orchestrators have grown since the consult design was writt
 - **Both take a `session_manager`** for persisting orchestration state and execution history, plus hooks and
   plugins.
 - **`Graph` and `Swarm` accept prebuilt nodes** (`Agent` / `AgentBase`, or a nested `MultiAgentBase`).
+- **Vended `subagent`, `graph` and `swarm` tools** (`strands.vended_tools`, new since 1.57.2) let the *model* start
+  a child agent, graph or swarm from a tool call. Each factory takes a `builder` that turns an `AgentSpec` into the
+  child `Agent`, so the host decides how children are built; without one, a child inherits the parent's model and
+  tools. The three share one child streamer (`multiagent/_agent_tool_streamer.py`) with `Agent.as_tool()`.
+- **A paused child resumes, not re-runs.** When a child stops on an interrupt, the streamer snapshots it into the
+  *parent's* `_interrupt_state.context` (`sub_agent_interrupted_turns`, keyed by `toolUseId`), and on resume the
+  tool rebuilds the child from the same tool input and restores that snapshot.
+- **Builders may be async** (harness-sdk#6093, in 1.65.0). A builder can return an awaitable; `subagent` awaits it
+  on both the fresh and the resume path, and so do `graph` and `swarm`. Before this, a builder that had to call
+  `resolve_turn_agent` (async: RBAC, the version snapshot, KB hydration, MCP pre-flight) would have needed async
+  work run from a sync callback on the event loop. Now the builder can be `async def build(spec): ...` and await the
+  turn's own phases, which is what CLAUDE.md requires of anything that builds the agent a turn would.
+- **A child that gave no answer is a tool error** (also #6093). A child that stops with `content_filtered` or
+  `refusal` comes back as `"<label> stopped before finishing (stop_reason=X)."` with any partial output, not as
+  a success. This applies to `as_tool()` too. `guardrail_intervened` deliberately stays a success, because Bedrock
+  also reports it for masked output. That matches our chat path: `DeclinedAnswerHook`
+  (`session/hooks/declined_answer.py`) acts only when the call streamed no text. It maps onto the consult's
+  `blocked` / `error` statuses (handoffs spec §8.5). One difference: the handoff brief
+  (`inference_api/chat/handoff_brief.py`) falls back on `guardrail_intervened` even when text came back. That is
+  the safe choice for a brief, but a runner should take the SDK's rule, not copy the brief's.
 
 What remains ours to solve:
 
 - ⚠️ **Verify first:** how a multi-agent `session_manager` coexists with `TurnBasedSessionManager` on each node, and
   whether a node's history restores byte-stable between turns. That property is the prompt-cache contract.
 - ⚠️ **Verify first:** whether a Swarm/Graph interrupt can ride our `PausedTurnSnapshot`, `PendingInterrupt`
-  breadcrumbs and resume route without a new `kind`, or needs one (the handoffs spec §8.7's "v2").
+  breadcrumbs and resume route without a new `kind`, or needs one (the handoffs spec §8.7's "v2"). For the vended
+  tools this question is narrower. Our session manager already persists the parent's `_interrupt_state` to
+  AgentCore Memory, so the child's snapshot would travel with it. What's left to check is the snapshot's size (it
+  is the child's whole state, on top of the parent's) and whether a child's re-prefixed interrupt id
+  (`<namespace>:<toolUseId>:<child id>`) survives our `PendingInterrupt` breadcrumbs, the extractors that read a
+  breadcrumb's `kind` from the interrupt, and the resume guard's id check.
 - The rest of §4's table: access, metering, streaming and cost are platform concerns no framework supplies.
 
 ## 5. The cross-conversation layer as a pattern host
@@ -233,8 +262,8 @@ the PR and accepted explicitly, as `CLAUDE.md` requires.
 Nothing here should jump the handoffs spec's gates. The point is to make each step reusable by the next.
 
 1. **Handoffs Phase 0** as specced. It is the cross-conversation layer and the measurement.
-2. **PR-1.1, the `resolve_turn_agent` extraction**, whenever the chat route is next touched. It's a pure refactor,
-   it doesn't depend on any gate, and every in-turn pattern needs it.
+2. **PR-1.1, the `resolve_turn_agent` extraction.** *Done* (2026-11-03, with PR-0.3a, which needed it for the
+   handoff brief). Every in-turn pattern builds its agents through it.
 3. **If Phase 1 passes its gate:** build §4's runner pattern-agnostically, with the consult as its first caller.
    Settle §4.2's two verify-firsts while doing it.
 4. **Agents as tools as a Designer binding** (`kind: 'agent'`, §6.1), on the runner. This is the first composition
@@ -256,7 +285,10 @@ Nothing here should jump the handoffs spec's gates. The point is to make each st
    composed node is a third candidate for the same job. Do we need all three?
 5. **One runner, or the Strands orchestrators directly?** Build our own runner for agent-as-tool and use
    `Swarm` / `GraphBuilder` for the rest with our nodes, or route everything through the runner for one metering
-   and streaming path?
+   and streaming path? Since 1.65.0 there is a middle option: the vended `subagent` / `graph` / `swarm` tools with
+   an async `builder` that calls `resolve_turn_agent` (§4.2). That gets resume-not-re-run and the no-answer error
+   from the SDK. Streaming, metering and the sub-session would still be ours, and a model-called tool still puts
+   its spec in `toolConfig` (§3, Agents as Tools).
 6. **Cost ceilings.** Should a composition carry a per-run `maxCostUsd` enforced by the runner, on top of the
    user's quota?
 
@@ -271,11 +303,11 @@ The claims most likely to go stale, and what makes each one stale:
 
 | Claim | Section | Stale when |
 |---|---|---|
-| Pinned `strands-agents==1.57.2` / `strands-agents-tools==0.8.8` | §3 | A pin bump merges |
-| No multi-agent module is used in `backend/src` | §3 | Any import of `strands.multiagent` or the multi-agent tools lands |
+| Pinned `strands-agents==1.65.0` / `strands-agents-tools==0.8.8` | §3, §4.2 | A pin bump merges |
+| No multi-agent module is used in `backend/src` | §3 | Any import of `strands.multiagent`, `strands.vended_tools.{subagent,graph,swarm}`, `as_tool()` or the multi-agent tools lands |
 | Swarm and Graph support interrupts, `session_manager` and prebuilt nodes | §4.2 | A Strands release changes `strands/multiagent/` |
+| Vended `subagent` / `graph` / `swarm` take a sync-or-async `builder`, resume a paused child from a snapshot in the parent's interrupt state, and report `content_filtered` / `refusal` children as tool errors | §4.2, §9 | A Strands release changes `strands/vended_tools/` or `multiagent/_agent_tool_streamer.py` |
 | The two verify-firsts are open | §4.2 | Either is settled, by us or upstream |
-| `resolve_turn_agent` doesn't exist yet | §4, §8 | PR-1.1 merges |
 | Handoffs, deliveries, consults and messages are unbuilt | §2, §3, §5 | Any of their PRs merge (the handoffs spec's §11 lists them) |
 | `Binding.kind` has no `'agent'` value | §6.1 | A composition binding lands in the Agent Designer |
 | The cost and TTFT directions in §7 are unmeasured | §7 | Any pattern is measured in dev |
