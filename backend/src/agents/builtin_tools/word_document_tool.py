@@ -116,31 +116,55 @@ _DOCX_PREAMBLE = (
 # name means two skills' scripts can never collide on one sandbox session.
 _SANDBOX_SKILL_SCRIPT = "_skill_script.py"
 
-# What a skill script prints, or returns from ``run``, reaches the model. It is
-# a per-turn payload that stays in history, so it is bounded.
+# Sandbox path ``params`` is written to, as JSON. A file rather than a literal
+# in the entry code: a revision set can be tens of KB, and as data in a file it
+# is never parsed as Python.
+_SANDBOX_SKILL_PARAMS = "_skill_params.json"
+
+# What a skill script prints, or returns, reaches the model. It is a per-turn
+# payload that stays in history, so it is bounded.
 _MAX_SCRIPT_OUTPUT_CHARS = 4_000
 
-
-def _skill_script_entry(label: str, params_json: str) -> str:
-    """The fixed code that runs a skill script against ``doc``.
+def _skill_script_entry(label: str, input_path: Optional[str], output_path: str) -> str:
+    """The fixed code that runs a skill script in the sandbox.
 
     Loads the file written at :data:`_SANDBOX_SKILL_SCRIPT` as a module (by
-    path, so nothing depends on ``sys.path``), then calls its
-    ``run(doc, params)``. ``doc`` is the document the tool opened or created;
-    ``run`` edits it in place and may return a short text summary, which is
-    printed so it comes back as the sandbox's stdout. ``params_json`` is
-    already JSON text (``parse_script_params``) and is embedded as a string
-    literal, never as code.
+    path, so nothing depends on ``sys.path``) and ``params`` from
+    :data:`_SANDBOX_SKILL_PARAMS`, then calls one of two contracts:
+
+    * ``run_file(input_path, output_path, params)`` if the script defines it:
+      the script reads the source ``.docx`` at ``input_path`` (``None`` when
+      creating) and writes the result to ``output_path`` itself. Nothing here
+      opens or re-saves the document, so a script that edits the package's XML
+      directly (a tracked-changes engine proving that rejecting every change
+      gives back the original) hands back exactly the bytes it wrote.
+    * otherwise ``run(doc, params)``: ``doc`` is the python-docx document the
+      entry opened (or a new one), edited in place and saved here.
+
+    Either may return a short text summary, printed so it comes back as the
+    sandbox's stdout.
     """
+    opener = f"Document({input_path!r})" if input_path else "Document()"
     return (
         "import importlib.util as _skill_ilu\n"
         "import json as _skill_json\n"
         f"_skill_spec = _skill_ilu.spec_from_file_location('_skill_script', {_SANDBOX_SKILL_SCRIPT!r})\n"
         "_skill_mod = _skill_ilu.module_from_spec(_skill_spec)\n"
         "_skill_spec.loader.exec_module(_skill_mod)\n"
-        "if not callable(getattr(_skill_mod, 'run', None)):\n"
-        f"    raise RuntimeError({label + ' defines no run(doc, params) function.'!r})\n"
-        f"_skill_result = _skill_mod.run(doc, _skill_json.loads({params_json!r}))\n"
+        f"with open({_SANDBOX_SKILL_PARAMS!r}, encoding='utf-8') as _skill_pf:\n"
+        "    _skill_params = _skill_json.load(_skill_pf)\n"
+        "if callable(getattr(_skill_mod, 'run_file', None)):\n"
+        f"    _skill_result = _skill_mod.run_file({input_path!r}, {output_path!r}, _skill_params)\n"
+        "    import os as _skill_os, zipfile as _skill_zip\n"
+        f"    if _skill_os.path.exists({output_path!r}) and not _skill_zip.is_zipfile({output_path!r}):\n"
+        f"        raise RuntimeError({label + ' did not write a Word document (.docx) to ' + repr(output_path) + '.'!r})\n"
+        "elif callable(getattr(_skill_mod, 'run', None)):\n"
+        "    from docx import Document\n"
+        f"    doc = {opener}\n"
+        "    _skill_result = _skill_mod.run(doc, _skill_params)\n"
+        f"    doc.save({output_path!r})\n"
+        "else:\n"
+        f"    raise RuntimeError({label + ' defines neither run(doc, params) nor run_file(input_path, output_path, params).'!r})\n"
         "if _skill_result is not None:\n"
         "    print(_skill_result if isinstance(_skill_result, str) "
         "else _skill_json.dumps(_skill_result, default=str))\n"
@@ -156,30 +180,24 @@ def _run_docx_skill_script(
 ) -> Tuple[bytes, str]:
     """Run a skill script on a new (``source_bytes`` None) or loaded document.
 
-    The script's bytes are written into the sandbox as a file and executed
-    there only; the Runtime host never imports or compiles them. Returns the
-    document bytes and the script's bounded output. Blocking — call via
-    ``asyncio.to_thread``.
+    The script's bytes and ``params`` are written into the sandbox as files and
+    executed there only; the Runtime host never imports or compiles them.
+    Returns the document bytes and the script's bounded output. Blocking —
+    call via ``asyncio.to_thread``.
     """
     from bedrock_agentcore.tools.code_interpreter_client import CodeInterpreter
 
     code_interpreter = CodeInterpreter(_region())
     code_interpreter.start(identifier=code_interpreter_id)
     try:
+        input_path: Optional[str] = None
         if source_bytes is not None:
             _ci_write_bytes(code_interpreter, _SANDBOX_SOURCE, source_bytes)
-            opener = f"doc = Document({_SANDBOX_SOURCE!r})\n"
-        else:
-            opener = "doc = Document()\n"
+            input_path = _SANDBOX_SOURCE
         _ci_write_bytes(code_interpreter, _SANDBOX_SKILL_SCRIPT, script.source)
+        _ci_write_bytes(code_interpreter, _SANDBOX_SKILL_PARAMS, params_json.encode("utf-8"))
         output = _ci_exec(
-            code_interpreter,
-            (
-                f"{_DOCX_PREAMBLE}\n"
-                f"{opener}\n"
-                f"{_skill_script_entry(script.label, params_json)}\n"
-                f"doc.save({filename!r})\n"
-            ),
+            code_interpreter, _skill_script_entry(script.label, input_path, filename)
         )
         data = _ci_read_bytes(code_interpreter, filename)
         if data is None:
@@ -700,12 +718,12 @@ def _make_create_with_skill_scripts(
                 script for the job: do NOT copy the script into python_code.
             path: The script's path from the skill's file listing, e.g.
                 ``scripts/engine.py``. Only files under ``scripts/`` can run.
-                The script runs in the same sandbox, must define
-                ``run(doc, params)``, edits ``doc`` in place and may return a
-                short summary, which comes back to you.
-            params: Optional object passed to the script's ``run`` as
-                ``params`` (for example which playbook or clauses to apply).
-                Keep it small; at most 16 KB as JSON.
+                The script runs in the same sandbox and may return a short
+                summary, which comes back to you.
+            params: Optional object passed to the script as its inputs, in
+                the shape the skill's instructions describe (for example the
+                playbook name and the revisions to apply). At most 64 KB as
+                JSON.
 
             document_name: File name WITHOUT extension (.docx is added
                 automatically). Use only letters, numbers, hyphens, and
@@ -825,12 +843,12 @@ def _make_modify_with_skill_scripts(
                 script for the job: do NOT copy the script into python_code.
             path: The script's path from the skill's file listing, e.g.
                 ``scripts/engine.py``. Only files under ``scripts/`` can run.
-                The script runs in the same sandbox, must define
-                ``run(doc, params)``, edits ``doc`` in place and may return a
-                short summary, which comes back to you.
-            params: Optional object passed to the script's ``run`` as
-                ``params`` (for example which playbook or clauses to apply).
-                Keep it small; at most 16 KB as JSON.
+                The script runs in the same sandbox and may return a short
+                summary, which comes back to you.
+            params: Optional object passed to the script as its inputs, in
+                the shape the skill's instructions describe (for example the
+                playbook name and the revisions to apply). At most 64 KB as
+                JSON.
 
         Returns:
             An inline download card for the edited document.

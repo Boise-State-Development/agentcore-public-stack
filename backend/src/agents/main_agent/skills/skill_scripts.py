@@ -77,11 +77,12 @@ __all__ = [
     "resolve_skill_script",
 ]
 
-# ``params`` travels inline in the sandbox code (as a JSON string literal), and
-# it is prompt text too: it sits in the tool call in history for the life of
-# the session. Generous for a playbook selector or a list of clause ids; a
-# whole playbook belongs in the skill, not here.
-MAX_PARAMS_BYTES = 16_384
+# ``params`` is written into the sandbox as a JSON file, and it is prompt text
+# too: the model writes it, and it sits in the tool call in history for the
+# life of the session. Sized for a contract's whole revision set (each edit's
+# target, replacement and note, the redline's substance, which the model has to
+# write whichever tool applies it); a whole playbook belongs in the skill.
+MAX_PARAMS_BYTES = 65_536
 
 # Attribute a script-capable tool carries so ``ChatAgent`` can find its holder.
 _HOLDER_ATTR = "_turn_skill_records"

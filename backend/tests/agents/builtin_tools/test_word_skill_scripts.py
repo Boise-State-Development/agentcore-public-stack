@@ -16,9 +16,11 @@ import contextlib
 import hashlib
 import io
 import json
+import pathlib
 import sys
 import traceback
 import types
+import zipfile
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
@@ -27,6 +29,7 @@ import pytest
 import agents.builtin_tools.word_document_tool as word
 import agents.main_agent.skills.skill_scripts as skill_scripts
 from agents.builtin_tools.word_document_tool import (
+    _SANDBOX_SKILL_PARAMS,
     _SANDBOX_SKILL_SCRIPT,
     make_create_word_document_tool,
     make_modify_word_document_tool,
@@ -53,6 +56,30 @@ def run(doc, params):
     return "applied %d change(s)" % len(params.get("clauses", []))
 '''
 
+
+# A file-contract script in the shape of a tracked-changes engine: it reads the
+# package at ``input_path`` and writes a new one at ``output_path`` with the
+# standard library alone, and keeps a copy so the test can compare bytes.
+FILE_ENGINE = b'''
+import shutil, zipfile
+
+def run_file(input_path, output_path, params):
+    with zipfile.ZipFile(input_path) as src:
+        xml = src.read("word/document.xml").decode()
+    first = params["revisions"][0]
+    xml = xml.replace(first["target_text"], first["redlined_text"])
+    with zipfile.ZipFile(output_path, "w") as out:
+        out.writestr("word/document.xml", xml)
+    shutil.copy(output_path, "written-by-engine.docx")
+    return "input=%s playbook=%s revisions=%d" % (input_path, params["playbook"], len(params["revisions"]))
+'''
+
+
+def _zip_docx(document_xml: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/document.xml", document_xml)
+    return buf.getvalue()
 
 def _ref(filename: str, kind: str, size: int = 100, content_type: str = "text/plain") -> SkillResourceRef:
     return SkillResourceRef(
@@ -338,14 +365,15 @@ class TestSandbox:
 
         ci = FakeCodeInterpreter.instances[-1]
         assert ci.stopped
-        # The script travels as a file, never inline in the code that runs.
+        # The script and its params travel as files, never inline in the code that runs.
         assert f"{_SANDBOX_SKILL_SCRIPT}.b64" in ci.written
-        assert all("redlined " not in code for code in ci.executed)
+        assert f"{_SANDBOX_SKILL_PARAMS}.b64" in ci.written
+        assert all("redlined " not in code and "indemnity" not in code for code in ci.executed)
         entry = ci.executed[-1]
         assert "doc = Document('_source.docx')" in entry
         assert f"spec_from_file_location('_skill_script', {_SANDBOX_SKILL_SCRIPT!r})" in entry
-        assert "_skill_mod.run(doc, _skill_json.loads(" in entry
-        assert entry.rstrip().endswith("doc.save('services-agreement-redline.docx')")
+        assert "_skill_mod.run(doc, _skill_params)" in entry
+        assert "doc.save('services-agreement-redline.docx')" in entry
 
     @pytest.mark.asyncio
     async def test_create_runs_the_script_on_a_new_document(self, sandbox):
@@ -378,7 +406,73 @@ class TestSandbox:
         text = _error_text(
             await tool._tool_func(document_name="x", skill_name="contract-redliner", path="scripts/engine.py")
         )
-        assert "contract-redliner/scripts/engine.py defines no run(doc, params) function." in text
+        assert (
+            "contract-redliner/scripts/engine.py defines neither run(doc, params) "
+            "nor run_file(input_path, output_path, params)."
+        ) in text
+
+    @pytest.mark.asyncio
+    async def test_a_file_script_gets_paths_and_its_bytes_come_back_unchanged(
+        self, sandbox, store, monkeypatch
+    ):
+        # A tracked-changes engine edits the package's XML itself; a python-docx
+        # re-save after it would rewrite every part it touched.
+        store.blobs["skills/contract-redliner/scripts/engine.py"] = FILE_ENGINE
+        source = _zip_docx("<w:p>original clause</w:p>")
+        monkeypatch.setattr(word, "_download_s3_bytes", lambda bucket, key: source)
+        revisions = [{"target_text": "original", "redlined_text": f"revised {i}"} for i in range(200)]
+        tool = make_modify_word_document_tool("s", "u", _bound_holder())
+        result = await tool._tool_func(
+            document_name="services-agreement",
+            skill_name="contract-redliner",
+            path="scripts/engine.py",
+            params={"playbook": "Rules_NDA_Mutual", "revisions": revisions},
+            output_name="services-agreement-redlined",
+        )
+        out = sandbox["services-agreement-redlined.docx"]
+        assert out == pathlib.Path("written-by-engine.docx").read_bytes()
+        with zipfile.ZipFile(io.BytesIO(out)) as z:
+            assert z.read("word/document.xml") == b"<w:p>revised 0 clause</w:p>"
+        assert "input=_source.docx playbook=Rules_NDA_Mutual revisions=200" in _summary(result)
+        entry = FakeCodeInterpreter.instances[-1].executed[-1]
+        assert "_skill_mod.run_file('_source.docx', 'services-agreement-redlined.docx', _skill_params)" in entry
+
+    @pytest.mark.asyncio
+    async def test_a_file_script_creating_a_document_gets_no_input(self, sandbox, store):
+        store.blobs["skills/contract-redliner/scripts/engine.py"] = (
+            b"import zipfile\n"
+            b"def run_file(input_path, output_path, params):\n"
+            b"    assert input_path is None\n"
+            b"    with zipfile.ZipFile(output_path, 'w') as z:\n"
+            b"        z.writestr('word/document.xml', '<w:p/>')\n"
+        )
+        tool = make_create_word_document_tool("s", "u", _bound_holder())
+        await tool._tool_func(document_name="fresh", skill_name="contract-redliner", path="scripts/engine.py")
+        assert zipfile.is_zipfile(io.BytesIO(sandbox["fresh.docx"]))
+
+    @pytest.mark.asyncio
+    async def test_a_file_script_that_writes_no_document_is_refused(self, sandbox, store):
+        store.blobs["skills/contract-redliner/scripts/engine.py"] = (
+            b"def run_file(input_path, output_path, params):\n"
+            b"    open(output_path, 'w').write('{\"counts\": {}}')\n"
+        )
+        tool = make_modify_word_document_tool("s", "u", _bound_holder())
+        text = _error_text(
+            await tool._tool_func(document_name="x", skill_name="contract-redliner", path="scripts/engine.py")
+        )
+        assert "did not write a Word document (.docx)" in text
+        assert not sandbox
+
+    @pytest.mark.asyncio
+    async def test_a_file_script_that_writes_nothing_is_named(self, sandbox, store):
+        store.blobs["skills/contract-redliner/scripts/engine.py"] = (
+            b"def run_file(input_path, output_path, params):\n    return 'nothing to change'\n"
+        )
+        tool = make_modify_word_document_tool("s", "u", _bound_holder())
+        text = _error_text(
+            await tool._tool_func(document_name="x", skill_name="contract-redliner", path="scripts/engine.py")
+        )
+        assert "was not produced by contract-redliner/scripts/engine.py" in text
 
     @pytest.mark.asyncio
     async def test_an_unbound_holder_sees_no_skills_and_starts_no_sandbox(self, sandbox):
@@ -438,8 +532,8 @@ OFF_DIGESTS = {
 # On: one toolConfig rewrite per deployment when the flag turns on. A change
 # here is a deliberate spec change; update the pin with it.
 ON_DIGESTS = {
-    "create_word_document": "cdb34e502561c5df63603325bfb2cac2b960c05cd54097805e51285e4b9c4aa4",
-    "modify_word_document": "73bb925967ed30f133c388d5f713a94092bc0b83feb3833f40e658310890c35d",
+    "create_word_document": "7fbd036e13a2a609b6417259d748932fb2cf48cac5fdba8d9cb7f5328994ff6f",
+    "modify_word_document": "528c4b1ff89b542b5e087020ae51ff971db14cbb14dec24d6bee1dccf7660774",
 }
 
 
