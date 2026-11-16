@@ -122,6 +122,37 @@ export interface BoundBinding extends BindingRef {
   pinnedAt?: string | null;
   /** The skill has changed since the pinned version. */
   updateAvailable?: boolean;
+  /**
+   * Skills only: it runs for the caller in this project, so they can read it
+   * (`GET /projects/{id}/skills/{skillId}`). Name and description come with it.
+   */
+  available?: boolean;
+  displayName?: string | null;
+  description?: string | null;
+}
+
+/** One file in a bound skill's bundle. */
+export interface ProjectSkillFile {
+  filename: string;
+  /** `reference` | `script` | `asset`: the bundle directory it lives in. */
+  kind: string;
+  size: number;
+  contentType: string;
+}
+
+/** `GET /projects/{id}/skills/{skillId}`: a bound skill as the project runs it (its pinned version). */
+export interface ProjectSkillContent {
+  skillId: string;
+  displayName: string;
+  description: string;
+  instructions: string;
+  /** The pinned version shown; null when the binding runs the latest. */
+  version: number | null;
+  compose: string[];
+  allowedTools: string[];
+  files: ProjectSkillFile[];
+  /** The caller wrote this skill, so the viewer offers Edit (Customize → Skills). */
+  isOwned?: boolean;
 }
 
 export interface BindingsResponse extends SettingsResponse {

@@ -19,7 +19,7 @@ import asyncio
 import logging
 from typing import Any, Dict, Iterable, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
 
 from apis.app_api.agent_designer.services.binding_validation import BindingValidationError
 from apis.shared.assistants.models import AgentBinding, VersionFieldChange
@@ -41,9 +41,18 @@ from apis.shared.projects.service import (
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.sessions.metadata import list_project_sessions
 from apis.shared.skills.pins import public_skill_config
+from apis.shared.skills.resource_store import SkillResourceStoreError
+from apis.shared.skills.resource_types import resource_download_headers, safe_download_content_type
 from apis.shared.sessions.models import SessionMetadataResponse, SessionsListResponse
 
 from .harness_gateway import AppApiHarnessGateway
+from .skill_content import (
+    SkillNotAvailableError,
+    SkillNotBoundError,
+    bound_skill_labels,
+    read_bound_skill,
+    read_bound_skill_file,
+)
 from .harness_settings import (
     SKILL,
     TOOL,
@@ -67,6 +76,8 @@ from .models import (
     MembersResponse,
     ModelResponse,
     PersonalSpaceResponse,
+    ProjectSkillContentResponse,
+    ProjectSkillFile,
     MemoryLimitsResponse,
     ProjectMemoryResponse,
     ProjectListResponse,
@@ -302,28 +313,32 @@ async def put_tools(
     return _bindings(await _save(project_id, user, kind=TOOL, bindings=bindings), TOOL)
 
 
-async def _skills(view: HarnessView) -> SkillBindingsResponse:
-    pins = await skill_pins(view.harness)
-    return SkillBindingsResponse(
-        bindings=[
+async def _skills(view: HarnessView, user: User) -> SkillBindingsResponse:
+    pins, labels = await asyncio.gather(skill_pins(view.harness), bound_skill_labels(view.harness, user))
+    bindings = []
+    for b in view.harness.bindings or []:
+        if b.kind != SKILL:
+            continue
+        pin = pins.get(b.ref)
+        label = labels.get(b.ref)
+        bindings.append(
             SkillBindingRef(
                 ref=b.ref,
                 config=public_skill_config(b.config),
-                version=pins[b.ref].version if b.ref in pins else None,
-                pinned_at=pins[b.ref].pinned_at if b.ref in pins else None,
-                update_available=pins[b.ref].update_available if b.ref in pins else False,
+                version=pin.version if pin else None,
+                pinned_at=pin.pinned_at if pin else None,
+                update_available=pin.update_available if pin else False,
+                available=label is not None,
+                display_name=label[0] if label else None,
+                description=label[1] if label else None,
             )
-            for b in (view.harness.bindings or [])
-            if b.kind == SKILL
-        ],
-        version=view.version,
-        can_edit=view.can_edit,
-    )
+        )
+    return SkillBindingsResponse(bindings=bindings, version=view.version, can_edit=view.can_edit)
 
 
 @router.get("/{project_id}/skills", response_model=SkillBindingsResponse, response_model_by_alias=True)
 async def get_skills(project_id: str, user: User = Depends(require_projects_user)) -> SkillBindingsResponse:
-    return await _skills(await _view(project_id, user))
+    return await _skills(await _view(project_id, user), user)
 
 
 @router.put("/{project_id}/skills", response_model=SkillBindingsResponse, response_model_by_alias=True)
@@ -336,7 +351,7 @@ async def put_skills(
     already bound keeps its pin unless the request names another version.
     """
     bindings = [AgentBinding(kind=SKILL, ref=b.ref, config=b.config) for b in body.bindings]
-    return await _skills(await _save(project_id, user, kind=SKILL, bindings=bindings))
+    return await _skills(await _save(project_id, user, kind=SKILL, bindings=bindings), user)
 
 
 @router.post(
@@ -352,7 +367,72 @@ async def pin_skill(
         raise _translate(e)
     except BindingValidationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
-    return await _skills(view)
+    return await _skills(view, user)
+
+
+def _skill_content_error(e: Exception) -> HTTPException:
+    if isinstance(e, SkillNotAvailableError):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.get(
+    "/{project_id}/skills/{skill_id}", response_model=ProjectSkillContentResponse, response_model_by_alias=True
+)
+async def get_project_skill(
+    project_id: str, skill_id: str, user: User = Depends(require_projects_user)
+) -> ProjectSkillContentResponse:
+    """Read one bound skill as this project runs it (any member): its pinned version's
+    description, instructions and bundle files.
+
+    Served when the skill would run for the caller in this project, by the run-time
+    predicate, so a member can read a private skill the editor who added it wrote
+    (``skill_content``). A skill bound but not available to the caller is a 403; a skill
+    the project doesn't bind is a 404.
+    """
+    view = await _view(project_id, user)
+    try:
+        record, version = await read_bound_skill(view.harness, user, skill_id)
+    except (SkillNotBoundError, SkillNotAvailableError) as e:
+        raise _skill_content_error(e)
+    return ProjectSkillContentResponse(
+        skill_id=record.skill_id,
+        display_name=record.display_name,
+        description=record.description,
+        instructions=record.instructions,
+        version=version,
+        compose=list(record.compose),
+        allowed_tools=list(record.allowed_tools),
+        files=[
+            ProjectSkillFile(filename=r.filename, kind=r.kind, size=r.size, content_type=r.content_type)
+            for r in record.resources
+        ],
+        is_owned=record.owner_id == user.user_id,
+    )
+
+
+@router.get("/{project_id}/skills/{skill_id}/files/{filename}")
+async def read_project_skill_file(
+    project_id: str, skill_id: str, filename: str, user: User = Depends(require_projects_user)
+) -> Response:
+    """The bytes of one file in a bound skill's pinned bundle, by the same rules as the
+    skill read. Served like every skill resource read (``attachment``, ``nosniff``, an
+    inert CSP, the type re-derived from the name), so a file can never become a document
+    on the SPA's origin; the SPA fetches it as text for its viewer.
+    """
+    view = await _view(project_id, user)
+    try:
+        ref, content = await read_bound_skill_file(view.harness, user, skill_id, filename)
+    except (SkillNotBoundError, SkillNotAvailableError) as e:
+        raise _skill_content_error(e)
+    except SkillResourceStoreError:
+        logger.warning("A bound skill's file could not be read", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That file could not be read.")
+    return Response(
+        content=content,
+        media_type=safe_download_content_type(ref.filename),
+        headers=resource_download_headers(ref.filename),
+    )
 
 
 @router.get(

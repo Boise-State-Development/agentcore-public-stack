@@ -62,6 +62,7 @@ describe('ProjectApiService', () => {
     ['saveModel', 'PUT', `${BASE}/prj_1/model`, () => service.saveModel('prj_1', { modelId: 'm' })],
     ['tools', 'GET', `${BASE}/prj_1/tools`, () => service.bindings('prj_1', 'tools')],
     ['saveSkills', 'PUT', `${BASE}/prj_1/skills`, () => service.saveBindings('prj_1', 'skills', [{ ref: 's' }])],
+    ['skillContent', 'GET', `${BASE}/prj_1/skills/my%20skill`, () => service.skillContent('prj_1', 'my skill')],
     ['versions', 'GET', `${BASE}/prj_1/instructions/versions?limit=50`, () => service.versions('prj_1')],
     ['version', 'GET', `${BASE}/prj_1/instructions/versions/3`, () => service.version('prj_1', 3)],
     ['tasks', 'GET', `${BASE}/prj_1/tasks?limit=20`, () => service.tasks('prj_1')],
@@ -94,6 +95,16 @@ describe('ProjectApiService', () => {
       req.flush({});
     });
   }
+
+  it('reads a bound skill file as text, with the name encoded', () => {
+    let body = '';
+    service.skillFile('prj_1', 'redline', 'process notes.md').subscribe(text => (body = text));
+    const req = httpMock.expectOne(`${BASE}/prj_1/skills/redline/files/process%20notes.md`);
+    expect(req.request.responseType).toBe('text');
+    expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+    req.flush('# Process');
+    expect(body).toBe('# Process');
+  });
 
   it('sends the wire shapes the backend reads', () => {
     service.addMembers('prj_1', ['a@x.edu', 'b@x.edu'], 'editor').subscribe();

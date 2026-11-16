@@ -19,6 +19,7 @@ import {
   ProjectDocumentsResponse,
   ProjectAuditResponse,
   ProjectListResponse,
+  ProjectSkillContent,
   ProjectMember,
   ProjectTasksResponse,
   ProjectUploadUrlResponse,
@@ -168,6 +169,22 @@ export class ProjectApiService {
       this.url(projectId, `/skills/${encodeURIComponent(skillId)}/pin`),
       {},
       this.options(),
+    );
+  }
+
+  /** A bound skill's content as the project runs it. Any member the skill runs for. */
+  skillContent(projectId: string, skillId: string): Observable<ProjectSkillContent> {
+    return this.http.get<ProjectSkillContent>(
+      this.url(projectId, `/skills/${encodeURIComponent(skillId)}`),
+      this.options(),
+    );
+  }
+
+  /** One file of a bound skill's pinned bundle, as text for the viewer. */
+  skillFile(projectId: string, skillId: string, filename: string): Observable<string> {
+    return this.http.get(
+      this.url(projectId, `/skills/${encodeURIComponent(skillId)}/files/${encodeURIComponent(filename)}`),
+      { ...this.options(), responseType: 'text' },
     );
   }
 
