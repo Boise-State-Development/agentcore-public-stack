@@ -300,9 +300,11 @@ class TestPerModelRequirement:
 
     KIMI = "us.moonshotai.kimi-k3"
 
-    @pytest.mark.parametrize("model_id", [KIMI, "global.moonshotai.kimi-k3"])
-    def test_enabled_for_both_inference_profiles(self, monkeypatch, model_id):
-        # Substring match, so `us.` and `global.` both hit without a second entry.
+    @pytest.mark.parametrize(
+        "model_id", [KIMI, "global.moonshotai.kimi-k3", "in.moonshotai.kimi-k3", "moonshotai.kimi-k3"]
+    )
+    def test_enabled_for_every_inference_profile(self, monkeypatch, model_id):
+        # Matched after the profile prefix, so every geo hits without a second entry.
         monkeypatch.delenv(EXPLICIT_CACHE_ENABLED_ENV, raising=False)
 
         assert explicit_prompt_cache_enabled(model_id) is True
@@ -356,6 +358,33 @@ class TestPerModelRequirement:
 
         assert explicit_prompt_cache_enabled("us.moonshotai.kimi-k2.5") is False
         assert explicit_prompt_cache_enabled("us.moonshot.kimi-k2-thinking") is False
+
+    @pytest.mark.parametrize(
+        "model_id", ["us.moonshotai.kimi-k3.1", "global.moonshotai.kimi-k3.1", "moonshotai.kimi-k3.1"]
+    )
+    def test_kimi_k3_1_stays_on_stock_implicit_caching(self, monkeypatch, model_id):
+        """K3.1 starts with K3's id but caches the other way round.
+
+        Measured 2026-11-15 (dev-ai, unique prefix per arm, 4 turns with
+        history): stock implicit read the whole growing conversation back with
+        no write ($0.03546 of input), full explicit pinned reads at the static
+        prefix and billed a write on top ($0.04378, +23%). The old substring
+        match on "moonshotai.kimi-k3" swept it onto the explicit path.
+        """
+        monkeypatch.delenv(EXPLICIT_CACHE_ENABLED_ENV, raising=False)
+
+        assert explicit_prompt_cache_enabled(model_id) is False
+
+    def test_kimi_k3_1_request_carries_no_explicit_controls(self, monkeypatch):
+        """End to end through the real _format_request."""
+        monkeypatch.delenv(EXPLICIT_CACHE_ENABLED_ENV, raising=False)
+        model = build_bedrock_responses_model("us.moonshotai.kimi-k3.1", region="us-west-2")
+
+        request = _format(model)
+
+        assert "prompt_cache_options" not in (request.get("extra_body") or {})
+        assert "prompt_cache_key" not in request
+        assert "instructions" in request
 
 
 class TestOtherTransportsUnaffected:
