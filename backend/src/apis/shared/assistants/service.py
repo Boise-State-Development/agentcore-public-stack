@@ -6,6 +6,7 @@ Architecture:
 - Cloud: Stores assistants in DynamoDB table specified by DYNAMODB_ASSISTANTS_TABLE_NAME
 """
 
+import asyncio
 import base64
 import json
 import logging
@@ -477,7 +478,7 @@ async def _get_assistant_cloud(assistant_id: str, owner_id: str, table_name: str
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(table_name)
 
-        response = table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
+        response = await asyncio.to_thread(table.get_item, Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
 
         if "Item" not in response:
             logger.info(f"Assistant {assistant_id} not found in DynamoDB")
@@ -525,7 +526,7 @@ async def _get_assistant_cloud_without_ownership_check(assistant_id: str, table_
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(table_name)
 
-        response = table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
+        response = await asyncio.to_thread(table.get_item, Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
 
         if "Item" not in response:
             logger.info(f"Assistant {assistant_id} not found in DynamoDB")
@@ -1579,7 +1580,9 @@ async def check_share_access(assistant_id: str, user_email: str) -> Optional[str
         normalized_email = user_email.lower().strip()
 
         # Check if share record exists
-        response = table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": f"SHARE#{normalized_email}"})
+        response = await asyncio.to_thread(
+            table.get_item, Key={"PK": f"AST#{assistant_id}", "SK": f"SHARE#{normalized_email}"}
+        )
 
         item = response.get("Item")
         if not item:
