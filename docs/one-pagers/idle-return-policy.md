@@ -93,8 +93,27 @@ All figures are input-side spend on Claude calls (base $2,457 over 28 days). Out
 
 ## Design of (b) + H3
 
-1. **Decision (after the turn, beside today's `update_after_turn`).** If the turn's input is at least `T_return` (model-relative, default 40K) and no regular cut is pending, choose a checkpoint with today's `choose_checkpoint` (same floor, protected turns and tail bound). Park it as `pending_checkpoint` with `pending_reason = "idle_return"`. Fetch the summary as today, and write the transcript object (H3). Re-decide on every qualifying turn end, replacing the parked one, so the protected tail is always the latest three turns.
-2. **Apply (head of turn, existing step).** An `idle_return` cut promotes **only** on `cache_expired` or `prefix_changed`, never on `hard_ceiling`. A warm continuation keeps reading the cache and never pays a second re-write.
+**One policy, not a second trigger.** Today's 100K cut is already return compaction with a high trigger. Of the 1,732 cuts applied over 28 days, 1,266 (73%) landed on a cold call, because deferred apply parks a cut until the cache has expired. So the idle-return cut replaces the 100K trigger's cold path, and does not sit beside it. The 100K trigger is not simply removed, though:
+
+- It is what bounds conversations that never pause.
+- Warm calls with more than 100K of context cost $553 over the 28 days, 17% of spend.
+- Without a bound, those conversations keep growing until a forced cut on a warm cache: the expensive kind of re-write, and the shape of the earlier compaction spiral.
+
+The merged policy has two rules:
+
+| When | What happens |
+|---|---|
+| The next call is cold and the context is at least `T_return` (model-relative, default 40K) | Cut. This takes over today's cold applies at 100K |
+| The cache is warm and the context keeps growing | No cut until it nears the window, then one forced cut. This is the safety net, and the only path that ever pays for a warm re-write |
+
+The replay's +$200–300 is already net of today's cuts (its offset resets at every real cut), so the merged policy keeps today's saving and adds this one.
+
+1. **Decision (after the turn, beside today's `update_after_turn`).** If the turn's input is at least `T_return`, choose a checkpoint with today's `choose_checkpoint` (same floor, protected turns and tail bound).
+   - Park it as `pending_checkpoint` with `pending_reason = "idle_return"`.
+   - Fetch the summary as today, and write the transcript object (H3).
+   - Re-decide on every qualifying turn end, replacing the parked one, so the protected tail is always the latest three turns.
+   - This decision replaces today's ceiling decision for cold applies. The warm safety net keeps its own trigger near the window.
+2. **Apply (head of turn, existing step).** An `idle_return` cut promotes **only** on `cache_expired` or `prefix_changed`. A warm continuation keeps reading the cache and never pays a second re-write. Only the safety net cuts on a warm cache.
 3. **The cache contract.**
    - State lives on the session row and is re-read every turn (`_adopt_persisted_compaction_state`).
    - Every agent instance on the session applies the persisted cut and never decides its own. The checkpoint and anchor never move backwards.
@@ -170,6 +189,46 @@ To reproduce:
 eval_harness.py run --family idle_return_recall --ceiling {default|idle_return} --invocations-url … --k 3
 ```
 
+## Attribution: knowing in prod whether it paid
+
+**Dashboards can't judge it.** In the four weeks before any change, idle-return spend moved like this:
+
+| Week from 2026-10-17 | Total spend | Idle-return spend | Share | $ per return |
+|---|---:|---:|---:|---:|
+| 1 | $761 | $176 | 23% | $0.18 |
+| 2 | $831 | $219 | 26% | $0.21 |
+| 3 | $834 | $281 | 34% | $0.23 |
+| 4 | $785 | $242 | 31% | $0.21 |
+
+That is a $105-a-week swing in idle-return spend, with nothing shipped to change it. The expected effect is about $50–75 a week. Launched into a week like week 3, the feature would look like a failure. Launched into a week like week 1, it would look like a success, whether it worked or not. The release ledger has the same problem: a release carries everything else in it too.
+
+**The quality cost is invisible without a comparison.** In the screen, the failure mode was the model saying "I don't have that, please resend it". In prod, each such failure costs a user turn and the user's time. No cost line attributes that turn to the cut.
+
+So the instrumentation is part of the feature's definition of done. It is a few fields on rows already written after the model answers, plus a hash split, and nothing on the turn path:
+
+1. **Tag the cut.**
+   - Add `reason` (`idle_return` or `context_limit`), `tokensBefore` and `tokensAfter` to the `applied` ledger event. Today the event has no reason, so an idle-return cut cannot be told apart from today's cold applies.
+   - These are the same numbers the notice needs, so it is one change.
+2. **Tag the reach-back.**
+   - Today a cost row records only tool names and call counts, so a reach-back into the stored turns looks like a `retrieve_offloaded_content` call for an offloaded tool result. Separate them with a distinct reference prefix, or with a counter on the row.
+   - Reach-backs are the cost a cut pays back. The summary call is a small side-channel cost (Nova 2 Lite, about $0.001 a decision) and stays unmetered.
+3. **Hold out a comparison group.**
+   - Split by a deterministic hash of the session id, and stamp each cost row `treated` or `holdout`.
+   - Run 50/50 for the first two weeks in prod, while the flag is still in-development.
+   - The replay predicts about 1,100 cuts across 380–450 conversations per 28 days. Cost per conversation is very uneven (the top 1% of conversations carry 19% of idle-return spend), so a 10% holdout (about 40 conversations with cuts a month) cannot put a confidence interval on dollars.
+
+**Reading it.**
+
+- **Dollars come from per-cut accounting.** Take the tokens each tagged cut removed (`tokensBefore − tokensAfter`) and price them on every later call in the conversation until the next cut, at that call's read and write rates. Then subtract the tagged reach-backs.
+- **The holdout gives the sign and the quality.** Compare cost per conversation that had a return, resend-style turns, thumbs-down, and the reach-back rate.
+
+**Exit rule.** The flag stays in-development until two weeks of holdout show both:
+
+- the per-cut saving holding up
+- no rise in resend-style turns
+
+If either fails, the cut is withdrawn, and the recoverable original stays only if it pays for itself elsewhere.
+
 ## Recommendation
 
 | Lever | Verdict |
@@ -180,3 +239,5 @@ eval_harness.py run --family idle_return_recall --ceiling {default|idle_return} 
 | 1h TTL (all, turn-open, per-conversation, after a cut, static-only) | **No-go** |
 | Concurrent or background compaction triggers | **No-go** |
 | Notice with reason and tokens saved | **Go**, independent of the rest; additive fields |
+| Replace the 100K trigger's cold path with the idle-return cut; keep a warm safety net near the window | **Go**, as part of the same change. Removing the 100K trigger outright would leave conversations that never pause ($553 per 28 days of warm calls over 100K) to grow into warm forced cuts |
+| Attribution: tagged cut, tagged reach-back, 50/50 holdout for two weeks | **Required** before the flag leaves in-development. Weekly idle-return spend swings more than the expected effect |
