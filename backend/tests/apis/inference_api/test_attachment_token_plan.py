@@ -162,3 +162,40 @@ def test_the_note_names_the_budget_not_the_byte_limit():
     assert "larger than this conversation keeps in context" in note
     assert "combined size limit" not in note
     assert "`document_read` with `upload_id` `up-a`" in note
+
+
+class _Live:
+    def __init__(self, messages):
+        self.agent = type("Inner", (), {"messages": messages})()
+
+
+def _pdf_message(size: int) -> dict:
+    return {"role": "user", "content": [{"document": {"format": "pdf", "name": "a", "source": {"bytes": b"x" * size}}}]}
+
+
+def test_the_warm_history_s_native_bytes_reach_the_planner(monkeypatch):
+    """The newest live agent for (session, user) is counted; nothing else is read."""
+    asked = []
+
+    def live(session_id, user_id):
+        asked.append((session_id, user_id))
+        return [_Live([_pdf_message(3_000)]), _Live([_pdf_message(9_999)])]
+
+    monkeypatch.setattr(routes, "live_conversation_agents", live)
+    facts = [object()]
+    assert routes._warm_history_native_bytes("sess-1", "user-1", token_profile(), facts) == 3_000
+    assert asked == [("sess-1", "user-1")]
+
+
+def test_the_warm_history_is_not_walked_without_cause(monkeypatch):
+    def live(*_a):
+        raise AssertionError("must not look")
+
+    monkeypatch.setattr(routes, "live_conversation_agents", live)
+    assert routes._warm_history_native_bytes("sess-1", "user-1", token_profile(), []) == 0
+    assert routes._warm_history_native_bytes("sess-1", "user-1", legacy_profile(), [object()]) == 0
+
+
+def test_a_cold_turn_holds_nothing(monkeypatch):
+    monkeypatch.setattr(routes, "live_conversation_agents", lambda *_a: [])
+    assert routes._warm_history_native_bytes("sess-1", "user-1", token_profile(), [object()]) == 0
