@@ -105,6 +105,7 @@ from apis.shared.files.attachment_plan import (
     refine_for_model,
 )
 from apis.shared.files.folder_attachments import FOLDERS_PER_MESSAGE, FolderAttachment
+from apis.shared.files.held_bytes import held_native_bytes
 from apis.shared.files.folder_manifest import (
     attached_entries,
     record_folder_manifests,
@@ -1991,6 +1992,30 @@ def _row_token_facts(meta) -> dict:
     return out
 
 
+def _warm_history_native_bytes(
+    session_id: Optional[str], user_id: Optional[str], profile, plan_facts: list
+) -> int:
+    """Raw bytes of the native blocks this conversation's warm agent will send
+    again (``held_bytes``), for the planner's request budget (§4.4.1).
+
+    Only a turn that attaches something under a profile with a request budget
+    pays for it: an in-process lookup on ``(session, user)`` and a ``len`` walk
+    over the newest live agent's list, no decode and no I/O. A cold turn has no
+    live agent and counts 0; its restore replaces every document with a digest.
+    Never raises.
+    """
+    if not plan_facts or not session_id or getattr(profile, "request_attachment_max_bytes", 0) <= 0:
+        return 0
+    try:
+        for live in live_conversation_agents(session_id, user_id):
+            messages = getattr(getattr(live, "agent", None), "messages", None)
+            if isinstance(messages, list):
+                return held_native_bytes(messages)
+    except Exception:  # noqa: BLE001 - no count is the pre-held behaviour, never a failed turn
+        logger.debug("Held native bytes not counted", exc_info=True)
+    return 0
+
+
 def _file_facts(file, upload_rows: dict) -> FileFacts:
     """The planner's facts for one resolved attachment, from what is already in hand.
 
@@ -3536,7 +3561,11 @@ async def _resolve_turn_attachments(
     # byte rules; `_plan_for_model` refines the inline set once it is.
     plan_facts = [_file_facts(f, upload_rows) for f in all_files]
     plan = plan_attachments(
-        plan_facts, None, profile=profile, dropped_over_count=dropped_over_count_total
+        plan_facts,
+        None,
+        ConversationFacts(held_native_bytes=_warm_history_native_bytes(input_data.session_id, user_id, profile, plan_facts)),
+        profile=profile,
+        dropped_over_count=dropped_over_count_total,
     )
 
     def _planned(*reasons: str) -> list:
@@ -3582,9 +3611,11 @@ async def _resolve_turn_attachments(
         for failure in unpersisted_inline:
             plan = plan.with_outcome(position[id(failure.file)], REASON_PERSIST_FAILED)
 
-    # The combined budget (spec §4E / PR-6): the inline set is one persisted
-    # message, and a message over ~7.5 MB raw fails the AgentCore Memory write
-    # with SessionException. The planner trimmed it first-fit in attachment
+    # The byte budget (spec §4E / PR-6, §4.4.1). Under ``legacy`` the inline set
+    # is one persisted message, and a message over ~7.5 MB raw fails the
+    # AgentCore Memory write with SessionException; under ``token`` handles keep
+    # it out of that message and the budget is the request's, less what the warm
+    # history re-sends. The planner trimmed it first-fit in attachment
     # order; an uploaded document that did not fit goes by reference (its
     # digest or a ready stub, rendered from the row the resolver already read,
     # so no I/O before the first token), anything else is dropped with a note.
@@ -3592,16 +3623,17 @@ async def _resolve_turn_attachments(
     over_budget_indices = plan.with_reason(REASON_OVER_BUDGET, REASON_OVER_BUDGET_REFERENCE)
     if over_budget_indices:
         logger.warning(
-            "Attachment turn over quota: requested_bytes=%d cap_bytes=%d "
+            "Attachment turn over quota: requested_bytes=%d cap_bytes=%d held_bytes=%d "
             "inline_files=%d dropped_files=%d",
             plan.requested_inline_bytes,
-            profile.inline_total_max_bytes,
+            plan.byte_budget,
+            plan.held_native_bytes,
             len(files_to_send) + len(over_budget_indices),
             len(over_budget_indices),
         )
         _emit_attachment_over_quota_metric(
             requested_bytes=plan.requested_inline_bytes,
-            cap_bytes=profile.inline_total_max_bytes,
+            cap_bytes=plan.byte_budget,
             inline_count=len(files_to_send) + len(over_budget_indices),
             dropped_count=len(over_budget_indices),
         )
