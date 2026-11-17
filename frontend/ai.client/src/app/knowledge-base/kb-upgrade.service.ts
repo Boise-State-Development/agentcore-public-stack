@@ -28,11 +28,10 @@ export type DocumentIssueKind =
   | 'being_removed';
 
 /**
- * The UI-facing engine name, for the `Managed`/`Classic` badge (task 16.4).
+ * The engine serving a knowledge base, in the server's UI-facing words (task 16.4).
  *
- * Deliberately friendly words, not the backend's internal engine ids: the badge
- * exists to answer "which engine is serving this?" for a human. `classic` is the
- * default the server sends for a legacy or not-yet-migrated knowledge base.
+ * Picks the per-document status vocabulary. `classic` is the default the server
+ * sends for a legacy or not-yet-migrated knowledge base.
  */
 export type KbEngine = 'managed' | 'classic';
 
