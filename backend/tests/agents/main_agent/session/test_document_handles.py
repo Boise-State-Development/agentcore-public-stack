@@ -263,6 +263,19 @@ class TestAppendMessage:
         mgr.append_message(_turn(_doc("notice_pdf", "pdf", PDF)), MagicMock())
         assert "uploadId" not in ah.handle_of(sent[0]["content"][1]["document"])
 
+    def test_a_failure_naming_the_uploads_still_persists_handles(self, make_session_manager, monkeypatch):
+        """A token-profile turn may carry 16 MB of documents: never fall back to their bytes."""
+        mgr, sent = self._manager(make_session_manager, monkeypatch, True)
+
+        def boom(*_a, **_k):
+            raise RuntimeError("upload index unavailable")
+
+        monkeypatch.setattr(ah, "session_uploads", boom)
+        mgr.append_message(_turn(_doc("notice_pdf", "pdf", PDF)), MagicMock())
+        handle = ah.handle_of(sent[0]["content"][1]["document"])
+        assert handle is not None and "uploadId" not in handle
+        assert handle["sizeBytes"] == len(PDF)
+
     def test_the_legacy_profile_persists_the_bytes(self, make_session_manager, monkeypatch):
         mgr, sent = self._manager(make_session_manager, monkeypatch, False)
         live = _turn(_doc("notice_pdf", "pdf", PDF))

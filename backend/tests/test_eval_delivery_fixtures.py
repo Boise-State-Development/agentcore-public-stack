@@ -172,7 +172,21 @@ def test_the_deck_goes_to_the_deck_tools_and_the_pdf_ladder_crosses_100_pages():
 
 def test_every_fixture_stays_an_inline_class_file():
     # The auto arm measures today's routing by type and tokens, not the 4 MB reference rule.
-    assert all(len(b.build(n)) <= INLINE_DOCUMENT_MAX_BYTES for n in d.GENERATED)
+    # Heavy packet A is the exception on purpose: the field case had one PDF over the per-file limit.
+    over = {d.heavy_packet_name("a")}
+    assert all(len(b.build(n)) <= INLINE_DOCUMENT_MAX_BYTES for n in d.GENERATED if n not in over)
+
+
+def test_the_heavy_packets_are_the_field_case():
+    """Over the old 7 MB together, under 16 MiB, one over the per-file limit (§4.4.1)."""
+    sizes = {letter: len(b.build(d.heavy_packet_name(letter))) for letter, _, _ in d.HEAVY_PACKETS}
+    assert sizes["a"] > INLINE_DOCUMENT_MAX_BYTES
+    under = [sizes[x] for x in "bcde"]
+    assert all(s <= INLINE_DOCUMENT_MAX_BYTES for s in under)
+    assert sizes["b"] + sizes["c"] + sizes["d"] > 7_000_000, "the old budget must leave packet D out"
+    assert sum(under) < 16 * 1024 * 1024
+    for letter, target, _ in d.HEAVY_PACKETS:
+        assert 0.97 * target <= sizes[letter] <= target, (letter, sizes[letter])
 
 
 def test_case_answers_are_the_planted_values():

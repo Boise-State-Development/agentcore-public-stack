@@ -679,12 +679,93 @@ for _set in POLICY_SETS:
         policy(_name)
 
 
+# --------------------------------------------------------------------------- image-heavy PDF packets
+
+#: The 2026-10-30 field case (unified-attachment-delivery §4.4.1): five
+#: image-heavy PDFs of 5.7, 3.9, 0.17, 4.04 and 2.7 MB, 31 pages in all. Each
+#: page is a few lines of text over a photo-sized image of noise; one page holds
+#: the packet's award number and its prior-cycle lookalike. Under the old 7 MB
+#: combined budget the fourth went on demand; under the request budget only the
+#: first (over the 4 MiB per-file limit) does.
+HEAVY_PACKETS: Tuple[Tuple[str, int, int], ...] = (
+    ("a", 5_700_000, 8),
+    ("b", 3_900_000, 6),
+    ("c", 170_000, 1),
+    ("d", 4_040_000, 9),
+    ("e", 2_700_000, 7),
+)
+
+
+def heavy_packet_name(letter: str) -> str:
+    return f"delivery_packet_{letter}_heavy.pdf"
+
+
+@dataclass(frozen=True)
+class PacketFact:
+    """A packet's award number and its prior-cycle lookalike."""
+
+    letter: str
+    subject: str
+    value: str
+    lookalike: str
+
+    def question(self) -> str:
+        return (
+            f"According to Award packet {self.letter.upper()}, what is the current award number for "
+            f"{self.subject}? Reply with just the number."
+        )
+
+
+def heavy_packet_fact(letter: str) -> PacketFact:
+    rng = random.Random(f"heavy-packet-{letter}")
+    value, lookalike = _code(rng, "AW")
+    subject = f"the {rng.choice(_FIRST)} {rng.choice(_SECOND)} {rng.choice(_FACILITIES)}"
+    return PacketFact(letter=letter, subject=subject, value=value, lookalike=lookalike)
+
+
+def heavy_packet(letter: str) -> bytes:
+    """One packet, padded to its target size with uncompressed noise, so its bytes are what the case needs."""
+    _, target, pages = next(p for p in HEAVY_PACKETS if p[0] == letter)
+    fact = heavy_packet_fact(letter)
+    rng = random.Random(f"heavy-packet-body-{letter}")
+    fact_page = pages // 2
+
+    def build(image_bytes: int) -> bytes:
+        side_w = 600
+        rows = max(1, image_bytes // (side_w * 3))
+        out: List[pdf.Page] = []
+        for n in range(pages):
+            page = pdf.Page()
+            page.text(72, 740, f"Award packet {letter.upper()}, page {n + 1} of {pages}", size=14, bold=True)
+            y = 712.0
+            lines = pdf.wrap(_filler_paragraph(rng), 10, 468)
+            if n == fact_page:
+                lines = pdf.wrap(
+                    f"For the record, the current award number for {fact.subject} is {fact.value}. "
+                    f"The prior-cycle award number for {fact.subject} is {fact.lookalike}, kept for audit only.",
+                    10, 468,
+                ) + lines
+            for line in lines[:8]:
+                page.text(72, y, line, size=10)
+                y -= 13
+            noise = random.Random(f"heavy-packet-noise-{letter}-{n}").randbytes(side_w * rows * 3)
+            page.image(pdf.Image(side_w, rows, noise), 72, 100, 468, 468 * rows / side_w if rows < side_w else 468)
+            out.append(page)
+        return pdf.build(out)
+
+    # The text and structure cost a few KB; size the noise to land on the target.
+    overhead = len(build(0))
+    per_page = max(0, (target - overhead) // pages)
+    return build(per_page)
+
+
 GENERATED: Dict[str, Callable[[], bytes]] = {
     **{name: _prose_builder(name) for name in _PROSE},
     **{name: _table_builder(name) for name in _TABLES},
     "delivery_permit_card.png": permit_card,
     **{name: (lambda n=name: as_pdf(whole(n)[0])) for name in _WHOLE},
     **{name: (lambda n=name: as_pdf(policy(n)[0])) for name in _POLICIES},
+    **{heavy_packet_name(letter): (lambda x=letter: heavy_packet(x)) for letter, _, _ in HEAVY_PACKETS},
 }
 
 

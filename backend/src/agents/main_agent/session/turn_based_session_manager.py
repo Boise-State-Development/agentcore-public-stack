@@ -411,13 +411,21 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
 
         The upload id comes from the rows this turn already resolved
         (``remember_session_uploads``), matched as restore matches, so no read
-        is added. Never raises: on any doubt the message keeps its bytes.
+        is added. Never raises. If naming the uploads fails, documents still
+        become handles without an id (restore matches on name, format and size,
+        so it renders the same digest) and images keep their bytes: under the
+        ``token`` profile a turn's documents may total 16 MB, which as bytes
+        would put the event past Memory's 10 MB quota.
         """
         try:
             from apis.shared.files.attachment_plan import persist_document_handles
 
             if not persist_document_handles():
                 return message
+        except Exception as e:  # noqa: BLE001 - persisting the bytes is the legacy behaviour
+            logger.warning("Document handles skipped for this message: %s", e)
+            return message
+        try:
             from apis.shared.files.attachment_handle import persisted_message, session_uploads, turn_images
 
             from .document_rehydration import match_document
@@ -434,7 +442,13 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
                 return ref.upload_id
 
             return persisted_message(message, _resolve, turn_images(*owner))
-        except Exception as e:  # noqa: BLE001 - persisting the bytes is always correct
+        except Exception as e:  # noqa: BLE001 - fall back to handles without upload ids
+            logger.warning("Upload ids not resolved for this message's handles: %s", e)
+        try:
+            from apis.shared.files.attachment_handle import persisted_message
+
+            return persisted_message(message, lambda *_: None)
+        except Exception as e:  # noqa: BLE001 - persisting the bytes is the last resort
             logger.warning("Document handles skipped for this message: %s", e)
             return message
 

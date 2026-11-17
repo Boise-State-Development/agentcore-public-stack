@@ -224,6 +224,7 @@ def cases() -> List[Dict[str, Any]]:
         "Twenty ~5k-token documents, the token profile's per-message cap (~100k tokens together). Each holds a "
         "certificate; only the seventeenth is the subject's.",
     ))
+    out.extend(heavy_packet_cases())
     out.extend(forced_arm_cases())
     out.extend(ceiling_cases())
     out.extend(whole_document_cases())
@@ -328,6 +329,36 @@ def terse_expect(set_name: str) -> Dict[str, Any]:
         rf"(?i)Shortest\W{{0,8}}(?:the\s+)?{_district(fastest)}",
         rf"\b{fastest.response_hours}\b",
     ]}}
+
+
+def heavy_packet_cases() -> List[Dict[str, Any]]:
+    """The 2026-10-30 field case: five image-heavy PDFs, 16.5 MB, over the old 7 MB budget.
+
+    ``heavy_packets_all`` asks every packet's number at once, as the tester did;
+    ``heavy_packet_d`` asks only the 4.04 MB packet, the one the 7 MB budget sent
+    on demand and the request budget sends native (§4.4.1). Packet A is over
+    the 4 MiB per-file limit, so it is on demand under either budget.
+    """
+    names = [d.heavy_packet_name(letter) for letter, _, _ in d.HEAVY_PACKETS]
+    facts = [d.heavy_packet_fact(letter) for letter, _, _ in d.HEAVY_PACKETS]
+    listing = "; ".join(f"{f.letter.upper()}: {f.subject}" for f in facts)
+    every = _case(
+        "heavy_packets_all", [
+            "Five award packets are attached (A to E). For each packet, give the current award number for "
+            f"the facility it covers ({listing}). Reply with one line per packet, as <letter>: <number>."
+        ], names,
+        {"contains_all": [f.value for f in facts]},
+        "Five image-heavy PDFs, 5.7 / 3.9 / 0.17 / 4.04 / 2.7 MB, 31 pages. Every number must be read, "
+        "including packet A's, which is over the per-file inline limit and is only reachable on demand.",
+    )
+    fourth = facts[3]
+    one = _case(
+        "heavy_packet_d", [fourth.question()], names,
+        {"contains_any": [fourth.value], "regex": {"search": [leads(fourth.value, [fourth.lookalike])]}},
+        "The same five packets; only packet D (4.04 MB) is asked about. Under the 7 MB budget it went "
+        "on demand; under the request budget it is a native block.",
+    )
+    return [every, one]
 
 
 #: The overflow cells' set sizes, and the arms compared at each.

@@ -704,6 +704,71 @@
   "notes": "Twenty ~5k-token documents, the token profile's per-message cap (~100k tokens together). Each holds a certificate; only the seventeenth is the subject's."
  },
  {
+  "id": "attachment_delivery.heavy_packets_all",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Five award packets are attached (A to E). For each packet, give the current award number for the facility it covers (A: the Brack Tarn sluice gate; B: the Tamsin Cut intake; C: the Kestrel Weir reservoir gauge; D: the Pell Gap reservoir gauge; E: the Ashby Bend reservoir gauge). Reply with one line per packet, as <letter>: <number>."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "AW-70245",
+    "AW-29290",
+    "AW-77369",
+    "AW-92371",
+    "AW-42312"
+   ]
+  },
+  "files": [
+   "delivery_packet_a_heavy.pdf",
+   "delivery_packet_b_heavy.pdf",
+   "delivery_packet_c_heavy.pdf",
+   "delivery_packet_d_heavy.pdf",
+   "delivery_packet_e_heavy.pdf"
+  ],
+  "notes": "Five image-heavy PDFs, 5.7 / 3.9 / 0.17 / 4.04 / 2.7 MB, 31 pages. Every number must be read, including packet A's, which is over the per-file inline limit and is only reachable on demand."
+ },
+ {
+  "id": "attachment_delivery.heavy_packet_d",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to Award packet D, what is the current award number for the Pell Gap reservoir gauge? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "AW-92371"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!AW\\-92317)[\\s\\S]){0,160}?AW\\-92371"
+    ]
+   }
+  },
+  "files": [
+   "delivery_packet_a_heavy.pdf",
+   "delivery_packet_b_heavy.pdf",
+   "delivery_packet_c_heavy.pdf",
+   "delivery_packet_d_heavy.pdf",
+   "delivery_packet_e_heavy.pdf"
+  ],
+  "notes": "The same five packets; only packet D (4.04 MB) is asked about. Under the 7 MB budget it went on demand; under the request budget it is a native block."
+ },
+ {
   "id": "attachment_delivery.arm_pdf_30k_native",
   "family": "attachment_delivery",
   "turns": [

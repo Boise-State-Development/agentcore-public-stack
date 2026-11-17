@@ -27,8 +27,11 @@ The field failure that prompted this was five policy PDFs (31 pages) on Opus 5.5
 file went unread and the answer came from four. It did **not** reproduce in 60 sample-turns with
 three to nine on-demand files, on either model: every on-demand file was read, every time. That
 includes a terse question, written in the field case's shape, that names no district and does not ask
-for every figure. So the field failure looks like a guidance problem, not a budget problem: the note
-on an on-demand file, which PR 2105 makes directive. Re-run these cells after it merges.
+for every figure. Nor was the 50k token budget what sent that file on demand. The field PDFs were
+image-heavy, and the old 7 MB combined byte budget sent the 4.04 MB one by reference. PR 2106
+removed that budget from the token profile, so the file now goes native (spec §4.4.1,
+`heavy_packet*` cells). What remains of the failure is guidance: the note on an on-demand file,
+which PR 2105 makes directive. Re-run these cells after it merges.
 
 ## The cells
 
