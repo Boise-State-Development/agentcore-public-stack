@@ -173,13 +173,38 @@ class TestSkills:
         monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: True)
         monkeypatch.setattr(f"{MODULE}.resolve_accessible_skill_ids", AsyncMock(return_value=["pdf"]))
         skill = SimpleNamespace(skill_id="pdf", display_name="PDF", description="PDF tools",
-                                compose=[])
+                                compose=[], owner_id="system")
         repo = MagicMock()
         repo.batch_get_skills = AsyncMock(return_value=[skill])
         monkeypatch.setattr(f"{MODULE}.get_skill_catalog_repository", lambda: repo)
         items = await bc.list_bindable("skill", _user())
         assert items[0].ref == "pdf"
         assert items[0].meta["compose"] == []
+        assert items[0].meta["ownership"] == "organization"
+
+    @pytest.mark.asyncio
+    async def test_skill_ownership_names_whose_skill_it_is(self, monkeypatch):
+        # Display only: the Designer groups skills into My skills / Shared with me /
+        # Organization. Access was already decided by resolve_accessible_skill_ids.
+        user = _user()
+        monkeypatch.setattr(f"{MODULE}.skills_enabled", lambda: True)
+        monkeypatch.setattr(
+            f"{MODULE}.resolve_accessible_skill_ids", AsyncMock(return_value=["mine", "org", "theirs"])
+        )
+        skills = [
+            SimpleNamespace(skill_id="mine", display_name="Mine", description="", compose=[], owner_id=user.user_id),
+            SimpleNamespace(skill_id="org", display_name="Org", description="", compose=[], owner_id="system"),
+            SimpleNamespace(skill_id="theirs", display_name="Theirs", description="", compose=[], owner_id="someone-else"),
+        ]
+        repo = MagicMock()
+        repo.batch_get_skills = AsyncMock(return_value=skills)
+        monkeypatch.setattr(f"{MODULE}.get_skill_catalog_repository", lambda: repo)
+        items = await bc.list_bindable("skill", user)
+        assert {i.ref: i.meta["ownership"] for i in items} == {
+            "mine": "mine",
+            "org": "organization",
+            "theirs": "shared",
+        }
 
 
 # --------------------------------------------------------------------------- kb
