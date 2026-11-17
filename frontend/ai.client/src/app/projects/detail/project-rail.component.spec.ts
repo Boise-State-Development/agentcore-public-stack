@@ -193,7 +193,7 @@ describe('ProjectRailComponent', () => {
 
   describe('the Voice row (#2021)', () => {
     const owner = { ...PROJECT, role: 'owner' as const };
-    const theSwitch = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('[data-testid="project-voice-switch"]');
+    const theSwitch = (el: HTMLElement) => el.querySelector<HTMLElement>('[data-testid="project-voice-switch"]');
     /** The warning is an icon in the row; its text is the hover tooltip and the accessible name. */
     const warning = (el: HTMLElement) =>
       el.querySelector('[data-testid="project-voice-warning"]')?.getAttribute('aria-label') ?? null;
@@ -213,6 +213,9 @@ describe('ProjectRailComponent', () => {
       const { el, row, fixture } = await render(owner);
       const sw = theSwitch(el)!;
       expect(sw.getAttribute('aria-checked')).toBe('true');
+      // The whole row is the switch, like every other row is its link or menu.
+      expect(row('Voice')).toBe(sw);
+      expect(sw.tagName).toBe('BUTTON');
 
       sw.click();
       await settle(fixture);
@@ -249,7 +252,10 @@ describe('ProjectRailComponent', () => {
       const { el, row } = await render(owner);
       const sw = theSwitch(el)!;
       expect(sw.getAttribute('aria-checked')).toBe('false');
-      expect(sw.disabled).toBe(true);
+      expect(sw.getAttribute('aria-disabled')).toBe('true');
+      expect(row('Voice').tagName).toBe('DIV'); // nothing to click while it can't run
+      sw.click();
+      expect(api.update).not.toHaveBeenCalled();
       // In the row, not a block below it.
       expect(el.querySelector('[data-testid="project-voice-warning"]')!.closest('div')).toBe(sw.closest('div'));
       expect(text(row('Voice'))).toBe('Voice Off · can’t run');

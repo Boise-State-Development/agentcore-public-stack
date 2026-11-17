@@ -100,40 +100,51 @@ const MODEL_MENU_POSITIONS: ConnectedPosition[] = [
                 <ng-container [ngTemplateOutlet]="rowBody" [ngTemplateOutletContext]="{ $implicit: row }" />
               </a>
             } @else if (row.key === 'voice') {
-              <div class="flex w-full items-center gap-3 px-3 py-2.5">
-                <ng-container [ngTemplateOutlet]="rowBody" [ngTemplateOutletContext]="{ $implicit: row }" />
-                @if (voiceWarning(); as warning) {
-                  <button
-                    type="button"
-                    data-testid="project-voice-warning"
-                    [appTooltip]="warning"
-                    appTooltipPosition="left"
-                    [attr.aria-label]="warning"
-                    class="-m-1 flex shrink-0 items-center rounded-full p-1 text-state-warning-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-state-warning-400 dark:hover:bg-white/5"
-                  >
-                    <ng-icon name="heroExclamationTriangle" class="size-4" aria-hidden="true" />
-                  </button>
-                }
-                @if (voice()?.canChange) {
-                  <button
-                    type="button"
-                    role="switch"
-                    data-testid="project-voice-switch"
-                    aria-label="Voice mode"
-                    [attr.aria-checked]="voiceOn()"
-                    [disabled]="savingVoice() || voiceBlocked()"
-                    (click)="toggleVoice()"
-                    class="relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
-                    [class]="voiceOn() ? 'bg-gray-600 dark:bg-gray-300' : 'bg-gray-300 dark:bg-gray-600'"
-                  >
+              @if (canToggleVoice()) {
+                <!-- The whole row is the switch, as every other row is its link or menu. -->
+                <button
+                  type="button"
+                  role="switch"
+                  data-testid="project-voice-switch"
+                  aria-label="Voice mode"
+                  [attr.aria-checked]="voiceOn()"
+                  [disabled]="savingVoice()"
+                  (click)="toggleVoice()"
+                  [class]="rowClass + ' disabled:cursor-wait'"
+                >
+                  <ng-container [ngTemplateOutlet]="rowBody" [ngTemplateOutletContext]="{ $implicit: row }" />
+                  <ng-container [ngTemplateOutlet]="voiceTrack" />
+                </button>
+              } @else {
+                <div class="flex w-full items-center gap-3 px-3 py-2.5">
+                  <ng-container [ngTemplateOutlet]="rowBody" [ngTemplateOutletContext]="{ $implicit: row }" />
+                  @if (voiceWarning(); as warning) {
+                    <button
+                      type="button"
+                      data-testid="project-voice-warning"
+                      [appTooltip]="warning"
+                      appTooltipPosition="left"
+                      [attr.aria-label]="warning"
+                      class="-m-1 flex shrink-0 items-center rounded-full p-1 text-state-warning-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-state-warning-400 dark:hover:bg-white/5"
+                    >
+                      <ng-icon name="heroExclamationTriangle" class="size-4" aria-hidden="true" />
+                    </button>
+                  }
+                  @if (voice()?.canChange) {
+                    <!-- The owner's switch, held off while tools or files keep voice off. -->
                     <span
-                      aria-hidden="true"
-                      class="pointer-events-none inline-block size-3 transform rounded-full bg-white shadow-xs transition duration-200 ease-in-out motion-reduce:transition-none dark:bg-gray-900"
-                      [class]="voiceOn() ? 'translate-x-3.5' : 'translate-x-0.5'"
-                    ></span>
-                  </button>
-                }
-              </div>
+                      role="switch"
+                      data-testid="project-voice-switch"
+                      aria-label="Voice mode"
+                      aria-checked="false"
+                      aria-disabled="true"
+                      class="opacity-50"
+                    >
+                      <ng-container [ngTemplateOutlet]="voiceTrack" />
+                    </span>
+                  }
+                </div>
+              }
             } @else if (canChooseModel()) {
               <button
                 type="button"
@@ -177,6 +188,19 @@ const MODEL_MENU_POSITIONS: ConnectedPosition[] = [
           }
         </span>
       }
+    </ng-template>
+
+    <ng-template #voiceTrack>
+      <span
+        aria-hidden="true"
+        class="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200 ease-in-out motion-reduce:transition-none"
+        [class]="voiceOn() ? 'bg-gray-600 dark:bg-gray-300' : 'bg-gray-300 dark:bg-gray-600'"
+      >
+        <span
+          class="pointer-events-none inline-block size-3 transform rounded-full bg-white shadow-xs transition duration-200 ease-in-out motion-reduce:transition-none dark:bg-gray-900"
+          [class]="voiceOn() ? 'translate-x-3.5' : 'translate-x-0.5'"
+        ></span>
+      </span>
     </ng-template>
 
     <ng-template #modelMenu>
@@ -249,6 +273,8 @@ export class ProjectRailComponent {
   /** Null when unknown (the read failed, or hasn't finished). */
   protected readonly voice = signal<ProjectVoice | null>(null);
   protected readonly savingVoice = signal(false);
+  /** The owner can flip the switch now: nothing else keeps voice off. */
+  protected readonly canToggleVoice = computed(() => this.voice()?.canChange === true && !this.voiceBlocked());
   /** Voice runs in this project's conversations: what the switch shows. */
   protected readonly voiceOn = computed(() => this.voice()?.available === true);
   /** Tools or files keep voice off whatever the switch says, so the switch can't be used. */

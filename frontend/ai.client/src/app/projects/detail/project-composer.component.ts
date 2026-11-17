@@ -155,8 +155,12 @@ export class ProjectComposerComponent {
     const project = this.project();
     // Known first, so the conversation opens as `?project=` without a fetch, and
     // marked new, so its page doesn't read metadata the backend hasn't written.
+    // The row carries the project, so the sidebar groups it under it at once.
     this.binding.knowProject(project);
-    this.sessions.addSessionToCache(sessionId, this.user.currentUser()?.user_id || 'anonymous');
+    this.sessions.addSessionToCache(sessionId, this.user.currentUser()?.user_id || 'anonymous', '', {
+      assistantId: project.harnessAgentId,
+      projectId: project.projectId,
+    });
     this.stagedSessionId.set(null);
     void this.router.navigate(['s', sessionId], {
       queryParams: this.binding.queryParamsFor(project.harnessAgentId, project.projectId),

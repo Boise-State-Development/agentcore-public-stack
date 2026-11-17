@@ -1071,10 +1071,18 @@ export class ConversationPage implements OnDestroy {
     if (!this.effectiveSessionId()) {
       const user = this.userService.currentUser();
       const userId = user?.user_id || 'anonymous';
-      this.sessionService.addSessionToCache(sessionId, userId);
       // Carry the assistant id forward if one is attached to this view —
-      // keeps the URL the single source of truth after voice ends.
+      // keeps the URL the single source of truth after voice ends. The row
+      // carries it too, with the project, so the sidebar groups a project's
+      // voice conversation under it without waiting for a reload (#2021).
       const assistantId = this.binding.boundAgentId() || this.assistant()?.assistantId;
+      const projectId = this.composerProject()?.projectId;
+      this.sessionService.addSessionToCache(
+        sessionId,
+        userId,
+        '',
+        assistantId ? { assistantId, ...(projectId ? { projectId } : {}) } : undefined,
+      );
       this.router.navigate(['s', sessionId], {
         replaceUrl: true,
         queryParams: this.binding.queryParamsFor(assistantId),

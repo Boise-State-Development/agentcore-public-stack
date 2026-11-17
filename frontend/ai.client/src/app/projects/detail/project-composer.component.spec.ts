@@ -127,7 +127,10 @@ describe('ProjectComposerComponent', () => {
       fixture.detectChanges();
 
       expect(binding.knowProject).toHaveBeenCalledWith(PROJECT);
-      expect(sessions.addSessionToCache).toHaveBeenCalledWith('voice-sess', 'user-1');
+      expect(sessions.addSessionToCache).toHaveBeenCalledWith('voice-sess', 'user-1', '', {
+        assistantId: 'agent-harness',
+        projectId: 'proj-1',
+      });
       expect(binding.queryParamsFor).toHaveBeenCalledWith('agent-harness', 'proj-1');
       expect(navigate).toHaveBeenCalledWith(['s', 'voice-sess'], { queryParams: { project: 'proj-1', assistantId: null } });
     });
