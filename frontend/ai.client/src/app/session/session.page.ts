@@ -1,4 +1,4 @@
-import { Component, inject, effect, Signal, signal, computed, viewChild, OnDestroy, PLATFORM_ID, ChangeDetectionStrategy } from '@angular/core';
+import { Component, inject, effect, Signal, signal, computed, untracked, viewChild, OnDestroy, PLATFORM_ID, ChangeDetectionStrategy } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -12,7 +12,7 @@ import { persistedAggregatesOf, samePersistedAggregates } from './services/sessi
 import { ScrollPositionService } from './services/session/scroll-position.service';
 import {
   ComposerDraftStorageService,
-  NEW_CONVERSATION_DRAFT_KEY,
+  newConversationDraftKey,
 } from './services/session/composer-draft-storage.service';
 import { ChatStateService } from './services/chat/chat-state.service';
 import { lastUserText } from './services/chat/provider-outage';
@@ -180,11 +180,14 @@ export class ConversationPage implements OnDestroy {
    * The *route* conversation, not {@link effectiveSessionId}: a new
    * conversation mints a staged id the moment a file is attached, and keying
    * drafts off that would swap the composer out from under text the user had
-   * already typed. Before the first send every visit to `/` is the same
-   * composer, so they all share one key.
+   * already typed. Before the first send every visit to `/` with the same
+   * binding (none, one Agent, one project) is the same composer, so they share
+   * one key; a different Agent or project is a different composer.
    */
   readonly draftKey = computed(
-    () => this.sessionId() ?? NEW_CONVERSATION_DRAFT_KEY,
+    () =>
+      this.sessionId() ??
+      newConversationDraftKey(this.binding.queryAssistantId(), this.binding.queryProjectId()),
   );
 
   // Writable signal that holds the current messages signal reference
@@ -284,6 +287,15 @@ export class ConversationPage implements OnDestroy {
   });
 
   constructor() {
+    // Moving between new conversations with different bindings changes only
+    // the query string, which the route subscription below never sees. The
+    // staged id belongs to the draft being left, so it is swapped for the one
+    // the incoming draft names (or none) here.
+    effect(() => {
+      this.draftKey();
+      untracked(() => this.adoptStagedSession());
+    });
+
     // Keep the viewed-session facades in ChatStateService (loading, cost
     // badge, Continue affordance, Stop button) pointed at the conversation
     // on screen. Uses the effective id so a staged session (file attached
@@ -516,26 +528,9 @@ export class ConversationPage implements OnDestroy {
 
       this.sessionId.set(id);
 
-      // A new-conversation draft with attachments names the conversation its
-      // uploads were filed under. Re-adopt it, or the next file attached after
-      // a reload mints a *second* staged id and the send carries upload ids
-      // from a conversation it does not name.
-      //
-      // `addSessionToCache` is not optional here, even though this id was
-      // already staged once: it also marks the id as new, which is what tells
-      // the metadata fetch to skip a conversation the backend has not created
-      // yet. That marker lives in memory and so died with the reload — without
-      // this call the first send lands on "Session not found".
-      if (!id) {
-        const staged = this.composerDrafts.read(NEW_CONVERSATION_DRAFT_KEY).attachmentSessionId;
-        if (staged && this.stagedSessionId() !== staged) {
-          this.stagedSessionId.set(staged);
-          this.sessionService.addSessionToCache(
-            staged,
-            this.userService.currentUser()?.user_id || 'anonymous',
-          );
-        }
-      }
+      // A new conversation's draft may name the conversation its uploads were
+      // filed under; see adoptStagedSession.
+      this.adoptStagedSession();
 
       // Session prewarm: start the Runtime microVM this conversation's next
       // turn will use while the user reads and types. A new conversation warms
@@ -863,6 +858,63 @@ export class ConversationPage implements OnDestroy {
     if (this.stagedSessionId()) {
       this.stagedSessionId.set(null);
     }
+  }
+
+  /**
+   * Take the staged conversation id the new-conversation draft names.
+   *
+   * A new-conversation draft with attachments names the conversation its
+   * uploads were filed under. Re-adopt it, or the next file attached after a
+   * reload mints a *second* staged id and the send carries upload ids from a
+   * conversation it does not name. A draft that names none clears the staged
+   * id, since it belonged to another new conversation's draft.
+   *
+   * `addSessionToCache` is not optional here, even though this id was already
+   * staged once: it also marks the id as new, which is what tells the metadata
+   * fetch to skip a conversation the backend has not created yet. That marker
+   * lives in memory and so died with the reload; without this call the first
+   * send lands on "Session not found".
+   */
+  private adoptStagedSession(): void {
+    if (this.sessionId()) return;
+    const key = this.draftKey();
+    const staged = this.composerDrafts.read(key).attachmentSessionId ?? null;
+    if (this.stagedSessionId() === staged) return;
+    this.stagedSessionId.set(staged);
+    if (staged) void this.confirmStagedSessionUnsent(key, staged);
+  }
+
+  /**
+   * Keep a staged id only while its conversation has not been sent.
+   *
+   * Uploads create no conversation row, so a row for a staged id means it has
+   * been sent since the draft named it: a send that bypassed the composer left
+   * its files in the draft. Re-adopting it would file the next upload under
+   * that conversation and send this "new" conversation's first message into
+   * it. Its files are dropped from the draft, since they are that
+   * conversation's; the text stays.
+   *
+   * Any failure (the expected one is a 404) keeps the id, as before this
+   * check, rather than strip a draft on a network blip.
+   */
+  private async confirmStagedSessionUnsent(key: string, staged: string): Promise<void> {
+    let sent: boolean;
+    try {
+      await this.sessionService.getSessionMetadata(staged, { quiet: true });
+      sent = true;
+    } catch {
+      sent = false;
+    }
+    if (this.stagedSessionId() !== staged) return;
+    if (sent) {
+      this.stagedSessionId.set(null);
+      this.composerDrafts.discardAttachments(key);
+      return;
+    }
+    this.sessionService.addSessionToCache(
+      staged,
+      this.userService.currentUser()?.user_id || 'anonymous',
+    );
   }
 
   /**

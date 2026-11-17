@@ -657,8 +657,16 @@ export class ChatInputComponent {
    * so does the queue. A folder only holds the send until app-api has created
    * its row (a fraction of a second); its expansion never holds it.
    */
+  /**
+   * Files a drop or pick accepted that have not started uploading yet. Uploads
+   * run one at a time, so most of a batch waits here; counting it is what
+   * stops a second pick made mid-batch from passing the per-message limit.
+   */
+  private readonly queuedFileCount = signal(0);
+
   readonly hasActivePendingUploads = computed(
     () =>
+      this.queuedFileCount() > 0 ||
       this.fileUploadService.hasActivePendingUploads() ||
       this.importingAttachments().some(upload => upload.status === 'uploading') ||
       this.attachedFolders().some(folder => folder.phase === 'attaching'),
@@ -738,6 +746,8 @@ export class ChatInputComponent {
       0,
       this.maxFilesPerMessage() -
         this.pendingUploads().length -
+        this.queuedFileCount() -
+        this.fileUploadService.presigningCount() -
         this.restoredAttachments().length -
         this.importingAttachments().length -
         // A folder is ONE attachment, whatever its file count (spec §9 D1).
@@ -1456,6 +1466,20 @@ export class ChatInputComponent {
       untracked(() => this.syncDraft(key, draft));
     });
 
+    // The page found that the files in this composer's restored draft belong
+    // to a conversation already sent (`discardAttachments`); take the cards
+    // down so they are neither shown nor sent from here.
+    effect(() => {
+      const discarded = this.draftStorage.discarded();
+      if (!discarded) return;
+      untracked(() => {
+        if (discarded.key !== this.mirroredDraftKey) return;
+        this.restoredAttachments.set([]);
+        this.stopAllFolderPolls();
+        this.attachedFolders.set([]);
+      });
+    });
+
     // Picking a project after an `@`-mention un-hands the turn: the `@Name`
     // stays in the text as prose, but the send must not carry the Agent past
     // a project that offers no mentions.
@@ -1633,6 +1657,16 @@ export class ChatInputComponent {
     });
 
     inject(DestroyRef).onDestroy(() => this.cancelDictation());
+    // File this composer's uploads under its draft and release them, as a
+    // conversation change does (`syncDraft`). `FileUploadService` outlives the
+    // composer, so without this the composer that replaces it (another Agent's
+    // new conversation renders a new one) shows them and files them as its own.
+    // A replacement with the same key gets them back from the draft.
+    inject(DestroyRef).onDestroy(() => {
+      if (!this.mirroredDraftKey) return;
+      this.draftStorage.write(this.mirroredDraftKey, this.composerDraftSnapshot());
+      this.fileUploadService.clearReadyUploads();
+    });
     // A folder card's poll must not outlive the composer that shows it.
     inject(DestroyRef).onDestroy(() => {
       this.stopAllFolderPolls();
@@ -2034,6 +2068,17 @@ export class ChatInputComponent {
       return;
     }
 
+    // Past the limit the backend keeps the first ones and drops the rest, so
+    // the user is asked to choose instead (a folder counts as one).
+    const attached = fileUploadIds.length + folders.length;
+    if (attached > this.maxFilesPerMessage()) {
+      this.toastService.warning(
+        'Too Many Files',
+        `A message can carry ${this.maxFilesPerMessage()} files and this one has ${attached}. Remove ${attached - this.maxFilesPerMessage()} to send.`,
+      );
+      return;
+    }
+
     // The empty state's composer is about to be replaced by a compact one (the
     // first send navigates to the new conversation); leave it our height so the
     // replacement shrinks from here instead of popping in.
@@ -2062,6 +2107,21 @@ export class ChatInputComponent {
     this.resetTextareaHeight();
     this.clearAttachments();
     this.persistDraftNow();
+  }
+
+  /**
+   * Send `text` as this message, with whatever else is on the composer: its
+   * attachments, folders and `@`-mention. A starter prompt is sent this way.
+   *
+   * The text replaces what was typed. If an upload is still running the send
+   * is refused as Enter's would be, and the text stays in the box to send once
+   * it finishes.
+   */
+  submitText(text: string): void {
+    this.userInput.set(text);
+    const textarea = this.messageInput()?.nativeElement;
+    if (textarea) textarea.value = text;
+    this.submitChatRequest();
   }
 
   cancelChatRequest() {
@@ -2938,6 +2998,10 @@ export class ChatInputComponent {
       return;
     }
 
+    // Held from here until each file starts uploading or is turned away, with
+    // no await before it, so a batch picked meanwhile sees these slots taken.
+    this.queuedFileCount.update(count => count + newFiles.length);
+
     // Nudge the user once per batch if they're attaching tabular files
     // without the Spreadsheet Analysis tool enabled — the backend routes
     // these to the tool instead of inline Bedrock document blocks (#206),
@@ -2955,8 +3019,10 @@ export class ChatInputComponent {
     let imageNoticeShown = false;
     let documentNoticeShown = false;
 
-    // Validate and upload each file
+    // Validate and upload each file. Each leaves the queue as it starts or is
+    // turned away; the upload's own presign and card count it from there.
     for (const file of newFiles) {
+      this.queuedFileCount.update(count => count - 1);
       // Check file size (pptx and, behind the flag, large documents have
       // their own caps — see maxFileSizeFor)
       const sizeLimit = maxFileSizeFor(file, this.attachmentLimits.limits());

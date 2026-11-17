@@ -525,7 +525,16 @@ export class FileUploadService {
     Array.from(this._pendingUploads().values())
   );
 
+  /**
+   * Uploads asked for a pre-signed URL that has not answered yet. They have no
+   * card until it does, so without this an upload in that window counts
+   * nowhere: not against the per-message limit, and not as in progress.
+   */
+  private readonly _presigning = signal(0);
+  readonly presigningCount = this._presigning.asReadonly();
+
   readonly hasActivePendingUploads = computed(() =>
+    this._presigning() > 0 ||
     this.pendingUploadsList().some(u => u.status === 'uploading' || u.status === 'completing')
   );
 
@@ -624,6 +633,7 @@ export class FileUploadService {
     };
 
     let presignResponse: PresignResponse;
+    this._presigning.update(count => count + 1);
     try {
       presignResponse = await firstValueFrom(
         this.http.post<PresignResponse>(`${this.baseUrl()}/presign`, presignRequest).pipe(
@@ -631,10 +641,12 @@ export class FileUploadService {
         )
       );
     } catch (err) {
+      this._presigning.update(count => count - 1);
       throw this.handleApiError(err, 'Failed to get upload URL', presignRequest);
     }
 
-    // Track pending upload
+    // Track pending upload. The card and the end of the presign count land
+    // together, so the upload is counted exactly once throughout.
     const pendingUpload: PendingUpload = {
       file,
       uploadId: presignResponse.uploadId,
@@ -642,6 +654,7 @@ export class FileUploadService {
       progress: 0,
     };
     this.updatePendingUpload(presignResponse.uploadId, pendingUpload);
+    this._presigning.update(count => count - 1);
 
     try {
       // Step 2: Upload to S3
