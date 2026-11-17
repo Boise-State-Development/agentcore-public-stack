@@ -28,14 +28,8 @@ describe('InlineBudgetNoticeComponent', () => {
     expect(host.getAttribute('aria-live')).toBe('polite');
   });
 
-  it('names a document read on demand in a quiet line, not a warning', () => {
-    expect(render({ byReference: [file('policy-d.pdf')], dropped: [] })).toBe(
-      "policy-d.pdf will be read on demand rather than included in full, since this message's files " +
-        'together are over 7 MB. Ask about it by name if the answer leaves it out.',
-    );
-    const host = fixture.nativeElement as HTMLElement;
-    expect(host.querySelector('[data-testid="inline-budget-on-demand"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="inline-budget-notice"]')).toBeNull();
+  it('says nothing about a document read on demand', () => {
+    expect(render({ byReference: [file('policy-d.pdf')], dropped: [] })).toBe('');
   });
 
   it('names images that need a follow-up message', () => {
@@ -45,17 +39,15 @@ describe('InlineBudgetNoticeComponent', () => {
     );
   });
 
-  it('says both, each in its own tone, when both happen', () => {
+  it('names only the images when documents are also read on demand', () => {
     const text = render({
       byReference: [file('one.pdf'), file('two.pdf'), file('three.docx')],
       dropped: [file('photo.png', 'image/png')],
     });
 
-    expect(text).toContain('one.pdf, two.pdf and three.docx will be read on demand');
-    expect(text).toContain('Ask about them by name if the answer leaves them out.');
-    expect(text).toContain("photo.png won't fit in this message");
-    expect(text).toContain('Send it in a follow-up message.');
-    const warning = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="inline-budget-notice"]');
-    expect(warning?.textContent).not.toContain('one.pdf');
+    expect(text).toBe(
+      "photo.png won't fit in this message, which can include 7 MB of images and documents in full. " +
+        'Send it in a follow-up message.',
+    );
   });
 });
