@@ -260,6 +260,16 @@ class RunConfig:
     #: compaction ceiling (``CEILINGS``) the case runs under.
     arm: str = "auto"
     ceiling: str = "default"
+    #: ``attachment_delivery`` only: a forced arm per file, overriding ``arm`` for
+    #: the files it names. How a case runs one turn under a document budget the
+    #: deployment does not have: the cases generator puts the planner's own
+    #: split at that budget here (``delivery_cases.budget_split``), so the turn
+    #: holds exactly the files a raised budget would. ``search`` is not allowed.
+    file_arms: Optional[Mapping[str, str]] = None
+
+
+#: Arms ``run.file_arms`` may name.
+FILE_ARMS: Tuple[str, ...] = ("native", "text", "on_demand")
 
 
 #: A project of the sample's own, created before its first turn and purged after
@@ -500,9 +510,21 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
     _check_keys(
         run_raw,
         ("enabled_tools", "enabled_skills", "project", "agent", "project_memory", "member2_role", "client_surface",
-         "client_tools", "arm", "ceiling"),
+         "client_tools", "arm", "ceiling", "file_arms"),
         f"{where}.run",
     )
+    file_arms = run_raw.get("file_arms")
+    if file_arms is not None:
+        if family != DELIVERY_FAMILY:
+            raise CaseError(f"{where}.run.file_arms: only {DELIVERY_FAMILY} cases name per-file arms")
+        if not isinstance(file_arms, Mapping) or not file_arms:
+            raise CaseError(f"{where}.run.file_arms: expected {{filename: arm}}")
+        named = set(_str_tuple(raw.get("files"), f"{where}.files")) | {f for m in turn_meta for f in m.files}
+        for filename, value in file_arms.items():
+            if filename not in named:
+                raise CaseError(f"{where}.run.file_arms.{filename}: not one of the case's files")
+            if value not in FILE_ARMS:
+                raise CaseError(f"{where}.run.file_arms.{filename}: expected one of {', '.join(FILE_ARMS)}")
     for key, allowed, reserved in (("arm", DELIVERY_ARMS, RESERVED_ARMS), ("ceiling", CEILINGS, RESERVED_CEILINGS)):
         value = run_raw.get(key)
         if value is None:
@@ -568,6 +590,7 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         client_tools=tuple(client_tools) if client_tools else None,
         arm=run_raw.get("arm") or "auto",
         ceiling=run_raw.get("ceiling") or "default",
+        file_arms=dict(file_arms) if file_arms else None,
     )
 
     expect = _parse_expect(raw.get("expect") or {}, f"{where}.expect")

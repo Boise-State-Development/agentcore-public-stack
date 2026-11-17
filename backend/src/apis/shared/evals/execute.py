@@ -284,16 +284,24 @@ async def run_sample(
     forced_arm: Dict[str, Any] = (
         {"arm": case.run.arm} if case.family == DELIVERY_FAMILY and case.run.arm != "auto" else {}
     )
+    file_arms = case.run.file_arms or {}
+
+    def arm_for(filename: str) -> Dict[str, Any]:
+        # A per-file arm wins over the case's (``RunConfig.file_arms``).
+        return {"arm": file_arms[filename]} if filename in file_arms else forced_arm
+
     for filename in case.files:
         if register_fixture is None:
             raise ValueError(f"{case.id} names fixture files but no fixture registrar was given")
-        upload_ids.append(await register_fixture(session_id, filename, **forced_arm))
+        upload_ids.append(await register_fixture(session_id, filename, **arm_for(filename)))
     turn_upload_ids: Dict[int, List[str]] = {}
     for index in range(len(case.turns)):
         for filename in case.meta_for(index).files:
             if register_fixture is None:
                 raise ValueError(f"{case.id} names fixture files but no fixture registrar was given")
-            turn_upload_ids.setdefault(index, []).append(await register_fixture(session_id, filename, **forced_arm))
+            turn_upload_ids.setdefault(index, []).append(
+                await register_fixture(session_id, filename, **arm_for(filename))
+            )
     every_upload = upload_ids + [u for ids in turn_upload_ids.values() for u in ids]
     index_states: Optional[Dict[str, Any]] = None
     if forced_arm.get("arm") == "search" and every_upload:
@@ -411,6 +419,7 @@ async def run_sample(
         "timing": turn_timing(turns),
         **({"upload_ms": upload_ms} if upload_ms is not None else {}),
         **({"arm": case.run.arm} if case.family == DELIVERY_FAMILY else {}),
+        **({"file_arms": dict(case.run.file_arms)} if case.run.file_arms else {}),
         **({"ceiling": case.run.ceiling} if case.family in PACED_FAMILIES else {}),
         "started_at": started_at,
         "finished_at": _now_iso(),
