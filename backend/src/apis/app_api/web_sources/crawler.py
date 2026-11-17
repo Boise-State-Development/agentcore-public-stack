@@ -10,6 +10,8 @@ always finalize the `CrawlJob` it owns. Failure modes:
 - robots.txt disallows a page → silently skipped (it never becomes a doc)
 - two URLs redirect to the same page, or a redirect leaves the crawl → the
   page is kept once, under the URL it landed on (it never becomes a 2nd doc)
+- a URL or redirect hop that is, or resolves to, a non-public address → it is
+  never requested; it never becomes a doc (the root's doc is marked failed)
 - timeout on the whole crawl → caught, crawl marked 'failed'
 
 The hot loop is small on purpose: discover links, gate them through
@@ -27,6 +29,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional, Set, Tuple
+from urllib.parse import urljoin
 from urllib.robotparser import RobotFileParser
 
 import httpx
@@ -46,7 +49,9 @@ from apis.app_api.web_sources.crawl_repository import (
     increment_counters,
 )
 from apis.app_api.web_sources.models import CrawlSettings
+from apis.app_api.web_sources.public_transport import PublicOnlyTransport
 from apis.app_api.web_sources.url_utils import (
+    BlockedAddressError,
     InvalidUrlError,
     absolute_url,
     assert_url_is_public,
@@ -62,6 +67,10 @@ USER_AGENT = "BoiseStateAI-Assistant-Crawler/1.0 (+contact)"
 PER_PAGE_TIMEOUT_SECONDS = 20.0
 CRAWL_BUDGET_SECONDS = 15 * 60  # hard ceiling: must outlive any reasonable crawl
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+# Redirects followed per fetch. Real sites chain two at most (http → https,
+# bare → www, `/x` → `/x/`); httpx's own default of 20 only gives a hostile
+# page more hops to hide an internal address behind.
+MAX_REDIRECTS = 5
 ACCEPT_HEADER = (
     "text/html;q=0.9, application/xhtml+xml;q=0.9, text/plain;q=0.5, */*;q=0.1"
 )
@@ -250,11 +259,7 @@ class _RobotsCache:
         scheme = urlparse(sample_url).scheme or "https"
         robots_url = f"{scheme}://{host}/robots.txt"
         try:
-            resp = await self._client.get(
-                robots_url,
-                follow_redirects=True,
-                timeout=PER_PAGE_TIMEOUT_SECONDS,
-            )
+            resp = await _get_following_redirects(self._client, robots_url)
             if resp.status_code >= 400:
                 return None
             parser = RobotFileParser()
@@ -385,20 +390,54 @@ class _FetchedPage:
     final_url: str
 
 
+async def _get_following_redirects(
+    client: httpx.AsyncClient, url: str, headers: Optional[Dict[str, str]] = None
+) -> httpx.Response:
+    """GET `url`, following redirects one hop at a time, each checked first.
+
+    httpx's `follow_redirects=True` requests every hop unchecked, so a
+    public page that 301s to the metadata service would be fetched. Here a
+    hop whose URL names a non-public address is refused before it is
+    requested; a hostname is checked by the client's transport when it
+    connects (`PublicOnlyTransport` in production). Returns the last hop's
+    response, so `resp.url` is where the request landed.
+
+    Raises:
+        BlockedAddressError: a hop names a non-public address.
+        InvalidUrlError: a hop is not an http(s) URL.
+        httpx.TooManyRedirects: more than MAX_REDIRECTS hops.
+    """
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        assert_url_is_public(current, resolve=False)
+        resp = await client.get(
+            current,
+            follow_redirects=False,
+            timeout=PER_PAGE_TIMEOUT_SECONDS,
+            headers=headers,
+        )
+        # A 3xx with a Location header (301/302/303/307/308); a 304 has none.
+        if not resp.has_redirect_location:
+            return resp
+        current = urljoin(str(resp.url), resp.headers["location"])
+    raise httpx.TooManyRedirects(
+        f"More than {MAX_REDIRECTS} redirects from {url}", request=resp.request
+    )
+
+
 async def _fetch_page(
     client: httpx.AsyncClient, url: str, if_none_match: Optional[str] = None
 ) -> _FetchedPage:
-    """Fetch a single page, following redirects.
+    """Fetch a single page, following redirects (see `_get_following_redirects`).
 
     When `if_none_match` is set (KB-sync refresh with a stored ETag), a 304
     response short-circuits with an empty body and `not_modified=True` — no
     body transfer, no re-extraction. Raises on non-2xx (other than 304) or
-    non-HTML.
+    non-HTML, and `BlockedAddressError` for a non-public address anywhere
+    on the way.
     """
     headers = {"If-None-Match": if_none_match} if if_none_match else None
-    resp = await client.get(
-        url, follow_redirects=True, timeout=PER_PAGE_TIMEOUT_SECONDS, headers=headers
-    )
+    resp = await _get_following_redirects(client, url, headers)
     try:
         final_url = normalize_url(str(resp.url))
     except InvalidUrlError:
@@ -420,19 +459,6 @@ async def _fetch_page(
         )
     # Use httpx's encoding inference; surface bytes as text for parsing.
     return _FetchedPage(resp.text, resp.headers.get("etag"), False, final_url)
-
-
-def _is_public(url: str) -> bool:
-    """The SSRF guard's literal-address check, for where a redirect landed.
-
-    The request has already been made by then; this keeps a redirect to an
-    internal address from being ingested and served back as page content.
-    """
-    try:
-        assert_url_is_public(url, resolve=False)
-    except InvalidUrlError:
-        return False
-    return True
 
 
 # ── S3 stage ────────────────────────────────────────────────────────────────
@@ -625,6 +651,32 @@ async def run_crawl(
                             url,
                             if_none_match=requested.source_etag if requested else None,
                         )
+                    except BlockedAddressError as blocked:
+                        # Nothing was requested from the address, and it never
+                        # becomes a document. The root's document already
+                        # exists, so it says why it is empty.
+                        logger.warning("Crawl %s refused %s: %s", crawl_id, url, blocked)
+                        if url == root_key:
+                            await update_document_status(
+                                assistant_id=assistant_id,
+                                document_id=root_document_id,
+                                status="failed",
+                                error_message="The page is at, or redirected to, an address that can't be fetched.",
+                            )
+                            await increment_counters(
+                                assistant_id=assistant_id,
+                                crawl_id=crawl_id,
+                                failed_delta=1,
+                            )
+                            return
+                        aliases.add(url)
+                        visited.discard(url)
+                        await increment_counters(
+                            assistant_id=assistant_id,
+                            crawl_id=crawl_id,
+                            discovered_delta=-1,
+                        )
+                        return
                     except Exception as fetch_err:
                         logger.warning("Fetch failed for %s: %s", url, fetch_err)
                         if refresh is not None:
@@ -656,24 +708,11 @@ async def run_crawl(
                     # keeps the document the route created for it.
                     final_url = page.final_url
                     key = root_key if url == root_key else final_url
-                    if key == root_key and not _is_public(final_url):
-                        logger.warning("Crawl %s root redirected to a non-public address", crawl_id)
-                        await update_document_status(
-                            assistant_id=assistant_id,
-                            document_id=root_document_id,
-                            status="failed",
-                            error_message="The page redirected to an address that can't be fetched.",
-                        )
-                        await increment_counters(
-                            assistant_id=assistant_id,
-                            crawl_id=crawl_id,
-                            failed_delta=1,
-                        )
-                        return
                     already_fetched = final_url in pages_by_final_url
-                    off_course = key != root_key and (
-                        (settings.same_domain_only and not in_crawl_scope(final_url, root_url))
-                        or not _is_public(final_url)
+                    off_course = (
+                        key != root_key
+                        and settings.same_domain_only
+                        and not in_crawl_scope(final_url, root_url)
                     )
                     if already_fetched or off_course:
                         # Another URL already fetched this page, or the
@@ -902,6 +941,7 @@ def _default_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         headers={"User-Agent": USER_AGENT, "Accept": ACCEPT_HEADER},
         timeout=PER_PAGE_TIMEOUT_SECONDS,
+        transport=PublicOnlyTransport(),
     )
 
 

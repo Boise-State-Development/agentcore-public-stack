@@ -993,3 +993,218 @@ async def test_a_root_that_redirects_to_an_internal_address_fails(recorder: _Rec
     assert recorder.s3_puts == []
     assert (recorder.preassigned_root_id, "failed") in recorder.status_updates
     assert recorder.failed_delta == 1
+
+
+# ── SSRF: nothing non-public is ever requested ─────────────────────────────
+
+
+_INTERNAL_TARGETS = [
+    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    "http://169.254.170.2/v2/credentials/abc",
+    "http://10.0.0.5/admin",
+    "http://127.0.0.1:8080/",
+    "http://[::1]/",
+    "http://[::ffff:169.254.169.254]/latest",
+]
+
+
+def _logging_handler(pages: Dict[str, str], redirects: Dict[str, str]):
+    """Like `_redirecting_handler`, but logs every request, robots.txt included."""
+    requested: List[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        requested.append(url)
+        if url in redirects:
+            return httpx.Response(301, headers={"location": redirects[url]})
+        if url in pages:
+            return httpx.Response(200, text=pages[url], headers={"content-type": "text/html"})
+        return httpx.Response(404, text="not found")
+
+    _handler.requested = requested  # type: ignore[attr-defined]
+    return _handler
+
+
+def _is_internal(url: str) -> bool:
+    host = httpx.URL(url).host
+    return host.startswith(("169.254.", "10.", "127.")) or ":" in host
+
+
+@pytest.mark.parametrize("target", _INTERNAL_TARGETS)
+@pytest.mark.asyncio
+async def test_a_redirect_chain_into_an_internal_address_is_never_requested(
+    recorder: _Recorder, target: str
+):
+    # Two public hops first, so the guard has to hold on every hop, not
+    # only on the URL the link named.
+    pages = {
+        f"{_WWW}/": '<html><body><a href="/research/moved">Moved</a><a href="/research/kept">Kept</a></body></html>',
+        f"{_WWW}/kept": "<html><body>kept</body></html>",
+        target: "<html><body>credentials</body></html>",
+    }
+    redirects = {
+        _SECTION_ROOT: f"{_WWW}/",
+        f"{_WWW}/moved": f"{_WWW}/moved-again",
+        f"{_WWW}/moved-again": target,
+    }
+    handler = _logging_handler(pages, redirects)
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=_SECTION_ROOT,
+        settings=CrawlSettings(max_depth=1, max_pages=25),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(handler),
+    )
+    assert f"{_WWW}/moved-again" in handler.requested
+    assert not any(_is_internal(u) for u in handler.requested), handler.requested
+    assert [url for _, url in recorder.created_docs] == [f"{_WWW}/kept"]
+    assert all(b"credentials" not in body for _, body in recorder.s3_puts)
+    # The refused link gave its page slot back and is not a failure.
+    assert recorder.discovered_delta == recorder.fetched_delta == 2
+    assert recorder.failed_delta == 0
+    assert recorder.finalized_status == "complete"
+
+
+@pytest.mark.parametrize("target", _INTERNAL_TARGETS)
+@pytest.mark.asyncio
+async def test_a_root_redirecting_internally_fails_without_requesting_it(recorder: _Recorder, target: str):
+    handler = _logging_handler({target: "<html><body>credentials</body></html>"}, {_SECTION_ROOT: target})
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=_SECTION_ROOT,
+        settings=CrawlSettings(max_depth=1, max_pages=25),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(handler),
+    )
+    assert not any(_is_internal(u) for u in handler.requested), handler.requested
+    assert recorder.s3_puts == []
+    assert (recorder.preassigned_root_id, "failed") in recorder.status_updates
+    assert recorder.failed_delta == 1
+
+
+@pytest.mark.asyncio
+async def test_a_robots_txt_redirecting_internally_is_never_requested(recorder: _Recorder):
+    robots = "https://example.com/robots.txt"
+    pages = {"https://example.com/": "<html><body>home</body></html>"}
+    handler = _logging_handler(pages, {robots: "http://169.254.169.254/latest/user-data"})
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url="https://example.com/",
+        settings=CrawlSettings(max_depth=0, max_pages=1),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(handler),
+    )
+    assert handler.requested == [robots, "https://example.com/"]
+    # Unreachable robots.txt is permissive, as before.
+    assert len(recorder.s3_puts) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_normal_multi_hop_redirect_still_lands(recorder: _Recorder):
+    # http → https → www → trailing slash: three hops, all public.
+    start = "http://example.com/research"
+    pages = {f"{_WWW}/": "<html><head><title>Research</title></head><body>research</body></html>"}
+    redirects = {
+        start: _SECTION_ROOT,
+        _SECTION_ROOT: _WWW,
+        _WWW: f"{_WWW}/",
+    }
+    handler = _logging_handler(pages, redirects)
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=start,
+        settings=CrawlSettings(max_depth=0, max_pages=1),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(handler),
+    )
+    assert [u for u in handler.requested if not u.endswith("robots.txt")] == [
+        start,
+        _SECTION_ROOT,
+        _WWW,
+        f"{_WWW}/",
+    ]
+    assert len(recorder.s3_puts) == 1
+    assert recorder.failed_delta == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_reports_the_last_hops_url():
+    redirects = {_SECTION_ROOT: _WWW, _WWW: f"{_WWW}/"}
+    handler = _logging_handler({f"{_WWW}/": "<html><body>x</body></html>"}, redirects)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        page = await crawler._fetch_page(client, _SECTION_ROOT)
+    assert page.final_url == f"{_WWW}/"
+    assert not page.not_modified
+
+
+@pytest.mark.parametrize("hops,ok", [(crawler.MAX_REDIRECTS, True), (crawler.MAX_REDIRECTS + 1, False)])
+@pytest.mark.asyncio
+async def test_the_redirect_hop_cap_holds(hops: int, ok: bool):
+    urls = [f"https://example.com/hop/{i}" for i in range(hops + 1)]
+    redirects = dict(zip(urls, urls[1:]))
+    handler = _logging_handler({urls[-1]: "<html><body>end</body></html>"}, redirects)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        if ok:
+            page = await crawler._fetch_page(client, urls[0])
+            assert page.final_url == urls[-1]
+        else:
+            with pytest.raises(httpx.TooManyRedirects):
+                await crawler._fetch_page(client, urls[0])
+    # Never more than the first request plus MAX_REDIRECTS hops.
+    assert len(handler.requested) == min(hops, crawler.MAX_REDIRECTS) + 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_304_still_short_circuits_after_a_redirect():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == _SECTION_ROOT:
+            return httpx.Response(301, headers={"location": f"{_WWW}/"})
+        assert request.headers.get("if-none-match") == '"v1"'
+        return httpx.Response(304, headers={"etag": '"v1"'})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        page = await crawler._fetch_page(client, _SECTION_ROOT, if_none_match='"v1"')
+    assert page.not_modified
+    assert page.final_url == f"{_WWW}/"
+
+
+@pytest.mark.asyncio
+async def test_a_hostname_resolving_privately_is_refused_by_the_default_client(
+    recorder: _Recorder, monkeypatch: pytest.MonkeyPatch
+):
+    # The production client, end to end: the name looks public, the
+    # resolver says 10.x, and no socket is opened.
+    import httpcore
+
+    from apis.app_api.web_sources import url_utils
+
+    async def fake_getaddrinfo(host: str, port: int):
+        return [(2, 1, 6, "", ("10.0.0.7", port))]
+
+    connects: List[str] = []
+
+    async def spy_connect(self, host: str, port: int, **kwargs):
+        connects.append(host)
+        raise httpcore.ConnectError("spy")
+
+    monkeypatch.setattr(url_utils, "_getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(httpcore.AnyIOBackend, "connect_tcp", spy_connect)
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url="https://intranet.example.com/",
+        settings=CrawlSettings(max_depth=1, max_pages=5),
+        root_document_id=recorder.preassigned_root_id,
+    )
+    assert connects == []
+    assert (recorder.preassigned_root_id, "failed") in recorder.status_updates
+    assert recorder.s3_puts == []
