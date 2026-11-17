@@ -26,6 +26,7 @@ import { Project } from '../models/project.model';
 class ComposerStub {
   readonly project = input<Project>();
   readonly projectModelId = input<string | null | undefined>();
+  readonly voiceAvailable = input<boolean | undefined>();
 }
 @Component({ selector: 'app-project-tasks', template: 'tasks' })
 class TasksStub {

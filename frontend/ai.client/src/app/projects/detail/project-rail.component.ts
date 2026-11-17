@@ -28,6 +28,7 @@ import { ModelConfig, Project, ProjectSchedule, ProjectVoice } from '../models/p
 import { ProjectApiService } from '../services/project-api.service';
 import { isUnavailable, projectErrorMessage } from '../services/projects.service';
 import { personLabel } from '../../shared/utils/person';
+import { TooltipDirective } from '../../components/tooltip';
 
 interface Row {
   key: string;
@@ -59,8 +60,9 @@ const MODEL_MENU_POSITIONS: ConnectedPosition[] = [
  * schedules) and per thing about the project itself (members, activity, history).
  * Each row links to that setting's page under `/projects/:id/`, apart from Model,
  * a single choice, which is a menu on its row and saves as soon as one is picked,
- * and Voice (#2021), a switch on its row for the owner, with a warning for the
- * owner and editors when the project's tools or files keep voice off.
+ * and Voice (#2021), a switch on its row for the owner, with a warning icon (its
+ * reason on hover or focus) for the owner and editors when the project's tools or
+ * files keep voice off.
  *
  * The summaries are loaded each time the overview is opened, each on its own, so a
  * refused or failed read blanks one row rather than the rail.
@@ -68,7 +70,7 @@ const MODEL_MENU_POSITIONS: ConnectedPosition[] = [
 @Component({
   selector: 'app-project-rail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CdkMenu, CdkMenuItemRadio, CdkMenuTrigger, NgIcon, NgTemplateOutlet, RouterLink],
+  imports: [CdkMenu, CdkMenuItemRadio, CdkMenuTrigger, NgIcon, NgTemplateOutlet, RouterLink, TooltipDirective],
   providers: [
     provideIcons({
       heroBookOpen,
@@ -100,6 +102,18 @@ const MODEL_MENU_POSITIONS: ConnectedPosition[] = [
             } @else if (row.key === 'voice') {
               <div class="flex w-full items-center gap-3 px-3 py-2.5">
                 <ng-container [ngTemplateOutlet]="rowBody" [ngTemplateOutletContext]="{ $implicit: row }" />
+                @if (voiceWarning(); as warning) {
+                  <button
+                    type="button"
+                    data-testid="project-voice-warning"
+                    [appTooltip]="warning"
+                    appTooltipPosition="left"
+                    [attr.aria-label]="warning"
+                    class="-m-1 flex shrink-0 items-center rounded-full p-1 text-state-warning-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-state-warning-400 dark:hover:bg-white/5"
+                  >
+                    <ng-icon name="heroExclamationTriangle" class="size-4" aria-hidden="true" />
+                  </button>
+                }
                 @if (voice()?.canChange) {
                   <button
                     type="button"
@@ -107,31 +121,19 @@ const MODEL_MENU_POSITIONS: ConnectedPosition[] = [
                     data-testid="project-voice-switch"
                     aria-label="Voice mode"
                     [attr.aria-checked]="voiceOn()"
-                    [attr.aria-describedby]="voiceWarning() ? 'project-voice-warning' : null"
                     [disabled]="savingVoice() || voiceBlocked()"
                     (click)="toggleVoice()"
-                    class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    [class]="voiceOn() ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'"
+                    class="relative inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+                    [class]="voiceOn() ? 'bg-gray-600 dark:bg-gray-300' : 'bg-gray-300 dark:bg-gray-600'"
                   >
                     <span
                       aria-hidden="true"
-                      class="pointer-events-none inline-block size-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out motion-reduce:transition-none"
-                      [class.translate-x-5]="voiceOn()"
-                      [class.translate-x-0]="!voiceOn()"
+                      class="pointer-events-none inline-block size-3 transform rounded-full bg-white shadow-xs transition duration-200 ease-in-out motion-reduce:transition-none dark:bg-gray-900"
+                      [class]="voiceOn() ? 'translate-x-3.5' : 'translate-x-0.5'"
                     ></span>
                   </button>
                 }
               </div>
-              @if (voiceWarning(); as warning) {
-                <p
-                  id="project-voice-warning"
-                  data-testid="project-voice-warning"
-                  class="mx-3 mb-1 flex gap-2 rounded-xl bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-800 dark:bg-state-warning-900/20 dark:text-state-warning-300"
-                >
-                  <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-                  <span>{{ warning }}</span>
-                </p>
-              }
             } @else if (canChooseModel()) {
               <button
                 type="button"
@@ -295,6 +297,12 @@ export class ProjectRailComponent {
    * model picker to this, so a change made here shows there without a reload.
    */
   readonly boundModelId = computed<string | null | undefined>(() => (this.loaded() ? this.modelId() : undefined));
+
+  /**
+   * Whether the project's conversations can use voice mode (#2021), once read;
+   * undefined until then. The composer offers voice by it.
+   */
+  readonly voiceAvailable = computed<boolean | undefined>(() => this.voice()?.available);
 
   /** The model's display name; the id when the catalog lacks it; null for "each member's default". */
   readonly modelLabel = computed(() => {

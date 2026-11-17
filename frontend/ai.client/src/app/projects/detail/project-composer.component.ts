@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, computed, effect, inject, input, signal, untracked } from '@angular/core';
+import { Router } from '@angular/router';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentBindingLocksService } from '../../agents/services/agent-binding-locks.service';
 import { AgentService } from '../../agents/services/agent.service';
@@ -9,6 +10,7 @@ import { FolderAttachmentData } from '../../session/services/models/message.mode
 import { ConversationBindingService } from '../../session/services/session/conversation-binding.service';
 import { SessionPrewarmService } from '../../session/services/session/session-prewarm.service';
 import { SessionService } from '../../session/services/session/session.service';
+import { VoiceChatService } from '../../session/services/voice/voice-chat.service';
 import { Project } from '../models/project.model';
 
 /** What `app-chat-input` emits on send; the fields a project task carries. */
@@ -25,9 +27,14 @@ interface ComposerSend {
  *
  * The conversation page's own composer (`app-chat-input`), so a project task
  * starts with everything a conversation offers: attachments (picker, drag and
- * drop, paste, Drive), `/` skill commands, dictation and the model picker.
- * Voice mode is left out (a project's harness has no voice setting), and
- * `@`-mentions turn themselves off for a project.
+ * drop, paste, Drive), `/` skill commands, dictation, the model picker and,
+ * while the project allows it (#2021), voice mode. `@`-mentions turn themselves
+ * off for a project.
+ *
+ * Voice starts here, on the user's click, and once it is live the page moves to
+ * the new conversation (`/s/{id}?project=`), whose page shows the voice panel and
+ * keeps the transcript. The session is the project's from the first frame: the
+ * connect names the project's agent.
  *
  * Sending starts a new conversation bound to the project's agent (its
  * `harnessAgentId`); the backend marks that session with the project, so it is a
@@ -55,7 +62,8 @@ interface ComposerSend {
           [sessionId]="stagedSessionId()"
           [project]="composerProject()"
           [allowFolderAttachments]="true"
-          [showVoiceControl]="false"
+          [showVoiceControl]="showVoice()"
+          [voiceAgentId]="harnessAgentId()"
           [showAnnouncements]="false"
           [autoFocus]="false"
           (fileAttached)="onFileAttached()"
@@ -79,6 +87,8 @@ export class ProjectComposerComponent {
   private readonly sessions = inject(SessionService);
   private readonly prewarm = inject(SessionPrewarmService);
   private readonly user = inject(UserService);
+  private readonly voiceChat = inject(VoiceChatService);
+  private readonly router = inject(Router);
 
   readonly project = input.required<Project>();
   /**
@@ -87,6 +97,8 @@ export class ProjectComposerComponent {
    * the rail re-locks the picker here without re-reading the harness.
    */
   readonly projectModelId = input<string | null | undefined>(undefined);
+  /** Whether the project's conversations can use voice mode, as the rail read it (#2021). */
+  readonly voiceAvailable = input<boolean | undefined>(undefined);
 
   /**
    * The id a new task's attachments are filed under, minted on the first file
@@ -101,7 +113,8 @@ export class ProjectComposerComponent {
     projectId: this.project().projectId,
     name: this.project().name,
   }));
-  private readonly harnessAgentId = computed(() => this.project().harnessAgentId);
+  protected readonly harnessAgentId = computed(() => this.project().harnessAgentId);
+  protected readonly showVoice = computed(() => this.voiceAvailable() === true && !this.archived());
 
   constructor() {
     // Lock the pickers to the harness while this composer can send to it. Moving
@@ -122,6 +135,32 @@ export class ProjectComposerComponent {
     // (the release also puts back the user's own model). A task opened from here
     // re-applies them from its own `?project=`.
     inject(DestroyRef).onDestroy(() => this.bindingLocks.clear());
+
+    // A voice session started from this composer moves to its conversation, where
+    // the voice panel lives, once it is live (a refused mic or a refused session
+    // stays here and leaves no empty conversation behind). Only a connect seen here
+    // counts: one already running when the page opened belongs to another one.
+    let previous = this.voiceChat.status();
+    effect(() => {
+      const status = this.voiceChat.status();
+      const started = previous === 'connecting' && (status === 'listening' || status === 'speaking');
+      previous = status;
+      if (started) untracked(() => this.openVoiceConversation());
+    });
+  }
+
+  private openVoiceConversation(): void {
+    const sessionId = this.voiceChat.getSessionId();
+    if (!sessionId || this.archived()) return;
+    const project = this.project();
+    // Known first, so the conversation opens as `?project=` without a fetch, and
+    // marked new, so its page doesn't read metadata the backend hasn't written.
+    this.binding.knowProject(project);
+    this.sessions.addSessionToCache(sessionId, this.user.currentUser()?.user_id || 'anonymous');
+    this.stagedSessionId.set(null);
+    void this.router.navigate(['s', sessionId], {
+      queryParams: this.binding.queryParamsFor(project.harnessAgentId, project.projectId),
+    });
   }
 
   /** Best-effort, like the conversation page: a failed read leaves the pickers free. */

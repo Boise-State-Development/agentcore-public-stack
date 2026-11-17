@@ -194,7 +194,9 @@ describe('ProjectRailComponent', () => {
   describe('the Voice row (#2021)', () => {
     const owner = { ...PROJECT, role: 'owner' as const };
     const theSwitch = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('[data-testid="project-voice-switch"]');
-    const warning = (el: HTMLElement) => el.querySelector('[data-testid="project-voice-warning"]')?.textContent?.trim() ?? null;
+    /** The warning is an icon in the row; its text is the hover tooltip and the accessible name. */
+    const warning = (el: HTMLElement) =>
+      el.querySelector('[data-testid="project-voice-warning"]')?.getAttribute('aria-label') ?? null;
 
     it('sits below Skills', async () => {
       const { el } = await render();
@@ -248,7 +250,8 @@ describe('ProjectRailComponent', () => {
       const sw = theSwitch(el)!;
       expect(sw.getAttribute('aria-checked')).toBe('false');
       expect(sw.disabled).toBe(true);
-      expect(sw.getAttribute('aria-describedby')).toBe('project-voice-warning');
+      // In the row, not a block below it.
+      expect(el.querySelector('[data-testid="project-voice-warning"]')!.closest('div')).toBe(sw.closest('div'));
       expect(text(row('Voice'))).toBe('Voice Off · can’t run');
       expect(warning(el)).toBe(
         'Voice is off for this project. Canvas and Zoom aren’t available in voice mode. Remove them under Tools to use voice.',

@@ -71,8 +71,8 @@ is live.
   Runtime overrides the id).
 
 Voice is not offered inside the Agent Designer's preview or the marketplace
-review test drive, or in the composer on a project's overview page (open or
-start a project conversation to use it).
+review test drive. Started from the composer on a project's page, voice opens
+the new project conversation once it connects.
 
 ### Voice with an Agent
 
@@ -109,7 +109,8 @@ either of these is true:
   `VOICE_KB_MAX_TOKENS=0` (or turns full context off) keeps voice off for any
   project with files.
 
-The owner and editors see a warning beside the switch naming the reason.
+The owner and editors see a warning icon beside the switch; hover or focus it
+for the reason.
 Nothing is saved for it: once the tool or file is gone, voice comes back on its
 own. Members see the voice button only while voice is on.
 

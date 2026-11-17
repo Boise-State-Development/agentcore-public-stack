@@ -1,4 +1,5 @@
-import { Component, input, output } from '@angular/core';
+import { Component, input, output, signal } from '@angular/core';
+import { Router, provideRouter } from '@angular/router';
 import { TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +11,7 @@ import { ChatRequestService } from '../../session/services/chat/chat-request.ser
 import { ConversationBindingService } from '../../session/services/session/conversation-binding.service';
 import { SessionPrewarmService } from '../../session/services/session/session-prewarm.service';
 import { SessionService } from '../../session/services/session/session.service';
+import { VoiceChatService, VoiceStatus } from '../../session/services/voice/voice-chat.service';
 import { Project } from '../models/project.model';
 import { ProjectComposerComponent } from './project-composer.component';
 
@@ -20,6 +22,7 @@ class ChatInputStub {
   readonly project = input<ComposerProject | null>(null);
   readonly allowFolderAttachments = input(false);
   readonly showVoiceControl = input(true);
+  readonly voiceAgentId = input<string | null>(null);
   readonly showAnnouncements = input(true);
   readonly autoFocus = input(true);
   readonly fileAttached = output<File>();
@@ -51,7 +54,8 @@ const HARNESS = { agentId: 'agent-harness', bindings: [], modelConfig: { modelId
 
 describe('ProjectComposerComponent', () => {
   let chatRequest: { submitChatRequest: ReturnType<typeof vi.fn> };
-  let binding: { knowProject: ReturnType<typeof vi.fn> };
+  let binding: { knowProject: ReturnType<typeof vi.fn>; queryParamsFor: ReturnType<typeof vi.fn> };
+  let voice: { status: ReturnType<typeof signal<VoiceStatus>>; getSessionId: () => string | null };
   let agents: { getAgent: ReturnType<typeof vi.fn> };
   let locks: { apply: ReturnType<typeof vi.fn>; clear: ReturnType<typeof vi.fn>; lockModel: ReturnType<typeof vi.fn> };
   let sessions: { addSessionToCache: ReturnType<typeof vi.fn> };
@@ -59,7 +63,8 @@ describe('ProjectComposerComponent', () => {
 
   beforeEach(() => {
     chatRequest = { submitChatRequest: vi.fn().mockResolvedValue(undefined) };
-    binding = { knowProject: vi.fn() };
+    binding = { knowProject: vi.fn(), queryParamsFor: vi.fn().mockReturnValue({ project: 'proj-1', assistantId: null }) };
+    voice = { status: signal<VoiceStatus>('idle'), getSessionId: () => 'voice-sess' };
     agents = { getAgent: vi.fn().mockResolvedValue(HARNESS) };
     locks = { apply: vi.fn(), clear: vi.fn(), lockModel: vi.fn() };
     sessions = { addSessionToCache: vi.fn() };
@@ -74,6 +79,8 @@ describe('ProjectComposerComponent', () => {
         { provide: SessionService, useValue: sessions },
         { provide: SessionPrewarmService, useValue: prewarm },
         { provide: UserService, useValue: { currentUser: () => ({ user_id: 'user-1' }) } },
+        { provide: VoiceChatService, useValue: voice },
+        provideRouter([]),
       ],
     });
     TestBed.overrideComponent(ProjectComposerComponent, {
@@ -84,15 +91,62 @@ describe('ProjectComposerComponent', () => {
 
   afterEach(() => TestBed.resetTestingModule());
 
-  async function render(project: Project = PROJECT) {
+  async function render(project: Project = PROJECT, voiceAvailable?: boolean) {
     const fixture = TestBed.createComponent(ProjectComposerComponent);
     fixture.componentRef.setInput('project', project);
+    if (voiceAvailable !== undefined) fixture.componentRef.setInput('voiceAvailable', voiceAvailable);
     fixture.detectChanges();
     await fixture.whenStable();
     fixture.detectChanges();
     const debug = fixture.debugElement.query(By.directive(ChatInputStub));
     return { fixture, input: debug?.componentInstance as ChatInputStub | undefined };
   }
+
+  describe('voice mode (#2021)', () => {
+    it('is offered while the project allows it, on the project’s agent', async () => {
+      const { input } = await render(PROJECT, true);
+      expect(input!.showVoiceControl()).toBe(true);
+      expect(input!.voiceAgentId()).toBe('agent-harness');
+    });
+
+    it('is not offered when the project keeps it off', async () => {
+      expect((await render(PROJECT, false)).input!.showVoiceControl()).toBe(false);
+    });
+
+    it('is not offered before the rail knows, or on an archived project', async () => {
+      expect((await render(PROJECT)).input!.showVoiceControl()).toBe(false);
+    });
+
+    it('opens the new conversation once the session is live', async () => {
+      const { fixture } = await render(PROJECT, true);
+      const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+      voice.status.set('connecting');
+      fixture.detectChanges();
+      expect(navigate).not.toHaveBeenCalled();
+      voice.status.set('listening');
+      fixture.detectChanges();
+
+      expect(binding.knowProject).toHaveBeenCalledWith(PROJECT);
+      expect(sessions.addSessionToCache).toHaveBeenCalledWith('voice-sess', 'user-1');
+      expect(binding.queryParamsFor).toHaveBeenCalledWith('agent-harness', 'proj-1');
+      expect(navigate).toHaveBeenCalledWith(['s', 'voice-sess'], { queryParams: { project: 'proj-1', assistantId: null } });
+    });
+
+    it('stays put when the connect fails, and ignores a session already running', async () => {
+      voice.status.set('listening'); // running before the page opened
+      const { fixture } = await render(PROJECT, true);
+      const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+      voice.status.set('speaking');
+      fixture.detectChanges();
+      voice.status.set('idle');
+      fixture.detectChanges();
+      voice.status.set('connecting');
+      fixture.detectChanges();
+      voice.status.set('idle'); // the mic was refused
+      fixture.detectChanges();
+      expect(navigate).not.toHaveBeenCalled();
+    });
+  });
 
   it('uses the conversation composer, naming the project, without voice or announcements', async () => {
     const { input } = await render();
