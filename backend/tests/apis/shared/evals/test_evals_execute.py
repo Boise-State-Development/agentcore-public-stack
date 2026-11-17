@@ -384,6 +384,30 @@ async def test_a_forced_arm_reaches_the_registrar_and_a_paced_turn_waits_first()
 
 
 @pytest.mark.asyncio
+async def test_a_per_file_arm_wins_over_the_case_s_arm():
+    case = parse_case(
+        {
+            "id": "attachment_delivery.split",
+            "family": "attachment_delivery",
+            "turns": [{"prompt": "one"}],
+            "run": {"enabled_tools": [], "file_arms": {"b.pdf": "on_demand"}},
+            "expect": {"contains_any": ["WP-1"]},
+            "files": ["a.pdf", "b.pdf"],
+        },
+        family="attachment_delivery",
+    )
+    registered = []
+
+    async def register(session_id: str, filename: str, **kwargs) -> str:
+        registered.append((filename, kwargs))
+        return f"upload-{filename}"
+
+    row = await run_sample(case, sample=0, model_id="m", run_turn=FakeRunner(["WP-1"]), register_fixture=register)
+    assert registered == [("a.pdf", {}), ("b.pdf", {"arm": "on_demand"})]
+    assert row["file_arms"] == {"b.pdf": "on_demand"}
+
+
+@pytest.mark.asyncio
 async def test_the_auto_arm_registers_as_before():
     seen = []
 

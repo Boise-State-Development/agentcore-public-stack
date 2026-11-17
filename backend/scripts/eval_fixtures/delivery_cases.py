@@ -34,6 +34,14 @@ Three groups (unified-attachment-delivery §8.4):
   every document, finds it. Forced ``on_demand`` (never indexed, no steering)
   against forced ``search`` (indexed, steered to ``query``). The readout sets
   ``attachment_plan.SEARCH_STEER_MIN_DOCUMENTS``.
+- the comparison cells (``compare_*``, the 1M document-budget readout): five
+  or ten policy PDFs (~34 or ~150 pages) whose question needs every document
+  (each district's figure, then the extreme, which sits in a document the 50k
+  budget sends on demand), and a warm follow-up needing every document again.
+  Arms: ``auto`` (the deployment's budget), ``b200k`` (the planner's own split
+  at a 200k budget, forced per file through ``run.file_arms``) and ``held``
+  (every file forced ``native``). ``cold`` variants pause past the cache TTL
+  before the follow-up.
 """
 
 from __future__ import annotations
@@ -219,6 +227,78 @@ def cases() -> List[Dict[str, Any]]:
     out.extend(ceiling_cases())
     out.extend(whole_document_cases())
     out.extend(overflow_cases())
+    out.extend(comparison_cases())
+    return out
+
+
+#: Files the planner holds ``native`` at each document budget on a 1M-window
+#: model (Opus 5.5, Sonnet 5.5: tokenizer factor 1.40), in attachment order; the
+#: rest go ``on_demand``. ``test_eval_fixtures`` re-plans the fixtures to pin these.
+BUDGET_HELD: Dict[str, Dict[str, int]] = {
+    "5": {"50k": 2, "100k": 5, "200k": 5},
+    "10": {"50k": 1, "100k": 2, "200k": 4},
+}
+#: The arms each comparison set runs. ``auto`` is the deployment's 50k; in set 5
+#: a 100k or 200k budget already holds every file, so ``held`` stands for both.
+COMPARISON_ARMS: Dict[str, Tuple[str, ...]] = {"5": ("auto", "held"), "10": ("auto", "b200k", "held")}
+
+
+def budget_split(set_name: str, budget: str) -> Dict[str, str]:
+    """``run.file_arms`` for a turn planned at ``budget``: the planner's held files, the rest on demand."""
+    files = d.policy_files(set_name)
+    held = BUDGET_HELD[set_name][budget]
+    return {f: ("native" if i < held else "on_demand") for i, f in enumerate(files)}
+
+
+def _district(facts: "d.PolicyFacts") -> str:
+    return re.escape(facts.district.removesuffix(" district"))
+
+
+def comparison_expect(set_name: str, question: str) -> Dict[str, Any]:
+    """Every district named beside its own figure, and the extreme named on the closing line."""
+    facts = [d.policy(f)[1] for f in d.policy_files(set_name)]
+    value = (lambda f: f.response_hours) if question == "response" else (lambda f: f.retention_years)
+    extreme = (min if question == "response" else max)(facts, key=value)
+    label = "Shortest" if question == "response" else "Longest"
+    return {"regex": {"search": [
+        *(rf"(?i){_district(f)}[\s\S]{{0,100}}?\b{value(f)}\b" for f in facts),
+        rf"(?i){label}\W{{0,8}}(?:the\s+)?{_district(extreme)}",
+    ]}}
+
+
+def comparison_prompts(set_name: str) -> List[str]:
+    count = len(d.policy_files(set_name))
+    return [
+        f"I've attached {count} district operations policies for a benchmarking comparison. For each district, "
+        "give its critical-incident response target in hours, one line per district. Then end with a line "
+        "'Shortest: <district>' naming the district with the shortest target.",
+        "Now the same comparison for records retention: for each district, give its records retention period in "
+        "years, one line per district. Then end with a line 'Longest: <district>' naming the district with the "
+        "longest period.",
+    ]
+
+
+def comparison_cases() -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for set_name, arms in COMPARISON_ARMS.items():
+        files = d.policy_files(set_name)
+        count, _ = d.POLICY_SETS[set_name]
+        for arm in arms:
+            file_arms = (budget_split(set_name, "200k") if arm == "b200k"
+                         else {f: "native" for f in files} if arm == "held" else None)
+            for pace in ("warm", "cold"):
+                case = _case(
+                    f"compare_{count}_policies_{arm}_{pace}", comparison_prompts(set_name), files,
+                    comparison_expect(set_name, "retention"),
+                    f"Comparison cell: {count} policy PDFs, arm {arm}, {pace} follow-up. Turn 1 needs every "
+                    "document's response target (scored by the readout from the turn's own answer), turn 2 every "
+                    "document's retention period (scored here)."
+                    + (" Turn 2 waits past the cache TTL." if pace == "cold" else ""),
+                    pauses={1: COLD_PAUSE_SECONDS} if pace == "cold" else None,
+                )
+                if file_arms:
+                    case["run"]["file_arms"] = file_arms
+                out.append(case)
     return out
 
 
