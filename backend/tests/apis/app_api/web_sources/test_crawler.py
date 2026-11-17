@@ -794,3 +794,202 @@ async def test_refresh_stage_failure_emits_stage_failed(
     assert (new_doc_id, "failed") in recorder.status_updates
     assert ("DOC-root", "failed") not in recorder.status_updates
     assert recorder.finalized_status == "complete"
+
+
+# ── Redirects ──────────────────────────────────────────────────────────────
+
+
+def _redirecting_handler(pages: Dict[str, str], redirects: Dict[str, str], etags: Dict[str, str] | None = None):
+    """Serve `pages`, and 301 each `redirects` key to its value.
+
+    The shape of a real site: boisestate.edu 301s to www.boisestate.edu and
+    `/x` to `/x/`, while its pages link to more than one form of each.
+    """
+    etags = etags or {}
+    requested: List[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/robots.txt"):
+            return httpx.Response(404, text="")
+        requested.append(url)
+        if url in redirects:
+            return httpx.Response(301, headers={"location": redirects[url]})
+        if url in pages:
+            etag = etags.get(url)
+            if etag and request.headers.get("if-none-match") == etag:
+                return httpx.Response(304, headers={"etag": etag})
+            headers = {"content-type": "text/html; charset=utf-8"}
+            if etag:
+                headers["etag"] = etag
+            return httpx.Response(200, text=pages[url], headers=headers)
+        return httpx.Response(404, text="not found")
+
+    _handler.requested = requested  # type: ignore[attr-defined]
+    return _handler
+
+
+_SECTION_ROOT = "https://example.com/research"
+_WWW = "https://www.example.com/research"
+
+
+@pytest.mark.asyncio
+async def test_a_page_reached_through_two_urls_gets_one_document(recorder: _Recorder):
+    pages = {
+        f"{_WWW}/": (
+            "<html><body>"
+            '<a href="/research/labs/">Labs</a>'
+            '<a href="https://example.com/research/labs/">Labs again</a>'
+            '<a href="/research/grants">Grants</a>'
+            '<a href="/research/grants/">Grants again</a>'
+            f'<a href="{_WWW}/">Home of research</a>'
+            "</body></html>"
+        ),
+        f"{_WWW}/labs/": "<html><body>labs</body></html>",
+        f"{_WWW}/grants/": "<html><body>grants</body></html>",
+    }
+    redirects = {
+        _SECTION_ROOT: f"{_WWW}/",
+        "https://example.com/research/labs/": f"{_WWW}/labs/",
+        f"{_WWW}/grants": f"{_WWW}/grants/",
+    }
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=_SECTION_ROOT,
+        settings=CrawlSettings(max_depth=1, max_pages=25),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(_redirecting_handler(pages, redirects)),
+    )
+    assert recorder.finalized_status == "complete"
+    # Recorded under where each page landed; the root keeps the route's doc.
+    assert sorted(url for _, url in recorder.created_docs) == [
+        f"{_WWW}/grants/",
+        f"{_WWW}/labs/",
+    ]
+    assert len(recorder.s3_puts) == 3
+    # The counters describe pages, not URLs: duplicates gave their slot back.
+    assert recorder.discovered_delta == recorder.fetched_delta == 3
+    assert recorder.failed_delta == 0
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_out_of_the_crawl_is_not_ingested(recorder: _Recorder):
+    pages = {
+        f"{_WWW}/": (
+            "<html><body>"
+            '<a href="/research/moved">Moved</a>'
+            '<a href="/research/metadata">Metadata</a>'
+            '<a href="/research/kept">Kept</a>'
+            "</body></html>"
+        ),
+        "https://www.example.com/admissions/": "<html><body>admissions</body></html>",
+        "http://169.254.169.254/latest": "<html><body>credentials</body></html>",
+        f"{_WWW}/kept": "<html><body>kept</body></html>",
+    }
+    redirects = {
+        _SECTION_ROOT: f"{_WWW}/",
+        f"{_WWW}/moved": "https://www.example.com/admissions/",
+        f"{_WWW}/metadata": "http://169.254.169.254/latest",
+    }
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=_SECTION_ROOT,
+        settings=CrawlSettings(max_depth=1, max_pages=25),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(_redirecting_handler(pages, redirects)),
+    )
+    assert [url for _, url in recorder.created_docs] == [f"{_WWW}/kept"]
+    assert all(b"credentials" not in body and b"admissions" not in body for _, body in recorder.s3_puts)
+    assert recorder.discovered_delta == recorder.fetched_delta == 2
+
+
+@pytest.mark.asyncio
+async def test_refresh_moves_a_redirected_page_to_where_it_landed(recorder: _Recorder):
+    # A crawl from before this fix stored the same page twice. The re-crawl
+    # sees only the URL it lands on, so the miss counter retires the other.
+    bare, www = "https://example.com/research/a", f"{_WWW}/a"
+    html = "<html><body><p>a</p></body></html>"
+    markdown, _ = crawler._extract_markdown(html, www)
+    stored_hash = crawler._content_sha256(markdown)
+    pages = {
+        f"{_WWW}/": f'<html><body><a href="{bare}">A</a><a href="{www}">A</a></body></html>',
+        www: html,
+    }
+    redirects = {_SECTION_ROOT: f"{_WWW}/", bare: www}
+    etags = {www: '"v1"'}
+    state, log = _refresh_state(
+        recorder,
+        {
+            _SECTION_ROOT: crawler.RefreshDoc(document_id="DOC-root"),
+            bare: crawler.RefreshDoc(document_id="DOC-bare", source_etag='"v1"', content_hash=stored_hash),
+            www: crawler.RefreshDoc(document_id="DOC-www", source_etag='"v1"', content_hash=stored_hash),
+        },
+    )
+    handler = _redirecting_handler(pages, redirects, etags)
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=_SECTION_ROOT,
+        settings=CrawlSettings(max_depth=1, max_pages=10),
+        root_document_id="DOC-root",
+        http_client_factory=_client_factory(handler),
+        refresh=state,
+        finalize_with_ttl=False,
+    )
+    assert state.seen_urls == {_SECTION_ROOT, www}
+    assert recorder.created_docs == []
+    assert [(o, u) for o, u, _ in log.events if u != _SECTION_ROOT] == [("unchanged", www)]
+
+
+@pytest.mark.asyncio
+async def test_refresh_does_not_trust_a_304_earned_by_another_records_etag(recorder: _Recorder):
+    # Only the bare URL has a record, and its ETag matches the page it now
+    # redirects to. The page is recorded under its final URL, which has no
+    # record yet, so it must be fetched and created, not reported unchanged.
+    bare, www = "https://example.com/research/a", f"{_WWW}/a"
+    pages = {f"{_WWW}/": f'<html><body><a href="{bare}">A</a></body></html>', www: "<html><body>a</body></html>"}
+    redirects = {_SECTION_ROOT: f"{_WWW}/", bare: www}
+    state, log = _refresh_state(
+        recorder,
+        {
+            _SECTION_ROOT: crawler.RefreshDoc(document_id="DOC-root"),
+            bare: crawler.RefreshDoc(document_id="DOC-bare", source_etag='"v1"'),
+        },
+    )
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=_SECTION_ROOT,
+        settings=CrawlSettings(max_depth=1, max_pages=10),
+        root_document_id="DOC-root",
+        http_client_factory=_client_factory(_redirecting_handler(pages, redirects, {www: '"v1"'})),
+        refresh=state,
+        finalize_with_ttl=False,
+    )
+    assert [url for _, url in recorder.created_docs] == [www]
+    assert ("created", www) in [(o, u) for o, u, _ in log.events]
+    assert bare not in state.seen_urls
+
+
+@pytest.mark.asyncio
+async def test_a_root_that_redirects_to_an_internal_address_fails(recorder: _Recorder):
+    pages = {"http://169.254.169.254/latest": "<html><body>credentials</body></html>"}
+    redirects = {_SECTION_ROOT: "http://169.254.169.254/latest"}
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=_SECTION_ROOT,
+        settings=CrawlSettings(max_depth=1, max_pages=25),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(_redirecting_handler(pages, redirects)),
+    )
+    assert recorder.s3_puts == []
+    assert (recorder.preassigned_root_id, "failed") in recorder.status_updates
+    assert recorder.failed_delta == 1
