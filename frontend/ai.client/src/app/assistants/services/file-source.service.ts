@@ -15,6 +15,7 @@ import {
   FileSourceConnector,
   FileSourceListResponse,
   ImportDocumentsResponse,
+  ImportFolderResponse,
   ImportFileRef,
   SourceRoot,
   SourceRootsResponse,
@@ -176,6 +177,30 @@ export class FileSourceService {
       );
     } catch (err) {
       throw this.toError(err, 'Failed to import files');
+    }
+  }
+
+  /**
+   * Import every readable file in a folder (subfolders included) into an agent's
+   * knowledge base. The server walks the folder under the folder-attachment caps
+   * and skips files the knowledge base already holds, so importing a folder again
+   * picks up only what is new. Agents only: a project's knowledge has no such route.
+   */
+  async importFolder(
+    agentId: string,
+    connectorId: string,
+    folderId: string,
+  ): Promise<ImportFolderResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.post<ImportFolderResponse>(
+          `${this.baseUrl()}${knowledgePaths(agentId).documents}/import-folder`,
+          { connectorId, folderId },
+          this.requestOptions(),
+        ),
+      );
+    } catch (err) {
+      throw this.toError(err, 'Failed to import the folder');
     }
   }
 

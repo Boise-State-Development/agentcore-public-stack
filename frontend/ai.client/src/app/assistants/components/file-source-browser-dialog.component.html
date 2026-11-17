@@ -350,6 +350,8 @@
           <span class="text-sm/6 text-gray-500 dark:text-gray-400">
             @if (maxFiles !== null) {
               {{ selectedCount() }} of {{ maxFiles }} selected
+            } @else if (canImportCurrentFolder() && selectedCount() === 0) {
+              Pick files, or import the whole folder and its subfolders
             } @else {
               {{ selectedCount() }} selected
             }
@@ -362,6 +364,22 @@
             >
               Cancel
             </button>
+            @if (allowFolderImport) {
+              <!-- Every readable file in this folder and its subfolders, walked
+                   server-side. Disabled until the user is inside a folder, and
+                   while files are ticked, so it never competes with Import. -->
+              <button
+                type="button"
+                (click)="importCurrentFolder()"
+                [disabled]="!canImportCurrentFolder() || selectedCount() > 0 || importing()"
+                class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                [attr.aria-label]="currentFolderName() ? 'Import the folder ' + currentFolderName() : 'Import this folder'"
+                data-testid="file-source-import-folder"
+              >
+                <ng-icon name="heroFolder" class="size-4" />
+                Import this folder
+              </button>
+            }
             @if (allowFolder) {
               <!-- The whole folder as one attachment (drive-folder spec §4.1).
                    Disabled until the user is inside a folder, and while files
