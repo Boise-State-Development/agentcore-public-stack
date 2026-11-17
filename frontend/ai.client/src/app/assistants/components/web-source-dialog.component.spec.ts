@@ -46,4 +46,20 @@ describe('WebSourceDialogComponent', () => {
     expect(closed).toBe(true);
     expect(result).toBeUndefined();
   });
+
+  it.each([
+    ['https://www.boisestate.edu/research/', 'www.boisestate.edu/research/'],
+    ['https://boisestate.edu/research', 'boisestate.edu/research/'],
+    ['https://example.com/docs/index.html', 'example.com/docs/'],
+    ['https://example.com', 'example.com/'],
+  ])('tells the user a crawl from %s stays under %s', async (url, scope) => {
+    const { container } = await open();
+    const input = container.querySelector<HTMLInputElement>('#web-src-url')!;
+    input.value = url;
+    input.dispatchEvent(new Event('input'));
+    container.querySelector<HTMLInputElement>('#web-src-crawl-toggle')!.click();
+    TestBed.tick();
+    const hint = container.querySelector('[data-testid="web-src-crawl-scope"]');
+    expect(hint?.textContent?.replace(/\s+/g, ' ')).toContain(`Only pages under ${scope} are crawled.`);
+  });
 });

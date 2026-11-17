@@ -82,6 +82,27 @@ export class WebSourceDialogComponent {
     }
   });
 
+  /**
+   * Where a crawl from this URL may go, as `host/path/`, or null while the URL
+   * is invalid. Display only: the backend's `url_utils.crawl_scope_prefix` is
+   * the rule, and this mirrors it so the user sees the section before starting.
+   */
+  protected readonly crawlScope = computed<string | null>(() => {
+    if (!this.urlIsValid()) {
+      return null;
+    }
+    const parsed = new URL(this.trimmedUrl());
+    const path = parsed.pathname || '/';
+    if (path.endsWith('/')) {
+      return `${parsed.host}${path}`;
+    }
+    const lastSegment = path.slice(path.lastIndexOf('/') + 1);
+    const prefix = lastSegment.includes('.')
+      ? path.slice(0, path.length - lastSegment.length)
+      : `${path}/`;
+    return `${parsed.host}${prefix}`;
+  });
+
   protected readonly canSubmit = computed(
     () => this.urlIsValid() && !this.submitting(),
   );

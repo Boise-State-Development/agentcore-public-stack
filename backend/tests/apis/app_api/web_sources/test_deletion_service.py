@@ -99,8 +99,13 @@ async def test_deletes_only_pages_under_the_crawl_root(patched):
         [
             _doc("DOC-1", source_file_id=f"{ROOT_URL}intro"),
             _doc("DOC-2", source_file_id=f"{ROOT_URL}guide/setup"),
+            # The crawler follows a site's absolute links to its www. host,
+            # so the page is this crawl's and goes with it.
+            _doc("DOC-6", source_file_id="https://www.example.com/docs/faq"),
             # Same site, different crawl root — must survive.
             _doc("DOC-3", source_file_id="https://example.com/blog/post"),
+            # Shares the root's prefix as a string, but is a sibling section.
+            _doc("DOC-7", source_file_id="https://example.com/docs-archive/old"),
             # A device upload — no provenance at all.
             _doc("DOC-4", connector=None, source_file_id=None),
             # A Drive import that happens to sit under a similar path.
@@ -111,9 +116,9 @@ async def test_deletes_only_pages_under_the_crawl_root(patched):
 
     removed = await _run(patched)
 
-    assert removed == 2
+    assert removed == 3
     deleted_ids = {c.args[1] for c in patched["soft_delete"].await_args_list}
-    assert deleted_ids == {"DOC-1", "DOC-2"}
+    assert deleted_ids == {"DOC-1", "DOC-2", "DOC-6"}
 
 
 @pytest.mark.asyncio

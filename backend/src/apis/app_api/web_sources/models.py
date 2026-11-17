@@ -35,6 +35,9 @@ class CrawlSettings(BaseModel):
     concurrency: int = Field(2, ge=1, le=5)
     min_delay_seconds: float = Field(1.0, alias="minDelay", ge=0.0, le=5.0)
     max_delay_seconds: float = Field(3.0, alias="maxDelay", ge=0.0, le=10.0)
+    # Keeps the crawl inside the start URL's section of its site
+    # (`url_utils.in_crawl_scope`), not merely on its domain; the name
+    # predates that and is the API's.
     same_domain_only: bool = Field(True, alias="sameDomainOnly")
 
     @model_validator(mode="after")

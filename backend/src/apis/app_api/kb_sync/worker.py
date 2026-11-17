@@ -330,7 +330,7 @@ async def _sync_web_crawl(policy: SyncPolicy) -> Dict[str, Any]:
     from apis.app_api.documents.services.storage_service import _get_s3_key, _sanitize_filename
     from apis.app_api.web_sources import crawler
     from apis.app_api.web_sources.crawl_repository import get_crawl_job, reset_crawl_for_refresh
-    from apis.app_api.web_sources.url_utils import normalize_url, url_extension_hint
+    from apis.app_api.web_sources.url_utils import in_crawl_scope, normalize_url, url_extension_hint
 
     assistant_id = policy.assistant_id
     job = await get_crawl_job(assistant_id, policy.source_ref)
@@ -343,13 +343,15 @@ async def _sync_web_crawl(policy: SyncPolicy) -> Dict[str, Any]:
 
     root = normalize_url(job.root_url)
 
-    # Existing web pages under this root, keyed by their normalized URL.
+    # Existing pages of this crawl, keyed by their normalized URL. The same
+    # scope rule the crawler follows links by: a page it fetched but this
+    # filter missed would get a second document on every sync.
     web_docs: Dict[str, Dict[str, Any]] = {}
     for item in records.list_document_items(assistant_id):
         url = str(item.get("sourceFileId") or "")
         if (
             item.get("sourceConnectorId") == "web"
-            and url.startswith(root)
+            and in_crawl_scope(url, root)
             and item.get("status") != "deleting"
         ):
             web_docs[url] = item

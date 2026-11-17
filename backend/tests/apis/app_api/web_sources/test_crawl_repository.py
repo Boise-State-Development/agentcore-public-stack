@@ -312,6 +312,40 @@ async def test_cascade_keeps_crawl_when_other_web_docs_remain(ddb) -> None:
     assert await crawl_repository.get_crawl_job(ASSISTANT_ID, crawl.crawl_id) is not None
 
 
+@pytest.mark.parametrize(
+    "survivor,kept",
+    [
+        # Fetched through the site's www. links: still this crawl's page.
+        ("https://www.example.com/docs/page-2", True),
+        # Shares the root as a string prefix, but is a sibling section.
+        ("https://example.com/docs-archive/page", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cascade_judges_survivors_by_crawl_scope(ddb, survivor: str, kept: bool) -> None:
+    from apis.app_api.documents.services.cleanup_service import (
+        _cascade_delete_orphaned_crawl_jobs,
+    )
+
+    crawl = await crawl_repository.create_crawl_job(
+        assistant_id=ASSISTANT_ID,
+        root_url="https://example.com/docs/",
+        settings=CrawlSettings(),
+        started_by_user_id=USER_ID,
+    )
+    await crawl_repository.finalize_crawl(
+        assistant_id=ASSISTANT_ID,
+        crawl_id=crawl.crawl_id,
+        status="complete",
+    )
+    _put_web_doc(ddb, document_id="DOC-survivor", source_file_id=survivor)
+
+    await _cascade_delete_orphaned_crawl_jobs(ASSISTANT_ID)
+
+    remaining = await crawl_repository.get_crawl_job(ASSISTANT_ID, crawl.crawl_id)
+    assert (remaining is not None) is kept
+
+
 @pytest.mark.asyncio
 async def test_cascade_ignores_soft_deleted_docs(ddb) -> None:
     """Docs still in `deleting` status are gone for cascade purposes — the cleanup task

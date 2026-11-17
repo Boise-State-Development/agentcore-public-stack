@@ -11,7 +11,7 @@ always finalize the `CrawlJob` it owns. Failure modes:
 - timeout on the whole crawl → caught, crawl marked 'failed'
 
 The hot loop is small on purpose: discover links, gate them through
-robots+domain+depth+visited, fetch with per-host jitter, extract markdown,
+robots+scope+depth+visited, fetch with per-host jitter, extract markdown,
 write to S3. Everything else (status transitions, chunking, embedding) is
 the existing documents pipeline.
 """
@@ -48,8 +48,8 @@ from apis.app_api.web_sources.url_utils import (
     absolute_url,
     assert_url_is_public,
     host_of,
+    in_crawl_scope,
     normalize_url,
-    same_registrable_domain,
     url_extension_hint,
 )
 
@@ -531,7 +531,10 @@ async def run_crawl(
                         continue
                     if len(visited) >= settings.max_pages:
                         break
-                    if settings.same_domain_only and not same_registrable_domain(
+                    # Stay inside the section the user pointed at: a crawl
+                    # started at /research/ must not follow the site nav to
+                    # the home page and spend its page budget there.
+                    if settings.same_domain_only and not in_crawl_scope(
                         normalized, root_url
                     ):
                         continue
