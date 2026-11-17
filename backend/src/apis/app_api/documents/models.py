@@ -239,6 +239,32 @@ class ImportDocumentsResponse(BaseModel):
     documents: List[DocumentResponse] = Field(..., description="Created document records, each in 'uploading' state")
 
 
+class ImportFolderRequest(BaseModel):
+    """Request body for importing a whole folder from a connected file source."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    connector_id: str = Field(..., alias="connectorId", min_length=1, description="OAuth connector to import from")
+    folder_id: str = Field(..., alias="folderId", min_length=1, description="Provider-side folder identifier")
+
+
+class ImportFolderResponse(BaseModel):
+    """The documents a folder import created, and what the walk passed over.
+
+    ``truncated`` means the folder held more than one import takes (the folder
+    attachment caps), so files past the cap were not seen; importing the folder
+    again picks up from there, because files already held are skipped.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    documents: List[DocumentResponse] = Field(..., description="Created document records, each in 'uploading' state")
+    listed: int = Field(..., description="Files seen in the folder and its subfolders")
+    already_imported: int = Field(..., alias="alreadyImported", description="Files this knowledge base already holds")
+    skipped_type: int = Field(..., alias="skippedType", description="Files of a type the knowledge base cannot read")
+    truncated: bool = Field(..., description="A cap stopped the walk before the whole folder was seen")
+
+
 class ExtractedChunkResponse(BaseModel):
     """One passage as the knowledge base actually holds it.
 

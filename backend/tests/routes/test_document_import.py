@@ -291,3 +291,89 @@ class TestImportDocuments:
             json={"connectorId": "google", "files": []},
         )
         assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------------- import-folder
+def _walked(file_id: str, name: str):
+    from apis.app_api.file_sources.folder_walk import WalkedFile
+
+    return WalkedFile(entry=SimpleNamespace(id=file_id, name=name), relative_path=name, mime_type="application/pdf")
+
+
+def _held(file_id: str, connector: str = "google") -> SimpleNamespace:
+    return SimpleNamespace(source_file_id=file_id, source_connector_id=connector)
+
+
+class TestImportFolder:
+    def _patches(self, *, walk, held=(), created=()):
+        from contextlib import ExitStack
+
+        provider = MagicMock()
+        provider.provider_id = "google"
+        adapter = MagicMock()
+        adapter.metadata.key = "google-drive"
+        stack = ExitStack()
+        stack.enter_context(patch(f"{ROUTES_MODULE}.resolve_assistant_permission", new_callable=AsyncMock, return_value=_owner_resolve()))
+        stack.enter_context(patch(f"{ROUTES_MODULE}.resolve_file_source", new_callable=AsyncMock, return_value=(provider, adapter)))
+        stack.enter_context(patch(f"{ROUTES_MODULE}.require_file_source_token", new_callable=AsyncMock, return_value="vault-token"))
+        stack.enter_context(patch(f"{ROUTES_MODULE}.list_assistant_documents", new_callable=AsyncMock, return_value=(list(held), None)))
+        walk_mock = stack.enter_context(patch(f"{ROUTES_MODULE}.walk_folder", new_callable=AsyncMock, return_value=walk))
+        stack.enter_context(patch(f"{ROUTES_MODULE}._generate_document_id", side_effect=[d.document_id for d in created]))
+        stack.enter_context(patch(f"{ROUTES_MODULE}.initial_document_status", new_callable=AsyncMock, return_value="uploading"))
+        stack.enter_context(patch(f"{ROUTES_MODULE}._import_max_file_bytes", new_callable=AsyncMock, return_value=None))
+        stack.enter_context(patch(f"{ROUTES_MODULE}.create_document", new_callable=AsyncMock, side_effect=list(created)))
+        run = stack.enter_context(patch(f"{ROUTES_MODULE}.run_import", new_callable=AsyncMock))
+        return stack, walk_mock, run
+
+    def test_imports_every_walked_file_and_skips_what_is_already_held(self, app):
+        from apis.app_api.file_sources.folder_walk import FolderWalk
+
+        walk = FolderWalk(files=[_walked("f1", "a.pdf"), _walked("f2", "b.pdf")], listed=4, skipped_type=1)
+        created = [_make_document("DOC-1", "a.pdf"), _make_document("DOC-2", "b.pdf")]
+        stack, walk_mock, run = self._patches(walk=walk, held=[_held("f0"), _held("other", "dropbox")], created=created)
+        with stack:
+            resp = TestClient(app).post(
+                f"/assistants/{ASSISTANT_ID}/documents/import-folder",
+                json={"connectorId": "google", "folderId": "fold-1"},
+            )
+
+        assert resp.status_code == 202
+        body = resp.json()
+        assert [d["documentId"] for d in body["documents"]] == ["DOC-1", "DOC-2"]
+        assert body["listed"] == 4
+        assert body["skippedType"] == 1
+        assert body["alreadyImported"] == 1
+        assert body["truncated"] is False
+        # Only this connector's files are skipped: a same-id file from another source is not.
+        assert walk_mock.call_args.kwargs["skip_ids"] == {"f0"}
+        assert walk_mock.call_args.args[2] == "fold-1"
+        assert run.call_args.kwargs["items"] == [("DOC-1", "f1"), ("DOC-2", "f2")]
+
+    def test_an_empty_folder_creates_nothing_and_schedules_nothing(self, app):
+        from apis.app_api.file_sources.folder_walk import FolderWalk
+
+        stack, _, run = self._patches(walk=FolderWalk(listed=0))
+        with stack:
+            resp = TestClient(app).post(
+                f"/assistants/{ASSISTANT_ID}/documents/import-folder",
+                json={"connectorId": "google", "folderId": "fold-1"},
+            )
+        assert resp.status_code == 202
+        assert resp.json()["documents"] == []
+        run.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "error,expected",
+        [("auth", 409), ("not_found", 404), ("failed", 502)],
+    )
+    def test_a_failed_walk_imports_nothing(self, app, error, expected):
+        from apis.app_api.file_sources.folder_walk import FolderWalk
+
+        stack, _, run = self._patches(walk=FolderWalk(error=error))
+        with stack:
+            resp = TestClient(app).post(
+                f"/assistants/{ASSISTANT_ID}/documents/import-folder",
+                json={"connectorId": "google", "folderId": "fold-1"},
+            )
+        assert resp.status_code == expected
+        run.assert_not_called()
