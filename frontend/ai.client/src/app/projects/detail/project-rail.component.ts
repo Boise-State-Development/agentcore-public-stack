@@ -13,8 +13,10 @@ import {
   heroClock,
   heroCpuChip,
   heroDocumentText,
+  heroExclamationTriangle,
   heroFolder,
   heroListBullet,
+  heroMicrophone,
   heroSparkles,
   heroUsers,
   heroWrenchScrewdriver,
@@ -22,14 +24,14 @@ import {
 import { BindableItem } from '../../agents/models/agent.model';
 import { AgentService } from '../../agents/services/agent.service';
 import { ToastService } from '../../services/toast/toast.service';
-import { ModelConfig, Project, ProjectSchedule } from '../models/project.model';
+import { ModelConfig, Project, ProjectSchedule, ProjectVoice } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { isUnavailable, projectErrorMessage } from '../services/projects.service';
 import { personLabel } from '../../shared/utils/person';
 
 interface Row {
   key: string;
-  /** The row's page. Model has none: it is a menu on the row. */
+  /** The row's page. Model and Voice have none: a menu and a switch on the row. */
   link: string[] | null;
   icon: string;
   label: string;
@@ -56,7 +58,9 @@ const MODEL_MENU_POSITIONS: ConnectedPosition[] = [
  * the assistant works from (instructions, files, memory, model, tools, skills,
  * schedules) and per thing about the project itself (members, activity, history).
  * Each row links to that setting's page under `/projects/:id/`, apart from Model,
- * a single choice, which is a menu on its row and saves as soon as one is picked.
+ * a single choice, which is a menu on its row and saves as soon as one is picked,
+ * and Voice (#2021), a switch on its row for the owner, with a warning for the
+ * owner and editors when the project's tools or files keep voice off.
  *
  * The summaries are loaded each time the overview is opened, each on its own, so a
  * refused or failed read blanks one row rather than the rail.
@@ -74,8 +78,10 @@ const MODEL_MENU_POSITIONS: ConnectedPosition[] = [
       heroClock,
       heroCpuChip,
       heroDocumentText,
+      heroExclamationTriangle,
       heroFolder,
       heroListBullet,
+      heroMicrophone,
       heroSparkles,
       heroUsers,
       heroWrenchScrewdriver,
@@ -91,6 +97,41 @@ const MODEL_MENU_POSITIONS: ConnectedPosition[] = [
               <a [routerLink]="row.link" [class]="rowClass">
                 <ng-container [ngTemplateOutlet]="rowBody" [ngTemplateOutletContext]="{ $implicit: row }" />
               </a>
+            } @else if (row.key === 'voice') {
+              <div class="flex w-full items-center gap-3 px-3 py-2.5">
+                <ng-container [ngTemplateOutlet]="rowBody" [ngTemplateOutletContext]="{ $implicit: row }" />
+                @if (voice()?.canChange) {
+                  <button
+                    type="button"
+                    role="switch"
+                    data-testid="project-voice-switch"
+                    aria-label="Voice mode"
+                    [attr.aria-checked]="voiceOn()"
+                    [attr.aria-describedby]="voiceWarning() ? 'project-voice-warning' : null"
+                    [disabled]="savingVoice() || voiceBlocked()"
+                    (click)="toggleVoice()"
+                    class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    [class]="voiceOn() ? 'bg-primary-600 dark:bg-primary-500' : 'bg-gray-200 dark:bg-gray-700'"
+                  >
+                    <span
+                      aria-hidden="true"
+                      class="pointer-events-none inline-block size-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out motion-reduce:transition-none"
+                      [class.translate-x-5]="voiceOn()"
+                      [class.translate-x-0]="!voiceOn()"
+                    ></span>
+                  </button>
+                }
+              </div>
+              @if (voiceWarning(); as warning) {
+                <p
+                  id="project-voice-warning"
+                  data-testid="project-voice-warning"
+                  class="mx-3 mb-1 flex gap-2 rounded-xl bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-800 dark:bg-state-warning-900/20 dark:text-state-warning-300"
+                >
+                  <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  <span>{{ warning }}</span>
+                </p>
+              }
             } @else if (canChooseModel()) {
               <button
                 type="button"
@@ -203,6 +244,43 @@ export class ProjectRailComponent {
   private readonly schedules = signal<SchedulesSummary | null>(null);
   protected readonly savingModel = signal(false);
   protected readonly modelMenuOpen = signal(false);
+  /** Null when unknown (the read failed, or hasn't finished). */
+  protected readonly voice = signal<ProjectVoice | null>(null);
+  protected readonly savingVoice = signal(false);
+  /** Voice runs in this project's conversations: what the switch shows. */
+  protected readonly voiceOn = computed(() => this.voice()?.available === true);
+  /** Tools or files keep voice off whatever the switch says, so the switch can't be used. */
+  protected readonly voiceBlocked = computed(() => {
+    const v = this.voice();
+    return !!v && (v.blockedTools.length > 0 || v.filesTooLarge !== null);
+  });
+
+  /**
+   * Why voice is off when the owner didn't turn it off, for the owner and editors (who
+   * can fix it). Null when nothing keeps it off.
+   */
+  protected readonly voiceWarning = computed<string | null>(() => {
+    const v = this.voice();
+    if (!v || !this.isEditor() || !this.voiceBlocked()) return null;
+    const reasons: string[] = [];
+    if (v.blockedTools.length) {
+      const names = v.blockedTools.map(t => t.name);
+      reasons.push(
+        `${listOf(names)} ${names.length === 1 ? 'isn’t' : 'aren’t'} available in voice mode. Remove ${names.length === 1 ? 'it' : 'them'} under Tools to use voice`,
+      );
+    }
+    const files = v.filesTooLarge;
+    if (files) {
+      reasons.push(
+        files.reason === 'voice_files_off'
+          ? 'This site doesn’t send project files to voice mode'
+          : files.estimatedTokens && files.budgetTokens
+            ? `The project’s files are too large for voice mode (about ${tokens(files.estimatedTokens)} tokens; the limit is ${tokens(files.budgetTokens)})`
+            : 'The project’s files are too large for voice mode',
+      );
+    }
+    return `Voice is off for this project. ${reasons.join('. ')}.`;
+  });
 
   protected readonly archived = computed(() => this.project().status === 'archived');
   protected readonly canEdit = computed(() => this.project().role !== 'viewer' && !this.archived());
@@ -279,6 +357,14 @@ export class ProjectRailComponent {
         action: edit ? 'Edit' : 'View',
       },
       {
+        key: 'voice',
+        link: null,
+        icon: 'heroMicrophone',
+        label: 'Voice',
+        meta: this.voiceMeta(),
+        action: null,
+      },
+      {
         key: 'schedules',
         link: page('schedules'),
         icon: 'heroCalendarDays',
@@ -325,6 +411,36 @@ export class ProjectRailComponent {
       const id = this.projectId();
       untracked(() => void this.load(id));
     });
+  }
+
+  /** "On", "Off", or "Off · can’t run" when tools or files keep it off. */
+  private voiceMeta(): string | null {
+    const v = this.voice();
+    if (!v) return null;
+    if (v.available) return 'On';
+    return this.voiceBlocked() ? 'Off · can’t run' : 'Off';
+  }
+
+  /** Flip the owner's switch, then re-read the status: the switch alone doesn't decide it. */
+  protected async toggleVoice(): Promise<void> {
+    const v = this.voice();
+    if (!v || this.savingVoice() || this.voiceBlocked()) return;
+    const projectId = this.projectId();
+    const enabled = !v.enabled;
+    this.savingVoice.set(true);
+    try {
+      await firstValueFrom(this.api.update(projectId, { voiceEnabled: enabled }));
+    } catch (err) {
+      this.toast.error('Voice mode could not be changed', projectErrorMessage(err));
+      this.savingVoice.set(false);
+      return;
+    }
+    this.voice.set({ ...v, enabled, available: enabled });
+    this.toast.success(enabled ? 'Voice mode is on for this project' : 'Voice mode is off for this project');
+    // A tool or file added since the rail loaded can still keep it off.
+    const fresh = await firstValueFrom(this.api.voice(projectId)).catch(() => null);
+    if (fresh && projectId === this.projectId()) this.voice.set(fresh);
+    this.savingVoice.set(false);
   }
 
   /** "2 skills", plus how many have a newer version than the one the project runs. */
@@ -379,8 +495,9 @@ export class ProjectRailComponent {
     this.fileCount.set(null);
     this.memoryCount.set(null);
     this.schedules.set(null);
+    this.voice.set(null);
     const quiet = <T>(p: Promise<T>): Promise<T | null> => p.catch(() => null);
-    const [instructions, model, tools, skills, files, models, memoryCount, schedules] = await Promise.all([
+    const [instructions, model, tools, skills, files, models, memoryCount, schedules, voice] = await Promise.all([
       quiet(firstValueFrom(this.api.instructions(projectId))),
       quiet(firstValueFrom(this.api.model(projectId))),
       quiet(firstValueFrom(this.api.bindings(projectId, 'tools'))),
@@ -389,6 +506,7 @@ export class ProjectRailComponent {
       quiet(this.agents.loadBindable('model')),
       quiet(this.loadMemoryCount(projectId)),
       quiet(this.loadSchedules(projectId)),
+      quiet(firstValueFrom(this.api.voice(projectId))),
     ]);
     if (projectId !== this.projectId()) return;
     this.instructions.set(instructions?.instructions ?? '');
@@ -403,6 +521,7 @@ export class ProjectRailComponent {
     }
     this.memoryCount.set(memoryCount);
     this.schedules.set(schedules);
+    this.voice.set(voice);
     this.models.set(models ?? []);
     this.loaded.set(true);
   }
@@ -432,6 +551,18 @@ export class ProjectRailComponent {
 
 function count(n: number, singular: string, plural = `${singular}s`): string {
   return `${n} ${n === 1 ? singular : plural}`;
+}
+
+/** "Canvas", "Canvas and Zoom", "Canvas, Zoom and Teams". */
+function listOf(items: string[]): string {
+  return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/** 900000 → "900K", 1200000 → "1.2M". */
+function tokens(n: number): string {
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
 }
 
 function countOrNone(n: number, singular: string): string {

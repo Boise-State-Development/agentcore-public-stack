@@ -160,3 +160,22 @@ async def test_a_voice_session_with_no_pricing_row_emits_the_metric(pricing, exp
         emit.assert_called_once_with("amazon.nova-2-sonic-v1:0", "no_pricing", surface="voice", session_id="s-1")
     else:
         emit.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("project_id", [None, "proj-1"])
+async def test_a_project_voice_sessions_cost_row_names_the_project(project_id):
+    """#2021: ``projectId`` on the row is what adds it to the project's cost rollup."""
+    from apis.inference_api.chat import voice_routes
+
+    store = AsyncMock()
+    with (
+        patch.object(voice_routes, "get_session_metadata", AsyncMock(return_value=None)),
+        patch("apis.shared.sessions.metadata.store_message_metadata", store),
+        patch("apis.shared.costs.pricing_config.get_model_pricing", AsyncMock(return_value=None)),
+        patch("apis.shared.observability.emf.emit_unmetered_model_call", MagicMock()),
+    ):
+        await voice_routes._finalize_voice_session("s-1", "u-1", _voice_agent(), project_id=project_id)
+
+    extra = store.await_args.kwargs["message_metadata"].model_extra or {}
+    assert extra.get("projectId") == project_id

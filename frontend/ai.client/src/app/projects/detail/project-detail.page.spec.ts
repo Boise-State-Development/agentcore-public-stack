@@ -63,6 +63,7 @@ describe('ProjectDetailPage', () => {
     bindings: vi.fn(),
     files: vi.fn(),
     schedules: vi.fn(),
+    voice: vi.fn(),
   };
   const agents = { loadBindable: vi.fn() };
   const dialog = { open: vi.fn() };
@@ -77,6 +78,7 @@ describe('ProjectDetailPage', () => {
     api.bindings.mockReturnValue(of({ bindings: [], version: 2, canEdit: true }));
     api.files.mockReturnValue(of({ documents: [], nextToken: null, canEdit: true }));
     api.schedules.mockReturnValue(of({ schedules: [] }));
+    api.voice.mockReturnValue(of({ enabled: true, available: true, canChange: false, blockedTools: [], filesTooLarge: null }));
     agents.loadBindable.mockResolvedValue([]);
     dialog.open.mockReturnValue({ closed: of(undefined), close: vi.fn() });
     TestBed.configureTestingModule({
@@ -128,7 +130,7 @@ describe('ProjectDetailPage', () => {
 
   it('lists the settings rail, with Activity for an editor', async () => {
     const { el } = await open('/projects/prj_1');
-    expect(railRows(el)).toEqual(['Instructions', 'Files', 'Memory', 'Model', 'Tools', 'Skills', 'Schedules', 'Members', 'Activity', 'History']);
+    expect(railRows(el)).toEqual(['Instructions', 'Files', 'Memory', 'Model', 'Tools', 'Skills', 'Voice', 'Schedules', 'Members', 'Activity', 'History']);
   });
 
   it('gives a viewer no Activity row', async () => {

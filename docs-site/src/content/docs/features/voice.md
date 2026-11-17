@@ -53,22 +53,26 @@ is live.
   by your roles, minus any tool that is disabled. In an Agent's conversation it
   gets the Agent's tool bindings instead, as a text turn does. Either way, voice
   only loads tools an admin marked **Available in voice mode** (see below).
-- **Instructions.** Your role instructions and personal instructions apply,
-  in the same order and with the same precedence as a text chat. They are
-  read once, when the voice session connects. In an Agent's conversation the
-  Agent's instructions come first and your personal instructions follow, as in
-  a text turn with that Agent.
+- **Instructions.** Your role instructions, the conversation mode saved on the
+  conversation, and your personal instructions apply, in the same order and
+  with the same precedence as a text chat. They are read once, when the voice
+  session connects. Voice has no mode picker of its own, so it uses the mode
+  the conversation was last set to. In an Agent's or a project's conversation
+  the Agent's or project's instructions come first and your personal
+  instructions follow, as in a text turn there; role instructions and modes
+  don't apply there, in text or in voice.
 - **Prompt.** After those, the system prompt adds short voice guidelines (be
   concise, avoid lists and heavy formatting) and one line naming the voice, so
   languages that mark the speaker's gender use the matching form. An Agent's
   conversation leaves the guidelines out unless the Agent's author turned them
-  on.
-- **Not applied:** the active conversation mode, and the chat model picker.
+  on. A project's conversation always keeps them.
+- **Not applied:** the chat model picker.
   Voice always runs on the Nova 2 Sonic model (`NOVA_SONIC_MODEL_ID` on the
   Runtime overrides the id).
 
 Voice is not offered inside the Agent Designer's preview or the marketplace
-review test drive, or in Shared Project conversations.
+review test drive, or in the composer on a project's overview page (open or
+start a project conversation to use it).
 
 ### Voice with an Agent
 
@@ -79,8 +83,36 @@ same access checks as a text turn. A published Agent uses its reviewed
 version, so turning voice on for one goes through marketplace review.
 
 The voice button is hidden on an Agent's conversation when voice is off for
-it. If the conversation's Agent can't run in voice (voice turned off since, no
-access, a Shared Project), voice closes with a message saying so.
+it. If the conversation's Agent can't run in voice (voice turned off since, or
+no access), voice closes with a message saying so.
+
+### Voice in a project
+
+Voice is on for every Shared Project's conversations unless the project's owner
+turns it off with the **Voice** switch on the project's page, below Skills.
+A voice session in a project runs the way a typed message there does: the
+project's instructions and workspace guidance, your personal instructions
+below them, project memory (it can save to it), the shared conversations, and
+the `project_files` tool. Who is speaking and which files are still processing
+are told to the model once, at the start of the session. The conversation is
+listed in the project, and its cost counts toward the project.
+
+Voice also turns itself off for a project, whatever the switch says, while
+either of these is true:
+
+- **A project tool isn't available in voice.** A tool runs in voice only when
+  an admin marked it **Available in voice mode** (see below). Rather than run
+  the project without one of its tools, voice stays off until the tool is
+  removed from the project's Tools or an admin marks it.
+- **The project's files are too large for voice.** Voice gets the files whole,
+  up to `VOICE_KB_MAX_TOKENS`, or not at all. A deployment that sets
+  `VOICE_KB_MAX_TOKENS=0` (or turns full context off) keeps voice off for any
+  project with files.
+
+The owner and editors see a warning beside the switch naming the reason.
+Nothing is saved for it: once the tool or file is gone, voice comes back on its
+own. Members see the voice button only while voice is on.
+
 
 **Knowledge base.** Voice has no search step: in text chat the server searches
 the knowledge base with the typed message before the model runs, and in voice

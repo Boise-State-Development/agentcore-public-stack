@@ -7,7 +7,7 @@ import { ProjectRailComponent } from './project-rail.component';
 import { AgentService } from '../../agents/services/agent.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ProjectApiService } from '../services/project-api.service';
-import { Project, ProjectSchedule } from '../models/project.model';
+import { Project, ProjectSchedule, ProjectVoice } from '../models/project.model';
 
 const PROJECT: Project = {
   projectId: 'prj_1',
@@ -24,6 +24,8 @@ const PROJECT: Project = {
   updatedAt: '2026-09-24T00:00:00Z',
 };
 
+const VOICE_ON: ProjectVoice = { enabled: true, available: true, canChange: false, blockedTools: [], filesTooLarge: null };
+
 const MODELS = [
   { kind: 'model', ref: 'm-haiku', label: 'Haiku 4.5', description: 'Fast', meta: { provider: 'bedrock' } },
   { kind: 'model', ref: 'm-sonnet', label: 'Sonnet 4.6', description: '', meta: { provider: 'bedrock' } },
@@ -39,6 +41,7 @@ function sched(scheduleId: string, state: ProjectSchedule['state']): ProjectSche
 describe('ProjectRailComponent', () => {
   const api = {
     instructions: vi.fn(), model: vi.fn(), saveModel: vi.fn(), bindings: vi.fn(), files: vi.fn(), memory: vi.fn(), memoryEntries: vi.fn(), schedules: vi.fn(),
+    voice: vi.fn(), update: vi.fn(),
   };
   const agents = { loadBindable: vi.fn() };
   const toast = { success: vi.fn(), error: vi.fn() };
@@ -55,6 +58,7 @@ describe('ProjectRailComponent', () => {
     api.memory.mockReturnValue(of({ sharedSpaceId: 'spc_1', personalSpaceId: null, role: 'editor' }));
     api.memoryEntries.mockReturnValue(of({ entries: [{ slug: 'a' }, { slug: 'b' }] }));
     api.schedules.mockReturnValue(of({ schedules: [sched('a', 'active'), sched('b', 'paused_error')] }));
+    api.voice.mockReturnValue(of(VOICE_ON));
     agents.loadBindable.mockResolvedValue(MODELS);
     TestBed.configureTestingModule({
       imports: [ProjectRailComponent],
@@ -106,6 +110,7 @@ describe('ProjectRailComponent', () => {
     expect(text(row('Model'))).toBe('Model Haiku 4.5 Change');
     expect(text(row('Tools'))).toBe('Tools 2 tools Edit');
     expect(text(row('Skills'))).toBe('Skills 1 skill Edit');
+    expect(text(row('Voice'))).toBe('Voice On');
     expect(text(row('Schedules'))).toBe('Schedules 2 schedules · 1 paused Manage');
     expect(text(row('Members'))).toBe('Members 4 people Manage');
     expect(text(row('History'))).toBe('History Version 2 View');
@@ -184,6 +189,96 @@ describe('ProjectRailComponent', () => {
     expect(text((await render()).row('Schedules'))).toBe('Schedules Not turned on Manage');
     api.schedules.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 500 })));
     expect(text((await render({ ...PROJECT, role: 'viewer' })).row('Schedules'))).toBe('Schedules View');
+  });
+
+  describe('the Voice row (#2021)', () => {
+    const owner = { ...PROJECT, role: 'owner' as const };
+    const theSwitch = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('[data-testid="project-voice-switch"]');
+    const warning = (el: HTMLElement) => el.querySelector('[data-testid="project-voice-warning"]')?.textContent?.trim() ?? null;
+
+    it('sits below Skills', async () => {
+      const { el } = await render();
+      const labels = Array.from(el.querySelectorAll('nav li > :first-child')).map(
+        r => r.querySelector('span > span')?.textContent?.trim(),
+      );
+      expect(labels.indexOf('Voice')).toBe(labels.indexOf('Skills') + 1);
+    });
+
+    it('gives the owner a switch that turns voice off, then re-reads the status', async () => {
+      api.voice.mockReturnValueOnce(of({ ...VOICE_ON, canChange: true }))
+        .mockReturnValueOnce(of({ ...VOICE_ON, enabled: false, available: false, canChange: true }));
+      api.update.mockReturnValue(of({ ...owner, voiceEnabled: false }));
+      const { el, row, fixture } = await render(owner);
+      const sw = theSwitch(el)!;
+      expect(sw.getAttribute('aria-checked')).toBe('true');
+
+      sw.click();
+      await settle(fixture);
+
+      expect(api.update).toHaveBeenCalledWith('prj_1', { voiceEnabled: false });
+      expect(theSwitch(el)!.getAttribute('aria-checked')).toBe('false');
+      expect(text(row('Voice'))).toBe('Voice Off');
+      expect(toast.success).toHaveBeenCalledWith('Voice mode is off for this project');
+    });
+
+    it('keeps the switch as it was when the save is refused', async () => {
+      api.voice.mockReturnValue(of({ ...VOICE_ON, canChange: true }));
+      api.update.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 403, error: { detail: 'Only the owner' } })));
+      const { el, fixture } = await render(owner);
+      theSwitch(el)!.click();
+      await settle(fixture);
+      expect(theSwitch(el)!.getAttribute('aria-checked')).toBe('true');
+      expect(toast.error).toHaveBeenCalled();
+    });
+
+    it('shows no switch to an editor, who sees the state', async () => {
+      api.voice.mockReturnValue(of({ ...VOICE_ON, enabled: false, available: false }));
+      const { el, row } = await render();
+      expect(theSwitch(el)).toBeNull();
+      expect(text(row('Voice'))).toBe('Voice Off');
+      expect(warning(el)).toBeNull(); // the owner turned it off: nothing to fix
+    });
+
+    it('turns off by itself for tools voice can’t run, and says which', async () => {
+      api.voice.mockReturnValue(of({
+        ...VOICE_ON, available: false, canChange: true,
+        blockedTools: [{ toolId: 'canvas', name: 'Canvas' }, { toolId: 'zoom', name: 'Zoom' }],
+      }));
+      const { el, row } = await render(owner);
+      const sw = theSwitch(el)!;
+      expect(sw.getAttribute('aria-checked')).toBe('false');
+      expect(sw.disabled).toBe(true);
+      expect(sw.getAttribute('aria-describedby')).toBe('project-voice-warning');
+      expect(text(row('Voice'))).toBe('Voice Off · can’t run');
+      expect(warning(el)).toBe(
+        'Voice is off for this project. Canvas and Zoom aren’t available in voice mode. Remove them under Tools to use voice.',
+      );
+    });
+
+    it('says when the files are too large, to editors as well as the owner', async () => {
+      api.voice.mockReturnValue(of({
+        ...VOICE_ON, available: false,
+        filesTooLarge: { reason: 'over_budget', estimatedTokens: 1_200_000, budgetTokens: 800_000 },
+      }));
+      const { el } = await render();
+      expect(warning(el)).toBe(
+        'Voice is off for this project. The project’s files are too large for voice mode (about 1.2M tokens; the limit is 800K).',
+      );
+    });
+
+    it('keeps the warning from viewers', async () => {
+      api.voice.mockReturnValue(of({ ...VOICE_ON, available: false, blockedTools: [{ toolId: 'canvas', name: 'Canvas' }] }));
+      const { el, row } = await render({ ...PROJECT, role: 'viewer' });
+      expect(warning(el)).toBeNull();
+      expect(text(row('Voice'))).toBe('Voice Off · can’t run');
+    });
+
+    it('leaves the row blank when the status can’t be read', async () => {
+      api.voice.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 503 })));
+      const { el, row } = await render(owner);
+      expect(text(row('Voice'))).toBe('Voice');
+      expect(theSwitch(el)).toBeNull();
+    });
   });
 
   describe('the Model menu', () => {

@@ -5111,6 +5111,8 @@ class ResolvedTurnAgent:
     permission: Optional[str] = None
     resolved_version: Any = None
     project_id: Optional[str] = None
+    #: The project's META row, read by the project gate (voice reads its settings).
+    project: Any = None
     project_member_note: Optional[str] = None
     project_files_note_task: Optional["asyncio.Task[Optional[str]]"] = None
     project_memory_task: Optional["asyncio.Task[ProjectMemoryTurn]"] = None
@@ -5174,6 +5176,7 @@ async def resolve_turn_agent(
     # OAuth-consent / tool-approval resumes (``service.py`` warns about exactly this).
     resolved_version = None
     turn_project_id: Optional[str] = None
+    turn_project = None
     project_member_note: Optional[str] = None
     project_files_note_task = None
     project_memory_task = None
@@ -5422,6 +5425,7 @@ async def resolve_turn_agent(
         permission=assistant_permission,
         resolved_version=resolved_version,
         project_id=turn_project_id,
+        project=turn_project,
         project_member_note=project_member_note,
         project_files_note_task=project_files_note_task,
         project_memory_task=project_memory_task,

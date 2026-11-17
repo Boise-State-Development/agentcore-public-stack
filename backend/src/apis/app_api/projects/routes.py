@@ -82,6 +82,7 @@ from .models import (
     ProjectMemoryResponse,
     ProjectListResponse,
     ProjectResponse,
+    ProjectVoiceResponse,
     SettingsVersionResponse,
     SettingsVersionSummary,
     SettingsVersionsResponse,
@@ -95,6 +96,8 @@ from .models import (
     UpdateMemberRequest,
     UpdateModelRequest,
     UpdateProjectRequest,
+    VoiceBlockedTool,
+    VoiceFilesTooLarge,
 )
 
 logger = logging.getLogger(__name__)
@@ -184,7 +187,7 @@ def get_project(project_id: str, user: User = Depends(require_projects_user)) ->
 async def update_project(
     project_id: str, body: UpdateProjectRequest, user: User = Depends(require_projects_user)
 ) -> ProjectResponse:
-    """Editors: name, description. Owner: also ``editorsManageMembers`` and ``status``."""
+    """Editors: name, description. Owner: also ``editorsManageMembers``, ``voiceEnabled`` and ``status``."""
     try:
         project, role = await _svc().update_project(
             project_id,
@@ -192,6 +195,7 @@ async def update_project(
             name=body.name,
             description=body.description,
             editors_manage_members=body.editors_manage_members,
+            voice_enabled=body.voice_enabled,
             status=body.status,
         )
     except ProjectError as e:
@@ -297,6 +301,54 @@ async def put_model(
     """Set the project's model (editor). The saver must be allowed to use it; a member who
     is not falls back to their own default when they run the project (§9.6)."""
     return _model(await _save(project_id, user, model_settings=body.model_settings))
+
+
+async def _tool_names(tool_ids: Iterable[str]) -> Dict[str, str]:
+    """Catalog display names by id; an id the catalog can't name is left out."""
+    ids = list(tool_ids)
+    if not ids:
+        return {}
+    from apis.shared.tools.repository import get_tool_catalog_repository
+
+    try:
+        tools = await get_tool_catalog_repository().batch_get_tools(ids)
+    except Exception:  # noqa: BLE001 — names are decoration; ids still say which tool
+        logger.warning("Could not read tool names for the project voice status", exc_info=True)
+        return {}
+    return {t.tool_id: t.display_name for t in tools if t.display_name}
+
+
+@router.get("/{project_id}/voice", response_model=ProjectVoiceResponse, response_model_by_alias=True)
+async def get_voice(project_id: str, user: User = Depends(require_projects_user)) -> ProjectVoiceResponse:
+    """Whether the project's conversations can use voice mode (#2021), for every member.
+
+    The voice button follows ``available``; the owner's settings row shows why it is off.
+    The voice route checks the same status (``apis.shared.projects.voice``) when a session
+    starts, so this is what a member would get.
+    """
+    from apis.shared.projects.voice import project_voice_status
+
+    view = await _view(project_id, user)
+    try:
+        found = await project_voice_status(view.project, view.harness)
+    except Exception:  # noqa: BLE001
+        logger.error("Could not work out voice mode for project %s", scrub_log(project_id), exc_info=True)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Couldn't check voice mode")
+    names = await _tool_names(found.blocked_tool_ids)
+    files = found.files
+    return ProjectVoiceResponse(
+        enabled=found.enabled,
+        available=found.available,
+        can_change=view.role == "owner" and view.project.status == "active",
+        blocked_tools=[VoiceBlockedTool(tool_id=t, name=names.get(t, t)) for t in found.blocked_tool_ids],
+        files_too_large=(
+            VoiceFilesTooLarge(
+                reason=files.reason, estimated_tokens=files.estimated_tokens, budget_tokens=files.budget_tokens
+            )
+            if files
+            else None
+        ),
+    )
 
 
 @router.get("/{project_id}/tools", response_model=BindingsResponse, response_model_by_alias=True)

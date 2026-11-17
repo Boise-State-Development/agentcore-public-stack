@@ -263,19 +263,33 @@ export class ChatContainerComponent {
   );
 
   /**
+   * Whether the Shared Project this conversation runs in can use voice mode (#2021):
+   * `available` from `GET /projects/{id}/voice`, read by the session page. Null
+   * until it is known, which keeps the voice button hidden.
+   */
+  projectVoiceAvailable = input<boolean | null>(null);
+
+  /**
    * Voice mode (#625): offered on a plain chat, and on an Agent's chat only once the
    * Agent has loaded and its author turned voice on. Hidden while the Agent named in
    * the URL is still loading (or failed to load), so voice can never start without
-   * it. Not offered in a Shared Project, whose harness has no voice setting. The
-   * backend enforces the same rules; this hides a button that could only fail.
+   * it. In a Shared Project (#2021) the project's voice status decides, again only
+   * once its harness has loaded, so voice never starts as a plain chat. The backend
+   * enforces the same rules; this hides a button that could only fail.
    */
   protected readonly showVoiceControl = computed<boolean>(() => {
     if (!this.resolvedConfig().showVoiceControl) return false;
-    if (this.project()) return false;
+    const assistant = this.voiceAssistant();
+    if (this.project() || assistant?.kind === 'project') {
+      const project = this.project();
+      const sameProject = !project || assistant?.projectId === project.projectId;
+      return (
+        this.projectVoiceAvailable() === true && assistant?.kind === 'project' && sameProject && !!this.voiceAgentId()
+      );
+    }
     const unbound = !this.hasUrlBinding() && !this.boundAgentId() && !this.assistant();
     if (unbound) return true;
-    const assistant = this.voiceAssistant();
-    if (!assistant || assistant.kind === 'project') return false;
+    if (!assistant) return false;
     // The Agent record only counts when it is the same Agent (it can lag on a switch too).
     const agent = this.agent();
     const fromAgent = agent?.agentId === assistant.assistantId ? agent.voiceEnabled : undefined;
