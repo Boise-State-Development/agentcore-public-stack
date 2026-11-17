@@ -129,7 +129,7 @@ describe('ChatInputComponent — Drive folders', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: computed(() => []),
             clearReadyUploads: () => undefined,
@@ -406,7 +406,7 @@ describe('ChatInputComponent — a refreshed folder and Connect', () => {
         {
           provide: FileUploadService,
           useValue: {
-            pendingUploadsList: signal([]), hasActivePendingUploads: signal(false), readyUploadIds: signal([]),
+            pendingUploadsList: signal([]), hasActivePendingUploads: signal(false), presigningCount: signal(0), readyUploadIds: signal([]),
             readyUploads: computed(() => []), clearReadyUploads: () => undefined, clearPendingUpload: () => undefined,
             listSessionFiles: async () => [], registerKnownFile: () => undefined,
           },

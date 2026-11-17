@@ -378,6 +378,23 @@ describe('FileUploadService', () => {
         });
       });
 
+      describe('an upload waiting on its pre-signed URL', () => {
+        it('counts as in progress before it has a card, and stops when the card lands', async () => {
+          const upload = service.uploadFile('session1', new File(['x'], 'notes.txt', { type: 'text/plain' }));
+
+          const presign = await vi.waitFor(() => httpMock.expectOne(r => r.url.endsWith('/presign')));
+          expect(service.pendingUploadsList()).toEqual([]);
+          expect(service.presigningCount()).toBe(1);
+          expect(service.hasActivePendingUploads()).toBe(true);
+
+          // A refused presign leaves nothing counted behind it.
+          presign.flush({ detail: 'nope' }, { status: 400, statusText: 'Bad Request' });
+          await upload.catch(() => undefined);
+          expect(service.presigningCount()).toBe(0);
+          expect(service.hasActivePendingUploads()).toBe(false);
+        });
+      });
+
       describe('presign gateway retry', () => {
         const presignAt = (n: number) =>
           vi.waitFor(

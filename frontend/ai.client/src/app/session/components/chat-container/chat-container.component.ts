@@ -108,6 +108,9 @@ export class ChatContainerComponent {
   // Child component reference for scroll functionality
   private messageListComponent = viewChild(MessageListComponent);
 
+  /** The composer on screen. Every layout renders at most one. */
+  private chatInput = viewChild(ChatInputComponent);
+
   private readonly chatState = inject(ChatStateService);
   private readonly modelService = inject(ModelService);
   private readonly projectsService = inject(ProjectsService);
@@ -478,9 +481,22 @@ export class ChatContainerComponent {
     this.assistantClosed.emit();
   }
 
+  /**
+   * Send a starter prompt as the message, through the composer.
+   *
+   * Through the composer, not around it: the files and `@`-mention on the
+   * composer belong to the message the user sends next, and this is it. Sent
+   * past the composer, they were left behind and stayed in its new-conversation
+   * draft, so the next new conversation opened with them already attached
+   * (and with this conversation's id to file uploads under).
+   */
   onStarterSelected(starter: string) {
     this.starterSelected.emit(starter);
-    // Submit the starter as a message
+    const composer = this.chatInput();
+    if (composer) {
+      composer.submitText(starter);
+      return;
+    }
     this.onMessageSubmitted({ content: starter, timestamp: new Date() });
   }
 

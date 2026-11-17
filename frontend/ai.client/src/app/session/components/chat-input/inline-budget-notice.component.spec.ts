@@ -28,27 +28,25 @@ describe('InlineBudgetNoticeComponent', () => {
     expect(host.getAttribute('aria-live')).toBe('polite');
   });
 
-  it('names a document that will be read from storage instead', () => {
-    expect(render({ byReference: [file('policy-d.pdf')], dropped: [] })).toBe(
-      'These attachments are over the 7 MB one message can include in full. ' +
-        'policy-d.pdf will be read from storage instead, in the parts the answer needs.',
-    );
+  it('says nothing for a document read from storage, which is still sent', () => {
+    expect(render({ byReference: [file('policy-d.pdf')], dropped: [] })).toBe('');
   });
 
   it('names images that need a follow-up message', () => {
     expect(render({ byReference: [], dropped: [file('a.png', 'image/png'), file('b.png', 'image/png')] })).toBe(
-      'These attachments are over the 7 MB one message can include in full. ' +
-        "a.png and b.png won't be included. Send them in a follow-up message.",
+      "a.png and b.png won't fit in this message, which can include 7 MB of images and documents in full. " +
+        'Send them in a follow-up message.',
     );
   });
 
-  it('says both when both happen', () => {
+  it('names only the files left out when documents also go by reference', () => {
     const text = render({
       byReference: [file('one.pdf'), file('two.pdf'), file('three.docx')],
       dropped: [file('photo.png', 'image/png')],
     });
 
-    expect(text).toContain('one.pdf, two.pdf and three.docx will be read from storage instead');
-    expect(text).toContain("photo.png won't be included. Send it in a follow-up message.");
+    expect(text).not.toContain('one.pdf');
+    expect(text).toContain("photo.png won't fit in this message");
+    expect(text).toContain('Send it in a follow-up message.');
   });
 });

@@ -6,6 +6,7 @@ import {
   StoredAttachment,
   StoredComposerDraft,
   isEmptyDraft,
+  newConversationDraftKey,
 } from './composer-draft-storage.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -44,6 +45,33 @@ describe('ComposerDraftStorageService', () => {
     expect(service.read('s1').text).toBe('half a question');
     expect(service.read('s2').text).toBe('a different half');
     expect(service.read('s3').text).toBe('');
+  });
+
+  it('keeps a new conversation with each Agent or project apart from a plain one', () => {
+    expect(newConversationDraftKey(null, null)).toBe(NEW_CONVERSATION_DRAFT_KEY);
+    expect(newConversationDraftKey('ast-1', null)).toBe('new:agent:ast-1');
+    expect(newConversationDraftKey(null, 'prj-1')).toBe('new:project:prj-1');
+    // The project wins, as it does for the binding.
+    expect(newConversationDraftKey('ast-1', 'prj-1')).toBe('new:project:prj-1');
+
+    service.write(newConversationDraftKey('ast-1', null), draft({ attachments: [attachment('u1')] }));
+    expect(service.read(newConversationDraftKey('ast-2', null)).attachments).toBeUndefined();
+    expect(service.read(NEW_CONVERSATION_DRAFT_KEY).attachments).toBeUndefined();
+  });
+
+  it('discards a draft\'s files and staged conversation but keeps its text', () => {
+    service.write(
+      NEW_CONVERSATION_DRAFT_KEY,
+      draft({ text: 'still mine', attachments: [attachment('u1')], attachmentSessionId: 'sent-1' }),
+    );
+
+    service.discardAttachments(NEW_CONVERSATION_DRAFT_KEY);
+
+    const left = service.read(NEW_CONVERSATION_DRAFT_KEY);
+    expect(left.text).toBe('still mine');
+    expect(left.attachments).toBeUndefined();
+    expect(left.attachmentSessionId).toBeUndefined();
+    expect(service.discarded()).toEqual({ key: NEW_CONVERSATION_DRAFT_KEY });
   });
 
   it('survives a reload — a fresh instance reads what the last one wrote', () => {

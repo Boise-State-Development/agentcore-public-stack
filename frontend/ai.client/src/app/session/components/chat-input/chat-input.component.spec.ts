@@ -22,7 +22,10 @@ import {
 import { SteeringService } from '../../services/chat/steering.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ComposerDraftService } from '../../services/session/composer-draft.service';
-import { NEW_CONVERSATION_DRAFT_KEY } from '../../services/session/composer-draft-storage.service';
+import {
+  ComposerDraftStorageService,
+  NEW_CONVERSATION_DRAFT_KEY,
+} from '../../services/session/composer-draft-storage.service';
 import { ChatInputComponent, spliceDictation } from './chat-input.component';
 import { ComposerHandoffService } from './composer-handoff.service';
 import { InlineBudgetNoticeComponent } from './inline-budget-notice.component';
@@ -144,7 +147,7 @@ describe('ChatInputComponent — the `@` menu keyboard path (D11)', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -299,7 +302,7 @@ describe('ChatInputComponent — the `/` skill-command menu', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -520,7 +523,7 @@ describe('ChatInputComponent — queueing a follow-up mid-stream', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -857,7 +860,7 @@ describe('ChatInputComponent — mid-turn steering (PR-5)', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds,
             // Kept in step with the ids: the composer reads the full upload to
             // record an attachment's filename and size in the draft.
@@ -1102,7 +1105,7 @@ describe('ChatInputComponent — a queue held behind a paused turn (PR-6)', () =
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -1348,7 +1351,7 @@ describe('ChatInputComponent — rotating discovery hints', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -1514,7 +1517,7 @@ describe('ChatInputComponent — composer drafts (feedback retry-with-correction
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -1616,7 +1619,7 @@ describe('ChatInputComponent — unsent text survives leaving the conversation',
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: readyUploads,
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: computed(() => readyUploads().map((u) => u.uploadId)),
             readyUploads,
             clearReadyUploads: () => readyUploads.set([]),
@@ -2007,7 +2010,7 @@ describe('ChatInputComponent — compact layout, touch and first-send handoff', 
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -2233,7 +2236,7 @@ describe('ChatInputComponent — dictation', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -2448,7 +2451,7 @@ describe('ChatInputComponent voice mode options', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -2620,7 +2623,7 @@ describe('ChatInputComponent — attaching to a text-only model', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -2760,7 +2763,7 @@ describe('ChatInputComponent — the `+` menu hand-offs', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -2945,7 +2948,7 @@ describe('ChatInputComponent — a project conversation', () => {
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: signal([]),
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: signal([]),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -3161,7 +3164,7 @@ describe('ChatInputComponent — the combined inline budget, before send', () =>
           provide: FileUploadService,
           useValue: {
             pendingUploadsList: pendingUploads,
-            hasActivePendingUploads: signal(false),
+            hasActivePendingUploads: signal(false), presigningCount: signal(0),
             readyUploadIds: computed(() => pendingUploads().filter(u => u.status === 'ready').map(u => u.uploadId)),
             readyUploads: signal([]),
             clearReadyUploads: () => undefined,
@@ -3203,7 +3206,7 @@ describe('ChatInputComponent — the combined inline budget, before send', () =>
     expect((fixture.nativeElement as HTMLElement).querySelector('app-inline-budget-notice')?.getAttribute('role')).toBe('status');
   });
 
-  it('names the file that will not fit as soon as it is attached, before send', () => {
+  it('sends a document past the budget by reference without a warning', () => {
     pendingUploads.set([
       upload('u1', 'policy-a.pdf', 5.7 * MB),
       upload('u2', 'policy-b.pdf', 3.9 * MB),
@@ -3214,9 +3217,8 @@ describe('ChatInputComponent — the combined inline budget, before send', () =>
     ]);
     fixture.detectChanges();
 
-    expect(notice()?.textContent?.replace(/\s+/g, ' ')).toContain(
-      'policy-d.pdf will be read from storage instead, in the parts the answer needs.',
-    );
+    expect(component.budgetOverflow()?.byReference.map(f => f.filename)).toEqual(['policy-d.pdf']);
+    expect(notice()).toBeNull();
   });
 
   it('judges restored attachments first, in the order the send carries them', () => {
@@ -3225,7 +3227,7 @@ describe('ChatInputComponent — the combined inline budget, before send', () =>
     fixture.detectChanges();
 
     expect(component.budgetOverflow()?.dropped.map(f => f.filename)).toEqual(['photo.png']);
-    expect(notice()?.textContent).toContain("won't be included. Send it in a follow-up message.");
+    expect(notice()?.textContent).toContain('Send it in a follow-up message.');
   });
 
   it('ignores a failed upload, which does not travel', () => {
@@ -3233,5 +3235,186 @@ describe('ChatInputComponent — the combined inline budget, before send', () =>
     fixture.detectChanges();
 
     expect(notice()).toBeNull();
+  });
+});
+
+/**
+ * The per-message file limit, held on every path a file reaches the message
+ * by, and the send that would otherwise lose files past it. Uploads run one at
+ * a time, so most of a batch is waiting while the first file uploads: a second
+ * pick in that window once saw only the started ones and went past five.
+ */
+describe('ChatInputComponent — the per-message file limit', () => {
+  let fixture: ComponentFixture<ChatInputComponent>;
+  let component: ChatInputComponent;
+  let pendingUploads: ReturnType<typeof signal<PendingUpload[]>>;
+  let warnings: string[];
+  let started: string[];
+  let releaseUploads: () => void;
+  let submitted: { content: string; fileUploadIds?: string[] }[];
+
+  beforeEach(async () => {
+    localStorage.clear();
+    pendingUploads = signal<PendingUpload[]>([]);
+    warnings = [];
+    started = [];
+    submitted = [];
+    let gate!: Promise<void>;
+    let open!: () => void;
+    gate = new Promise<void>(resolve => (open = resolve));
+    releaseUploads = () => open();
+    await TestBed.configureTestingModule({
+      imports: [ChatInputComponent],
+      providers: [
+        { provide: AgentMentionService, useClass: MentionServiceStub },
+        { provide: SkillCommandService, useClass: SkillCommandServiceStub },
+        {
+          provide: FileUploadService,
+          useValue: {
+            pendingUploadsList: pendingUploads,
+            hasActivePendingUploads: signal(false),
+            presigningCount: signal(0),
+            readyUploadIds: computed(() => pendingUploads().filter(u => u.status === 'ready').map(u => u.uploadId)),
+            readyUploads: computed(() => pendingUploads().filter(u => u.status === 'ready')),
+            clearReadyUploads: () => pendingUploads.set([]),
+            clearPendingUpload: () => undefined,
+            listSessionFiles: async () => [],
+            registerKnownFile: () => undefined,
+            // Each upload shows its card and waits on the gate, as a slow PDF
+            // upload would, then turns ready.
+            uploadFile: async (_sessionId: string, file: File) => {
+              started.push(file.name);
+              const card: PendingUpload = { file, uploadId: file.name, status: 'uploading', progress: 0 };
+              pendingUploads.update(list => [...list, card]);
+              await gate;
+              pendingUploads.update(list =>
+                list.map(u => (u.uploadId === file.name ? { ...u, status: 'ready' as const } : u)),
+              );
+            },
+          },
+        },
+        {
+          provide: ToastService,
+          useValue: {
+            error: () => undefined,
+            warning: (title: string) => warnings.push(title),
+            info: () => undefined,
+          },
+        },
+        { provide: ToolService, useValue: { enabledToolIds: () => [] } },
+        { provide: ModelService, useClass: ModelServiceStub },
+        {
+          provide: VoiceChatService,
+          useValue: { status: signal('idle'), isVoiceActive: signal(false), agentTranscript: signal('') },
+        },
+        { provide: SystemPromptsService, useValue: { activePrompt: signal(null) } },
+        { provide: Router, useValue: { navigate: () => Promise.resolve(true) } },
+        { provide: SteeringService, useClass: SteeringServiceStub },
+      ],
+    })
+      .overrideComponent(ChatInputComponent, { set: { imports: [], schemas: [NO_ERRORS_SCHEMA] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(ChatInputComponent);
+    component = fixture.componentInstance;
+    fixture.componentRef.setInput('showVoiceControl', false);
+    fixture.componentRef.setInput('autoFocus', false);
+    fixture.componentRef.setInput('sessionId', 's1');
+    fixture.componentRef.setInput('draftKey', NEW_CONVERSATION_DRAFT_KEY);
+    component.messageSubmitted.subscribe(message => submitted.push(message));
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    releaseUploads();
+    localStorage.clear();
+  });
+
+  function pdf(name: string): File {
+    return new File(['x'], name, { type: 'application/pdf' });
+  }
+
+  function drop(...files: File[]): Promise<void> {
+    const event = {
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+      dataTransfer: { files },
+    } as unknown as DragEvent;
+    return component.onDrop(event);
+  }
+
+  function ready(uploadId: string): PendingUpload {
+    return { file: { name: `${uploadId}.pdf`, type: 'application/pdf', size: 10 } as File, uploadId, status: 'ready', progress: 100 };
+  }
+
+  it('counts files still waiting to upload, so a second pick mid-batch is refused', async () => {
+    const first = drop(pdf('a.pdf'), pdf('b.pdf'), pdf('c.pdf'), pdf('d.pdf'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    // Only a.pdf has started; b, c and d are queued behind it.
+    expect(started).toEqual(['a.pdf']);
+    expect(component.remainingFileSlots()).toBe(1);
+    expect(component.hasActivePendingUploads()).toBe(true);
+
+    await drop(pdf('e.pdf'), pdf('f.pdf'));
+
+    expect(warnings).toEqual(['File Limit']);
+    releaseUploads();
+    await first;
+    expect(started).toEqual(['a.pdf', 'b.pdf', 'c.pdf', 'd.pdf']);
+    expect(component.remainingFileSlots()).toBe(1);
+  });
+
+  it('refuses to send more files than one message carries, rather than lose the rest', () => {
+    component.restoredAttachments.set([
+      { uploadId: 'r1', filename: 'r1.pdf', mimeType: 'application/pdf', sizeBytes: 10, sessionId: 's1', status: 'ready', createdAt: '' },
+    ]);
+    pendingUploads.set(['u1', 'u2', 'u3', 'u4', 'u5'].map(ready));
+    component.userInput.set('compare these');
+
+    component.submitChatRequest();
+
+    expect(submitted).toEqual([]);
+    expect(warnings).toEqual(['Too Many Files']);
+    expect(component.attachmentIds()).toHaveLength(6);
+  });
+
+  it('sends a starter prompt with the files on the composer, and empties its draft', () => {
+    pendingUploads.set(['u1', 'u2'].map(ready));
+    fixture.detectChanges();
+    expect(TestBed.inject(ComposerDraftStorageService).read(NEW_CONVERSATION_DRAFT_KEY).attachments).toHaveLength(2);
+
+    component.submitText('Help me draft a budget justification.');
+
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0].content).toBe('Help me draft a budget justification.');
+    expect(submitted[0].fileUploadIds).toEqual(['u1', 'u2']);
+    expect(TestBed.inject(ComposerDraftStorageService).read(NEW_CONVERSATION_DRAFT_KEY).attachments).toBeUndefined();
+  });
+
+  it('takes down restored files the page found belong to a conversation already sent', () => {
+    component.restoredAttachments.set([
+      { uploadId: 'r1', filename: 'r1.pdf', mimeType: 'application/pdf', sizeBytes: 10, sessionId: 's1', status: 'ready', createdAt: '' },
+    ]);
+    component.userInput.set('keep this text');
+    fixture.detectChanges();
+
+    TestBed.inject(ComposerDraftStorageService).discardAttachments(NEW_CONVERSATION_DRAFT_KEY);
+    fixture.detectChanges();
+
+    expect(component.restoredAttachments()).toEqual([]);
+    expect(component.userInput()).toBe('keep this text');
+  });
+
+  it("ignores a discard for another conversation's draft", () => {
+    component.restoredAttachments.set([
+      { uploadId: 'r1', filename: 'r1.pdf', mimeType: 'application/pdf', sizeBytes: 10, sessionId: 's1', status: 'ready', createdAt: '' },
+    ]);
+    fixture.detectChanges();
+
+    TestBed.inject(ComposerDraftStorageService).discardAttachments('new:agent:ast-other');
+    fixture.detectChanges();
+
+    expect(component.restoredAttachments()).toHaveLength(1);
   });
 });
