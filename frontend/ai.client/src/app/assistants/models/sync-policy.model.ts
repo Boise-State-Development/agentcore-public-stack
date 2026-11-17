@@ -78,3 +78,28 @@ export interface UpdateSyncPolicyRequest {
 export interface SyncPoliciesListResponse {
   policies: SyncPolicy[];
 }
+
+/**
+ * A folder sync's last run, in words: how many files the folder holds and what
+ * changed (assistant-kb-sync spec §11). `null` before the first run.
+ */
+export function folderRunSummaryText(summary: FolderRunSummary | null | undefined): string | null {
+  if (!summary) return null;
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const parts = [
+    summary.updated ? `${summary.updated} updated` : '',
+    summary.added ? `${summary.added} added` : '',
+    summary.removedFromSource ? `${summary.removedFromSource} no longer in the folder` : '',
+    summary.failed ? `${plural(summary.failed, 'file', 'files')} couldn’t be fetched` : '',
+    summary.skipped ? `${plural(summary.skipped, 'file', 'files')} too large` : '',
+    summary.deferred ? `${summary.deferred} waiting for the next sync` : '',
+  ].filter(Boolean);
+  const listed = `${plural(summary.listed, 'file', 'files')} in the folder${summary.truncated ? ' (more than are checked)' : ''}`;
+  return parts.length ? `${listed} · last sync: ${parts.join(', ')}` : `${listed} · up to date at the last sync`;
+}
+
+/** The connector half of a `drive_folder` policy's `{connectorId}:{folderId}`. */
+export function folderConnectorId(sourceRef: string): string | null {
+  const at = sourceRef.lastIndexOf(':');
+  return at > 0 ? sourceRef.slice(0, at) : null;
+}

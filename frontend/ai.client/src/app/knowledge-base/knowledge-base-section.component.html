@@ -415,6 +415,61 @@
       </ul>
     </div>
   } @else {
+  <!-- Synced folders (assistant-kb-sync spec §11): one schedule per Drive
+       folder, made by a folder import with "Keep in sync". Its files are
+       ordinary documents below, each marked with the folder; this list hosts
+       the folder's own controls. Owners/editors only, like every sync control. -->
+  @if (canManageSync() && folderPolicies().length > 0) {
+    <div>
+      <h3 class="mb-2 text-sm/6 font-medium text-gray-700 dark:text-gray-300">Synced folders</h3>
+      <ul
+        class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800"
+        data-testid="kb-synced-folders"
+      >
+        @for (policy of folderPolicies(); track policy.policyId) {
+          <li class="flex items-start gap-3 px-3 py-2.5 sm:px-4">
+            <ng-icon name="heroFolder" class="mt-0.5 size-5 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ folderLabel(policy) }}</p>
+              @if (folderRunText(policy); as text) {
+                <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">{{ text }}</p>
+              } @else {
+                <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
+                  Auto-sync from {{ folderConnectorName(policy) || 'the folder' }} · first sync within about 15 minutes
+                </p>
+              }
+              <app-sync-policy-control
+                class="mt-1.5 block"
+                [policy]="policy"
+                [busy]="isSyncBusy(policy.sourceRef)"
+                [sourceName]="folderLabel(policy)"
+                [lastSyncedAt]="policy.lastSyncAt ?? null"
+                [reconnectLabel]="folderConnectorName(policy)"
+                (intervalSelected)="onFolderIntervalSelected(policy, $event)"
+                (runNow)="onSyncRunNow(policy.sourceRef)"
+                (pause)="onSyncPause(policy.sourceRef)"
+                (resume)="onSyncResume(policy.sourceRef)"
+                (reconnect)="onSyncReconnect(policy.sourceRef)"
+              />
+            </div>
+            <!-- Stops the schedule only; the folder's files stay. -->
+            <button
+              type="button"
+              (click)="stopFolderSync(policy)"
+              [disabled]="isSyncBusy(policy.sourceRef)"
+              title="Stop syncing this folder"
+              [attr.aria-label]="'Stop syncing ' + folderLabel(policy)"
+              class="flex size-8 shrink-0 items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              data-testid="kb-stop-folder-sync"
+            >
+              <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
+            </button>
+          </li>
+        }
+      </ul>
+    </div>
+  }
+
   <!-- Web sources (crawl roots). Sync policies attach to the
        crawl, not to the individual page documents it produced.
        Rendered for owners/editors only — the entire sync surface
@@ -603,9 +658,17 @@
                     <span aria-hidden="true">&#8226;</span>
                     <span>New version of the file above</span>
                   }
-                  @if (canManageSync() && isDriveSyncable(doc) && reconnectLabelForDocument(doc); as provider) {
+                  @if (canManageSync() && folderPolicyFor(doc); as folder) {
+                    <span aria-hidden="true">&#8226;</span>
+                    <!-- One line however long the path; the full one is in the tooltip. -->
+                    <span class="max-w-full min-w-0 truncate" [title]="'Kept in sync with ' + folderLabel(folder)">Kept in sync with {{ folderLabel(folder) }}</span>
+                  } @else if (canManageSync() && isDriveSyncable(doc) && reconnectLabelForDocument(doc); as provider) {
                     <span aria-hidden="true">&#8226;</span>
                     <span>Auto-sync from {{ provider }}</span>
+                  }
+                  @if (doc.removedFromSource) {
+                    <span aria-hidden="true">&#8226;</span>
+                    <span class="font-medium text-state-warning-700 dark:text-state-warning-400">No longer in the folder</span>
                   }
                 </div>
                 @if (doc.status === 'failed' && doc.errorMessage) {
@@ -613,8 +676,9 @@
                 }
                 <!-- "Keep in sync" — only for documents imported from an external
                      connector (device uploads have no source of truth to refetch),
-                     owners/editors only. -->
-                @if (canManageSync() && isDriveSyncable(doc)) {
+                     owners/editors only. A document a synced folder covers is kept
+                     fresh by the folder's schedule instead, so it offers none. -->
+                @if (canManageSync() && isDriveSyncable(doc) && !folderPolicyFor(doc)) {
                   <app-sync-policy-control
                     class="mt-1.5 block"
                     [policy]="syncPolicyFor(doc.documentId)"
