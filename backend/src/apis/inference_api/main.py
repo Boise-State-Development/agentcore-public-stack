@@ -40,6 +40,13 @@ _derived_environment_report = hydrate_derived_environment()
 # after the .env load, so a local run can name its version there.
 from apis.shared.build_info import APP_VERSION  # noqa: E402
 
+# The turn path awaits the shared assistant lookups one after another before the
+# first token, with nothing else on the loop to free it for, so a thread hop would
+# only add latency here. app-api keeps the default (a worker thread).
+from apis.shared.blocking_io import run_blocking_io_inline  # noqa: E402
+
+run_blocking_io_inline()
+
 # Before anything makes an outbound request: trace ids go out, the inbound
 # `session.id` baggage does not (it names the user's conversation, and reached
 # every third-party MCP server and fetched site). opentelemetry-instrument set

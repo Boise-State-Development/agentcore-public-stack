@@ -8,8 +8,17 @@ Storage (assistants table, adjacency list):
     PK: AST#{assistant_id} | SK: SYNCPOL#{policy_id}
     GSI4 (DueSyncIndex, sparse): GSI4_PK = "SYNCDUE", GSI4_SK = "{next_sync_at}#{policy_id}"
     GSI4 keys exist only while state == "active".
+
+Every table call runs in a worker thread (``asyncio.to_thread``). boto3 is
+blocking network I/O, and app-api serves every request from one event loop: a
+document delete calls ``delete_sync_policies_for_source`` per document, so a
+bulk delete ran hundreds of these queries on the loop back to back and the ALB
+health check timed out behind them (2026-11-16). The resource is built on the
+caller's thread; only the call itself crosses over, so no Table object is ever
+used by two threads at once.
 """
 
+import asyncio
 import logging
 import os
 import uuid
@@ -137,13 +146,13 @@ async def create_sync_policy(
     item["GSI4_PK"] = DUE_INDEX_PK
     item["GSI4_SK"] = _due_sort_key(policy.next_sync_at, policy.policy_id)
 
-    _get_table().put_item(Item=item)
+    await asyncio.to_thread(_get_table().put_item, Item=item)
     logger.info(f"Created sync policy {policy.policy_id} ({source_type}/{interval}) for assistant {assistant_id}")
     return policy
 
 
 async def get_sync_policy(assistant_id: str, policy_id: str) -> Optional[SyncPolicy]:
-    response = _get_table().get_item(Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"})
+    response = await asyncio.to_thread(_get_table().get_item, Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"})
     item = response.get("Item")
     return SyncPolicy.model_validate(item) if item else None
 
@@ -151,7 +160,7 @@ async def get_sync_policy(assistant_id: str, policy_id: str) -> Optional[SyncPol
 async def list_sync_policies(assistant_id: str) -> List[SyncPolicy]:
     from boto3.dynamodb.conditions import Key
 
-    response = _get_table().query(
+    response = await asyncio.to_thread(_get_table().query,
         KeyConditionExpression=Key("PK").eq(f"AST#{assistant_id}") & Key("SK").begins_with("SYNCPOL#")
     )
     policies = []
@@ -172,7 +181,7 @@ async def list_due_policies(now: Optional[str] = None, limit: int = 20) -> List[
     from boto3.dynamodb.conditions import Key
 
     now = now or _get_current_timestamp()
-    response = _get_table().query(
+    response = await asyncio.to_thread(_get_table().query,
         IndexName="DueSyncIndex",
         # '~' sorts after '#' and all timestamp characters, so this covers
         # every "{ts}#{policy_id}" key with ts <= now.
@@ -229,7 +238,7 @@ async def set_policy_state(
         expression += " REMOVE " + ", ".join(remove_parts)
 
     try:
-        _get_table().update_item(
+        await asyncio.to_thread(_get_table().update_item,
             Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},
             UpdateExpression=expression,
             ExpressionAttributeNames=names,
@@ -275,7 +284,7 @@ async def rearm_policy(
         values[":run_started"] = values[":updated_at"]
 
     try:
-        _get_table().update_item(
+        await asyncio.to_thread(_get_table().update_item,
             Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},
             UpdateExpression=update_expression,
             ExpressionAttributeValues=values,
@@ -322,7 +331,7 @@ async def record_sync_result(
         values[":zero"] = 0
         set_parts += ["consecutiveFailures = :zero", "consecutiveNotFound = :zero"]
 
-    _get_table().update_item(
+    await asyncio.to_thread(_get_table().update_item,
         Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},
         UpdateExpression="SET " + ", ".join(set_parts) + " REMOVE syncRunStartedAt",
         ExpressionAttributeValues=values,
@@ -341,7 +350,7 @@ async def exclude_folder_file(assistant_id: str, policy_id: str, file_id: str) -
     from botocore.exceptions import ClientError
 
     try:
-        _get_table().update_item(
+        await asyncio.to_thread(_get_table().update_item,
             Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},
             UpdateExpression="ADD excludedFileIds :ids SET updatedAt = :now",
             ConditionExpression=(
@@ -372,7 +381,7 @@ async def exclude_folder_file(assistant_id: str, policy_id: str, file_id: str) -
 
 
 async def put_reauth_marker(user_id: str, assistant_id: str, policy_id: str, provider_id: str) -> None:
-    _get_table().put_item(
+    await asyncio.to_thread(_get_table().put_item,
         Item={
             "PK": f"USER#{user_id}",
             "SK": f"SYNCREAUTH#{policy_id}",
@@ -385,7 +394,7 @@ async def put_reauth_marker(user_id: str, assistant_id: str, policy_id: str, pro
 
 
 async def delete_reauth_marker(user_id: str, policy_id: str) -> None:
-    _get_table().delete_item(Key={"PK": f"USER#{user_id}", "SK": f"SYNCREAUTH#{policy_id}"})
+    await asyncio.to_thread(_get_table().delete_item, Key={"PK": f"USER#{user_id}", "SK": f"SYNCREAUTH#{policy_id}"})
 
 
 async def resume_reauth_policies(user_id: str, provider_id: str) -> int:
@@ -397,7 +406,7 @@ async def resume_reauth_policies(user_id: str, provider_id: str) -> int:
     """
     from boto3.dynamodb.conditions import Key
 
-    response = _get_table().query(
+    response = await asyncio.to_thread(_get_table().query,
         KeyConditionExpression=Key("PK").eq(f"USER#{user_id}") & Key("SK").begins_with("SYNCREAUTH#")
     )
     resumed = 0
@@ -448,7 +457,7 @@ async def change_policy_interval(assistant_id: str, policy_id: str, interval: Sy
         values[":next"] = next_sync_at
         values[":gsi4sk"] = _due_sort_key(next_sync_at, policy_id)
 
-    _get_table().update_item(
+    await asyncio.to_thread(_get_table().update_item,
         Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},
         UpdateExpression="SET " + ", ".join(set_parts),
         ExpressionAttributeNames={"#interval": "interval"},
@@ -484,7 +493,7 @@ async def trigger_run_now(assistant_id: str, policy_id: str) -> SyncPolicy:
     now = _iso(now_dt)
     cooldown_floor = _iso(now_dt - timedelta(seconds=RUN_NOW_COOLDOWN_SECONDS))
     try:
-        _get_table().update_item(
+        await asyncio.to_thread(_get_table().update_item,
             Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"},
             UpdateExpression="SET nextSyncAt = :now, GSI4_SK = :gsi4sk, lastManualRunAt = :now, updatedAt = :now",
             ExpressionAttributeValues={
@@ -502,7 +511,7 @@ async def trigger_run_now(assistant_id: str, policy_id: str) -> SyncPolicy:
 
 
 async def delete_sync_policy(assistant_id: str, policy_id: str) -> bool:
-    _get_table().delete_item(Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"})
+    await asyncio.to_thread(_get_table().delete_item, Key={"PK": f"AST#{assistant_id}", "SK": f"SYNCPOL#{policy_id}"})
     logger.info(f"Deleted sync policy {policy_id} for assistant {assistant_id}")
     return True
 

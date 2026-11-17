@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import random
+import weakref
 from typing import Optional
 
 import boto3
@@ -18,6 +19,35 @@ import boto3
 from apis.shared.kb_backend.records import ENGINE_MANAGED
 
 logger = logging.getLogger(__name__)
+
+#: Background document cleanups one app-api task runs at once. Each one makes a
+#: managed-KB delete, an S3 delete and several DynamoDB writes; a bulk delete of
+#: 658 documents on 2026-11-16 started 658 of them unbounded, which drew
+#: ``ThrottlingException`` from ``DeleteKnowledgeBaseDocuments`` and kept the
+#: event loop busy enough that the ALB health check timed out. Cleanup runs
+#: after the response (the rows are already soft-deleted and invisible), so
+#: queueing behind this cap costs the user nothing.
+MAX_CONCURRENT_CLEANUPS = 8
+
+# One semaphore per event loop: an asyncio primitive binds to the loop that
+# first waits on it, and tests run many loops in one process.
+_cleanup_slots: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary()
+)
+
+# Assistants whose orphaned-crawl cascade is running, and those that asked for
+# another pass while it ran. See `_cascade_coalesced`.
+_cascade_running: set[str] = set()
+_cascade_rerun: set[str] = set()
+
+
+def _cleanup_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    slots = _cleanup_slots.get(loop)
+    if slots is None:
+        slots = asyncio.Semaphore(MAX_CONCURRENT_CLEANUPS)
+        _cleanup_slots[loop] = slots
+    return slots
 
 
 def _get_documents_bucket() -> str:
@@ -72,6 +102,29 @@ async def cleanup_document_resources(
     Returns:
         True if all resources were cleaned up successfully, False otherwise
     """
+    async with _cleanup_semaphore():
+        return await _cleanup_document_resources(
+            document_id=document_id,
+            assistant_id=assistant_id,
+            s3_key=s3_key,
+            chunk_count=chunk_count,
+            max_retries=max_retries,
+            base_delay=base_delay,
+            source_connector_id=source_connector_id,
+        )
+
+
+async def _cleanup_document_resources(
+    *,
+    document_id: str,
+    assistant_id: str,
+    s3_key: str,
+    chunk_count: Optional[int],
+    max_retries: int,
+    base_delay: float,
+    source_connector_id: Optional[str],
+) -> bool:
+    """The body of :func:`cleanup_document_resources`, run inside a cleanup slot."""
     # One engine lookup for both phases. A managed-KB document never had
     # vectors in the S3 Vectors index, so the legacy phase below must not fall
     # back to scanning the whole index for it — that scan is what blocked the
@@ -118,7 +171,7 @@ async def cleanup_document_resources(
 
         if source_connector_id == "web":
             try:
-                await _cascade_delete_orphaned_crawl_jobs(assistant_id)
+                await _cascade_coalesced(assistant_id)
             except Exception as e:
                 logger.error(
                     f"CrawlJob cascade after deleting {document_id} failed: {e}",
@@ -131,6 +184,35 @@ async def cleanup_document_resources(
         )
 
     return all_succeeded
+
+
+async def _cascade_coalesced(assistant_id: str) -> None:
+    """Run the orphaned-crawl cascade for an assistant, at most one at a time.
+
+    The cascade reads every document row of the assistant, so running it once
+    per deleted page made a bulk delete quadratic: deleting a 600-page web
+    corpus ran 600 full-partition queries (2026-11-16). One pass after the last
+    deletion decides the same thing, because it only asks which crawls no
+    surviving page still references.
+
+    So while a pass is running, a later caller only marks the assistant for one
+    more pass and returns. The running caller repeats until no mark is left, so
+    every hard-delete that finished before a pass began is seen by that pass,
+    and a burst of N deletions costs a handful of passes instead of N. All of
+    this runs on one event loop, so the check-and-mark needs no lock.
+    """
+    if assistant_id in _cascade_running:
+        _cascade_rerun.add(assistant_id)
+        return
+    _cascade_running.add(assistant_id)
+    try:
+        while True:
+            _cascade_rerun.discard(assistant_id)
+            await _cascade_delete_orphaned_crawl_jobs(assistant_id)
+            if assistant_id not in _cascade_rerun:
+                return
+    finally:
+        _cascade_running.discard(assistant_id)
 
 
 async def _cascade_delete_orphaned_crawl_jobs(assistant_id: str) -> None:
@@ -203,7 +285,9 @@ async def _list_surviving_web_source_file_ids(assistant_id: str) -> list[str]:
         if exclusive_start_key:
             kwargs["ExclusiveStartKey"] = exclusive_start_key
         try:
-            response = table.query(**kwargs)
+            # A full-partition read, page by page: on the event loop it stalled
+            # every request on the task (2026-11-16).
+            response = await asyncio.to_thread(table.query, **kwargs)
         except Exception as e:
             logger.error(f"Failed to list web docs for cascade ({assistant_id}): {e}")
             return urls

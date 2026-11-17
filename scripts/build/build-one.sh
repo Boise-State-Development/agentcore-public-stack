@@ -153,6 +153,7 @@ case "$SERVICE" in
             "backend/src/apis/shared/build_info.py"
             "backend/src/apis/shared/timestamps.py"
             "backend/src/apis/shared/dynamo_errors.py"
+            "backend/src/apis/shared/blocking_io.py"
             "backend/src/apis/shared/feature_flags.py"
             "backend/src/apis/shared/aws_clients.py"
         )

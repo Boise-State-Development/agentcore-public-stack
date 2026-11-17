@@ -9,6 +9,7 @@ DynamoDB Schema:
 - GSI for status queries (optional)
 """
 
+import asyncio
 import logging
 import os
 import uuid
@@ -90,7 +91,7 @@ async def _auto_fail_stale_document(document: Document) -> Document:
     return updated if updated else document
 
 
-async def release_reservation_if_managed(document: Document) -> None:
+def _release_reservation_if_managed_sync(document: Document) -> None:
     """Return a managed-KB byte reservation for a document abandoned before its
     bytes were settled by the ingestion consumer (Requirement 12.6).
 
@@ -103,8 +104,9 @@ async def release_reservation_if_managed(document: Document) -> None:
     whose ``sizeBytes`` is real but was never reserved
     (``byte_cap.reserved_at_request``).
 
-    ``app_kb_id == assistant_id`` this phase. boto3 is called synchronously here,
-    matching the rest of this module.
+    ``app_kb_id == assistant_id`` this phase. Every call here is blocking boto3, so
+    the async entry point (:func:`release_reservation_if_managed`) runs this in a
+    worker thread.
     """
     from apis.shared.kb_backend import byte_cap
     from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
@@ -127,7 +129,16 @@ async def release_reservation_if_managed(document: Document) -> None:
         )
 
 
-async def settle_bytes_on_delete(document: Document, previous_status: Optional[str]) -> None:
+async def release_reservation_if_managed(document: Document) -> None:
+    """Return an abandoned document's managed-KB byte reservation, off the event loop.
+
+    See :func:`_release_reservation_if_managed_sync`; its KB-record read and
+    byte-cap writes are three blocking DynamoDB calls.
+    """
+    await asyncio.to_thread(_release_reservation_if_managed_sync, document)
+
+
+def _settle_bytes_on_delete_sync(document: Document, previous_status: Optional[str]) -> None:
     """Give a deleted document's bytes back to its managed-KB allowance.
 
     Which bytes depends on how far the document got, and the ``DOC#`` markers say
@@ -186,7 +197,17 @@ async def settle_bytes_on_delete(document: Document, previous_status: Optional[s
 
     if previous_status in ('failed', 'deleting'):
         return
-    await release_reservation_if_managed(document)
+    _release_reservation_if_managed_sync(document)
+
+
+async def settle_bytes_on_delete(document: Document, previous_status: Optional[str]) -> None:
+    """Give a deleted document's bytes back to its allowance, off the event loop.
+
+    See :func:`_settle_bytes_on_delete_sync`. Every document delete runs it, and
+    it makes up to five blocking DynamoDB calls; on the loop, a bulk delete of a
+    few hundred documents stalled every request on the task (2026-11-16).
+    """
+    await asyncio.to_thread(_settle_bytes_on_delete_sync, document, previous_status)
 
 
 async def create_document(
@@ -270,7 +291,7 @@ async def create_document(
     item['SK'] = f'DOC#{document_id}'
     
     try:
-        table.put_item(Item=item)
+        await asyncio.to_thread(table.put_item, Item=item)
         logger.info(f"Created document {document_id} for assistant {assistant_id}")
         return document
     except ClientError as e:
@@ -318,7 +339,7 @@ async def get_document(
     table = dynamodb.Table(table_name)
     
     try:
-        response = table.get_item(
+        response = await asyncio.to_thread(table.get_item,
             Key={
                 'PK': f'AST#{assistant_id}',
                 'SK': f'DOC#{document_id}'
@@ -460,7 +481,7 @@ async def update_document_status(
         if expression_attribute_names:
             update_params['ExpressionAttributeNames'] = expression_attribute_names
         
-        response = table.update_item(**update_params)
+        response = await asyncio.to_thread(table.update_item, **update_params)
         
         # Parse response and return Document object
         if 'Attributes' in response:
@@ -555,7 +576,7 @@ async def update_document_import_metadata(
         expression_attribute_values[":source_etag"] = source_etag
 
     try:
-        response = table.update_item(
+        response = await asyncio.to_thread(table.update_item,
             Key={
                 'PK': f'AST#{assistant_id}',
                 'SK': f'DOC#{document_id}'
@@ -604,7 +625,6 @@ async def assistant_has_documents(assistant_id: str) -> bool:
     established legacy agent silently breaks retrieval of its existing corpus,
     whereas wrongly staying legacy on a new agent is benign (it can still Upgrade).
     """
-    import asyncio
 
     table_name = os.environ.get('DYNAMODB_ASSISTANTS_TABLE_NAME')
     if not table_name:
@@ -705,7 +725,7 @@ async def list_assistant_documents(
         query_params['ExclusiveStartKey'] = exclusive_start_key
     
     try:
-        response = table.query(**query_params)
+        response = await asyncio.to_thread(table.query, **query_params)
         
         documents = []
         for item in response.get('Items', []):
@@ -788,7 +808,7 @@ async def delete_document(
     table = dynamodb.Table(table_name)
     
     try:
-        table.delete_item(
+        await asyncio.to_thread(table.delete_item,
             Key={
                 'PK': f'AST#{assistant_id}',
                 'SK': f'DOC#{document_id}'
@@ -860,7 +880,7 @@ async def soft_delete_document(
     ttl_value = int(time.time()) + ttl_days * 86400
 
     try:
-        response = table.update_item(
+        response = await asyncio.to_thread(table.update_item,
             Key={
                 'PK': f'AST#{assistant_id}',
                 'SK': f'DOC#{document_id}'
@@ -942,7 +962,7 @@ async def hard_delete_document(
     table = dynamodb.Table(table_name)
 
     try:
-        table.delete_item(
+        await asyncio.to_thread(table.delete_item,
             Key={
                 'PK': f'AST#{assistant_id}',
                 'SK': f'DOC#{document_id}'
@@ -1004,7 +1024,7 @@ async def batch_soft_delete_documents(
     marked_count = 0
     for document_id in document_ids:
         try:
-            table.update_item(
+            await asyncio.to_thread(table.update_item,
                 Key={
                     'PK': f'AST#{assistant_id}',
                     'SK': f'DOC#{document_id}'
