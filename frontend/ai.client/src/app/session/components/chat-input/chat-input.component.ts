@@ -1657,6 +1657,16 @@ export class ChatInputComponent {
     });
 
     inject(DestroyRef).onDestroy(() => this.cancelDictation());
+    // File this composer's uploads under its draft and release them, as a
+    // conversation change does (`syncDraft`). `FileUploadService` outlives the
+    // composer, so without this the composer that replaces it (another Agent's
+    // new conversation renders a new one) shows them and files them as its own.
+    // A replacement with the same key gets them back from the draft.
+    inject(DestroyRef).onDestroy(() => {
+      if (!this.mirroredDraftKey) return;
+      this.draftStorage.write(this.mirroredDraftKey, this.composerDraftSnapshot());
+      this.fileUploadService.clearReadyUploads();
+    });
     // A folder card's poll must not outlive the composer that shows it.
     inject(DestroyRef).onDestroy(() => {
       this.stopAllFolderPolls();

@@ -3406,6 +3406,21 @@ describe('ChatInputComponent — the per-message file limit', () => {
     expect(component.userInput()).toBe('keep this text');
   });
 
+  it('files its uploads under its own draft when it is destroyed, and lets go of them', () => {
+    pendingUploads.set(['u1'].map(ready));
+    fixture.detectChanges();
+
+    // Another Agent's new conversation renders a new composer; this one goes.
+    fixture.destroy();
+
+    expect(pendingUploads()).toEqual([]);
+    expect(
+      TestBed.inject(ComposerDraftStorageService)
+        .read(NEW_CONVERSATION_DRAFT_KEY)
+        .attachments?.map(a => a.uploadId),
+    ).toEqual(['u1']);
+  });
+
   it("ignores a discard for another conversation's draft", () => {
     component.restoredAttachments.set([
       { uploadId: 'r1', filename: 'r1.pdf', mimeType: 'application/pdf', sizeBytes: 10, sessionId: 's1', status: 'ready', createdAt: '' },
