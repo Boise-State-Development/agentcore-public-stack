@@ -187,3 +187,94 @@ class TestHostOf:
 
     def test_handles_unparseable(self):
         assert host_of("not a url") is None
+
+
+class TestIsBlockedAddress:
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "169.254.169.254",  # EC2 instance metadata
+            "169.254.170.2",  # ECS task metadata / credentials
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.0.1",
+            "127.0.0.1",
+            "100.64.0.1",  # carrier-grade NAT
+            "0.0.0.0",
+            "224.0.0.1",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "::ffff:169.254.169.254",  # IPv4-mapped
+            "64:ff9b::a9fe:a9fe",  # NAT64 of 169.254.169.254
+        ],
+    )
+    def test_blocks_non_public(self, address: str):
+        import ipaddress
+
+        from apis.app_api.web_sources.url_utils import is_blocked_address
+
+        assert is_blocked_address(ipaddress.ip_address(address))
+
+    @pytest.mark.parametrize("address", ["8.8.8.8", "93.184.215.14", "2606:4700:4700::1111", "64:ff9b::808:808"])
+    def test_allows_public(self, address: str):
+        import ipaddress
+
+        from apis.app_api.web_sources.url_utils import is_blocked_address
+
+        assert not is_blocked_address(ipaddress.ip_address(address))
+
+
+class TestResolvePublicAddresses:
+    @pytest.fixture
+    def resolver(self, monkeypatch: pytest.MonkeyPatch):
+        from apis.app_api.web_sources import url_utils
+
+        answers: dict = {}
+
+        async def fake_getaddrinfo(host: str, port: int):
+            if host not in answers:
+                import socket
+
+                raise socket.gaierror("no such host")
+            return [(2, 1, 6, "", (a, port)) for a in answers[host]]
+
+        monkeypatch.setattr(url_utils, "_getaddrinfo", fake_getaddrinfo)
+        return answers
+
+    @pytest.mark.asyncio
+    async def test_returns_public_addresses(self, resolver):
+        from apis.app_api.web_sources.url_utils import resolve_public_addresses
+
+        resolver["example.com"] = ["93.184.215.14", "93.184.215.14"]
+        assert [str(a) for a in await resolve_public_addresses("example.com", 443)] == ["93.184.215.14"]
+
+    @pytest.mark.asyncio
+    async def test_refuses_a_hostname_resolving_privately(self, resolver):
+        from apis.app_api.web_sources.url_utils import BlockedAddressError, resolve_public_addresses
+
+        resolver["intranet.example.com"] = ["10.0.0.7"]
+        with pytest.raises(BlockedAddressError):
+            await resolve_public_addresses("intranet.example.com", 443)
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_host_is_invalid_not_blocked(self, resolver):
+        from apis.app_api.web_sources.url_utils import BlockedAddressError, resolve_public_addresses
+
+        with pytest.raises(InvalidUrlError) as excinfo:
+            await resolve_public_addresses("nowhere.invalid", 443)
+        assert not isinstance(excinfo.value, BlockedAddressError)
+
+    @pytest.mark.asyncio
+    async def test_ip_literals_skip_dns(self, resolver):
+        from apis.app_api.web_sources.url_utils import BlockedAddressError, resolve_public_addresses
+
+        assert [str(a) for a in await resolve_public_addresses("8.8.8.8", 80)] == ["8.8.8.8"]
+        with pytest.raises(BlockedAddressError):
+            await resolve_public_addresses("::1", 80)
+
+    def test_assert_url_is_public_raises_blocked_for_literals(self):
+        from apis.app_api.web_sources.url_utils import BlockedAddressError
+
+        with pytest.raises(BlockedAddressError):
+            assert_url_is_public("http://169.254.170.2/v2/credentials", resolve=False)
