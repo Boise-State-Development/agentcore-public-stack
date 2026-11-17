@@ -8,6 +8,8 @@ always finalize the `CrawlJob` it owns. Failure modes:
 - transport errors on a page → that one document goes 'failed', crawl
   continues
 - robots.txt disallows a page → silently skipped (it never becomes a doc)
+- two URLs redirect to the same page, or a redirect leaves the crawl → the
+  page is kept once, under the URL it landed on (it never becomes a 2nd doc)
 - timeout on the whole crawl → caught, crawl marked 'failed'
 
 The hot loop is small on purpose: discover links, gate them through
@@ -45,6 +47,7 @@ from apis.app_api.web_sources.crawl_repository import (
 )
 from apis.app_api.web_sources.models import CrawlSettings
 from apis.app_api.web_sources.url_utils import (
+    InvalidUrlError,
     absolute_url,
     assert_url_is_public,
     host_of,
@@ -372,21 +375,36 @@ class _HostDelay:
 # ── Fetch ────────────────────────────────────────────────────────────────────
 
 
+@dataclass
+class _FetchedPage:
+    html: str
+    etag: Optional[str]
+    not_modified: bool
+    # Where the request ended up after redirects, normalized. Two URLs that
+    # land on the same final URL are the same page.
+    final_url: str
+
+
 async def _fetch_page(
     client: httpx.AsyncClient, url: str, if_none_match: Optional[str] = None
-) -> Tuple[str, Optional[str], bool]:
-    """Fetch a single page. Returns (html, etag, not_modified).
+) -> _FetchedPage:
+    """Fetch a single page, following redirects.
 
     When `if_none_match` is set (KB-sync refresh with a stored ETag), a 304
-    response short-circuits as ("", stored_etag, True) — no body transfer,
-    no re-extraction. Raises on non-2xx (other than 304) or non-HTML.
+    response short-circuits with an empty body and `not_modified=True` — no
+    body transfer, no re-extraction. Raises on non-2xx (other than 304) or
+    non-HTML.
     """
     headers = {"If-None-Match": if_none_match} if if_none_match else None
     resp = await client.get(
         url, follow_redirects=True, timeout=PER_PAGE_TIMEOUT_SECONDS, headers=headers
     )
+    try:
+        final_url = normalize_url(str(resp.url))
+    except InvalidUrlError:
+        final_url = url
     if if_none_match and resp.status_code == 304:
-        return "", if_none_match, True
+        return _FetchedPage("", if_none_match, True, final_url)
     resp.raise_for_status()
     content_type = (resp.headers.get("content-type") or "").lower()
     if not any(
@@ -401,8 +419,20 @@ async def _fetch_page(
             f"Response too large: {len(content)} bytes (max {MAX_RESPONSE_BYTES})"
         )
     # Use httpx's encoding inference; surface bytes as text for parsing.
-    html = resp.text
-    return html, resp.headers.get("etag"), False
+    return _FetchedPage(resp.text, resp.headers.get("etag"), False, final_url)
+
+
+def _is_public(url: str) -> bool:
+    """The SSRF guard's literal-address check, for where a redirect landed.
+
+    The request has already been made by then; this keeps a redirect to an
+    internal address from being ingested and served back as page content.
+    """
+    try:
+        assert_url_is_public(url, resolve=False)
+    except InvalidUrlError:
+        return False
+    return True
 
 
 # ── S3 stage ────────────────────────────────────────────────────────────────
@@ -500,10 +530,19 @@ async def run_crawl(
             discovered_delta=1,
         )
 
+        root_key = normalize_url(root_url)
         visited: Set[str] = set()
+        # final URL -> the URL its document is recorded under. Most sites
+        # redirect between `example.com` and `www.example.com`, and from `/x`
+        # to `/x/`, and link to both forms, so the URL a link names is not
+        # the page's identity; where the request lands is.
+        pages_by_final_url: Dict[str, str] = {}
+        # Requested URLs that turned out to land on a page already fetched
+        # (or outside the crawl). Never queued again.
+        aliases: Set[str] = set()
         frontier: asyncio.Queue[Tuple[str, int]] = asyncio.Queue()
-        await frontier.put((normalize_url(root_url), 0))
-        visited.add(normalize_url(root_url))
+        await frontier.put((root_key, 0))
+        visited.add(root_key)
 
         semaphore = asyncio.Semaphore(settings.concurrency)
         delay = _HostDelay(settings)
@@ -527,7 +566,11 @@ async def run_crawl(
                 loop = asyncio.get_running_loop()
                 links = await loop.run_in_executor(None, _extract_links, html, url)
                 for normalized, _raw in links:
-                    if normalized in visited:
+                    if (
+                        normalized in visited
+                        or normalized in aliases
+                        or normalized in pages_by_final_url
+                    ):
                         continue
                     if len(visited) >= settings.max_pages:
                         break
@@ -560,7 +603,7 @@ async def run_crawl(
                         # exception — if the user pointed at a disallowed
                         # root, the route already created a doc; mark it
                         # failed below.
-                        if url == normalize_url(root_url):
+                        if url == root_key:
                             await update_document_status(
                                 assistant_id=assistant_id,
                                 document_id=root_document_id,
@@ -574,24 +617,24 @@ async def run_crawl(
                             )
                         return
                     await delay.wait_for(url)
-                    existing = refresh.docs.get(url) if refresh is not None else None
-                    if refresh is not None:
-                        # Seen = survived the robots gate. Fetch failures
-                        # still count as seen (transient outage ≠ missing
-                        # page); robots-disallowed pages returned above and
-                        # do NOT (the site said stop indexing them).
-                        refresh.seen_urls.add(url)
-                    document_id = await creator.get_or_create(url)
+                    requested = refresh.docs.get(url) if refresh is not None else None
                     logger.info("Crawl %s fetching %s (depth=%d)", crawl_id, url, depth)
                     try:
-                        html, etag, not_modified = await _fetch_page(
+                        page = await _fetch_page(
                             client,
                             url,
-                            if_none_match=existing.source_etag if existing else None,
+                            if_none_match=requested.source_etag if requested else None,
                         )
                     except Exception as fetch_err:
                         logger.warning("Fetch failed for %s: %s", url, fetch_err)
-                        if existing is None:
+                        if refresh is not None:
+                            # Seen = survived the robots gate. Fetch failures
+                            # still count as seen (transient outage ≠ missing
+                            # page); robots-disallowed pages returned above and
+                            # do NOT (the site said stop indexing them).
+                            refresh.seen_urls.add(url)
+                        document_id = await creator.get_or_create(url)
+                        if requested is None:
                             # Refresh mode never clobbers an existing indexed
                             # doc's status over a transient fetch error — its
                             # last-good content stays served.
@@ -609,8 +652,79 @@ async def run_crawl(
                         )
                         return
 
+                    # The page is recorded under where it landed; the root
+                    # keeps the document the route created for it.
+                    final_url = page.final_url
+                    key = root_key if url == root_key else final_url
+                    if key == root_key and not _is_public(final_url):
+                        logger.warning("Crawl %s root redirected to a non-public address", crawl_id)
+                        await update_document_status(
+                            assistant_id=assistant_id,
+                            document_id=root_document_id,
+                            status="failed",
+                            error_message="The page redirected to an address that can't be fetched.",
+                        )
+                        await increment_counters(
+                            assistant_id=assistant_id,
+                            crawl_id=crawl_id,
+                            failed_delta=1,
+                        )
+                        return
+                    already_fetched = final_url in pages_by_final_url
+                    off_course = key != root_key and (
+                        (settings.same_domain_only and not in_crawl_scope(final_url, root_url))
+                        or not _is_public(final_url)
+                    )
+                    if already_fetched or off_course:
+                        # Another URL already fetched this page, or the
+                        # redirect left the crawl. No document; give the
+                        # page budget slot back.
+                        logger.info(
+                            "Crawl %s skipping %s: lands on %s (%s)",
+                            crawl_id,
+                            url,
+                            final_url,
+                            "outside the crawl" if off_course else "already fetched",
+                        )
+                        aliases.add(url)
+                        visited.discard(url)
+                        await increment_counters(
+                            assistant_id=assistant_id,
+                            crawl_id=crawl_id,
+                            discovered_delta=-1,
+                        )
+                        return
+                    # Claimed with no await since the check, so two in-flight
+                    # URLs for one page can't both pass it.
+                    pages_by_final_url[final_url] = key
+                    if url != key:
+                        aliases.add(url)
+
+                    existing = refresh.docs.get(key) if refresh is not None else None
+                    if page.not_modified and existing is not requested:
+                        # The ETag sent belonged to the record under the URL
+                        # as requested, not the one the page is recorded
+                        # under; fetch it plainly.
+                        await delay.wait_for(url)
+                        try:
+                            page = await _fetch_page(client, url)
+                        except Exception as fetch_err:
+                            logger.warning("Fetch failed for %s: %s", url, fetch_err)
+                            if refresh is not None:
+                                refresh.seen_urls.add(key)
+                            await increment_counters(
+                                assistant_id=assistant_id,
+                                crawl_id=crawl_id,
+                                failed_delta=1,
+                            )
+                            return
+                    if refresh is not None:
+                        refresh.seen_urls.add(key)
+                    document_id = await creator.get_or_create(key)
+                    html, etag, not_modified = page.html, page.etag, page.not_modified
+
                     if not_modified:
-                        await refresh._emit(url, document_id, "unchanged", etag)
+                        await refresh._emit(key, document_id, "unchanged", etag)
                         await increment_counters(
                             assistant_id=assistant_id,
                             crawl_id=crawl_id,
@@ -628,7 +742,7 @@ async def run_crawl(
                     # thread pool so extraction never blocks the shared loop.
                     loop = asyncio.get_running_loop()
                     markdown, title = await loop.run_in_executor(
-                        None, _extract_markdown, html, url
+                        None, _extract_markdown, html, final_url
                     )
                     if not markdown.strip():
                         if existing is None:
@@ -652,28 +766,28 @@ async def run_crawl(
                                 # Same bytes under a new/absent ETag: record
                                 # the fresh etag so gate 1 works next run,
                                 # skip the re-embed entirely.
-                                await refresh._emit(url, document_id, "unchanged", etag, content_hash)
+                                await refresh._emit(key, document_id, "unchanged", etag, content_hash)
                                 await increment_counters(
                                     assistant_id=assistant_id,
                                     crawl_id=crawl_id,
                                     fetched_delta=1,
                                 )
-                                await enqueue_links(html, url, depth)
+                                await enqueue_links(html, final_url, depth)
                                 return
                             # Changed: let the worker stash the previous
                             # chunk count BEFORE the S3 overwrite fires the
                             # ingestion event.
-                            await refresh._emit(url, document_id, "changed", etag, content_hash)
+                            await refresh._emit(key, document_id, "changed", etag, content_hash)
                         else:
-                            await refresh._emit(url, document_id, "created", etag, content_hash)
+                            await refresh._emit(key, document_id, "created", etag, content_hash)
                     display_name = (
-                        title or url_extension_hint(url)
+                        title or url_extension_hint(key)
                     ).strip() or "page"
                     filename = f"{display_name}.md"
                     logger.info(
                         "Crawl %s staging %s -> s3 (%d bytes markdown)",
                         crawl_id,
-                        url,
+                        key,
                         len(markdown.encode("utf-8")),
                     )
                     try:
@@ -684,9 +798,9 @@ async def run_crawl(
                             filename=filename,
                         )
                     except Exception as stage_err:
-                        logger.warning("Staging %s to S3 failed: %s", url, stage_err)
+                        logger.warning("Staging %s to S3 failed: %s", key, stage_err)
                         if refresh is not None:
-                            await refresh._emit(url, document_id, "stage_failed", etag, content_hash)
+                            await refresh._emit(key, document_id, "stage_failed", etag, content_hash)
                         if existing is None:
                             await update_document_status(
                                 assistant_id=assistant_id,
@@ -704,7 +818,7 @@ async def run_crawl(
                         # Not walking them would leave every page below this
                         # one unseen, and a refresh counts unseen pages as
                         # misses toward deletion.
-                        await enqueue_links(html, url, depth)
+                        await enqueue_links(html, final_url, depth)
                         return
                     await update_document_import_metadata(
                         assistant_id=assistant_id,
@@ -718,7 +832,7 @@ async def run_crawl(
                     logger.info(
                         "Crawl %s wrote %s to s3 (key=%s); ingestion Lambda will take over",
                         crawl_id,
-                        url,
+                        key,
                         s3_key,
                     )
                     await increment_counters(
@@ -727,9 +841,9 @@ async def run_crawl(
                         fetched_delta=1,
                     )
                     if on_progress is not None:
-                        await on_progress(url)
+                        await on_progress(key)
 
-                    await enqueue_links(html, url, depth)
+                    await enqueue_links(html, final_url, depth)
                 finally:
                     in_flight -= 1
                     if in_flight == 0 and frontier.empty():
