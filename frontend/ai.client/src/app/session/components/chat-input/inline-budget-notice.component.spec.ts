@@ -28,8 +28,14 @@ describe('InlineBudgetNoticeComponent', () => {
     expect(host.getAttribute('aria-live')).toBe('polite');
   });
 
-  it('says nothing for a document read from storage, which is still sent', () => {
-    expect(render({ byReference: [file('policy-d.pdf')], dropped: [] })).toBe('');
+  it('names a document read on demand in a quiet line, not a warning', () => {
+    expect(render({ byReference: [file('policy-d.pdf')], dropped: [] })).toBe(
+      "policy-d.pdf will be read on demand rather than included in full, since this message's files " +
+        'together are over 7 MB. Ask about it by name if the answer leaves it out.',
+    );
+    const host = fixture.nativeElement as HTMLElement;
+    expect(host.querySelector('[data-testid="inline-budget-on-demand"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="inline-budget-notice"]')).toBeNull();
   });
 
   it('names images that need a follow-up message', () => {
@@ -39,14 +45,17 @@ describe('InlineBudgetNoticeComponent', () => {
     );
   });
 
-  it('names only the files left out when documents also go by reference', () => {
+  it('says both, each in its own tone, when both happen', () => {
     const text = render({
       byReference: [file('one.pdf'), file('two.pdf'), file('three.docx')],
       dropped: [file('photo.png', 'image/png')],
     });
 
-    expect(text).not.toContain('one.pdf');
+    expect(text).toContain('one.pdf, two.pdf and three.docx will be read on demand');
+    expect(text).toContain('Ask about them by name if the answer leaves them out.');
     expect(text).toContain("photo.png won't fit in this message");
     expect(text).toContain('Send it in a follow-up message.');
+    const warning = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="inline-budget-notice"]');
+    expect(warning?.textContent).not.toContain('one.pdf');
   });
 });

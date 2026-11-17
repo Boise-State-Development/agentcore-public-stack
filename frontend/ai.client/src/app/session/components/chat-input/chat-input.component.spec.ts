@@ -3206,7 +3206,7 @@ describe('ChatInputComponent — the combined inline budget, before send', () =>
     expect((fixture.nativeElement as HTMLElement).querySelector('app-inline-budget-notice')?.getAttribute('role')).toBe('status');
   });
 
-  it('sends a document past the budget by reference without a warning', () => {
+  it('names a document past the budget as read on demand, without a warning', () => {
     pendingUploads.set([
       upload('u1', 'policy-a.pdf', 5.7 * MB),
       upload('u2', 'policy-b.pdf', 3.9 * MB),
@@ -3219,6 +3219,8 @@ describe('ChatInputComponent — the combined inline budget, before send', () =>
 
     expect(component.budgetOverflow()?.byReference.map(f => f.filename)).toEqual(['policy-d.pdf']);
     expect(notice()).toBeNull();
+    const onDemand = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="inline-budget-on-demand"]');
+    expect(onDemand?.textContent?.replace(/\s+/g, ' ')).toContain('policy-d.pdf will be read on demand');
   });
 
   it('judges restored attachments first, in the order the send carries them', () => {
