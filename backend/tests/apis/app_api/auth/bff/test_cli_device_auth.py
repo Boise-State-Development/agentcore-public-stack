@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time
 import urllib.parse
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -33,9 +34,14 @@ from apis.shared.auth.device_grants.models import (
 )
 from apis.shared.auth.device_grants.repository import DeviceGrantRepository
 from apis.shared.auth.device_grants.service import DeviceGrantService
+from apis.shared import rate_limit
 from apis.shared.sessions_bff.config import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
 
 from .conftest import BFF_SESSIONS_TABLE, COGNITO_DOMAIN_URL, make_id_token
+
+
+#: A multiple of 300 (and so of 60), plus 30.
+_FROZEN_RATE_LIMIT_NOW = 1_800_000_030.0
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +63,12 @@ def cli_app(monkeypatch, moto_aws, codec, repository, grants) -> FastAPI:
     The service singleton lives in `routes`, so injecting it there is what
     both the CLI routes and the callback branch pick up.
     """
+    # The limiter counts in fixed windows (`now // window`). A burst test
+    # that crosses a window boundary on a slow runner splits its requests
+    # across two counters and never sees a 429, so the limiter's clock is
+    # held mid-window: 30 s into a 60 s token window and a 300 s
+    # authorize/verify window alike.
+    monkeypatch.setattr(rate_limit, "time", SimpleNamespace(time=lambda: _FROZEN_RATE_LIMIT_NOW))
     bff_routes._repository = repository
     from apis.shared.sessions_bff.cookie import _set_default_codec_for_tests
 
