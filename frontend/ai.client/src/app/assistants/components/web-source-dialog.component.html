@@ -46,7 +46,7 @@
           Crawl linked pages from this URL
         </label>
         <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-          Off by default — only the page above is fetched. Turn on to follow links within the same site.
+          Off by default — only the page above is fetched. Turn on to follow links that stay under this URL, so a crawl from /research/ stays in /research/. To crawl a whole site, start from its home page.
         </p>
       </div>
     </div>
@@ -162,8 +162,13 @@
           </p>
         </div>
 
-        <p class="text-xs/5 text-gray-500 dark:text-gray-400">
-          Crawl stays on the same domain and honors the site's robots.txt.
+        <p class="text-xs/5 text-gray-500 dark:text-gray-400" data-testid="web-src-crawl-scope">
+          @if (crawlScope(); as scope) {
+            Only pages under <span class="font-medium text-gray-700 dark:text-gray-300">{{ scope }}</span> are crawled.
+          } @else {
+            The crawl stays under the URL you enter.
+          }
+          It honors the site's robots.txt.
         </p>
       </div>
     }

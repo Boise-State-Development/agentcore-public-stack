@@ -365,6 +365,74 @@ async def test_same_domain_filter_drops_external_links(recorder: _Recorder):
 
 
 @pytest.mark.asyncio
+async def test_crawl_stays_inside_the_start_urls_section(recorder: _Recorder):
+    # A crawl started at /research/ must not follow the site nav to the home
+    # page or a sibling section and spend its page budget there.
+    nav = (
+        '<a href="https://www.example.com/">Home</a>'
+        '<a href="/admissions/">Admissions</a>'
+        '<a href="/research-news/">News</a>'
+    )
+    pages = {
+        "https://example.com/research/": (
+            f"<html><body>{nav}"
+            '<a href="/research/labs">Labs</a>'
+            '<a href="https://www.example.com/research/grants">Grants</a>'
+            "</body></html>"
+        ),
+        "https://example.com/research/labs": f"<html><body>{nav}labs</body></html>",
+        "https://www.example.com/research/grants": f"<html><body>{nav}grants</body></html>",
+        "https://www.example.com/": "<html><body>home</body></html>",
+        "https://example.com/admissions/": "<html><body>admissions</body></html>",
+        "https://example.com/research-news/": "<html><body>news</body></html>",
+    }
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url="https://example.com/research/",
+        settings=CrawlSettings(max_depth=2, max_pages=25),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(_build_handler(pages)),
+    )
+    assert recorder.finalized_status == "complete"
+    fetched_urls = {url for _, url in recorder.created_docs}
+    assert fetched_urls == {
+        "https://example.com/research/labs",
+        "https://www.example.com/research/grants",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_home_page_start_crawls_the_whole_host(recorder: _Recorder):
+    pages = {
+        "https://example.com/": (
+            "<html><body>"
+            '<a href="/admissions/">A</a><a href="/research/">R</a>'
+            '<a href="https://docs.example.com/">Docs</a>'
+            "</body></html>"
+        ),
+        "https://example.com/admissions/": "<html><body>a</body></html>",
+        "https://example.com/research/": "<html><body>r</body></html>",
+        "https://docs.example.com/": "<html><body>d</body></html>",
+    }
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url="https://example.com/",
+        settings=CrawlSettings(max_depth=1, max_pages=10),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(_build_handler(pages)),
+    )
+    fetched_urls = {url for _, url in recorder.created_docs}
+    assert fetched_urls == {
+        "https://example.com/admissions/",
+        "https://example.com/research/",
+    }
+
+
+@pytest.mark.asyncio
 async def test_per_page_404_marks_doc_failed_but_continues(recorder: _Recorder):
     pages = {
         "https://example.com/": (

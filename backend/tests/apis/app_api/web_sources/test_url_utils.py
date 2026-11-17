@@ -14,9 +14,10 @@ from apis.app_api.web_sources.url_utils import (
     InvalidUrlError,
     absolute_url,
     assert_url_is_public,
+    crawl_scope_prefix,
     host_of,
+    in_crawl_scope,
     normalize_url,
-    same_registrable_domain,
     url_extension_hint,
 )
 
@@ -54,24 +55,59 @@ class TestNormalizeUrl:
             normalize_url("https:///path")
 
 
-class TestSameRegistrableDomain:
-    def test_identical_hosts(self):
-        assert same_registrable_domain(
-            "https://example.com/a", "https://example.com/b"
-        )
+class TestCrawlScope:
+    @pytest.mark.parametrize(
+        "root,prefix",
+        [
+            ("https://example.com/", "/"),
+            ("https://example.com/research/", "/research/"),
+            ("https://example.com/research", "/research/"),
+            ("https://example.com/research/index.html", "/research/"),
+            ("https://example.com/a/b/", "/a/b/"),
+        ],
+    )
+    def test_prefix_is_the_roots_section(self, root: str, prefix: str):
+        assert crawl_scope_prefix(root) == prefix
 
-    def test_subdomain_matches_apex(self):
-        assert same_registrable_domain(
-            "https://docs.example.com/a", "https://example.com/b"
-        )
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://example.com/research/",
+            "https://example.com/research",
+            "https://example.com/research/labs/a",
+            "https://www.example.com/research/labs/a",
+            "http://example.com/research/b",
+        ],
+    )
+    def test_pages_in_the_section_are_in_scope(self, url: str):
+        assert in_crawl_scope(url, "https://example.com/research")
 
-    def test_different_apex(self):
-        assert not same_registrable_domain(
-            "https://example.com/a", "https://other.com/b"
-        )
+    @pytest.mark.parametrize(
+        "url",
+        [
+            # The reported case: the site nav links back to the home page.
+            "https://example.com/",
+            "https://example.com/admissions/",
+            "https://example.com/research-news/x",
+            "https://docs.example.com/research/a",
+            "https://other.com/research/a",
+            "not-a-url",
+        ],
+    )
+    def test_pages_outside_the_section_are_out_of_scope(self, url: str):
+        assert not in_crawl_scope(url, "https://example.com/research/")
 
-    def test_handles_unparseable(self):
-        assert not same_registrable_domain("not-a-url", "https://example.com")
+    def test_a_home_page_root_covers_its_host(self):
+        root = "https://www.example.com/"
+        assert in_crawl_scope("https://example.com/admissions/", root)
+        assert not in_crawl_scope("https://docs.example.com/a", root)
+
+    def test_root_reached_through_www_redirect_keeps_its_children(self):
+        # Pages are stored under the host the crawler fetched them from, so a
+        # root typed without www. must still own the site's absolute www. links.
+        assert in_crawl_scope(
+            "https://www.example.com/research/a", "https://example.com/research/"
+        )
 
 
 class TestSsrfGuard:

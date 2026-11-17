@@ -10,10 +10,9 @@ lets `documents.services.cleanup_service._cascade_delete_orphaned_crawl_jobs`
 drop the now-orphaned `CrawlJob`. This module drives the same graph from the
 other end — delete the source, and the pages go with it.
 
-Pages are matched to their crawl by URL prefix (`source_file_id` starts with
-the crawl's `root_url`), the same rule the orphan cascade uses and sound for
-the same reason: the crawler only enqueues URLs that already passed its
-same-domain / same-root filter.
+Pages are matched to their crawl by `url_utils.in_crawl_scope(source_file_id,
+root_url)`, the same rule the crawler follows links by and the orphan cascade
+and KB sync find pages with, so every page a crawl fetched goes with it.
 """
 
 import asyncio
@@ -27,6 +26,7 @@ from apis.app_api.documents.services.document_service import (
     soft_delete_document,
 )
 from apis.app_api.web_sources.crawl_repository import hard_delete_crawl_job
+from apis.app_api.web_sources.url_utils import in_crawl_scope
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.sync_policies.service import delete_sync_policies_for_source
 
@@ -122,7 +122,7 @@ async def _list_crawl_pages(
                 continue
             if not document.source_file_id:
                 continue
-            if not document.source_file_id.startswith(root_url):
+            if not in_crawl_scope(document.source_file_id, root_url):
                 continue
             if document.status == "deleting":
                 continue

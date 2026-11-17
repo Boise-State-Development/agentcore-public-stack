@@ -142,12 +142,12 @@ async def _cascade_delete_orphaned_crawl_jobs(assistant_id: str) -> None:
     break the SPA's watcher loop and cause the in-flight `finalize_crawl`
     update to fail its `attribute_exists` precondition.
 
-    "Orphaned" is decided by URL prefix match: a CrawlJob is kept iff some
-    surviving doc has `source_connector_id == 'web'` and `source_file_id`
-    starts with the crawl's `root_url`. Prefix is good enough — the crawler
-    only enqueues URLs that already satisfy the same-domain / same-root
-    filter, so false positives are rare in practice and the worst case is
-    that a row sticks around until its TTL fires.
+    "Orphaned" is decided by crawl scope: a CrawlJob is kept iff some
+    surviving doc has `source_connector_id == 'web'` and a `source_file_id`
+    inside the crawl (`url_utils.in_crawl_scope`, the rule the crawler
+    follows links by). Two crawls whose sections overlap can keep each
+    other's row alive; the worst case is that a row sticks around until its
+    TTL fires.
 
     Never raises. Failures of the underlying list/delete calls are logged.
     """
@@ -155,6 +155,7 @@ async def _cascade_delete_orphaned_crawl_jobs(assistant_id: str) -> None:
         hard_delete_crawl_job,
         list_all_crawls,
     )
+    from apis.app_api.web_sources.url_utils import in_crawl_scope
 
     crawls = await list_all_crawls(assistant_id)
     terminal_crawls = [c for c in crawls if c.status in ("complete", "failed")]
@@ -164,7 +165,7 @@ async def _cascade_delete_orphaned_crawl_jobs(assistant_id: str) -> None:
     surviving_web_urls = await _list_surviving_web_source_file_ids(assistant_id)
 
     for crawl in terminal_crawls:
-        if any(url.startswith(crawl.root_url) for url in surviving_web_urls):
+        if any(in_crawl_scope(url, crawl.root_url) for url in surviving_web_urls):
             continue
         await hard_delete_crawl_job(assistant_id, crawl.crawl_id)
 

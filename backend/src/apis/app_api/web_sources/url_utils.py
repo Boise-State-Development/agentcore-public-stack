@@ -1,4 +1,4 @@
-"""URL normalization, same-domain comparison, and SSRF guards.
+"""URL normalization, crawl scope, and SSRF guards.
 
 Kept in one module so the route validator and the crawler share the exact
 same logic — divergence between "is this URL safe to start a crawl from?"
@@ -50,26 +50,54 @@ def host_of(url: str) -> Optional[str]:
         return None
 
 
-def same_registrable_domain(a: str, b: str) -> bool:
-    """True when `a` and `b` share a registrable domain.
+def _host_without_www(netloc: str) -> str:
+    """`www.example.com` and `example.com` are one site for crawl scope.
 
-    Uses a coarse last-two-labels heuristic — fine for the common cases
-    (`docs.example.com` vs `example.com`) and avoids a `tldextract`
-    dependency. Edge cases like `.co.uk` are treated as different domains
-    than `.example.co.uk`; that's the safe direction (we'll under-crawl
-    rather than wander off-site).
+    Most sites redirect one to the other and then link absolutely to the
+    canonical form, so a crawl started at `example.com/research/` reads
+    links to `www.example.com/research/…` from its very first page.
     """
-    ha = host_of(a)
-    hb = host_of(b)
-    if not ha or not hb:
+    return netloc[4:] if netloc.startswith("www.") else netloc
+
+
+def crawl_scope_prefix(root_url: str) -> str:
+    """The path a crawl started at `root_url` is confined to.
+
+    The root names a section of a site, and the crawl stays inside it:
+    `/research/` and `/research` both confine it to `/research/`, a page
+    such as `/research/index.html` to its directory, and the site's home
+    page to the whole host. `/research-news/` is outside `/research/`.
+    """
+    path = urlparse(root_url).path or "/"
+    if path.endswith("/"):
+        return path
+    last_segment = path.rsplit("/", 1)[-1]
+    if "." in last_segment:
+        return path[: len(path) - len(last_segment)]
+    return path + "/"
+
+
+def in_crawl_scope(url: str, root_url: str) -> bool:
+    """True when `url` belongs to the crawl started at `root_url`.
+
+    The one rule for "is this page part of that web source?": the crawler
+    follows only links that pass it, and deleting a source, the orphaned
+    crawl cascade and the KB-sync refresh all find a crawl's pages with it.
+    If those disagreed, a page the crawler fetched would survive its
+    source's deletion and be duplicated by every sync.
+
+    Same host (ignoring a leading `www.` and the scheme) and a path at or
+    under `crawl_scope_prefix(root_url)`.
+    """
+    try:
+        candidate = urlparse(normalize_url(url))
+        root = urlparse(normalize_url(root_url))
+    except InvalidUrlError:
         return False
-    if ha == hb:
-        return True
-    parts_a = ha.split(".")
-    parts_b = hb.split(".")
-    if len(parts_a) < 2 or len(parts_b) < 2:
+    if _host_without_www(candidate.netloc) != _host_without_www(root.netloc):
         return False
-    return parts_a[-2:] == parts_b[-2:]
+    path = candidate.path or "/"
+    return path == root.path or path.startswith(crawl_scope_prefix(root.geturl()))
 
 
 def _resolve_addresses(host: str) -> Iterable[ipaddress._BaseAddress]:
