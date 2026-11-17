@@ -12,17 +12,31 @@ These tests pin the three things that fix it:
 * every DynamoDB call on that path runs in a worker thread, not on the loop's;
 * the orphaned-crawl cascade runs once per burst, not once per page;
 * background cleanups are capped per task.
+
+And one that measures the result rather than the mechanism: a burst of deletes
+through the real route, against a table whose every call blocks like a network
+round trip, must leave the loop responsive.
+
+The shared assistant lookups go through ``apis.shared.blocking_io``: a thread on
+app-api, inline on the Runtime, whose turn path would only pay for the hop.
 """
 
 import asyncio
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+from fastapi import FastAPI
 
+from apis.app_api.documents.routes import router as documents_router
 from apis.app_api.documents.services import cleanup_service, document_service
+from apis.shared import blocking_io
 from apis.shared.assistants import service as assistant_service
+from apis.shared.auth.dependencies import get_current_user_from_session
+from apis.shared.auth.models import User
 from apis.shared.sync_policies import service as sync_policy_service
 
 ASSISTANT_ID = "ast-offloop"
@@ -51,6 +65,15 @@ class _RecordingResource:
 
     def Table(self, _name: str) -> _RecordingTable:  # noqa: N802 - boto3's spelling
         return self._table
+
+
+@pytest.fixture(autouse=True)
+def app_api_blocking_io_mode():
+    """app-api's mode (a thread), whatever an earlier test's import of the Runtime set."""
+    previous = blocking_io.blocking_io_runs_inline()
+    blocking_io.run_blocking_io_inline(False)
+    yield
+    blocking_io.run_blocking_io_inline(previous)
 
 
 @pytest.fixture()
@@ -112,6 +135,46 @@ class TestDeletePathRunsOffTheLoop:
         await assistant_service.check_share_access(ASSISTANT_ID, "someone@example.edu")
         _assert_all_off_loop(recording_table, loop_thread, {"get_item"})
         assert len(recording_table.calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_project_harness_role_lookup(self):
+        """A project's agent resolves the caller's role from two more reads (project, member)."""
+        loop_thread = threading.get_ident()
+        threads: list[int] = []
+        harness = SimpleNamespace(assistant_id=ASSISTANT_ID, kind="project", owner_id=OWNER_ID)
+
+        def role(*_args) -> str:
+            threads.append(threading.get_ident())
+            return "editor"
+
+        with (
+            patch.object(assistant_service, "_get_assistant_cloud_without_ownership_check", AsyncMock(return_value=harness)),
+            patch.object(assistant_service, "_project_harness_role", role),
+            patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE}),
+        ):
+            await assistant_service.resolve_assistant_permission(ASSISTANT_ID, "member", "m@example.edu")
+            await assistant_service.get_assistant_with_access_check(ASSISTANT_ID, "member", "m@example.edu")
+
+        assert len(threads) == 2
+        assert loop_thread not in threads
+
+    @pytest.mark.asyncio
+    async def test_the_runtime_keeps_the_lookups_inline(self, recording_table):
+        """The turn path awaits these lookups before the first token; a hop there is pure cost."""
+        loop_thread = threading.get_ident()
+        blocking_io.run_blocking_io_inline()
+        await assistant_service._get_assistant_cloud_without_ownership_check(ASSISTANT_ID, TABLE)
+        await assistant_service.check_share_access(ASSISTANT_ID, "someone@example.edu")
+        assert [thread for _, thread in recording_table.calls] == [loop_thread, loop_thread]
+
+    def test_the_runtime_process_selects_inline(self):
+        """`inference_api/main.py` picks the inline mode at startup."""
+        from pathlib import Path
+
+        import apis.inference_api
+
+        source = (Path(apis.inference_api.__file__).parent / "main.py").read_text()
+        assert "\nrun_blocking_io_inline()\n" in source
 
     @pytest.mark.asyncio
     async def test_sync_policy_cleanup(self, recording_table):
@@ -312,3 +375,164 @@ class TestCleanupConcurrencyCap:
 
         assert (success, failure) == (len(docs), 0)
         assert peak <= cleanup_service.MAX_CONCURRENT_CLEANUPS
+
+
+# ---------------------------------------------------------------------------
+# A burst of deletes through the real route leaves the loop responsive
+# ---------------------------------------------------------------------------
+
+# A DynamoDB round trip, held the way a blocking boto3 call holds its thread.
+_ROUND_TRIP_S = 0.01
+# Twice the size of the 2026-11-16 burst's busiest minute in flight at once.
+_BURST = 200
+# The worst stall tolerated, against the 1,000 ms the lag monitor warns at.
+_MAX_LAG_S = 0.25
+
+
+def _assistant_item() -> dict:
+    return {
+        "PK": f"AST#{ASSISTANT_ID}",
+        "SK": "METADATA",
+        "assistantId": ASSISTANT_ID,
+        "ownerId": OWNER_ID,
+        "ownerName": "Owner",
+        "name": "Burst project",
+        "description": "",
+        "instructions": "",
+        "vectorIndexId": "idx",
+        "visibility": "PRIVATE",
+        "createdAt": "2026-11-16T00:00:00Z",
+        "updatedAt": "2026-11-16T00:00:00Z",
+        "status": "COMPLETE",
+    }
+
+
+def _document_item(document_id: str) -> dict:
+    return {
+        "PK": f"AST#{ASSISTANT_ID}",
+        "SK": f"DOC#{document_id}",
+        "documentId": document_id,
+        "assistantId": ASSISTANT_ID,
+        "filename": f"{document_id}.html",
+        "contentType": "text/html",
+        "sizeBytes": 1024,
+        "s3Key": f"assistants/{ASSISTANT_ID}/documents/{document_id}/page.html",
+        "status": "complete",
+        "chunkCount": 3,
+        "createdAt": "2026-11-16T00:00:00Z",
+        "updatedAt": "2026-11-16T00:00:00Z",
+    }
+
+
+class _SlowTable:
+    """Answers like the assistants table, after blocking its thread for a round trip."""
+
+    def get_item(self, Key: dict, **_kwargs) -> dict:  # noqa: N803 - boto3's spelling
+        time.sleep(_ROUND_TRIP_S)
+        return {"Item": _assistant_item()} if Key["SK"] == "METADATA" else {}
+
+    def update_item(self, Key: dict, **_kwargs) -> dict:  # noqa: N803
+        time.sleep(_ROUND_TRIP_S)
+        return {"Attributes": _document_item(Key["SK"].removeprefix("DOC#"))}
+
+    def query(self, **_kwargs) -> dict:
+        time.sleep(_ROUND_TRIP_S)
+        return {"Items": []}
+
+    def delete_item(self, **_kwargs) -> dict:
+        time.sleep(_ROUND_TRIP_S)
+        return {}
+
+
+class _LagProbe:
+    """How late a short sleep wakes: the same measure as app-api's lag monitor."""
+
+    def __init__(self, interval_s: float = 0.005) -> None:
+        self.interval_s = interval_s
+        self.worst_s = 0.0
+        self._task: asyncio.Task | None = None
+
+    async def _run(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            started = loop.time()
+            await asyncio.sleep(self.interval_s)
+            self.worst_s = max(self.worst_s, loop.time() - started - self.interval_s)
+
+    async def __aenter__(self) -> "_LagProbe":
+        self._task = asyncio.create_task(self._run())
+        await asyncio.sleep(0)
+        return self
+
+    async def __aexit__(self, *_exc) -> None:
+        assert self._task is not None
+        self._task.cancel()
+        await asyncio.gather(self._task, return_exceptions=True)
+
+
+async def _delete_burst() -> tuple[float, list[int], int]:
+    """Send the burst through the route; return the worst lag, the statuses, the cleanups."""
+    app = FastAPI()
+    app.include_router(documents_router)
+    app.dependency_overrides[get_current_user_from_session] = lambda: User(
+        email="owner@example.edu", user_id=OWNER_ID, name="Owner", roles=["User"]
+    )
+
+    cleaned = 0
+    all_cleaned = asyncio.Event()
+
+    async def cleanup_body(*, document_id: str, assistant_id: str, **_kwargs) -> bool:
+        # The background cleanup's own DynamoDB work: the hard delete and the
+        # orphaned-crawl cascade's partition read. Vectors, S3 and the managed KB
+        # are other services, already off the loop.
+        nonlocal cleaned
+        await document_service.hard_delete_document(assistant_id, document_id)
+        await cleanup_service._list_surviving_web_source_file_ids(assistant_id)
+        cleaned += 1
+        if cleaned == _BURST:
+            all_cleaned.set()
+        return True
+
+    def no_kb_record(*_args, **_kwargs):
+        time.sleep(_ROUND_TRIP_S)
+        return None
+
+    transport = httpx.ASGITransport(app=app)
+    with (
+        patch("boto3.resource", return_value=SimpleNamespace(Table=lambda _name: _SlowTable())),
+        patch("apis.shared.kb_backend.records.get_kb_record", no_kb_record),
+        patch.object(cleanup_service, "_cleanup_document_resources", cleanup_body),
+        patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE}),
+    ):
+        async with httpx.AsyncClient(transport=transport, base_url="http://app-api") as client:
+            async with _LagProbe() as probe:
+                responses = await asyncio.gather(
+                    *(
+                        client.delete(f"/assistants/{ASSISTANT_ID}/documents/DOC-{i}")
+                        for i in range(_BURST)
+                    )
+                )
+                await asyncio.wait_for(all_cleaned.wait(), timeout=60)
+    return probe.worst_s, [r.status_code for r in responses], cleaned
+
+
+class TestDeleteBurstKeepsTheLoopResponsive:
+    @pytest.mark.asyncio
+    async def test_a_burst_of_deletes_never_stalls_the_loop(self):
+        worst_s, statuses, cleaned = await _delete_burst()
+
+        assert statuses == [204] * _BURST
+        assert cleaned == _BURST
+        assert worst_s < _MAX_LAG_S, (
+            f"the loop stalled {worst_s * 1000:.0f} ms during a burst of {_BURST} deletes: "
+            "a blocking call on the delete path is running on the event loop"
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_probe_sees_a_blocking_call(self):
+        """The same burst with the assistant lookups inline stalls it, so the test has teeth."""
+        blocking_io.run_blocking_io_inline()
+        worst_s, statuses, _ = await _delete_burst()
+
+        assert statuses == [204] * _BURST
+        assert worst_s >= _MAX_LAG_S

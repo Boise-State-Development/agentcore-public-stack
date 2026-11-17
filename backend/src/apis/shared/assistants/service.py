@@ -6,7 +6,6 @@ Architecture:
 - Cloud: Stores assistants in DynamoDB table specified by DYNAMODB_ASSISTANTS_TABLE_NAME
 """
 
-import asyncio
 import base64
 import json
 import logging
@@ -17,6 +16,7 @@ from typing import List, Optional, Tuple
 
 from .models import AgentBinding, AgentModelConfig, Assistant, ResponseStrictness
 from .serialization import from_ddb, to_ddb_safe
+from apis.shared.blocking_io import run_blocking
 from apis.shared.dynamo_errors import is_missing_index_error, log_missing_index
 from apis.shared.timestamps import to_iso, utc_now_iso
 
@@ -302,7 +302,7 @@ async def get_assistant_with_access_check(
     # A project's harness answers to project membership, never to its own owner field
     # or visibility — so this runs first, or a transferred-away owner keeps full access.
     if is_project_harness(assistant):
-        role = _project_harness_role(assistant, user_id, user_email)
+        role = await run_blocking(_project_harness_role, assistant, user_id, user_email)
         return (assistant, role) if role else (None, None)
 
     # Owner always has full access regardless of visibility
@@ -368,7 +368,7 @@ async def resolve_assistant_permission(
         return None, None
 
     if is_project_harness(assistant):
-        return assistant, _project_harness_role(assistant, user_id, user_email)
+        return assistant, await run_blocking(_project_harness_role, assistant, user_id, user_email)
 
     if assistant.owner_id == user_id:
         return assistant, "owner"
@@ -478,7 +478,7 @@ async def _get_assistant_cloud(assistant_id: str, owner_id: str, table_name: str
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(table_name)
 
-        response = await asyncio.to_thread(table.get_item, Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
+        response = await run_blocking(table.get_item, Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
 
         if "Item" not in response:
             logger.info(f"Assistant {assistant_id} not found in DynamoDB")
@@ -526,7 +526,7 @@ async def _get_assistant_cloud_without_ownership_check(assistant_id: str, table_
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(table_name)
 
-        response = await asyncio.to_thread(table.get_item, Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
+        response = await run_blocking(table.get_item, Key={"PK": f"AST#{assistant_id}", "SK": "METADATA"})
 
         if "Item" not in response:
             logger.info(f"Assistant {assistant_id} not found in DynamoDB")
@@ -1580,7 +1580,7 @@ async def check_share_access(assistant_id: str, user_email: str) -> Optional[str
         normalized_email = user_email.lower().strip()
 
         # Check if share record exists
-        response = await asyncio.to_thread(
+        response = await run_blocking(
             table.get_item, Key={"PK": f"AST#{assistant_id}", "SK": f"SHARE#{normalized_email}"}
         )
 
