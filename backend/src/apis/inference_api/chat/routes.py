@@ -2360,14 +2360,25 @@ def _build_attachment_guidance(
             if search_available and not over_budget_ref
             else "first with `pattern`"
         )
+        # An over-budget file was sent to be read with the others, and only the
+        # combined byte budget kept it out. "To answer from it" left reading it
+        # optional: in the field (five policy PDFs, one over the budget) Opus
+        # 5.5 read the large document, never this one, and answered from four.
+        # So for this file alone the note asks for the read before any answer
+        # about the attached files.
+        ask = (
+            "It was sent to be read with the others, so before answering about the attached files"
+            if over_budget_ref and not getattr(ref, "token_budget", False)
+            else "To answer from it"
+        )
         if ref.format == "pdf":
             parts.append(
-                f"{lead} To answer from it, {call}: {find} to find the "
+                f"{lead} {ask}, {call}: {find} to find the "
                 f"relevant pages, then with `page_range` to read them._"
             )
         else:
             parts.append(
-                f"{lead} To answer from it, {call}: {find} to find the "
+                f"{lead} {ask}, {call}: {find} to find the "
                 f"relevant passages, then read on from there._"
             )
 
