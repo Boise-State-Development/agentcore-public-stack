@@ -587,37 +587,16 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
       });
     });
 
-    describe('the Managed/Classic badge', () => {
-      it('labels a managed knowledge base "Managed"', async () => {
-        await render(status({ phase: 'succeeded', engine: 'managed' }));
-        expect(fixture.componentInstance.isManagedEngine()).toBe(true);
-        expect(fixture.componentInstance.engineBadgeLabel()).toBe('Managed');
-      });
-
-      it('labels a legacy knowledge base "Classic"', async () => {
-        await render(status({ phase: 'none', engine: 'classic' }));
-        expect(fixture.componentInstance.isManagedEngine()).toBe(false);
-        expect(fixture.componentInstance.engineBadgeLabel()).toBe('Classic');
-      });
-
-      it('defaults to classic when no status has been read', () => {
-        expect(fixture.componentInstance.engineBadgeLabel()).toBe('Classic');
-      });
-
-      it('renders the badge next to the document list when documents exist', async () => {
-        await render(status({ phase: 'succeeded', engine: 'managed' }));
+    it('does not name the engine next to the document list', async () => {
+      // Managed is the default for new knowledge bases; the engine only picks
+      // the status vocabulary and is not shown as a badge.
+      for (const engine of ['classic', 'managed'] as const) {
+        await render(status({ phase: engine === 'managed' ? 'succeeded' : 'available', engine }));
         fixture.componentInstance.uploadedDocuments.set([doc()]);
         fixture.detectChanges();
-        expect(fixture.componentInstance.showEngineBadge()).toBe(true);
-        expect(text()).toContain('Managed');
-      });
-
-      it('hides the badge when the knowledge base has no documents', async () => {
-        await render(status({ phase: 'succeeded', engine: 'managed' }));
-        fixture.componentInstance.uploadedDocuments.set([]);
-        fixture.detectChanges();
-        expect(fixture.componentInstance.showEngineBadge()).toBe(false);
-      });
+        expect(text()).toContain('Uploaded Documents');
+        expect(text()).not.toMatch(/\b(Classic|Managed)\b/);
+      }
     });
   });
 

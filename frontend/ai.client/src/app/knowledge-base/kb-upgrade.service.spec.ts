@@ -81,7 +81,7 @@ describe('KbUpgradeService', () => {
     });
 
     it('reads the engine when the server sends it', async () => {
-      // Drives the Managed/Classic badge (task 16.4).
+      // Picks the per-document status vocabulary (task 16.4).
       const pending = service.getStatus(ENTITY);
       http.expectOne(BASE).flush({ phase: 'succeeded', canUpgrade: false, engine: 'managed' });
 

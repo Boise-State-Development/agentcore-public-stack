@@ -282,32 +282,19 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
    */
   readonly upgradePhase = computed(() => this.upgradeStatus()?.phase ?? 'none');
 
-  // ── Engine visibility (task 16.4, HANDOFF §6) ───────────────────────────
+  // ── Engine (task 16.4, HANDOFF §6) ──────────────────────────────────────
   //
-  // Two surfaces, one source: the server-derived engine on the upgrade status.
-  // The badge names the engine, and the per-document status vocabulary follows
-  // it — because a managed knowledge base no longer emits chunking/embedding
-  // (PR #900), so its documents must not be described with legacy words.
+  // The server-derived engine on the upgrade status. The per-document status
+  // vocabulary follows it, because a managed knowledge base no longer emits
+  // chunking/embedding (PR #900), so its documents must not be described with
+  // legacy words. The engine is not shown as a badge: managed is the default
+  // for every new knowledge base, so naming it told users nothing they act on.
 
   /** The engine serving this knowledge base; `classic` until a status is read. */
   readonly kbEngine = computed(() => this.upgradeStatus()?.engine ?? 'classic');
 
   /** True when this knowledge base is served by the managed backend. */
   readonly isManagedEngine = computed(() => this.kbEngine() === 'managed');
-
-  /** The `Managed`/`Classic` badge label. */
-  readonly engineBadgeLabel = computed(() => (this.isManagedEngine() ? 'Managed' : 'Classic'));
-
-  /**
-   * Whether to show the engine badge at all.
-   *
-   * Only for an existing knowledge base that actually has documents — a badge on
-   * an empty or not-yet-created section would label a store with nothing in it.
-   * Engine is not sensitive, so this is not permission-gated.
-   */
-  readonly showEngineBadge = computed(
-    () => this.mode() === 'edit' && this.uploadedDocuments().length > 0,
-  );
 
   // ── KB storage usage bar (byte-cap visibility, Requirement 12.11) ────────
   //
