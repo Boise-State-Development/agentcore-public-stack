@@ -541,6 +541,12 @@ chat_ceiling    = CompactionPolicy.resolve(window).ceiling, compared with the wh
   document. The measurement switch that implemented it is deleted (§9.1).
 - A catalog field could override the budget per model. Not built in phase 3; the
   formula is the only source until a readout asks for an override.
+- **The 1M models keep 50k** (2026-11-17, `docs/testing/attachment-budget-1m-models-2026-11.md`).
+  Opus 5.5 and Sonnet 5.5 were measured on five- and ten-PDF comparison sets (34 and 150 pages) at
+  today's budget, at the planner's split for a 200k budget, and with every file held. Every arm
+  answered every cross-document question, and no on-demand file went unread in 60 sample-turns.
+  Holding cost 2–7× as much per session with a cold return, and made the first token 2–4× slower.
+  So no per-model ceiling and no multi-document budget are adopted, and the override stays unbuilt.
 
 ## 6. Persistence and the prompt cache
 
@@ -707,7 +713,7 @@ separated from the document's.
 | Type | pdf, docx, html, md, txt, csv, xlsx, pptx, png |
 | Size | ~5k, ~30k, ~80k, ~150k, ~300k tokens; a set that exceeds any budget |
 | Content | Prose, table, scanned, chart or figure |
-| Count | 1, 5, 20 |
+| Count | 1, 5, 20; and comparison sets of 5 and 10 PDFs whose question needs every file (`compare_*`) |
 | Question | Lookup, cross-document, absent fact, visual, follow-up after the cache expires |
 | Arm | `native`, `text`, `on_demand`, `search`, and `auto` (the planner) |
 | Ceiling | 100k (today) and 200k. Phase 0 also ran 100k with documents excluded; that arm was deleted with §5.2's subtraction |

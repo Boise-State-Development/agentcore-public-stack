@@ -41,7 +41,8 @@ Three groups (unified-attachment-delivery §8.4):
   Arms: ``auto`` (the deployment's budget), ``b200k`` (the planner's own split
   at a 200k budget, forced per file through ``run.file_arms``) and ``held``
   (every file forced ``native``). ``cold`` variants pause past the cache TTL
-  before the follow-up.
+  before the follow-up. ``terse`` variants ask only for the extreme, the
+  field case's shape, so nothing forces the model to open every document.
 """
 
 from __future__ import annotations
@@ -299,7 +300,34 @@ def comparison_cases() -> List[Dict[str, Any]]:
                 if file_arms:
                     case["run"]["file_arms"] = file_arms
                 out.append(case)
+            # Terse: the field case's shape. The question does not ask for every
+            # document's figure, so nothing forces the model to open each one.
+            case = _case(
+                f"compare_{count}_policies_{arm}_terse", [terse_prompt(set_name)], files,
+                terse_expect(set_name),
+                f"Comparison cell, terse: {count} policy PDFs, arm {arm}. One question naming no district and not "
+                "asking for each figure; only reading every document finds the extreme.",
+            )
+            if file_arms:
+                case["run"]["file_arms"] = file_arms
+            out.append(case)
     return out
+
+
+def terse_prompt(set_name: str) -> str:
+    count = len(d.policy_files(set_name))
+    return (f"These are {count} district operations policies for a benchmarking comparison. Which district commits "
+            "to the fastest critical-incident response? End with a line 'Shortest: <district>'.")
+
+
+def terse_expect(set_name: str) -> Dict[str, Any]:
+    """The shortest target's district on the closing line, and its figure somewhere."""
+    facts = [d.policy(f)[1] for f in d.policy_files(set_name)]
+    fastest = min(facts, key=lambda f: f.response_hours)
+    return {"regex": {"search": [
+        rf"(?i)Shortest\W{{0,8}}(?:the\s+)?{_district(fastest)}",
+        rf"\b{fastest.response_hours}\b",
+    ]}}
 
 
 #: The overflow cells' set sizes, and the arms compared at each.
