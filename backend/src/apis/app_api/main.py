@@ -356,7 +356,11 @@ if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":
 # Conditionally register the user-facing skills surface (skill list +
 # per-skill preferences). Deferred to a later release; off by default.
 if skills_enabled():
+    from apis.app_api.skills.bundle_import_routes import router as skill_import_router
     from apis.app_api.skills.routes import router as user_skills_router
+    # Bundle import (skill-bundle-import.md); its routes 404 while
+    # SKILL_BUNDLE_IMPORT_ENABLED is off.
+    app.include_router(skill_import_router)
     app.include_router(user_skills_router)
     logger.info("Skills routes enabled")
 

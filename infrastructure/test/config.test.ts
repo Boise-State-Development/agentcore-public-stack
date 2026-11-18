@@ -1120,6 +1120,26 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Skill bundle import feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED;
+    });
+
+    test('defaults to disabled when unset or empty', () => {
+      delete process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED;
+      expect(loadConfig(app).skillBundleImport.enabled).toBe(false);
+      process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED = '';
+      expect(loadConfig(app).skillBundleImport.enabled).toBe(false);
+    });
+
+    test('only "true" turns it on', () => {
+      process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED = ' True ';
+      expect(loadConfig(app).skillBundleImport.enabled).toBe(true);
+      process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED = 'yes';
+      expect(loadConfig(app).skillBundleImport.enabled).toBe(false);
+    });
+  });
+
   // ============================================================
   // AWS Limits feature flag — opt-in while in development
   // ============================================================

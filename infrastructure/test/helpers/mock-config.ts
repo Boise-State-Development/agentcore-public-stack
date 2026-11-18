@@ -288,6 +288,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     fieldSetAuthoring: {
       enabled: false,
     },
+    skillBundleImport: {
+      enabled: false,
+    },
     agents: {
       enabled: false,
     },

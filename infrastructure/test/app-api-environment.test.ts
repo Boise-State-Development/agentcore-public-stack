@@ -102,6 +102,12 @@ describe('buildAppApiEnvironment — quota requests', () => {
     expect(on.FIELD_SET_AUTHORING_ENABLED).toBe('true');
   });
 
+  it('forwards the skill bundle import flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).SKILL_BUNDLE_IMPORT_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ skillBundleImport: { enabled: true } }), stubParams());
+    expect(on.SKILL_BUNDLE_IMPORT_ENABLED).toBe('true');
+  });
+
   it('forwards the AWS Limits flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).AWS_LIMITS_ENABLED).toBe('false');
     const on = buildAppApiEnvironment(createMockConfig({ awsLimits: { enabled: true } }), stubParams());

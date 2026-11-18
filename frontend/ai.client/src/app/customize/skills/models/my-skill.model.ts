@@ -49,7 +49,77 @@ export interface MySkill {
   category: string | null;
   createdAt: string | null;
   updatedAt: string | null;
+  /** Set once the skill was imported from a bundle (skill-bundle-import.md §3). */
+  importSource?: SkillImportSource | null;
 }
+
+/** Where a skill was last imported from. Display and refresh only; never versioned. */
+export interface SkillImportSource {
+  type: 'zip' | 'github';
+  /** The bundle's directory inside the archive ('' is the top level). */
+  path: string;
+  bundleHash: string;
+  importedAt: string;
+  url?: string | null;
+  owner?: string | null;
+  repo?: string | null;
+  ref?: string | null;
+  commitSha?: string | null;
+  filename?: string | null;
+}
+
+/** What an import does to one file, against the skill it would write. */
+export type ImportFileStatus = 'added' | 'changed' | 'unchanged' | 'removed' | 'skipped';
+
+export interface ImportFileRow {
+  /** The path as the bundle has it (a removed file's is its bundle path here). */
+  path: string;
+  status: ImportFileStatus;
+  filename: string | null;
+  kind: SkillResourceKind | null;
+  size: number;
+  /** Why a `skipped` file was left out. */
+  reason: string | null;
+}
+
+/** `POST /skills/mine/import/preview`. With `candidates`, no skill was chosen yet. */
+export interface ImportPreview {
+  source: SkillImportSource;
+  candidates: string[];
+  skill: {
+    name: string;
+    displayName: string;
+    description: string;
+    instructionsLength: number;
+    allowedTools: string[];
+  } | null;
+  /** Against the target skill; null when creating. */
+  changes: {
+    description: boolean;
+    instructions: boolean;
+    allowedTools: boolean;
+    skillMetadata: boolean;
+  } | null;
+  files: ImportFileRow[];
+  bundleHash: string | null;
+  targetUpdatedAt: string | null;
+}
+
+export interface ImportApplyResult {
+  skill: MySkill;
+  files: ImportFileRow[];
+}
+
+/** A bundle to import: a `.zip` or a public GitHub URL, and optionally its path. */
+export interface SkillImportInput {
+  file?: File | null;
+  url?: string | null;
+  /** Sent only when chosen; `''` names the archive's top level. */
+  path?: string | null;
+}
+
+/** Uploaded `.zip` ceiling, mirroring the backend `MAX_UPLOAD_ARCHIVE_BYTES`. */
+export const MAX_IMPORT_ZIP_BYTES = 10 * 1024 * 1024;
 
 export interface MySkillListResponse {
   skills: MySkill[];

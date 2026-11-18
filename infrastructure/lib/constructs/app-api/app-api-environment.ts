@@ -458,6 +458,9 @@ export function buildAppApiEnvironment(
     // `/skills/mine/{id}/field-sets` routes. app-api only; the Runtime resolves
     // field sets the same way either way. In development, so only "true" enables.
     FIELD_SET_AUTHORING_ENABLED: config.fieldSetAuthoring.enabled ? 'true' : 'false',
+    // Skill bundle import: the `/skills/mine/import*` routes (a `.zip` or a
+    // public GitHub path). app-api only. In development, so only "true" enables.
+    SKILL_BUNDLE_IMPORT_ENABLED: config.skillBundleImport.enabled ? 'true' : 'false',
 
     // Assistant KB full-context mode. app-api never sends a knowledge base to a
     // model; its share is `GET /assistants/{id}/knowledge-base/mode`, which tells

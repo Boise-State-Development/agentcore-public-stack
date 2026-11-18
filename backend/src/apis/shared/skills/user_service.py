@@ -21,9 +21,11 @@ from typing import Dict, List, Optional, Tuple
 from apis.shared.auth.models import User
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.bundle_files import SkillBundleFiles, get_skill_bundle_files
+from apis.shared.skills.bundle_import import ParsedBundle
 from apis.shared.skills.models import (
     SKILL_ID_PATTERN,
     SkillDefinition,
+    SkillImportSource,
     SkillResourceRef,
     SkillStatus,
     SkillVisibility,
@@ -60,6 +62,10 @@ class UserSkillNotFoundError(UserSkillError):
 
 class UserSkillLimitError(UserSkillError):
     """The caller is at their authored-skill cap (409)."""
+
+
+class UserSkillConflictError(UserSkillError):
+    """An import's source or target moved since its preview (409)."""
 
 
 def slugify_skill_id(display_name: str) -> str:
@@ -332,6 +338,141 @@ class UserSkillService:
             content_type,
             user,
             kind=kind,
+        )
+
+    # =========================================================================
+    # Bundle import (docs/specs/skill-bundle-import.md)
+    # =========================================================================
+
+    async def import_bundle(
+        self,
+        user: User,
+        bundle: ParsedBundle,
+        *,
+        source: SkillImportSource,
+        skill_id: Optional[str] = None,
+        display_name: Optional[str] = None,
+        expected_bundle_hash: Optional[str] = None,
+        expected_updated_at: Optional[str] = None,
+    ) -> SkillDefinition:
+        """Create a skill from ``bundle``, or re-import it into an owned skill.
+
+        A re-import replaces the description, instructions, advisory tools and
+        frontmatter, writes added and changed files, and drops files the bundle
+        no longer has (spec D4). The display name stays the user's. It writes the
+        **live row only**: no version is cut, so a project pinned to a version
+        keeps it until someone clicks Update (D5).
+
+        Raises:
+            UserSkillConflictError: ``expected_bundle_hash`` or
+                ``expected_updated_at`` no longer match (D3).
+            UserSkillNotFoundError: ``skill_id`` is not the caller's.
+            UserSkillLimitError: Creating would pass ``MAX_SKILLS_PER_USER``.
+            ValueError: A file breaks a bundle rule.
+        """
+        if expected_bundle_hash and expected_bundle_hash != bundle.bundle_hash:
+            raise UserSkillConflictError(
+                "The source changed since you previewed it. Review the import again."
+            )
+        if skill_id is None:
+            return await self._create_from_bundle(user, bundle, source, display_name)
+
+        skill = await self.require_owned(skill_id, user)
+        if expected_updated_at and skill.updated_at.isoformat() != expected_updated_at:
+            raise UserSkillConflictError(
+                "This skill changed since you previewed the import. Review it again."
+            )
+
+        old_refs = list(skill.resources)
+        new_refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, old_refs)
+        updated = await self.repository.update_skill(
+            skill_id,
+            {
+                "description": bundle.description,
+                "instructions": bundle.instructions,
+                "allowed_tools": list(bundle.allowed_tools),
+                "skill_metadata": dict(bundle.skill_metadata),
+                "resources": new_refs,
+                "import_source": source,
+            },
+            admin_user_id=user.user_id,
+        )
+        if updated is None:
+            raise UserSkillNotFoundError(f"Skill '{skill_id}' not found")
+        self.bundle_files.write_skill_md(updated)
+        self._invalidate(skill_id)
+        await self.bundle_files.gc_orphaned(old_refs, new_refs)
+        self._log_import(user, skill_id, source, old_refs, new_refs, created=False)
+        return updated
+
+    async def _create_from_bundle(
+        self,
+        user: User,
+        bundle: ParsedBundle,
+        source: SkillImportSource,
+        display_name: Optional[str],
+    ) -> SkillDefinition:
+        name = (display_name or "").strip() or bundle.display_name
+        existing = await self.repository.list_skills_by_owner(user.user_id)
+        if len(existing) >= MAX_SKILLS_PER_USER:
+            raise UserSkillLimitError(
+                f"You already have the maximum of {MAX_SKILLS_PER_USER} skills. "
+                "Delete one before importing another."
+            )
+
+        skill_id = await self._allocate_skill_id(name)
+        refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, [])
+        skill = SkillDefinition(
+            skill_id=skill_id,
+            display_name=name,
+            description=bundle.description,
+            instructions=bundle.instructions,
+            allowed_tools=list(bundle.allowed_tools),
+            skill_metadata=dict(bundle.skill_metadata),
+            resources=refs,
+            status=SkillStatus.ACTIVE,
+            owner_id=user.user_id,
+            visibility=SkillVisibility.PRIVATE,
+            created_by=user.user_id,
+            updated_by=user.user_id,
+            import_source=source,
+        )
+        try:
+            created = await self.repository.create_skill(skill)
+        except Exception:
+            # The row never existed, so nothing names these objects.
+            await self.bundle_files.gc_orphaned(refs, [])
+            raise
+        self.bundle_files.write_skill_md(created)
+        self._invalidate(skill_id)
+        self._log_import(user, skill_id, source, [], refs, created=True)
+        return created
+
+    @staticmethod
+    def _log_import(
+        user: User,
+        skill_id: str,
+        source: SkillImportSource,
+        old_refs: List[SkillResourceRef],
+        new_refs: List[SkillResourceRef],
+        *,
+        created: bool,
+    ) -> None:
+        old = {r.filename: r.content_hash for r in old_refs}
+        new = {r.filename: r.content_hash for r in new_refs}
+        logger.info(
+            f"User {scrub_log(user.email)} imported a skill bundle into {scrub_log(skill_id)}",
+            extra={
+                "event": "user_skill_imported",
+                "skill_id": scrub_log(skill_id),
+                "owner_user_id": user.user_id,
+                # NB: not "created" — reserved on LogRecord, like "filename".
+                "new_skill": created,
+                "source_type": source.type,
+                "files_added": len(set(new) - set(old)),
+                "files_changed": sum(1 for k in set(new) & set(old) if new[k] != old[k]),
+                "files_removed": len(set(old) - set(new)),
+            },
         )
 
     # =========================================================================
