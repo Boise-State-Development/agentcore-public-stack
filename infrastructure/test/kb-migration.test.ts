@@ -27,6 +27,7 @@ import * as path from 'path';
 
 import { AppConfig, loadConfig, ManagedKbConfig } from '../lib/config';
 import {
+  INGESTION_CONSUMER_RESERVED_CONCURRENCY,
   KbMigrationConstruct,
   MANAGED_KB_ACCOUNT_QUOTA,
   MANAGED_KB_COUNT_ALARM_FRACTION,
@@ -59,6 +60,7 @@ interface LambdaProps {
   Timeout?: number;
   MemorySize?: number;
   DeadLetterConfig?: { TargetArn?: unknown };
+  ReservedConcurrentExecutions?: number;
   Environment?: { Variables?: Record<string, string> };
   Code?: { ImageUri?: unknown };
 }
@@ -406,6 +408,18 @@ describe('KbMigrationConstruct — ingestion consumer (task 2.2)', () => {
     const p = lambdaFor(t, HANDLERS.ingestionConsumer);
     expect(typeof p.Timeout).toBe('number');
     expect(p.Timeout!).toBeGreaterThanOrEqual(300);
+  });
+
+  it('caps its concurrency so status polling stays under the Bedrock quota', () => {
+    // Unbounded, a 240-file KB-sync burst ran 68 consumers at once and
+    // throttled GetKnowledgeBaseDocuments (5 req/s per account) into a wave
+    // of redeliveries. The cap must be set, and small enough that 5 s polling
+    // leaves part of that quota for app-api.
+    const p = lambdaFor(t, HANDLERS.ingestionConsumer);
+    expect(p.ReservedConcurrentExecutions).toBe(INGESTION_CONSUMER_RESERVED_CONCURRENCY);
+    const pollIntervalSeconds = 5;
+    const quotaRequestsPerSecond = 5;
+    expect(INGESTION_CONSUMER_RESERVED_CONCURRENCY / pollIntervalSeconds).toBeLessThan(quotaRequestsPerSecond);
   });
 
   it('has a dead-letter queue wired as its async-invocation DLQ', () => {
