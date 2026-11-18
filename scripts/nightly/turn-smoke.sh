@@ -128,7 +128,7 @@ main() {
     case ${exit_code} in
         0) log_success "Turn smoke matrix passed (report: ${report})" ;;
         1) log_error "Turn smoke matrix has failing rows (report: ${report})" ;;
-        2) log_warn "Turn smoke matrix could not start — a scripted Hosted UI login needs a classic (server-rendered) login page and a user with a permanent password" ;;
+        2) log_warn "Turn smoke matrix could not run — see its setup: line above. Usually the user is over its quota (nothing is published), or the scripted Hosted UI login needs a classic (server-rendered) login page and a user with a permanent password" ;;
         *) log_error "Turn smoke matrix exited ${exit_code}" ;;
     esac
     exit ${exit_code}
