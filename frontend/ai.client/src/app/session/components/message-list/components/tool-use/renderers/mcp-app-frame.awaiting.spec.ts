@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { McpAppFrameComponent } from './mcp-app-frame.component';
 import { ToolResultData } from '../tool-renderer-registry.service';
 import { McpAppStateService } from '../../../../../services/mcp-apps/mcp-app-state.service';
-import { McpAppCardStateService } from '../../../../../services/mcp-apps/mcp-app-card-state.service';
+import {
+  McpAppCard,
+  McpAppCardStateService,
+} from '../../../../../services/mcp-apps/mcp-app-card-state.service';
 import { McpAppProxyService } from '../../../../../services/mcp-apps/mcp-app-proxy.service';
 import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-message.service';
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
@@ -35,6 +38,21 @@ interface FrameState {
   isAwaitingUser: Signal<boolean>;
   isError: Signal<boolean>;
   isRunning: Signal<boolean>;
+  toCallToolResult(): unknown;
+}
+
+/** The App's own Submit: GitHub's issue_write, called again from the frame. */
+function submitCard(over: Partial<McpAppCard> = {}): McpAppCard {
+  return {
+    cardId: 'card_1',
+    toolUseId: 'tooluse_1',
+    toolName: 'issue_write',
+    arguments: { _ui_submitted: true },
+    content: [{ type: 'text', text: '{"number": 42, "title": "Move the page"}' }],
+    isError: false,
+    createdAt: '2026-11-18T10:00:00Z',
+    ...over,
+  };
 }
 
 const AWAITING: ToolResultData = {
@@ -50,14 +68,16 @@ const FAILED: ToolResultData = {
 
 describe('McpAppFrameComponent: an App form waiting for the user', () => {
   let fixture: ComponentFixture<McpAppFrameComponent>;
+  let cards: McpAppCard[];
 
   beforeEach(async () => {
+    cards = [];
     TestBed.resetTestingModule();
     await TestBed.configureTestingModule({
       imports: [McpAppFrameComponent],
       providers: [
         { provide: McpAppStateService, useValue: stub() },
-        { provide: McpAppCardStateService, useValue: stub({ cardsFor: () => [] }) },
+        { provide: McpAppCardStateService, useValue: stub({ cardsFor: () => cards }) },
         { provide: McpAppProxyService, useValue: stub() },
         { provide: McpAppMessageService, useValue: stub() },
         { provide: McpAppConsentService, useValue: stub() },
@@ -89,6 +109,7 @@ describe('McpAppFrameComponent: an App form waiting for the user', () => {
 
     fixture = TestBed.createComponent(McpAppFrameComponent);
     fixture.componentRef.setInput('toolUseId', 'tooluse_1');
+    fixture.componentRef.setInput('toolName', 'issue_write');
   });
 
   function render(result: ToolResultData, inputComplete = true): FrameState {
@@ -131,5 +152,30 @@ describe('McpAppFrameComponent: an App form waiting for the user', () => {
 
     expect(query('.badge-failed')).toBeNull();
     expect(query('.badge-waiting')).toBeNull();
+  });
+
+  // Reload after Submit: the conversation still holds the "waiting" result,
+  // and handing it back made the App redraw the empty form over the issue
+  // the user had already created.
+  it('hands the App its own Submit result once the form was submitted', () => {
+    cards = [submitCard()];
+    const state = render(AWAITING);
+
+    expect(state.toCallToolResult()).toEqual({
+      content: [{ type: 'text', text: '{"number": 42, "title": "Move the page"}' }],
+      isError: false,
+    });
+    expect(state.isAwaitingUser()).toBe(false);
+    expect(state.isError()).toBe(false);
+    expect(query('.badge-waiting')).toBeNull();
+    expect(query('.badge-failed')).toBeNull();
+  });
+
+  it('keeps the form waiting when the Submit failed', () => {
+    cards = [submitCard({ isError: true })];
+    const state = render(AWAITING);
+
+    expect(state.isAwaitingUser()).toBe(true);
+    expect((state.toCallToolResult() as { isError: boolean }).isError).toBe(true);
   });
 });
