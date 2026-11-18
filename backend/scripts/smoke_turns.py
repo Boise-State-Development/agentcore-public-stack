@@ -55,7 +55,10 @@ the Runtime's image tag at the start of the run). Best-effort, content-free,
 and it never changes the exit status.
 
 Exit status: 0 when no row FAILED (SKIP and OBSERVED do not fail a run), 1
-otherwise, 2 for a setup error before any turn ran.
+otherwise, 2 for a setup error: before any turn ran, or a turn refused because
+the user is over its quota. A quota refusal stops the run and publishes
+nothing, because every row after it would fail the same way and a ledger row
+of all FAILs reads as a broken build rather than an exhausted test user.
 """
 
 from __future__ import annotations
@@ -265,6 +268,14 @@ class RowFailure(Exception):
 
 class RowSkip(Exception):
     """A row cannot run here (fixture or transport missing). Not a failure."""
+
+
+class QuotaBlocked(Exception):
+    """The user is over its quota, so the turn was refused before any model call.
+
+    Not a row failure: it says nothing about the build, and every later row
+    would be refused the same way. The run stops and reports a setup error.
+    """
 
 
 # ============================================================
@@ -704,20 +715,31 @@ RESUME_HEAD_EXTRA = frozenset(
 )
 
 
-def assert_frame_contract(turn: TurnResult, *, allow_interrupt: bool = False, resume: bool = False) -> List[str]:
+def assert_frame_contract(
+    turn: TurnResult, *, allow_interrupt: bool = False, resume: bool = False, expect_quota_refusal: bool = False
+) -> List[str]:
     """Invariant I1 (turn-path-ttft §6A) on one turn's frames. Returns warnings.
 
     ``resume=True`` widens the head: a resumed turn finishes the paused tool
     first, so its ``tool_result`` (and the passthroughs around it) arrive before
     the next model call's ``message_start``.
+
+    A turn carrying ``quota_exceeded`` raises :class:`QuotaBlocked` unless
+    ``expect_quota_refusal`` (the ``quota_exceeded`` row), which instead allows
+    the frame in the tail, where the refusal streams it.
     """
     warnings: List[str] = []
     names = turn.names
     head_allowed = HEAD_ALLOWED | RESUME_HEAD_EXTRA if resume else HEAD_ALLOWED
+    tail_allowed = TAIL_ALLOWED | {"quota_exceeded"} if expect_quota_refusal else TAIL_ALLOWED
     if turn.status_code != 200:
         raise RowFailure(f"HTTP {turn.status_code}: {turn.error}")
     if not names:
         raise RowFailure("stream carried no frames")
+    if "quota_exceeded" in names and not expect_quota_refusal:
+        refusal = turn.first("quota_exceeded")
+        detail = (refusal.data.get("message") if refusal else None) or "quota_exceeded"
+        raise QuotaBlocked(str(detail))
     if "message_start" not in names:
         raise RowFailure(f"no message_start; frames={names[:12]}")
 
@@ -738,7 +760,7 @@ def assert_frame_contract(turn: TurnResult, *, allow_interrupt: bool = False, re
     if "message_stop" not in names:
         raise RowFailure("no message_stop before done")
     last_stop = len(names) - 1 - names[::-1].index("message_stop")
-    tail_bad = [n for n in names[last_stop + 1 :] if n not in TAIL_ALLOWED]
+    tail_bad = [n for n in names[last_stop + 1 :] if n not in tail_allowed]
     if tail_bad:
         raise RowFailure(f"frames after the final message_stop that the tail contract forbids: {tail_bad}; tail={names[last_stop:]}")
 
@@ -1715,7 +1737,7 @@ async def row_quota_exceeded(ctx: Context) -> RowResult:
     sid = ctx.new_session()
     turn = await ctx.transport.stream_turn(ctx.base_payload(sid, "Reply with exactly the single word PONG."))
     ctx.note(turn)
-    warnings = assert_frame_contract(turn)
+    warnings = assert_frame_contract(turn, expect_quota_refusal=True)
     stop = turn.all("message_stop")
     reason = stop[-1].data.get("stopReason") if stop else None
     if reason != "quota_exceeded" and not turn.all("quota_exceeded"):
@@ -2005,6 +2027,7 @@ async def main_async(args: argparse.Namespace) -> int:
 
     ctx = Context(transport=transport, args=args)
     results: List[RowResult] = []
+    quota_blocked: Optional[str] = None
     only = set(args.only.split(",")) if args.only else None
     try:
         for name, fn in ROWS:
@@ -2013,6 +2036,9 @@ async def main_async(args: argparse.Namespace) -> int:
             try:
                 out = await fn(ctx)
                 results.extend(out if isinstance(out, list) else [out])
+            except QuotaBlocked as blocked:
+                quota_blocked = f"{name}: {blocked}"
+                break
             except RowSkip as skip:
                 results.append(RowResult(name, "SKIP", str(skip)))
             except RowFailure as failure:
@@ -2035,6 +2061,18 @@ async def main_async(args: argparse.Namespace) -> int:
         elif ctx.created_sessions:
             logger.info("kept sessions: %s", ", ".join(ctx.created_sessions))
         await transport.close()
+
+    if quota_blocked is not None:
+        print(
+            f"setup: the signed-in user ({transport.label}) is over its quota, so the turn was refused ({quota_blocked}). "
+            "Nothing was published: raise the user's quota or wait for the period, then re-run.",
+            file=sys.stderr,
+        )
+        if args.json:
+            with open(args.json, "w", encoding="utf-8") as fh:
+                json.dump({"target": transport.label, "rows": [r.__dict__ for r in results],
+                           "quotaBlocked": quota_blocked, "published": False}, fh, indent=2, default=str)
+        return 2
 
     _print_report(results, ctx, transport.label)
     published = False

@@ -157,3 +157,73 @@ class TestRepositories:
         settings = asyncio.run(repo.get_settings("user-1"))
         assert memory_mode_from(settings) == "off"
         assert settings["personalInstructions"] == "be brief"
+
+
+class TestQuota:
+    """The eval users' standing quota: one tier, assigned to their app role, idempotent.
+
+    Before it, the eval user lived on the $10 default tier plus hand-made
+    overrides and extensions; on dev those ran out on 2026-11-15 and the
+    nightly eval and smoke failed for three nights.
+    """
+
+    TABLE = "test-stack-user-quotas"
+
+    @pytest.fixture
+    def repo(self, monkeypatch):
+        monkeypatch.setenv("AWS_DEFAULT_REGION", REGION)
+        monkeypatch.setenv("AWS_REGION", REGION)
+        for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
+            monkeypatch.setenv(key, "testing")
+        with mock_aws():
+            gsis = [("AssignmentTypeIndex", "GSI1PK", "GSI1SK"), ("AppRoleAssignmentIndex", "GSI6PK", "GSI6SK")]
+            attrs = {"PK", "SK"} | {a for _, pk, sk in gsis for a in (pk, sk)}
+            boto3.client("dynamodb").create_table(
+                TableName=self.TABLE,
+                KeySchema=[{"AttributeName": "PK", "KeyType": "HASH"}, {"AttributeName": "SK", "KeyType": "RANGE"}],
+                AttributeDefinitions=[{"AttributeName": a, "AttributeType": "S"} for a in sorted(attrs)],
+                BillingMode="PAY_PER_REQUEST",
+                GlobalSecondaryIndexes=[
+                    {"IndexName": n, "KeySchema": [{"AttributeName": pk, "KeyType": "HASH"},
+                                                   {"AttributeName": sk, "KeyType": "RANGE"}],
+                     "Projection": {"ProjectionType": "ALL"}}
+                    for n, pk, sk in gsis
+                ],
+            )
+            from agents.main_agent.quota.repository import QuotaRepository
+
+            yield QuotaRepository(table_name=self.TABLE, events_table_name="test-stack-quota-events")
+
+    def test_creates_the_tier_and_the_role_assignment_once(self, repo):
+        now = "2026-11-18T00:00:00Z"
+        assert asyncio.run(seed.ensure_quota(repo, seed.DEFAULT_MONTHLY_LIMIT, now=now)) == "created"
+        assert asyncio.run(seed.ensure_quota(repo, seed.DEFAULT_MONTHLY_LIMIT, now=now)) == "current"
+
+        tier = asyncio.run(repo.get_tier(seed.QUOTA_TIER_ID))
+        assert tier.monthly_cost_limit == seed.DEFAULT_MONTHLY_LIMIT == 300
+        assert tier.enabled and tier.action_on_limit == "block"
+        # What the resolver reads for a user holding the eval_harness role.
+        [assignment] = asyncio.run(repo.query_app_role_assignments(seed.ROLE_ID))
+        assert assignment.tier_id == seed.QUOTA_TIER_ID and assignment.enabled
+
+    def test_a_new_limit_updates_the_same_tier(self, repo):
+        now = "2026-11-18T00:00:00Z"
+        asyncio.run(seed.ensure_quota(repo, seed.DEFAULT_MONTHLY_LIMIT, now=now))
+        from decimal import Decimal
+
+        assert asyncio.run(seed.ensure_quota(repo, Decimal("450"), now=now)) == "updated"
+        assert asyncio.run(repo.get_tier(seed.QUOTA_TIER_ID)).monthly_cost_limit == 450
+        assert len(asyncio.run(repo.query_app_role_assignments(seed.ROLE_ID))) == 1
+
+    def test_a_disabled_assignment_is_restored_with_its_role_index(self, repo):
+        now = "2026-11-18T00:00:00Z"
+        asyncio.run(seed.ensure_quota(repo, seed.DEFAULT_MONTHLY_LIMIT, now=now))
+        asyncio.run(repo.update_assignment(seed.QUOTA_ASSIGNMENT_ID, {"enabled": False}))
+
+        assert asyncio.run(seed.ensure_quota(repo, seed.DEFAULT_MONTHLY_LIMIT, now=now)) == "updated"
+        [assignment] = asyncio.run(repo.query_app_role_assignments(seed.ROLE_ID))
+        assert assignment.enabled
+
+    def test_monthly_limit_flag(self):
+        assert seed.parse_args(["--prefix", PREFIX]).monthly_limit == 300
+        assert seed.parse_args(["--prefix", PREFIX, "--monthly-limit", "120"]).monthly_limit == 120
