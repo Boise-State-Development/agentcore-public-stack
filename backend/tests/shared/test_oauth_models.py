@@ -15,6 +15,7 @@ from apis.shared.oauth.models import (
     OAuthProvider,
     OAuthProviderCreate,
     OAuthProviderType,
+    OAuthProviderUpdate,
 )
 
 
@@ -102,3 +103,47 @@ class TestTenantProviderCreate:
                 provider_type=OAuthProviderType.ATLASSIAN,
                 authorization_server_metadata=self._metadata,
             )
+
+
+class TestCredentialWhitespace:
+    """A pasted client ID or secret is stored without surrounding whitespace.
+
+    Stored as pasted, a trailing newline made GitHub refuse AgentCore's token
+    exchange, which surfaced only as a message-less ValidationException from
+    ``CompleteResourceTokenAuth`` after the user had authorized.
+    """
+
+    def test_create_strips_client_id_and_secret(self) -> None:
+        created = OAuthProviderCreate(
+            provider_id="github",
+            display_name="GitHub",
+            provider_type=OAuthProviderType.GITHUB,
+            client_id="  Ov23liExample\n",
+            client_secret="\tsecret-value \n",
+        )
+        assert created.client_id == "Ov23liExample"
+        assert created.client_secret == "secret-value"
+
+    def test_create_rejects_whitespace_only_secret(self) -> None:
+        with pytest.raises(ValidationError):
+            OAuthProviderCreate(
+                provider_id="github",
+                display_name="GitHub",
+                provider_type=OAuthProviderType.GITHUB,
+                client_id="Ov23liExample",
+                client_secret="   ",
+            )
+
+    def test_update_strips_a_rotation(self) -> None:
+        update = OAuthProviderUpdate(client_id=" Ov23liExample ", client_secret="secret-value\r\n")
+        assert update.client_id == "Ov23liExample"
+        assert update.client_secret == "secret-value"
+
+    def test_update_whitespace_only_secret_is_not_a_rotation(self) -> None:
+        with pytest.raises(ValidationError, match="provided together"):
+            OAuthProviderUpdate(client_id="Ov23liExample", client_secret="  ")
+
+    def test_update_without_credentials_is_unchanged(self) -> None:
+        update = OAuthProviderUpdate(display_name="GitHub")
+        assert update.client_id is None
+        assert update.client_secret is None

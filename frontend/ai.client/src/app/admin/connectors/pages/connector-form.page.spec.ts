@@ -210,6 +210,54 @@ describe('ConnectorFormPage Entra tenant', () => {
   });
 });
 
+// A secret stored with the whitespace a paste picked up makes the provider
+// refuse AgentCore's token exchange, which surfaces only as an unexplained
+// connect failure after the user has already authorized.
+describe('ConnectorFormPage client credentials', () => {
+  it('sends trimmed credentials on create', async () => {
+    const fixture = setup(null);
+    fixture.detectChanges();
+    const page = fixture.componentInstance;
+    page.selectConnectorType('github');
+    page.connectorForm.patchValue({
+      providerId: 'github',
+      clientId: ' Ov23liExample ',
+      clientSecret: 'secret-value\n',
+    });
+
+    await page.onSubmit();
+
+    expect(fixture.service.createConnector).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId: 'Ov23liExample', clientSecret: 'secret-value' }),
+    );
+  });
+
+  it('sends a trimmed rotation on edit', async () => {
+    const fixture = await loadEdit(CONNECTOR);
+    const page = fixture.componentInstance;
+    page.connectorForm.patchValue({ clientId: 'Ov23liExample\t', clientSecret: '  secret-value \r\n' });
+
+    await page.onSubmit();
+
+    expect(fixture.service.updateConnector.mock.calls[0][1]).toMatchObject({
+      clientId: 'Ov23liExample',
+      clientSecret: 'secret-value',
+    });
+  });
+
+  it('treats whitespace-only credentials as no rotation', async () => {
+    const fixture = await loadEdit(CONNECTOR);
+    const page = fixture.componentInstance;
+    page.connectorForm.patchValue({ displayName: 'Example Drive 2', clientId: '  ', clientSecret: ' ' });
+
+    await page.onSubmit();
+
+    const updates = fixture.service.updateConnector.mock.calls[0][1];
+    expect('clientId' in updates).toBe(false);
+    expect('clientSecret' in updates).toBe(false);
+  });
+});
+
 describe('ConnectorFormPage provider picker', () => {
   const radios = (el: HTMLElement) =>
     Array.from(el.querySelectorAll<HTMLInputElement>('input[name="providerTypePreset"]'));

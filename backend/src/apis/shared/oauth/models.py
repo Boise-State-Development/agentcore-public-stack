@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from apis.shared.timestamps import utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -284,6 +284,18 @@ class OAuthProvider:
 # =============================================================================
 
 
+def _strip_credential(value: Any) -> Any:
+    """Trim whitespace a paste picks up around a client ID or secret.
+
+    Neither value ever legitimately starts or ends with whitespace. Stored as
+    pasted, a trailing space or newline makes the provider reject AgentCore's
+    token exchange, which surfaces only as an unexplained
+    ``CompleteResourceTokenAuth`` ValidationException after the user has
+    already authorized.
+    """
+    return value.strip() if isinstance(value, str) else value
+
+
 _CUSTOM_TYPES = {OAuthProviderType.CUSTOM, OAuthProviderType.CANVAS}
 
 
@@ -332,6 +344,10 @@ class OAuthProviderCreate(BaseModel):
             "icon_name": "heroCloud",
         }
     })
+
+    _strip_credentials = field_validator("client_id", "client_secret", mode="before")(
+        _strip_credential
+    )
 
     @model_validator(mode="after")
     def _validate_discovery(self) -> "OAuthProviderCreate":
@@ -401,6 +417,10 @@ class OAuthProviderUpdate(BaseModel):
     # export target); a populated adapter key sets it; `None` leaves it
     # unchanged.
     export_target_adapter_id: Optional[str] = None
+
+    _strip_credentials = field_validator("client_id", "client_secret", mode="before")(
+        _strip_credential
+    )
 
     @model_validator(mode="after")
     def _validate_credential_pair(self) -> "OAuthProviderUpdate":
