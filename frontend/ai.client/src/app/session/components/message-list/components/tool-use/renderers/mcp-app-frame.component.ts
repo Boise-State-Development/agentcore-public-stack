@@ -24,7 +24,10 @@ import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-m
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
 import { McpAppTeardownService } from '../../../../../services/mcp-apps/mcp-app-teardown.service';
 import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
-import { isAwaitingUserSubmission } from '../../../../../services/mcp-apps/awaiting-submission';
+import {
+  findSubmittedCall,
+  isAwaitingUserSubmission,
+} from '../../../../../services/mcp-apps/awaiting-submission';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
 import { McpAppActionsComponent } from '../../mcp-app-actions/mcp-app-actions.component';
 import { McpAppCardStateService } from '../../../../../services/mcp-apps/mcp-app-card-state.service';
@@ -579,13 +582,25 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    * error on purpose so the agent stops, but nothing has failed. Shown as a
    * neutral "Waiting for you" in place of "Failed".
    */
-  protected readonly isAwaitingUser = computed(() =>
-    isAwaitingUserSubmission(this.result()),
+  protected readonly isAwaitingUser = computed(
+    () => isAwaitingUserSubmission(this.result()) && !this.submittedCall(),
+  );
+
+  /**
+   * The App's own call that completed this tool's waiting form, from the
+   * persisted cards (so only after a reload). Handed to the App as the tool
+   * result in place of the stored "waiting" one, or it redraws the empty
+   * form over the issue the user already created (see `findSubmittedCall`).
+   */
+  private readonly submittedCall = computed(() =>
+    findSubmittedCall(this.result(), this.displayToolName(), this.appActions()),
   );
 
   /** The tool failed (drives the header's "Failed" badge). */
   protected readonly isError = computed(
-    () => this.result()?.status === 'error' && !this.isAwaitingUser(),
+    () =>
+      this.result()?.status === 'error' &&
+      !isAwaitingUserSubmission(this.result()),
   );
 
   /**
@@ -803,8 +818,11 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     });
     // On finality, send the complete `tool-input` (once) then (re-)push the
     // tool result if it's landed/changed after the App initialized.
+    // A submitted form's card hydrates after the App may already have
+    // initialized, so it re-pushes the result too.
     effect(() => {
       this.result();
+      this.submittedCall();
       if (this.inputFinal()) this.bridge?.sendToolInputFinal();
       this.bridge?.refreshToolResult();
     });
@@ -1026,6 +1044,8 @@ export class McpAppFrameComponent implements ToolResultRenderer {
 
   /** Map the renderer's `ToolResultData` to an MCP `CallToolResult`. */
   private toCallToolResult(): unknown | null {
+    const submitted = this.submittedCall();
+    if (submitted) return { content: submitted.content, isError: false };
     const r = this.result();
     if (!r) return null;
     const content = (r.content ?? []).map((item) => {
