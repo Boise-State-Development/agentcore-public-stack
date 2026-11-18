@@ -1,7 +1,8 @@
 # Conversation rewind and fork
 
 **Status:** Rewind (§4–§6) and fork (§7) built, delivery PRs 1–4, behind `SESSION_REWIND_ENABLED` /
-`features.sessionRewind` and `SESSION_FORK_ENABLED` / `features.sessionFork`, both default off. Spec
+`features.sessionRewind` and `SESSION_FORK_ENABLED` / `features.sessionFork`, both default on since
+2026-11-17 (feature switches; `=false` opts out). Spec
 written 2026-10-03 against `develop` @ `ac4212a7`.
 
 **As built (2026-10-29), where it differs from the text below:**
@@ -30,13 +31,14 @@ written 2026-10-03 against `develop` @ `ac4212a7`.
   provenance, and `rootSessionId` offload bucketing.
 - **Rewind does not reach long-term memory (§7.3, measured 2026-11-04).** A rewound turn's facts
   are extracted about 60 s after the turn whether or not it is rewound, and they come back in new
-  conversations. The recommendation there is to disclose this now and offer a "Forget them" after
-  a rewind, behind a flag.
+  conversations. The disclosure (option A) shipped 2026-11-17 as an info toast after every rewind
+  (`REWIND_MEMORY_NOTICE`, with a "Review memories" link to `/memories`), not in a confirmation,
+  because Rewind has none. The "Forget them" offer (B2 + D) is not built.
 - Not yet built: the Undo toast (§4.4), hiding Rewind on summarized messages (the endpoint refuses
   them with 409 and the SPA shows the reason), `rewindMissCount` / `rewindUsd` rollups (§6, the row
   flag is written), and the smoke-matrix rows (§8.1).
 **Tracking issue:** #1421
-**Flags (in development, default OFF):** `SESSION_REWIND_ENABLED` / `CDK_SESSION_REWIND_ENABLED` /
+**Flags (default ON, feature switches; `=false` opts out):** `SESSION_REWIND_ENABLED` / `CDK_SESSION_REWIND_ENABLED` /
 `features.sessionRewind`, and `SESSION_FORK_ENABLED` / `CDK_SESSION_FORK_ENABLED` / `features.sessionFork`.
 Two flags because the two halves ship separately (§8).
 
@@ -380,7 +382,8 @@ Readings:
 
 #### Recommendation
 
-1. **Now (option A):** a single sentence in the Rewind confirmation or tooltip: "Anything already
+1. **Now (option A, shipped 2026-11-17 as a toast after each rewind):** a single sentence in the
+   Rewind confirmation or tooltip: "Anything already
    saved to your memories from these messages stays there. Review memories." Add the same
    sentence to the docs-site page for rewind. It costs nothing, and it is true whichever option
    follows.

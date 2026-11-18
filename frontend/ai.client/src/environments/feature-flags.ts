@@ -152,8 +152,8 @@ export interface FeatureFlags {
    * user message offers "Rewind to here", which hides it and everything after
    * it and puts its text back in the composer to edit and resend. Backend:
    * SESSION_REWIND_ENABLED (app-api's `POST /sessions/{id}/rewind` 404s while
-   * off; the Runtime applies the cut). In development, so `false` everywhere
-   * until a deployment turns both sides on.
+   * off; the Runtime applies the cut). Default on, a feature switch: a
+   * deployment that sets `CDK_SESSION_REWIND_ENABLED=false` sets this `false`.
    */
   sessionRewind: boolean;
 
@@ -163,7 +163,8 @@ export interface FeatureFlags {
    * everything before it, with its text in the new composer. The parent stays
    * as it is. Backend: SESSION_FORK_ENABLED (app-api's `POST /sessions/{id}/fork`
    * 404s while off; the Runtime seeds the fork's first turn from the parent's
-   * live history). In development, so `false` everywhere.
+   * live history). Default on, a feature switch: a deployment that sets
+   * `CDK_SESSION_FORK_ENABLED=false` sets this `false`.
    */
   sessionFork: boolean;
 

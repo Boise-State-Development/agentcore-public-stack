@@ -864,20 +864,23 @@ def session_rewind_enabled() -> bool:
     ``docs/specs/conversation-rewind-and-fork.md`` §4. Gates app-api's
     ``POST /sessions/{id}/rewind`` (404 after authentication while off) and
     ``GET /messages``' span filtering, and on the AgentCore Runtime the
-    restore-time filter and the head-of-turn in-place cut. **Opt-in while the
-    feature is in development** (CLAUDE.md "Feature flags"): only ``"true"``
-    (case-insensitive) enables it. CDK sets it on app-api from
+    restore-time filter and the head-of-turn in-place cut. **Default ON with a
+    kill switch**: unset or empty resolves to enabled; only the literal
+    ``"false"`` (case-insensitive) disables. A **feature switch**: it widens
+    what users can do to a conversation's history. CDK sets it on app-api from
     ``config.sessionRewind.enabled`` and writes it to the Runtime only while
-    on. The SPA's matching switch is ``features.sessionRewind``.
+    off, so the default spends none of the V2 environment budget. The SPA's
+    matching switch is ``features.sessionRewind``.
 
     Set it the same way on both services. A Runtime with it off ignores the
     spans app-api wrote, so the model would still see the turns the user
     rewound away.
 
-    A **feature switch** once finished: it widens what users can do to a
-    conversation's history.
+    A rewound turn's facts may already be in AgentCore long-term memory
+    (extraction runs about a minute after the turn), so the SPA's Rewind
+    confirmation says so; the spans hide history, they do not unlearn it.
     """
-    return os.environ.get("SESSION_REWIND_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("SESSION_REWIND_ENABLED", "").strip().lower() != "false"
 
 
 def session_fork_enabled() -> bool:
@@ -886,15 +889,15 @@ def session_fork_enabled() -> bool:
     ``docs/specs/conversation-rewind-and-fork.md`` §7. Gates app-api's
     ``POST /sessions/{id}/fork`` (404 after authentication while off) and, on
     the AgentCore Runtime, seeding a fork's first turn from its parent's live
-    history so the shared prefix reads from the prompt cache. **Opt-in while
-    the feature is in development**: only ``"true"`` (case-insensitive)
-    enables it. CDK sets it on app-api from ``config.sessionFork.enabled`` and
-    writes it to the Runtime only while on. The SPA's matching switch is
+    history so the shared prefix reads from the prompt cache. **Default ON
+    with a kill switch**: unset or empty resolves to enabled; only the literal
+    ``"false"`` (case-insensitive) disables. A **feature switch**: it widens
+    what users can do. CDK sets it on app-api from ``config.sessionFork.enabled``
+    and writes it to the Runtime only while off, so the default spends none of
+    the V2 environment budget. The SPA's matching switch is
     ``features.sessionFork``.
-
-    A **feature switch** once finished: it widens what users can do.
     """
-    return os.environ.get("SESSION_FORK_ENABLED", "").strip().lower() == "true"
+    return os.environ.get("SESSION_FORK_ENABLED", "").strip().lower() != "false"
 
 
 def session_prewarm_enabled() -> bool:
