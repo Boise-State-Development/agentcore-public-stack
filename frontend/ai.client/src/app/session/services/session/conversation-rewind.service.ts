@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Injectable, Injector, inject, signal } from '@angular/core';
+import { Router } from '@angular/router';
 import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ChatStateService } from '../chat/chat-state.service';
@@ -96,6 +97,7 @@ export class ConversationRewindService {
       this.chatState.setLastTurnInterrupted(ref.sessionId, false);
       this.chatState.setLastTurnProviderOutage(ref.sessionId, null);
       this.injector.get(ComposerDraftService).request(ref.sessionId, result.prefillText);
+      this.discloseMemoryResidue();
       return true;
     } catch (error) {
       this.noteRefusal(message, error);
@@ -105,7 +107,25 @@ export class ConversationRewindService {
       this.pendingMessageId.set(null);
     }
   }
+
+  private discloseMemoryResidue(): void {
+    const router = this.injector.get(Router);
+    this.injector.get(ToastService).info('Rewound', REWIND_MEMORY_NOTICE, {
+      duration: 10000,
+      action: { label: 'Review memories', handler: () => void router.navigateByUrl('/memories') },
+    });
+  }
 }
+
+/**
+ * Said after every rewind (spec §7.3, option A): a rewind hides messages from
+ * the conversation, but long-term memory may already have learned from them
+ * (extraction runs about a minute after a turn), and a new conversation can
+ * recall it. Nothing here can undo that, so the user is told and pointed at
+ * the Memories page, which lists and deletes records.
+ */
+export const REWIND_MEMORY_NOTICE =
+  'Anything already saved to your memories from these messages stays there.';
 
 /** The server's own explanation for a refusal, which is written for the user. */
 export function rewindErrorMessage(error: unknown): string {

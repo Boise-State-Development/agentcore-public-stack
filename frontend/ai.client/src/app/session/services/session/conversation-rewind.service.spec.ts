@@ -1,7 +1,8 @@
 import { TestBed } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConversationRewindService, isSummaryRefusal } from './conversation-rewind.service';
+import { Router } from '@angular/router';
+import { ConversationRewindService, REWIND_MEMORY_NOTICE, isSummaryRefusal } from './conversation-rewind.service';
 import { SessionService } from './session.service';
 import { MessageMapService } from './message-map.service';
 import { ComposerDraftService } from './composer-draft.service';
@@ -21,7 +22,8 @@ describe('ConversationRewindService', () => {
     setLastTurnInterrupted: ReturnType<typeof vi.fn>;
     setLastTurnProviderOutage: ReturnType<typeof vi.fn>;
   };
-  let toast: { error: ReturnType<typeof vi.fn> };
+  let toast: { error: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn> };
+  let router: { navigateByUrl: ReturnType<typeof vi.fn> };
   let composerDraft: ComposerDraftService;
 
   const userMessage = (overrides: Partial<Message> = {}): Message => ({
@@ -40,7 +42,8 @@ describe('ConversationRewindService', () => {
       setLastTurnInterrupted: vi.fn(),
       setLastTurnProviderOutage: vi.fn(),
     };
-    toast = { error: vi.fn() };
+    toast = { error: vi.fn(), info: vi.fn() };
+    router = { navigateByUrl: vi.fn().mockResolvedValue(true) };
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({
       providers: [
@@ -49,6 +52,7 @@ describe('ConversationRewindService', () => {
         { provide: MessageMapService, useValue: messageMap },
         { provide: ChatStateService, useValue: chatState },
         { provide: ToastService, useValue: toast },
+        { provide: Router, useValue: router },
       ],
     });
     service = TestBed.inject(ConversationRewindService);
@@ -73,6 +77,35 @@ describe('ConversationRewindService', () => {
     expect(chatState.setLastTurnProviderOutage).toHaveBeenCalledWith('sess-1', null);
     expect(composerDraft.consume('sess-1')?.text).toBe('what changed?');
     expect(service.pendingMessageId()).toBeNull();
+  });
+
+  it('says that long-term memory keeps what it already learned, and links to Memories', async () => {
+    sessionService.rewindSession.mockResolvedValue({
+      nextMessageIndex: 8,
+      prefillText: 'what changed?',
+      rewoundMessageIds: ['msg-sess-1-4', 'msg-sess-1-5'],
+      epoch: 1,
+    });
+
+    await service.rewind(userMessage());
+
+    expect(toast.info).toHaveBeenCalledTimes(1);
+    const [title, message, options] = toast.info.mock.calls[0];
+    expect(title).toBe('Rewound');
+    expect(message).toBe(REWIND_MEMORY_NOTICE);
+    expect(message).toMatch(/memories/);
+    expect(options.action.label).toBe('Review memories');
+    options.action.handler();
+    expect(router.navigateByUrl).toHaveBeenCalledWith('/memories');
+  });
+
+  it('says nothing about memory when the rewind fails', async () => {
+    sessionService.rewindSession.mockRejectedValue(new HttpErrorResponse({ status: 409 }));
+
+    await service.rewind(userMessage());
+
+    expect(toast.info).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalled();
   });
 
   it('is unavailable while that conversation streams', async () => {
