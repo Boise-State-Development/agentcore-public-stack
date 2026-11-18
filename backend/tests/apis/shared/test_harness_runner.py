@@ -233,6 +233,23 @@ async def test_a_quota_exceeded_frame_is_flagged_and_the_status_is_unchanged(mon
 
 
 @pytest.mark.asyncio
+async def test_a_stream_error_s_code_reaches_the_result(monkeypatch, delivery_spy):
+    stream = _sse(
+        ("message_start", '{"role": "assistant"}'),
+        ("stream_error", '{"type": "stream_error", "code": "provider_unavailable", "message": "provider down"}'),
+        ("done", "{}"),
+    )
+    _mock_http(monkeypatch, lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=stream))
+    result = await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=SpyBearerAuth("b"),
+        invocations_base_url="http://localhost:8001", governance=GovernanceFloor(audit=RecordingAudit()),
+    )
+    assert result.status == "error" and result.error == "provider down"
+    assert result.error_code == "provider_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_scheduled_completion_marks_session_unread(monkeypatch, delivery_spy):
     """An unattended (schedule) run flags the session unread on completion."""
     def handler(request: httpx.Request) -> httpx.Response:

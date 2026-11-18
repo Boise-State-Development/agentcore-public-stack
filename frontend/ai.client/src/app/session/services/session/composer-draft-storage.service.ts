@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, signal } from '@angular/core';
 
 /**
  * Everything a user has composed but not sent, remembered per conversation
@@ -13,7 +13,7 @@ import { Injectable } from '@angular/core';
  * `localStorage`, not memory: the losses worth preventing are the ones the
  * user did not choose — a reload, a closed tab, a session expiry bouncing
  * through Cognito — and an in-memory map survives none of them. The key for
- * the new-conversation composer is a constant ({@link NEW_CONVERSATION_DRAFT_KEY}),
+ * a new conversation is fixed by its binding ({@link newConversationDraftKey}),
  * so staging a file upload (which mints a session id before the first send)
  * does not move the draft out from under it.
  *
@@ -66,6 +66,24 @@ const MAX_DRAFT_CHARS = 32_000;
 
 /** The draft key for the composer on a conversation that has not been sent yet. */
 export const NEW_CONVERSATION_DRAFT_KEY = 'new';
+
+/**
+ * The draft key for a new conversation, by what its URL binds it to.
+ *
+ * A new conversation with an Agent, or in a project, keeps its own draft, apart
+ * from a plain one and from each other. With one key for every new
+ * conversation, files staged on one Agent's page were on the next Agent's page
+ * too, and went to that Agent if the user sent there. The project wins when
+ * both are named, as it does for the binding (`bindingQueryParams`).
+ */
+export function newConversationDraftKey(
+  assistantId: string | null | undefined,
+  projectId: string | null | undefined,
+): string {
+  if (projectId) return `${NEW_CONVERSATION_DRAFT_KEY}:project:${projectId}`;
+  if (assistantId) return `${NEW_CONVERSATION_DRAFT_KEY}:agent:${assistantId}`;
+  return NEW_CONVERSATION_DRAFT_KEY;
+}
 
 /**
  * A file the user attached but has not sent. Metadata only — enough to paint
@@ -153,8 +171,27 @@ function isStoredAttachment(value: unknown): value is StoredAttachment {
 
 @Injectable({ providedIn: 'root' })
 export class ComposerDraftStorageService {
+  private readonly _discarded = signal<{ key: string } | null>(null);
+
+  /**
+   * The last draft whose attachments were discarded from outside its composer
+   * ({@link discardAttachments}), for the composer showing it to let go of them
+   * too. A fresh object per call, so the same key twice still notifies.
+   */
+  readonly discarded = this._discarded.asReadonly();
+
   constructor() {
     this.prune();
+  }
+
+  /**
+   * Drop a draft's files, folders and staged conversation, keeping its text.
+   * For attachments that turn out to belong to a conversation already sent.
+   */
+  discardAttachments(key: string): void {
+    const draft = this.read(key);
+    this.write(key, { text: draft.text, mentionAgentId: draft.mentionAgentId, queued: draft.queued });
+    this._discarded.set({ key });
   }
 
   /** The remembered draft for a conversation; {@link EMPTY_DRAFT} when there is none. */

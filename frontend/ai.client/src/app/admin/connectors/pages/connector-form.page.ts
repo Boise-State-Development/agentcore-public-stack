@@ -1304,9 +1304,15 @@ export class ConnectorFormPage implements OnInit {
         if (currentExportAdapter !== this.exportAdapterLoadedFromServer()) {
           updates.exportTargetAdapterId = currentExportAdapter;
         }
-        if (formValue.clientId && formValue.clientSecret) {
-          updates.clientId = formValue.clientId;
-          updates.clientSecret = formValue.clientSecret;
+        // Send the credentials exactly as checked by `credentialPairError`:
+        // trimmed. A space or newline picked up when pasting would otherwise
+        // be stored as part of the secret, and the provider then refuses the
+        // token exchange with no clue why.
+        const clientId = formValue.clientId.trim();
+        const clientSecret = formValue.clientSecret.trim();
+        if (clientId && clientSecret) {
+          updates.clientId = clientId;
+          updates.clientSecret = clientSecret;
         }
         // Only send the discovery URL when the admin actually changed it —
         // the backend requires a credential rotation alongside a discovery
@@ -1339,8 +1345,8 @@ export class ConnectorFormPage implements OnInit {
           providerId: formValue.providerId,
           displayName: formValue.displayName,
           providerType: formValue.providerType,
-          clientId: formValue.clientId,
-          clientSecret: formValue.clientSecret,
+          clientId: formValue.clientId.trim(),
+          clientSecret: formValue.clientSecret.trim(),
           scopes,
           allowedRoles,
           enabled: formValue.enabled,

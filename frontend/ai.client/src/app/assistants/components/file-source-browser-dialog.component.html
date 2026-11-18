@@ -318,7 +318,7 @@
       </div>
 
       <!-- Footer -->
-      <div class="flex items-center justify-between gap-4 border-t border-gray-200 px-5 py-3 dark:border-gray-700">
+      <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-gray-200 px-5 py-3 dark:border-gray-700">
         @if (isPicker) {
           <span class="min-w-0 flex-1 truncate text-sm/6 text-gray-500 dark:text-gray-400">
             @if (currentFolderId() !== null) {
@@ -347,14 +347,38 @@
             </button>
           </div>
         } @else {
-          <span class="text-sm/6 text-gray-500 dark:text-gray-400">
-            @if (maxFiles !== null) {
-              {{ selectedCount() }} of {{ maxFiles }} selected
-            } @else {
-              {{ selectedCount() }} selected
+          <!-- Wide enough for the hint beside the buttons, or it takes its own row
+               above them, so no button ever wraps its label. -->
+          <div class="min-w-48 flex-1">
+            <span class="text-sm/6 text-gray-500 dark:text-gray-400">
+              @if (maxFiles !== null) {
+                {{ selectedCount() }} of {{ maxFiles }} selected
+              } @else if (canImportCurrentFolder() && selectedCount() === 0) {
+                Pick files, or import the whole folder and its subfolders
+              } @else {
+                {{ selectedCount() }} selected
+              }
+            </span>
+            @if (offerFolderSync && canImportCurrentFolder() && selectedCount() === 0) {
+              <!-- Applies to "Import this folder" only: the section schedules a
+                   folder sync after the import (assistant-kb-sync spec §11). -->
+              <div class="mt-1 flex items-center gap-2">
+                <input
+                  id="file-source-keep-in-sync"
+                  type="checkbox"
+                  [checked]="keepFolderInSync()"
+                  (change)="keepFolderInSync.set($any($event.target).checked)"
+                  [disabled]="importing()"
+                  class="size-4 rounded border-gray-300 text-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                  data-testid="file-source-keep-in-sync"
+                />
+                <label for="file-source-keep-in-sync" class="text-sm/6 text-gray-700 dark:text-gray-300">
+                  Keep in sync with the folder
+                </label>
+              </div>
             }
-          </span>
-          <div class="flex items-center gap-2">
+          </div>
+          <div class="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
             <button
               type="button"
               (click)="cancel()"
@@ -362,6 +386,22 @@
             >
               Cancel
             </button>
+            @if (allowFolderImport) {
+              <!-- Every readable file in this folder and its subfolders, walked
+                   server-side. Disabled until the user is inside a folder, and
+                   while files are ticked, so it never competes with Import. -->
+              <button
+                type="button"
+                (click)="importCurrentFolder()"
+                [disabled]="!canImportCurrentFolder() || selectedCount() > 0 || importing()"
+                class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+                [attr.aria-label]="currentFolderName() ? 'Import the folder ' + currentFolderName() : 'Import this folder'"
+                data-testid="file-source-import-folder"
+              >
+                <ng-icon name="heroFolder" class="size-4" />
+                Import this folder
+              </button>
+            }
             @if (allowFolder) {
               <!-- The whole folder as one attachment (drive-folder spec §4.1).
                    Disabled until the user is inside a folder, and while files

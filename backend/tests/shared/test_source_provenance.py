@@ -23,6 +23,7 @@ from apis.shared.files.source_provenance import (
     METHOD_NUMERIC,
     METHOD_QUOTE_NOT_LOCATED,
     METHOD_QUOTE_TOO_LONG,
+    METHOD_VALUE_NOT_BARE,
     PRECISION_ESTIMATED,
     PRECISION_MEASURED,
     STATE_QUOTE_UNSUPPORTED,
@@ -447,6 +448,55 @@ class TestUnassessedReasons:
         assert result.method == METHOD_QUOTE_TOO_LONG
         # Located all the same: traceable, just not confirmable.
         assert result.locator is not None
+
+
+class TestDescribedValues:
+    """A value wrapped in a description fails like a wrong one, and says which.
+
+    Sonnet 5 on dev sent "July 28, 2027 interim report due" against a passage
+    that carries "July 28, 2027". The state is right: that text is not in the
+    passage. The method tells it apart from a wrong date, because the fix is
+    to send less, not to re-read the document.
+    """
+
+    @pytest.mark.parametrize(
+        "value, quote",
+        [
+            ("January 15, 2026 project start", "The project period begins January 15, 2026"),
+            ("$316,200 in direct costs", "Direct costs total $316,200."),
+            ("54% indirect rate", "Indirect costs are calculated at 54% of MTDC."),
+        ],
+    )
+    def test_the_value_inside_a_description_is_named(self, value, quote):
+        result = verify_claim(claim(value, quote), award_letter())
+        assert result.state == STATE_QUOTE_UNSUPPORTED
+        assert result.method == METHOD_VALUE_NOT_BARE
+
+    @pytest.mark.parametrize(
+        "value, quote",
+        [
+            # A wrong date in a description is a wrong date.
+            ("January 16, 2026 project start", "The project period begins January 15, 2026"),
+            # A day or year inside the passage's date is not a number it states.
+            ("15 days", "The project period begins January 15, 2026"),
+            ("2026 awards", "The project period begins January 15, 2026"),
+            # The percent sign travels with the value here too.
+            ("$54 per unit", "Indirect costs are calculated at 54% of MTDC."),
+            # A bare wrong amount is the hallucination signal, unchanged.
+            ("$912,000", "The total approved budget for this project is $487,500"),
+        ],
+    )
+    def test_a_coincidence_is_still_no_match(self, value, quote):
+        result = verify_claim(claim(value, quote), award_letter())
+        assert result.state == STATE_QUOTE_UNSUPPORTED
+        assert result.method == METHOD_NO_MATCH
+
+    def test_the_bare_value_is_supported(self):
+        result = verify_claim(
+            claim("January 15, 2026", "The project period begins January 15, 2026"),
+            award_letter(),
+        )
+        assert result.state == STATE_SUPPORTED
 
 
 class TestKnownWeaknesses:

@@ -14,6 +14,8 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { FileEntry, FileSourceConnector } from '../models/file-source.model';
+import { FEATURES } from '../../services/features';
+import { environment } from '../../../environments/environment';
 
 const CONNECTED: FileSourceConnector = {
   providerId: 'google',
@@ -30,6 +32,7 @@ function fileEntry(over: Partial<FileEntry>): FileEntry {
 function setup(
   fileSourceOverrides: Partial<Record<string, unknown>> = {},
   dialogData: Record<string, unknown> = { target: 'AST-1' },
+  folderSync = true,
 ) {
   const fileSourceService = {
     listFileSources: vi.fn().mockResolvedValue([CONNECTED]),
@@ -60,6 +63,7 @@ function setup(
       { provide: UserConnectorsService, useValue: connectorsService },
       { provide: OAuthConsentService, useValue: consentService },
       { provide: ToastService, useValue: toast },
+      { provide: FEATURES, useValue: { ...environment.features, folderSync } },
     ],
   });
 
@@ -397,5 +401,132 @@ describe('FileSourceBrowserDialogComponent — attach a whole folder', () => {
     (component['toggleSelect'] as (e: FileEntry) => void)(fileEntry({ id: 'a', name: 'a.pdf', mimeType: 'application/pdf' }));
     fixture.detectChanges();
     expect(folderButton(fixture)?.disabled).toBe(true);
+  });
+});
+
+describe('FileSourceBrowserDialogComponent — import a whole folder', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+  afterEach(() => TestBed.resetTestingModule());
+
+  function folderButton(fixture: { nativeElement: HTMLElement }): HTMLButtonElement | null {
+    return fixture.nativeElement.querySelector('[data-testid="file-source-import-folder"]');
+  }
+
+  async function enterFolder(component: Record<string, never>, fixture: { detectChanges(): void }) {
+    await (component['openFolder'] as (id: string, name: string) => Promise<void>)('fold-1', 'Grants');
+    fixture.detectChanges();
+  }
+
+  it('is offered only to an agent knowledge base that asks for it', async () => {
+    const browse = vi.fn().mockResolvedValue({ entries: [], breadcrumbs: [], nextCursor: null });
+    const plain = setup({ browse }, { target: 'AST-1', connector: CONNECTED });
+    await enterFolder(plain.component, plain.fixture);
+    expect(folderButton(plain.fixture)).toBeNull();
+
+    // A project's knowledge has no folder route, so it is never offered there.
+    const project = setup({ browse }, { target: { projectId: 'p1' }, connector: CONNECTED, allowFolderImport: true });
+    await enterFolder(project.component, project.fixture);
+    expect(folderButton(project.fixture)).toBeNull();
+  });
+
+  it('imports the folder it is in and closes with what the server created', async () => {
+    const response = { documents: [{ documentId: 'DOC-1' }], listed: 3, alreadyImported: 1, skippedType: 1, truncated: false };
+    const importFolder = vi.fn().mockResolvedValue(response);
+    const { fixture, component, dialogRef } = setup(
+      {
+        browse: vi.fn().mockResolvedValue({ entries: [], breadcrumbs: [], nextCursor: null }),
+        importFolder,
+      },
+      { target: 'AST-1', connector: CONNECTED, allowFolderImport: true },
+    );
+    await vi.waitFor(() => expect((component['roots'] as () => unknown[])()).toHaveLength(1));
+    await enterFolder(component, fixture);
+    const button = folderButton(fixture)!;
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-label')).toBe('Import the folder Grants');
+    button.click();
+
+    await vi.waitFor(() => expect(dialogRef.close).toHaveBeenCalled());
+    expect(importFolder).toHaveBeenCalledWith('AST-1', 'google', 'fold-1');
+    expect(dialogRef.close).toHaveBeenCalledWith({
+      documents: response.documents,
+      folderImport: {
+        ...response,
+        folderName: 'Grants',
+        connectorId: 'google',
+        folderId: 'fold-1',
+        folderPath: 'Grants',
+        keepInSync: false,
+      },
+    });
+  });
+
+  describe('Keep in sync', () => {
+    function syncBox(fixture: { nativeElement: HTMLElement }): HTMLInputElement | null {
+      return fixture.nativeElement.querySelector('[data-testid="file-source-keep-in-sync"]');
+    }
+
+    const response = { documents: [{ documentId: 'DOC-1' }], listed: 1, alreadyImported: 0, skippedType: 0, truncated: false };
+    const crumbs = { entries: [], breadcrumbs: [{ id: 'root', name: 'My Drive' }], nextCursor: null };
+    // Two roots, so the picker stays at the roots list rather than opening the only one.
+    const listRoots = vi.fn().mockResolvedValue([{ id: 'root', name: 'My Drive' }, { id: 'shared', name: 'Shared' }]);
+    const atRoots = (component: Record<string, never>) =>
+      vi.waitFor(() => expect((component['roots'] as () => unknown[])()).toHaveLength(2));
+
+    it('is not offered without folder sync', async () => {
+      const { fixture, component } = setup(
+        { listRoots, browse: vi.fn().mockResolvedValue(crumbs) },
+        { target: 'AST-1', connector: CONNECTED, allowFolderImport: true },
+        false,
+      );
+      await atRoots(component);
+      await enterFolder(component, fixture);
+      expect(folderButton(fixture)).not.toBeNull();
+      expect(syncBox(fixture)).toBeNull();
+    });
+
+    it('is offered only inside a folder, and not while files are ticked', async () => {
+      const file = fileEntry({ id: 'a', name: 'a.pdf', mimeType: 'application/pdf' });
+      const { fixture, component } = setup(
+        { listRoots, browse: vi.fn().mockResolvedValue({ ...crumbs, entries: [file] }) },
+        { target: 'AST-1', connector: CONNECTED, allowFolderImport: true },
+      );
+      await atRoots(component);
+      fixture.detectChanges();
+      expect(syncBox(fixture)).toBeNull();
+
+      await enterFolder(component, fixture);
+      expect(syncBox(fixture)).not.toBeNull();
+
+      (component['toggleSelect'] as (e: FileEntry) => void)(file);
+      fixture.detectChanges();
+      expect(syncBox(fixture)).toBeNull();
+    });
+
+    it('closes with keepInSync and the folder path the schedule is named by', async () => {
+      const importFolder = vi.fn().mockResolvedValue(response);
+      const { fixture, component, dialogRef } = setup(
+        { listRoots, browse: vi.fn().mockResolvedValue(crumbs), importFolder },
+        { target: 'AST-1', connector: CONNECTED, allowFolderImport: true },
+      );
+      await atRoots(component);
+      await enterFolder(component, fixture);
+      const box = syncBox(fixture)!;
+      box.click();
+      fixture.detectChanges();
+      expect(box.checked).toBe(true);
+      folderButton(fixture)!.click();
+
+      await vi.waitFor(() => expect(dialogRef.close).toHaveBeenCalled());
+      expect(dialogRef.close).toHaveBeenCalledWith({
+        documents: response.documents,
+        folderImport: expect.objectContaining({
+          connectorId: 'google',
+          folderId: 'fold-1',
+          folderPath: 'My Drive/Grants',
+          keepInSync: true,
+        }),
+      });
+    });
   });
 });

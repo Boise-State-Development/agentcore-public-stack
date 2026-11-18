@@ -62,7 +62,6 @@ LEGACY = LimitsProfile(
     max_files_per_message=5,
     inline_document_max_bytes=4 * MIB,
     inline_total_max_bytes=7_000_000,
-    turn_guard=True,
     over_budget_by_reference=True,
     documents_as_text=False,
     text_only_max_chars=60_000,
@@ -162,12 +161,6 @@ CASES: List[Case] = [
         [(N, "pdf", "inline"), (N, "pdf", "inline")],
         profile=_budget(0),
         requested=8 * MIB,
-    ),
-    Case(
-        "the guard off disables the budget",
-        [f("a.pdf", size=4 * MIB), f("b.pdf", size=4 * MIB)],
-        [(N, "pdf", "inline"), (N, "pdf", "inline")],
-        profile=replace(LEGACY, turn_guard=False),
     ),
     Case(
         "files that each pass the per-file gate are caught by the budget; a sheet never counts",
@@ -432,7 +425,7 @@ def test_the_table(case: Case):
 
 #: sha256 over every row's inputs and the plan the planner produced for them.
 #: A change here is a change to who gets what: say so in the PR.
-TABLE_DIGEST = "c0a65269a994c043930829c3444b51c5d2a2fa7347157657d5f99d7fe1b83ecd"
+TABLE_DIGEST = "9fd16d12b16fc5e8bb71affc5344ef7b83d6158acac1b89eab25740393a0df85"
 
 
 #: Fields added for the ``token`` profile (phase 3). Omitted from a payload while
@@ -449,6 +442,8 @@ _PHASE3_DEFAULTS = {
     "compact_width": None, "compact_height": None, "variant": None,
     # Phase 5 (overflow): the row's searchability and the plan's conversation set.
     "searchable": False, "conversation": None,
+    # The persisted-bytes budget that replaced the token profile's 7 MB combined budget.
+    "persisted_inline_max_bytes": 0,
 }
 
 
@@ -539,22 +534,21 @@ def _named(*names: str) -> list:
 
 
 COUNT_CASES = [
-    # (name, direct, ids, folders, folders_dropped, profile, kept_direct, kept_ids, kept_folders, dropped_names, dropped_total, resolver_max)
-    ("under the cap", 1, 2, 0, 0, LEGACY, 1, 2, 0, [], 0, None),
-    ("ids beyond the cap are counted, not fetched", 0, 7, 0, 0, LEGACY, 0, 5, 0, [], 2, None),
-    ("direct files beyond the cap are named", 6, 0, 0, 0, LEGACY, 5, 0, 0, ["d5.pdf"], 1, None),
-    ("direct first, ids fill the remainder", 2, 5, 0, 0, LEGACY, 2, 3, 0, [], 2, None),
-    ("direct overflow leaves no room for ids", 6, 1, 0, 0, LEGACY, 5, 0, 0, ["d5.pdf"], 2, None),
-    ("a non-positive cap disables it", 9, 9, 0, 0, replace(LEGACY, max_files_per_message=0), 9, 9, 0, [], 0, None),
-    ("folders count one each, after the files", 0, 2, 2, 0, replace(LEGACY, max_files_per_message=3), 0, 2, 1, [], 1, None),
-    ("the folder limit of its own is always counted", 0, 0, 2, 1, LEGACY, 0, 0, 2, [], 1, None),
-    ("the guard off: nothing capped, the resolver's old backstop", 9, 9, 2, 1, replace(LEGACY, turn_guard=False), 9, 9, 2, [], 1, 5),
+    # (name, direct, ids, folders, folders_dropped, profile, kept_direct, kept_ids, kept_folders, dropped_names, dropped_total)
+    ("under the cap", 1, 2, 0, 0, LEGACY, 1, 2, 0, [], 0),
+    ("ids beyond the cap are counted, not fetched", 0, 7, 0, 0, LEGACY, 0, 5, 0, [], 2),
+    ("direct files beyond the cap are named", 6, 0, 0, 0, LEGACY, 5, 0, 0, ["d5.pdf"], 1),
+    ("direct first, ids fill the remainder", 2, 5, 0, 0, LEGACY, 2, 3, 0, [], 2),
+    ("direct overflow leaves no room for ids", 6, 1, 0, 0, LEGACY, 5, 0, 0, ["d5.pdf"], 2),
+    ("a non-positive cap disables it", 9, 9, 0, 0, replace(LEGACY, max_files_per_message=0), 9, 9, 0, [], 0),
+    ("folders count one each, after the files", 0, 2, 2, 0, replace(LEGACY, max_files_per_message=3), 0, 2, 1, [], 1),
+    ("the folder limit of its own is always counted", 0, 0, 2, 1, LEGACY, 0, 0, 2, [], 1),
 ]
 
 
 @pytest.mark.parametrize("case", COUNT_CASES, ids=[c[0] for c in COUNT_CASES])
 def test_the_count_cap(case):
-    (_, n_direct, n_ids, n_folders, folders_dropped, profile, k_direct, k_ids, k_folders, names, total, backstop) = case
+    (_, n_direct, n_ids, n_folders, folders_dropped, profile, k_direct, k_ids, k_folders, names, total) = case
     direct = _named(*[f"d{i}.pdf" for i in range(n_direct)])
     ids = [f"u{i}" for i in range(n_ids)]
     folders = [f"fa-{i}" for i in range(n_folders)]
@@ -566,7 +560,6 @@ def test_the_count_cap(case):
     assert cap.folder_ids == folders[:k_folders]
     assert cap.dropped_names == names
     assert cap.dropped_total == total
-    assert cap.resolver_max_files == backstop
 
 
 # ---------------------------------------------------------------------------
@@ -676,7 +669,6 @@ def test_the_forceable_modes_are_the_row_values():
 
 def test_the_legacy_profile_reads_todays_constants(monkeypatch):
     for var in (
-        "ATTACHMENT_TURN_GUARD_ENABLED",
         "INLINE_BUDGET_BY_REFERENCE_ENABLED",
         "CONVERSE_DOCUMENTS_AS_TEXT_ENABLED",
     ):
@@ -692,16 +684,9 @@ def test_the_legacy_profile_reads_todays_constants(monkeypatch):
     assert replace(ap.legacy_profile(), name="legacy") == LEGACY
 
 
-@pytest.mark.parametrize(
-    "env,field_name",
-    [
-        ("ATTACHMENT_TURN_GUARD_ENABLED", "turn_guard"),
-        ("INLINE_BUDGET_BY_REFERENCE_ENABLED", "over_budget_by_reference"),
-    ],
-)
-def test_a_kill_switch_is_a_profile_input(monkeypatch, env, field_name):
-    monkeypatch.setenv(env, "false")
-    assert getattr(ap.legacy_profile(), field_name) is False
+def test_a_kill_switch_is_a_profile_input(monkeypatch):
+    monkeypatch.setenv("INLINE_BUDGET_BY_REFERENCE_ENABLED", "false")
+    assert ap.legacy_profile().over_budget_by_reference is False
 
 
 def test_documents_as_text_is_a_profile_input(monkeypatch):
@@ -742,15 +727,17 @@ def test_the_token_profile_is_the_legacy_byte_limits_plus_the_budget(monkeypatch
         images_per_message=None,
         pdf_max_pages=None,
         request_attachment_max_bytes=0,
+        inline_total_max_bytes=legacy.inline_total_max_bytes,
+        persisted_inline_max_bytes=0,
     ) == legacy
+    # The 7 MB moved from the whole inline set to the bytes Memory still holds.
+    assert (token.inline_total_max_bytes, token.persisted_inline_max_bytes) == (0, 7_000_000)
     assert (token.name, token.documents_as_text, token.document_budget_share) == ("token", True, 0.5)
     assert (token.downscale_images, token.image_upload_max_bytes) == (True, 20 * MIB)
     assert (token.max_files_per_message, token.images_per_message, token.pdf_max_pages) == (20, 20, 1_000)
     assert token.request_attachment_max_bytes == 16 * MIB
     # The table's TOKEN is the real profile.
-    assert replace(TOKEN, turn_guard=token.turn_guard, over_budget_by_reference=True) == replace(
-        token, turn_guard=token.turn_guard
-    )
+    assert replace(TOKEN, over_budget_by_reference=True) == token
 
 
 # ---------------------------------------------------------------------------
@@ -784,7 +771,6 @@ def test_no_attachments_writes_nothing():
     }
 
 
-
 # ---------------------------------------------------------------------------
 # The ``token`` profile (phase 3, spec §4.3 and §5.2)
 # ---------------------------------------------------------------------------
@@ -801,6 +787,9 @@ TOKEN = replace(
     images_per_message=20,
     pdf_max_pages=1_000,
     request_attachment_max_bytes=16 * MIB,
+    # The 7 MB protects only the bytes still written to Memory (copyless images).
+    inline_total_max_bytes=0,
+    persisted_inline_max_bytes=7_000_000,
 )
 #: The catalog windows and the ceilings CompactionPolicy gives them on dev.
 HAIKU55 = ModelFacts(context_window=100_000, model_id="us.anthropic.claude-haiku-5-5", chat_ceiling=50_000)
@@ -957,7 +946,7 @@ def test_the_token_table(case: Case):
 
 
 #: The ``token`` table's own digest. A change here is a change to who gets what.
-TOKEN_TABLE_DIGEST = "31ab7e3c2fea7066a25e43961edab8d233f2ecd7be10699b26ad3d787235786e"
+TOKEN_TABLE_DIGEST = "03717c1c1bbd582cf1d0b13ef544238450bf8c322a6e5ed5c21d09fbffbb1439"
 
 
 def test_the_token_table_digest_is_pinned():
@@ -1050,7 +1039,7 @@ def test_twenty_worst_case_compact_copies_always_fit_the_real_budget():
     files = [img(f"p{i}.jpg", MODEL_IMAGE_MAX_BYTES, compact=COMPACT_IMAGE_MAX_BYTES) for i in range(20)]
     plan = plan_attachments(files, HAIKU55, profile=token)
     assert all(e.mode == "native" for e in plan.entries)
-    assert 20 * COMPACT_IMAGE_MAX_BYTES <= ap._request_byte_budget(token)
+    assert 20 * COMPACT_IMAGE_MAX_BYTES <= ap.request_byte_budget(token)
 
 
 def test_an_image_without_a_model_copy_has_no_variant():
@@ -1121,7 +1110,7 @@ def test_the_search_table(case: Case):
 
 
 #: The ``search`` table's digest (phase 5). A change here is a change to who gets what.
-SEARCH_TABLE_DIGEST = "733bcbf398131d658c2d874da826dba577f1137ed22933248cbafc3297556264"
+SEARCH_TABLE_DIGEST = "32776ed1a5c4514f0afb69b721df5f59d5dce70ac03c92f3ea85c39c725e2bbc"
 
 
 def test_the_search_table_digest_is_pinned():
@@ -1284,3 +1273,99 @@ def test_facts_from_row_reads_a_rows_planner_fields():
     assert (facts.text_tokens, facts.native_tokens, facts.has_text_layer, facts.searchable) == (20_000, 10_000, True, True)
     assert facts.has_row and not facts.by_reference and facts.upload_id == "up-1"
     assert ap.indexes_for_search(facts, TOKEN)
+
+
+# ---------------------------------------------------------------------------
+# The token profile's byte budget: the request, less the warm history (§4.4.1)
+# ---------------------------------------------------------------------------
+
+#: A 1M-window model with a ceiling wide enough that only the bytes decide.
+OPUS55_WIDE = replace(OPUS55, chat_ceiling=1_000_000)
+
+
+def _field_set() -> List[FileFacts]:
+    """The 2026-10-30 field case: five image-heavy PDFs, 31 pages, 16.5 MB."""
+    sizes_pages = [(5_700_000, 8), (3_900_000, 6), (170_000, 1), (4_040_000, 9), (2_700_000, 7)]
+    return [
+        up(f"award_{i}.pdf", PDF, size, page_count=pages, text_tokens=300 * pages,
+           native_tokens=1_565 * pages, has_text_layer=True)
+        for i, (size, pages) in enumerate(sizes_pages)
+    ]
+
+
+def test_the_field_case_sends_every_pdf_under_the_per_file_limit():
+    """Every PDF under the 4 MiB per-file limit goes native (10.8 MB together)."""
+    plan = plan_attachments(_field_set(), OPUS55_WIDE, profile=ap.token_profile())
+    assert _rows(plan) == [
+        (OD, "pdf", "over_budget_reference"),
+        (N, "pdf", "within_budget"),
+        (N, "pdf", "within_budget"),
+        (N, "pdf", "within_budget"),
+        (N, "pdf", "within_budget"),
+    ]
+    assert plan.byte_budget == 16 * MIB
+
+
+def test_the_field_case_under_the_old_7mb_budget_left_one_out():
+    """What prod did on 2026-10-30: the 4.04 MB PDF pushed the first fit past 7 MB."""
+    old = replace(ap.token_profile(), inline_total_max_bytes=7_000_000, persisted_inline_max_bytes=0)
+    plan = plan_attachments(_field_set(), OPUS55_WIDE, profile=old)
+    assert [e.reason for e in plan.entries] == [
+        "over_budget_reference", "within_budget", "within_budget", "over_budget_reference", "within_budget",
+    ]
+
+
+def test_a_warm_history_takes_its_native_bytes_out_of_the_request_budget():
+    """12 MiB already in the live history leaves 4 MiB for this turn."""
+    held = ConversationFacts(held_native_bytes=12 * MIB)
+    plan = plan_attachments(_field_set(), OPUS55_WIDE, held, profile=ap.token_profile())
+    assert [e.mode for e in plan.entries] == [OD, N, N, OD, OD]
+    assert (plan.byte_budget, plan.held_native_bytes) == (4 * MIB, 12 * MIB)
+    assert plan.to_row()["heldNativeBytes"] == 12 * MIB
+
+
+def test_a_history_holding_the_whole_budget_sends_this_turns_documents_on_demand():
+    held = ConversationFacts(held_native_bytes=20 * MIB)
+    files = [pdf("a.pdf", 2), img("p.jpg", 900_000)]
+    plan = plan_attachments(files, OPUS55_WIDE, held, profile=ap.token_profile())
+    # An image has no other mode: it is dropped and named, not sent past the payload.
+    assert _rows(plan) == [(OD, "pdf", "over_budget_reference"), (D, "image", "over_budget")]
+    assert plan.byte_budget == 0
+
+
+def test_a_cold_turn_records_no_held_bytes():
+    plan = plan_attachments(_field_set(), OPUS55_WIDE, profile=ap.token_profile())
+    assert plan.held_native_bytes == 0
+    assert "heldNativeBytes" not in plan.to_row()
+
+
+def test_the_legacy_profile_ignores_held_bytes():
+    held = ConversationFacts(held_native_bytes=30 * MIB)
+    files = [up("a.pdf", PDF, 1_000_000)]
+    plan = plan_attachments(files, CLAUDE, held, profile=LEGACY)
+    assert _rows(plan) == [(N, "pdf", "inline")]
+    assert (plan.byte_budget, plan.held_native_bytes) == (LEGACY.inline_total_max_bytes, 0)
+
+
+def test_images_with_no_row_share_the_persisted_bytes_budget():
+    """A direct base64 image keeps its bytes in Memory, so those stay under 7 MB."""
+    files = [f(f"direct{i}.png", PNG, 3_000_000) for i in range(3)] + [img("up.jpg", 3_000_000)]
+    plan = plan_attachments(files, OPUS55_WIDE, profile=ap.token_profile())
+    assert [e.mode for e in plan.entries] == [N, N, D, N]
+    assert plan.entries[2].reason == "over_budget"
+
+
+def test_request_byte_budget():
+    token = ap.token_profile()
+    assert ap.request_byte_budget(token) == 16 * MIB
+    assert ap.request_byte_budget(token, 6 * MIB) == 10 * MIB
+    assert ap.request_byte_budget(token, 40 * MIB) == 0
+    assert ap.request_byte_budget(LEGACY) == LEGACY.inline_total_max_bytes
+    assert ap.request_byte_budget(replace(LEGACY, inline_total_max_bytes=0)) is None
+
+
+def test_limits_endpoint_serves_the_request_budget():
+    token = ap.client_limits(ap.token_profile(), ap.upload_limits(ap.token_profile()))
+    assert token["inlineBudgetBytes"] == 16 * MIB
+    legacy = ap.client_limits(ap.legacy_profile(), ap.upload_limits(ap.legacy_profile()))
+    assert legacy["inlineBudgetBytes"] == 7_000_000

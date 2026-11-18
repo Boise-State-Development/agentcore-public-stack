@@ -65,6 +65,17 @@ HARVEST_WEEK1 = (("Apples", 12), ("Pears", 30), ("Plums", 9))
 HARVEST_WEEK2 = (("Apples", 12), ("Pears", 22), ("Plums", 17))
 HARVEST_RISER = "Plums"
 
+#: site_badge_01..16.png and site_walk_memo.md: sixteen large badge photos
+#: and a short memo, attached together. Each badge prints its own number and
+#: the number of the badge it replaces, a digit swap of its own. The memo
+#: holds the gate's closing time. Sized so one turn of them passes Haiku 5.5's
+#: 70k hard compaction ceiling, which cuts the attach turn after turn 2.
+SITE_BADGE_COUNT = 16
+SITE_BADGE_NUMBERS = tuple(f"VB-{31_407 + 1_100 * i}" for i in range(SITE_BADGE_COUNT))
+SITE_BADGE_REPLACED = tuple(f"{n[:-2]}{n[-1]}{n[-2]}" for n in SITE_BADGE_NUMBERS)
+SITE_BADGE_ASKED = (7, 11)
+SITE_GATE_CLOSES = "17:45"
+
 #: grant_expenses.xlsx, sheet "Expenses": the Travel total, a lookalike, the
 #: count of Equipment lines over $1,000, and on sheet "Approvals" one line's approver.
 TRAVEL_TOTAL = "4,815"
@@ -185,6 +196,25 @@ def it_runbook() -> bytes:
     ).encode("utf-8")
 
 
+def site_badge(index: int) -> Callable[[], bytes]:
+    """Badge ``index`` (1-based): its number, the one it replaces, its holder's crew."""
+    number = SITE_BADGE_NUMBERS[index - 1]
+    replaced = SITE_BADGE_REPLACED[index - 1]
+    return lambda: images.badge("Quarry Ridge visitor badge", [
+        f"Badge number: {number}",
+        f"Replaces badge: {replaced}",
+        f"Crew: survey team {index}",
+    ])
+
+
+def site_walk_memo() -> bytes:
+    return (
+        "# Quarry Ridge site walk\n\n"
+        "Every visitor wears the badge issued at the gatehouse. Badge photos from the walk are attached.\n\n"
+        f"The gate opens at 07:15 and closes at {SITE_GATE_CLOSES}. Vehicles leave by the north road.\n"
+    ).encode("utf-8")
+
+
 def stable_xlsx(book) -> bytes:
     """``book`` saved with fixed properties and zip dates, so the same workbook is the same bytes.
 
@@ -268,6 +298,8 @@ GENERATED: Dict[str, Callable[[], bytes]] = {
     ]),
     "harvest_week1.png": lambda: images.bar_chart("Orchard harvest, week 1 (crates)", HARVEST_WEEK1),
     "harvest_week2.png": lambda: images.bar_chart("Orchard harvest, week 2 (crates)", HARVEST_WEEK2),
+    **{f"site_badge_{i:02d}.png": site_badge(i) for i in range(1, SITE_BADGE_COUNT + 1)},
+    "site_walk_memo.md": site_walk_memo,
     "grant_expenses.xlsx": grant_expenses,
     "sensor_readings.csv": sensor_readings,
     "quarterly_review.pptx": quarterly_review,

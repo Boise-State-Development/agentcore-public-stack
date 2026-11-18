@@ -7,11 +7,16 @@ import {
   ChangeDetectionStrategy,
   PLATFORM_ID,
   inject,
+  ElementRef,
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
+import type RenderMathInElement from 'katex/contrib/auto-render';
 import { MarkdownComponent } from 'ngx-markdown';
 import { CodeBlockClipboardButtonComponent } from './code-block-clipboard-button.component';
 import { KATEX_OPTIONS } from '../../../../shared/utils/katex-delimiters';
+
+/** One console report per page when KaTeX's globals are missing. */
+let katexMissingReported = false;
 
 /**
  * StreamingTextComponent provides smooth character-by-character typing animation
@@ -32,9 +37,8 @@ import { KATEX_OPTIONS } from '../../../../shared/utils/katex-delimiters';
       [clipboard]="!isStreaming()"
       [clipboardButtonComponent]="ClipboardButton"
       mermaid
-      katex
-      [katexOptions]="katexOptions"
       [data]="displayedText()"
+      (ready)="renderMath()"
     ></markdown>
   `,
   styles: `
@@ -47,14 +51,9 @@ export class StreamingTextComponent implements OnDestroy {
   private platformId = inject(PLATFORM_ID);
   private isBrowser = isPlatformBrowser(this.platformId);
 
-  protected readonly ClipboardButton = CodeBlockClipboardButtonComponent;
+  private host = inject<ElementRef<HTMLElement>>(ElementRef);
 
-  /**
-   * Explicit KaTeX delimiters. Without this binding ngx-markdown supplies its
-   * own defaults, which pair bare `$…$` and mangle any line carrying two
-   * currency amounts. See `katex-delimiters.ts`.
-   */
-  protected readonly katexOptions = KATEX_OPTIONS;
+  protected readonly ClipboardButton = CodeBlockClipboardButtonComponent;
 
   /** The full text content to display */
   text = input.required<string>();
@@ -114,6 +113,38 @@ export class StreamingTextComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.cancelAnimation();
+  }
+
+  /**
+   * Typesets math in the rendered markdown with KaTeX's auto-render, using
+   * `KATEX_OPTIONS` (see `katex-delimiters.ts` for why those delimiters).
+   *
+   * ngx-markdown up to v21 did exactly this inside its own render step when
+   * the `katex` attribute was set. v22 replaced that with
+   * `marked-katex-extension`, which only knows `$`/`$$` and so cannot keep
+   * `\(…\)`, `\[…\]` and the AMS environments. `ready` fires synchronously
+   * right after ngx-markdown writes the HTML, so this runs on every render as
+   * before. `katex` and `renderMathInElement` are globals from angular.json's
+   * `scripts`.
+   */
+  protected renderMath(): void {
+    if (!this.isBrowser) return;
+    const { katex, renderMathInElement } = globalThis as unknown as {
+      katex?: unknown;
+      renderMathInElement?: typeof RenderMathInElement;
+    };
+    if (katex === undefined || renderMathInElement === undefined) {
+      // Leave the source text as written rather than throwing out of an
+      // output handler; say so once so a build missing the scripts is visible.
+      if (!katexMissingReported) {
+        katexMissingReported = true;
+        console.error(
+          'KaTeX is not loaded: katex.min.js and contrib/auto-render.min.js must be in angular.json `scripts`.',
+        );
+      }
+      return;
+    }
+    renderMathInElement(this.host.nativeElement, KATEX_OPTIONS);
   }
 
   private startAnimation(): void {

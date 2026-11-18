@@ -153,11 +153,6 @@ class ConfigListCache:
         surfaces, and serving one the store may have since changed is worse
         than surfacing the error the caller already knows how to handle.
         """
-        from apis.shared.feature_flags import config_cache_enabled
-
-        if not config_cache_enabled():
-            return await loader()
-
         cached = self._live_entry(key)
         if cached is not None:
             return list(cached)

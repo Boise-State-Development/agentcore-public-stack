@@ -1,3 +1,289 @@
+# Release Notes — v1.37.0
+
+**Release Date:** November 17, 2026
+**Previous Release:** v1.36.1 (November 13, 2026)
+
+---
+
+## Highlights
+
+Voice mode now works in Shared Projects. An Agent's knowledge base can import a whole Google Drive folder and keep it in sync with the folder. The agent composer's settings become folding cards that summarize the agent. Charts in Word and PowerPoint files now reach the model as their plotted numbers instead of `[image: Chart 1]`.
+
+The release also fixes four problems users hit:
+- A bulk document delete blocked app-api and set off the 2026-11-16 prod event-loop alarm.
+- Stop never reached a tool call that was already running.
+- Sonnet 5 could time out mid-think.
+- A web crawl wandered out of its section of the site, and could request a private address.
+
+Conversation rewind and fork are now **on by default** for every deployment, after running in our prod since 1.32.0. A rewind now ends with a notice that memories already saved from those messages stay. The SPA moves to Angular 22 and `strands-agents` to 1.65.0. There is one new flag, in development and off by default (`CONCURRENT_TOOL_EXECUTION_ENABLED`), and four default-on rollout switches retire. No GSI changes and no backfills. The only manual steps are optional: a Skill Creator file edit and a catalog row for Kimi K3.1.
+
+---
+
+## Voice mode in Shared Projects
+
+A project member can talk to the project the same way they type to it. In voice, the project's harness gets what a typed project turn gets: the project's instructions and workspace guidance, project memory and its tools, the shared-conversation tools and `project_files`. Voice conversations appear in the project's conversation list, and their cost counts in the project's rollup.
+
+### Backend
+- The voice route resolves the harness through `ResolvedTurnAgent.project`. The member note and the file-readiness note go into the system prompt once, because a voice session has one member and no shared prompt cache.
+- Voice sessions save `projectId` on the session row, and their `C#` cost rows carry it.
+- New owner-only `voiceEnabled` project setting (`PATCH /projects/{id}`). It defaults to on, and projects stored before this read as on. The change is audited, and Activity shows "turned voice mode on/off".
+- Voice is also off, with nothing stored, while either of these is true:
+  - a bound tool isn't marked `voiceAvailable`;
+  - the project's files are too large to send to voice whole (`VOICE_KB_MAX_TOKENS`, the 16 MB fetch cap, or files the deployment keeps out of voice).
+
+  `GET /projects/{id}/voice` (any member) returns `enabled`, `available`, `canChange`, `blockedTools` and `filesTooLarge`. The voice route checks the same status (`apis/shared/projects/voice.py`).
+- Plain voice now applies the conversation mode saved on the session, as text does.
+
+### Frontend
+- A Voice row in the project rail. For the owner the row is the switch. When a tool or the files keep voice off, it shows "Off · can't run" with the reason on hover or focus.
+- The voice button appears in a project conversation only once the harness has loaded, so voice never starts as a plain chat. The project page's composer offers voice too.
+
+**Limit worth knowing:** the project tools now in voice (memory, shared conversations, `project_files`) haven't been timed against Nova 2 Sonic's roughly one-second tool window. A project with tools not marked "Available in voice mode" stays out of voice until they are; `backfill_voice_tool_flags.py` from 1.36.0 covers the first set.
+
+## Agent knowledge bases: folder import, folder sync and a card-based composer
+
+An Agent's knowledge base can take a whole Drive folder in one step and keep up with it. The agent composer's left column becomes a set of cards that each read as a one-line summary and open only when wanted.
+
+### Backend
+- `POST /assistants/{id}/documents/import-folder` walks the folder and its subfolders with `walk_folder`, under the folder-attachment caps. It skips files the knowledge base already holds from the same connector, so a re-import picks up only new ones, and returns counts for what it passed over. It is gated by the same connector access as the file import. No flag.
+- The bindable skill palette carries a display-only `meta.ownership`, used to group skills.
+
+### Frontend
+- **Import this folder** in the Drive picker, for Agents only. With `features.folderSync` on, **Keep in sync with the folder** creates a weekly `drive_folder` sync policy. That is the same import-then-policy shape Save as project uses, so the backend needs no change.
+- The knowledge-base card lists synced folders through `app-sync-policy-control`: interval, Sync now, pause and resume, Reconnect, and stop (it asks first and leaves the files). Documents a folder policy covers read "Kept in sync with *folder*", and they lose their per-file controls.
+- **Settings cards.** Persona, Model, Tools, Skills, Knowledge base, Starters & discovery and Voice mode share one header: icon, title, count, summary and fold.
+  - Model folds to the choice once one is picked.
+  - Optional cards start folded ("None selected · 51 available"). A template still opens Tools.
+  - A warning that needs action stays outside the fold.
+- Skills use the shared searchable selector, grouped My skills / Shared with me / Organization.
+- The knowledge-base list:
+  - It scrolls inside the card, and gains search and source filters at six or more documents.
+  - Each row has one **Open** action. A Drive file opens in Drive, a crawled page at its URL, and markdown, text or CSV in a new in-app viewer. Everything else moves to a row menu.
+  - A refresh no longer flashes the skeleton.
+
+## Charts in Word and PowerPoint reach the model as data
+
+A native Office chart stores every plotted value in its chart part, so Office can draw it without the workbook. The model now reads those values: a question about a chart in a report gets an answer from its numbers.
+
+### Backend
+- New `apis/shared/files/office_charts.py`, stdlib-only and deterministic. It reads `c:strCache` / `c:numCache` and renders a chart either as a `[chart: Title (column chart)]` line with its axis titles and a markdown table, or as one line for table cells and the paragraph index.
+- `docx_to_markdown` (Word read as text on Converse, and file facts) places the block after the chart's anchoring paragraph. `docx_paragraphs` (pattern mode, large Word files, the digest, `verify_sources`) puts the values on that paragraph.
+- `read_powerpoint_presentation` leaves a marker per chart part, and the host fills it from the same bytes with the same renderer. That includes charts inside groups and Office 2016 charts in `mc:AlternateContent`. Group shapes are now walked for text, and pictures are named by their alt text.
+
+### Cost
+A live conversation holding a Word document with charts renders that document differently once, so its cached prefix is written once on the first turn after deploy. A document without charts renders byte-for-byte as before.
+
+## Attachments: images survive compaction, the 7 MB cap lifts, and the composer keeps files where they belong
+
+### Images stay reachable after compaction
+- **Mixed sessions** (#2066). Once compaction summarized the turn that attached an image, the image left the request. A PDF from the same turn stayed readable through `document_read`. On dev, a model said an image "isn't attached to this conversation". `document_read` now lists the session's images and returns one by upload id, as the stored compact copy (1,568 px, at most 340 KB). The read counts against the round's byte budget. The tool's description names images, which adds 32 tokens to its spec.
+- **Image-only sessions** (#2079). The tool's gate counted documents only, so a conversation of images alone lost every image at the first cut. The gate now answers what the session holds from the same single upload-row query, so nothing more is read before the first token. An image-only session gains `document_read` on the turn its first image arrives: about 1,130 tokens on Haiku 5.5, read from cache after that.
+- Two new eval cases cross Haiku 5.5's hard compaction ceiling and ask about one image after the cut.
+
+### The token profile is held to the request budget, not 7 MB (#2106)
+The planner's `token` profile, on in prod since 1.36.0, still applied the legacy 7 MB combined budget. That budget kept the persisted user message under AgentCore Memory's 10 MB event quota, and handles now keep documents and stored images out of that message. So the budget is now the request's 16 MiB raw, less the native bytes a warm agent's history will send again (`held_bytes.held_native_bytes`, counted only on turns that attach something). The same count keeps two large warm turns under Bedrock's 32 MB payload.
+- Every PDF under the 4 MiB per-file limit now goes native. On 2026-10-30, one 4.04 MB PDF went on demand and the model never read it.
+- Images posted as base64 `files` with no upload row still share a 7 MB budget (`persisted_inline_max_bytes`), because their bytes stay in Memory. Only headless callers send those.
+- `GET /files/limits` serves `inlineBudgetBytes: 16777216` under the token profile. The `C#` row's `attachmentPlan` gains `heldNativeBytes` when non-zero. The `legacy` profile is unchanged.
+
+### Composer fixes, from prod testers (#2105)
+- **Files from an earlier chat showed up in a new one.** Starter prompts sent around the composer, so its files stayed in the shared new-conversation draft. Starters now send through the composer, and each Agent and project page gets its own draft key.
+- **A composer could hold 11 files.** The limit counted only uploads that had started. It now counts queued uploads, and Enter waits for the batch.
+- **An amber "over 7 MB" notice looked like an error.** That path still attaches the file, so the notice is gone.
+
+## Web crawls stay on the pages you asked for
+
+Feedback on knowledge-base web content was that a crawl "can't crawl down". It started at the given URL but followed any link on the domain. The site navigation then filled the 25-page budget before the section did.
+
+- **Section scope** (#2108). `url_utils.in_crawl_scope` is now the one rule for "this page belongs to that crawl": the same host, ignoring `www.` and the scheme, at or under the start URL's path. The crawler, web-source deletion, the orphaned-crawl cleanup and KB sync all use it. Before, those three matched on `startswith(root_url)`, so a page reached through a `www.` link outlived its source's deletion and got a second document on every sync. The Add web content dialog names the section a crawl will stay in.
+- **One document per page** (#2109). A page is recorded under the URL it lands on after redirects. A second URL that lands on it is skipped and gives back its budget slot. Links resolve against the landing URL.
+- **No requests to private addresses.** See Security.
+
+Pages that existing crawls already fetched outside their section stay where they are; delete them from the knowledge base by hand.
+
+## Platform: Angular 22, OnPush chat shell, Strands 1.65.0
+
+- **Angular 21 → 22** (#2041), with no behaviour change. Every v22 default that would change behaviour is switched off explicitly:
+  - `ChangeDetectionStrategy.Eager` on the five components that declared none;
+  - `paramsInheritanceStrategy: 'emptyOnly'`, because v22's `'always'` with component input binding would hand a parent's `:id` to a child's `id` input;
+  - KaTeX through `marked-katex-extension`, since ngx-markdown 22 dropped auto-render.
+- **The chat shell is OnPush** (#2044): `App`, `Sidenav`, the session page, `ChatInputComponent` and `MessageListComponent`. A streaming reply no longer re-checks the composer and the message list on every pass. The app is zoneless, and an audit confirmed every value these templates read is a signal, an input, a constant or an event.
+- **`HttpClient` runs on `FetchBackend`** (#2047). Uploads that report progress already use `XMLHttpRequest` directly, and the chat stream uses `fetchEventSource`. The one visible difference, a request that got no response, is handled: the toast reads the same, and **Show details** says `Network error: Failed to fetch`.
+- **`strands-agents` 1.63.0 → 1.65.0** (#2087). It has three fixes we want:
+  - signed reasoning blocks are no longer merged, which broke the next turn on Opus and Sonnet 5.5 with interleaved thinking (harness-sdk#5708);
+  - the `drop_block` retry covers side calls;
+  - paused-turn restore drops a stale pending execution.
+
+  The guard it needed landed first: a null interrupt response is refused before the lease (#2082). The one request-byte change is a `status` field on Nova tool results. Only side channels run on Nova, and they have no cached prefix.
+
+## Conversation rewind and fork on by default
+
+"Rewind to here" and "Fork from here" ran in our prod from 1.32.0 (2026-10-30), and neither switch was ever flipped. They are now on for every deployment, including a fresh install, and they stay feature switches: `SESSION_REWIND_ENABLED=false` and `SESSION_FORK_ENABLED=false` still opt out (#2121).
+
+### What changed
+- **Readers** in `feature_flags.py` are now `!= "false"`. The CDK defaults are `true`, and an unset or empty `CDK_*` variable means on. All three `environment*.ts` files set `sessionRewind` and `sessionFork` to `true`.
+- **The Runtime copy is now written only while off**, so the default spends none of the V2 environment budget. The app-api copy is unchanged.
+- **A rewind ends with a memory notice.** Long-term memory extracts a turn about a minute after it, and a rewind cannot undo that (`docs/specs/conversation-rewind-and-fork.md` §7.3). So after a successful rewind, the SPA shows an info toast saying that anything already saved to the user's memories from those messages stays there, with a link to Memories (`ConversationRewindService`). Rewind is still one click.
+
+## Smaller additions
+
+- **Concurrent tool execution, in development** (#2093). Behind `CONCURRENT_TOOL_EXECUTION_ENABLED` (off by default), a model's tool batch runs on Strands' `ConcurrentToolExecutor`. `ToolConcurrencyPlugin` lets only calls known to be read-only overlap: `PARALLEL_SAFE_TOOLS`, a Gateway Web Search, and MCP tools marked `readOnlyHint` and not `destructiveHint`. Every other call is serialized behind one lock per agent. It also turns a stray `BaseException` from a tool into an error result (harness-sdk#4713). Results reach history in the order the model asked for them, so nothing touches the cached prefix. On in our `development` environment.
+- **Kimi K3.1 Pro – Highspeed** (`us.moonshotai.kimi-k3.1`) curated on the `bedrock-responses` transport (#2098). K3.1 caches the opposite way to K3: stock requests read the whole growing conversation back, and K3's explicit path cost about 40% more. A substring match sent K3.1 down K3's path; it now matches the bare id. Rates come from the model card ($4.40 / $22.00, cache read $0.22), because the Price List API has no K3.1 SKUs yet.
+- **The project page uses the conversation composer** (#2094): attachments, Drive and folders, `/` skills (the project's own), dictation, the model picker and the readiness strip. Leaving an Agent or project conversation now puts back the user's own model.
+- **A project's Skills page shows what is selected** (#2103), and members can read a bound skill in a read-only viewer. The skill's author also gets **Edit skill**.
+- **Artifact cards use the shared content card** (#2074): a live miniature, a type chip, Open, and a menu for Share, Download, Rename and Delete. Each card mints one render token the first time it nears the viewport.
+- **A skill's reference file stays inline up to 16,000 tokens** (#2102). The 4,000-token offload made the model fetch the file straight back. `AGENTCORE_SKILL_FILE_INLINE_MAX_TOKENS=0` restores the old gate.
+- **The Skill Creator can add a structured extraction to a skill it writes** (#2073), through a new reference file and richer `my_skill_*` results. The seven tool specs are unchanged and pinned by digest.
+- **Word skill scripts can work on the file itself** (#2101, `WORD_SKILL_SCRIPTS_ENABLED`, in development). `run_file(input_path, output_path, params)` gets paths, and nothing re-saves around it, so an OOXML redlining engine gets back exactly the bytes it wrote. `params` goes up from 16 KB to 64 KB.
+- **`analyze_spreadsheet` names a workbook's other sheets** when it rejects a file lookup, and links each sheet's own capitalisation to its CSV (#2076).
+- **`verify_sources` asks for the bare value, one document per call** (#2072). Sonnet 5 had sent its answer's phrasing as `value`, and every claim came back `quote_unsupported`.
+
+---
+
+## 🐛 Bug fixes
+
+- **A bulk document delete took app-api down** (#2104). On 2026-11-16, 658 single-document deletes in four minutes blocked the event loop for up to 8.5 s. ECS replaced all three tasks on failed health checks, dropping chat streams with them. Each delete made blocking DynamoDB calls on the loop, and the orphaned-crawl cascade read the whole ~800-row partition once per deleted page.
+  - The delete path's table calls now run in worker threads (`apis/shared/blocking_io.py`). They run inline on the Runtime, where a thread hop would only add TTFT.
+  - The cascade is coalesced per assistant.
+  - Background cleanups are capped at 8 per task.
+- **Stop never reached an in-flight tool call** (#2091). `_mark_session_cancelled` called `agent.cancel()` on our `ChatAgent` wrapper, which has none, so a Stop during a slow MCP call let it run to the end. Each turn now passes a per-turn `cancel_signal` to `stream_async`, set by the lease heartbeat after `session_manager.cancelled`. The write to Strands' private `_cancel_signal` is gone.
+- **Sonnet 5 timed out mid-think** (#2085). It thinks with display `"omitted"`, which streams nothing while it reasons: a prod turn sat silent for 603 s and failed `ModelReadTimeout`. That is the 2026-11-14 alarm. It now gets `display: "summarized"`, with no `drop_block` binding. Display is not part of the cache key, and dev probes read all cached tokens across the switch.
+- **A resend just after Stop showed "Chat Request Failed"** (#2092). The Runtime rewrites every container error to 424, and app-api mapped it back to 409 only if the lease was still held. It now goes by the status the body names. A 424 naming a 500 stays 424 even during a live turn.
+- **A null interrupt response re-paused a turn forever** (#2082). It is now refused before the lease as `invalid_interrupt_response`, and the pause is kept, so a correct answer still resumes.
+- **A pasted connector secret with a stray newline failed consent silently** (#2117). The client ID and secret are trimmed in the SPA and in `OAuthProviderCreate` / `OAuthProviderUpdate`.
+- **Links in dark mode were hard to read** (#2118): 2.14:1 on the assistant bubble. They now use a fixed lightness in the brand's hue, at 6.44:1.
+- **A knowledge base flashed "Classic"** (#2110) on every load while its engine status loaded. The Managed/Classic badge is gone; managed is the default for new knowledge bases. The upgrade card is unchanged.
+- The attachment, compaction, crawl and composer fixes are in their spotlights above.
+
+## 🔒 Security
+
+- **A web crawl could request a non-public address** (#2111). It refused only to *store* one, after the request had gone out. There were three gaps:
+  - httpx followed redirects unchecked, so a public page that 301ed to `169.254.169.254` (EC2 metadata), `169.254.170.2` (ECS task credentials) or an RFC 1918 host was fetched;
+  - discovered links were checked for IP literals only, so a hostname resolving to a private address was fetched;
+  - nothing re-checked the start URL at fetch time, which left room for DNS rebinding.
+
+  The crawler now follows redirects itself, at most 5 hops, checking each before it is requested; robots.txt uses the same path. `web_sources/public_transport.py` resolves each hostname once, off the event loop, refuses it if any address is non-public, and connects to an address it checked, so a rebinding resolver has nothing to swap. TLS still verifies against the hostname. Carrier-grade NAT, IPv4-mapped and NAT64 forms are refused as well.
+
+## ⚡ Performance
+
+- OnPush chat shell (#2044), described under Platform.
+- A skill reference file read inline saves one model round trip and about 1k tokens of preview per read between 4k and 16k tokens (#2102).
+
+## ⚠️ Breaking changes
+
+None that need a migration. Three behaviour changes to know about:
+- A web crawl started at a home page no longer follows links into subdomains (`example.com/` → `docs.example.com`). One host-scoped rule is what keeps delete and sync from matching another web source's pages (#2108).
+- Clicking an artifact card's body no longer opens it; use **Open** (#2074).
+- Four rollout switches are gone (see Feature flags). A deployment that set any of them `=false` loses that opt-out.
+
+## 🏗️ Infrastructure
+
+No new resources and no IAM changes. `CONCURRENT_TOOL_EXECUTION_ENABLED` is written to the AgentCore Runtime only while on, so it costs the V2 environment budget nothing by default. The kb-sync Lambda image now copies `apis/shared/blocking_io.py` alongside `assistants/`.
+
+## 🔧 CI/CD
+
+- **The terminal client is checked on pull requests** (#2070). `scripts/tui/build.sh --check` (pytest, ruff, black, mypy, wheel build) ran only after the merge to `main`, which is how a `black` drift stopped the 1.36.0 Release workflow. A `test-tui` job now runs when a PR touches `tui/`, `scripts/`, `.github/`, `VERSION` or `backend/src/apis/shared/files/models.py`.
+- **The nightly deploy runs again** (#2075). A late ALB access-log write orphaned `nightly-develop-alb-access-logs` on 2026-11-04, and every nightly deploy since failed early validation. The nightly teardown now empties a bucket before each retry and before a retained bucket's Cloud Control delete.
+- The CLI device-auth rate-limit tests pin the limiter's clock, so they can't flake across a window boundary (#2112).
+
+## 📦 Dependencies
+
+| Package | From | To |
+|---|---|---|
+| `strands-agents`, `strands-agents[bidi]` (backend, scheduled-runs Lambdas) | 1.63.0 | 1.65.0 |
+| `@angular/*` | 21.2.25 | 22.2.6 |
+| `@angular/cli`, `@angular/build` | 21.2.27 | 22.2.7 |
+| `@angular/cdk` | 21.2.14 | 22.2.7 |
+| `typescript` | 5.9.3 | 6.0.3 |
+| `ngx-markdown` | 21.2.0 | 22.1.1 |
+| `vite` (override) | 8.1.x | 8.3.x |
+| `@analogjs/vite-plugin-angular`, `@analogjs/vitest-angular` | 3.0.0 alphas | removed |
+
+`mcp` stays at 2.3.0.
+
+## 🧪 Test coverage
+
+About 6,200 lines of new backend tests and 2,400 of new SPA specs. They cover the delete path off the event loop, per-turn cancellation, the crawl scope, redirect and public-address rules, Office chart rendering, voice in projects, folder import, the 424 mapping, the null-response guard, the concurrency plugin, and the agent composer's cards.
+
+Eval and smoke harness changes:
+- `expect.first_number` scores an answer's leading number, so a scoped distractor named after the right answer no longer fails it (#2078, #2086).
+- A sample whose turn hit a provider outage gets one retry.
+- The smoke matrix's `duplicate_send_409` no longer races the lease release (#2089).
+- `run.file_arms` and new budget cells serve the 1M-context readout (#2107).
+
+## 📚 Docs
+
+- **Specs and one-pagers:**
+  - extraction validation (#2064);
+  - a shared decision primitive over Strands' `DecisionModel` (#2095);
+  - the email triage and relationships epic (#2099);
+  - the idle-return policy and its attribution plan (#2088, #2096);
+  - multi-agent patterns synced to Strands 1.65.0 (#2100);
+  - the readout that keeps the 50k document budget on 1M-context models (#2107).
+- **Projects workflow examples** (#2077): award intake, policy revision and teaching evaluations, each with full instructions, prompts and what a tested run returned. The README has a new **Workflow examples** section.
+- **Kaizen:** the Strands 1.55 → 1.63 adoption audit and its docs sync (#2084, #2090), the `strands-release-review` skill (#2080), and the `strands-docs` MCP in both Strands skills (#2097).
+
+## 🚩 Feature flags
+
+| Flag | Default | Set on | Kind | What on does |
+|---|---|---|---|---|
+| `CONCURRENT_TOOL_EXECUTION_ENABLED` / `CDK_CONCURRENT_TOOL_EXECUTION_ENABLED` (no SPA field) | **OFF** (in development): only `"true"` enables; unset arrives as `""` | AgentCore Runtime only, written only while on | Rollout switch once promoted. Retires after a production release plus two weeks with no flip, the readout's turn duration and tool-error rate recorded, and harness-sdk#4713 fixed upstream or still guarded (#1422) | A batch of read-only tool calls runs concurrently and takes about as long as the slowest one; every other call stays serialized |
+
+**Default changes** (#2121): `SESSION_REWIND_ENABLED` / `CDK_SESSION_REWIND_ENABLED` / `features.sessionRewind` and `SESSION_FORK_ENABLED` / `CDK_SESSION_FORK_ENABLED` / `features.sessionFork` went from OFF (in development) to **ON**. Each is a feature switch; `=false` opts out. Set on app-api and the AgentCore Runtime, and the Runtime copy is now written only while off.
+
+**Retired** (#2081). Each was a default-on rollout switch shipped by 1.24.0 and never turned off anywhere. Its on behaviour is now unconditional, and a deployment that set it `=false` loses that opt-out. None was forwarded through CDK or written to the Runtime:
+- `AGENT_STATUS_LIVE_DRAIN_ENABLED`: status transitions always drain while the agent stream is silent.
+- `AGENT_PREPARING_PHASE_ENABLED`: a non-resume turn always builds its agent inside the stream.
+- `CONFIG_CACHE_ENABLED`: catalogs are always served from the in-process cache. `CONFIG_CACHE_TTL_SECONDS` still applies.
+- `ATTACHMENT_TURN_GUARD_ENABLED`: the count cap and combined budget always apply. `FILE_UPLOAD_MAX_FILES_PER_MESSAGE=0` and `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES=0` still turn each limit off.
+
+**On in our `development` environment only:** `CONCURRENT_TOOL_EXECUTION_ENABLED` (new), `RELEASE_LEDGER_ENABLED` / `releaseLedger`, `WORD_SKILL_SCRIPTS_ENABLED`, `HANDOFFS_ENABLED` and `HANDOFF_BRIEF_ENABLED`, `QUOTA_REQUESTS_ENABLED`.
+
+**Still opt-in, on in our prod** (#1798). `sessionRewind` and `sessionFork` are promoted above; the rest stay opt-in:
+- `sessionPrewarm`: waits on the Runtime V2 readout of what turnless warms cost.
+- `attachmentKb` and `CONVERSATION_INDEX_ENABLED`: a cost and retention decision each deployment makes.
+- `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`: production variable set 2026-11-05, effective from the next platform deploy. Promote after two weeks with no flip.
+- `AGENT_KNOWLEDGE_FILES_ENABLED` with `knowledgeBaseMode`, and `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`: on in prod from 1.34.0 (2026-11-08). Promote after two weeks with no flip.
+- `attachmentPlan` with `ATTACHMENT_PLAN_ENABLED`: a rollout switch on in prod since 1.36.0. It retires in phase 6, when the `token` profile becomes the only one.
+- `documentExtract`, `fieldSetAuthoring` and `sourceProvenance`, with `DOCUMENT_EXTRACT_ENABLED`, `FIELD_SET_AUTHORING_ENABLED` and `SOURCE_PROVENANCE_ENABLED`: on in prod since 1.36.0, short of two weeks.
+- `attachmentCards`: on in prod since 1.36.1 (UI only), short of two weeks.
+
+## 🛠️ Manual steps
+
+No backfills and no required steps. Two optional ones:
+
+### Skill Creator: structured extraction guidance (optional, every deployment already seeded)
+The seeder does not overwrite a skill that already exists. So a deployment that seeded `skill_creator` before this release gets the new guidance only after an admin:
+- adds `references/structured-extraction.md` from `backend/scripts/seed_skills/skill_creator/`;
+- applies the two `SKILL.md` edits (intent capture and saving).
+
+See `docs/specs/skill-creator.md`, Field sets. A fresh install seeds it as part of bootstrap.
+
+### Kimi K3.1 Pro – Highspeed catalog row (optional)
+To offer it, add its curated row from Admin → Models in each environment that should offer it. Without the row, the model is refused as uncataloged.
+
+1.36.0's manual steps still apply if they are not done yet:
+- `backfill_voice_tool_flags.py`, which voice in projects also relies on;
+- the prod catalog rows for Sonnet 5.5 and GPT-6.1 Sol.
+
+## 🚀 Deployment notes
+
+**Order:** `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`.
+
+- **Platform.** Nothing changes for a deployment with concurrent tool execution off, apart from images rebuilding for the new version. With it on, the variable is written to the Runtime.
+- **Backend before frontend.** The project Voice row reads `GET /projects/{id}/voice`, and **Import this folder** posts to `…/documents/import-folder`. If the SPA ships first, both fail until app-api is up.
+- **Expected one-time prompt-cache rewrites** on the first turn after deploy:
+  - every session with a readable document: `document_read`'s description, +32 tokens;
+  - sessions where `verify_sources` is on (prod has source provenance on): its new spec;
+  - a live conversation holding a Word document with charts, where documents are sent as text: that document's new rendering.
+- **Rewind and fork default.** On our prod, the `production` variables are already `true`, so nothing changes for users. The platform deploy removes `SESSION_REWIND_ENABLED` and `SESSION_FORK_ENABLED` from the Runtime's environment, because a default-on flag is written there only while off, which updates the Runtime once. A deployment that never set them gets both features with this release. To keep them off, set `CDK_SESSION_REWIND_ENABLED=false` and `CDK_SESSION_FORK_ENABLED=false` before the platform deploy.
+- **Not rewrites:** Sonnet 5's thinking display, the Nova `status` field (side channels only), and the Skill Creator's tool specs (pinned by digest).
+- **Watch after deploy:** app-api's event-loop-lag alarm under document deletes, and the `model-read-timeouts` alarm on Sonnet 5.
+
+**Ledger readout of the outgoing release** (1.36.1 vs 1.35.0) is in the release PR body. It is read from dev, because the ledger is not on in prod yet.
+
+---
+
 # Release Notes — v1.36.1
 
 **Release Date:** November 13, 2026

@@ -179,10 +179,15 @@ class TestOverBudgetDocumentGoesByReference:
         assert "were skipped" not in text
         assert (
             "_`policy-d.pdf` (3.8 MB) is attached, but this message's attachments together exceed the "
-            "combined size limit for a single message, so its content is not in this message. To answer "
-            "from it, call `document_read` with `upload_id` `up-d`: first with `pattern` to find the "
-            "relevant pages, then with `page_range` to read them._"
+            "combined size limit for a single message, so its content is not in this message. It was "
+            "sent to be read with the others, so before answering about the attached files, call "
+            "`document_read` with `upload_id` `up-d`: first with `pattern` to find the relevant pages, "
+            "then with `page_range` to read them._"
         ) in text
+        # A large document keeps the optional wording: it is read in the parts
+        # the question needs, not before every answer.
+        assert text.count("before answering about the attached files") == 1
+        assert "To answer from it" in text
         # The large document still gets search; the over-budget one never does,
         # because only large documents are indexed.
         assert text.count("`query`") == 1

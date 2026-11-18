@@ -390,16 +390,43 @@ needed a new constant. Documents keep 50 MB through the large-document pipeline,
 spreadsheets and decks keep their 25 MB. The `legacy` profile is unchanged (5 files,
 4 MB images, no page rule), and its table digest is the one it had before.
 
-**Per request, images first.** One turn's native blocks share one byte budget: the
-smaller of the 7.0 MB that protects the AgentCore Memory event (until phase 4a's
-handles take bytes out of the persisted message) and 16 MB raw. The 16 MB is 21.3 MB
-of the probed 32 MB request on the wire, which leaves about 10 MB for the history,
-system prompt and tools. The planner places images first, because an image has no
-other mode, then documents in attachment order:
+**Per request, images first.** One turn's native blocks share one byte budget: 16 MB
+raw, less the native bytes a warm agent's history will send again. The 16 MB is
+21.3 MB of the probed 32 MB request on the wire, which leaves about 10 MB for the
+text of the history, the system prompt and the tools.
+
+- **The 7.0 MB combined budget no longer applies here.** It protected the AgentCore
+  Memory event while the persisted user message carried the bytes. Phase 4a's handles
+  replace every document and every image sent from a stored copy, so the token profile
+  dropped it (`inline_total_max_bytes = 0`). The `legacy` profile keeps it.
+- **The 7 MB still holds the bytes Memory keeps** (`persisted_inline_max_bytes`). An
+  image posted as base64 `files` has no upload row, so nothing names a stored copy and
+  it is persisted with its bytes. Those images share 7 MB, and one over it is dropped
+  and named. Only headless callers send `files`; the SPA and the TUI upload first.
+- **The warm history counts first.** A warm agent keeps every earlier native PDF and
+  image in `agent.messages` as bytes. Offload swaps a document for its digest only
+  after its pin, and only when the prefix rewrite is free. So the route counts those
+  bytes (`held_bytes.held_native_bytes` over the newest live agent for
+  `(session, user)`, a `len` walk with no decode and no I/O) and the planner takes
+  them out of the 16 MB (`ConversationFacts.held_native_bytes`). Without that, two
+  warm turns at 16 MB each would send about 45 MB of base64, which Bedrock refuses as
+  `Input is too long`. Strands then trims the front of the live history to recover,
+  dropping turn 1 and rewriting the cached prefix. A cold turn counts 0, because its
+  restore replaces every document with its digest. The `C#` row's `attachmentPlan`
+  carries `heldNativeBytes` when it is non-zero.
+- **What it bought.** On 2026-10-30 five image-heavy PDFs (5.7, 3.9, 0.17, 4.04 and
+  2.7 MB) reached a prod turn. The 4.04 MB one pushed the first fit past 7 MB and went
+  `over_budget_reference`, and the model never read it. Under the request budget every
+  PDF under the 4 MiB per-file limit goes native, 10.8 MB together. The 5.7 MB one
+  still goes on demand.
+
+The planner places images first, because an image has no other mode, then documents
+in attachment order:
 
 1. Every image goes at its `high` copy when they all fit, else every image at its
    `compact` copy (§4.3.1). Twenty compact copies are 6.8 MB, so an uploaded image
-   always fits. A model that reads Claude's standard tier (every Claude model before
+   fits unless a warm history already holds most of the request; then it is dropped
+   and named rather than sent past the payload. A model that reads Claude's standard tier (every Claude model before
    4.7) is sent the compact copy whatever the budget, because that is what it would
    downscale to: the same tokens, fewer bytes. The entry's `variant`
    (`high` or `compact`) is on the cost row, and phase 4a's image handle records it,
@@ -410,7 +437,7 @@ other mode, then documents in attachment order:
 **What an image's `on_demand` is.** For an uploaded image the compact copy is the
 overflow mode, so `on_demand` is never reached: no image reader is added to
 `document_read`. That reader would change `toolConfig` for every image session, the
-rotation class `_session_has_documents` was hardened against. Only an image with no
+rotation class the `document_read` gate was hardened against. Only an image with no
 upload row and no stored copy, sent as base64 by a client, can still be dropped over
 the budget (`over_budget`), as before.
 
@@ -541,6 +568,12 @@ chat_ceiling    = CompactionPolicy.resolve(window).ceiling, compared with the wh
   document. The measurement switch that implemented it is deleted (§9.1).
 - A catalog field could override the budget per model. Not built in phase 3; the
   formula is the only source until a readout asks for an override.
+- **The 1M models keep 50k** (2026-11-17, `docs/testing/attachment-budget-1m-models-2026-11.md`).
+  Opus 5.5 and Sonnet 5.5 were measured on five- and ten-PDF comparison sets (34 and 150 pages) at
+  today's budget, at the planner's split for a 200k budget, and with every file held. Every arm
+  answered every cross-document question, and no on-demand file went unread in 60 sample-turns.
+  Holding cost 2–7× as much per session with a cold return, and made the first token 2–4× slower.
+  So no per-model ceiling and no multi-document budget are adopted, and the override stays unbuilt.
 
 ## 6. Persistence and the prompt cache
 
@@ -564,7 +597,9 @@ every document is prepared at upload (§4.1), that purpose disappears.
 So the message written to AgentCore Memory carries a handle (upload id, name, size)
 in place of document bytes, while the live `agent.messages` keeps the bytes for the
 warm agent. This removes the 10 MB event constraint for documents, and with it the
-7 MB budget.
+7 MB budget. (The budget was lifted under the `token` profile once images had handles
+too, §4.4.1. The 7 MB kept only the copyless images, and the warm history's bytes
+came out of the request budget instead.)
 
 Images differ: they survive restore as bytes today. With a handle, restore fetches
 them from S3. That fetch must be byte-identical (the stored, downscaled object),
@@ -616,6 +651,41 @@ stated in the PR, and the developer driving the change accepts it before merge.
 
 What still carries bytes: `document_read` slices inside tool results (re-sent on
 restore, bounded by the tool's cap), and images with no stored copy.
+
+**After compaction.** Restore re-sends only the history after the compaction
+checkpoint, so an image in a summarized turn is no longer in the request, handle or
+not. A document beside it stays reachable through `document_read`; until
+2026-11-13 the image did not (dev QA: eight PNGs, a 364-page PDF and eleven text
+files on Haiku 5.5, cut after turn 2; on turn 3 the model read the PDF and said one
+PNG "isn't attached"). `document_read` now lists the session's images under
+`images` and, given an image's upload id alone, returns its stored compact copy as a
+native `image` block (`document_read.read_image`; the high copy, then the original,
+when the row has no compact one). It takes its share of the round's byte budget like
+a page read, and a text-only model is told it cannot view it. The image rides the
+tool result, which Memory keeps with its bytes, so a restore re-sends it byte for
+byte. Nothing runs before the first token and nothing is re-sent per turn: the read
+happens only when the model asks. The tool's description names images, which moved
+its spec once per deployment: +32 tokens on CountTokens (Haiku 4.5; 664 → 696 without the KB, 837 → 869 with it).
+
+Image-only sessions get the tool too (2026-11-14). Its gate
+(`_session_attachment_kind`) answers `documents`, `images` or nothing from the one
+upload-row query it already ran, with the turn's own uploads classified the same way
+(`_resolved_files_include_an_image`) and a handed-over image counted by its hint
+(`file_kinds.KIND_IMAGE`), so the attach turn, a later turn on another microVM and a
+resume all agree and `toolConfig` cannot flap (the rotation class above came from
+the turn and the query disagreeing, not from images as such). An image-only session
+gets `document_read` alone (`verify_sources` needs a document); the cache key
+carries `"images"` for it and keys every other session exactly as before. Only
+`documents` is memoized, so an image session still queries per turn, as it did.
+Cost: the tool's spec in that session's `toolConfig` from its first image (696
+tokens on Haiku 4.5's CountTokens, 869 with the KB; Haiku 5.5 has no CountTokens, and
+turn 3 of the image-only case measured 6,144 input tokens on dev against 5,015
+without the tool, so ~1,130), read from cache on later turns;
+a first image on turn 2 or later rewrites the prefix once, as a first document does.
+The regression cases are `attachment_tools.image_after_compaction` (the QA repro:
+sixteen ~4.8k-token badge images and a memo, cut after turn 2 at ~84k input on
+Haiku 5.5) and `attachment_tools.image_only_after_compaction` (cut at ~82k; on develop the
+model answered "I don't have access to the image contents").
 
 ## 7. Flags
 
@@ -672,7 +742,7 @@ separated from the document's.
 | Type | pdf, docx, html, md, txt, csv, xlsx, pptx, png |
 | Size | ~5k, ~30k, ~80k, ~150k, ~300k tokens; a set that exceeds any budget |
 | Content | Prose, table, scanned, chart or figure |
-| Count | 1, 5, 20 |
+| Count | 1, 5, 20; and comparison sets of 5 and 10 PDFs whose question needs every file (`compare_*`) |
 | Question | Lookup, cross-document, absent fact, visual, follow-up after the cache expires |
 | Arm | `native`, `text`, `on_demand`, `search`, and `auto` (the planner) |
 | Ceiling | 100k (today) and 200k. Phase 0 also ran 100k with documents excluded; that arm was deleted with §5.2's subtraction |
@@ -754,7 +824,7 @@ Usage counts are from `develop` at e39c6a9d1.
 | The ceiling-subtraction measurement switch (`AGENTCORE_MEMORY_COMPACTION_CEILING_EXCLUDES_DOCUMENTS`, `chat_input_tokens`, `held_document_tokens`) and the `100k_documents_excluded` eval ceiling | `compaction_policy.py`, `compaction_models.py`, the session manager, `evals/cases.py`; one test file | 3 | **Done:** deleted, because the readout dropped the subtraction (§5.2) |
 | `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` and `CDK_CONVERSE_DOCUMENTS_AS_TEXT_ENABLED` | 5 source files, 4 test files, `config.ts`, two constructs, `config.test.ts`, `platform.yml`, `.env.example` | 6 | Text is the `token` profile's rule. The `legacy` profile reads the flag until then |
 | `_prerender_documents_as_text` and the per-call projection's own selection | `routes.py`, `apis/shared/models/document_cap.py` | 6 | The planner names the files to render; the projection keeps only the rendering |
-| `INLINE_DOCUMENT_MAX_BYTES`, `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES` | `apis/shared/files/models.py`; 4 and 5 source files, 8 and 5 test files | 6 | Their causes are gone: text removes the 4.5 MB limit, handles remove the 10 MB event limit |
+| `INLINE_DOCUMENT_MAX_BYTES`, `INLINE_ATTACHMENTS_MAX_TOTAL_BYTES` | `apis/shared/files/models.py`; 4 and 5 source files, 8 and 5 test files | 6 | Their causes are gone: text removes the 4.5 MB limit, handles remove the 10 MB event limit. **Partly done:** the `token` profile no longer applies the 7 MB to its inline set (§4.4.1). It still reads the constant as `persisted_inline_max_bytes`, for images posted with no upload row, whose bytes stay in Memory. The constant goes once those images get a stored copy, or once `files` refuses them |
 | `inline-budget-notice.component.ts` | SPA | 6 | No per-message byte budget remains to explain |
 | `MAX_FILES_PER_MESSAGE`, `LARGE_DOCUMENT_MAX_BYTES`, `TEXT_ONLY_DOCUMENTS_MAX_CHARS` as module constants | `models.py`, read in 6, 2 and 3 source files | 6 | They become fields of the limits profile. The environment overrides stay, read in one place |
 | The `legacy` profile and `ATTACHMENT_PLAN_ENABLED` itself | Planner, `feature_flags.py`, CDK, `platform.yml`, three environment files | 6 | See below |
@@ -804,7 +874,7 @@ when it is promoted.
 | Text mode loses layout a native docx block kept | The docx and html arms compare `native` and `text` in phase 0 before the rule changes |
 | Image restore from S3 adds first-token latency | Measured at realistic scale and accepted explicitly, or images keep bytes in Memory with a lower count |
 | Preparing every upload raises Lambda invocations and KB ingest | Small files skip sharding. KB eligibility widened in phase 5 to documents the planner sends on demand, under the `token` profile only (§4.3.2) |
-| 20 native PDFs exceed the request payload or the stricter many-image limit | The planner counts native blocks and bytes per request against the probed ceilings |
+| 20 native PDFs exceed the request payload or the stricter many-image limit | The planner counts native blocks and bytes per request against the probed ceilings, including the native bytes the warm history re-sends (§4.4.1). Not yet counted: a warm history's native PDF *pages* against the per-request page limit, and the images a cold restore re-sends |
 
 ## 11. Open questions
 

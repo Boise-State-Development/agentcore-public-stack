@@ -1,4 +1,4 @@
-"""PNG fixtures drawn with Pillow: a labelled bar chart and a screenshot of a dialog.
+"""PNG fixtures drawn with Pillow: a labelled bar chart, a screenshot of a dialog and a badge photo.
 
 Pillow is already a pinned backend dependency. Text uses Pillow's bundled
 scalable default font, so a fixture renders the same on any host with the
@@ -64,4 +64,24 @@ def dialog(title: str, lines: Sequence[str], button: str = "OK", *, width: int =
         y += 40
     draw.rectangle((width - 190, height - 100, width - 60, height - 56), fill=_BAR)
     draw.text((width - 125, height - 78), button, fill=_PAPER, font=_font(22), anchor="mm")
+    return _png(image)
+
+
+def badge(title: str, lines: Sequence[str], *, size: int = 1932) -> bytes:
+    """A large square visitor badge, its lines printed big.
+
+    Large on purpose: a model's image cost is its pixels (one token per 28 px
+    patch, up to 4,784 at Claude's high tier), and 1,932 px square is about
+    4,761 tokens, so a handful of these fills a context cheaply in bytes.
+    """
+    image = Image.new("RGB", (size, size), _PAPER)
+    draw = ImageDraw.Draw(image)
+    margin = size // 16
+    draw.rectangle((margin, margin, size - margin, size - margin), outline=_INK, width=8)
+    draw.rectangle((margin, margin, size - margin, margin + size // 7), fill=_BAR)
+    draw.text((margin * 2, margin + size // 28), title, fill=_PAPER, font=_font(size // 16))
+    y = margin + size // 4
+    for line in lines:
+        draw.text((margin * 2, y), line, fill=_INK, font=_font(size // 20))
+        y += size // 9
     return _png(image)

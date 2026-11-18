@@ -398,10 +398,10 @@ export function buildAppApiEnvironment(
     AWS_LIMITS_ENABLED: config.awsLimits.enabled ? 'true' : 'false',
     // Handoffs (opt-in while in development): gates /sessions/{id}/handoffs.
     HANDOFFS_ENABLED: config.handoffs.enabled ? 'true' : 'false',
-    // Conversation rewind (opt-in while in development): gates
+    // Conversation rewind (default on): gates
     // POST /sessions/{id}/rewind and GET /messages' hiding of rewound turns.
     SESSION_REWIND_ENABLED: config.sessionRewind.enabled ? 'true' : 'false',
-    // Conversation fork (opt-in while in development): gates
+    // Conversation fork (default on): gates
     // POST /sessions/{id}/fork and a fork's pinning to its root's microVM.
     SESSION_FORK_ENABLED: config.sessionFork.enabled ? 'true' : 'false',
     // Client-measured time to first token (default on): gates

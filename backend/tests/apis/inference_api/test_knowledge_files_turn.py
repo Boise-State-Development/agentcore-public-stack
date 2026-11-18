@@ -23,7 +23,7 @@ FLAG = "AGENT_KNOWLEDGE_FILES_ENABLED"
 
 
 def _tools(monkeypatch, *, assistant_id="ast_agent", turn_project_id=None, project_memory=None):
-    monkeypatch.setattr(routes, "_build_document_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr(routes, "_build_document_tools", AsyncMock(return_value=([], "")))
     return asyncio.run(routes._build_turn_tools(
         InvocationRequest(session_id="s1", rag_assistant_id=assistant_id), USER, USER.user_id, [],
         project_memory=project_memory, turn_has_document=False, turn_project_id=turn_project_id,

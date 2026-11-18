@@ -110,4 +110,13 @@ changed in Drive later aren't picked up.
   conversations, sharing, memory, attachments and Word documents.
 - [Example: negotiating a research agreement](/agentcore-public-stack/user-guide/projects/example-contract-negotiation/):
   a full walkthrough with a seven-person team.
+- [Example: revising a department policy](/agentcore-public-stack/user-guide/projects/example-policy-revision/):
+  check a procedure against higher rules, then get the fixes as Word tracked
+  changes or Google Docs suggestions.
+- [Example: sorting teaching evaluation comments](/agentcore-public-stack/user-guide/projects/example-teaching-evaluations/):
+  exact counts, themes and an action plan from an evaluation export, with
+  sensitive comments handed to a person first.
+- [Example: setting up awards from their documents](/agentcore-public-stack/user-guide/projects/example-award-intake/):
+  one field list run over five award documents, with a source check on every
+  value.
 - [Tips and current limits](/agentcore-public-stack/user-guide/projects/tips-and-limits/).

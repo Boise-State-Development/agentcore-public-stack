@@ -178,6 +178,48 @@ describe('ModelService', () => {
       service.clearAgentModelLock();
       expect(service.agentModelLocked()).toBe(false);
     });
+
+    // Leaving an Agent or project conversation used to leave its model selected,
+    // and saved as the tab's pick, for the user's next plain chat.
+    it('puts back the user’s own model when released', () => {
+      service.setSelectedModelById('claude-sonnet');
+      service.lockToAgentModel('claude-haiku');
+      expect(service.selectedModel().modelId).toBe('claude-haiku');
+
+      service.clearAgentModelLock();
+      expect(service.selectedModel().modelId).toBe('claude-sonnet');
+    });
+
+    it('never saves the pinned model as the tab’s selection', () => {
+      service.setSelectedModelById('claude-sonnet');
+      service.lockToAgentModel('claude-haiku');
+      expect(sessionStore['selectedModelId']).toBe('claude-sonnet');
+    });
+
+    it('a switch from one Agent to another keeps the user’s pick, not the first Agent’s', () => {
+      service.setSelectedModelById('claude-haiku');
+      service.lockToAgentModel('claude-sonnet');
+      service.lockToAgentModel('ghost-model');
+      service.clearAgentModelLock();
+      expect(service.selectedModel().modelId).toBe('claude-haiku');
+    });
+
+    it('a default saved during a lock waits for the release', () => {
+      service.setSelectedModelById('claude-sonnet');
+      service.lockToAgentModel('claude-haiku');
+      service.applyUserDefault('claude-haiku');
+      expect(service.agentModelLocked()).toBe(true);
+
+      service.lockToAgentModel('ghost-model');
+      service.clearAgentModelLock();
+      expect(service.selectedModel().modelId).toBe('claude-haiku');
+    });
+
+    it('releasing with no lock leaves a pick the user made alone', () => {
+      service.setSelectedModelById('claude-haiku');
+      service.clearAgentModelLock();
+      expect(service.selectedModel().modelId).toBe('claude-haiku');
+    });
   });
 
   /**
@@ -256,6 +298,47 @@ describe('ModelService', () => {
 
       expect(service.agentModelLocked()).toBe(false);
       expect(select).not.toHaveBeenCalled();
+    });
+
+    it('puts back the tab’s saved pick after a lock taken before the list arrived', async () => {
+      sessionStore['selectedModelId'] = 'claude-haiku';
+      service.lockToAgentModel('claude-sonnet');
+
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/models').flush(mockResponse);
+      });
+      TestBed.tick();
+      expect(service.selectedModel().modelId).toBe('claude-sonnet');
+      expect(sessionStore['selectedModelId']).toBe('claude-haiku');
+
+      service.clearAgentModelLock();
+      expect(service.selectedModel().modelId).toBe('claude-haiku');
+    });
+
+    // The user-default branch awaits a settings read after the list is set, so
+    // its write lands after the lock effect has run. It used to leave a locked
+    // picker showing the user's default instead of the Agent's model.
+    it('keeps showing the pinned model when the user default arrives late, and restores that default', async () => {
+      // Held open so the lock effect runs first, as it does in the app, where
+      // the settings read is a round trip.
+      let answerSettings!: (value: { defaultModelId: string }) => void;
+      mockUserSettings.getSettings.mockReturnValue(new Promise(resolve => (answerSettings = resolve)));
+      service.lockToAgentModel('claude-sonnet');
+
+      await vi.waitFor(() => {
+        httpMock.expectOne('http://localhost:8000/models').flush(mockResponse);
+      });
+      await vi.waitFor(() => expect(mockUserSettings.getSettings).toHaveBeenCalled());
+      TestBed.tick();
+      expect(service.selectedModel().modelId).toBe('claude-sonnet');
+
+      answerSettings({ defaultModelId: 'claude-haiku' });
+      await vi.waitFor(() => expect(service.modelsLoading()).toBe(false));
+      TestBed.tick();
+      expect(service.selectedModel().modelId).toBe('claude-sonnet');
+
+      service.clearAgentModelLock();
+      expect(service.selectedModel().modelId).toBe('claude-haiku');
     });
 
     it('leaves an unavailable pinned model unselected rather than guessing', async () => {

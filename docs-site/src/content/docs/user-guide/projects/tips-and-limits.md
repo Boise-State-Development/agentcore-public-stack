@@ -3,7 +3,7 @@ title: Tips and current limits
 description: How to get reliable answers from a project's assistant, and what Projects don't do yet.
 sidebar:
   label: Tips and current limits
-  order: 5
+  order: 8
 ---
 
 ## Ask questions the files can answer

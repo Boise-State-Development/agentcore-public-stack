@@ -18,9 +18,9 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
-from apis.shared.evals.cases import DELIVERY_FAMILY, EvalCase
+from apis.shared.evals.cases import DELIVERY_FAMILY, PACED_FAMILIES, EvalCase
 from apis.shared.evals.score import score_sample
 from apis.shared.evals.session_mapper import build_session
 from apis.shared.harness.models import RunResult
@@ -84,6 +84,71 @@ class OAuthRequiredError(RuntimeError):
     The eval user's grants are the fixed thing a baseline describes (spec D7),
     so this is a configuration error that stops the run, not a failed sample.
     """
+
+
+#: The ``stream_error`` code of a model provider that failed after the Runtime's
+#: own retries (``ErrorCode.PROVIDER_UNAVAILABLE``).
+PROVIDER_UNAVAILABLE = "provider_unavailable"
+#: How long a sample waits before its one retry after a provider outage. Long
+#: enough for a brief regional blip to clear; an outage that outlasts it fails
+#: the retry too, and the sample is scored as the failure it is.
+PROVIDER_RETRY_DELAY_SECONDS = 30.0
+
+
+def is_provider_outage(row: Mapping[str, Any]) -> bool:
+    """The sample's turn ended in the provider's failure, not the agent's."""
+    return row.get("status") == "error" and row.get("error_code") == PROVIDER_UNAVAILABLE
+
+
+def retried_attempt(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """What a row keeps of an attempt it replaced: enough to clean it up and to say why."""
+    return {
+        "session_id": row.get("session_id"),
+        **({"sessions": list(row["sessions"])} if row.get("sessions") else {}),
+        "upload_ids": list(row.get("upload_ids") or ()),
+        "status": row.get("status"),
+        "error_code": row.get("error_code"),
+        "error": row.get("error"),
+        "started_at": row.get("started_at"),
+        "finished_at": row.get("finished_at"),
+    }
+
+
+def retried_sessions(row: Mapping[str, Any]) -> List[str]:
+    """Every session a row's replaced attempts ran in, for cleanup and the run's true spend."""
+    ids: List[str] = []
+    for attempt in row.get("retried") or ():
+        if not isinstance(attempt, Mapping):
+            continue
+        ids.append(str(attempt.get("session_id") or ""))
+        ids.extend(str(s.get("session_id") or "") for s in attempt.get("sessions") or () if isinstance(s, Mapping))
+    return list(dict.fromkeys(i for i in ids if i))
+
+
+async def run_with_provider_retry(
+    attempt: Callable[[int], Awaitable[Dict[str, Any]]],
+    *,
+    delay_seconds: Optional[float] = PROVIDER_RETRY_DELAY_SECONDS,
+    sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+) -> Dict[str, Any]:
+    """Run a sample, and once more after ``delay_seconds`` if the provider failed it.
+
+    ``attempt(n)`` runs the sample from scratch for attempt ``n`` (0, then 1):
+    a fresh session, and whatever else a clean sample needs (its own project,
+    freshly staged documents), because the failed attempt's turns are in its
+    session's history and a retry there would answer a different conversation.
+
+    The retry's row is the sample's, with the replaced attempt under
+    ``retried`` (:func:`retried_attempt`). A retry that fails again, for any
+    reason, stays the honest failure it is. ``delay_seconds=None`` never retries.
+    """
+    first = await attempt(0)
+    if delay_seconds is None or not is_provider_outage(first):
+        return first
+    await sleep(delay_seconds)
+    second = await attempt(1)
+    second["retried"] = [retried_attempt(first)]
+    return second
 
 
 #: The most client-tool pauses one turn may answer before the harness gives up:
@@ -219,16 +284,24 @@ async def run_sample(
     forced_arm: Dict[str, Any] = (
         {"arm": case.run.arm} if case.family == DELIVERY_FAMILY and case.run.arm != "auto" else {}
     )
+    file_arms = case.run.file_arms or {}
+
+    def arm_for(filename: str) -> Dict[str, Any]:
+        # A per-file arm wins over the case's (``RunConfig.file_arms``).
+        return {"arm": file_arms[filename]} if filename in file_arms else forced_arm
+
     for filename in case.files:
         if register_fixture is None:
             raise ValueError(f"{case.id} names fixture files but no fixture registrar was given")
-        upload_ids.append(await register_fixture(session_id, filename, **forced_arm))
+        upload_ids.append(await register_fixture(session_id, filename, **arm_for(filename)))
     turn_upload_ids: Dict[int, List[str]] = {}
     for index in range(len(case.turns)):
         for filename in case.meta_for(index).files:
             if register_fixture is None:
                 raise ValueError(f"{case.id} names fixture files but no fixture registrar was given")
-            turn_upload_ids.setdefault(index, []).append(await register_fixture(session_id, filename, **forced_arm))
+            turn_upload_ids.setdefault(index, []).append(
+                await register_fixture(session_id, filename, **arm_for(filename))
+            )
     every_upload = upload_ids + [u for ids in turn_upload_ids.values() for u in ids]
     index_states: Optional[Dict[str, Any]] = None
     if forced_arm.get("arm") == "search" and every_upload:
@@ -243,6 +316,7 @@ async def run_sample(
     turns: List[Dict[str, Any]] = []
     status = "completed"
     error: Optional[str] = None
+    error_code: Optional[str] = None
     extra: Dict[str, Any] = {"rag_assistant_id": assistant_id} if assistant_id else {}
     if case.run.client_surface:
         extra["client_surface"] = case.run.client_surface
@@ -301,6 +375,7 @@ async def run_sample(
         if result.status != "completed":
             status = result.status
             error = result.error
+            error_code = getattr(result, "error_code", None)
             break
 
     memory_state = await inspect() if inspect is not None else None
@@ -335,6 +410,7 @@ async def run_sample(
         **({"index": index_states} if index_states is not None else {}),
         "status": status,
         "error": error,
+        **({"error_code": error_code} if error_code else {}),
         "passed": scored.passed,
         "failures": list(scored.failures),
         "final_message": str(last.get("final_message") or ""),
@@ -342,7 +418,9 @@ async def run_sample(
         "usage": sum_usage(turns),
         "timing": turn_timing(turns),
         **({"upload_ms": upload_ms} if upload_ms is not None else {}),
-        **({"arm": case.run.arm, "ceiling": case.run.ceiling} if case.family == DELIVERY_FAMILY else {}),
+        **({"arm": case.run.arm} if case.family == DELIVERY_FAMILY else {}),
+        **({"file_arms": dict(case.run.file_arms)} if case.run.file_arms else {}),
+        **({"ceiling": case.run.ceiling} if case.family in PACED_FAMILIES else {}),
         "started_at": started_at,
         "finished_at": _now_iso(),
         "turns": turns,

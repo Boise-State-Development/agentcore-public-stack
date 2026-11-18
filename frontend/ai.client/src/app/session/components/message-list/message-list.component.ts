@@ -1,4 +1,4 @@
-import { Component, computed, effect, input, output, inject, signal, untracked, PLATFORM_ID } from '@angular/core';
+import { Component, computed, effect, input, output, inject, signal, untracked, PLATFORM_ID, ChangeDetectionStrategy } from '@angular/core';
 import { isPlatformBrowser, NgTemplateOutlet } from '@angular/common';
 import { Message, ToolUseData } from '../../services/models/message.model';
 import type { Artifact } from '../../services/artifacts/artifact.model';
@@ -151,6 +151,7 @@ function segmentTurn(messages: readonly Message[]): TurnSegment[] {
     HandoffRowComponent,
   ],
   templateUrl: './message-list.component.html',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './message-list.component.css',
 })
 export class MessageListComponent {

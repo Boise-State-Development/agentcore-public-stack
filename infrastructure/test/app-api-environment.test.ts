@@ -120,20 +120,21 @@ describe('buildAppApiEnvironment — handoffs', () => {
 });
 
 describe('buildAppApiEnvironment — session rewind', () => {
-  it('forwards the flag, off by default', () => {
-    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
-    expect(off.SESSION_REWIND_ENABLED).toBe('false');
-
+  it('forwards the flag either way', () => {
     const on = buildAppApiEnvironment(createMockConfig({ sessionRewind: { enabled: true } }), stubParams());
     expect(on.SESSION_REWIND_ENABLED).toBe('true');
+
+    const off = buildAppApiEnvironment(createMockConfig({ sessionRewind: { enabled: false } }), stubParams());
+    expect(off.SESSION_REWIND_ENABLED).toBe('false');
   });
 });
 
 describe('buildAppApiEnvironment — session fork', () => {
-  it('forwards the flag, off by default', () => {
-    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).SESSION_FORK_ENABLED).toBe('false');
+  it('forwards the flag either way', () => {
     const on = buildAppApiEnvironment(createMockConfig({ sessionFork: { enabled: true } }), stubParams());
     expect(on.SESSION_FORK_ENABLED).toBe('true');
+    const off = buildAppApiEnvironment(createMockConfig({ sessionFork: { enabled: false } }), stubParams());
+    expect(off.SESSION_FORK_ENABLED).toBe('false');
   });
 });
 

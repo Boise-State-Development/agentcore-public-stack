@@ -1,7 +1,8 @@
-import { Component, inject, effect, Signal, signal, computed, viewChild, OnDestroy, PLATFORM_ID } from '@angular/core';
+import { Component, inject, effect, Signal, signal, computed, untracked, viewChild, OnDestroy, PLATFORM_ID, ChangeDetectionStrategy } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
-import { Subscription } from 'rxjs';
+import { Subscription, firstValueFrom } from 'rxjs';
+import { ProjectApiService } from '../projects/services/project-api.service';
 import { v4 as uuidv4 } from 'uuid';
 import { ChatRequestService } from './services/chat/chat-request.service';
 import { MessageMapService } from './services/session/message-map.service';
@@ -12,7 +13,7 @@ import { persistedAggregatesOf, samePersistedAggregates } from './services/sessi
 import { ScrollPositionService } from './services/session/scroll-position.service';
 import {
   ComposerDraftStorageService,
-  NEW_CONVERSATION_DRAFT_KEY,
+  newConversationDraftKey,
 } from './services/session/composer-draft-storage.service';
 import { ChatStateService } from './services/chat/chat-state.service';
 import { lastUserText } from './services/chat/provider-outage';
@@ -39,13 +40,12 @@ import { FEATURES } from '../services/features';
 import { ComposerProject } from './components/chat-input/chat-input.component';
 import { ConversationBindingService } from './services/session/conversation-binding.service';
 import { AgentService } from '../agents/services/agent.service';
+import { AgentBindingLocksService } from '../agents/services/agent-binding-locks.service';
 import { AgentMentionService } from '../agents/services/agent-mention.service';
 import { routeMention, stripMention } from './services/chat/mention-routing';
 import { AgentHandoffService } from './services/handoff/agent-handoff.service';
 import { ToastService } from '../services/toast/toast.service';
 import { Agent, AgentRunnability } from '../agents/models/agent.model';
-import { ToolService } from '../services/tool/tool.service';
-import { SkillService } from '../services/skill/skill.service';
 import { ChatContainerComponent, ChatContainerConfig } from './components/chat-container/chat-container.component';
 import {
   ShareAgentDialogComponent,
@@ -60,6 +60,7 @@ import { GreetingProvider } from '../../branding/greeting.provider';
   selector: 'app-session-page',
   imports: [ChatContainerComponent],
   templateUrl: './session.page.html',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './session.page.css',
 })
 export class ConversationPage implements OnDestroy {
@@ -88,8 +89,7 @@ export class ConversationPage implements OnDestroy {
   private artifactHttp = inject(ArtifactHttpService);
   private assistantService = inject(AssistantService);
   private agentService = inject(AgentService);
-  private toolService = inject(ToolService);
-  private skillService = inject(SkillService);
+  private bindingLocks = inject(AgentBindingLocksService);
   private router = inject(Router);
   private dialog = inject(Dialog);
   private voiceChatService = inject(VoiceChatService);
@@ -101,6 +101,7 @@ export class ConversationPage implements OnDestroy {
   private toast = inject(ToastService);
   private features = inject(FEATURES);
   private agentHandoff = inject(AgentHandoffService);
+  private projectApi = inject(ProjectApiService);
   /** Protected: the template hands the URL binding to the composer's voice control (#625). */
   protected readonly binding = inject(ConversationBindingService);
   private platformId = inject(PLATFORM_ID);
@@ -181,11 +182,14 @@ export class ConversationPage implements OnDestroy {
    * The *route* conversation, not {@link effectiveSessionId}: a new
    * conversation mints a staged id the moment a file is attached, and keying
    * drafts off that would swap the composer out from under text the user had
-   * already typed. Before the first send every visit to `/` is the same
-   * composer, so they all share one key.
+   * already typed. Before the first send every visit to `/` with the same
+   * binding (none, one Agent, one project) is the same composer, so they share
+   * one key; a different Agent or project is a different composer.
    */
   readonly draftKey = computed(
-    () => this.sessionId() ?? NEW_CONVERSATION_DRAFT_KEY,
+    () =>
+      this.sessionId() ??
+      newConversationDraftKey(this.binding.queryAssistantId(), this.binding.queryProjectId()),
   );
 
   // Writable signal that holds the current messages signal reference
@@ -271,6 +275,39 @@ export class ConversationPage implements OnDestroy {
     return null;
   });
 
+  /**
+   * Whether the conversation's project can use voice mode (#2021), keyed by project
+   * so a switch never shows the previous project's answer. Read each time a project
+   * conversation is opened from somewhere else; a failed read leaves voice hidden.
+   */
+  private readonly projectVoice = signal<{ projectId: string; available: boolean } | null>(null);
+  readonly projectVoiceAvailable = computed<boolean | null>(() => {
+    const project = this.composerProject();
+    const voice = this.projectVoice();
+    return project && voice?.projectId === project.projectId ? voice.available : null;
+  });
+  /** The project whose voice status was last asked for, so one open reads it once. */
+  private projectVoiceRequested: string | null = null;
+  private readonly projectVoiceLoader = effect(() => {
+    const projectId = this.composerProject()?.projectId ?? null;
+    untracked(() => {
+      if (!projectId) {
+        this.projectVoiceRequested = null;
+        this.projectVoice.set(null);
+        return;
+      }
+      if (this.projectVoiceRequested === projectId) return;
+      this.projectVoiceRequested = projectId;
+      // A late answer for a project the page has since left is dropped.
+      const settle = (available: boolean) => {
+        if (this.composerProject()?.projectId === projectId) this.projectVoice.set({ projectId, available });
+      };
+      firstValueFrom(this.projectApi.voice(projectId))
+        .then(v => settle(v.available))
+        .catch(() => settle(false));
+    });
+  });
+
   // Computed signal to determine if assistant can be closed
   // Only allow closing if: no messages exist AND the binding is on the URL (not session preferences)
   readonly canCloseAssistant = computed(() => {
@@ -285,6 +322,15 @@ export class ConversationPage implements OnDestroy {
   });
 
   constructor() {
+    // Moving between new conversations with different bindings changes only
+    // the query string, which the route subscription below never sees. The
+    // staged id belongs to the draft being left, so it is swapped for the one
+    // the incoming draft names (or none) here.
+    effect(() => {
+      this.draftKey();
+      untracked(() => this.adoptStagedSession());
+    });
+
     // Keep the viewed-session facades in ChatStateService (loading, cost
     // badge, Continue affordance, Stop button) pointed at the conversation
     // on screen. Uses the effective id so a staged session (file attached
@@ -517,26 +563,9 @@ export class ConversationPage implements OnDestroy {
 
       this.sessionId.set(id);
 
-      // A new-conversation draft with attachments names the conversation its
-      // uploads were filed under. Re-adopt it, or the next file attached after
-      // a reload mints a *second* staged id and the send carries upload ids
-      // from a conversation it does not name.
-      //
-      // `addSessionToCache` is not optional here, even though this id was
-      // already staged once: it also marks the id as new, which is what tells
-      // the metadata fetch to skip a conversation the backend has not created
-      // yet. That marker lives in memory and so died with the reload — without
-      // this call the first send lands on "Session not found".
-      if (!id) {
-        const staged = this.composerDrafts.read(NEW_CONVERSATION_DRAFT_KEY).attachmentSessionId;
-        if (staged && this.stagedSessionId() !== staged) {
-          this.stagedSessionId.set(staged);
-          this.sessionService.addSessionToCache(
-            staged,
-            this.userService.currentUser()?.user_id || 'anonymous',
-          );
-        }
-      }
+      // A new conversation's draft may name the conversation its uploads were
+      // filed under; see adoptStagedSession.
+      this.adoptStagedSession();
 
       // Session prewarm: start the Runtime microVM this conversation's next
       // turn will use while the user reads and types. A new conversation warms
@@ -867,6 +896,63 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
+   * Take the staged conversation id the new-conversation draft names.
+   *
+   * A new-conversation draft with attachments names the conversation its
+   * uploads were filed under. Re-adopt it, or the next file attached after a
+   * reload mints a *second* staged id and the send carries upload ids from a
+   * conversation it does not name. A draft that names none clears the staged
+   * id, since it belonged to another new conversation's draft.
+   *
+   * `addSessionToCache` is not optional here, even though this id was already
+   * staged once: it also marks the id as new, which is what tells the metadata
+   * fetch to skip a conversation the backend has not created yet. That marker
+   * lives in memory and so died with the reload; without this call the first
+   * send lands on "Session not found".
+   */
+  private adoptStagedSession(): void {
+    if (this.sessionId()) return;
+    const key = this.draftKey();
+    const staged = this.composerDrafts.read(key).attachmentSessionId ?? null;
+    if (this.stagedSessionId() === staged) return;
+    this.stagedSessionId.set(staged);
+    if (staged) void this.confirmStagedSessionUnsent(key, staged);
+  }
+
+  /**
+   * Keep a staged id only while its conversation has not been sent.
+   *
+   * Uploads create no conversation row, so a row for a staged id means it has
+   * been sent since the draft named it: a send that bypassed the composer left
+   * its files in the draft. Re-adopting it would file the next upload under
+   * that conversation and send this "new" conversation's first message into
+   * it. Its files are dropped from the draft, since they are that
+   * conversation's; the text stays.
+   *
+   * Any failure (the expected one is a 404) keeps the id, as before this
+   * check, rather than strip a draft on a network blip.
+   */
+  private async confirmStagedSessionUnsent(key: string, staged: string): Promise<void> {
+    let sent: boolean;
+    try {
+      await this.sessionService.getSessionMetadata(staged, { quiet: true });
+      sent = true;
+    } catch {
+      sent = false;
+    }
+    if (this.stagedSessionId() !== staged) return;
+    if (sent) {
+      this.stagedSessionId.set(null);
+      this.composerDrafts.discardAttachments(key);
+      return;
+    }
+    this.sessionService.addSessionToCache(
+      staged,
+      this.userService.currentUser()?.user_id || 'anonymous',
+    );
+  }
+
+  /**
    * Display name for a mentioned Agent, for the hand-off notice.
    *
    * Falls back to a generic noun rather than an id: the toast explains what just happened
@@ -985,10 +1071,18 @@ export class ConversationPage implements OnDestroy {
     if (!this.effectiveSessionId()) {
       const user = this.userService.currentUser();
       const userId = user?.user_id || 'anonymous';
-      this.sessionService.addSessionToCache(sessionId, userId);
       // Carry the assistant id forward if one is attached to this view —
-      // keeps the URL the single source of truth after voice ends.
+      // keeps the URL the single source of truth after voice ends. The row
+      // carries it too, with the project, so the sidebar groups a project's
+      // voice conversation under it without waiting for a reload (#2021).
       const assistantId = this.binding.boundAgentId() || this.assistant()?.assistantId;
+      const projectId = this.composerProject()?.projectId;
+      this.sessionService.addSessionToCache(
+        sessionId,
+        userId,
+        '',
+        assistantId ? { assistantId, ...(projectId ? { projectId } : {}) } : undefined,
+      );
       this.router.navigate(['s', sessionId], {
         replaceUrl: true,
         queryParams: this.binding.queryParamsFor(assistantId),
@@ -1079,68 +1173,16 @@ export class ConversationPage implements OnDestroy {
   }
 
   /**
-   * Lock each picker to the Agent's binding. Tools and skills are always locked, to
-   * none if the Agent binds none: the backend runs every Agent (a project's included)
-   * on its own tools and skills, never the viewer's picks. An Agent that binds no
-   * tools still gets the admin's always-on tools, so its lock keeps them; skills have
-   * no such floor.
+   * Lock each picker to the Agent's binding (`AgentBindingLocksService`). A skill
+   * resolve that lands after the conversation moved to another Agent is dropped.
    */
   private applyAgentBindingLocks(agent: Agent): void {
-    const modelId = agent.modelConfig?.modelId;
-    if (modelId) {
-      this.modelService.lockToAgentModel(modelId);
-    } else {
-      this.modelService.clearAgentModelLock();
-    }
-
-    const toolIds = agent.bindings.filter(b => b.kind === 'tool').map(b => b.ref);
-    if (toolIds.length > 0) {
-      this.toolService.lockToAgentTools(toolIds);
-    } else {
-      this.toolService.lockToAgentTools([], { keepAlwaysOn: true });
-    }
-
-    const skillIds = agent.bindings.filter(b => b.kind === 'skill').map(b => b.ref);
-    this.skillService.lockToAgentSkillIds(skillIds, { resolving: skillIds.length > 0 });
-    // Resolve the bound skills for this viewer. Only fires when an Agent actually
-    // binds skills (a skills-enabled context), so there is no fetch in flag-off
-    // environments.
-    if (skillIds.length > 0) {
-      void this.resolveAgentSkills(agent.agentId);
-    }
-  }
-
-  /**
-   * Replace the id lock with the Agent's skills as the backend resolved them for this
-   * viewer (`GET /agents/{id}/skills`), which is what the `/` menu and the picker rows
-   * are built from. The viewer's own `/skills/` list cannot do it: a skill another
-   * project member authored is not in it, so for every member but the author the
-   * locked set used to intersect to nothing and the menu never opened.
-   *
-   * Best-effort. A failure (an older backend without the route) keeps the id lock and
-   * loads the viewer's own list so the rows it can name still render, which is exactly
-   * the previous behaviour. A result for an Agent that is no longer the conversation's
-   * is dropped.
-   */
-  private async resolveAgentSkills(agentId: string): Promise<void> {
-    try {
-      const skills = await this.agentService.getBoundSkills(agentId);
-      if (this.agent()?.agentId !== agentId || !this.skillService.agentLocked()) return;
-      this.skillService.lockToAgentSkills(skills);
-    } catch {
-      if (this.agent()?.agentId !== agentId || !this.skillService.agentLocked()) return;
-      this.skillService.settleAgentLock();
-      if (!this.skillService.initialized()) {
-        void this.skillService.loadSkills();
-      }
-    }
+    this.bindingLocks.apply(agent, () => this.agent()?.agentId === agent.agentId);
   }
 
   /** Release every Agent picker lock (plain chat / navigating away). */
   private clearAgentBindingLocks(): void {
-    this.modelService.clearAgentModelLock();
-    this.toolService.clearAgentLock();
-    this.skillService.clearAgentLock();
+    this.bindingLocks.clear();
   }
 
   /**

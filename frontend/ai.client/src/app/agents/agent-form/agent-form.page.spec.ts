@@ -2,7 +2,7 @@ import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { provideRouter, ActivatedRoute } from '@angular/router';
 import { ReactiveFormsModule } from '@angular/forms';
-import { Component, input, output } from '@angular/core';
+import { Component, input, output, model } from '@angular/core';
 import { AgentFormPage } from './agent-form.page';
 import { AgentPreviewComponent } from './components/agent-preview.component';
 import { KnowledgeBaseSectionComponent } from '../../knowledge-base/knowledge-base-section.component';
@@ -72,6 +72,7 @@ class StubKnowledgeBaseComponent {
   userPermission = input('owner');
   permissionResolved = input(false);
   createDraft = input<unknown>(null);
+  open = model(false);
 }
 
 /**
@@ -243,10 +244,58 @@ describe('AgentFormPage — invalid submit feedback', () => {
     });
   });
 
+  describe('model card', () => {
+    it('opens while no model is chosen, and folds to the choice once one is', () => {
+      expect(component.modelOpen()).toBe(true);
+      component.models.set([
+        { kind: 'model', ref: 'm1', label: 'Model One', description: 'Fast', meta: {} },
+      ]);
+      component.selectModel('m1');
+      expect(component.modelOpen()).toBe(false);
+      expect(component.modelSummary()).toBe('Model One — Fast');
+    });
+  });
+
+  describe('skills', () => {
+    it('lists skills in the shared selector, grouped by whose skill it is', () => {
+      component.skills.set([
+        { kind: 'skill', ref: 'org-b', label: 'Budgets', description: '', meta: { ownership: 'organization' } },
+        { kind: 'skill', ref: 'mine', label: 'My Rubric', description: '', meta: { ownership: 'mine' } },
+        { kind: 'skill', ref: 'theirs', label: 'Advising', description: '', meta: { ownership: 'shared' } },
+        // An older backend sends no ownership: those were all catalog skills then.
+        { kind: 'skill', ref: 'org-a', label: 'APA style', description: '', meta: {} },
+      ]);
+      expect(component.skillItems().map((i) => [i.group, i.name])).toEqual([
+        ['My skills', 'My Rubric'],
+        ['Shared with me', 'Advising'],
+        ['Organization', 'APA style'],
+        ['Organization', 'Budgets'],
+      ]);
+      expect(component.skillsCardSummary()).toBe('None selected · 4 available. With none, this agent runs without skills.');
+
+      component.onSkillSelectionChange(new Set(['mine', 'org-b']));
+      expect(component.isSkillSelected('mine')).toBe(true);
+      expect(component.skillsCardSummary()).toBe('Budgets, My Rubric');
+      expect(component.isDirty()).toBe(true);
+    });
+  });
+
   describe('voice mode (#625)', () => {
     function checkbox(testId: string): HTMLInputElement | null {
       return fixture.nativeElement.querySelector(`[data-testid="${testId}"]`);
     }
+
+    beforeEach(() => {
+      // The Voice card starts folded; these read the controls inside it.
+      component.voiceOpen.set(true);
+      fixture.detectChanges();
+    });
+
+    it('folds to a one-line answer', () => {
+      expect(component.voiceSummary()).toBe('Off. People can only type to this agent.');
+      component.form.patchValue({ voiceEnabled: true });
+      expect(component.voiceSummary()).toBe('On · uses only this agent’s instructions');
+    });
 
     it('defaults a new agent to voice off, and shows the instructions-only option once on', () => {
       expect(component.form.get('voiceEnabled')?.value).toBe(false);
@@ -497,8 +546,17 @@ describe('AgentFormPage — saved enum param on reopen', () => {
   });
 
   function effortSelect(): HTMLSelectElement {
+    // A saved agent's Model card opens folded; a tuned param opens its own fold.
+    component.modelOpen.set(true);
+    fixture.detectChanges();
     return fixture.nativeElement.querySelector('select#param-reasoning_effort');
   }
+
+  it('opens the advanced parameters for an agent that tunes one', () => {
+    expect(component.modelOpen()).toBe(false);
+    expect(component.paramsOpen()).toBe(true);
+    expect(component.modelSummary()).toContain('1 custom setting');
+  });
 
   it('hydrates the saved param into component state', () => {
     expect(component.paramValue('reasoning_effort')).toBe('high');

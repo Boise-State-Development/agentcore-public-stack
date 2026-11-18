@@ -368,9 +368,10 @@ class ProjectService:
         name: Optional[str] = None,
         description: Optional[str] = None,
         editors_manage_members: Optional[bool] = None,
+        voice_enabled: Optional[bool] = None,
         status: Optional[ProjectStatus] = None,
     ) -> Tuple[Project, ProjectRole]:
-        """Editors change name and description; settings and status are the owner's.
+        """Editors change name and description; settings (members, voice) and status are the owner's.
 
         An archived project accepts exactly one change: the owner restoring it.
 
@@ -379,14 +380,15 @@ class ProjectService:
         """
         project, role = self._require(project_id, user, "editor")
 
-        owner_only = editors_manage_members is not None or status is not None
+        settings_change = editors_manage_members is not None or voice_enabled is not None
+        owner_only = settings_change or status is not None
         if owner_only and role != "owner":
             raise ProjectPermissionError("Only the project owner can change settings or archive the project")
 
         restoring = project.status == "archived" and status == "active"
         if project.status == "archived" and not restoring:
             raise ProjectConflictError("This project is archived. Restore it to make changes.")
-        if restoring and (name is not None or description is not None or editors_manage_members is not None):
+        if restoring and (name is not None or description is not None or settings_change):
             raise ProjectError("Restore the project first, then edit it")
 
         updates: dict = {}
@@ -394,10 +396,13 @@ class ProjectService:
             updates["name"] = _clean_name(name)
         if description is not None:
             updates["description"] = _clean_description(description)
+        settings_updates: dict = {}
         if editors_manage_members is not None:
-            updates["settings"] = project.settings.model_copy(
-                update={"editors_manage_members": editors_manage_members}
-            )
+            settings_updates["editors_manage_members"] = editors_manage_members
+        if voice_enabled is not None:
+            settings_updates["voice_enabled"] = voice_enabled
+        if settings_updates:
+            updates["settings"] = project.settings.model_copy(update=settings_updates)
         if status is not None:
             updates["status"] = status
         if not updates:
@@ -464,6 +469,7 @@ class ProjectService:
             "editorsManageMembers": (
                 before.settings.editors_manage_members, after.settings.editors_manage_members
             ),
+            "voiceEnabled": (before.settings.voice_enabled, after.settings.voice_enabled),
         }
         changed = sorted(k for k, (old, new) in fields.items() if old != new)
         if changed:

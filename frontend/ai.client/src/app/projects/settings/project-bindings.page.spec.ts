@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { Dialog } from '@angular/cdk/dialog';
 import { HttpErrorResponse } from '@angular/common/http';
 import { of, throwError } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +10,7 @@ import { BoundBinding, Project } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { TEST_PROJECT, buttonNamed, openProjectPage, provideProjectPageRoute, settlePage } from '../../../testing/project-page';
 import { ProjectBindingsPage } from './project-bindings.page';
+import { ProjectSkillDialogComponent } from './components/project-skill-dialog.component';
 
 function bindable(ref: string, label: string, description: string, category?: string): BindableItem {
   return { kind: 'tool', ref, label, description, meta: category ? { category } : {} };
@@ -29,6 +31,7 @@ describe('ProjectBindingsPage', () => {
   };
   const agents = { loadBindable: vi.fn() };
   const toast = { success: vi.fn(), error: vi.fn() };
+  const dialog = { open: vi.fn() };
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -41,6 +44,7 @@ describe('ProjectBindingsPage', () => {
         { provide: ProjectApiService, useValue: api },
         { provide: AgentService, useValue: agents },
         { provide: ToastService, useValue: toast },
+        { provide: Dialog, useValue: dialog },
       ],
     });
   });
@@ -218,6 +222,104 @@ describe('ProjectBindingsPage', () => {
       await settlePage(harness);
       expect(el.querySelector('[role=alert]')?.textContent).toContain('The skill changed while it was being pinned');
       expect(rowText(el, 'PDF Workflows')).toContain('Version 2');
+    });
+  });
+
+  describe('what is selected', () => {
+    const buttonIn = (row: Element, name: string): HTMLButtonElement | undefined =>
+      [...row.querySelectorAll('button')].find(b => b.textContent!.trim() === name);
+
+    it('counts and names the selection above the list, and marks each selected row in text', async () => {
+      const { el, harness } = await openSkills({ pdf: { ref: 'pdf', version: 2, pinnedAt: null, updateAvailable: false } });
+      const summary = el.querySelector('[id^="project-bindings-summary-"]')!;
+      expect(summary.textContent!.trim()).toBe('1 skill selected');
+      expect(summary.closest('[role=group]')!.querySelector('li')!.textContent!.trim()).toBe('PDF Workflows');
+      expect(rowText(el, 'PDF Workflows')).toContain('Selected');
+      expect(rowText(el, 'Memo Style')).not.toContain('Selected');
+
+      checkboxFor(el, 'Memo Style').click();
+      await settlePage(harness);
+      expect(summary.textContent!.trim()).toBe('2 skills selected');
+      expect(rowText(el, 'Memo Style')).toContain('Selected');
+      expect(el.textContent).toContain('Unsaved changes');
+    });
+
+    it('says when nothing is selected', async () => {
+      const { el } = await openSkills({});
+      expect(el.querySelector('[id^="project-bindings-summary-"]')!.textContent!.trim()).toBe('No skills selected');
+      expect(el.textContent).toContain('The assistant uses no skills in this project');
+    });
+
+    it('marks selected tools the same way', async () => {
+      const { el } = await openTools();
+      expect(el.querySelector('[id^="project-bindings-summary-"]')!.textContent!.trim()).toBe('2 tools selected');
+      expect(rowText(el, 'Calendar')).toContain('Selected');
+      // Tools have no content to read.
+      expect(buttonIn(rowFor(el, 'Calendar'), 'View')).toBeUndefined();
+    });
+  });
+
+  describe('viewing a skill', () => {
+    const buttonIn = (row: Element, name: string): HTMLButtonElement | undefined =>
+      [...row.querySelectorAll('button')].find(b => b.textContent!.trim() === name);
+
+    it('opens a bound skill the caller can read, read-only, for a viewer too', async () => {
+      const { el } = await openSkills(
+        { pdf: { ref: 'pdf', version: 2, pinnedAt: null, updateAvailable: false, available: true } },
+        { ...TEST_PROJECT, role: 'viewer' },
+      );
+      const view = buttonIn(rowFor(el, 'PDF Workflows'), 'View')!;
+      expect(view.getAttribute('aria-label')).toBe('View PDF Workflows');
+      view.click();
+      expect(dialog.open).toHaveBeenCalledWith(ProjectSkillDialogComponent, {
+        data: { projectId: 'prj_1', skillId: 'pdf', name: 'PDF Workflows' },
+      });
+      // An unbound palette skill has nothing the project runs yet.
+      expect(buttonIn(rowFor(el, 'Memo Style'), 'View')).toBeUndefined();
+    });
+
+    it('opens a selected skill from its chip at the top, without finding it in the list', async () => {
+      const { el, harness } = await openSkills({
+        pdf: { ref: 'pdf', version: 2, pinnedAt: null, updateAvailable: false, available: true },
+      });
+      const chips = el.querySelector('[id^="project-bindings-summary-"]')!.closest('[role=group]')!;
+      const chip = chips.querySelector<HTMLButtonElement>('button[aria-label="View PDF Workflows"]')!;
+      expect(chip.textContent!.trim()).toBe('PDF Workflows');
+      chip.click();
+      expect(dialog.open).toHaveBeenCalledWith(ProjectSkillDialogComponent, {
+        data: { projectId: 'prj_1', skillId: 'pdf', name: 'PDF Workflows' },
+      });
+
+      // Checked but not saved: the project doesn't run it yet, so its chip is plain text.
+      checkboxFor(el, 'Memo Style').click();
+      await settlePage(harness);
+      const memo = [...chips.querySelectorAll('li')].find(li => li.textContent!.trim() === 'Memo Style')!;
+      expect(memo.querySelector('button')).toBeNull();
+    });
+
+    it('names a private skill someone else added, and lets the member read it', async () => {
+      const { el } = await openSkills(
+        {
+          eds_redline: {
+            ref: 'eds_redline', version: 1, pinnedAt: null, updateAvailable: false,
+            available: true, displayName: 'Contract redline', description: 'Redlines a contract.',
+          },
+        },
+        { ...TEST_PROJECT, role: 'viewer' },
+      );
+      const text = rowText(el, 'Contract redline');
+      expect(text).toContain('Redlines a contract.');
+      expect(text).toContain('It runs for you in this project.');
+      expect(text).not.toContain('You don’t have access');
+      expect(checkboxFor(el, 'Contract redline').disabled).toBe(true);
+      buttonIn(rowFor(el, 'Contract redline'), 'View')!.click();
+      expect(dialog.open.mock.calls[0][1].data.skillId).toBe('eds_redline');
+    });
+
+    it('offers no View on a skill that does not run for the caller', async () => {
+      const { el } = await openSkills({ locked_one: { ref: 'locked_one', version: 1, pinnedAt: null, updateAvailable: false, available: false } });
+      expect(rowText(el, 'locked_one')).toContain('You don’t have access to it');
+      expect(buttonIn(rowFor(el, 'locked_one'), 'View')).toBeUndefined();
     });
   });
 });

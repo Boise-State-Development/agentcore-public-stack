@@ -556,11 +556,216 @@ def dossier(letter: str) -> str:
     return f"delivery_dossier_{letter}_30k.md"
 
 
+# --------------------------------------------------------------------------- multi-document comparison
+
+
+@dataclass(frozen=True)
+class PolicyFacts:
+    """One district's policy: two comparable values, each with a withdrawn lookalike.
+
+    ``response_hours`` is the critical-incident response target (the first
+    question), ``retention_years`` the records retention period (the follow-up).
+    Each lookalike is a figure an earlier draft proposed and withdrew, planted
+    in another section, so only reading the right sentence answers.
+    """
+
+    district: str
+    response_hours: int
+    response_lookalike: int
+    retention_years: int
+    retention_lookalike: int
+
+
+#: The comparison sets (the 1M document-budget readout): ``(files, estimated tokens each)``.
+#: ``5``: five ~5.5k-token PDFs, about 30 pages, the DRED field case's shape.
+#: ``10``: ten ~13.5k-token PDFs, about 150 pages.
+POLICY_SETS: Dict[str, Tuple[int, int]] = {"5": (5, 5_500), "10": (10, 13_500)}
+_POLICY_LETTERS = "abcdefghij"
+#: Where each document's first fact sits: late and different per document, so
+#: a document's digest never carries it and reading the first pages does not either.
+_RESPONSE_DEPTHS = (0.62, 0.71, 0.84, 0.58, 0.9, 0.66, 0.77, 0.88, 0.6, 0.81)
+_RETENTION_DEPTHS = (0.3, 0.22, 0.41, 0.35, 0.18, 0.45, 0.27, 0.38, 0.24, 0.33)
+#: The extreme of each question lands on a document the 50k budget sends on demand
+#: (any file after the first two in either set), as in the field case.
+_SHORTEST_RESPONSE = {"5": 3, "10": 7}
+_LONGEST_RETENTION = {"5": 4, "10": 8}
+
+
+def policy_file(set_name: str, letter: str) -> str:
+    return f"delivery_policy{set_name}_{letter}.pdf"
+
+
+def policy_files(set_name: str) -> List[str]:
+    count, _ = POLICY_SETS[set_name]
+    return [policy_file(set_name, letter) for letter in _POLICY_LETTERS[:count]]
+
+
+def _policy_values(set_name: str) -> List[PolicyFacts]:
+    count, _ = POLICY_SETS[set_name]
+    rng = random.Random(f"policy-values:{set_name}")
+    districts = _site_names(f"policy{set_name}", count)
+    hours = rng.sample(range(14, 70), count)
+    years = rng.sample(range(4, 30), count)
+    # Put the extremes where the set says, the rest in shuffled order.
+    lo = hours.index(min(hours))
+    hours[lo], hours[_SHORTEST_RESPONSE[set_name]] = hours[_SHORTEST_RESPONSE[set_name]], hours[lo]
+    hi = years.index(max(years))
+    years[hi], years[_LONGEST_RETENTION[set_name]] = years[_LONGEST_RETENTION[set_name]], years[hi]
+    shortest, longest = _SHORTEST_RESPONSE[set_name], _LONGEST_RETENTION[set_name]
+    # Each lookalike lies past the real extreme (taking it would change the
+    # answer) and equals no document's real value.
+    low = [v for v in range(1, min(hours)) if v not in hours][::-1]
+    high = [v for v in range(max(years) + 1, 60) if v not in years]
+    out = []
+    for i, district in enumerate(districts):
+        out.append(PolicyFacts(
+            district=f"{district} district",
+            response_hours=hours[i],
+            response_lookalike=low[i] if i != shortest else next(v for v in range(hours[i] + 30, 99) if v not in hours),
+            retention_years=years[i],
+            retention_lookalike=high[i] if i != longest else next(v for v in range(1, years[i]) if v not in years),
+        ))
+    return out
+
+
+_POLICIES: Dict[str, Tuple[Document, PolicyFacts]] = {}
+
+
+def policy(filename: str) -> Tuple[Document, PolicyFacts]:
+    """The document behind policy fixture ``filename`` and its two planted values. Deterministic."""
+    if filename in _POLICIES:
+        return _POLICIES[filename]
+    stem = filename.removeprefix("delivery_policy").removesuffix(".pdf")
+    set_name, letter = stem.split("_")
+    i = _POLICY_LETTERS.index(letter)
+    facts = _policy_values(set_name)[i]
+    _, tokens = POLICY_SETS[set_name]
+    rng = random.Random(f"policy:{filename}")
+    title = f"{facts.district.title()} operations policy"
+    budget = tokens * CHARS_PER_TOKEN - len(title)
+    paragraphs: List[str] = []
+    used = 0
+    while used < budget:
+        paragraph = _filler_paragraph(rng)
+        paragraphs.append(paragraph)
+        used += len(paragraph) + 2
+    n = len(paragraphs)
+
+    def plant(fraction: float, sentence: str) -> None:
+        index = min(n - 1, max(0, int(round(fraction * (n - 1)))))
+        paragraphs[index] = f"{paragraphs[index]} {sentence}"
+
+    d = facts.district
+    plant(_RESPONSE_DEPTHS[i], f"This policy sets the critical-incident response target for the {d} at "
+                               f"{facts.response_hours} hours from first report.")
+    plant((_RESPONSE_DEPTHS[i] + 0.35) % 1.0, f"An earlier draft proposed a critical-incident response target of "
+                                              f"{facts.response_lookalike} hours; that draft was withdrawn.")
+    plant(_RETENTION_DEPTHS[i], f"Under this policy the {d} keeps operational records for a retention period of "
+                                f"{facts.retention_years} years.")
+    plant((_RETENTION_DEPTHS[i] + 0.4) % 1.0, f"A records retention period of {facts.retention_lookalike} years was "
+                                              "considered during consultation and rejected.")
+    per_section = 8
+    sections = tuple(
+        (f"Section {j // per_section + 1}: operations notes", tuple(paragraphs[j:j + per_section]))
+        for j in range(0, n, per_section)
+    )
+    doc = Document(title=title, sections=sections, facts={}, absent=Absent("", "", "", ""))
+    _POLICIES[filename] = (doc, facts)
+    return _POLICIES[filename]
+
+
+for _set in POLICY_SETS:
+    for _name in policy_files(_set):
+        policy(_name)
+
+
+# --------------------------------------------------------------------------- image-heavy PDF packets
+
+#: The 2026-10-30 field case (unified-attachment-delivery §4.4.1): five
+#: image-heavy PDFs of 5.7, 3.9, 0.17, 4.04 and 2.7 MB, 31 pages in all. Each
+#: page is a few lines of text over a photo-sized image of noise; one page holds
+#: the packet's award number and its prior-cycle lookalike. Under the old 7 MB
+#: combined budget the fourth went on demand; under the request budget only the
+#: first (over the 4 MiB per-file limit) does.
+HEAVY_PACKETS: Tuple[Tuple[str, int, int], ...] = (
+    ("a", 5_700_000, 8),
+    ("b", 3_900_000, 6),
+    ("c", 170_000, 1),
+    ("d", 4_040_000, 9),
+    ("e", 2_700_000, 7),
+)
+
+
+def heavy_packet_name(letter: str) -> str:
+    return f"delivery_packet_{letter}_heavy.pdf"
+
+
+@dataclass(frozen=True)
+class PacketFact:
+    """A packet's award number and its prior-cycle lookalike."""
+
+    letter: str
+    subject: str
+    value: str
+    lookalike: str
+
+    def question(self) -> str:
+        return (
+            f"According to Award packet {self.letter.upper()}, what is the current award number for "
+            f"{self.subject}? Reply with just the number."
+        )
+
+
+def heavy_packet_fact(letter: str) -> PacketFact:
+    rng = random.Random(f"heavy-packet-{letter}")
+    value, lookalike = _code(rng, "AW")
+    subject = f"the {rng.choice(_FIRST)} {rng.choice(_SECOND)} {rng.choice(_FACILITIES)}"
+    return PacketFact(letter=letter, subject=subject, value=value, lookalike=lookalike)
+
+
+def heavy_packet(letter: str) -> bytes:
+    """One packet, padded to its target size with uncompressed noise, so its bytes are what the case needs."""
+    _, target, pages = next(p for p in HEAVY_PACKETS if p[0] == letter)
+    fact = heavy_packet_fact(letter)
+    rng = random.Random(f"heavy-packet-body-{letter}")
+    fact_page = pages // 2
+
+    def build(image_bytes: int) -> bytes:
+        side_w = 600
+        rows = max(1, image_bytes // (side_w * 3))
+        out: List[pdf.Page] = []
+        for n in range(pages):
+            page = pdf.Page()
+            page.text(72, 740, f"Award packet {letter.upper()}, page {n + 1} of {pages}", size=14, bold=True)
+            y = 712.0
+            lines = pdf.wrap(_filler_paragraph(rng), 10, 468)
+            if n == fact_page:
+                lines = pdf.wrap(
+                    f"For the record, the current award number for {fact.subject} is {fact.value}. "
+                    f"The prior-cycle award number for {fact.subject} is {fact.lookalike}, kept for audit only.",
+                    10, 468,
+                ) + lines
+            for line in lines[:8]:
+                page.text(72, y, line, size=10)
+                y -= 13
+            noise = random.Random(f"heavy-packet-noise-{letter}-{n}").randbytes(side_w * rows * 3)
+            page.image(pdf.Image(side_w, rows, noise), 72, 100, 468, 468 * rows / side_w if rows < side_w else 468)
+            out.append(page)
+        return pdf.build(out)
+
+    # The text and structure cost a few KB; size the noise to land on the target.
+    overhead = len(build(0))
+    per_page = max(0, (target - overhead) // pages)
+    return build(per_page)
+
+
 GENERATED: Dict[str, Callable[[], bytes]] = {
     **{name: _prose_builder(name) for name in _PROSE},
     **{name: _table_builder(name) for name in _TABLES},
     "delivery_permit_card.png": permit_card,
     **{name: (lambda n=name: as_pdf(whole(n)[0])) for name in _WHOLE},
+    **{name: (lambda n=name: as_pdf(policy(n)[0])) for name in _POLICIES},
+    **{heavy_packet_name(letter): (lambda x=letter: heavy_packet(x)) for letter, _, _ in HEAVY_PACKETS},
 }
 
 
@@ -574,4 +779,6 @@ def estimated_tokens(filename: str) -> int:
         return 1_500
     if filename in _WHOLE:
         return len(whole(filename)[0].text) // CHARS_PER_TOKEN
+    if filename in _POLICIES:
+        return len(policy(filename)[0].text) // CHARS_PER_TOKEN
     return 0

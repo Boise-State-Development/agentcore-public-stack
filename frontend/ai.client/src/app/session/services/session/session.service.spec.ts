@@ -174,6 +174,14 @@ describe('SessionService', () => {
       expect(service.isNewSession('other')).toBe(false);
     });
 
+    it('carries the binding a caller already knows, so a project row groups at once (#2021)', () => {
+      service.addSessionToCache('v1', 'user-1', '', { assistantId: 'ast-h', projectId: 'prj_1' });
+      service.addSessionToCache('v2', 'user-1');
+      const [v2, v1] = service.mergedSessionsResource().sessions;
+      expect(v1.preferences).toEqual({ assistantId: 'ast-h', projectId: 'prj_1' });
+      expect(v2.preferences).toBeUndefined();
+    });
+
     it('should update title in cache', () => {
       service.addSessionToCache('s1', 'u1', 'Old');
       service.updateSessionTitleInCache('s1', 'New');

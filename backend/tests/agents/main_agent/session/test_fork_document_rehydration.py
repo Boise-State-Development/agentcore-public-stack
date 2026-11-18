@@ -205,9 +205,9 @@ class TestDocumentReadSeesTheRoot:
     async def test_gate_asks_the_ancestors_only_when_the_fork_has_none(self, monkeypatch, clear_memo):
         from apis.inference_api.chat.routes import _build_document_tools
 
-        lookup = AsyncMock(side_effect=lambda user, sid: sid == "root")
-        monkeypatch.setattr("apis.shared.files.document_read.session_has_documents", lookup)
-        tools = await _build_document_tools("fork", "u1", ancestor_session_ids=("parent", "root"))
+        lookup = AsyncMock(side_effect=lambda user, sid: "documents" if sid == "root" else "")
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
+        tools, _kind = await _build_document_tools("fork", "u1", ancestor_session_ids=("parent", "root"))
         assert [t.tool_name for t in tools] == ["document_read"]
         assert [c.args for c in lookup.await_args_list] == [("u1", "fork"), ("u1", "parent"), ("u1", "root")]
 
@@ -215,8 +215,8 @@ class TestDocumentReadSeesTheRoot:
     async def test_gate_stops_at_the_forks_own_document(self, monkeypatch, clear_memo):
         from apis.inference_api.chat.routes import _build_document_tools
 
-        lookup = AsyncMock(return_value=True)
-        monkeypatch.setattr("apis.shared.files.document_read.session_has_documents", lookup)
+        lookup = AsyncMock(return_value="documents")
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
         await _build_document_tools("fork", "u1", ancestor_session_ids=("root",))
         lookup.assert_awaited_once_with("u1", "fork")
 

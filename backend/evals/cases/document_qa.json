@@ -165,18 +165,14 @@
       "enabled_skills": []
     },
     "expect": {
-      "contains_any": [
-        "26.5%",
+      "first_number": [
         "26.5"
-      ],
-      "forbidden": [
-        "24%"
       ]
     },
     "files": [
       "grant_budget_memo.md"
     ],
-    "notes": "The superseded 24% rate is mentioned once as no longer applying.",
+    "notes": "The superseded 24% rate is mentioned once as no longer applying: an answer that leads with 26.5% and then says 24% no longer applies is right, one that leads with 24% is not (spec D34).",
     "judge": {
       "evaluators": [
         "grounded"
@@ -313,17 +309,14 @@
       "enabled_skills": []
     },
     "expect": {
-      "contains_any": [
+      "first_number": [
         "47.50"
-      ],
-      "forbidden": [
-        "63.20"
       ]
     },
     "large_documents": [
       "manual"
     ],
-    "notes": "300-page text PDF, literal wording (page 88), so a pattern search finds it. 63.20 is the interstate allowance (page 119). Question text-perdiem."
+    "notes": "300-page text PDF, literal wording (page 88), so a pattern search finds it. 63.20 is the interstate allowance (page 119): an answer that leads with $47.50 and then names the interstate rate is right, one that leads with $63.20 is not (spec D34). A page number cited before the amount would read as the answer; none of the stored answers do that. Question text-perdiem."
   },
   {
     "id": "document_qa.large_scanned_abutment_cost",
@@ -439,17 +432,14 @@
       "enabled_skills": []
     },
     "expect": {
-      "contains_any": [
+      "first_number": [
         "17"
-      ],
-      "forbidden": [
-        "40"
       ]
     },
     "large_documents": [
       "handbook"
     ],
-    "notes": "15 MB Word handbook (mostly one embedded image), paraphrase. 40 is the visiting-scholars limit planted elsewhere. Question docx-borrow."
+    "notes": "15 MB Word handbook (mostly one embedded image), paraphrase. 40 is the visiting-scholars limit planted elsewhere: an answer that leads with 17 and then names 40 for visiting scholars is right, one that leads with 40 is not, so this checks the first number rather than forbidding 40. 'Just the number' is not scored. Question docx-borrow."
   },
   {
     "id": "document_qa.large_handbook_fines_age",

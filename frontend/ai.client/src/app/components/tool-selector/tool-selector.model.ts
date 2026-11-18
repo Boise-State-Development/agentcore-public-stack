@@ -43,6 +43,12 @@ export interface ToolSelectorItem {
    * pinned skill. The selector only reports the click (`itemAction`); the parent runs it.
    */
   action?: ToolSelectorAction;
+  /**
+   * A button that opens the row's content to read, such as "View" on a skill. Reported
+   * through `itemDetail`; the parent opens whatever it shows. Works on a locked row too,
+   * since reading something is not changing it.
+   */
+  detail?: ToolSelectorAction;
 }
 
 export interface ToolSelectorAction {

@@ -172,7 +172,21 @@ def test_the_deck_goes_to_the_deck_tools_and_the_pdf_ladder_crosses_100_pages():
 
 def test_every_fixture_stays_an_inline_class_file():
     # The auto arm measures today's routing by type and tokens, not the 4 MB reference rule.
-    assert all(len(b.build(n)) <= INLINE_DOCUMENT_MAX_BYTES for n in d.GENERATED)
+    # Heavy packet A is the exception on purpose: the field case had one PDF over the per-file limit.
+    over = {d.heavy_packet_name("a")}
+    assert all(len(b.build(n)) <= INLINE_DOCUMENT_MAX_BYTES for n in d.GENERATED if n not in over)
+
+
+def test_the_heavy_packets_are_the_field_case():
+    """Over the old 7 MB together, under 16 MiB, one over the per-file limit (§4.4.1)."""
+    sizes = {letter: len(b.build(d.heavy_packet_name(letter))) for letter, _, _ in d.HEAVY_PACKETS}
+    assert sizes["a"] > INLINE_DOCUMENT_MAX_BYTES
+    under = [sizes[x] for x in "bcde"]
+    assert all(s <= INLINE_DOCUMENT_MAX_BYTES for s in under)
+    assert sizes["b"] + sizes["c"] + sizes["d"] > 7_000_000, "the old budget must leave packet D out"
+    assert sum(under) < 16 * 1024 * 1024
+    for letter, target, _ in d.HEAVY_PACKETS:
+        assert 0.97 * target <= sizes[letter] <= target, (letter, sizes[letter])
 
 
 def test_case_answers_are_the_planted_values():
@@ -247,3 +261,66 @@ def test_whole_document_scoring_passes_a_right_answer_and_fails_the_decoy_and_th
     names = [s for s, _ in facts.incidents]
     assert passed("summarise", "\n".join(f"- {s}: something happened" for s in names))
     assert not passed("summarise", "\n".join(f"- {s}: something happened" for s in names[:3]))
+
+
+# --------------------------------------------------------------------------- comparison cells (1M budget readout)
+
+
+def _plan_policy_set(set_name: str, budget: int, model_id: str):
+    from apis.shared.files import attachment_plan as ap
+    from apis.shared.files.file_facts import compute_document_facts
+
+    files = []
+    for name in d.policy_files(set_name):
+        data = b.build(name)
+        facts = compute_document_facts("pdf", data)
+        files.append(ap.FileFacts(
+            filename=name, mime_type="application/pdf", size_bytes=len(data), upload_id=name, has_row=True,
+            page_count=facts.get("pages"), text_tokens=facts["tokens"]["text"],
+            native_tokens=facts["tokens"].get("native"), has_text_layer=True,
+        ))
+    model = ap.ModelFacts(model_id=model_id, context_window=1_000_000, chat_ceiling=2 * budget)
+    profile = ap.token_profile()
+    plan = ap.refine_for_model(ap.plan_attachments(files, None, profile=profile), files, model, profile=profile)
+    return [e.mode for e in plan.entries]
+
+
+@pytest.mark.parametrize("model_id", ["us.anthropic.claude-opus-5-5", "us.anthropic.claude-sonnet-5-5"])
+@pytest.mark.parametrize("set_name", sorted(d.POLICY_SETS))
+def test_budget_split_is_the_planner_s_own_at_each_budget(set_name, model_id):
+    for label, held in delivery_cases.BUDGET_HELD[set_name].items():
+        budget = int(label.removesuffix("k")) * 1000
+        modes = _plan_policy_set(set_name, budget, model_id)
+        assert modes == ["native"] * held + ["on_demand"] * (len(modes) - held), (set_name, label)
+
+
+@pytest.mark.parametrize("set_name", sorted(d.POLICY_SETS))
+def test_each_policy_plants_both_figures_and_their_lookalikes_once(set_name):
+    from apis.shared.files.document_read import _open_pdf, _pdf_page_text
+
+    every = [d.policy(n)[1] for n in d.policy_files(set_name)]
+    for name in d.policy_files(set_name):
+        pdf = _open_pdf(b.build(name))
+        text = " ".join(" ".join(_pdf_page_text(pdf, i) for i in range(len(pdf))).split())
+        pdf.close()
+        facts = d.policy(name)[1]
+        assert text.count(f"at {facts.response_hours} hours from first report") == 1
+        assert text.count(f"target of {facts.response_lookalike} hours") == 1
+        assert text.count(f"retention period of {facts.retention_years} years.") == 1
+        assert text.count(f"period of {facts.retention_lookalike} years was") == 1
+    # A lookalike is no document's real figure, and lies past the real extreme.
+    hours = {f.response_hours for f in every}
+    years = {f.retention_years for f in every}
+    assert not hours & {f.response_lookalike for f in every}
+    assert not years & {f.retention_lookalike for f in every}
+
+
+def test_comparison_scoring_needs_every_district_and_the_extreme():
+    case = next(c for c in delivery_cases.cases() if c["id"].endswith("compare_5_policies_auto_warm"))
+    facts = [d.policy(n)[1] for n in d.policy_files("5")]
+    longest = max(facts, key=lambda f: f.retention_years)
+    right = "\n".join(f"- {f.district}: {f.retention_years} years" for f in facts) + f"\nLongest: {longest.district}"
+    patterns = case["expect"]["regex"]["search"]
+    assert all(re.search(p, right) for p in patterns)
+    missing_one = "\n".join(f"- {f.district}: {f.retention_years} years" for f in facts[:-1])
+    assert not all(re.search(p, missing_one + f"\nLongest: {facts[0].district}") for p in patterns)

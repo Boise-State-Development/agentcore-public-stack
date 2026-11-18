@@ -450,6 +450,12 @@ export class InferenceAgentCoreConstruct extends Construct {
         ...(config.webSearchDefaultMaxResults.enabled
           ? { WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED: 'true' }
           : {}),
+        // Concurrent tool execution: read-only calls in a tool batch overlap,
+        // everything else stays serialized. Written only while ON, so the
+        // default costs nothing against the V2 payload budget.
+        ...(config.concurrentToolExecution.enabled
+          ? { CONCURRENT_TOOL_EXECUTION_ENABLED: 'true' }
+          : {}),
         // Word skill scripts: create/modify_word_document can run a bound
         // skill's scripts/*.py in Code Interpreter. Written only while ON, so
         // the default costs nothing against the V2 payload budget.
@@ -470,13 +476,14 @@ export class InferenceAgentCoreConstruct extends Construct {
         // context card from its prompt cache. Meaningless without handoffs, so
         // written only while both are ON; the default costs nothing.
         ...(config.handoffs.enabled && config.handoffs.briefEnabled ? { HANDOFF_BRIEF_ENABLED: 'true' } : {}),
-        // Conversation rewind (in development): the Runtime filters rewound
-        // messages at restore and cuts a warm agent's list in place. Written
-        // only while ON, so the default costs nothing against the V2 payload budget.
-        ...(config.sessionRewind.enabled ? { SESSION_REWIND_ENABLED: 'true' } : {}),
-        // Conversation fork (in development): a fork's first turn starts from
-        // its parent's live history. Written only while ON (V2 payload budget).
-        ...(config.sessionFork.enabled ? { SESSION_FORK_ENABLED: 'true' } : {}),
+        // Conversation rewind (default on): the Runtime filters rewound
+        // messages at restore and cuts a warm agent's list in place. Spread in
+        // only while OFF: the code reads unset as on, so the default costs
+        // nothing against the V2 payload budget. Must match app-api's copy.
+        ...(config.sessionRewind.enabled ? {} : { SESSION_REWIND_ENABLED: 'false' }),
+        // Conversation fork (default on): a fork's first turn starts from its
+        // parent's live history. Spread in only while OFF (V2 payload budget).
+        ...(config.sessionFork.enabled ? {} : { SESSION_FORK_ENABLED: 'false' }),
         // Typed structured extraction: the Runtime mounts `document_extract`,
         // makes the constrained side-channel call, verifies each value through
         // source_provenance and emits `document_extraction`. Written only while

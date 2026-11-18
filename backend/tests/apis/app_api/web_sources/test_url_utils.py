@@ -14,9 +14,10 @@ from apis.app_api.web_sources.url_utils import (
     InvalidUrlError,
     absolute_url,
     assert_url_is_public,
+    crawl_scope_prefix,
     host_of,
+    in_crawl_scope,
     normalize_url,
-    same_registrable_domain,
     url_extension_hint,
 )
 
@@ -54,24 +55,59 @@ class TestNormalizeUrl:
             normalize_url("https:///path")
 
 
-class TestSameRegistrableDomain:
-    def test_identical_hosts(self):
-        assert same_registrable_domain(
-            "https://example.com/a", "https://example.com/b"
-        )
+class TestCrawlScope:
+    @pytest.mark.parametrize(
+        "root,prefix",
+        [
+            ("https://example.com/", "/"),
+            ("https://example.com/research/", "/research/"),
+            ("https://example.com/research", "/research/"),
+            ("https://example.com/research/index.html", "/research/"),
+            ("https://example.com/a/b/", "/a/b/"),
+        ],
+    )
+    def test_prefix_is_the_roots_section(self, root: str, prefix: str):
+        assert crawl_scope_prefix(root) == prefix
 
-    def test_subdomain_matches_apex(self):
-        assert same_registrable_domain(
-            "https://docs.example.com/a", "https://example.com/b"
-        )
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://example.com/research/",
+            "https://example.com/research",
+            "https://example.com/research/labs/a",
+            "https://www.example.com/research/labs/a",
+            "http://example.com/research/b",
+        ],
+    )
+    def test_pages_in_the_section_are_in_scope(self, url: str):
+        assert in_crawl_scope(url, "https://example.com/research")
 
-    def test_different_apex(self):
-        assert not same_registrable_domain(
-            "https://example.com/a", "https://other.com/b"
-        )
+    @pytest.mark.parametrize(
+        "url",
+        [
+            # The reported case: the site nav links back to the home page.
+            "https://example.com/",
+            "https://example.com/admissions/",
+            "https://example.com/research-news/x",
+            "https://docs.example.com/research/a",
+            "https://other.com/research/a",
+            "not-a-url",
+        ],
+    )
+    def test_pages_outside_the_section_are_out_of_scope(self, url: str):
+        assert not in_crawl_scope(url, "https://example.com/research/")
 
-    def test_handles_unparseable(self):
-        assert not same_registrable_domain("not-a-url", "https://example.com")
+    def test_a_home_page_root_covers_its_host(self):
+        root = "https://www.example.com/"
+        assert in_crawl_scope("https://example.com/admissions/", root)
+        assert not in_crawl_scope("https://docs.example.com/a", root)
+
+    def test_root_reached_through_www_redirect_keeps_its_children(self):
+        # Pages are stored under the host the crawler fetched them from, so a
+        # root typed without www. must still own the site's absolute www. links.
+        assert in_crawl_scope(
+            "https://www.example.com/research/a", "https://example.com/research/"
+        )
 
 
 class TestSsrfGuard:
@@ -151,3 +187,94 @@ class TestHostOf:
 
     def test_handles_unparseable(self):
         assert host_of("not a url") is None
+
+
+class TestIsBlockedAddress:
+    @pytest.mark.parametrize(
+        "address",
+        [
+            "169.254.169.254",  # EC2 instance metadata
+            "169.254.170.2",  # ECS task metadata / credentials
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.0.1",
+            "127.0.0.1",
+            "100.64.0.1",  # carrier-grade NAT
+            "0.0.0.0",
+            "224.0.0.1",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "::ffff:169.254.169.254",  # IPv4-mapped
+            "64:ff9b::a9fe:a9fe",  # NAT64 of 169.254.169.254
+        ],
+    )
+    def test_blocks_non_public(self, address: str):
+        import ipaddress
+
+        from apis.app_api.web_sources.url_utils import is_blocked_address
+
+        assert is_blocked_address(ipaddress.ip_address(address))
+
+    @pytest.mark.parametrize("address", ["8.8.8.8", "93.184.215.14", "2606:4700:4700::1111", "64:ff9b::808:808"])
+    def test_allows_public(self, address: str):
+        import ipaddress
+
+        from apis.app_api.web_sources.url_utils import is_blocked_address
+
+        assert not is_blocked_address(ipaddress.ip_address(address))
+
+
+class TestResolvePublicAddresses:
+    @pytest.fixture
+    def resolver(self, monkeypatch: pytest.MonkeyPatch):
+        from apis.app_api.web_sources import url_utils
+
+        answers: dict = {}
+
+        async def fake_getaddrinfo(host: str, port: int):
+            if host not in answers:
+                import socket
+
+                raise socket.gaierror("no such host")
+            return [(2, 1, 6, "", (a, port)) for a in answers[host]]
+
+        monkeypatch.setattr(url_utils, "_getaddrinfo", fake_getaddrinfo)
+        return answers
+
+    @pytest.mark.asyncio
+    async def test_returns_public_addresses(self, resolver):
+        from apis.app_api.web_sources.url_utils import resolve_public_addresses
+
+        resolver["example.com"] = ["93.184.215.14", "93.184.215.14"]
+        assert [str(a) for a in await resolve_public_addresses("example.com", 443)] == ["93.184.215.14"]
+
+    @pytest.mark.asyncio
+    async def test_refuses_a_hostname_resolving_privately(self, resolver):
+        from apis.app_api.web_sources.url_utils import BlockedAddressError, resolve_public_addresses
+
+        resolver["intranet.example.com"] = ["10.0.0.7"]
+        with pytest.raises(BlockedAddressError):
+            await resolve_public_addresses("intranet.example.com", 443)
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_host_is_invalid_not_blocked(self, resolver):
+        from apis.app_api.web_sources.url_utils import BlockedAddressError, resolve_public_addresses
+
+        with pytest.raises(InvalidUrlError) as excinfo:
+            await resolve_public_addresses("nowhere.invalid", 443)
+        assert not isinstance(excinfo.value, BlockedAddressError)
+
+    @pytest.mark.asyncio
+    async def test_ip_literals_skip_dns(self, resolver):
+        from apis.app_api.web_sources.url_utils import BlockedAddressError, resolve_public_addresses
+
+        assert [str(a) for a in await resolve_public_addresses("8.8.8.8", 80)] == ["8.8.8.8"]
+        with pytest.raises(BlockedAddressError):
+            await resolve_public_addresses("::1", 80)
+
+    def test_assert_url_is_public_raises_blocked_for_literals(self):
+        from apis.app_api.web_sources.url_utils import BlockedAddressError
+
+        with pytest.raises(BlockedAddressError):
+            assert_url_is_public("http://169.254.170.2/v2/credentials", resolve=False)

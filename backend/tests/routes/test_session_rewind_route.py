@@ -159,7 +159,7 @@ class TestGetMessagesHidesRewoundTurns:
     @pytest.mark.asyncio
     async def test_flag_off_shows_everything_and_sends_no_index(self, monkeypatch):
         monkeypatch.setenv("AGENTCORE_MEMORY_ID", "test-memory")
-        monkeypatch.delenv("SESSION_REWIND_ENABLED", raising=False)
+        monkeypatch.setenv("SESSION_REWIND_ENABLED", "false")
         memory = MagicMock()
         memory.list_messages.return_value = [MagicMock(message=m) for m in _conversation(2)]
 
@@ -184,7 +184,7 @@ class TestRoute:
         from apis.app_api.sessions.routes import router
         from apis.shared.auth.dependencies import get_current_user_from_session
 
-        monkeypatch.delenv("SESSION_REWIND_ENABLED", raising=False)
+        monkeypatch.setenv("SESSION_REWIND_ENABLED", "false")
         app = FastAPI()
         app.include_router(router)
         app.dependency_overrides[get_current_user_from_session] = lambda: MagicMock(user_id=USER)

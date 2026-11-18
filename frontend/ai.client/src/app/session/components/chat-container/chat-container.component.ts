@@ -108,6 +108,9 @@ export class ChatContainerComponent {
   // Child component reference for scroll functionality
   private messageListComponent = viewChild(MessageListComponent);
 
+  /** The composer on screen. Every layout renders at most one. */
+  private chatInput = viewChild(ChatInputComponent);
+
   private readonly chatState = inject(ChatStateService);
   private readonly modelService = inject(ModelService);
   private readonly projectsService = inject(ProjectsService);
@@ -260,19 +263,33 @@ export class ChatContainerComponent {
   );
 
   /**
+   * Whether the Shared Project this conversation runs in can use voice mode (#2021):
+   * `available` from `GET /projects/{id}/voice`, read by the session page. Null
+   * until it is known, which keeps the voice button hidden.
+   */
+  projectVoiceAvailable = input<boolean | null>(null);
+
+  /**
    * Voice mode (#625): offered on a plain chat, and on an Agent's chat only once the
    * Agent has loaded and its author turned voice on. Hidden while the Agent named in
    * the URL is still loading (or failed to load), so voice can never start without
-   * it. Not offered in a Shared Project, whose harness has no voice setting. The
-   * backend enforces the same rules; this hides a button that could only fail.
+   * it. In a Shared Project (#2021) the project's voice status decides, again only
+   * once its harness has loaded, so voice never starts as a plain chat. The backend
+   * enforces the same rules; this hides a button that could only fail.
    */
   protected readonly showVoiceControl = computed<boolean>(() => {
     if (!this.resolvedConfig().showVoiceControl) return false;
-    if (this.project()) return false;
+    const assistant = this.voiceAssistant();
+    if (this.project() || assistant?.kind === 'project') {
+      const project = this.project();
+      const sameProject = !project || assistant?.projectId === project.projectId;
+      return (
+        this.projectVoiceAvailable() === true && assistant?.kind === 'project' && sameProject && !!this.voiceAgentId()
+      );
+    }
     const unbound = !this.hasUrlBinding() && !this.boundAgentId() && !this.assistant();
     if (unbound) return true;
-    const assistant = this.voiceAssistant();
-    if (!assistant || assistant.kind === 'project') return false;
+    if (!assistant) return false;
     // The Agent record only counts when it is the same Agent (it can lag on a switch too).
     const agent = this.agent();
     const fromAgent = agent?.agentId === assistant.assistantId ? agent.voiceEnabled : undefined;
@@ -478,9 +495,22 @@ export class ChatContainerComponent {
     this.assistantClosed.emit();
   }
 
+  /**
+   * Send a starter prompt as the message, through the composer.
+   *
+   * Through the composer, not around it: the files and `@`-mention on the
+   * composer belong to the message the user sends next, and this is it. Sent
+   * past the composer, they were left behind and stayed in its new-conversation
+   * draft, so the next new conversation opened with them already attached
+   * (and with this conversation's id to file uploads under).
+   */
   onStarterSelected(starter: string) {
     this.starterSelected.emit(starter);
-    // Submit the starter as a message
+    const composer = this.chatInput();
+    if (composer) {
+      composer.submitText(starter);
+      return;
+    }
     this.onMessageSubmitted({ content: starter, timestamp: new Date() });
   }
 

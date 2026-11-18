@@ -116,6 +116,7 @@ export interface AppConfig {
   documentExtract: DocumentExtractConfig;
   fieldSetAuthoring: FieldSetAuthoringConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
+  concurrentToolExecution: ConcurrentToolExecutionConfig;
   wordSkillScripts: WordSkillScriptsConfig;
   converseDocumentsAsText: ConverseDocumentsAsTextConfig;
   projectFileReadiness: ProjectFileReadinessConfig;
@@ -550,12 +551,12 @@ export interface HandoffsConfig {
 }
 
 /**
- * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4). **Opt-in
- * while the feature is in development**: off unless CDK_SESSION_REWIND_ENABLED=true
- * (or a `sessionRewind.enabled: true` cdk.json context). Sets SESSION_REWIND_ENABLED
+ * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4). **Default ON
+ * with a kill switch** (a feature switch): on unless CDK_SESSION_REWIND_ENABLED=false
+ * (or a `sessionRewind.enabled: false` cdk.json context). Sets SESSION_REWIND_ENABLED
  * on **app-api**, which serves `POST /sessions/{id}/rewind` and filters rewound
  * messages out of `GET /messages`, and on the **AgentCore Runtime** (only while
- * on, so the default spends none of the V2 environment budget), which filters
+ * off, so the default spends none of the V2 environment budget), which filters
  * them at restore and cuts a warm agent's history in place. No new resources: the
  * state is one attribute on the existing session metadata row.
  */
@@ -564,12 +565,12 @@ export interface SessionRewindConfig {
 }
 
 /**
- * Conversation fork (docs/specs/conversation-rewind-and-fork.md §7). **Opt-in
- * while the feature is in development**: off unless CDK_SESSION_FORK_ENABLED=true
- * (or a `sessionFork.enabled: true` cdk.json context). Sets SESSION_FORK_ENABLED
+ * Conversation fork (docs/specs/conversation-rewind-and-fork.md §7). **Default ON
+ * with a kill switch** (a feature switch): on unless CDK_SESSION_FORK_ENABLED=false
+ * (or a `sessionFork.enabled: false` cdk.json context). Sets SESSION_FORK_ENABLED
  * on **app-api**, which serves `POST /sessions/{id}/fork` and lets a fork's turns
  * pin to their root conversation's microVM, and on the **AgentCore Runtime**
- * (only while on), which starts a fork's first turn from its parent's live
+ * (only while off), which starts a fork's first turn from its parent's live
  * history so the shared prefix reads from the prompt cache. No new resources.
  */
 export interface SessionForkConfig {
@@ -982,6 +983,24 @@ export interface McpElicitationConfig {
  * resources and no IAM: both roles already hold UpdateItem on the table.
  */
 export interface ReleaseLedgerConfig {
+  enabled: boolean;
+}
+
+/**
+ * Concurrent tool execution (backend/src/agents/main_agent/core/tool_concurrency.py).
+ * On, the chat agent runs a model's tool batch with Strands'
+ * ConcurrentToolExecutor: calls to tools known to be read-only overlap, and
+ * every other call stays serialized behind one lock per agent, so a batch of
+ * independent reads takes about the longest call instead of the sum. Nothing
+ * reaches the prompt or toolConfig, and results reach history in the order the
+ * model asked for them. **Opt-in while in development**: off unless
+ * CDK_CONCURRENT_TOOL_EXECUTION_ENABLED=true (or a
+ * `concurrentToolExecution.enabled: true` cdk.json context). A rollout switch
+ * once promoted. Sets CONCURRENT_TOOL_EXECUTION_ENABLED on the AgentCore
+ * Runtime only, and **only while on**, so the default spends none of the V2
+ * payload budget. No resources.
+ */
+export interface ConcurrentToolExecutionConfig {
   enabled: boolean;
 }
 
@@ -1880,16 +1899,16 @@ export function loadConfig(scope: cdk.App): AppConfig {
         : scope.node.tryGetContext('handoffs')?.briefEnabled ?? false,
     },
     sessionRewind: {
-      // Opt-in while in development, same parsing as sessionPrewarm above.
+      // Default ON with a kill switch, same parsing as projects above.
       enabled: process.env.CDK_SESSION_REWIND_ENABLED
-        ? process.env.CDK_SESSION_REWIND_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('sessionRewind')?.enabled ?? false,
+        ? process.env.CDK_SESSION_REWIND_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('sessionRewind')?.enabled ?? true,
     },
     sessionFork: {
-      // Opt-in while in development, same parsing as sessionPrewarm above.
+      // Default ON with a kill switch, same parsing as projects above.
       enabled: process.env.CDK_SESSION_FORK_ENABLED
-        ? process.env.CDK_SESSION_FORK_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('sessionFork')?.enabled ?? false,
+        ? process.env.CDK_SESSION_FORK_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('sessionFork')?.enabled ?? true,
     },
     quotaRequests: {
       // Opt-in while in development, same parsing as sessionPrewarm above.
@@ -2051,6 +2070,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED
         ? process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('webSearchDefaultMaxResults')?.enabled ?? false,
+    },
+    concurrentToolExecution: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED
+        ? process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('concurrentToolExecution')?.enabled ?? false,
     },
     wordSkillScripts: {
       // In development: only "true" enables, and an unset GitHub variable

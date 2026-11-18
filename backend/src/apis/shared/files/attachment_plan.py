@@ -51,10 +51,13 @@ per-model ``document_budget`` of half the chat ceiling (§5.2), applied by
 Each file is costed in the turn model's own tokens (:func:`document_cost`):
 the row's ``tokens.text`` times the model's tokenizer factor, plus
 ``PDF_PAGE_IMAGE_TOKENS`` a page for a native PDF (measured, §2.1). The budget
-is spent per turn, in attachment order. The byte rules that protect the
-AgentCore Memory event (the per-message count, the combined inline bytes) are
-unchanged until phase 4. :func:`current_limits_profile` selects it with
-``ATTACHMENT_PLAN_ENABLED``.
+is spent per turn, in attachment order. Its byte budget is the request's
+(``request_attachment_max_bytes``), less the native bytes a warm history
+re-sends (``ConversationFacts.held_native_bytes``). Phase 4's handles took the
+bytes out of the persisted message, so the legacy 7 MB combined budget now
+holds only images with no upload row (``persisted_inline_max_bytes``), whose
+bytes Memory still keeps (§4.4.1). :func:`current_limits_profile` selects it
+with ``ATTACHMENT_PLAN_ENABLED``.
 
 **One place decides (§9.1 rule 3).** ``tests/architecture/test_attachment_plan_boundary.py``
 fails if a turn-path module outside this one reads a limit constant or a class
@@ -280,8 +283,6 @@ class LimitsProfile:
     inline_document_max_bytes: int
     #: The combined inline budget for one message; ``<= 0`` disables.
     inline_total_max_bytes: int
-    #: ``ATTACHMENT_TURN_GUARD_ENABLED``: the count cap and the combined budget apply.
-    turn_guard: bool = True
     #: ``INLINE_BUDGET_BY_REFERENCE_ENABLED``: an uploaded document over the
     #: combined budget goes ``on_demand`` rather than being dropped.
     over_budget_by_reference: bool = True
@@ -290,8 +291,6 @@ class LimitsProfile:
     documents_as_text: bool = False
     #: Characters of extracted text per turn for a TEXT-only model.
     text_only_max_chars: int = 60_000
-    #: How many ids the resolver fetches when the guard is off (its old backstop).
-    resolver_backstop_without_guard: int = 5
     #: ``document_budget`` as a share of the model's chat ceiling. ``0`` is the
     #: ``legacy`` profile: no token budget, the byte rules only.
     document_budget_share: float = 0.0
@@ -308,8 +307,16 @@ class LimitsProfile:
     pdf_max_pages: Optional[int] = None
     #: Raw bytes of native attachments one request may carry: the probed 32 MB
     #: request payload (§2.1) is base64, so 24 MB raw, less headroom for the
-    #: history, system prompt and tools. ``0`` disables.
+    #: history, system prompt and tools. A warm agent's history re-sends the
+    #: native blocks earlier turns attached, so those bytes
+    #: (``ConversationFacts.held_native_bytes``) come out of it first. ``0`` disables.
     request_attachment_max_bytes: int = 0
+    #: Raw bytes of attachments one message may write to AgentCore Memory as
+    #: bytes, held under its 10 MB event quota. Under the ``token`` profile a
+    #: handle replaces every document and every image sent from a stored copy
+    #: (``attachment_handle``), so only an image with no upload row (a direct
+    #: base64 ``files`` attachment) still counts. ``0`` disables.
+    persisted_inline_max_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -373,6 +380,10 @@ class ConversationFacts:
     #: The conversation's earlier document attachments, from its file rows
     #: (phase 5): what :func:`plan_conversation` judges the on-demand set from.
     earlier: Tuple["FileFacts", ...] = ()
+    #: Raw bytes of the native document and image blocks the warm agent's
+    #: history will send again with this turn (``held_native_bytes``). ``0`` on
+    #: a cold turn, whose restore replaces every document with its digest.
+    held_native_bytes: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +431,10 @@ class AttachmentPlan:
     #: Decoded bytes of the inline candidates the combined budget judged, and
     #: whether it moved any out (the over-quota log and metric read these).
     requested_inline_bytes: int = 0
+    #: The byte budget this turn's inline set was held to (``0``: none applied),
+    #: and the warm history's native bytes it was reduced by.
+    byte_budget: int = 0
+    held_native_bytes: int = 0
     #: Per-document character share for a TEXT-only model (0 when none).
     text_char_limit: int = 0
     #: The conversation's on-demand set and whether the turn steers it to
@@ -458,6 +473,8 @@ class AttachmentPlan:
         }
         if self.dropped_over_count:
             row["droppedOverCount"] = int(self.dropped_over_count)
+        if self.held_native_bytes:
+            row["heldNativeBytes"] = int(self.held_native_bytes)
         if self.conversation is not None:
             row["conversation"] = self.conversation.to_row()
         return row
@@ -501,8 +518,6 @@ class CountCap:
     dropped_names: list = field(default_factory=list)
     #: Everything over the cap: direct files, ids and folders.
     dropped_total: int = 0
-    #: The resolver's own backstop: ``None`` once the cap has been applied here.
-    resolver_max_files: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +528,6 @@ class CountCap:
 def legacy_profile() -> LimitsProfile:
     """Today's byte rules, with the flags they read as inputs (§9.1 rule 1)."""
     from apis.shared.feature_flags import (
-        attachment_turn_guard_enabled,
         converse_documents_as_text_enabled,
         inline_budget_by_reference_enabled,
     )
@@ -523,7 +537,6 @@ def legacy_profile() -> LimitsProfile:
         max_files_per_message=MAX_FILES_PER_MESSAGE,
         inline_document_max_bytes=INLINE_DOCUMENT_MAX_BYTES,
         inline_total_max_bytes=INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
-        turn_guard=attachment_turn_guard_enabled(),
         over_budget_by_reference=inline_budget_by_reference_enabled(),
         documents_as_text=converse_documents_as_text_enabled(),
         text_only_max_chars=TEXT_ONLY_DOCUMENTS_MAX_CHARS,
@@ -531,12 +544,20 @@ def legacy_profile() -> LimitsProfile:
 
 
 def token_profile() -> LimitsProfile:
-    """The ``token`` profile (§4.3, §5.2): the legacy byte limits that protect the
-    persisted message, plus the per-model document budget, and text for every
-    renderable non-PDF document whatever ``CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`` says."""
+    """The ``token`` profile (§4.3, §5.2): the per-model document budget, and text
+    for every renderable non-PDF document whatever ``CONVERSE_DOCUMENTS_AS_TEXT_ENABLED``
+    says.
+
+    Its byte budget is the request's (``request_attachment_max_bytes``, less what
+    the warm history re-sends), not the legacy 7 MB combined budget: handles keep
+    documents and stored images out of the persisted message (§6.2), so the 7 MB
+    applies only to the bytes that still reach it (``persisted_inline_max_bytes``).
+    """
     return replace(
         legacy_profile(),
         name=PROFILE_TOKEN,
+        inline_total_max_bytes=0,
+        persisted_inline_max_bytes=INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
         documents_as_text=True,
         over_budget_by_reference=True,
         document_budget_share=DOCUMENT_BUDGET_CEILING_SHARE,
@@ -673,8 +694,12 @@ def client_limits(
     """
     profile = profile or current_limits_profile()
     uploads = uploads or upload_limits(profile)
-    count = profile.max_files_per_message if profile.turn_guard else profile.resolver_backstop_without_guard
-    budget = profile.inline_total_max_bytes if profile.turn_guard else 0
+    count = profile.max_files_per_message
+    # What one message's native attachments may total before the planner sends
+    # the rest on demand: the request budget under the ``token`` profile (the
+    # composer cannot know what a warm history holds, so it is the turn's best
+    # case), the combined 7 MB under ``legacy``.
+    budget = request_byte_budget(profile) or 0
     return {
         "profile": profile.name,
         "filesPerMessage": count if count > 0 else None,
@@ -821,21 +846,12 @@ def cap_message_attachments(
     Order is kept, so the first N attached are the N that survive. Ids past the
     budget are counted, not named: resolving them only to name the losers would
     fan out a read per id a client chose to send. ``folders_dropped`` is what the
-    folder limit of its own already removed; it is counted whatever the guard.
+    folder limit of its own already removed; it is always counted.
     """
     direct = list(direct_files)
     ids = list(upload_ids)
     folders = list(folder_ids)
     dropped_total = int(folders_dropped)
-    if not profile.turn_guard:
-        return CountCap(
-            direct_files=direct,
-            upload_ids=ids,
-            folder_ids=folders,
-            dropped_total=dropped_total,
-            resolver_max_files=profile.resolver_backstop_without_guard,
-        )
-
     cap = profile.max_files_per_message
     dropped_names: list = []
     if cap > 0:
@@ -854,7 +870,6 @@ def cap_message_attachments(
         folder_ids=folders,
         dropped_names=dropped_names,
         dropped_total=dropped_total,
-        resolver_max_files=None,
     )
 
 
@@ -873,7 +888,7 @@ def plan_attachments(
     with the model once it is resolved; the same facts give the same byte
     decisions, and the model rules refine the inline set.
     """
-    del held  # read by the token profile only
+    held_bytes = max(0, int(held.held_native_bytes)) if held is not None else 0
     classes = [file_class(f.filename, f.mime_type) for f in files]
     modes: List[Optional[str]] = [None] * len(files)
     reasons: List[Optional[str]] = [None] * len(files)
@@ -908,16 +923,19 @@ def plan_attachments(
         modes[i], reasons[i] = MODE_NATIVE, REASON_INLINE
         candidates.append(i)
 
-    # The combined budget: first-fit in attachment order. Images count — they
-    # are in the same persisted message. A forced file always stays.
+    # The byte budget: first-fit in attachment order. Images count: under
+    # ``legacy`` they are in the same persisted message, and under ``token`` in
+    # the same request. A forced file always stays.
     requested = sum(max(0, files[i].size_bytes) for i in candidates)
     variants: Dict[int, str] = {}
-    budget = _request_byte_budget(profile)
-    if profile.downscale_images and candidates and budget > 0:
+    budget = request_byte_budget(profile, held_bytes)
+    if profile.downscale_images and candidates and budget is not None:
         # The ``token`` profile: images first, since an image has no other
         # mode, then documents, which fall back to on_demand (§4.4.1).
-        _images_first_budget(files, classes, candidates, modes, reasons, variants, budget)
-    elif profile.turn_guard and candidates and profile.inline_total_max_bytes > 0:
+        _images_first_budget(
+            files, classes, candidates, modes, reasons, variants, budget, profile.persisted_inline_max_bytes
+        )
+    elif candidates and profile.inline_total_max_bytes > 0:
         running = 0
         for i in candidates:
             size = max(0, files[i].size_bytes)
@@ -947,6 +965,8 @@ def plan_attachments(
         entries=entries,
         dropped_over_count=int(dropped_over_count),
         requested_inline_bytes=requested,
+        byte_budget=budget or 0,
+        held_native_bytes=held_bytes if profile.request_attachment_max_bytes > 0 else 0,
     )
     if model is None:
         return plan
@@ -961,15 +981,17 @@ def _on_demand_mode(facts: FileFacts, profile: LimitsProfile) -> str:
     return MODE_ON_DEMAND
 
 
-def _request_byte_budget(profile: LimitsProfile) -> int:
-    """Raw bytes of native blocks one turn may carry: the smaller of the persisted
-    message's budget and the request's, ``0`` when neither applies."""
+def request_byte_budget(profile: LimitsProfile, held_native_bytes: int = 0) -> Optional[int]:
+    """Raw bytes of native blocks one turn may add: the smaller of the combined
+    budget and what the request has left once the warm history's native blocks
+    (``held_native_bytes``) are counted. ``None`` when neither applies; ``0``
+    when the history already holds the whole request budget."""
     caps = []
-    if profile.turn_guard and profile.inline_total_max_bytes > 0:
+    if profile.inline_total_max_bytes > 0:
         caps.append(profile.inline_total_max_bytes)
     if profile.request_attachment_max_bytes > 0:
-        caps.append(profile.request_attachment_max_bytes)
-    return min(caps) if caps else 0
+        caps.append(max(0, profile.request_attachment_max_bytes - max(0, int(held_native_bytes))))
+    return min(caps) if caps else None
 
 
 def _has_model_copy(facts: FileFacts) -> bool:
@@ -984,31 +1006,38 @@ def _images_first_budget(
     reasons: List[Optional[str]],
     variants: Dict[int, str],
     budget: int,
+    persisted_budget: int = 0,
 ) -> None:
     """The ``token`` profile's byte pass (§4.4.1).
 
     Images are placed first: every one at its ``high`` copy when they all fit,
     else every one at its ``compact`` copy (twenty compact copies are under
-    10 MB, so an uploaded image always fits). Then documents first-fit in
-    attachment order; one that does not fit goes ``on_demand`` when it has a
-    row to read it from, and is dropped only when it has nothing. A forced file
-    always stays.
+    10 MB, so an uploaded image fits unless a warm history already holds most
+    of the request). An image with no upload row keeps its bytes in the
+    persisted message (no stored copy to name), so those images also share
+    ``persisted_budget``. Then documents first-fit in attachment order; one
+    that does not fit goes ``on_demand`` when it has a row to read it from, and
+    is dropped only when it has nothing. A forced file always stays.
     """
     images = [i for i in candidates if classes[i] == CLASS_IMAGE]
     others = [i for i in candidates if classes[i] != CLASS_IMAGE]
     high_total = sum(max(0, files[i].size_bytes) for i in images)
     use_compact = high_total > budget
     running = 0
+    persisted = 0
     for i in images:
         facts = files[i]
         size = max(0, facts.size_bytes)
         variant = VARIANT_HIGH if _has_model_copy(facts) else None
         if use_compact and facts.compact_bytes is not None:
             size, variant = max(0, int(facts.compact_bytes)), VARIANT_COMPACT
-        if running + size > budget:
+        keeps_bytes = persisted_budget > 0 and not facts.has_row
+        if running + size > budget or (keeps_bytes and persisted + size > persisted_budget):
             modes[i], reasons[i] = MODE_DROPPED, REASON_OVER_BUDGET
             continue
         running += size
+        if keeps_bytes:
+            persisted += size
         if variant:
             variants[i] = variant
     for i in others:

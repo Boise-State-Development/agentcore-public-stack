@@ -1,4 +1,4 @@
-import { Component, inject, computed, signal } from '@angular/core';
+import { Component, inject, computed, signal, ChangeDetectionStrategy } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { filter } from 'rxjs/operators';
@@ -60,6 +60,7 @@ import { EditSidebarDialogComponent } from './components/edit-sidebar-dialog.com
     }),
   ],
   templateUrl: './sidenav.html',
+  changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './sidenav.css',
 })
 export class Sidenav {

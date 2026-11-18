@@ -3,6 +3,7 @@ import {
   ChangeDetectionStrategy,
   inject,
   input,
+  model,
   signal,
   computed,
   effect,
@@ -15,6 +16,11 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowDownTray,
   heroArrowPath,
+  heroArrowTopRightOnSquare,
+  heroDocumentText,
+  heroEllipsisVertical,
+  heroEye,
+  heroFolder,
   heroArrowUpTray,
   heroBookOpen,
   heroCheckCircle,
@@ -49,6 +55,9 @@ import { SpinnerComponent } from '../components/spinner/spinner.component';
 import {
   FileSourceBrowserDialogComponent,
   FileSourceBrowserDialogData,
+  FileSourceBrowserDialogResult,
+  FolderImportResult,
+  isFolderImportResult,
 } from '../assistants/components/file-source-browser-dialog.component';
 import {
   WebSourceDialogComponent,
@@ -63,7 +72,13 @@ import { WebSourceService } from '../assistants/services/web-source.service';
 import { SyncPolicyService } from '../assistants/services/sync-policy.service';
 import { FileSourceConnector } from '../assistants/models/file-source.model';
 import { CrawlJob } from '../assistants/models/web-source.model';
-import { SyncPolicy, SyncSourceType } from '../assistants/models/sync-policy.model';
+import {
+  folderConnectorId,
+  folderRunSummaryText,
+  SyncInterval,
+  SyncPolicy,
+  SyncSourceType,
+} from '../assistants/models/sync-policy.model';
 import {
   SyncPolicyControlComponent,
   SyncIntervalSelection,
@@ -83,6 +98,21 @@ import {
 import { parseIso } from '../utils/date';
 import { FEATURES } from '../services/features';
 import { KnowledgeModeLineComponent } from './knowledge-mode-line.component';
+import { SettingsCardComponent } from '../components/settings-card/settings-card.component';
+import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
+import { ConnectedPosition } from '@angular/cdk/overlay';
+import {
+  DocumentViewerDialogComponent,
+  DocumentViewerDialogData,
+} from './document-viewer-dialog.component';
+import {
+  DocumentSourceKind,
+  documentOpenAction,
+  documentSourceKind,
+} from './document-source';
+
+/** A folder kept in sync from an import checks weekly until its owner changes it, as Save as project does. */
+const FOLDER_SYNC_DEFAULT_INTERVAL: SyncInterval = 'weekly';
 
 /**
  * The reusable "Knowledge base" authoring section — device upload, web-crawl
@@ -105,11 +135,25 @@ import { KnowledgeModeLineComponent } from './knowledge-mode-line.component';
   // Block, so a parent's space-y gap (a margin on this element) takes effect.
   host: { class: 'block' },
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, SyncPolicyControlComponent, SpinnerComponent, KnowledgeModeLineComponent],
+  imports: [
+    NgIcon,
+    SyncPolicyControlComponent,
+    SpinnerComponent,
+    KnowledgeModeLineComponent,
+    SettingsCardComponent,
+    CdkMenuTrigger,
+    CdkMenu,
+    CdkMenuItem,
+  ],
   providers: [
     provideIcons({
       heroArrowDownTray,
       heroArrowPath,
+      heroArrowTopRightOnSquare,
+      heroDocumentText,
+      heroEllipsisVertical,
+      heroEye,
+      heroFolder,
       heroArrowUpTray,
       heroBookOpen,
       heroCheckCircle,
@@ -156,6 +200,8 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
    * parent implementation also patches its own form/state from the draft.
    */
   readonly createDraft = input.required<() => Promise<string>>();
+  /** Whether the card is unfolded. Two-way: `[(open)]`. */
+  readonly open = model(false);
 
   /**
    * The effective record id. Mirrors {@link entityId} (once non-null) and is
@@ -254,6 +300,13 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
   readonly isLoadingCrawls = signal<boolean>(false);
   /** Source refs (document/crawl ids) with a sync mutation in flight. */
   readonly syncBusySourceRefs = signal<Set<string>>(new Set());
+  /**
+   * Documents a folder import just made, by the folder policy scheduled with it.
+   * The policy's first run (due at once, spec §11.1) marks each copy with its
+   * `syncPolicyId`; until then this keeps the row from offering its own per-file
+   * schedule, which would split the folder across two kinds of policy.
+   */
+  private readonly pendingFolderCover = signal<ReadonlyMap<string, string>>(new Map());
 
   // ── Knowledge base upgrade (managed-kb-migration, Requirements 21 & 23) ──
   //
@@ -282,32 +335,19 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
    */
   readonly upgradePhase = computed(() => this.upgradeStatus()?.phase ?? 'none');
 
-  // ── Engine visibility (task 16.4, HANDOFF §6) ───────────────────────────
+  // ── Engine (task 16.4, HANDOFF §6) ──────────────────────────────────────
   //
-  // Two surfaces, one source: the server-derived engine on the upgrade status.
-  // The badge names the engine, and the per-document status vocabulary follows
-  // it — because a managed knowledge base no longer emits chunking/embedding
-  // (PR #900), so its documents must not be described with legacy words.
+  // The server-derived engine on the upgrade status. The per-document status
+  // vocabulary follows it, because a managed knowledge base no longer emits
+  // chunking/embedding (PR #900), so its documents must not be described with
+  // legacy words. The engine is not shown as a badge: managed is the default
+  // for every new knowledge base, so naming it told users nothing they act on.
 
   /** The engine serving this knowledge base; `classic` until a status is read. */
   readonly kbEngine = computed(() => this.upgradeStatus()?.engine ?? 'classic');
 
   /** True when this knowledge base is served by the managed backend. */
   readonly isManagedEngine = computed(() => this.kbEngine() === 'managed');
-
-  /** The `Managed`/`Classic` badge label. */
-  readonly engineBadgeLabel = computed(() => (this.isManagedEngine() ? 'Managed' : 'Classic'));
-
-  /**
-   * Whether to show the engine badge at all.
-   *
-   * Only for an existing knowledge base that actually has documents — a badge on
-   * an empty or not-yet-created section would label a store with nothing in it.
-   * Engine is not sensitive, so this is not permission-gated.
-   */
-  readonly showEngineBadge = computed(
-    () => this.mode() === 'edit' && this.uploadedDocuments().length > 0,
-  );
 
   // ── KB storage usage bar (byte-cap visibility, Requirement 12.11) ────────
   //
@@ -539,6 +579,14 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
 
   private readonly policiesBySourceRef = computed(
     () => new Map(this.syncPolicies().map((p) => [p.sourceRef, p])),
+  );
+
+  /** Drive folders this knowledge base is kept in step with (assistant-kb-sync spec §11). */
+  readonly folderPolicies = computed(() =>
+    this.syncPolicies().filter((p) => p.sourceType === 'drive_folder'),
+  );
+  private readonly folderPoliciesById = computed(
+    () => new Map(this.folderPolicies().map((p) => [p.policyId, p])),
   );
 
   /**
@@ -982,21 +1030,30 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
       return;
     }
 
-    const dialogRef = this.dialog.open<Document[] | undefined, FileSourceBrowserDialogData>(
+    const dialogRef = this.dialog.open<FileSourceBrowserDialogResult, FileSourceBrowserDialogData>(
       FileSourceBrowserDialogComponent,
       {
-        data: { target: recordId, connector },
+        data: { target: recordId, connector, allowFolderImport: true },
         hasBackdrop: false,
       },
     );
 
-    const imported = await firstValueFrom(dialogRef.closed);
-    if (imported && imported.length > 0) {
-      this.toast.success(
-        `Importing ${imported.length} file${imported.length === 1 ? '' : 's'}…`,
-      );
-      // loadDocuments() picks up the new 'uploading' records and starts polling
-      // them through to 'complete', exactly like a device upload.
+    const result = await firstValueFrom(dialogRef.closed);
+    const imported = isFolderImportResult(result) ? result.documents : Array.isArray(result) ? result : [];
+    if (isFolderImportResult(result)) {
+      this.announceFolderImport(result.folderImport);
+      if (result.folderImport.keepInSync) {
+        await this.keepFolderInSync(recordId, result);
+      }
+    } else if (imported.length > 0) {
+      this.toast.success(`Importing ${imported.length} file${imported.length === 1 ? '' : 's'}…`);
+    }
+    if (imported.length > 0) {
+      // The new rows go in at once, each with its own spinner, so the list grows
+      // by exactly what was added instead of waiting on a round-trip. The reload
+      // then starts polling them through to 'complete', like a device upload.
+      this.addDocuments(imported);
+      this.open.set(true);
       await this.loadDocuments();
     }
   }
@@ -1201,8 +1258,10 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
       return;
     }
 
-    this.isLoadingDocuments.set(true);
-
+    // No `isLoadingDocuments.set(true)` here. The skeleton is for the first load
+    // only, which the hydrate effect raises; a refresh after an upload or import
+    // swaps the rows in place. Raising it again turned the whole list into a
+    // skeleton on every import and back, and the card jumped twice.
     try {
       const response = await this.documentService.listDocuments(recordId);
       this.uploadedDocuments.set(response.documents);
@@ -1559,6 +1618,102 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     return this.policiesBySourceRef().get(sourceRef) ?? null;
   }
 
+  /**
+   * The folder schedule that keeps a document in sync, if one does: the one the
+   * server marked it with, or the one a folder import just scheduled for it.
+   */
+  folderPolicyFor(doc: Document): SyncPolicy | null {
+    const policyId = doc.syncPolicyId ?? this.pendingFolderCover().get(doc.documentId);
+    return policyId ? (this.folderPoliciesById().get(policyId) ?? null) : null;
+  }
+
+  folderLabel(policy: SyncPolicy): string {
+    return policy.sourceName || 'Drive folder';
+  }
+
+  folderRunText(policy: SyncPolicy): string | null {
+    return folderRunSummaryText(policy.lastRunSummary);
+  }
+
+  /** The file source behind a folder schedule, by name ("" when it is no longer offered). */
+  folderConnectorName(policy: SyncPolicy): string {
+    const providerId = folderConnectorId(policy.sourceRef);
+    return this.fileSources().find((s) => s.providerId === providerId)?.displayName ?? '';
+  }
+
+  /**
+   * "Keep in sync" on a folder import: schedule the folder (spec §11). Its first
+   * run is due at once and adopts the copies the import just made, so the import
+   * plus this policy is the same shape Save as project leaves. A folder already
+   * on a schedule keeps the one it has. The import itself has already happened,
+   * so a failure here is said on its own and never undoes it.
+   */
+  private async keepFolderInSync(recordId: string, result: FolderImportResult): Promise<void> {
+    const folder = result.folderImport;
+    const sourceRef = `${folder.connectorId}:${folder.folderId}`;
+    let policy = this.syncPolicyFor(sourceRef);
+    if (!policy) {
+      try {
+        policy = await this.syncPolicyService.createPolicy(recordId, {
+          sourceType: 'drive_folder',
+          sourceRef,
+          interval: FOLDER_SYNC_DEFAULT_INTERVAL,
+          sourceName: folder.folderPath || folder.folderName,
+        });
+        this.upsertPolicy(policy);
+      } catch (error) {
+        this.toastSyncError(error, `The files were imported, but ${folder.folderName} could not be kept in sync.`);
+        void this.loadSyncData();
+        return;
+      }
+    }
+    const policyId = policy.policyId;
+    if (result.documents.length > 0) {
+      this.pendingFolderCover.update((map) => {
+        const next = new Map(map);
+        for (const doc of result.documents) next.set(doc.documentId, policyId);
+        return next;
+      });
+    }
+  }
+
+  /**
+   * Turning a folder's sync off deletes its schedule, and only another folder
+   * import can make one again, so it asks first. The files stay.
+   */
+  async onFolderIntervalSelected(policy: SyncPolicy, selection: SyncIntervalSelection): Promise<void> {
+    if (selection === 'manual') {
+      await this.stopFolderSync(policy);
+      return;
+    }
+    await this.onSyncIntervalSelected('drive_folder', policy.sourceRef, selection);
+  }
+
+  /** Remove a folder's schedule after confirming; its files stay as ordinary imports. */
+  async stopFolderSync(policy: SyncPolicy): Promise<void> {
+    const ref = this.dialog.open<boolean, ConfirmationDialogData>(ConfirmationDialogComponent, {
+      data: {
+        title: 'Stop syncing this folder?',
+        message: `The files from “${this.folderLabel(policy)}” stay in this knowledge base, but changes in the folder will no longer reach it.`,
+        confirmText: 'Stop syncing',
+        cancelText: 'Keep syncing',
+        destructive: true,
+      },
+    });
+    if ((await firstValueFrom(ref.closed)) !== true) {
+      // The control may already show "Don't auto-sync"; put the schedule back in view.
+      this.syncPolicies.update((list) => [...list]);
+      return;
+    }
+    await this.onSyncIntervalSelected('drive_folder', policy.sourceRef, 'manual');
+    if (this.syncPolicyFor(policy.sourceRef)) {
+      return;
+    }
+    this.pendingFolderCover.update((map) => new Map([...map].filter(([, id]) => id !== policy.policyId)));
+    // The server unmarks the folder's files; re-read them so each offers its own schedule again.
+    await this.loadDocuments();
+  }
+
   isSyncBusy(sourceRef: string): boolean {
     return this.syncBusySourceRefs().has(sourceRef);
   }
@@ -1683,8 +1838,10 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
    * never enter paused_reauth.
    */
   async onSyncReconnect(sourceRef: string): Promise<void> {
-    const doc = this.uploadedDocuments().find((d) => d.documentId === sourceRef);
-    const providerId = doc?.sourceConnectorId;
+    const providerId =
+      this.syncPolicyFor(sourceRef)?.sourceType === 'drive_folder'
+        ? folderConnectorId(sourceRef)
+        : this.uploadedDocuments().find((d) => d.documentId === sourceRef)?.sourceConnectorId;
     if (!providerId || providerId === 'web') {
       this.toast.error('This source cannot be reconnected from here.');
       return;
@@ -1827,6 +1984,159 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
       }
     }
   }
+
+  // ── Folder imports ──────────────────────────────────────────────────────
+
+  /** Put documents the server just created at the top of the list, once each. */
+  private addDocuments(docs: Document[]): void {
+    this.uploadedDocuments.update((current) => {
+      const known = new Set(current.map((d) => d.documentId));
+      return [...docs.filter((d) => !known.has(d.documentId)), ...current];
+    });
+  }
+
+  /** Say what a folder import did, including what it passed over and why. */
+  private announceFolderImport(r: {
+    documents: Document[];
+    alreadyImported: number;
+    skippedType: number;
+    truncated: boolean;
+    folderName: string;
+  }): void {
+    const n = r.documents.length;
+    const notes: string[] = [];
+    if (r.alreadyImported) notes.push(`${r.alreadyImported} already here`);
+    if (r.skippedType) notes.push(`${r.skippedType} of a type it can't read`);
+    const tail = notes.length ? ` (${notes.join(', ')})` : '';
+    if (n === 0) {
+      this.toast.info(`Nothing new to import from ${r.folderName}${tail}.`);
+      return;
+    }
+    const more = r.truncated ? ' The folder holds more; import it again to continue.' : '';
+    this.toast.success(`Importing ${n} file${n === 1 ? '' : 's'} from ${r.folderName}${tail}.${more}`);
+  }
+
+  // ── Document list: search, filter and opening ───────────────────────────
+
+  /** The row menu opens under its button, right edges aligned, so it stays inside the card. */
+  readonly rowMenuPositions: ConnectedPosition[] = [
+    { originX: 'end', originY: 'bottom', overlayX: 'end', overlayY: 'top', offsetY: 4 },
+    { originX: 'end', originY: 'top', overlayX: 'end', overlayY: 'bottom', offsetY: -4 },
+  ];
+
+  /** Above this many documents the list gets a search box and filters. */
+  readonly searchThreshold = 6;
+  readonly documentQuery = signal('');
+  readonly documentFilter = signal<DocumentSourceKind | 'attention' | 'all'>('all');
+
+  private readonly connectorNames = computed(() => {
+    const names = new Map<string, string>();
+    for (const source of this.fileSources()) names.set(source.providerId, source.displayName);
+    return names;
+  });
+
+  private readonly connectorIcons = computed(() => {
+    const icons = new Map<string, string>();
+    for (const source of this.fileSources()) if (source.iconData) icons.set(source.providerId, source.iconData);
+    return icons;
+  });
+
+  /** The filter chips worth showing: only kinds the list actually holds. */
+  readonly documentFilters = computed(() => {
+    const docs = this.uploadedDocuments();
+    const kinds = new Set(docs.map((d) => documentSourceKind(d)));
+    const chips: { value: DocumentSourceKind | 'attention' | 'all'; label: string }[] = [{ value: 'all', label: 'All' }];
+    if (kinds.has('upload')) chips.push({ value: 'upload', label: 'Uploaded' });
+    if (kinds.has('connector')) {
+      const names = new Set(
+        docs
+          .filter((d) => documentSourceKind(d) === 'connector')
+          .map((d) => this.connectorNames().get(d.sourceConnectorId ?? '') ?? 'Connected'),
+      );
+      chips.push({ value: 'connector', label: names.size === 1 ? [...names][0] : 'Connected sources' });
+    }
+    if (kinds.has('web')) chips.push({ value: 'web', label: 'Web pages' });
+    if (docs.some((d) => d.status === 'failed' || d.removedFromSource)) {
+      chips.push({ value: 'attention', label: 'Needs attention' });
+    }
+    return chips.length > 2 ? chips : [];
+  });
+
+  readonly filteredDocuments = computed(() => {
+    const q = this.documentQuery().trim().toLowerCase();
+    const filter = this.documentFilter();
+    return this.displayedDocuments().filter((doc) => {
+      if (q && !doc.filename.toLowerCase().includes(q) && !(doc.sourceFileId ?? '').toLowerCase().includes(q)) {
+        return false;
+      }
+      if (filter === 'all') return true;
+      if (filter === 'attention') return doc.status === 'failed' || !!doc.removedFromSource;
+      return documentSourceKind(doc) === filter;
+    });
+  });
+
+  readonly isFilteringDocuments = computed(
+    () => !!this.documentQuery().trim() || this.documentFilter() !== 'all',
+  );
+
+  onDocumentQuery(event: Event): void {
+    this.documentQuery.set((event.target as HTMLInputElement).value);
+  }
+
+  clearDocumentFilters(): void {
+    this.documentQuery.set('');
+    this.documentFilter.set('all');
+  }
+
+  /** What "Open" does for a row. See `documentOpenAction`. */
+  openAction(doc: Document) {
+    return documentOpenAction(doc, this.connectorNames().get(doc.sourceConnectorId ?? ''));
+  }
+
+  sourceIcon(doc: Document): string | null {
+    return documentSourceKind(doc) === 'connector'
+      ? (this.connectorIcons().get(doc.sourceConnectorId ?? '') ?? null)
+      : null;
+  }
+
+  sourceKind(doc: Document): DocumentSourceKind {
+    return documentSourceKind(doc);
+  }
+
+  /** The row's primary action for a document that is not a link out. */
+  async openDocument(doc: Document): Promise<void> {
+    const action = this.openAction(doc);
+    if (action.kind === 'view') {
+      const recordId = this.id();
+      if (!recordId) return;
+      this.dialog.open<void, DocumentViewerDialogData>(DocumentViewerDialogComponent, {
+        data: { target: recordId, documentId: doc.documentId, filename: doc.filename, format: action.format },
+      });
+      return;
+    }
+    if (action.kind === 'file') {
+      await this.downloadDocument(doc.documentId);
+    }
+  }
+
+  /** The card's folded line: what the knowledge base holds, and anything to act on. */
+  readonly cardSummary = computed(() => {
+    const docs = this.uploadedDocuments();
+    const crawls = this.webCrawls().length;
+    if (this.isLoadingKnowledge()) return 'Loading…';
+    if (!docs.length && !crawls && !this.currentUpload()) {
+      return 'No documents. Add files, web pages or a folder for this agent to answer from.';
+    }
+    const parts = [`${docs.length} ${docs.length === 1 ? 'document' : 'documents'}`];
+    if (crawls) parts.push(`${crawls} ${crawls === 1 ? 'web source' : 'web sources'}`);
+    const folders = this.folderPolicies().length;
+    if (folders) parts.push(`${folders} synced ${folders === 1 ? 'folder' : 'folders'}`);
+    const processing = docs.filter((d) => PROCESSING_STATUSES.includes(d.status)).length;
+    if (processing) parts.push(`${processing} processing`);
+    const failed = docs.filter((d) => d.status === 'failed').length;
+    if (failed) parts.push(`${failed} failed`);
+    return parts.join(' · ');
+  });
 
   formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';

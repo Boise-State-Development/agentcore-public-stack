@@ -117,8 +117,8 @@ it made up, or pass `verified` twice. We close it at the type level instead:
   `quote_located` and reach its own verdict, because nothing downstream is given it.
 * What is recorded for measurement instead is `method` — the single reason the state
   came out as it did (`no_quote`, `quote_not_located`, `literal`, `numeric`, `date`,
-  `no_match`, `enum_field`, `non_scalar`, `quote_too_long`, `empty_value`,
-  `document_unreadable`). It carries strictly more information than the boolean pair
+  `no_match`, `value_not_bare`, `enum_field`, `non_scalar`, `quote_too_long`,
+  `empty_value`, `document_unreadable`). It carries strictly more information than the boolean pair
   and, unlike the pair, it is not a verdict anyone can re-derive a different answer
   from.
 
@@ -260,6 +260,16 @@ A multi-part value assembled from a sentence ("Jane Smith, Chemistry") reads as
 unsupported. That is the conservative direction, and the right one while the state is
 new.
 
+**Two ways to be `quote_unsupported`.** A failed value is `no_match`, except when it
+carries a date or number the passage *does* state, wrapped in words the passage does
+not: method `value_not_bare`. Sonnet 5 on dev sent `"July 28, 2027 interim report
+due"` against a passage reading "…financial report by July 28, 2027". The state is
+right (that text is not in the passage), but the mistake differs from a wrong date and
+so does the fix: send less, not re-read. The test runs only after the whole value has
+failed, so it can never promote a claim. Numbers are compared outside written dates on
+both sides, so "15 days" is not half-right against "January 15, 2026", and a wrong date
+in a description is still `no_match`.
+
 ## 7. What slice one covers, and what it does not
 
 **Covered: documents reachable through `document_read`** — the session's own
@@ -320,7 +330,23 @@ own attachment. Consequences, all good:
 
 **What goes back to the model: the state, and nothing else.** `{claims: [{id, state}]}`
 — one short word per claim. Not the quote (it wrote it), not the locator, not the
-method.
+method. The one addition is a `hint` beside a `value_not_bare` claim ("Only part of
+value is in the passage. Send just the value as printed."), on the failure path only.
+Without it the dev model read a bare `quote_unsupported` as a bad *quote*: it rewrote
+the passage, then re-read the document's page as a PDF, two rounds before it tried the
+bare value.
+
+**`value` is the bare value as the passage prints it.** The argument once said "the
+value exactly as you will state it to the user", and the model did exactly that: the
+answer's phrasing, which no passage contains, so every claim in the call failed and
+the user saw a warning card for each. It now says *as the passage prints it*, gives
+three bare examples and shows the failing shape. `upload_id` stays optional in the
+schema (below), but its description says it is required once the conversation has more
+than one document, and that claims from different documents go in separate calls: the
+same run's first call put claims from three documents in one call, with no id, among
+five, and was refused. Probed against Sonnet 5 on dev with five documents and three
+dates, the first call carried bare values in 6 of 6 samples (descriptions or labels in
+2 of 4 before), and split per document with an id in 5 of 6.
 
 * A model that cannot see `quote_unsupported` cannot correct it, and correcting it is
   the most valuable thing that can happen in the turn.

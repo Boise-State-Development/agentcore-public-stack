@@ -1,5 +1,10 @@
 import { ApplicationConfig, inject, provideAppInitializer, provideBrowserGlobalErrorListeners } from '@angular/core';
-import { provideRouter, withComponentInputBinding, withNavigationErrorHandler } from '@angular/router';
+import {
+  provideRouter,
+  withComponentInputBinding,
+  withNavigationErrorHandler,
+  withRouterConfig,
+} from '@angular/router';
 
 import { routes } from './app.routes';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
@@ -46,6 +51,10 @@ function markedOptionsFactory(config: ConfigService): MarkedOptions {
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
+    // Angular 22's default backend is FetchBackend. Nothing here needs XHR:
+    // uploads that report progress use XMLHttpRequest directly, and the one
+    // shape that differs (a network failure's `error` is the thrown TypeError
+    // rather than a ProgressEvent) is normalised in ErrorService.
     provideHttpClient(
       // withCredentialsInterceptor flips the cookie-attaching flag on app-api
       // requests (cross-origin in local dev; no-op same-origin in prod).
@@ -71,6 +80,12 @@ export const appConfig: ApplicationConfig = {
     provideRouter(
       routes,
       withComponentInputBinding(),
+      // Angular 22 changed the default to 'always'. Keep 'emptyOnly': with
+      // 'always' a child route inherits its parent's params and data, so
+      // component input binding would hand a parent's `:id` to a child's `id`
+      // input. resolveRouteChrome (shared/utils/route-chrome.ts) is written
+      // against this behaviour too.
+      withRouterConfig({ paramsInheritanceStrategy: 'emptyOnly' }),
       // A tab opened before a deploy asks for lazy chunks the deploy deleted.
       // The navigation becomes a full load of its destination (or a Refresh
       // prompt when a stream/upload would be cut off, or it already tried).

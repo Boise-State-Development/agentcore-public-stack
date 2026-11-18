@@ -273,13 +273,17 @@ html.dark .message-block {
         background-color: var(--color-gray-800);
     }
 
-    /* Links */
+    /* Links. The primary scale's light steps only add 0.1-0.2 lightness to the
+       brand color, so a dark brand (#0033a0) stays navy and reads at ~2:1 on
+       the gray-800 bubble. Pin the lightness instead and keep the brand's hue:
+       0.75 is ~6.5:1 on gray-800 and ~4.5:1 on gray-700, and the hue sets it
+       apart from the gray-300 body text. */
     a {
-        color: var(--color-primary-400);
+        color: oklch(from var(--color-primary-500) 0.75 0.14 h);
     }
 
     a:hover {
-        color: var(--color-primary-300);
+        color: oklch(from var(--color-primary-500) 0.85 0.12 h);
     }
 
     /* Weight alone barely separates bold from body text on a dark surface,

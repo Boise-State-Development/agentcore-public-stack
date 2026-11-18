@@ -21,17 +21,20 @@ function budgetLabel(bytes: number): string {
 }
 
 /**
- * Under the composer's attachment cards: which files the message's combined
- * inline budget will leave out, said before send.
+ * Under the composer's attachment cards: the images the message's combined
+ * inline budget leaves out, said before send.
  *
- * Each file can pass the per-file limit and the message still exceed what one
- * message can carry in full, and until this the only sign was a footnote on the
- * answer. A document that does not fit is read from storage instead, in the
- * parts the answer needs; an image is not included, so the fix is a follow-up
- * message. Nothing renders while everything fits, which is the normal case.
+ * Only images are named. A document past the budget is still attached and is
+ * read on demand, as a large document is, and that needs nothing from the
+ * user: the attachment-budget eval on 1M-context models found equal answer
+ * quality with no on-demand file left unread, and a line about it read as an
+ * upload error, so testers stopped instead of sending messages that worked.
+ * An image past the budget has no other way in, so it will not be sent at all;
+ * that stays a warning, since the fix is a follow-up message.
  *
- * The host is the live region and stays in the DOM while the cards do, so the
- * notice is announced when it appears rather than inserted with its own region.
+ * Nothing renders while every image fits. The host is the live region and
+ * stays in the DOM while the cards do, so the warning is announced when it
+ * appears rather than inserted with its own region.
  */
 @Component({
   selector: 'app-inline-budget-notice',
@@ -40,7 +43,7 @@ function budgetLabel(bytes: number): string {
   providers: [provideIcons({ heroExclamationTriangle })],
   host: { role: 'status', 'aria-live': 'polite', class: 'block' },
   template: `
-    @if (overflow(); as over) {
+    @if (dropped().length) {
       <div
         class="mx-4 mb-3 flex items-start gap-2 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-800 dark:border-state-warning-900/50 dark:bg-state-warning-900/30 dark:text-state-warning-200"
         data-testid="inline-budget-notice"
@@ -51,16 +54,9 @@ function budgetLabel(bytes: number): string {
           aria-hidden="true"
         />
         <p class="min-w-0 flex-1">
-          These attachments are over the {{ budget() }} one message can include in full.
-          @if (over.byReference.length) {
-            <span class="font-medium">{{ referenceNames() }}</span>
-            will be read from storage instead, in the parts the answer needs.
-          }
-          @if (over.dropped.length) {
-            <span class="font-medium">{{ droppedNames() }}</span>
-            {{ over.dropped.length === 1 ? "won't be included. Send it" : "won't be included. Send them" }}
-            in a follow-up message.
-          }
+          <span class="font-medium">{{ droppedNames() }}</span>
+          won't fit in this message, which can include {{ budget() }} of images and documents in full.
+          Send {{ dropped().length === 1 ? 'it' : 'them' }} in a follow-up message.
         </p>
       </div>
     }
@@ -73,6 +69,6 @@ export class InlineBudgetNoticeComponent {
 
   /** The served budget (`GET /files/limits`). An overflow implies there is one. */
   protected readonly budget = computed(() => budgetLabel(this.limits().inlineBudgetBytes ?? 0));
-  protected readonly referenceNames = computed(() => joinNames(this.overflow()?.byReference ?? []));
-  protected readonly droppedNames = computed(() => joinNames(this.overflow()?.dropped ?? []));
+  protected readonly dropped = computed(() => this.overflow()?.dropped ?? []);
+  protected readonly droppedNames = computed(() => joinNames(this.dropped()));
 }

@@ -1,4 +1,4 @@
-"""Voice mode runs the conversation's Agent (#625).
+"""Voice mode runs the conversation's Agent (#625), including a project's harness (#2021).
 
 Covers which Agent a voice session runs (the session's saved Agent wins over
 the browser's claim), the resolution through the text path's resolver, the
@@ -130,15 +130,6 @@ class TestResolveVoiceAgent:
         assert kb_task.cancelled()
 
     @pytest.mark.asyncio
-    async def test_a_project_harness_is_refused(self):
-        from apis.inference_api.chat import routes
-
-        with patch.object(routes, "resolve_turn_agent", AsyncMock(return_value=_resolved(project_id="proj-1"))):
-            with pytest.raises(vap.VoiceAgentRefused) as refused:
-                await vap.resolve_voice_agent("sess-1", _user(), "ast-1")
-        assert refused.value.message == vap.PROJECT_VOICE_MESSAGE
-
-    @pytest.mark.asyncio
     async def test_the_text_paths_refusal_is_refused_without_streaming_it(self):
         """No access, deleted, blocked binding: the conversational refusal is never
         iterated, so nothing is written to the conversation."""
@@ -167,3 +158,145 @@ class TestResolveVoiceAgent:
         with patch.object(routes, "resolve_turn_agent", AsyncMock(side_effect=HTTPException(status_code=503))):
             with pytest.raises(vap.VoiceAgentRefused):
                 await vap.resolve_voice_agent("sess-1", _user(), "ast-1")
+
+
+def _project(voice_enabled=True):
+    from apis.shared.projects.models import Project, ProjectSettings
+
+    return Project(
+        project_id="proj-1",
+        name="Biology 101",
+        owner_id="owner",
+        owner_email="owner@example.edu",
+        harness_agent_id="ast-h",
+        settings=ProjectSettings(voice_enabled=voice_enabled),
+        created_at="2026-11-01T00:00:00Z",
+        updated_at="2026-11-01T00:00:00Z",
+    )
+
+
+def _harness_resolved(project=None, **overrides):
+    harness = SimpleNamespace(
+        voice_enabled=False,  # a harness has no voice setting of its own
+        voice_instructions_only=True,
+        bindings=[SimpleNamespace(kind="tool", ref="calculator")],
+    )
+    values = dict(
+        assistant=harness,
+        project_id="proj-1",
+        project=project if project is not None else _project(),
+        project_member_note="<project_member>Ana</project_member>",
+        kb_full_context_task=asyncio.ensure_future(_done("<knowledge_base>syllabus</knowledge_base>")),
+        tools_override=SimpleNamespace(tool_ids=["calculator"], owns_toolset=True),
+    )
+    values.update(overrides)
+    return _resolved(**values)
+
+
+class TestProjectVoice:
+    """A project's harness runs in voice when the project allows it (#2021)."""
+
+    def _patches(self, resolved, *, blocked_tools=(), files_too_large=None, compose=None):
+        from apis.inference_api.chat import project_memory as pm
+        from apis.inference_api.chat import routes
+        from apis.shared.projects import voice
+
+        return [
+            patch.object(routes, "resolve_turn_agent", AsyncMock(return_value=resolved)),
+            patch.object(routes, "compose_turn_system_prompt", compose or MagicMock(return_value="BASE + project")),
+            patch.object(voice, "tools_voice_cannot_run", AsyncMock(return_value=list(blocked_tools))),
+            patch.object(voice, "files_too_large_for_voice", MagicMock(return_value=files_too_large)),
+            patch.object(pm, "build_project_memory_tools", MagicMock(return_value=["memory_save"])),
+            patch.object(pm, "build_shared_task_tools", MagicMock(return_value=["shared_conversations_list"])),
+            patch.object(pm, "build_project_files_tools", MagicMock(return_value=["project_files"])),
+        ]
+
+    async def _run(self, patches, **kwargs):
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            return await vap.resolve_voice_agent("sess-1", _user(), "ast-h", **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_runs_like_a_text_project_turn(self):
+        from apis.inference_api.chat.project_memory import ProjectMemoryTurn
+
+        memory = ProjectMemoryTurn(
+            project_id="proj-1", shared_space_id="sp-1", personal_space_id=None, memory_context="<memory>team</memory>"
+        )
+        compose = MagicMock(return_value="BASE + project")
+        resolved = _harness_resolved(
+            project_memory_task=asyncio.ensure_future(_done(memory)),
+            project_files_note_task=asyncio.ensure_future(_done("<files_note>1 processing</files_note>")),
+        )
+        plan = await self._run(self._patches(resolved, compose=compose), personal_instructions="Be brief")
+
+        # The project's composition: harness guidance, then personal instructions under it.
+        assert compose.call_args.kwargs["project_id"] == "proj-1"
+        assert compose.call_args.kwargs["personal_instructions"] == "Be brief"
+        # The per-message notes of a text turn go in the system prompt once.
+        assert plan.system_prompt == (
+            "BASE + project\n\n<project_member>Ana</project_member>\n\n<files_note>1 processing</files_note>"
+        )
+        assert plan.project_id == "proj-1"
+        assert plan.memory_context == "<memory>team</memory>"
+        assert plan.extra_tools == ["memory_save", "shared_conversations_list", "project_files"]
+        assert plan.knowledge_context == "<knowledge_base>syllabus</knowledge_base>"
+        assert plan.voice_guidelines is True  # a harness keeps the built-in voice guidelines
+        assert plan.tool_ids == ["calculator"]
+
+    @pytest.mark.asyncio
+    async def test_without_memory_spaces_it_still_gets_project_files(self):
+        plan = await self._run(self._patches(_harness_resolved()))
+        assert plan.memory_context is None
+        assert plan.extra_tools == ["project_files"]
+
+    @pytest.mark.asyncio
+    async def test_the_owner_turned_voice_off(self):
+        resolved = _harness_resolved(project=_project(voice_enabled=False))
+        with pytest.raises(vap.VoiceAgentRefused) as refused:
+            await self._run(self._patches(resolved))
+        assert refused.value.message == vap.PROJECT_VOICE_OFF_MESSAGE
+        await asyncio.sleep(0)
+        assert resolved.kb_full_context_task.cancelled() or resolved.kb_full_context_task.done()
+
+    @pytest.mark.asyncio
+    async def test_a_bound_tool_voice_cannot_run_keeps_it_off(self):
+        memory_task = asyncio.ensure_future(asyncio.sleep(10))
+        resolved = _harness_resolved(project_memory_task=memory_task)
+        compose = MagicMock()
+        with pytest.raises(vap.VoiceAgentRefused) as refused:
+            await self._run(self._patches(resolved, blocked_tools=["canvas"], compose=compose))
+        assert refused.value.message == vap.PROJECT_VOICE_BLOCKED_MESSAGE
+        compose.assert_not_called()
+        await asyncio.sleep(0)
+        assert memory_task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_files_too_large_for_voice_keep_it_off(self):
+        from apis.shared.projects.voice import FilesTooLarge
+
+        resolved = _harness_resolved(kb_full_context_task=asyncio.ensure_future(_done(None)))
+        with pytest.raises(vap.VoiceAgentRefused) as refused:
+            await self._run(self._patches(resolved, files_too_large=FilesTooLarge(reason="over_budget")))
+        assert refused.value.message == vap.PROJECT_VOICE_BLOCKED_MESSAGE
+
+    @pytest.mark.asyncio
+    async def test_files_that_reached_voice_are_not_checked_again(self):
+        from apis.shared.projects import voice
+
+        check = MagicMock(return_value=None)
+        patches = self._patches(_harness_resolved())
+        patches.append(patch.object(voice, "files_too_large_for_voice", check))
+        plan = await self._run(patches)
+        assert plan.knowledge_context
+        check.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_project_with_no_files_runs(self):
+        resolved = _harness_resolved(kb_full_context_task=asyncio.ensure_future(_done(None)))
+        plan = await self._run(self._patches(resolved, files_too_large=None))
+        assert plan.knowledge_context is None
+        assert plan.project_id == "proj-1"

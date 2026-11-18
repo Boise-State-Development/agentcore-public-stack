@@ -56,10 +56,11 @@ class TestTool:
         listing = AsyncMock(return_value={"documents": [{"upload_id": "up-1"}], "count": 1})
         monkeypatch.setattr(f"{TOOL_MODULE}.list_session_documents", listing)
         result = await _call(make_document_read_tool("s1", "u1"))
-        listing.assert_awaited_once_with("u1", "s1", ancestor_session_ids=())
+        listing.assert_awaited_once_with("u1", "s1", ancestor_session_ids=(), include_images=True)
         assert result["status"] == "success"
         payload = result["content"][0]["json"]
         assert payload["count"] == 1 and "hint" in payload
+        assert "image" not in payload["hint"]
 
     @pytest.mark.asyncio
     async def test_page_read_appends_the_native_block_after_the_metadata(self, monkeypatch):
@@ -69,13 +70,54 @@ class TestTool:
         ))
         monkeypatch.setattr(f"{TOOL_MODULE}.read_document", read)
         result = await _call(make_document_read_tool("s1", "u1"), upload_id="up-1", page_range="4-7", max_pages=6)
-        # A page range is the one read that can return a native PDF, so it is
-        # the one that carries the round's byte budget (all of it, alone).
+        # A page range can return a native PDF, so it carries the round's
+        # byte budget (all of it, alone).
         read.assert_awaited_once_with(
             "u1", "s1", "up-1", page_range="4-7", pattern=None, max_pages=6, offset=0, text_only=False,
             max_document_bytes=7_000_000,
         )
         assert result["content"] == [{"json": {"pages_returned": 4}}, block]
+
+    @pytest.mark.asyncio
+    async def test_an_image_comes_back_after_the_metadata_and_restores_byte_for_byte(self, monkeypatch):
+        """The recovery path for an image whose turn compaction summarized: the
+        image block rides the tool result, which Memory keeps with its bytes,
+        so a restore re-sends exactly what this turn sent."""
+        from apis.shared.files.attachment_handle import persisted_message
+
+        image = {"image": {"format": "jpeg", "source": {"bytes": b"\xff\xd8compact"}}}
+        read = AsyncMock(return_value=DocumentReadResult(
+            mode="image", payload={"upload_id": "img-1", "variant": "compact"},
+            extra_blocks=[image], bytes_returned=9, format="jpeg",
+        ))
+        monkeypatch.setattr(f"{TOOL_MODULE}.read_document", read)
+        result = await _call(make_document_read_tool("s1", "u1"), upload_id="img-1")
+
+        # A bare id may be an image, so it is read under the round's budget.
+        assert read.await_args.kwargs["max_document_bytes"] == 7_000_000
+        assert result["content"] == [{"json": {"upload_id": "img-1", "variant": "compact"}}, image]
+
+        message = {"role": "user", "content": [
+            {"toolResult": {"toolUseId": "t1", "status": "success", "content": result["content"]}}
+        ]}
+        assert persisted_message(message, lambda *a: "img-1", images=[]) is message
+
+    @pytest.mark.asyncio
+    async def test_the_listing_hint_names_images_when_there_are_some(self, monkeypatch):
+        listing = AsyncMock(return_value={
+            "documents": [], "count": 0,
+            "images": [{"upload_id": "img-1", "filename": "qa-badge-3.png", "format": "png", "size_bytes": 1}],
+        })
+        monkeypatch.setattr(f"{TOOL_MODULE}.list_session_documents", listing)
+        payload = (await _call(make_document_read_tool("s1", "u1")))["content"][0]["json"]
+        assert payload["images"][0]["upload_id"] == "img-1"
+        assert "image's upload_id alone returns the image" in payload["hint"]
+
+    def test_the_spec_tells_the_model_images_are_here(self):
+        for searchable in (False, True):
+            description = make_document_read_tool("s1", "u1", searchable=searchable).tool_spec["description"]
+            assert "documents and its\n  images with their upload_id" in description
+            assert "An image's upload_id alone: returns that image" in description
 
     @pytest.mark.asyncio
     async def test_text_only_tool_reads_text_with_an_identical_spec(self, monkeypatch):
@@ -148,9 +190,9 @@ class TestRoutesGate:
     async def test_this_turns_document_builds_the_tool_without_a_query(self, monkeypatch, clear_memo):
         from apis.inference_api.chat.routes import _build_document_tools
 
-        lookup = AsyncMock(return_value=False)
-        monkeypatch.setattr("apis.shared.files.document_read.session_has_documents", lookup)
-        tools = await _build_document_tools("s1", "u1", turn_has_document=True)
+        lookup = AsyncMock(return_value="")
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
+        tools, _kind = await _build_document_tools("s1", "u1", turn_has_document=True)
         assert [t.tool_name for t in tools] == ["document_read"]
         lookup.assert_not_awaited()
 
@@ -158,41 +200,41 @@ class TestRoutesGate:
     async def test_a_session_with_a_document_gets_the_tool_regardless_of_enabled_tools(self, monkeypatch, clear_memo):
         from apis.inference_api.chat.routes import _build_document_tools
 
-        lookup = AsyncMock(return_value=True)
-        monkeypatch.setattr("apis.shared.files.document_read.session_has_documents", lookup)
-        assert len(await _build_document_tools("s1", "u1")) == 1
+        lookup = AsyncMock(return_value="documents")
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
+        assert len((await _build_document_tools("s1", "u1"))[0]) == 1
         lookup.assert_awaited_once_with("u1", "s1")
         # Memoized: the second turn does not query again.
-        assert len(await _build_document_tools("s1", "u1")) == 1
+        assert len((await _build_document_tools("s1", "u1"))[0]) == 1
         assert lookup.await_count == 1
 
     @pytest.mark.asyncio
     async def test_no_document_means_no_tool_and_no_memo(self, monkeypatch, clear_memo):
         from apis.inference_api.chat.routes import _DOCUMENT_SESSIONS, _build_document_tools
 
-        lookup = AsyncMock(return_value=False)
-        monkeypatch.setattr("apis.shared.files.document_read.session_has_documents", lookup)
-        assert await _build_document_tools("s1", "u1") == []
-        assert await _build_document_tools("s1", "u1") == []
+        lookup = AsyncMock(return_value="")
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
+        assert (await _build_document_tools("s1", "u1"))[0] == []
+        assert (await _build_document_tools("s1", "u1"))[0] == []
         assert lookup.await_count == 2 and "s1" not in _DOCUMENT_SESSIONS
 
     @pytest.mark.asyncio
     async def test_lookup_failure_fails_closed(self, monkeypatch, clear_memo):
         from apis.inference_api.chat.routes import _build_document_tools
 
-        monkeypatch.setattr("apis.shared.files.document_read.session_has_documents", AsyncMock(side_effect=RuntimeError("ddb")))
-        assert await _build_document_tools("s1", "u1") == []
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", AsyncMock(side_effect=RuntimeError("ddb")))
+        assert (await _build_document_tools("s1", "u1"))[0] == []
 
     @pytest.mark.asyncio
     async def test_kill_switch_and_missing_identity(self, monkeypatch, clear_memo):
         from apis.inference_api.chat.routes import _build_document_tools, _document_tools_gate
 
         monkeypatch.setenv("DOCUMENT_READ_ENABLED", "false")
-        assert await _build_document_tools("s1", "u1", turn_has_document=True) == []
-        assert await _document_tools_gate("s1", "u1", turn_has_document=True) is False
+        assert (await _build_document_tools("s1", "u1", turn_has_document=True))[0] == []
+        assert await _document_tools_gate("s1", "u1", "documents") == ""
         monkeypatch.setenv("DOCUMENT_READ_ENABLED", "")
-        assert await _document_tools_gate("s1", "u1", turn_has_document=True) is True
-        assert await _document_tools_gate("", "u1", turn_has_document=True) is False
+        assert await _document_tools_gate("s1", "u1", "documents") == "documents"
+        assert await _document_tools_gate("", "u1", "documents") == ""
 
     @pytest.mark.parametrize(
         "mime,filename,expected",
@@ -238,9 +280,9 @@ class TestRoutesGate:
         """
         from apis.inference_api.chat.routes import _DOCUMENT_SESSIONS, _build_document_tools
 
-        lookup = AsyncMock(return_value=False)
-        monkeypatch.setattr("apis.shared.files.document_read.session_has_documents", lookup)
-        assert await _build_document_tools("s1", "u1", turn_has_document=False) == []
+        lookup = AsyncMock(return_value="")
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
+        assert (await _build_document_tools("s1", "u1", turn_has_document=False))[0] == []
         # It falls through to the authoritative query rather than guessing,
         # and leaves no memo behind for the next turn to trip over.
         lookup.assert_awaited_once_with("u1", "s1")
@@ -261,20 +303,20 @@ class TestRoutesGate:
         from apis.inference_api.chat import routes
 
         # Turn 1 on container A: a real document arrives with the turn.
-        lookup = AsyncMock(return_value=True)
-        monkeypatch.setattr("apis.shared.files.document_read.session_has_documents", lookup)
-        assert len(await routes._build_document_tools("s1", "u1", turn_has_document=True)) == 1
+        lookup = AsyncMock(return_value="documents")
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
+        assert len((await routes._build_document_tools("s1", "u1", turn_has_document=True))[0]) == 1
 
         # Container recycles: the memo is gone, the upload rows are not.
         routes._DOCUMENT_SESSIONS.clear()
-        assert len(await routes._build_document_tools("s1", "u1")) == 1
+        assert len((await routes._build_document_tools("s1", "u1"))[0]) == 1
 
         # And the negative case stays negative across the same boundary.
         routes._DOCUMENT_SESSIONS.clear()
-        lookup.return_value = False
-        assert await routes._build_document_tools("s2", "u1", turn_has_document=False) == []
+        lookup.return_value = ""
+        assert (await routes._build_document_tools("s2", "u1", turn_has_document=False))[0] == []
         routes._DOCUMENT_SESSIONS.clear()
-        assert await routes._build_document_tools("s2", "u1") == []
+        assert (await routes._build_document_tools("s2", "u1"))[0] == []
 
     @pytest.mark.asyncio
     async def test_resume_reproduces_the_live_turns_answer(self, monkeypatch, clear_memo):
@@ -284,11 +326,11 @@ class TestRoutesGate:
         from apis.inference_api.chat.routes import _document_tools_gate
 
         monkeypatch.setattr(
-            "apis.shared.files.document_read.session_has_documents", AsyncMock(return_value=False)
+            "apis.shared.files.document_read.session_attachment_kind", AsyncMock(return_value="")
         )
-        live = await _document_tools_gate("s1", "u1", turn_has_document=False)
+        live = await _document_tools_gate("s1", "u1", "")
         resumed = await _document_tools_gate("s1", "u1")
-        assert live is resumed is False
+        assert live == resumed == ""
 
     def test_memo_is_bounded(self, monkeypatch, clear_memo):
         from apis.inference_api.chat import routes
@@ -297,6 +339,108 @@ class TestRoutesGate:
         for i in range(5):
             routes._remember_document_session(f"s{i}")
         assert list(routes._DOCUMENT_SESSIONS) == ["s2", "s3", "s4"]
+
+
+class TestImageOnlySessions:
+    """A session holding only images gets ``document_read`` alone.
+
+    Restore re-sends only the history after the compaction checkpoint, so an
+    image in a summarized turn is gone; ``document_read`` lists the session's
+    images and returns one by upload id. Before this, its gate counted
+    documents only, so a conversation of images lost them for good at the
+    first cut.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_image_turn_builds_document_read_without_verify_sources(self, monkeypatch, clear_memo):
+        from apis.inference_api.chat.routes import _DOCUMENT_SESSIONS, _build_document_tools
+
+        monkeypatch.setenv("SOURCE_PROVENANCE_ENABLED", "true")
+        lookup = AsyncMock(return_value="")
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
+        tools, kind = await _build_document_tools("s1", "u1", turn_has_image=True)
+        assert [t.tool_name for t in tools] == ["document_read"] and kind == "images"
+        # Images are not memoized: a document may still arrive.
+        assert "s1" not in _DOCUMENT_SESSIONS
+
+    @pytest.mark.asyncio
+    async def test_the_rows_alone_answer_images_on_a_later_turn_and_on_resume(self, monkeypatch, clear_memo):
+        """The attach turn, a later turn on another container, and a resume all
+        agree, so ``toolConfig`` and the cache key cannot flap."""
+        from apis.inference_api.chat.routes import _build_document_tools, _document_tools_gate
+
+        lookup = AsyncMock(return_value="images")
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
+        attach = await _build_document_tools("s1", "u1", turn_has_image=True)
+        later = await _build_document_tools("s1", "u1")
+        resumed = await _document_tools_gate("s1", "u1")
+        assert attach[1] == later[1] == resumed == "images"
+        assert [t.tool_name for t in later[0]] == ["document_read"]
+
+    @pytest.mark.asyncio
+    async def test_a_document_upgrades_an_image_session_and_is_memoized(self, monkeypatch, clear_memo):
+        from apis.inference_api.chat.routes import _DOCUMENT_SESSIONS, _build_document_tools
+
+        monkeypatch.setenv("SOURCE_PROVENANCE_ENABLED", "true")
+        lookup = AsyncMock(return_value="images")
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
+        _, kind = await _build_document_tools("s1", "u1")
+        assert kind == "images"
+        tools, kind = await _build_document_tools("s1", "u1", turn_has_document=True, turn_has_image=True)
+        assert kind == "documents" and [t.tool_name for t in tools] == ["document_read", "verify_sources"]
+        assert "s1" in _DOCUMENT_SESSIONS
+
+    @pytest.mark.asyncio
+    async def test_a_failed_lookup_keeps_this_turns_image(self, monkeypatch, clear_memo):
+        from apis.inference_api.chat.routes import _build_document_tools
+
+        monkeypatch.setattr(
+            "apis.shared.files.document_read.session_attachment_kind", AsyncMock(side_effect=RuntimeError("ddb"))
+        )
+        assert (await _build_document_tools("s1", "u1", turn_has_image=True))[1] == "images"
+        assert (await _build_document_tools("s1", "u1"))[1] == ""
+
+    @pytest.mark.asyncio
+    async def test_a_handed_over_image_counts_on_the_turn_it_arrives(self, monkeypatch, clear_memo):
+        """Its reference row is written during the stream, after the query ran (handoffs §4.9)."""
+        import asyncio
+
+        from apis.inference_api.chat.routes import _document_tools_gate
+
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", AsyncMock(return_value=""))
+        hint = asyncio.ensure_future(asyncio.sleep(0, result=True))
+        assert await _document_tools_gate("s1", "u1", image_hint=hint) == "images"
+
+    @pytest.mark.asyncio
+    async def test_a_fork_sees_its_ancestors_images_until_it_finds_a_document(self, monkeypatch, clear_memo):
+        from apis.inference_api.chat.routes import _build_document_tools
+
+        kinds = {"fork": "", "parent": "images", "root": "documents", "fork2": ""}
+        lookup = AsyncMock(side_effect=lambda user, sid: kinds[sid])
+        monkeypatch.setattr("apis.shared.files.document_read.session_attachment_kind", lookup)
+        _, kind = await _build_document_tools("fork", "u1", ancestor_session_ids=("parent", "root"))
+        assert kind == "documents"
+        kinds["root"] = ""
+        _, kind = await _build_document_tools("fork2", "u1", ancestor_session_ids=("parent", "root"))
+        assert kind == "images"
+
+    @pytest.mark.parametrize(
+        "mime,expected",
+        [
+            ("image/png", True),
+            ("image/jpeg", True),
+            ("image/webp", True),
+            ("image/gif", True),
+            ("application/pdf", False),
+            ("text/csv", False),
+            ("application/vnd.openxmlformats-officedocument.presentationml.presentation", False),
+        ],
+    )
+    def test_turn_image_classification(self, mime, expected):
+        from apis.inference_api.chat.routes import _resolved_files_include_an_image
+
+        assert _resolved_files_include_an_image([SimpleNamespace(content_type=mime, filename="f", bytes="")]) is expected
+        assert _resolved_files_include_an_image(None) is False
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +462,25 @@ def test_cache_key_carries_the_document_tool_bit_without_moving_the_skills_hash(
     # Trailing layout: (..., document_tools, assistant_id, skills_hash).
     assert without[-2] == with_docs[-2] == ""
     assert without[-3] is False and with_docs[-3] is True
+
+
+def test_cache_key_keeps_the_documents_bit_and_separates_an_image_only_session():
+    """``documents`` keys exactly as ``True`` did, so no existing key moves; an
+    image-only session (no ``verify_sources``) keys apart from both."""
+    from apis.inference_api.chat import service
+
+    base = dict(
+        session_id="s", user_id="u", enabled_tools=["t"], model_id="m", inference_params={},
+        system_prompt=None, caching_enabled=False, provider="bedrock", freshness_hash="f", agent_type="chat",
+    )
+    as_bool = service._create_cache_key(**base, document_tools=True)
+    as_kind = service._create_cache_key(**base, document_tools="documents")
+    images = service._create_cache_key(**base, document_tools="images")
+    nothing = service._create_cache_key(**base, document_tools="")
+    assert as_bool == as_kind
+    assert nothing == service._create_cache_key(**base)
+    assert len({as_kind, images, nothing}) == 3
+    assert images[-3] == "images"
 
 
 # ---------------------------------------------------------------------------

@@ -2,13 +2,17 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Dialog } from '@angular/cdk/dialog';
 import { signal } from '@angular/core';
+import { By } from '@angular/platform-browser';
 import { of } from 'rxjs';
 import { ArtifactCardComponent } from './artifact-card.component';
 import { ArtifactShareModalComponent } from './artifact-share-modal.component';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
 import { ArtifactHttpService } from '../../../../services/artifacts/artifact-http.service';
 import { ArtifactDownloadService } from '../../../../services/artifacts/artifact-download.service';
+import { ArtifactShareService } from '../../../../services/artifacts/artifact-share.service';
+import { SessionService } from '../../../../services/session/session.service';
 import { UserService } from '../../../../../auth/user.service';
+import { ContentCardComponent } from '../../../../../components/content-card/content-card.component';
 import { ToastService } from '../../../../../services/toast/toast.service';
 import { ConfirmationDialogComponent } from '../../../../../components/confirmation-dialog';
 import { RenameArtifactDialogComponent } from '../../../../../artifacts/components/rename-artifact-dialog.component';
@@ -35,6 +39,7 @@ describe('ArtifactCardComponent', () => {
   let http: {
     renameArtifact: ReturnType<typeof vi.fn>;
     deleteArtifact: ReturnType<typeof vi.fn>;
+    mintRenderToken: ReturnType<typeof vi.fn>;
   };
   let toast: { error: ReturnType<typeof vi.fn> };
   /** What the stubbed CDK dialog "returns" — the user's choice. */
@@ -52,6 +57,17 @@ describe('ArtifactCardComponent', () => {
     if (!match) throw new Error(`no button matching ${label}`);
     return match as HTMLButtonElement;
   };
+  const card = (): ContentCardComponent =>
+    fixture.debugElement.query(By.directive(ContentCardComponent))
+      .componentInstance as ContentCardComponent;
+  /** Picks an overflow-menu item, as the CDK menu would on activation. */
+  const pick = (id: string): void => {
+    card().menuSelect.emit(id);
+  };
+  const menuLabel = (id: string): string | undefined =>
+    card()
+      .menuItems()
+      .find((item) => item.id === id)?.label;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -70,6 +86,8 @@ describe('ArtifactCardComponent', () => {
         .fn()
         .mockResolvedValue({ artifactId: 'art-1', title: 'Renamed' }),
       deleteArtifact: vi.fn().mockResolvedValue(undefined),
+      // The thumbnail's mint; rejecting leaves its placeholder standing.
+      mintRenderToken: vi.fn().mockRejectedValue(new Error('no preview')),
     };
     toast = { error: vi.fn() };
 
@@ -81,6 +99,11 @@ describe('ArtifactCardComponent', () => {
         { provide: ArtifactDownloadService, useValue: download },
         { provide: ArtifactHttpService, useValue: http },
         { provide: ToastService, useValue: toast },
+        { provide: ArtifactShareService, useValue: {} },
+        {
+          provide: SessionService,
+          useValue: { currentSession: signal({ sessionId: 'sess-1' }) },
+        },
         {
           provide: UserService,
           useValue: { currentUser: signal({ email: 'owner@example.com' }) },
@@ -93,29 +116,59 @@ describe('ArtifactCardComponent', () => {
     fixture.detectChanges();
   });
 
-  it('renders Share alongside Download', () => {
-    expect(el().textContent).toContain('Share');
-    expect(el().textContent).toContain('Download');
+  it('is drawn with the shared content card', () => {
+    expect(card().title()).toBe('Quarterly Chart');
+    expect(card().meta()).toBe('Web page · v3');
   });
 
-  it('gives both actions a visible label inside their accessible name', () => {
-    // WCAG 2.5.3: the visible label must be contained in the accessible
-    // name. Both card actions are labelled, so neither needs a tooltip.
-    expect(button(/^Share /).getAttribute('aria-label')).toContain('Share');
-    expect(button(/^Download /).getAttribute('aria-label')).toContain(
-      'Download',
+  it('offers Open as the primary action, naming the version', () => {
+    const open = button(/^Open /);
+    expect(open.textContent?.trim()).toBe('Open');
+    expect(open.getAttribute('aria-label')).toBe(
+      'Open Web page artifact Quarterly Chart, version 3',
     );
   });
 
+  it('opens the panel on Open', () => {
+    button(/^Open /).click();
+
+    expect(artifactState.openArtifactPanel).toHaveBeenCalledWith({
+      artifactId: 'art-1',
+      version: 3,
+      title: 'Quarterly Chart',
+    });
+    expect(dialog.open).not.toHaveBeenCalled();
+  });
+
+  it('previews the version on the card, minted in this conversation', () => {
+    expect(http.mintRenderToken).toHaveBeenCalledWith('art-1', 3, 'sess-1');
+  });
+
+  it('puts Share, Download, Rename and Delete in the overflow menu', () => {
+    expect(card().menuItems().map((item) => item.id)).toEqual([
+      'share',
+      'download',
+      'rename',
+      'delete',
+    ]);
+    expect(button(/^More actions for /)).toBeTruthy();
+    // Delete is the destructive one.
+    expect(card().menuItems().find((item) => item.id === 'delete')?.danger).toBe(true);
+  });
+
+  it('scopes Share and Download to the version on the card', () => {
+    // One card per version: a share pins an immutable version, and the
+    // download is that version's bytes.
+    expect(menuLabel('share')).toBe('Share version 3');
+    expect(menuLabel('download')).toBe('Download version 3');
+  });
+
   it('shares the version on the card, not the artifact head', () => {
-    button(/^Share /).click();
+    pick('share');
 
     expect(dialog.open).toHaveBeenCalledTimes(1);
     const [component, config] = dialog.open.mock.calls[0];
     expect(component).toBe(ArtifactShareModalComponent);
-    // The card renders one row per version, so the version it shares is
-    // the one the user is looking at — a share pins an immutable version
-    // and never follows HEAD.
     expect(config.data).toEqual({
       artifactId: 'art-1',
       version: 3,
@@ -134,6 +187,11 @@ describe('ArtifactCardComponent', () => {
         { provide: ArtifactDownloadService, useValue: download },
         { provide: ArtifactHttpService, useValue: http },
         { provide: ToastService, useValue: toast },
+        { provide: ArtifactShareService, useValue: {} },
+        {
+          provide: SessionService,
+          useValue: { currentSession: signal({ sessionId: 'sess-1' }) },
+        },
         { provide: UserService, useValue: { currentUser: signal(null) } },
       ],
     });
@@ -141,39 +199,33 @@ describe('ArtifactCardComponent', () => {
     fixture.componentRef.setInput('artifact', ARTIFACT);
     fixture.detectChanges();
 
-    button(/^Share /).click();
+    pick('share');
     expect(dialog.open.mock.calls[0][1].data.ownerEmail).toBe('');
   });
 
-  it('still opens the panel when the card body is clicked', () => {
-    const hit = el().querySelector<HTMLButtonElement>('.artifact-card__hit');
-    hit!.click();
+  it('downloads the version on the card and says so while it runs', async () => {
+    let finish!: (ok: boolean) => void;
+    download.download.mockReturnValue(
+      new Promise<boolean>((resolve) => (finish = resolve)),
+    );
+    pick('download');
+    fixture.detectChanges();
 
-    expect(artifactState.openArtifactPanel).toHaveBeenCalledWith({
-      artifactId: 'art-1',
-      version: 3,
-      title: 'Quarterly Chart',
-    });
-    // Adding Share must not have stolen the card's primary action.
-    expect(dialog.open).not.toHaveBeenCalled();
-  });
-
-  it('still downloads the version on the card', () => {
-    button(/^Download /).click();
     expect(download.download).toHaveBeenCalledWith({
       artifactId: 'art-1',
       version: 3,
     });
-  });
+    expect(card().status()).toBe('Downloading…');
+    expect(card().live()).toBe(true);
 
-  it('keeps both action labels in the accessible name at any card width', () => {
-    // On a narrow card (artifact panel docked open, split view, mobile) a
-    // container query hides these labels visually so the title isn't
-    // squeezed to nothing — but they are only *visually* hidden, never
-    // removed, so the visible-label-in-accessible-name rule (WCAG 2.5.3)
-    // still holds and the buttons keep their [appTooltip].
-    expect(button(/^Share /).textContent).toContain('Share');
-    expect(button(/^Download /).textContent).toContain('Download');
+    // A second pick while one is running is ignored.
+    pick('download');
+    expect(download.download).toHaveBeenCalledTimes(1);
+
+    finish(true);
+    await flush();
+    fixture.detectChanges();
+    expect(card().live()).toBe(false);
   });
 
   describe('rename and delete', () => {
@@ -181,17 +233,13 @@ describe('ArtifactCardComponent', () => {
       // Share and Download really are scoped to this card's version and
       // say so. These two are not, so a matching "version 3" suffix
       // would promise something they do not do.
-      expect(button(/^Rename /).getAttribute('aria-label')).toBe(
-        'Rename artifact Quarterly Chart',
-      );
-      expect(button(/^Delete /).getAttribute('aria-label')).toBe(
-        'Delete artifact Quarterly Chart and all versions',
-      );
+      expect(menuLabel('rename')).toBe('Rename artifact');
+      expect(menuLabel('delete')).toBe('Delete artifact');
     });
 
     it('renames the whole artifact in local state', async () => {
       dialogResult = 'Renamed';
-      button(/^Rename /).click();
+      pick('rename');
       await flush();
 
       expect(dialog.open.mock.calls[0][0]).toBe(RenameArtifactDialogComponent);
@@ -202,7 +250,7 @@ describe('ArtifactCardComponent', () => {
     it('leaves state alone when a rename fails', async () => {
       dialogResult = 'Renamed';
       http.renameArtifact.mockRejectedValue(new Error('503'));
-      button(/^Rename /).click();
+      pick('rename');
       await flush();
 
       expect(artifactState.rename).not.toHaveBeenCalled();
@@ -215,7 +263,7 @@ describe('ArtifactCardComponent', () => {
       // that this removes one version.
       artifactState.versionsFor.mockReturnValue([ARTIFACT, ARTIFACT, ARTIFACT]);
       dialogResult = false;
-      button(/^Delete /).click();
+      pick('delete');
       await flush();
 
       expect(dialog.open.mock.calls[0][0]).toBe(ConfirmationDialogComponent);
@@ -227,7 +275,7 @@ describe('ArtifactCardComponent', () => {
 
     it('deletes the whole artifact and clears every sibling card', async () => {
       dialogResult = true;
-      button(/^Delete /).click();
+      pick('delete');
       await flush();
 
       expect(http.deleteArtifact).toHaveBeenCalledWith('art-1');
@@ -238,7 +286,7 @@ describe('ArtifactCardComponent', () => {
 
     it('does nothing when the confirmation is declined', async () => {
       dialogResult = false;
-      button(/^Delete /).click();
+      pick('delete');
       await flush();
 
       expect(http.deleteArtifact).not.toHaveBeenCalled();
@@ -248,18 +296,28 @@ describe('ArtifactCardComponent', () => {
     it('keeps the card when the delete fails', async () => {
       dialogResult = true;
       http.deleteArtifact.mockRejectedValue(new Error('503'));
-      button(/^Delete /).click();
+      pick('delete');
       await flush();
 
       expect(artifactState.remove).not.toHaveBeenCalled();
       expect(toast.error).toHaveBeenCalled();
     });
 
-    it('does not steal the card body click', () => {
-      const hit = el().querySelector<HTMLButtonElement>('.artifact-card__hit');
-      hit!.click();
-      expect(artifactState.openArtifactPanel).toHaveBeenCalled();
-      expect(dialog.open).not.toHaveBeenCalled();
+    it('ignores a second rename or delete while one is in flight', async () => {
+      dialogResult = 'Renamed';
+      let finish!: () => void;
+      http.renameArtifact.mockReturnValue(
+        new Promise((resolve) => (finish = () => resolve({ title: 'Renamed' }))),
+      );
+      pick('rename');
+      await flush();
+      pick('delete');
+      pick('rename');
+      await flush();
+
+      expect(dialog.open).toHaveBeenCalledTimes(1);
+      finish();
+      await flush();
     });
   });
 });

@@ -16,7 +16,7 @@ cachetools==6.2.4
 # reader app-api's shares use. It reads AgentCore Memory through
 # bedrock_agentcore.memory.integrations.strands, which imports Strands (the base
 # package; none of its bidi extras are imported). Versions match backend/uv.lock.
-strands-agents==1.63.0
+strands-agents==1.65.0
 # mcp 2.x's own wire types and transport, pinned like backend/pyproject.toml's
 # [tool.uv] constraints so pip resolves the same set uv.lock does.
 mcp==2.3.0

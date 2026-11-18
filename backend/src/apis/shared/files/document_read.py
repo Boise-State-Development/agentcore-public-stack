@@ -27,6 +27,14 @@ Plus a **list** mode (no ``upload_id``) enumerating the session's readable
 documents, and an **index** mode (a PDF with neither range nor pattern) that
 returns the page count and a short per-page snippet index.
 
+An **image** (:func:`read_image`) has no pages or text, so the tool returns it
+whole: the stored compact copy ``image_downscale`` wrote at upload, as a native
+``image`` block. It is the recovery path for an image whose turn compaction
+summarized away (unified-attachment-delivery §6.2): restore re-sends only the
+history after the checkpoint, so before this an image in a summarized turn was
+gone for good while a document beside it stayed readable. The listing names
+the session's images for the same reason, under ``images``.
+
 A **query** mode (:func:`search_documents`) searches the conversation's large
 documents semantically through the shared ``attachments`` managed KB
 (``attachment_search.py``, the only module that may), when the deployment has it.
@@ -68,6 +76,7 @@ from .models import (
     is_presentation_file,
     is_tabular_file,
 )
+from .office_charts import chart_line, chart_reference, load_charts
 from .pdfium_lock import pdfium_lock, serialized_pdfium
 from .repository import get_file_upload_repository
 from .workspace import (
@@ -168,6 +177,16 @@ def is_document_class(mime_type: str, filename: str = "") -> bool:
     return document_format_for(mime_type, filename) is not None
 
 
+#: Bedrock image formats ``document_read`` returns an image as.
+IMAGE_FORMATS = frozenset({"png", "jpeg", "gif", "webp"})
+
+
+def image_format_for(mime_type: str) -> Optional[str]:
+    """The Bedrock image format of an uploaded image, or ``None`` for anything else."""
+    fmt = get_file_format((mime_type or "").lower().split(";")[0].strip())
+    return fmt if fmt in IMAGE_FORMATS else None
+
+
 # ---------------------------------------------------------------------------
 # Result shape
 # ---------------------------------------------------------------------------
@@ -220,8 +239,15 @@ async def list_session_documents(
     session_id: str,
     *,
     ancestor_session_ids: Sequence[str] = (),
+    include_images: bool = False,
 ) -> Dict[str, Any]:
     """The session's READY documents the tool can read, newest first.
+
+    ``include_images`` (the tool's listing) adds ``images``: the session's
+    images, which the tool returns whole by upload id, so a model whose image
+    turn was compacted away can find it again. The key is present only when
+    the session has one. Callers that resolve a *document* by name leave it
+    off, so an image can never be matched where a document was asked for.
 
     A file from an attached folder also carries ``path``: the folder's name and
     the file's path inside it (drive-folder spec §4.4), so a model that lost the
@@ -235,6 +261,7 @@ async def list_session_documents(
     session_ids = _scope_session_ids(session_id, ancestor_session_ids)
     files = await _list_scope_files(session_ids)
     documents: List[Dict[str, Any]] = []
+    images: List[Dict[str, Any]] = []
     folder_files = False
     listed: set = set()
     for meta in files:
@@ -243,6 +270,16 @@ async def list_session_documents(
         listed.add(meta.upload_id)
         fmt = document_format_for(meta.mime_type, meta.filename)
         if fmt is None:
+            image_fmt = image_format_for(meta.mime_type) if include_images else None
+            if image_fmt is not None:
+                images.append(
+                    {
+                        "upload_id": meta.upload_id,
+                        "filename": meta.filename,
+                        "format": image_fmt,
+                        "size_bytes": meta.size_bytes,
+                    }
+                )
             continue
         folder_files = folder_files or _FOLDER_SOURCE_MARK in (meta.source or "")
         documents.append(
@@ -262,7 +299,10 @@ async def list_session_documents(
             path = paths.get(doc["upload_id"])
             if path:
                 doc["path"] = path
-    return {"documents": documents, "count": len(documents)}
+    listing: Dict[str, Any] = {"documents": documents, "count": len(documents)}
+    if images:
+        listing["images"] = images
+    return listing
 
 
 async def _folder_paths(user_id: str, session_id: str) -> Dict[str, str]:
@@ -295,16 +335,45 @@ def _modes_for(fmt: str) -> List[str]:
     return ["pattern", "text"]
 
 
-async def session_has_documents(user_id: str, session_id: str) -> bool:
-    """Whether the session has at least one READY document the tool can read.
+#: What a session holds that ``document_read`` can return, strongest first
+#: (:func:`session_attachment_kind`). ``""`` is nothing.
+ATTACHMENTS_DOCUMENTS = "documents"
+ATTACHMENTS_IMAGES = "images"
 
-    The tool-injection gate. One ``SessionIndex`` query; callers memoize the
-    positive answer because it is monotonic for practical purposes (a file,
-    once uploaded, stays unless the user deletes it).
+
+def attachment_kind_of(files: Sequence[FileMetadata], user_id: str) -> str:
+    """:data:`ATTACHMENTS_DOCUMENTS` when ``files`` hold a readable document of
+    ``user_id``'s, else :data:`ATTACHMENTS_IMAGES` when they hold an image, else ``""``."""
+    kind = ""
+    for meta in files:
+        if meta.user_id != user_id:
+            continue
+        if is_document_class(meta.mime_type, meta.filename):
+            return ATTACHMENTS_DOCUMENTS
+        if image_format_for(meta.mime_type) is not None:
+            kind = ATTACHMENTS_IMAGES
+    return kind
+
+
+async def session_attachment_kind(user_id: str, session_id: str) -> str:
+    """What the session holds that the tool can return: documents, only images, or nothing.
+
+    The tool-injection gate. One ``SessionIndex`` query, the same one the
+    documents-only gate ran, so answering for images too reads nothing more.
+    Images count because ``document_read`` lists and returns them: an image's
+    turn can be compacted away, and the tool is then the only way back to it.
+    Callers memoize ``documents`` (monotonic for practical purposes: a file,
+    once uploaded, stays unless the user deletes it); ``images`` can still
+    become ``documents``.
     """
     _require_identity(user_id, session_id)
     files = await get_file_upload_repository().list_session_files(session_id, status=FileStatus.READY)
-    return any(meta.user_id == user_id and is_document_class(meta.mime_type, meta.filename) for meta in files)
+    return attachment_kind_of(files, user_id)
+
+
+async def session_has_documents(user_id: str, session_id: str) -> bool:
+    """Whether the session has at least one READY document the tool can read."""
+    return await session_attachment_kind(user_id, session_id) == ATTACHMENTS_DOCUMENTS
 
 
 async def session_has_tabular_files(user_id: str, session_id: str) -> bool:
@@ -427,11 +496,12 @@ async def read_document(
 
     meta = await _read_through(await _get_owned_ready_file(user_id, upload_id), reader="document_read")
     fmt = document_format_for(meta.mime_type, meta.filename)
+    if fmt is None and image_format_for(meta.mime_type) is not None:
+        return await read_image(meta, text_only=text_only, max_bytes=max_document_bytes)
     if fmt is None:
         raise DocumentReadError(
             f"'{meta.filename}' is not a readable document. Spreadsheets go through "
-            "analyze_spreadsheet, presentations through read_powerpoint_presentation, "
-            "and images are only available inline."
+            "analyze_spreadsheet and presentations through read_powerpoint_presentation."
         )
     prepared = large_document.is_prepared(meta)
     if not prepared and meta.size_bytes > _MAX_DOCUMENT_BYTES:
@@ -483,6 +553,56 @@ async def read_document(
             lambda: _text_pattern("\n".join(text_lines(fmt, raw)), pattern_text, base, "line")
         )
     return await _text_read(user_id, upload_id, offset, base, fmt)
+
+
+async def read_image(
+    meta: FileMetadata, *, text_only: bool = False, max_bytes: Optional[int] = None
+) -> DocumentReadResult:
+    """One image, whole, as a native ``image`` block: its stored compact copy.
+
+    The compact copy (``image_downscale``: Claude's standard tier, 1,568 px and
+    at most 340 KB) is what a re-look needs and what keeps a round of them
+    under the Memory event budget: twenty fit in one round. A row with no
+    compact copy answers with its high copy, and a legacy row with its original
+    (``model_image_source``). The bytes are the stored object's, unchanged, so
+    the tool result restores byte for byte like any other.
+
+    ``max_bytes`` is what is left of the round's byte budget; an image past it,
+    or past Bedrock's image limit, is refused with a reason rather than sent.
+    """
+    from .file_resolver import model_image_source
+    from .image_downscale import MODEL_IMAGE_MAX_BYTES
+
+    if text_only:
+        raise DocumentReadError(
+            f"'{meta.filename}' is an image, and the model in use reads text only, so it cannot be viewed."
+        )
+    key, mime_type = model_image_source(meta, "compact")
+    fmt = image_format_for(mime_type) or image_format_for(meta.mime_type)
+    raw = await asyncio.to_thread(_get_object_bytes, meta.s3_bucket, key)
+    if len(raw) > MODEL_IMAGE_MAX_BYTES:
+        raise DocumentReadError(f"'{meta.filename}' is too large to show again ({len(raw)} bytes).")
+    if max_bytes is not None and max_bytes > 0 and len(raw) > max_bytes:
+        raise DocumentReadError(
+            f"'{meta.filename}' does not fit what this round of reads has left "
+            f"({_megabytes(max_bytes)}); read it in a call of its own."
+        )
+    high_key = model_image_source(meta, "high")[0]
+    variant = "original" if key == meta.s3_key else ("high" if key == high_key else "compact")
+    payload = {
+        "upload_id": meta.upload_id,
+        "filename": meta.filename,
+        "format": fmt,
+        "size_bytes": len(raw),
+        "variant": variant,
+    }
+    return DocumentReadResult(
+        mode="image",
+        payload=payload,
+        extra_blocks=[{"image": {"format": fmt, "source": {"bytes": raw}}}],
+        bytes_returned=len(raw),
+        format=fmt,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1214,11 +1334,16 @@ def docx_paragraphs(raw: bytes) -> List[str]:
     read, so a deletion vanishes and an insertion reads as settled text. The
     upload digest numbers paragraphs through this same function, so its outline
     and ``document_read`` agree only while app-api and the Runtime have the flag
-    set the same way."""
+    set the same way.
+
+    A native chart is written out on the paragraph that anchors it, as
+    ``office_charts.chart_line`` renders it, so ``pattern`` finds a value a
+    chart plots where the chart sits."""
     raw = annotate_docx_for_model(raw)
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             xml = archive.read("word/document.xml")
+            charts = load_charts(archive, "word/document.xml")
     except (zipfile.BadZipFile, KeyError) as e:
         raise DocumentReadError(f"Could not open the Word document: {e}") from e
     try:
@@ -1236,9 +1361,39 @@ def docx_paragraphs(raw: bytes) -> List[str]:
             elif node.tag in (f"{_W_NS}br", f"{_W_NS}cr"):
                 parts.append(" ")
         text = "".join(parts).strip()
+        if charts:
+            lines = [chart_line(charts.get(rid), alt=alt) for rid, alt in _paragraph_charts(para)]
+            text = " ".join(t for t in [text, *lines] if t)
         if text:
             paragraphs.append(text)
     return paragraphs
+
+
+_MC_FALLBACK = "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+_WP_DOCPR = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}docPr"
+
+
+def _paragraph_charts(para: ElementTree.Element) -> List[Tuple[str, str]]:
+    """``(relationship id, alt text)`` per chart this paragraph anchors itself:
+    not one inside a nested paragraph (a text box's, counted on its own), nor
+    the picture Word saves as an ``mc:Fallback`` for a new-style chart."""
+    found: List[Tuple[str, str]] = []
+
+    def walk(node: ElementTree.Element) -> None:
+        for child in node:
+            if child.tag in (_MC_FALLBACK, f"{_W_NS}p"):
+                continue
+            if child.tag == f"{_W_NS}drawing":
+                rid = chart_reference(child)
+                if rid is not None:
+                    docpr = next(child.iter(_WP_DOCPR), None)
+                    alt = ((docpr.get("descr") or docpr.get("title") or "") if docpr is not None else "").strip()
+                    found.append((rid, alt))
+                    continue
+            walk(child)
+
+    walk(para)
+    return found
 
 
 def _docx_read(raw: bytes, pattern: Optional[str], offset: int, base: Dict[str, Any]) -> DocumentReadResult:

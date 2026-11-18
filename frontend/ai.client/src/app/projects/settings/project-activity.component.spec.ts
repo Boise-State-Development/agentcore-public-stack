@@ -26,6 +26,8 @@ describe('describeActivity', () => {
     [rec('project.updated', { changes: ['name'], after: { name: 'Roster' } }), 'renamed the project to “Roster”'],
     [rec('project.updated', { changes: ['description', 'editorsManageMembers'], after: { editorsManageMembers: false } }),
       'updated the description and limited managing members to the owner'],
+    [rec('project.updated', { changes: ['voiceEnabled'], after: { voiceEnabled: false } }), 'turned voice mode off'],
+    [rec('project.updated', { changes: ['voiceEnabled'], after: { voiceEnabled: true } }), 'turned voice mode on'],
     [rec('project.archived'), 'archived the project'],
     [rec('project.archived', { reason: 'policy review' }), 'archived the project (policy review)'],
     [rec('project.restored'), 'restored the project'],

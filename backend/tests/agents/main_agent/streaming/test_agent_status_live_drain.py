@@ -129,9 +129,8 @@ def _arrival_of_phase(frames, phase: str) -> bool:
 
 class TestLiveDrain:
     @pytest.mark.asyncio
-    async def test_tool_start_reaches_the_client_during_the_silence(self, monkeypatch):
+    async def test_tool_start_reaches_the_client_during_the_silence(self):
         """The whole point: narrate the tool WHILE it runs."""
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
         hook = _Hook()
         agent = _StallingAgent(hook)
 
@@ -140,23 +139,8 @@ class TestLiveDrain:
         assert _arrival_of_phase(frames, "tool_start") is False
 
     @pytest.mark.asyncio
-    async def test_the_kill_switch_restores_the_between_yields_drain(self, monkeypatch):
-        """Off, the frame waits for the stream to speak — the old behaviour."""
-        monkeypatch.setenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", "false")
-        hook = _Hook()
-        agent = _StallingAgent(hook)
-
-        frames = await _collect_with_arrival(agent, _Wrapper(hook))
-
-        # Still delivered, and still in order — just late, which is the bug.
-        assert _arrival_of_phase(frames, "tool_start") is True
-        phases = [p["phase"] for p in _status_payloads(frames)]
-        assert phases == ["tool_start", "tool_end"]
-
-    @pytest.mark.asyncio
-    async def test_every_transition_is_delivered_exactly_once(self, monkeypatch):
+    async def test_every_transition_is_delivered_exactly_once(self):
         """A status line that stutters backwards is worse than none."""
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
         hook = _Hook()
 
         frames = await _collect_with_arrival(_StallingAgent(hook), _Wrapper(hook))
@@ -165,8 +149,7 @@ class TestLiveDrain:
         assert phases == ["tool_start", "tool_end"]
 
     @pytest.mark.asyncio
-    async def test_sessionid_is_stamped_on_every_frame(self, monkeypatch):
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
+    async def test_sessionid_is_stamped_on_every_frame(self):
         hook = _Hook()
 
         frames = await _collect_with_arrival(_StallingAgent(hook), _Wrapper(hook))
@@ -177,9 +160,8 @@ class TestLiveDrain:
 
 class TestFailSoft:
     @pytest.mark.asyncio
-    async def test_a_wrapper_without_the_hook_streams_normally(self, monkeypatch):
+    async def test_a_wrapper_without_the_hook_streams_normally(self):
         """Voice and tests build wrappers with no status hook."""
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
         hook = _Hook()  # recorded into, but never reachable by the coordinator
         agent = _StallingAgent(hook, silence=0.05)
 
@@ -189,9 +171,8 @@ class TestFailSoft:
         assert any(f.startswith("event: done") for f, _ in frames)
 
     @pytest.mark.asyncio
-    async def test_a_failing_drain_does_not_break_the_turn(self, monkeypatch):
+    async def test_a_failing_drain_does_not_break_the_turn(self):
         """Narration is a nicety; it must never be able to end a turn."""
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
 
         class _BrokenHook(_Hook):
             def drain_statuses(self):
@@ -255,8 +236,7 @@ class TestSideFrame:
     """The first turn's `session_title` rides the same poll as the statuses."""
 
     @pytest.mark.asyncio
-    async def test_a_ready_title_goes_out_during_the_silence(self, monkeypatch):
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
+    async def test_a_ready_title_goes_out_during_the_silence(self):
         hook = _Hook()
         agent = _StallingAgent(hook)
         poll = _OneShotTitle(hook)
@@ -268,9 +248,8 @@ class TestSideFrame:
         assert poll.emitted == 1
 
     @pytest.mark.asyncio
-    async def test_it_is_polled_even_without_a_status_hook(self, monkeypatch):
+    async def test_it_is_polled_even_without_a_status_hook(self):
         """No hook means no statuses, not no title."""
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
         agent = _StallingAgent(_Hook(), silence=0.25)
         emitted: List[str] = []
 
@@ -285,8 +264,7 @@ class TestSideFrame:
         assert [sse for sse, _ in frames].count(_TITLE_FRAME) == 1
 
     @pytest.mark.asyncio
-    async def test_a_failing_poll_does_not_break_the_turn(self, monkeypatch):
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
+    async def test_a_failing_poll_does_not_break_the_turn(self):
         hook = _Hook()
         agent = _StallingAgent(hook, silence=0.05)
 
@@ -300,14 +278,13 @@ class TestSideFrame:
 
 class TestEarlyExit:
     @pytest.mark.asyncio
-    async def test_a_cooperative_stop_mid_silence_ends_cleanly(self, monkeypatch):
+    async def test_a_cooperative_stop_mid_silence_ends_cleanly(self):
         """Stop abandons the merge, which must unwind the agent stream.
 
         The merge holds an in-flight `__anext__` across its poll timeouts, so
         this is the path where that task gets cancelled. A generator left
         half-closed here would surface as a hung turn or a leaked lease.
         """
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
         hook = _Hook()
         agent = _StallingAgent(hook, silence=0.3)
         session_manager = _SessionManager()
@@ -373,14 +350,13 @@ class _SpanHoldingAgent(_StallingAgent):
 
 class TestContextAcrossSteps:
     @pytest.mark.asyncio
-    async def test_a_value_set_before_a_yield_resets_after_it(self, monkeypatch):
+    async def test_a_value_set_before_a_yield_resets_after_it(self):
         """Each `__anext__` is its own task; they must share one Context.
 
         A fresh context copy per step made every span Strands held across a
         yield fail to detach ("was created in a different Context"), ~5 logged
         errors per tool turn in the runtime.
         """
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
         hook = _Hook()
         agent = _SpanHoldingAgent(hook)
 
@@ -390,9 +366,8 @@ class TestContextAcrossSteps:
         assert agent.reset_error is None
 
     @pytest.mark.asyncio
-    async def test_the_ambient_value_survives_into_the_next_step(self, monkeypatch):
+    async def test_the_ambient_value_survives_into_the_next_step(self):
         """Otherwise spans opened mid-turn parent to the request span."""
-        monkeypatch.delenv("AGENT_STATUS_LIVE_DRAIN_ENABLED", raising=False)
         hook = _Hook()
         agent = _SpanHoldingAgent(hook)
 

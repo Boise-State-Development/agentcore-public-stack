@@ -10,7 +10,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChevronDown, heroMagnifyingGlass, heroXMark } from '@ng-icons/heroicons/outline';
+import { heroCheck, heroChevronDown, heroMagnifyingGlass, heroXMark } from '@ng-icons/heroicons/outline';
 import { ToolSelectorItem } from './tool-selector.model';
 import {
   isChildSelected,
@@ -57,7 +57,7 @@ let nextInstance = 0;
   selector: 'app-tool-selector',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon],
-  providers: [provideIcons({ heroChevronDown, heroMagnifyingGlass, heroXMark })],
+  providers: [provideIcons({ heroCheck, heroChevronDown, heroMagnifyingGlass, heroXMark })],
   templateUrl: './tool-selector.component.html',
   host: { class: 'block' },
 })
@@ -88,8 +88,17 @@ export class ToolSelectorComponent {
   /** "Select all" / "Clear" over the rows currently shown. */
   readonly bulkActions = input(true);
   readonly maxHeight = input<keyof typeof HEIGHT_CLASS>('md');
+  /**
+   * Mark selected rows beyond the checkbox: a tinted row and a "Selected" tag, which is
+   * text, so the state never rests on colour alone. For a surface where the selection
+   * is the thing being read (a project's skills), and where a read-only viewer sees
+   * only disabled checkboxes, which are easy to misread.
+   */
+  readonly markSelected = input(false);
   /** A row's `action` button was pressed. */
   readonly itemAction = output<ToolSelectorItem>();
+  /** A row's `detail` button was pressed. */
+  readonly itemDetail = output<ToolSelectorItem>();
 
   private readonly uid = `tool-selector-${nextInstance++}`;
   private readonly searchInput = viewChild<ElementRef<HTMLInputElement>>('search');
@@ -261,6 +270,15 @@ export class ToolSelectorComponent {
 
   protected runAction(item: ToolSelectorItem): void {
     if (item.action && !item.action.disabled) this.itemAction.emit(item);
+  }
+
+  protected openDetail(item: ToolSelectorItem): void {
+    if (item.detail && !item.detail.disabled) this.itemDetail.emit(item);
+  }
+
+  /** A selected row, drawn as one when `markSelected` is on. */
+  protected isMarked(item: ToolSelectorItem): boolean {
+    return this.markSelected() && this.isSelected(item);
   }
 
   protected selectAllShown(): void {

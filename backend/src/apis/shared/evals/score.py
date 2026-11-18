@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 if TYPE_CHECKING:
@@ -58,6 +59,30 @@ def contains_any(text: str, values: Iterable[str]) -> bool:
         if needle and re.search(r"(?<!\w)" + re.escape(needle) + r"(?!\w)", haystack):
             return True
     return False
+
+
+#: A number as the answer writes it, after :func:`normalize` (commas gone). Not
+#: preceded by a letter, digit or point, so ``Q4``, ``v2`` and the ``5`` in
+#: ``1.5`` are not numbers of their own. A sign is not part of it.
+_NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?")
+
+
+def first_number(text: str) -> Optional[str]:
+    """The first number ``text`` states (``"1,700 items"`` → ``"1700"``), or ``None``.
+
+    Markdown emphasis and a currency or percent sign around it do not matter:
+    ``**17**``, ``$19`` and ``26.5%`` give ``17``, ``19`` and ``26.5``.
+    """
+    match = _NUMBER.search(normalize(text))
+    return match.group(0) if match else None
+
+
+def same_number(a: str, b: str) -> bool:
+    """``17`` and ``17.0`` are the same number; text that is not one matches nothing."""
+    try:
+        return Decimal(a) == Decimal(b)
+    except ArithmeticError:
+        return False
 
 
 _FENCE = re.compile(r"^[ \t]*(```|~~~)[^\n]*\n(.*?)^[ \t]*\1[ \t]*$", re.MULTILINE | re.DOTALL)
@@ -175,6 +200,10 @@ def score_sample(
         failures.append("contains a forbidden value")
     if expect.forbidden_in_code and contains_any(code_blocks(answer), expect.forbidden_in_code):
         failures.append("code contains a forbidden value")
+    if expect.first_number:
+        found = first_number(answer)
+        if found is None or not any(same_number(found, value) for value in expect.first_number):
+            failures.append(f"first number: {found or 'none'}, expected {' or '.join(expect.first_number)}")
 
     names = [str(call.get("name") or "") for call in tool_calls]
     tools = expect.tools
@@ -254,6 +283,7 @@ FAILURE_CODES: Tuple[str, ...] = (
     "empty",
     "missing_value",
     "forbidden_value",
+    "first_number",
     "tool_missing",
     "tool_forbidden",
     "tool_order",
@@ -276,6 +306,7 @@ _FAILURE_PATTERNS: Tuple[Tuple["re.Pattern[str]", str, bool], ...] = (
     (re.compile(r"^missing "), "missing_value", False),
     (re.compile(r"^contains a forbidden value$"), "forbidden_value", False),
     (re.compile(r"^code contains a forbidden value$"), "forbidden_value", False),
+    (re.compile(r"^first number: "), "first_number", False),
     (re.compile(r"^did not call (?P<name>\S+)$"), "tool_missing", True),
     (re.compile(r"^called (?P<name>\S+)$"), "tool_forbidden", True),
     (re.compile(r"^tools out of order: "), "tool_order", False),

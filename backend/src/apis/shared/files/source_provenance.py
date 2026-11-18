@@ -355,6 +355,12 @@ METHOD_LITERAL = "literal"
 METHOD_NUMERIC = "numeric"
 METHOD_DATE = "date"
 METHOD_NO_MATCH = "no_match"
+#: Still ``quote_unsupported``: the value as stated is not in the passage. But
+#: the value's own date or number *is*, and the rest is words the passage does
+#: not carry: a description where the bare value belongs ("July 28, 2027
+#: interim report due"). A different mistake from a wrong number, and the one
+#: the model fixes by sending less, so it is told which it made.
+METHOD_VALUE_NOT_BARE = "value_not_bare"
 
 
 def _is_not_found(value: Any) -> bool:
@@ -417,6 +423,36 @@ def _dates_in(text: str) -> set:
         if parsed is not None:
             found.add(parsed)
     return found
+
+
+def _numbers_outside_dates(text: str) -> set:
+    """``_numbers_in`` without the day and year inside a written date.
+
+    The hint below must not fire on a coincidence: "28 days" is not in a
+    passage that only says "July 28, 2027", and a value "July 28, 2027" is not
+    half-right against "July 28, 2026" because both carry a 28.
+    """
+    spans = [m.span() for m in _DATE_RE.finditer(text)]
+    found = set()
+    for match in _NUMBER_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in spans):
+            continue
+        number = _as_number(match.group())
+        if number is not None:
+            found.add((number, text[match.end():match.end() + 1] == "%"))
+    return found
+
+
+def _value_is_described(value_str: str, quote: str) -> bool:
+    """Whether a value that failed the check carries a date or number the
+    passage does: the value is in there, wrapped in words that are not.
+
+    Only ever asked after the whole value failed, so it can never promote a
+    claim. It separates the two ways to fail, nothing more.
+    """
+    if _dates_in(value_str) & _dates_in(quote):
+        return True
+    return bool(_numbers_outside_dates(value_str) & _numbers_outside_dates(quote))
 
 
 def _on_value_boundaries(quote: str, start: int, end: int, *, numeric: bool) -> bool:
@@ -507,6 +543,8 @@ def _value_in_quote(value: Any, quote: str, *, enum_field: bool) -> Tuple[Option
     if parsed_date is not None and parsed_date in _dates_in(quote):
         return True, METHOD_DATE
 
+    if _value_is_described(value_str, quote):
+        return False, METHOD_VALUE_NOT_BARE
     return False, METHOD_NO_MATCH
 
 
@@ -611,6 +649,7 @@ __all__ = [
     "METHOD_NUMERIC",
     "METHOD_DATE",
     "METHOD_NO_MATCH",
+    "METHOD_VALUE_NOT_BARE",
     "document_units",
     "normalize_with_map",
     "render_locator",

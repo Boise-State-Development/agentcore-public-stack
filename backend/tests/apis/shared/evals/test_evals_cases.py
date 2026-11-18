@@ -383,7 +383,7 @@ def test_a_pause_is_a_delivery_case_s_and_bounded():
         parse_case(raw, family="attachment_delivery")
     other = _case()
     other["turns"] = [{"prompt": "one", "pause_seconds": 10}]
-    with pytest.raises(CaseError, match="only attachment_delivery cases pause"):
+    with pytest.raises(CaseError, match="only attachment_delivery and idle_return_recall cases pause"):
         parse_case(other, family="tool_selection")
 
 
@@ -394,8 +394,42 @@ def test_an_unknown_arm_and_an_arm_outside_the_family_are_refused():
         parse_case(_case(run={"enabled_tools": ["calculator"], "arm": "auto"}), family="tool_selection")
 
 
+def test_per_file_arms_name_the_case_s_own_files_and_a_forced_mode():
+    raw = _delivery()
+    raw["files"] = ["a.pdf", "b.pdf"]
+    raw["run"]["file_arms"] = {"a.pdf": "native", "b.pdf": "on_demand"}
+    case = parse_case(raw, family="attachment_delivery")
+    assert case.run.file_arms == {"a.pdf": "native", "b.pdf": "on_demand"}
+    raw["run"]["file_arms"] = {"c.pdf": "native"}
+    with pytest.raises(CaseError, match="not one of the case's files"):
+        parse_case(raw, family="attachment_delivery")
+    raw["run"]["file_arms"] = {"a.pdf": "search"}
+    with pytest.raises(CaseError, match="expected one of native, text, on_demand"):
+        parse_case(raw, family="attachment_delivery")
+    with pytest.raises(CaseError, match="only attachment_delivery cases name per-file arms"):
+        parse_case(_case(run={"enabled_tools": ["calculator"], "file_arms": {"a.pdf": "native"}}), family="tool_selection")
+
+
 def test_the_delivery_family_is_opt_in():
     from apis.shared.evals.cases import DEFAULT_FAMILIES, OPT_IN_FAMILIES
 
     assert "attachment_delivery" in OPT_IN_FAMILIES and "attachment_delivery" not in DEFAULT_FAMILIES
     assert set(DEFAULT_FAMILIES) | OPT_IN_FAMILIES == set(FAMILIES)
+
+
+def test_idle_return_recall_pauses_and_names_a_ceiling_but_no_arm():
+    from apis.shared.evals.cases import CEILING_ENV, OPT_IN_FAMILIES
+
+    raw = {
+        "id": "idle_return_recall.example",
+        "family": "idle_return_recall",
+        "turns": [{"prompt": "one"}, {"prompt": "two", "pause_seconds": 330, "files": ["a.md"]}],
+        "run": {"enabled_tools": [], "enabled_skills": [], "ceiling": "idle_return"},
+        "expect": {"contains_any": ["x"]},
+    }
+    case = parse_case(raw, family="idle_return_recall")
+    assert case.meta_for(1).pause_seconds == 330 and case.run.ceiling == "idle_return"
+    assert CEILING_ENV["idle_return"] and "idle_return_recall" in OPT_IN_FAMILIES
+    raw["run"]["arm"] = "native"
+    with pytest.raises(CaseError, match="only attachment_delivery cases name a arm"):
+        parse_case(raw, family="idle_return_recall")

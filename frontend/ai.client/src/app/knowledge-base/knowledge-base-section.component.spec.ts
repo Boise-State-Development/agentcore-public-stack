@@ -6,6 +6,7 @@ import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { KnowledgeBaseSectionComponent } from './knowledge-base-section.component';
 import { KbUpgradeService, UpgradeStatus, DocumentNotCarried } from './kb-upgrade.service';
 import { Document, KbUsage, PROCESSING_STATUSES } from '../assistants/models/document.model';
+import { SyncPolicy } from '../assistants/models/sync-policy.model';
 import { ConfigService } from '../services/config.service';
 import { ToastService } from '../services/toast/toast.service';
 import { DocumentService, DocumentUploadError } from '../assistants/services/document.service';
@@ -158,6 +159,8 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
 
     fixture = TestBed.createComponent(KnowledgeBaseSectionComponent);
     fixture.componentRef.setInput('createDraft', async () => 'ast-1');
+    // The card starts folded in the composer; these specs read what is inside it.
+    fixture.componentRef.setInput('open', true);
   });
 
   afterEach(() => {
@@ -462,6 +465,8 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
         }).compileComponents();
         fixture = TestBed.createComponent(KnowledgeBaseSectionComponent);
         fixture.componentRef.setInput('createDraft', async () => 'ast-1');
+    // The card starts folded in the composer; these specs read what is inside it.
+    fixture.componentRef.setInput('open', true);
         fixture.componentRef.setInput('entityId', 'ast-1');
         fixture.componentRef.setInput('permissionResolved', true);
         fixture.detectChanges();
@@ -587,37 +592,16 @@ describe('KnowledgeBaseSectionComponent — upgrade card', () => {
       });
     });
 
-    describe('the Managed/Classic badge', () => {
-      it('labels a managed knowledge base "Managed"', async () => {
-        await render(status({ phase: 'succeeded', engine: 'managed' }));
-        expect(fixture.componentInstance.isManagedEngine()).toBe(true);
-        expect(fixture.componentInstance.engineBadgeLabel()).toBe('Managed');
-      });
-
-      it('labels a legacy knowledge base "Classic"', async () => {
-        await render(status({ phase: 'none', engine: 'classic' }));
-        expect(fixture.componentInstance.isManagedEngine()).toBe(false);
-        expect(fixture.componentInstance.engineBadgeLabel()).toBe('Classic');
-      });
-
-      it('defaults to classic when no status has been read', () => {
-        expect(fixture.componentInstance.engineBadgeLabel()).toBe('Classic');
-      });
-
-      it('renders the badge next to the document list when documents exist', async () => {
-        await render(status({ phase: 'succeeded', engine: 'managed' }));
+    it('does not name the engine next to the document list', async () => {
+      // Managed is the default for new knowledge bases; the engine only picks
+      // the status vocabulary and is not shown as a badge.
+      for (const engine of ['classic', 'managed'] as const) {
+        await render(status({ phase: engine === 'managed' ? 'succeeded' : 'available', engine }));
         fixture.componentInstance.uploadedDocuments.set([doc()]);
         fixture.detectChanges();
-        expect(fixture.componentInstance.showEngineBadge()).toBe(true);
-        expect(text()).toContain('Managed');
-      });
-
-      it('hides the badge when the knowledge base has no documents', async () => {
-        await render(status({ phase: 'succeeded', engine: 'managed' }));
-        fixture.componentInstance.uploadedDocuments.set([]);
-        fixture.detectChanges();
-        expect(fixture.componentInstance.showEngineBadge()).toBe(false);
-      });
+        expect(text()).toContain('Documents');
+        expect(text()).not.toMatch(/\b(Classic|Managed)\b/);
+      }
     });
   });
 
@@ -850,6 +834,8 @@ describe('KnowledgeBaseSectionComponent — replace document', () => {
 
     fixture = TestBed.createComponent(KnowledgeBaseSectionComponent);
     fixture.componentRef.setInput('createDraft', async () => 'ast-1');
+    // The card starts folded in the composer; these specs read what is inside it.
+    fixture.componentRef.setInput('open', true);
   });
 
   afterEach(() => TestBed.resetTestingModule());
@@ -872,8 +858,29 @@ describe('KnowledgeBaseSectionComponent — replace document', () => {
     return fixture.nativeElement as HTMLElement;
   }
 
-  function replaceButton(name = 'notes.pdf'): HTMLButtonElement | null {
-    return el().querySelector(`button[aria-label="Replace ${name}"]`);
+  /**
+   * The row menu's item `label` for the document `name`, or null when the row
+   * offers no such item. Replace and Delete live in each row's "More actions"
+   * menu, which CDK renders in its overlay; the menu is closed again before the
+   * item is returned, so each call reads a fresh menu.
+   */
+  function menuItem(name: string, label: string): { disabled: boolean } | null {
+    const trigger = el().querySelector<HTMLButtonElement>(`button[aria-label="More actions for ${name}"]`);
+    if (!trigger) return null;
+    trigger.click();
+    fixture.detectChanges();
+    const items = Array.from(document.querySelectorAll<HTMLButtonElement>('.cdk-overlay-container [role="menuitem"]'));
+    const item = items.find((b) => b.textContent?.trim() === label);
+    const found = item
+      ? { disabled: item.disabled || item.getAttribute('aria-disabled') === 'true' }
+      : null;
+    trigger.click();
+    fixture.detectChanges();
+    return found;
+  }
+
+  function replaceButton(name = 'notes.pdf'): { disabled: boolean } | null {
+    return menuItem(name, 'Replace with a newer version');
   }
 
   /** Open the picker for a row and "choose" a file, as the browser would. */
@@ -897,7 +904,6 @@ describe('KnowledgeBaseSectionComponent — replace document', () => {
       doc({ documentId: 'f', filename: 'f.pdf', status: 'provisioning' }),
     ]);
     expect(replaceButton('a.pdf')).not.toBeNull();
-    expect(replaceButton('a.pdf')?.getAttribute('title')).toBe('Replace with a newer version');
     expect(replaceButton('b.pdf')).not.toBeNull();
     for (const name of ['c.pdf', 'd.pdf', 'e.pdf', 'f.pdf']) {
       expect(replaceButton(name)).toBeNull();
@@ -1060,8 +1066,8 @@ describe('KnowledgeBaseSectionComponent — replace document', () => {
     expect(tasks.tasks()).toHaveLength(1);
     expect(replaceButton('notes.pdf')?.disabled).toBe(true);
     expect(replaceButton('other.pdf')?.disabled).toBe(true);
-    expect(el().querySelector<HTMLButtonElement>('button[aria-label="Delete notes.pdf"]')?.disabled).toBe(true);
-    expect(el().querySelector<HTMLButtonElement>('button[aria-label="Delete other.pdf"]')?.disabled).toBe(false);
+    expect(menuItem('notes.pdf', 'Delete')?.disabled).toBe(true);
+    expect(menuItem('other.pdf', 'Delete')?.disabled).toBe(false);
     expect(el().textContent).toContain('Replacing…');
     expect(unloadAllowed()).toBe(false);
 
@@ -1074,6 +1080,414 @@ describe('KnowledgeBaseSectionComponent — replace document', () => {
   });
 });
 
+
+describe('KnowledgeBaseSectionComponent — document list', () => {
+  let fixture: ComponentFixture<KnowledgeBaseSectionComponent>;
+  let documents: Record<string, ReturnType<typeof vi.fn>>;
+  let dialog: { open: ReturnType<typeof vi.fn> };
+  let toast: Record<'success' | 'error' | 'warning' | 'info', ReturnType<typeof vi.fn>>;
+
+  function doc(overrides: Partial<Document> = {}): Document {
+    return {
+      documentId: 'doc-1',
+      assistantId: 'ast-1',
+      filename: 'notes.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 1234,
+      status: 'complete',
+      createdAt: '2026-09-01T00:00:00Z',
+      updatedAt: '2026-09-01T00:00:00Z',
+      ...overrides,
+    } as Document;
+  }
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    const collaborators = quietCollaborators();
+    documents = (collaborators[0] as unknown as { useValue: Record<string, ReturnType<typeof vi.fn>> })
+      .useValue;
+    dialog = { open: vi.fn() };
+    toast = { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() };
+    await TestBed.configureTestingModule({
+      imports: [KnowledgeBaseSectionComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        ...collaborators,
+        { provide: ConfigService, useValue: { appApiUrl: () => 'http://api.test' } },
+        {
+          provide: KbUpgradeService,
+          useValue: { getStatus: vi.fn().mockResolvedValue(status()), start: vi.fn(), retry: vi.fn(), dismissNotice: vi.fn() },
+        },
+        { provide: ToastService, useValue: toast },
+        { provide: Dialog, useValue: dialog },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(KnowledgeBaseSectionComponent);
+    fixture.componentRef.setInput('createDraft', async () => 'ast-1');
+    fixture.componentRef.setInput('open', true);
+  });
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  function el(): HTMLElement {
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  async function render(docs: Document[]) {
+    documents['listDocuments'].mockResolvedValue({ documents: docs, nextToken: null });
+    fixture.componentRef.setInput('entityId', 'ast-1');
+    fixture.componentRef.setInput('userPermission', 'owner');
+    fixture.componentRef.setInput('permissionResolved', true);
+    fixture.detectChanges();
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(fixture.componentInstance.isLoadingKnowledge()).toBe(false);
+    });
+  }
+
+  function names(): string[] {
+    return Array.from(el().querySelectorAll('li p.truncate')).map((p) => p.textContent?.trim() ?? '');
+  }
+
+  it('summarises what it holds while folded, and says what needs attention', async () => {
+    fixture.componentRef.setInput('open', false);
+    await render([doc(), doc({ documentId: 'b', filename: 'b.pdf', status: 'failed' })]);
+    expect(el().textContent).toContain('2 documents · 1 failed');
+    // Folded: the rows are not in the page, only the summary.
+    expect(el().querySelector('li')).toBeNull();
+  });
+
+  it('refreshes in place, never back to the skeleton', async () => {
+    await render([doc()]);
+    documents['listDocuments'].mockReturnValue(new Promise(() => undefined));
+    void fixture.componentInstance.loadDocuments();
+    fixture.detectChanges();
+    expect(fixture.componentInstance.isLoadingKnowledge()).toBe(false);
+    expect(names()).toEqual(['notes.pdf']);
+  });
+
+  it('adds imported files as their own rows at once, before the reload answers', async () => {
+    await render([doc()]);
+    const imported = [doc({ documentId: 'n1', filename: 'new.docx', status: 'uploading', sourceConnectorId: 'google', sourceFileId: 'f1' })];
+    dialog.open.mockReturnValue({ closed: of(imported) });
+    let release!: (v: unknown) => void;
+    documents['listDocuments'].mockReturnValue(new Promise((r) => (release = r)));
+
+    const opening = fixture.componentInstance.openFileSourceBrowser();
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(names()).toEqual(['new.docx', 'notes.pdf']);
+    });
+    expect(fixture.componentInstance.isLoadingKnowledge()).toBe(false);
+    release({ documents: [...imported, doc()], nextToken: null });
+    await opening;
+  });
+
+  it('offers a folder import from the picker and reports what it skipped', async () => {
+    await render([]);
+    const created = [doc({ documentId: 'n1', filename: 'a.pdf', status: 'uploading' })];
+    dialog.open.mockReturnValue({
+      closed: of({
+        documents: created,
+        folderImport: { documents: created, listed: 5, alreadyImported: 2, skippedType: 2, truncated: false, folderName: 'Grants' },
+      }),
+    });
+    await fixture.componentInstance.openFileSourceBrowser();
+    expect(dialog.open.mock.calls[0][1].data.allowFolderImport).toBe(true);
+    expect(toast.success).toHaveBeenCalledWith(
+      "Importing 1 file from Grants (2 already here, 2 of a type it can't read).",
+    );
+  });
+
+  it('searches and filters a long list', async () => {
+    await render([
+      doc({ documentId: 'a', filename: 'Budget 2026.pdf' }),
+      doc({ documentId: 'b', filename: 'Syllabus.docx' }),
+      doc({ documentId: 'c', filename: 'Catalog', sourceConnectorId: 'web', sourceFileId: 'https://x.edu/catalog' }),
+      doc({ documentId: 'd', filename: 'Roster.pdf', sourceConnectorId: 'google', sourceAdapterKey: 'google-drive', sourceFileId: 'f1' }),
+      doc({ documentId: 'e', filename: 'Notes.md' }),
+      doc({ documentId: 'f', filename: 'Broken.pdf', status: 'failed' }),
+    ]);
+    const search = el().querySelector<HTMLInputElement>('#kb-document-search')!;
+    search.value = 'budget';
+    search.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    expect(names()).toEqual(['Budget 2026.pdf']);
+
+    fixture.componentInstance.clearDocumentFilters();
+    fixture.componentInstance.documentFilter.set('attention');
+    fixture.detectChanges();
+    expect(names()).toEqual(['Broken.pdf']);
+
+    const chips = Array.from(el().querySelectorAll('[aria-label="Filter documents"] button')).map((b) => b.textContent?.trim());
+    expect(chips).toEqual(['All', 'Uploaded', 'Connected', 'Web pages', 'Needs attention']);
+  });
+
+  it('opens a document where it is most useful: its source, a viewer, or the file', async () => {
+    await render([
+      doc({ documentId: 'd', filename: 'Roster.pdf', sourceConnectorId: 'google', sourceAdapterKey: 'google-drive', sourceFileId: 'f1' }),
+      doc({ documentId: 'w', filename: 'Catalog', sourceConnectorId: 'web', sourceFileId: 'https://x.edu/catalog' }),
+      doc({ documentId: 'm', filename: 'Notes.md', contentType: 'text/markdown' }),
+      doc({ documentId: 'p', filename: 'Report.pdf' }),
+    ]);
+    const drive = el().querySelector<HTMLAnchorElement>('a[aria-label="Open in Google Drive: Roster.pdf"]');
+    expect(drive?.href).toBe('https://drive.google.com/open?id=f1');
+    expect(drive?.rel).toContain('noopener');
+    expect(el().querySelector<HTMLAnchorElement>('a[aria-label="Open page: Catalog"]')?.href).toBe('https://x.edu/catalog');
+
+    el().querySelector<HTMLButtonElement>('button[aria-label="View: Notes.md"]')!.click();
+    expect(dialog.open.mock.calls.at(-1)![1].data).toEqual({
+      target: 'ast-1',
+      documentId: 'm',
+      filename: 'Notes.md',
+      format: 'markdown',
+    });
+    expect(el().querySelector('button[aria-label="Open file: Report.pdf"]')).not.toBeNull();
+    // The download moved into the row menu; it is no longer a row icon.
+    expect(el().querySelector('button[aria-label="Download Report.pdf"]')).toBeNull();
+  });
+});
+
+describe('KnowledgeBaseSectionComponent — synced folders', () => {
+  let fixture: ComponentFixture<KnowledgeBaseSectionComponent>;
+  let documents: Record<string, ReturnType<typeof vi.fn>>;
+  let sync: Record<string, ReturnType<typeof vi.fn>>;
+  let connectors: Record<string, ReturnType<typeof vi.fn>>;
+  let dialog: { open: ReturnType<typeof vi.fn> };
+  let toast: Record<'success' | 'error' | 'warning' | 'info', ReturnType<typeof vi.fn>>;
+
+  const GOOGLE = { providerId: 'google', displayName: 'Google Drive', iconName: 'heroCloud', connected: true };
+
+  function doc(overrides: Partial<Document> = {}): Document {
+    return {
+      documentId: 'doc-1',
+      assistantId: 'ast-1',
+      filename: 'notes.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 1234,
+      status: 'complete',
+      sourceConnectorId: 'google',
+      sourceAdapterKey: 'google-drive',
+      sourceFileId: 'file-1',
+      createdAt: '2026-09-01T00:00:00Z',
+      updatedAt: '2026-09-01T00:00:00Z',
+      ...overrides,
+    } as Document;
+  }
+
+  function folderPolicy(overrides: Partial<SyncPolicy> = {}): SyncPolicy {
+    return {
+      policyId: 'pol-folder',
+      assistantId: 'ast-1',
+      sourceType: 'drive_folder',
+      sourceRef: 'google:fold-1',
+      sourceName: 'My Drive/Grants',
+      interval: 'weekly',
+      state: 'active',
+      createdAt: '2026-11-17T00:00:00Z',
+      updatedAt: '2026-11-17T00:00:00Z',
+      ...overrides,
+    };
+  }
+
+  function folderImportResult(created: Document[], keepInSync: boolean) {
+    return {
+      documents: created,
+      folderImport: {
+        documents: created,
+        listed: created.length,
+        alreadyImported: 0,
+        skippedType: 0,
+        truncated: false,
+        folderName: 'Grants',
+        connectorId: 'google',
+        folderId: 'fold-1',
+        folderPath: 'My Drive/Grants',
+        keepInSync,
+      },
+    };
+  }
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    const collaborators = quietCollaborators();
+    const useValue = (i: number) =>
+      (collaborators[i] as unknown as { useValue: Record<string, ReturnType<typeof vi.fn>> }).useValue;
+    documents = useValue(0);
+    useValue(1)['listFileSources'].mockResolvedValue([GOOGLE]);
+    sync = useValue(3);
+    connectors = useValue(4);
+    dialog = { open: vi.fn() };
+    toast = { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() };
+    await TestBed.configureTestingModule({
+      imports: [KnowledgeBaseSectionComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        ...collaborators,
+        { provide: ConfigService, useValue: { appApiUrl: () => 'http://api.test' } },
+        {
+          provide: KbUpgradeService,
+          useValue: { getStatus: vi.fn().mockResolvedValue(status()), start: vi.fn(), retry: vi.fn(), dismissNotice: vi.fn() },
+        },
+        { provide: ToastService, useValue: toast },
+        { provide: Dialog, useValue: dialog },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(KnowledgeBaseSectionComponent);
+    fixture.componentRef.setInput('createDraft', async () => 'ast-1');
+    fixture.componentRef.setInput('open', true);
+  });
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  function el(): HTMLElement {
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  async function render(docs: Document[], policies: SyncPolicy[] = []) {
+    documents['listDocuments'].mockResolvedValue({ documents: docs, nextToken: null });
+    sync['listPolicies'].mockResolvedValue(policies);
+    fixture.componentRef.setInput('entityId', 'ast-1');
+    fixture.componentRef.setInput('userPermission', 'owner');
+    fixture.componentRef.setInput('permissionResolved', true);
+    fixture.detectChanges();
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(fixture.componentInstance.isLoadingKnowledge()).toBe(false);
+    });
+  }
+
+  function syncedFolders(): HTMLElement | null {
+    return el().querySelector('[data-testid="kb-synced-folders"]');
+  }
+
+  /** Per-file sync controls: every control outside the synced-folders list. */
+  function perFileControls(): number {
+    return Array.from(el().querySelectorAll('app-sync-policy-control')).filter(
+      (c) => !c.closest('[data-testid="kb-synced-folders"]'),
+    ).length;
+  }
+
+  it('lists a synced folder with its controls, and hides per-file sync for the files it covers', async () => {
+    await render(
+      [
+        doc({ documentId: 'a', filename: 'Budget.pdf', syncPolicyId: 'pol-folder' }),
+        doc({ documentId: 'b', filename: 'Other.pdf', sourceFileId: 'file-2' }),
+      ],
+      [folderPolicy()],
+    );
+    const list = syncedFolders();
+    expect(list?.textContent).toContain('My Drive/Grants');
+    expect(list?.textContent).toContain('first sync within about 15 minutes');
+    expect(list?.querySelectorAll('app-sync-policy-control')).toHaveLength(1);
+    expect(el().textContent).toContain('Kept in sync with My Drive/Grants');
+    // Only the file no folder covers offers its own schedule.
+    expect(perFileControls()).toBe(1);
+    // The folded card's summary counts the folder beside the documents.
+    expect(fixture.componentInstance.cardSummary()).toBe('2 documents · 1 synced folder');
+  });
+
+  it('promises a first sync only until one has run', async () => {
+    await render([], [folderPolicy({ lastSyncAt: '2026-11-17T23:58:31Z', lastResult: 'skipped', state: 'paused_reauth' })]);
+    const list = syncedFolders()!;
+    expect(list.textContent).toContain('Auto-sync from Google Drive');
+    expect(list.textContent).not.toContain('first sync within');
+    expect(list.textContent).toContain('Reconnect Google Drive');
+  });
+
+  it('has no synced-folders list without a folder policy', async () => {
+    await render([doc()]);
+    expect(syncedFolders()).toBeNull();
+    expect(perFileControls()).toBe(1);
+  });
+
+  it('schedules the folder after a "Keep in sync" import, before its first run marks the files', async () => {
+    await render([]);
+    const created = [doc({ documentId: 'n1', filename: 'a.pdf', status: 'uploading' })];
+    sync['createPolicy'].mockResolvedValue(folderPolicy());
+    dialog.open.mockReturnValue({ closed: of(folderImportResult(created, true)) });
+    // The reload answers before the folder's first run, so the copy is still unmarked.
+    documents['listDocuments'].mockResolvedValue({ documents: created, nextToken: null });
+
+    await fixture.componentInstance.openFileSourceBrowser();
+    fixture.detectChanges();
+
+    expect(sync['createPolicy']).toHaveBeenCalledWith('ast-1', {
+      sourceType: 'drive_folder',
+      sourceRef: 'google:fold-1',
+      interval: 'weekly',
+      sourceName: 'My Drive/Grants',
+    });
+    expect(syncedFolders()?.textContent).toContain('My Drive/Grants');
+    expect(el().textContent).toContain('Kept in sync with My Drive/Grants');
+    expect(perFileControls()).toBe(0);
+  });
+
+  it('makes no schedule when "Keep in sync" is not ticked', async () => {
+    await render([]);
+    const created = [doc({ documentId: 'n1', status: 'uploading' })];
+    dialog.open.mockReturnValue({ closed: of(folderImportResult(created, false)) });
+    await fixture.componentInstance.openFileSourceBrowser();
+    expect(sync['createPolicy']).not.toHaveBeenCalled();
+  });
+
+  it('keeps the schedule a folder already has when it is imported again', async () => {
+    await render([], [folderPolicy()]);
+    const created = [doc({ documentId: 'n2', status: 'uploading' })];
+    dialog.open.mockReturnValue({ closed: of(folderImportResult(created, true)) });
+    documents['listDocuments'].mockResolvedValue({ documents: created, nextToken: null });
+    await fixture.componentInstance.openFileSourceBrowser();
+    fixture.detectChanges();
+    expect(sync['createPolicy']).not.toHaveBeenCalled();
+    expect(perFileControls()).toBe(0);
+  });
+
+  it('says so when the schedule fails, and keeps what was imported', async () => {
+    await render([]);
+    const created = [doc({ documentId: 'n1', status: 'uploading' })];
+    sync['createPolicy'].mockRejectedValue(new Error(''));
+    dialog.open.mockReturnValue({ closed: of(folderImportResult(created, true)) });
+    documents['listDocuments'].mockResolvedValue({ documents: created, nextToken: null });
+    await fixture.componentInstance.openFileSourceBrowser();
+    fixture.detectChanges();
+    expect(toast.success).toHaveBeenCalledWith('Importing 1 file from Grants.');
+    expect(toast.error).toHaveBeenCalledWith('The files were imported, but Grants could not be kept in sync.');
+    expect(syncedFolders()).toBeNull();
+    expect(perFileControls()).toBe(1);
+  });
+
+  it('stops syncing a folder only after confirming, then re-reads its files', async () => {
+    await render([doc({ documentId: 'a', syncPolicyId: 'pol-folder' })], [folderPolicy()]);
+    sync['deletePolicy'].mockResolvedValue(undefined);
+    const stop = () => el().querySelector<HTMLButtonElement>('[data-testid="kb-stop-folder-sync"]')!;
+
+    dialog.open.mockReturnValueOnce({ closed: of(false) });
+    stop().click();
+    await vi.waitFor(() => expect(dialog.open).toHaveBeenCalledTimes(1));
+    expect(sync['deletePolicy']).not.toHaveBeenCalled();
+
+    // The server unmarks the folder's files with the schedule.
+    documents['listDocuments'].mockResolvedValue({ documents: [doc({ documentId: 'a' })], nextToken: null });
+    dialog.open.mockReturnValueOnce({ closed: of(true) });
+    stop().click();
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(syncedFolders()).toBeNull();
+      expect(perFileControls()).toBe(1);
+    });
+    expect(sync['deletePolicy']).toHaveBeenCalledWith('ast-1', 'pol-folder');
+    expect(dialog.open.mock.calls[1][1].data.title).toBe('Stop syncing this folder?');
+  });
+
+  it('reconnects a paused folder through the connector in its source', async () => {
+    await render([], [folderPolicy({ state: 'paused_reauth' })]);
+    connectors['initiateConsent'].mockResolvedValue({ connected: false, authorizationUrl: 'https://consent.test' });
+    await fixture.componentInstance.onSyncReconnect('google:fold-1');
+    expect(connectors['initiateConsent']).toHaveBeenCalledWith('google');
+  });
+});
 
 describe('KnowledgeBaseSectionComponent — knowledge-base mode line', () => {
   let getMode: ReturnType<typeof vi.fn>;
@@ -1102,6 +1516,8 @@ describe('KnowledgeBaseSectionComponent — knowledge-base mode line', () => {
     }).compileComponents();
     const fixture = TestBed.createComponent(KnowledgeBaseSectionComponent);
     fixture.componentRef.setInput('createDraft', async () => 'ast-1');
+    // The card starts folded in the composer; these specs read what is inside it.
+    fixture.componentRef.setInput('open', true);
     fixture.componentRef.setInput('entityId', 'ast-1');
     fixture.componentRef.setInput('userPermission', options.permission ?? 'owner');
     fixture.componentRef.setInput('permissionResolved', true);

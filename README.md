@@ -12,7 +12,7 @@
 
 Chat, agents, skills, tools and connectors on Amazon Bedrock AgentCore. Every model, tool and connector is a role grant your admins control, every model call is metered to the token, and every release publishes its quality, speed and cost, failures included. Source-available, and free for universities, public research and government. Built by Boise State University.
 
-[![Release](https://img.shields.io/badge/Release-v1.36.1-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
+[![Release](https://img.shields.io/badge/Release-v1.37.0-6366f1?style=flat&logo=github&logoColor=white)](RELEASE_NOTES.md)
 [![Nightly](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml/badge.svg)](https://github.com/Boise-State-Development/agentcore-public-stack/actions/workflows/nightly.yml)
 [![Docs](https://img.shields.io/badge/Docs-boise--state--development.github.io-0ea5e9?style=flat&logo=readthedocs&logoColor=white)](https://boise-state-development.github.io/agentcore-public-stack/)
 [![Benchmarks](https://img.shields.io/badge/Benchmarks-published_every_release-22c55e?style=flat)](https://boise-state-development.github.io/agentcore-public-stack/benchmarks/)
@@ -81,13 +81,13 @@ Every rule below is code you can read and test, not a vendor's promise. The [gov
 
 ### 📊 Measured in the open
 
-**We publish our results; most platforms keep theirs private.** Every release runs 143 synthetic cases, three times each, on every model we list, and publishes what passed, what it cost and how long it took, failing cases included. The cases are synthetic, so nothing is withheld, and on the Benchmarks page every number links back to the case and commit that produced it.
+**We publish our results; most platforms keep theirs private.** Every release runs 145 synthetic cases, three times each, on every model we list, and publishes what passed, what it cost and how long it took, failing cases included. The cases are synthetic, so nothing is withheld, and on the Benchmarks page every number links back to the case and commit that produced it.
 
 | Model | Cases passing | Cost per task | Median task time | Median first token | Measured |
 |---|---:|---:|---:|---:|---|
-| `us.anthropic.claude-haiku-5-5` | 142 of 143 (k=3) | $0.0006 | 6.8 s | 2.7 s | 2026-11-13, v1.35.0 |
-| `us.anthropic.claude-sonnet-5` | 140 of 143 (k=3) | $0.0101 | 6.3 s | 1.5 s | 2026-11-13, v1.35.0 |
-| `us.anthropic.claude-opus-5-5` | 138 of 143 (k=3) | $0.0219 | 7.4 s | 2.2 s | 2026-11-13, v1.35.0 |
+| `us.anthropic.claude-haiku-5-5` | 142 of 145 (k=3) | $0.0008 | 7.2 s | 2.8 s | 2026-11-18, v1.36.1 |
+| `us.anthropic.claude-sonnet-5` | 142 of 145 (k=3) | $0.0131 | 6.4 s | 1.5 s | 2026-11-18, v1.36.1 |
+| `us.anthropic.claude-opus-5-5` | 143 of 145 (k=3) | $0.0273 | 7.5 s | 2.4 s | 2026-11-18, v1.36.1 |
 
 Cost per task is what the platform metered for every model call of a task, at Regional rates on the development deployment. Full tables by workflow, the methodology and the command that reruns the benchmark on your own deployment are on the [Benchmarks](https://boise-state-development.github.io/agentcore-public-stack/benchmarks/) page.
 
@@ -121,6 +121,21 @@ The platform is general-purpose, but it was shaped by the needs of a public univ
 - **Document work at scale.** Upload documents up to 50 MB, whole Drive folders, and Word files with tracked changes. The agent reads, summarizes, compares, redlines and produces Word, Excel and PowerPoint output.
 - **Verifiable answers.** Source provenance verification checks whether a cited passage really is in the document and whether the asserted value actually appears in it, and marks the ones it cannot confirm. Structured extraction runs a typed field set across a batch of documents and carries that provenance on every value. Both are in development, off by default.
 - **Procurement and governance that fit how agencies buy.** No new per-seat contract. SSO through your existing identity provider (Entra ID, Cognito, Google or any OIDC issuer). Roles mapped from identity claims. An audit log of admin changes. Delegated admin so each office owns its own surface. Per-department budgets today, with chargeback to a cost center in the works.
+
+---
+
+## 🧭 Workflow examples
+
+Each of these is a Shared Project we built with a campus office and ran end to end, written up with the project's full instructions, the prompts to send, what came back, and where a person still has to check. The people and documents in them are fictional.
+
+| Workflow | Who it's for | What the assistant does | What stays with you |
+| --- | --- | --- | --- |
+| [Setting up awards from their documents](docs-site/src/content/docs/user-guide/projects/example-award-intake.md) | Research administration | Runs one 14-field setup list over five award documents in one call, labels every value with a source check, and flags overlapping PIs and colliding report dates across the set | Look-alike values a check can't tell apart, worked-out totals, and every acceptance or allowability call |
+| [Revising a department policy](docs-site/src/content/docs/user-guide/projects/example-policy-revision.md) | Department chairs | Checks an outdated procedure against university and college rules, then returns each fix as a Word tracked change or a Google Docs suggestion citing its rule | Judgment calls, local context, and accepting each change |
+| [Sorting teaching evaluation comments](docs-site/src/content/docs/user-guide/projects/example-teaching-evaluations.md) | Faculty and chairs | Counts a course-evaluation export in code, sorts every comment with a shared codebook, and lists safety concerns for a person before any summary | Follow-up on flagged comments, and what to change; it declines to rate instructors |
+| [Negotiating a research agreement](docs-site/src/content/docs/user-guide/projects/example-contract-negotiation.md) | Sponsored programs, compliance, legal | Reviews a sponsor's redline clause by clause against a playbook, coordinates seven reviewers, and drafts the response as tracked changes | Escalations, and the final read before anything is sent |
+
+The award-intake workflow uses structured extraction and source provenance verification, which are in development and off by default.
 
 ---
 
@@ -341,7 +356,7 @@ agentcore-public-stack/
 
 See [RELEASE_NOTES.md](RELEASE_NOTES.md) for every release: new features, fixes, platform upgrades, breaking changes and the manual steps a deployment needs.
 
-**Current release:** v1.36.1
+**Current release:** v1.37.0
 
 ---
 

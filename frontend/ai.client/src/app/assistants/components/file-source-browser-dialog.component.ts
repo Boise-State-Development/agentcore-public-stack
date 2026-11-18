@@ -30,6 +30,7 @@ import {
   FileEntry,
   FileSourceConnector,
   ImportFileRef,
+  ImportFolderResponse,
   SourceRoot,
 } from '../models/file-source.model';
 import { Document } from '../models/document.model';
@@ -37,6 +38,7 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { KnowledgeTarget } from '../models/knowledge-target.model';
+import { FEATURES } from '../../services/features';
 import { DialogDismissDirective } from '../../components/dialog/dialog-dismiss.directive';
 import { DialogTitleDirective } from '../../components/dialog/dialog-title.directive';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
@@ -77,6 +79,39 @@ export interface FileSourceBrowserDialogData {
    * room for another folder.
    */
   allowFolder?: boolean;
+  /**
+   * `import` mode, agent targets only: offer "Import this folder" beside Import,
+   * so every readable file in the folder the user is in (subfolders included)
+   * is imported in one go. The server walks the folder; nothing is listed here.
+   */
+  allowFolderImport?: boolean;
+}
+
+/** An `import`-mode result for a whole folder ("Import this folder"). */
+export interface FolderImportResult {
+  documents: Document[];
+  folderImport: ImportFolderResponse & {
+    folderName: string;
+    /** The connector the folder was imported through. */
+    connectorId: string;
+    /** The provider's id for the folder. */
+    folderId: string;
+    /** The breadcrumb path to the folder, for display only. */
+    folderPath: string;
+    /**
+     * "Keep in sync" was ticked (only offered with `features.folderSync`): the
+     * caller schedules a `drive_folder` sync policy for the folder, whose first
+     * run adopts the copies this import made (assistant-kb-sync spec §11).
+     */
+    keepInSync: boolean;
+  };
+}
+
+/** Whether an `import`-mode result came from importing a folder. */
+export function isFolderImportResult(
+  result: FileSourceBrowserDialogResult | undefined,
+): result is FolderImportResult {
+  return !!result && !Array.isArray(result) && 'folderImport' in result;
 }
 
 /** A destination folder chosen in `pick-folder` mode. */
@@ -118,6 +153,7 @@ export function isFolderAttachSelection(
  */
 export type FileSourceBrowserDialogResult =
   | Document[]
+  | FolderImportResult
   | FolderSelection
   | AttachSelection
   | FolderAttachSelection;
@@ -224,6 +260,18 @@ export class FileSourceBrowserDialogComponent {
   /** `attach` mode: whether the folder the user is in can be attached whole. */
   protected readonly allowFolder = this.isAttach && this.data.allowFolder === true;
 
+  /** `import` mode: whether the folder the user is in can be imported whole. */
+  protected readonly allowFolderImport =
+    this.mode === 'import' && typeof this.data.target === 'string' && this.data.allowFolderImport === true;
+
+  /**
+   * `import` mode: "Keep in sync" beside "Import this folder". Folder sync needs
+   * the backend switch, so it is offered only with `features.folderSync`.
+   */
+  protected readonly offerFolderSync = this.allowFolderImport && inject(FEATURES).folderSync;
+  /** Whether a folder import should also keep the folder in sync. */
+  protected readonly keepFolderInSync = signal(false);
+
   /** True when the dialog was opened targeting a single connector. */
   protected readonly lockedToConnector = !!this.data.connector;
 
@@ -323,6 +371,15 @@ export class FileSourceBrowserDialogComponent {
    */
   protected readonly canAttachCurrentFolder = computed(
     () => this.allowFolder && this.canPickCurrentFolder() && this.activeSearch() === null,
+  );
+
+  /**
+   * `import` mode: the folder the user is in can be imported whole. Same rule as
+   * attaching one: inside a folder, not in search results, and never while files
+   * are ticked, so "Import this folder" and "Import 3" never compete for a click.
+   */
+  protected readonly canImportCurrentFolder = computed(
+    () => this.allowFolderImport && this.canPickCurrentFolder() && this.activeSearch() === null,
   );
 
   constructor() {
@@ -562,14 +619,19 @@ export class FileSourceBrowserDialogComponent {
       return;
     }
     const folderName = this.currentFolderName() || 'Folder';
+    this.dialogRef.close({
+      connector,
+      folder: { folderId, folderName, folderPath: this.currentFolderPath(folderName) },
+    });
+  }
+
+  /** The breadcrumb path to the current folder, ending in its own name. */
+  private currentFolderPath(folderName: string): string {
     const names = this.breadcrumbs().map((crumb) => crumb.name);
     if (names[names.length - 1] !== folderName) {
       names.push(folderName);
     }
-    this.dialogRef.close({
-      connector,
-      folder: { folderId, folderName, folderPath: names.join('/') },
-    });
+    return names.join('/');
   }
 
   /** `attach` mode: hand the selection to the composer, which imports it. */
@@ -676,6 +738,42 @@ export class FileSourceBrowserDialogComponent {
         files,
       );
       this.dialogRef.close(response.documents);
+    } catch (err) {
+      this.importing.set(false);
+      this.toast.error(this.errorMessage(err));
+    }
+  }
+
+  /**
+   * Import every readable file in the current folder, subfolders included. The
+   * server walks the folder and skips what the knowledge base already holds, so
+   * the dialog closes with only what is new.
+   */
+  protected async importCurrentFolder(): Promise<void> {
+    const connector = this.connector();
+    const folderId = this.currentFolderId();
+    const target = this.data.target;
+    if (!connector || folderId === null || typeof target !== 'string' || this.importing()) {
+      return;
+    }
+    if (!this.canImportCurrentFolder() || this.selectedCount() > 0) {
+      return;
+    }
+    this.importing.set(true);
+    try {
+      const response = await this.fileSourceService.importFolder(target, connector.providerId, folderId);
+      const folderName = this.currentFolderName() || 'Folder';
+      this.dialogRef.close({
+        documents: response.documents,
+        folderImport: {
+          ...response,
+          folderName,
+          connectorId: connector.providerId,
+          folderId,
+          folderPath: this.currentFolderPath(folderName),
+          keepInSync: this.offerFolderSync && this.keepFolderInSync(),
+        },
+      });
     } catch (err) {
       this.importing.set(false);
       this.toast.error(this.errorMessage(err));

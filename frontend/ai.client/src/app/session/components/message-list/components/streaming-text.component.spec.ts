@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { By } from '@angular/platform-browser';
 import { provideMarkdown, MarkdownComponent, MarkdownService } from 'ngx-markdown';
 import { StreamingTextComponent } from './streaming-text.component';
@@ -71,15 +71,28 @@ describe('StreamingTextComponent', () => {
     expect(component.displayedText()).toBe('Partial answer, now complete.');
   });
 
-  it('hands the markdown component explicit KaTeX delimiters', () => {
-    // Left unbound, ngx-markdown falls back to its own DEFAULT_KATEX_OPTIONS,
-    // which pair bare `$…$` and swallow the prose between two currency
-    // amounts. The binding is the whole fix — assert it actually arrives.
-    fixture.componentRef.setInput('text', 'Q1 ($100K), Q2 ($115K)');
-    fixture.componentRef.setInput('isStreaming', false);
-    fixture.detectChanges();
+  it('typesets math itself with explicit KaTeX delimiters on every render', () => {
+    // ngx-markdown 22's own `katex` path goes through marked-katex-extension,
+    // which only knows `$`/`$$`. We run KaTeX auto-render on `ready` instead,
+    // with our delimiter list: ngx-markdown's old defaults paired bare `$…$`
+    // and swallowed the prose between two currency amounts.
+    const globals = globalThis as Record<string, unknown>;
+    const renderMathInElement = vi.fn();
+    globals['katex'] = {};
+    globals['renderMathInElement'] = renderMathInElement;
+    try {
+      fixture.componentRef.setInput('text', 'Q1 ($100K), Q2 ($115K)');
+      fixture.componentRef.setInput('isStreaming', false);
+      fixture.detectChanges();
 
-    const markdown = fixture.debugElement.query(By.directive(MarkdownComponent));
-    expect(markdown.componentInstance.katexOptions).toBe(KATEX_OPTIONS);
+      const markdown = fixture.debugElement.query(By.directive(MarkdownComponent));
+      expect(markdown.componentInstance.katex).toBe(false);
+
+      markdown.componentInstance.ready.emit();
+      expect(renderMathInElement).toHaveBeenCalledWith(fixture.nativeElement, KATEX_OPTIONS);
+    } finally {
+      delete globals['katex'];
+      delete globals['renderMathInElement'];
+    }
   });
 });

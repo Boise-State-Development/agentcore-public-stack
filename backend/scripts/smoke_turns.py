@@ -284,6 +284,7 @@ class Transport(Protocol):
         *,
         on_frame: Optional[OnFrame] = None,
         abort_after_deltas: Optional[int] = None,
+        abort_gate: Optional[asyncio.Event] = None,
         timeout_s: float = 300.0,
     ) -> TurnResult: ...
 
@@ -308,7 +309,13 @@ async def _drain_sse(
     *,
     on_frame: Optional[OnFrame],
     abort_after_deltas: Optional[int],
+    abort_gate: Optional[asyncio.Event] = None,
 ) -> Tuple[List[Frame], bool]:
+    """Collect a stream's frames, closing it early once ``abort_after_deltas`` have arrived.
+
+    With ``abort_gate``, the close also waits for that event: the stream keeps
+    draining past the delta count until the caller says the client may leave.
+    """
     frames: List[Frame] = []
     deltas = 0
     aborted = False
@@ -319,7 +326,11 @@ async def _drain_sse(
             await on_frame(frame)
         if name == "content_block_delta":
             deltas += 1
-            if abort_after_deltas is not None and deltas >= abort_after_deltas:
+            if (
+                abort_after_deltas is not None
+                and deltas >= abort_after_deltas
+                and (abort_gate is None or abort_gate.is_set())
+            ):
                 aborted = True
                 await response.aclose()
                 break
@@ -449,6 +460,7 @@ class AppApiTransport:
         *,
         on_frame: Optional[OnFrame] = None,
         abort_after_deltas: Optional[int] = None,
+        abort_gate: Optional[asyncio.Event] = None,
         timeout_s: float = 300.0,
     ) -> TurnResult:
         started = time.monotonic()
@@ -461,7 +473,7 @@ class AppApiTransport:
                         error=body[:500],
                         elapsed_ms=(time.monotonic() - started) * 1000,
                     )
-                frames, aborted = await _drain_sse(response, started, on_frame=on_frame, abort_after_deltas=abort_after_deltas)
+                frames, aborted = await _drain_sse(response, started, on_frame=on_frame, abort_after_deltas=abort_after_deltas, abort_gate=abort_gate)
                 return TurnResult(
                     status_code=response.status_code,
                     frames=frames,
@@ -548,6 +560,7 @@ class RuntimeTransport:
         *,
         on_frame: Optional[OnFrame] = None,
         abort_after_deltas: Optional[int] = None,
+        abort_gate: Optional[asyncio.Event] = None,
         timeout_s: float = 300.0,
     ) -> TurnResult:
         bearer = await self._bearer_token()
@@ -562,7 +575,7 @@ class RuntimeTransport:
                 if response.status_code >= 400:
                     body = (await response.aread()).decode("utf-8", errors="replace")
                     return TurnResult(status_code=response.status_code, error=body[:500])
-                frames, aborted = await _drain_sse(response, started, on_frame=on_frame, abort_after_deltas=abort_after_deltas)
+                frames, aborted = await _drain_sse(response, started, on_frame=on_frame, abort_after_deltas=abort_after_deltas, abort_gate=abort_gate)
                 return TurnResult(
                     status_code=response.status_code,
                     frames=frames,
@@ -1243,35 +1256,109 @@ async def row_tool_approval(ctx: Context) -> RowResult:
     return RowResult("tool_approval_resume", "PASS", f"approved {ev.data.get('toolName')} and the turn finished", warnings)
 
 
+def _is_session_busy(turn: TurnResult) -> bool:
+    """The single-flight refusal, in either shape it reaches the client.
+
+    app-api turns the Runtime's 424 back into a 409 only while the lease is
+    still held when it looks (`_resolve_upstream_error_status`). A lease
+    released between the container's 409 and that look leaves the 424, whose
+    body still names the container's 409.
+    """
+    if turn.status_code == 409:
+        return True
+    return turn.status_code == 424 and "(409)" in (turn.error or "")
+
+
 async def row_duplicate_and_stop(ctx: Context) -> List[RowResult]:
     if not ctx.transport.via_app_api:
         raise RowSkip("single-flight 409 and Stop live on app-api; not reachable in runtime-direct mode")
     sid = ctx.new_session()
-    long_prompt = "Count from 1 to 150, one number per line, with no other text."
-    started = asyncio.Event()
+    # The duplicate must land while the first turn holds its lease, and two
+    # things free that lease early, both of which read as a guard that let a
+    # duplicate through:
+    #   - the model finishing. Haiku 5.5 has streamed 600 lines within 250ms
+    #     of `message_start`, so no prompt is reliably long enough to send the
+    #     duplicate on `message_start`. It is sent on the response's first
+    #     frame instead: the container takes the lease before it opens the
+    #     response, and the agent build and the model's first token still lie
+    #     ahead (seconds on dev).
+    #   - the client leaving. On the V2 Runtime a disconnect reaches the
+    #     container and closes the turn's generator, whose `finally` releases
+    #     the lease; so the client holds its abort until the duplicate has
+    #     answered (`abort_gate`).
+    long_prompt = "Count from 1 to 600, one number per line, with no other text."
+    opened = asyncio.Event()
+    dup_answered = asyncio.Event()
+    t0 = time.monotonic()
+    first_ended_ms: Optional[float] = None
 
     async def on_frame(frame: Frame) -> None:
-        if frame.name == "message_start":
-            started.set()
+        nonlocal first_ended_ms
+        opened.set()
+        if frame.name == "done" and first_ended_ms is None:
+            first_ended_ms = (time.monotonic() - t0) * 1000
 
-    task = asyncio.create_task(ctx.transport.stream_turn(ctx.base_payload(sid, long_prompt), on_frame=on_frame, abort_after_deltas=12))
-    results: List[RowResult] = []
-    try:
-        await asyncio.wait_for(started.wait(), timeout=120)
-    except asyncio.TimeoutError:
-        task.cancel()
-        raise RowFailure("first stream never reached message_start")
-
-    dup = await ctx.transport.stream_turn(ctx.base_payload(sid, "Say hi."), timeout_s=60)
-    if dup.status_code != 409:
-        results.append(
-            RowResult("duplicate_send_409", "FAIL", f"second send while streaming -> HTTP {dup.status_code} (expected 409); {dup.error or ''}"[:200])
+    task = asyncio.create_task(
+        ctx.transport.stream_turn(
+            ctx.base_payload(sid, long_prompt), on_frame=on_frame, abort_after_deltas=12, abort_gate=dup_answered
         )
-    else:
-        results.append(RowResult("duplicate_send_409", "PASS", f"409 while streaming: {(dup.error or '')[:80]}"))
+    )
+    results: List[RowResult] = []
+    opened_wait = asyncio.create_task(opened.wait())
+    await asyncio.wait({opened_wait, task}, timeout=120, return_when=asyncio.FIRST_COMPLETED)
+    if not opened.is_set():
+        opened_wait.cancel()
+        if task.done():
+            turn = task.result()
+            raise RowFailure(f"first stream opened with no frames: HTTP {turn.status_code} {turn.error or ''}"[:200])
+        task.cancel()
+        raise RowFailure("first stream sent no frame within 120s")
+
+    t_dup = (time.monotonic() - t0) * 1000
+    try:
+        dup = await ctx.transport.stream_turn(ctx.base_payload(sid, "Say hi."), timeout_s=60)
+    finally:
+        dup_answered.set()
+    # When the duplicate's acquire had already run: its error response, or its first frame.
+    dup_answered_ms = t_dup + (dup.frames[0].t_ms if dup.frames else dup.elapsed_ms)
 
     first = await task
     ctx.note(first)
+    start_frame = first.first("message_start")
+    timeline = {
+        "firstFrameMs": round(first.frames[0].t_ms) if first.frames else None,
+        "messageStartMs": round(start_frame.t_ms) if start_frame else None,
+        "dupSentMs": round(t_dup),
+        "dupAnsweredMs": round(dup_answered_ms),
+        "firstEndedMs": round(first_ended_ms) if first_ended_ms is not None else None,
+        "dupStatus": dup.status_code,
+        "firstDeltas": len(first.all("content_block_delta")),
+        "firstTail": first.names[-5:],
+        "firstTextChars": len(first.final_text),
+    }
+    if dup.status_code == 409:
+        results.append(RowResult("duplicate_send_409", "PASS", f"409 while the first turn streamed: {(dup.error or '')[:80]}", data=timeline))
+    elif first_ended_ms is not None and first_ended_ms <= dup_answered_ms:
+        results.append(
+            RowResult(
+                "duplicate_send_409",
+                "FAIL",
+                f"inconclusive: the first turn ended at {first_ended_ms:.0f}ms, before the duplicate answered at "
+                f"{dup_answered_ms:.0f}ms (HTTP {dup.status_code}), so this run cannot tell",
+                data=timeline,
+            )
+        )
+    else:
+        results.append(
+            RowResult(
+                "duplicate_send_409",
+                "FAIL",
+                f"second send while the first was still streaming -> HTTP {dup.status_code} (expected 409); "
+                f"the single-flight guard let it through. {dup.error or ''}"[:200],
+                data=timeline,
+            )
+        )
+
     if not first.aborted:
         results.append(RowResult("stop_mid_answer", "FAIL", "the long turn finished before the client could abort it; lengthen the prompt"))
         return results
@@ -1287,11 +1374,11 @@ async def row_duplicate_and_stop(ctx: Context) -> List[RowResult]:
     while time.monotonic() < deadline:
         attempts += 1
         nxt = await ctx.transport.stream_turn(ctx.base_payload(sid, "Reply with exactly the single word RESUMED."))
-        if nxt.status_code != 409:
+        if not _is_session_busy(nxt):
             break
         await asyncio.sleep(2.0)
     assert nxt is not None
-    if nxt.status_code == 409:
+    if _is_session_busy(nxt):
         results.append(RowResult("stop_mid_answer", "FAIL", f"still 409 {attempts} tries / 45s after Stop — the lease leaked"))
         return results
     ctx.note(nxt)
@@ -1300,7 +1387,7 @@ async def row_duplicate_and_stop(ctx: Context) -> List[RowResult]:
     detail = f"resend accepted after {attempts} try(ies)"
     if code == 200 and body is not None:
         assistants = _message_texts(body, "assistant")
-        partial = any(("1" in a and "150" not in a) for a in assistants[:-1]) if len(assistants) > 1 else False
+        partial = any(("1" in a and "600" not in a) for a in assistants[:-1]) if len(assistants) > 1 else False
         detail += (
             "; partial answer persisted" if partial else "; partial answer not visible (a short turn can finish server-side and clear the marker)"
         )
@@ -1772,7 +1859,7 @@ async def build_transport(args: argparse.Namespace) -> Transport:
 
 
 def _print_report(results: List[RowResult], ctx: Context, label: str) -> None:
-    width = max(len(r.row) for r in results) + 2
+    width = max((len(r.row) for r in results), default=10) + 2
     print()
     print(f"smoke_turns against {label}")
     print("=" * (width + 70))
@@ -1921,7 +2008,7 @@ async def main_async(args: argparse.Namespace) -> int:
     only = set(args.only.split(",")) if args.only else None
     try:
         for name, fn in ROWS:
-            if only and not any(part in only for part in name.split("+")):
+            if only and name not in only and not any(part in only for part in name.split("+")):
                 continue
             try:
                 out = await fn(ctx)
@@ -1939,13 +2026,12 @@ async def main_async(args: argparse.Namespace) -> int:
                     break
     finally:
         if ctx.created_sessions and not args.keep:
-            deleted = 0
-            for sid in ctx.created_sessions:
-                if await transport.delete_session(sid) in (200, 204):
-                    deleted += 1
-            logger.info("deleted %d/%d smoke sessions", deleted, len(ctx.created_sessions))
-            if deleted < len(ctx.created_sessions):
-                logger.info("not deleted: %s", ", ".join(ctx.created_sessions))
+            not_deleted = [sid for sid in ctx.created_sessions if await transport.delete_session(sid) not in (200, 204)]
+            logger.info(
+                "deleted %d/%d smoke sessions", len(ctx.created_sessions) - len(not_deleted), len(ctx.created_sessions)
+            )
+            if not_deleted:
+                logger.info("not deleted: %s", ", ".join(not_deleted))
         elif ctx.created_sessions:
             logger.info("kept sessions: %s", ", ".join(ctx.created_sessions))
         await transport.close()

@@ -502,7 +502,7 @@ class TestWebCrawlSync:
 
     ROOT = "https://example.com/"
 
-    async def _setup_crawl(self, assistants_table, *, page_urls=()):
+    async def _setup_crawl(self, assistants_table, *, page_urls=(), root=None):
         from apis.app_api.web_sources.crawl_repository import create_crawl_job, finalize_crawl
         from apis.app_api.web_sources.models import CrawlSettings
 
@@ -512,13 +512,13 @@ class TestWebCrawlSync:
         )
         assistant_id = assistant.assistant_id
         job = await create_crawl_job(
-            assistant_id=assistant_id, root_url=self.ROOT,
+            assistant_id=assistant_id, root_url=root or self.ROOT,
             settings=CrawlSettings(max_depth=1, max_pages=10),
             started_by_user_id=USER_ID,
         )
         await finalize_crawl(assistant_id=assistant_id, crawl_id=job.crawl_id, status="complete")
 
-        for i, url in enumerate((self.ROOT, *page_urls)):
+        for i, url in enumerate((root or self.ROOT, *page_urls)):
             doc_id = f"doc-web-{i}"
             await create_document(
                 assistant_id=assistant_id, filename=f"p{i}.md", content_type="text/markdown",
@@ -650,6 +650,21 @@ class TestWebCrawlSync:
         item = assistants_table.get_item(Key={"PK": f"AST#{assistant_id}", "SK": "DOC#doc-web-1"})["Item"]
         assert item["consecutiveMisses"] == 0
         assert item["status"] != "deleting"
+
+    async def test_refresh_knows_every_page_of_a_section_crawl(self, assistants_table, fake_crawl):
+        # A page the crawler fetched through the site's www. links must be
+        # handed back to it, or each sync gives that page a second document.
+        root = "https://example.com/research/"
+        www_page = "https://www.example.com/research/labs"
+        other_section = "https://example.com/admissions/"
+        assistant_id, job, policy = await self._setup_crawl(
+            assistants_table, root=root, page_urls=(www_page, other_section)
+        )
+        fake_crawl["seen"] = [root, www_page]
+
+        await worker.run_sync(self._payload(assistant_id, policy, job))
+
+        assert set(fake_crawl["captured"]["refresh"].docs) == {root, www_page}
 
     async def test_missing_job_pauses_policy(self, assistants_table, fake_crawl):
         assistant_id, job, policy = await self._setup_crawl(assistants_table)

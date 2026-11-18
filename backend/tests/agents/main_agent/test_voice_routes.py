@@ -355,9 +355,13 @@ class TestVoiceSystemPrompt:
         return ws
 
     @staticmethod
-    async def _connect(ws: MagicMock, *, settings=None, settings_error=None, roles=()):
-        """Run voice_stream up to VoiceAgent construction; return (agent_class, roles_mock)."""
-        from apis.inference_api.chat import role_instructions, voice_routes
+    async def _connect(ws: MagicMock, *, settings=None, settings_error=None, roles=(), mode=None, mode_lookup=None):
+        """Run voice_stream up to VoiceAgent construction; return (agent_class, roles_mock).
+
+        ``mode`` is the ``(name, text)`` saved on the session; ``mode_lookup``
+        receives the resolver mock so a test can assert on it.
+        """
+        from apis.inference_api.chat import role_instructions, system_prompt_resolver, voice_routes
 
         repo = MagicMock()
         repo.enabled = True
@@ -375,9 +379,13 @@ class TestVoiceSystemPrompt:
             voice_routes, "UserSettingsRepository", return_value=repo
         ), patch.object(
             role_instructions, "resolve_role_instructions", new=AsyncMock(return_value=list(roles))
-        ) as resolve_roles:
+        ) as resolve_roles, patch.object(
+            system_prompt_resolver, "resolve_active_prompt_text", new=AsyncMock(return_value=mode)
+        ) as resolve_mode:
             await voice_routes.voice_stream(ws)
         agent_class.assert_called_once()
+        if mode_lookup is not None:
+            mode_lookup.append(resolve_mode)
         return agent_class, resolve_roles
 
     @pytest.mark.asyncio
@@ -399,6 +407,47 @@ class TestVoiceSystemPrompt:
         user = resolve_roles.await_args.args[0]
         assert user.user_id == "user-1"
         assert user.roles == ["faculty"]
+
+    @pytest.mark.asyncio
+    async def test_the_sessions_saved_mode_sits_between_role_and_personal_instructions(self):
+        """#2021: the order a plain text turn uses, with the mode saved on the session."""
+        from apis.shared.rbac.models import RoleInstruction
+
+        lookups: list = []
+        agent_class, _ = await self._connect(
+            self._websocket(),
+            settings={"personalInstructions": "Call me Captain."},
+            roles=[RoleInstruction("faculty", "Faculty", "Cite primary sources.")],
+            mode=("Guided Learning", "Ask one question at a time."),
+            mode_lookup=lookups,
+        )
+
+        prompt = agent_class.call_args.kwargs["system_prompt"]
+        assert (
+            prompt.index("## Role Instructions")
+            < prompt.index("## Active Mode: Guided Learning")
+            < prompt.index("## Personal Instructions")
+        )
+        assert "Ask one question at a time." in prompt
+        # No per-turn picker in voice: the session's saved choice, read for its owner.
+        assert lookups[0].await_args.kwargs == {"session_id": "s1", "user_id": "user-1"}
+
+    @pytest.mark.asyncio
+    async def test_a_saved_mode_alone_builds_a_prompt(self):
+        agent_class, _ = await self._connect(self._websocket(), mode=("Socratic", "Answer with questions."))
+
+        prompt = agent_class.call_args.kwargs["system_prompt"]
+        assert prompt.endswith("Answer with questions.")
+
+    @pytest.mark.asyncio
+    async def test_a_preview_session_never_looks_up_a_mode(self):
+        lookups: list = []
+        agent_class, _ = await self._connect(
+            self._websocket(session_id="preview-abc"), mode=("Socratic", "x"), mode_lookup=lookups
+        )
+
+        assert agent_class.call_args.kwargs["system_prompt"] is None
+        lookups[0].assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_personal_instructions_alone(self):
@@ -567,6 +616,47 @@ class TestVoiceRunsTheConversationsAgent:
         assert always_on.await_args.kwargs["include_always_on"] is False
 
     @pytest.mark.asyncio
+    async def test_a_projects_memory_and_session_tools_reach_the_voice_agent(self):
+        """#2021: a project's harness brings its memory block and its session-bound
+        tools, and the session is recorded under the project."""
+        from contextlib import ExitStack
+
+        from apis.inference_api.chat import voice_routes
+        from apis.inference_api.chat.voice_agent_plan import VoiceAgentPlan
+
+        class _Stop(Exception):
+            pass
+
+        project_files = object()
+        plan = VoiceAgentPlan(
+            assistant_id="ast-h",
+            system_prompt="Project prompt",
+            knowledge_context=None,
+            voice_guidelines=True,
+            tool_ids=["calculator"],
+            owns_toolset=True,
+            project_id="proj-1",
+            memory_context="<memory>team</memory>",
+            extra_tools=[project_files],
+        )
+        ws = self._websocket({"agent_id": "ast-h"})
+        agent_class = MagicMock(side_effect=_Stop)
+        with ExitStack() as stack:
+            for p in self._patches(voice_routes, resolve_voice_agent=AsyncMock(return_value=plan)):
+                stack.enter_context(p)
+            stack.enter_context(patch.object(voice_routes, "_get_voice_agent_class", return_value=agent_class))
+            try:
+                await voice_routes.voice_stream(ws)
+            except _Stop:
+                pass
+
+        kwargs = agent_class.call_args.kwargs
+        assert kwargs["memory_context"] == "<memory>team</memory>"
+        assert kwargs["extra_tools"] == [project_files]
+        assert kwargs["voice_guidelines"] is True
+        assert kwargs["memory_retrieval"] is False
+
+    @pytest.mark.asyncio
     async def test_a_plain_voice_chat_keeps_todays_prompt_and_only_voice_tools(self):
         from contextlib import ExitStack
 
@@ -691,6 +781,35 @@ class TestSessionMetadataRecordsTheAgent:
         prefs = store.await_args.kwargs["session_metadata"].preferences
         assert prefs.assistant_id == "ast-1"
         assert prefs.incognito is True
+
+    @pytest.mark.asyncio
+    async def test_a_new_project_voice_session_is_listed_in_the_project(self):
+        """#2021: ``projectId`` on the preferences is what the project's conversation list keys on."""
+        from apis.inference_api.chat import voice_routes
+
+        store = AsyncMock()
+        with patch.object(voice_routes, "get_session_metadata", new=AsyncMock(return_value=None)), \
+                patch.object(voice_routes, "store_session_metadata", new=store):
+            await voice_routes._ensure_session_metadata("s-1", "u1", assistant_id="ast-h", project_id="proj-1")
+        prefs = store.await_args.kwargs["session_metadata"].preferences
+        assert prefs.assistant_id == "ast-h"
+        assert prefs.project_id == "proj-1"
+
+    @pytest.mark.asyncio
+    async def test_an_unbound_existing_session_joins_the_project(self):
+        from apis.inference_api.chat import voice_routes
+        from apis.shared.sessions.models import SessionMetadata
+
+        existing = SessionMetadata(
+            session_id="s-1", user_id="u1", title="t", status="active", created_at="2026-01-01T00:00:00Z",
+            last_message_at="2026-01-01T00:00:00Z", message_count=0, starred=False, tags=[],
+        )
+        store = AsyncMock()
+        with patch.object(voice_routes, "get_session_metadata", new=AsyncMock(return_value=existing)), \
+                patch.object(voice_routes, "store_session_metadata", new=store):
+            await voice_routes._ensure_session_metadata("s-1", "u1", assistant_id="ast-h", project_id="proj-1")
+        prefs = store.await_args.kwargs["session_metadata"].preferences
+        assert prefs.project_id == "proj-1"
 
     @pytest.mark.asyncio
     async def test_a_plain_session_with_metadata_is_left_alone(self):

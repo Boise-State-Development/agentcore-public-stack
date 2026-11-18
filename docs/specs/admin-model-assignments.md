@@ -160,7 +160,7 @@ The fallback logs once, and the admin page marks the slot.
 
 - **TTFT.** `session_title` and `tool_summary` start concurrently with the stream, and
   nothing waits for them. Their read must still never sit before the first token. Read
-  through the config-catalog cache (the `CONFIG_CACHE_ENABLED` path), with a TTL, and
+  through the config-catalog cache (`apis.shared.caching.config_cache`), with a TTL, and
   fill it off the turn path. A miss serves the default and fills in the background.
   `extraction`, `compaction_summary` and `document_digest` run after the model answers
   or out of band. `docs/specs/turn-path-ttft.md` §6 is the regression plan to follow.

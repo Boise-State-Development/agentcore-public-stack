@@ -95,6 +95,7 @@ from apis.shared.evals.cases import (  # noqa: E402
     DELIVERY_FAMILY,
     FAMILIES,
     OPT_IN_FAMILIES,
+    PACED_FAMILIES,
     CaseError,
     EPHEMERAL_PROJECT,
     EvalCase,
@@ -117,6 +118,11 @@ from apis.shared.evals.efficiency import (  # noqa: E402
     format_efficiency_table,
     moved,
     run_efficiency,
+)
+from apis.shared.evals.execute import (  # noqa: E402
+    PROVIDER_RETRY_DELAY_SECONDS,
+    is_provider_outage,
+    retried_sessions,
 )
 from apis.shared.evals.judges import DEFAULT_JUDGE_MODEL, same_base_model  # noqa: E402
 from apis.shared.evals.report import (  # noqa: E402
@@ -164,6 +170,7 @@ RATES: Dict[str, Tuple[float, float]] = {
     "us.anthropic.claude-haiku-5-5": (0.11, 0.55),
     "us.anthropic.claude-sonnet-4-6": (3.30, 16.50),
     "us.anthropic.claude-sonnet-5": (2.20, 11.00),
+    "us.anthropic.claude-sonnet-5-5": (2.20, 11.00),
     # Regional (CRIS) list price, from curated-models.ts.
     "us.anthropic.claude-opus-5-5": (4.40, 22.00),
 }
@@ -354,6 +361,13 @@ def cmd_cases(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- run
 
 
+def _rewrite_results(out: Path, rows: Sequence[Dict[str, Any]]) -> None:
+    """Replace ``results.jsonl`` with ``rows``, keeping the previous file as ``results.jsonl.bak``."""
+    results_file = out / RESULTS_FILE
+    results_file.with_suffix(".jsonl.bak").write_text(results_file.read_text(encoding="utf-8"), encoding="utf-8")
+    results_file.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
 def _done_samples(rows: Sequence[Dict[str, Any]]) -> Set[Tuple[str, int]]:
     return {(str(r["case_id"]), int(r["sample"])) for r in rows}
 
@@ -435,11 +449,11 @@ async def cmd_run(args: argparse.Namespace) -> int:
             return 2
     # A ceiling is the Runtime's, not the request's: one run, one ceiling.
     ceiling = getattr(args, "ceiling", "default")
-    if any(c.family == DELIVERY_FAMILY for c in cases):
-        skipped = [c for c in cases if c.family == DELIVERY_FAMILY and c.run.ceiling != ceiling]
-        cases = [c for c in cases if not (c.family == DELIVERY_FAMILY and c.run.ceiling != ceiling)]
+    if any(c.family in PACED_FAMILIES for c in cases):
+        skipped = [c for c in cases if c.family in PACED_FAMILIES and c.run.ceiling != ceiling]
+        cases = [c for c in cases if not (c.family in PACED_FAMILIES and c.run.ceiling != ceiling)]
         if skipped:
-            print(f"--ceiling {ceiling}: skipping {len(skipped)} {DELIVERY_FAMILY} case(s) of other ceilings")
+            print(f"--ceiling {ceiling}: skipping {len(skipped)} paced case(s) of other ceilings")
         env = CEILING_ENV[ceiling]
         if env:
             if not args.invocations_url:
@@ -454,6 +468,16 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
     out = Path(args.out)
     rows = read_rows(out / RESULTS_FILE)
+    # ``--rerun-outages``: a sample the provider failed twice is not a
+    # measurement of the agent, and ``publish`` refuses a run that holds one.
+    # Its row is dropped so the resume below runs the sample again.
+    selected = {c.id for c in cases}
+    outages = ([r for r in rows if is_provider_outage(r) and r.get("case_id") in selected]
+               if getattr(args, "rerun_outages", False) else [])
+    if outages:
+        dropped = {id(r) for r in outages}
+        rows = [r for r in rows if id(r) not in dropped]
+        print(f"--rerun-outages: {len(outages)} sample(s) ended in a provider outage and will run again")
     done = _done_samples(rows)
     todo = [(case, s) for case in cases for s in range(args.k) if (case.id, s) not in done]
     turns, dollars, note = estimate(todo, args.model_id)
@@ -467,10 +491,18 @@ async def cmd_run(args: argparse.Namespace) -> int:
     if not args.yes:
         print("estimate only; pass --yes to spend")
         return 0
+    if outages:
+        _rewrite_results(out, rows)
 
     from smoke_turns import resolve_runtime_env
 
-    from apis.shared.evals.execute import EVAL_TRIGGER, OAuthRequiredError, QuotaExceededError, run_sample
+    from apis.shared.evals.execute import (
+        EVAL_TRIGGER,
+        OAuthRequiredError,
+        QuotaExceededError,
+        run_sample,
+        run_with_provider_retry,
+    )
     from apis.shared.evals.fixtures import (
         FixtureError,
         load_fixture,
@@ -605,47 +637,61 @@ async def cmd_run(args: argparse.Namespace) -> int:
                 case, sample = queue.get_nowait()
             except asyncio.QueueEmpty:
                 return
-            project = None
-            try:
+
+            async def attempt(n: int, case: EvalCase = case, sample: int = sample) -> Dict[str, Any]:
+                # Each attempt is a clean sample: its own session, project and
+                # staged documents (``run_with_provider_retry``).
+                project = None
                 if case.run.project == EPHEMERAL_PROJECT:
                     from eval_project_memory import EphemeralProject
 
-                    project = await EphemeralProject.create(accounts, case, sample)
-                row = await run_sample(
-                    case,
-                    sample=sample,
-                    model_id=args.model_id,
-                    run_turn=run_turn,
-                    register_fixture=register_fixture,
-                    fixtures_dir=fixtures_dir,
-                    staged=staged.get((case.id, sample)),
-                    assistant_id=project.harness_agent_id if project else fixture_ids.get(fixture_key(case) or ""),
-                    inspect=project.inspect if project else None,
-                    wait_searchable=wait_searchable,
-                )
-            except (OAuthRequiredError, QuotaExceededError, HeadlessAuthError, FixtureError) as exc:
-                fatal.append(f"{type(exc).__name__}: {exc}")
+                    try:
+                        project = await EphemeralProject.create(accounts, case, sample)
+                    except Exception as exc:  # noqa: BLE001 — a project that cannot be set up stops the run
+                        raise _ProjectSetupError(f"could not set up {case.id}'s project: {exc}") from exc
+                try:
+                    if n:
+                        print(f"RETRY {case.id} [{sample}] after a provider outage", flush=True)
+                    sample_staged = staged.get((case.id, sample))
+                    if n and case.large_documents:
+                        sample_staged = await _restage_sample(out, case, sample, args)
+                    return await run_sample(
+                        case,
+                        sample=sample,
+                        model_id=args.model_id,
+                        run_turn=run_turn,
+                        register_fixture=register_fixture,
+                        fixtures_dir=fixtures_dir,
+                        staged=sample_staged,
+                        assistant_id=(project.harness_agent_id if project
+                                      else fixture_ids.get(fixture_key(case) or "")),
+                        inspect=project.inspect if project else None,
+                        wait_searchable=wait_searchable,
+                    )
+                finally:
+                    if project is not None:
+                        await project.purge()
+
+            try:
+                row = await run_with_provider_retry(attempt, delay_seconds=args.provider_retry_delay)
+            except (OAuthRequiredError, QuotaExceededError, HeadlessAuthError, FixtureError,
+                    _ProjectSetupError) as exc:
+                fatal.append(str(exc) if isinstance(exc, _ProjectSetupError) else f"{type(exc).__name__}: {exc}")
                 return
-            except Exception as exc:  # noqa: BLE001 — a project that cannot be set up stops the run
-                if project is None and case.run.project == EPHEMERAL_PROJECT:
-                    fatal.append(f"could not set up {case.id}'s project: {exc}")
-                    return
-                raise
-            finally:
-                if project is not None:
-                    await project.purge()
             with results_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(row) + "\n")
             new_rows.append(row)
             verdict = "PASS" if row["passed"] else "FAIL"
             detail = "" if row["passed"] else "  " + "; ".join(row["failures"])
-            print(f"{verdict}  {case.id} [{sample}]{detail}", flush=True)
+            retried = "  (retried after a provider outage)" if row.get("retried") else ""
+            print(f"{verdict}  {case.id} [{sample}]{detail}{retried}", flush=True)
 
     await asyncio.gather(*(worker() for _ in range(max(1, args.workers))))
 
     if not args.keep:
         unrun = _unrun_staged(out, read_rows(results_path))
-        await _cleanup(new_rows + unrun, args.user_id,
+        # A dropped outage row's sessions too, in case its run kept them.
+        await _cleanup(new_rows + unrun + outages, args.user_id,
                        member2_user_id=accounts.member2_user_id if accounts is not None else None)
         _forget_staged(out, unrun)
     if uploader is not None:
@@ -677,6 +723,10 @@ async def cmd_run(args: argparse.Namespace) -> int:
             print(f"  {family:<22} {sum(outcomes)}/{len(outcomes)}")
     if tokens:
         print("tokens this invocation: " + ", ".join(f"{k}={v:,}" for k, v in sorted(tokens.items())))
+    retried = [row for row in new_rows if row.get("retried")]
+    if retried:
+        again = sum(1 for row in retried if is_provider_outage(row))
+        print(f"provider outages: {len(retried)} sample(s) retried once, {again} failed again (scored as failures)")
     return 0
 
 
@@ -685,7 +735,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
 def _unrun_staged(out: Path, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Staged sessions whose sample never wrote a row, shaped like rows for ``_cleanup``."""
-    ran = {row.get("session_id") for row in rows}
+    ran = {row.get("session_id") for row in rows} | {s for row in rows for s in retried_sessions(row)}
     return [entry for entry in read_rows(out / STAGED_FILE) if entry["session_id"] not in ran]
 
 
@@ -735,8 +785,7 @@ async def _stage_large_documents(
     staged sample from an earlier, interrupted invocation is reused rather
     than uploaded again.
     """
-    from apis.shared.evals.execute import StagedSample, new_session_id
-    from apis.shared.evals.fixtures import register_reference_upload, wait_for_documents
+    from apis.shared.evals.fixtures import wait_for_documents
 
     wanted = [(case, sample) for case, sample in todo if case.large_documents]
     if not wanted:
@@ -753,18 +802,7 @@ async def _stage_large_documents(
     async def stage(case: EvalCase, sample: int) -> Dict[str, Any]:
         if (case.id, sample) in earlier:
             return earlier[(case.id, sample)]
-        session_id = new_session_id()
-        upload_ids = []
-        for name in case.large_documents:
-            doc = documents[name]
-            upload_ids.append(
-                await register_reference_upload(args.user_id, session_id, doc.filename, doc.mime_type, doc.data)
-            )
-        entry = {"case_id": case.id, "sample": sample, "session_id": session_id,
-                 "upload_ids": upload_ids, "documents": list(case.large_documents)}
-        with staged_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry) + "\n")
-        return entry
+        return await _register_staged(staged_path, case, sample, documents, args.user_id)
 
     megabytes = sum(len(documents[n].data) for c, _ in wanted for n in c.large_documents) / 1e6
     print(f"staging {len(wanted)} samples with large documents ({megabytes:.0f} MB to upload)", flush=True)
@@ -779,14 +817,58 @@ async def _stage_large_documents(
     if unsettled:
         print(f"  {unsettled} document(s) not searchable after {args.document_timeout:.0f}s; "
               "their samples run anyway, as a user asking early would", flush=True)
-    return {
-        (e["case_id"], int(e["sample"])): StagedSample(
-            session_id=e["session_id"],
-            upload_ids=tuple(e["upload_ids"]),
-            documents=tuple({"name": n, **states[u]} for n, u in zip(e["documents"], e["upload_ids"])),
-        )
-        for e in entries
-    }
+    return {(e["case_id"], int(e["sample"])): _staged_sample(e, states) for e in entries}
+
+
+async def _register_staged(
+    staged_path: Path, case: EvalCase, sample: int, documents: Mapping[str, Any], user_id: str
+) -> Dict[str, Any]:
+    """Upload one sample's large documents into a new session of its own and note it in ``staged.jsonl``."""
+    from apis.shared.evals.execute import new_session_id
+    from apis.shared.evals.fixtures import register_reference_upload
+
+    session_id = new_session_id()
+    upload_ids = []
+    for name in case.large_documents:
+        doc = documents[name]
+        upload_ids.append(await register_reference_upload(user_id, session_id, doc.filename, doc.mime_type, doc.data))
+    entry = {"case_id": case.id, "sample": sample, "session_id": session_id,
+             "upload_ids": upload_ids, "documents": list(case.large_documents)}
+    with staged_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry) + "\n")
+    return entry
+
+
+def _staged_sample(entry: Mapping[str, Any], states: Mapping[str, Any]) -> Any:
+    from apis.shared.evals.execute import StagedSample
+
+    return StagedSample(
+        session_id=entry["session_id"],
+        upload_ids=tuple(entry["upload_ids"]),
+        documents=tuple({"name": n, **states[u]} for n, u in zip(entry["documents"], entry["upload_ids"])),
+    )
+
+
+async def _restage_sample(out: Path, case: EvalCase, sample: int, args: argparse.Namespace) -> Any:
+    """Fresh copies of a sample's large documents in a fresh session, prepared, for its retry.
+
+    The failed attempt's session holds its turns, so the retry cannot reuse
+    it, and an upload belongs to one session. This waits for the new copies
+    in the worker, so a retried large-document sample costs that worker the
+    preparation time again.
+    """
+    from apis.shared.evals.fixtures import wait_for_documents
+    from large_document_quality.fixtures import build_all
+
+    documents = {f.name: f for f in build_all(LARGE_DOCUMENT_SEED, sorted(set(case.large_documents)))}
+    entry = await _register_staged(out / STAGED_FILE, case, sample, documents, args.user_id)
+    states = await wait_for_documents(args.user_id, entry["upload_ids"], timeout=args.document_timeout,
+                                      echo=_echo_documents)
+    return _staged_sample(entry, states)
+
+
+class _ProjectSetupError(RuntimeError):
+    """A sample's own project could not be created: the environment, not the model, so the run stops."""
 
 
 # --------------------------------------------------------------------------- cleanup
@@ -801,6 +883,8 @@ async def _cleanup(
     sessions = 0
     uploads = 0
     service = SessionService()
+    # A row's replaced attempts (``retried``) left their own sessions and uploads.
+    rows = [attempt for row in rows for attempt in [row, *(row.get("retried") or ())]]
     for row in rows:
         for upload_id in row.get("upload_ids") or []:
             try:
@@ -1056,7 +1140,9 @@ async def _record_calls(
     """
     recorded = _read_calls(out)
     # An entry written before ``costUsd`` existed is read again rather than left incomplete.
-    wanted = [s for row in rows for s in sample_sessions(row) if "costUsd" not in recorded.get(s, {})]
+    # A replaced attempt's sessions too: the run spent them, though no measure counts them.
+    wanted = [s for row in rows for s in sample_sessions(row) + retried_sessions(row)
+              if "costUsd" not in recorded.get(s, {})]
     if not wanted:
         return recorded
     found = await _session_calls(meta, wanted)
@@ -1318,10 +1404,16 @@ def cmd_publish(args: argparse.Namespace) -> int:
         if missing:
             print(f"{out}: {len(missing)} sample(s) have no metered cost, e.g. {missing[0]}; "
                   "run without --no-cost-rows with access to the run's account", file=sys.stderr)
+            outages = [r["case_id"] for r in rows if is_provider_outage(r)]
+            if outages:
+                # A provider outage is not a result, so it is never published as
+                # one (spec D35): the samples run again instead.
+                print(f"{out}: {len(outages)} of them ended in a provider outage, e.g. {outages[0]}; re-run them "
+                      "with the run's own `run` command plus --rerun-outages, then publish", file=sys.stderr)
             return 2
         runs.append(public_report.run_document(meta, rows, calls))
         forbidden += [meta.get("user_id"), meta.get("member2_user_id"), meta.get("prefix"), meta.get("target")]
-        forbidden += [s for r in rows for s in sample_sessions(r)]
+        forbidden += [s for r in rows for s in sample_sessions(r) + retried_sessions(r)]
     document = public_report.build_document(runs, generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     try:
         public_report.assert_publishable(document, known_case_ids=golden_ids, forbidden=forbidden)
@@ -1442,6 +1534,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     s.add_argument("--workers", type=int, default=4, help="cases run concurrently; turns within a case never are")
     s.add_argument("--timeout", type=float, default=300.0, help="per-turn stream budget in seconds")
     s.add_argument("--keep", action="store_true", help="do not delete the sessions and uploads this run created")
+    s.add_argument("--rerun-outages", action="store_true",
+                   help="run again every selected sample whose row ended in a provider_unavailable error "
+                        f"(the old rows are kept in {RESULTS_FILE}.bak); what publish needs before it accepts the run")
+    s.add_argument("--provider-retry-delay", type=float, default=PROVIDER_RETRY_DELAY_SECONDS,
+                   help="seconds before a sample's one retry, in a fresh session, when its turn ended in a "
+                        f"provider_unavailable error (default {PROVIDER_RETRY_DELAY_SECONDS:.0f})")
     s.add_argument("--document-timeout", type=float, default=900.0,
                    help="seconds to wait for staged large documents to become searchable (default 900)")
     s.add_argument("--upload-via", choices=["direct", "presign"], default="direct",
@@ -1450,7 +1548,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         "(needs --auth cognito)")
     s.add_argument("--match", help="run only the cases whose id matches this regex (e.g. 'ceiling_pdf_(30|80)k')")
     s.add_argument("--ceiling", choices=list(CEILINGS), default="default",
-                   help=f"{DELIVERY_FAMILY} only: run the cases of this compaction ceiling (a non-default one "
+                   help="paced families only: run the cases of this compaction ceiling (a non-default one "
                         "needs a local stack started with its environment; cases.CEILING_ENV)")
     s.add_argument("--yes", action="store_true", help="spend: without it, print the estimate and stop")
 

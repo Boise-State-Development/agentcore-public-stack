@@ -319,7 +319,15 @@ The original design sketch, kept for the record:
   construction and an `@`-mention agent resolves the same ones), no eviction
   from the model path (`evict_after_cycles=None`; a 90-day S3 lifecycle rule
   expires the objects), gate 4,000 tokens / preview 1,000 (env-backed;
-  `AGENTCORE_TOOL_RESULT_OFFLOAD_ENABLED=false` removes the plugin). The
+  `AGENTCORE_TOOL_RESULT_OFFLOAD_ENABLED=false` removes the plugin). A
+  `read_skill_file` result has a gate of its own, 16,000 estimated tokens
+  (`AGENTCORE_SKILL_FILE_INLINE_MAX_TOKENS`, `0` restores the ordinary gate):
+  a skill's reference is most often the rest of its instructions (a process
+  file, a playbook) that the model must read whole, and offloaded it is
+  always retrieved in full, so the preview only added a round trip and a
+  second copy in history (a dev contract-redline run, 2026-11-16, retrieved a
+  9k-token process file and a 12k-token playbook together). A larger
+  reference still offloads at 4,000. The
   persisted message already carries the bounded form, so restore reproduces
   it byte-for-byte. Our subclass adds a chars/4 pre-filter so the plugin's
   per-result `CountTokens` round trip only runs for results near or over the

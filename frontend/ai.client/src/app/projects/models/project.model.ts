@@ -25,6 +25,11 @@ export interface Project {
   role: ProjectRole;
   status: ProjectStatus;
   editorsManageMembers: boolean;
+  /**
+   * The owner's voice-mode switch (#2021), on unless they turned it off. Whether
+   * voice runs also depends on the project's tools and files: read `ProjectVoice`.
+   */
+  voiceEnabled?: boolean;
   /** Members besides the owner. */
   memberCount: number;
   harnessAgentId: string;
@@ -45,7 +50,39 @@ export interface UpdateProjectRequest {
   name?: string;
   description?: string;
   editorsManageMembers?: boolean;
+  /** Owner only. */
+  voiceEnabled?: boolean;
   status?: ProjectStatus;
+}
+
+/** A bound tool voice mode can't run (`name` falls back to the id). */
+export interface VoiceBlockedTool {
+  toolId: string;
+  name: string;
+}
+
+export interface VoiceFilesTooLarge {
+  /**
+   * `over_budget` / `document_over_budget` / `raw_bytes`: the files are too large to
+   * send whole. `voice_files_off`: this deployment keeps files out of voice.
+   */
+  reason: string;
+  estimatedTokens: number;
+  budgetTokens: number;
+}
+
+/**
+ * `GET /projects/{id}/voice` (#2021). `available` is what the voice button follows:
+ * `enabled` (the owner's switch) and nothing in `blockedTools` or `filesTooLarge`.
+ * Those turn voice off without changing `enabled`, so it comes back once fixed.
+ */
+export interface ProjectVoice {
+  enabled: boolean;
+  available: boolean;
+  /** The caller may flip `enabled`: the owner, on an active project. */
+  canChange: boolean;
+  blockedTools: VoiceBlockedTool[];
+  filesTooLarge: VoiceFilesTooLarge | null;
 }
 
 export interface ProjectMember {
@@ -122,6 +159,37 @@ export interface BoundBinding extends BindingRef {
   pinnedAt?: string | null;
   /** The skill has changed since the pinned version. */
   updateAvailable?: boolean;
+  /**
+   * Skills only: it runs for the caller in this project, so they can read it
+   * (`GET /projects/{id}/skills/{skillId}`). Name and description come with it.
+   */
+  available?: boolean;
+  displayName?: string | null;
+  description?: string | null;
+}
+
+/** One file in a bound skill's bundle. */
+export interface ProjectSkillFile {
+  filename: string;
+  /** `reference` | `script` | `asset`: the bundle directory it lives in. */
+  kind: string;
+  size: number;
+  contentType: string;
+}
+
+/** `GET /projects/{id}/skills/{skillId}`: a bound skill as the project runs it (its pinned version). */
+export interface ProjectSkillContent {
+  skillId: string;
+  displayName: string;
+  description: string;
+  instructions: string;
+  /** The pinned version shown; null when the binding runs the latest. */
+  version: number | null;
+  compose: string[];
+  allowedTools: string[];
+  files: ProjectSkillFile[];
+  /** The caller wrote this skill, so the viewer offers Edit (Customize → Skills). */
+  isOwned?: boolean;
 }
 
 export interface BindingsResponse extends SettingsResponse {

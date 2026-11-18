@@ -704,6 +704,71 @@
   "notes": "Twenty ~5k-token documents, the token profile's per-message cap (~100k tokens together). Each holds a certificate; only the seventeenth is the subject's."
  },
  {
+  "id": "attachment_delivery.heavy_packets_all",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "Five award packets are attached (A to E). For each packet, give the current award number for the facility it covers (A: the Brack Tarn sluice gate; B: the Tamsin Cut intake; C: the Kestrel Weir reservoir gauge; D: the Pell Gap reservoir gauge; E: the Ashby Bend reservoir gauge). Reply with one line per packet, as <letter>: <number>."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_all": [
+    "AW-70245",
+    "AW-29290",
+    "AW-77369",
+    "AW-92371",
+    "AW-42312"
+   ]
+  },
+  "files": [
+   "delivery_packet_a_heavy.pdf",
+   "delivery_packet_b_heavy.pdf",
+   "delivery_packet_c_heavy.pdf",
+   "delivery_packet_d_heavy.pdf",
+   "delivery_packet_e_heavy.pdf"
+  ],
+  "notes": "Five image-heavy PDFs, 5.7 / 3.9 / 0.17 / 4.04 / 2.7 MB, 31 pages. Every number must be read, including packet A's, which is over the per-file inline limit and is only reachable on demand."
+ },
+ {
+  "id": "attachment_delivery.heavy_packet_d",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "According to Award packet D, what is the current award number for the Pell Gap reservoir gauge? Reply with just the number."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "contains_any": [
+    "AW-92371"
+   ],
+   "regex": {
+    "search": [
+     "\\A(?:(?!AW\\-92317)[\\s\\S]){0,160}?AW\\-92371"
+    ]
+   }
+  },
+  "files": [
+   "delivery_packet_a_heavy.pdf",
+   "delivery_packet_b_heavy.pdf",
+   "delivery_packet_c_heavy.pdf",
+   "delivery_packet_d_heavy.pdf",
+   "delivery_packet_e_heavy.pdf"
+  ],
+  "notes": "The same five packets; only packet D (4.04 MB) is asked about. Under the 7 MB budget it went on demand; under the request budget it is a native block."
+ },
+ {
   "id": "attachment_delivery.arm_pdf_30k_native",
   "family": "attachment_delivery",
   "turns": [
@@ -2680,5 +2745,713 @@
   },
   "files": [],
   "notes": "Overflow cell (phase 5): 8 ~30k-token dossiers, two a turn, forced search. The last turn asks a 90%-depth fact from a dossier attached earlier and never named."
+ },
+ {
+  "id": "attachment_delivery.compare_5_policies_auto_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "I've attached 5 district operations policies for a benchmarking comparison. For each district, give its critical-incident response target in hours, one line per district. Then end with a line 'Shortest: <district>' naming the district with the shortest target."
+   },
+   {
+    "prompt": "Now the same comparison for records retention: for each district, give its records retention period in years, one line per district. Then end with a line 'Longest: <district>' naming the district with the longest period."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Ashby\\ Basin[\\s\\S]{0,100}?\\b13\\b",
+     "(?i)Orrin\\ Gap[\\s\\S]{0,100}?\\b5\\b",
+     "(?i)Calder\\ Reach[\\s\\S]{0,100}?\\b8\\b",
+     "(?i)Morrow\\ Flats[\\s\\S]{0,100}?\\b12\\b",
+     "(?i)Brack\\ Tarn[\\s\\S]{0,100}?\\b16\\b",
+     "(?i)Longest\\W{0,8}(?:the\\s+)?Brack\\ Tarn"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy5_a.pdf",
+   "delivery_policy5_b.pdf",
+   "delivery_policy5_c.pdf",
+   "delivery_policy5_d.pdf",
+   "delivery_policy5_e.pdf"
+  ],
+  "notes": "Comparison cell: 5 policy PDFs, arm auto, warm follow-up. Turn 1 needs every document's response target (scored by the readout from the turn's own answer), turn 2 every document's retention period (scored here)."
+ },
+ {
+  "id": "attachment_delivery.compare_5_policies_auto_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "I've attached 5 district operations policies for a benchmarking comparison. For each district, give its critical-incident response target in hours, one line per district. Then end with a line 'Shortest: <district>' naming the district with the shortest target."
+   },
+   {
+    "prompt": "Now the same comparison for records retention: for each district, give its records retention period in years, one line per district. Then end with a line 'Longest: <district>' naming the district with the longest period.",
+    "pause_seconds": 330
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Ashby\\ Basin[\\s\\S]{0,100}?\\b13\\b",
+     "(?i)Orrin\\ Gap[\\s\\S]{0,100}?\\b5\\b",
+     "(?i)Calder\\ Reach[\\s\\S]{0,100}?\\b8\\b",
+     "(?i)Morrow\\ Flats[\\s\\S]{0,100}?\\b12\\b",
+     "(?i)Brack\\ Tarn[\\s\\S]{0,100}?\\b16\\b",
+     "(?i)Longest\\W{0,8}(?:the\\s+)?Brack\\ Tarn"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy5_a.pdf",
+   "delivery_policy5_b.pdf",
+   "delivery_policy5_c.pdf",
+   "delivery_policy5_d.pdf",
+   "delivery_policy5_e.pdf"
+  ],
+  "notes": "Comparison cell: 5 policy PDFs, arm auto, cold follow-up. Turn 1 needs every document's response target (scored by the readout from the turn's own answer), turn 2 every document's retention period (scored here). Turn 2 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.compare_5_policies_auto_terse",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "These are 5 district operations policies for a benchmarking comparison. Which district commits to the fastest critical-incident response? End with a line 'Shortest: <district>'."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Shortest\\W{0,8}(?:the\\s+)?Morrow\\ Flats",
+     "\\b16\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy5_a.pdf",
+   "delivery_policy5_b.pdf",
+   "delivery_policy5_c.pdf",
+   "delivery_policy5_d.pdf",
+   "delivery_policy5_e.pdf"
+  ],
+  "notes": "Comparison cell, terse: 5 policy PDFs, arm auto. One question naming no district and not asking for each figure; only reading every document finds the extreme."
+ },
+ {
+  "id": "attachment_delivery.compare_5_policies_held_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "I've attached 5 district operations policies for a benchmarking comparison. For each district, give its critical-incident response target in hours, one line per district. Then end with a line 'Shortest: <district>' naming the district with the shortest target."
+   },
+   {
+    "prompt": "Now the same comparison for records retention: for each district, give its records retention period in years, one line per district. Then end with a line 'Longest: <district>' naming the district with the longest period."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default",
+   "file_arms": {
+    "delivery_policy5_a.pdf": "native",
+    "delivery_policy5_b.pdf": "native",
+    "delivery_policy5_c.pdf": "native",
+    "delivery_policy5_d.pdf": "native",
+    "delivery_policy5_e.pdf": "native"
+   }
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Ashby\\ Basin[\\s\\S]{0,100}?\\b13\\b",
+     "(?i)Orrin\\ Gap[\\s\\S]{0,100}?\\b5\\b",
+     "(?i)Calder\\ Reach[\\s\\S]{0,100}?\\b8\\b",
+     "(?i)Morrow\\ Flats[\\s\\S]{0,100}?\\b12\\b",
+     "(?i)Brack\\ Tarn[\\s\\S]{0,100}?\\b16\\b",
+     "(?i)Longest\\W{0,8}(?:the\\s+)?Brack\\ Tarn"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy5_a.pdf",
+   "delivery_policy5_b.pdf",
+   "delivery_policy5_c.pdf",
+   "delivery_policy5_d.pdf",
+   "delivery_policy5_e.pdf"
+  ],
+  "notes": "Comparison cell: 5 policy PDFs, arm held, warm follow-up. Turn 1 needs every document's response target (scored by the readout from the turn's own answer), turn 2 every document's retention period (scored here)."
+ },
+ {
+  "id": "attachment_delivery.compare_5_policies_held_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "I've attached 5 district operations policies for a benchmarking comparison. For each district, give its critical-incident response target in hours, one line per district. Then end with a line 'Shortest: <district>' naming the district with the shortest target."
+   },
+   {
+    "prompt": "Now the same comparison for records retention: for each district, give its records retention period in years, one line per district. Then end with a line 'Longest: <district>' naming the district with the longest period.",
+    "pause_seconds": 330
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default",
+   "file_arms": {
+    "delivery_policy5_a.pdf": "native",
+    "delivery_policy5_b.pdf": "native",
+    "delivery_policy5_c.pdf": "native",
+    "delivery_policy5_d.pdf": "native",
+    "delivery_policy5_e.pdf": "native"
+   }
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Ashby\\ Basin[\\s\\S]{0,100}?\\b13\\b",
+     "(?i)Orrin\\ Gap[\\s\\S]{0,100}?\\b5\\b",
+     "(?i)Calder\\ Reach[\\s\\S]{0,100}?\\b8\\b",
+     "(?i)Morrow\\ Flats[\\s\\S]{0,100}?\\b12\\b",
+     "(?i)Brack\\ Tarn[\\s\\S]{0,100}?\\b16\\b",
+     "(?i)Longest\\W{0,8}(?:the\\s+)?Brack\\ Tarn"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy5_a.pdf",
+   "delivery_policy5_b.pdf",
+   "delivery_policy5_c.pdf",
+   "delivery_policy5_d.pdf",
+   "delivery_policy5_e.pdf"
+  ],
+  "notes": "Comparison cell: 5 policy PDFs, arm held, cold follow-up. Turn 1 needs every document's response target (scored by the readout from the turn's own answer), turn 2 every document's retention period (scored here). Turn 2 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.compare_5_policies_held_terse",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "These are 5 district operations policies for a benchmarking comparison. Which district commits to the fastest critical-incident response? End with a line 'Shortest: <district>'."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default",
+   "file_arms": {
+    "delivery_policy5_a.pdf": "native",
+    "delivery_policy5_b.pdf": "native",
+    "delivery_policy5_c.pdf": "native",
+    "delivery_policy5_d.pdf": "native",
+    "delivery_policy5_e.pdf": "native"
+   }
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Shortest\\W{0,8}(?:the\\s+)?Morrow\\ Flats",
+     "\\b16\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy5_a.pdf",
+   "delivery_policy5_b.pdf",
+   "delivery_policy5_c.pdf",
+   "delivery_policy5_d.pdf",
+   "delivery_policy5_e.pdf"
+  ],
+  "notes": "Comparison cell, terse: 5 policy PDFs, arm held. One question naming no district and not asking for each figure; only reading every document finds the extreme."
+ },
+ {
+  "id": "attachment_delivery.compare_10_policies_auto_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "I've attached 10 district operations policies for a benchmarking comparison. For each district, give its critical-incident response target in hours, one line per district. Then end with a line 'Shortest: <district>' naming the district with the shortest target."
+   },
+   {
+    "prompt": "Now the same comparison for records retention: for each district, give its records retention period in years, one line per district. Then end with a line 'Longest: <district>' naming the district with the longest period."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Kestrel\\ Hollow[\\s\\S]{0,100}?\\b19\\b",
+     "(?i)Brack\\ Shoals[\\s\\S]{0,100}?\\b23\\b",
+     "(?i)Ilsey\\ Gap[\\s\\S]{0,100}?\\b17\\b",
+     "(?i)Quill\\ Ford[\\s\\S]{0,100}?\\b4\\b",
+     "(?i)Kestrel\\ Ford[\\s\\S]{0,100}?\\b22\\b",
+     "(?i)Orrin\\ Hollow[\\s\\S]{0,100}?\\b14\\b",
+     "(?i)Morrow\\ Bend[\\s\\S]{0,100}?\\b7\\b",
+     "(?i)Ilsey\\ Flats[\\s\\S]{0,100}?\\b8\\b",
+     "(?i)Pell\\ Shoals[\\s\\S]{0,100}?\\b27\\b",
+     "(?i)Saddle\\ Crossing[\\s\\S]{0,100}?\\b24\\b",
+     "(?i)Longest\\W{0,8}(?:the\\s+)?Pell\\ Shoals"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy10_a.pdf",
+   "delivery_policy10_b.pdf",
+   "delivery_policy10_c.pdf",
+   "delivery_policy10_d.pdf",
+   "delivery_policy10_e.pdf",
+   "delivery_policy10_f.pdf",
+   "delivery_policy10_g.pdf",
+   "delivery_policy10_h.pdf",
+   "delivery_policy10_i.pdf",
+   "delivery_policy10_j.pdf"
+  ],
+  "notes": "Comparison cell: 10 policy PDFs, arm auto, warm follow-up. Turn 1 needs every document's response target (scored by the readout from the turn's own answer), turn 2 every document's retention period (scored here)."
+ },
+ {
+  "id": "attachment_delivery.compare_10_policies_auto_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "I've attached 10 district operations policies for a benchmarking comparison. For each district, give its critical-incident response target in hours, one line per district. Then end with a line 'Shortest: <district>' naming the district with the shortest target."
+   },
+   {
+    "prompt": "Now the same comparison for records retention: for each district, give its records retention period in years, one line per district. Then end with a line 'Longest: <district>' naming the district with the longest period.",
+    "pause_seconds": 330
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Kestrel\\ Hollow[\\s\\S]{0,100}?\\b19\\b",
+     "(?i)Brack\\ Shoals[\\s\\S]{0,100}?\\b23\\b",
+     "(?i)Ilsey\\ Gap[\\s\\S]{0,100}?\\b17\\b",
+     "(?i)Quill\\ Ford[\\s\\S]{0,100}?\\b4\\b",
+     "(?i)Kestrel\\ Ford[\\s\\S]{0,100}?\\b22\\b",
+     "(?i)Orrin\\ Hollow[\\s\\S]{0,100}?\\b14\\b",
+     "(?i)Morrow\\ Bend[\\s\\S]{0,100}?\\b7\\b",
+     "(?i)Ilsey\\ Flats[\\s\\S]{0,100}?\\b8\\b",
+     "(?i)Pell\\ Shoals[\\s\\S]{0,100}?\\b27\\b",
+     "(?i)Saddle\\ Crossing[\\s\\S]{0,100}?\\b24\\b",
+     "(?i)Longest\\W{0,8}(?:the\\s+)?Pell\\ Shoals"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy10_a.pdf",
+   "delivery_policy10_b.pdf",
+   "delivery_policy10_c.pdf",
+   "delivery_policy10_d.pdf",
+   "delivery_policy10_e.pdf",
+   "delivery_policy10_f.pdf",
+   "delivery_policy10_g.pdf",
+   "delivery_policy10_h.pdf",
+   "delivery_policy10_i.pdf",
+   "delivery_policy10_j.pdf"
+  ],
+  "notes": "Comparison cell: 10 policy PDFs, arm auto, cold follow-up. Turn 1 needs every document's response target (scored by the readout from the turn's own answer), turn 2 every document's retention period (scored here). Turn 2 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.compare_10_policies_auto_terse",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "These are 10 district operations policies for a benchmarking comparison. Which district commits to the fastest critical-incident response? End with a line 'Shortest: <district>'."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default"
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Shortest\\W{0,8}(?:the\\s+)?Ilsey\\ Flats",
+     "\\b16\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy10_a.pdf",
+   "delivery_policy10_b.pdf",
+   "delivery_policy10_c.pdf",
+   "delivery_policy10_d.pdf",
+   "delivery_policy10_e.pdf",
+   "delivery_policy10_f.pdf",
+   "delivery_policy10_g.pdf",
+   "delivery_policy10_h.pdf",
+   "delivery_policy10_i.pdf",
+   "delivery_policy10_j.pdf"
+  ],
+  "notes": "Comparison cell, terse: 10 policy PDFs, arm auto. One question naming no district and not asking for each figure; only reading every document finds the extreme."
+ },
+ {
+  "id": "attachment_delivery.compare_10_policies_b200k_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "I've attached 10 district operations policies for a benchmarking comparison. For each district, give its critical-incident response target in hours, one line per district. Then end with a line 'Shortest: <district>' naming the district with the shortest target."
+   },
+   {
+    "prompt": "Now the same comparison for records retention: for each district, give its records retention period in years, one line per district. Then end with a line 'Longest: <district>' naming the district with the longest period."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default",
+   "file_arms": {
+    "delivery_policy10_a.pdf": "native",
+    "delivery_policy10_b.pdf": "native",
+    "delivery_policy10_c.pdf": "native",
+    "delivery_policy10_d.pdf": "native",
+    "delivery_policy10_e.pdf": "on_demand",
+    "delivery_policy10_f.pdf": "on_demand",
+    "delivery_policy10_g.pdf": "on_demand",
+    "delivery_policy10_h.pdf": "on_demand",
+    "delivery_policy10_i.pdf": "on_demand",
+    "delivery_policy10_j.pdf": "on_demand"
+   }
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Kestrel\\ Hollow[\\s\\S]{0,100}?\\b19\\b",
+     "(?i)Brack\\ Shoals[\\s\\S]{0,100}?\\b23\\b",
+     "(?i)Ilsey\\ Gap[\\s\\S]{0,100}?\\b17\\b",
+     "(?i)Quill\\ Ford[\\s\\S]{0,100}?\\b4\\b",
+     "(?i)Kestrel\\ Ford[\\s\\S]{0,100}?\\b22\\b",
+     "(?i)Orrin\\ Hollow[\\s\\S]{0,100}?\\b14\\b",
+     "(?i)Morrow\\ Bend[\\s\\S]{0,100}?\\b7\\b",
+     "(?i)Ilsey\\ Flats[\\s\\S]{0,100}?\\b8\\b",
+     "(?i)Pell\\ Shoals[\\s\\S]{0,100}?\\b27\\b",
+     "(?i)Saddle\\ Crossing[\\s\\S]{0,100}?\\b24\\b",
+     "(?i)Longest\\W{0,8}(?:the\\s+)?Pell\\ Shoals"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy10_a.pdf",
+   "delivery_policy10_b.pdf",
+   "delivery_policy10_c.pdf",
+   "delivery_policy10_d.pdf",
+   "delivery_policy10_e.pdf",
+   "delivery_policy10_f.pdf",
+   "delivery_policy10_g.pdf",
+   "delivery_policy10_h.pdf",
+   "delivery_policy10_i.pdf",
+   "delivery_policy10_j.pdf"
+  ],
+  "notes": "Comparison cell: 10 policy PDFs, arm b200k, warm follow-up. Turn 1 needs every document's response target (scored by the readout from the turn's own answer), turn 2 every document's retention period (scored here)."
+ },
+ {
+  "id": "attachment_delivery.compare_10_policies_b200k_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "I've attached 10 district operations policies for a benchmarking comparison. For each district, give its critical-incident response target in hours, one line per district. Then end with a line 'Shortest: <district>' naming the district with the shortest target."
+   },
+   {
+    "prompt": "Now the same comparison for records retention: for each district, give its records retention period in years, one line per district. Then end with a line 'Longest: <district>' naming the district with the longest period.",
+    "pause_seconds": 330
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default",
+   "file_arms": {
+    "delivery_policy10_a.pdf": "native",
+    "delivery_policy10_b.pdf": "native",
+    "delivery_policy10_c.pdf": "native",
+    "delivery_policy10_d.pdf": "native",
+    "delivery_policy10_e.pdf": "on_demand",
+    "delivery_policy10_f.pdf": "on_demand",
+    "delivery_policy10_g.pdf": "on_demand",
+    "delivery_policy10_h.pdf": "on_demand",
+    "delivery_policy10_i.pdf": "on_demand",
+    "delivery_policy10_j.pdf": "on_demand"
+   }
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Kestrel\\ Hollow[\\s\\S]{0,100}?\\b19\\b",
+     "(?i)Brack\\ Shoals[\\s\\S]{0,100}?\\b23\\b",
+     "(?i)Ilsey\\ Gap[\\s\\S]{0,100}?\\b17\\b",
+     "(?i)Quill\\ Ford[\\s\\S]{0,100}?\\b4\\b",
+     "(?i)Kestrel\\ Ford[\\s\\S]{0,100}?\\b22\\b",
+     "(?i)Orrin\\ Hollow[\\s\\S]{0,100}?\\b14\\b",
+     "(?i)Morrow\\ Bend[\\s\\S]{0,100}?\\b7\\b",
+     "(?i)Ilsey\\ Flats[\\s\\S]{0,100}?\\b8\\b",
+     "(?i)Pell\\ Shoals[\\s\\S]{0,100}?\\b27\\b",
+     "(?i)Saddle\\ Crossing[\\s\\S]{0,100}?\\b24\\b",
+     "(?i)Longest\\W{0,8}(?:the\\s+)?Pell\\ Shoals"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy10_a.pdf",
+   "delivery_policy10_b.pdf",
+   "delivery_policy10_c.pdf",
+   "delivery_policy10_d.pdf",
+   "delivery_policy10_e.pdf",
+   "delivery_policy10_f.pdf",
+   "delivery_policy10_g.pdf",
+   "delivery_policy10_h.pdf",
+   "delivery_policy10_i.pdf",
+   "delivery_policy10_j.pdf"
+  ],
+  "notes": "Comparison cell: 10 policy PDFs, arm b200k, cold follow-up. Turn 1 needs every document's response target (scored by the readout from the turn's own answer), turn 2 every document's retention period (scored here). Turn 2 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.compare_10_policies_b200k_terse",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "These are 10 district operations policies for a benchmarking comparison. Which district commits to the fastest critical-incident response? End with a line 'Shortest: <district>'."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default",
+   "file_arms": {
+    "delivery_policy10_a.pdf": "native",
+    "delivery_policy10_b.pdf": "native",
+    "delivery_policy10_c.pdf": "native",
+    "delivery_policy10_d.pdf": "native",
+    "delivery_policy10_e.pdf": "on_demand",
+    "delivery_policy10_f.pdf": "on_demand",
+    "delivery_policy10_g.pdf": "on_demand",
+    "delivery_policy10_h.pdf": "on_demand",
+    "delivery_policy10_i.pdf": "on_demand",
+    "delivery_policy10_j.pdf": "on_demand"
+   }
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Shortest\\W{0,8}(?:the\\s+)?Ilsey\\ Flats",
+     "\\b16\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy10_a.pdf",
+   "delivery_policy10_b.pdf",
+   "delivery_policy10_c.pdf",
+   "delivery_policy10_d.pdf",
+   "delivery_policy10_e.pdf",
+   "delivery_policy10_f.pdf",
+   "delivery_policy10_g.pdf",
+   "delivery_policy10_h.pdf",
+   "delivery_policy10_i.pdf",
+   "delivery_policy10_j.pdf"
+  ],
+  "notes": "Comparison cell, terse: 10 policy PDFs, arm b200k. One question naming no district and not asking for each figure; only reading every document finds the extreme."
+ },
+ {
+  "id": "attachment_delivery.compare_10_policies_held_warm",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "I've attached 10 district operations policies for a benchmarking comparison. For each district, give its critical-incident response target in hours, one line per district. Then end with a line 'Shortest: <district>' naming the district with the shortest target."
+   },
+   {
+    "prompt": "Now the same comparison for records retention: for each district, give its records retention period in years, one line per district. Then end with a line 'Longest: <district>' naming the district with the longest period."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default",
+   "file_arms": {
+    "delivery_policy10_a.pdf": "native",
+    "delivery_policy10_b.pdf": "native",
+    "delivery_policy10_c.pdf": "native",
+    "delivery_policy10_d.pdf": "native",
+    "delivery_policy10_e.pdf": "native",
+    "delivery_policy10_f.pdf": "native",
+    "delivery_policy10_g.pdf": "native",
+    "delivery_policy10_h.pdf": "native",
+    "delivery_policy10_i.pdf": "native",
+    "delivery_policy10_j.pdf": "native"
+   }
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Kestrel\\ Hollow[\\s\\S]{0,100}?\\b19\\b",
+     "(?i)Brack\\ Shoals[\\s\\S]{0,100}?\\b23\\b",
+     "(?i)Ilsey\\ Gap[\\s\\S]{0,100}?\\b17\\b",
+     "(?i)Quill\\ Ford[\\s\\S]{0,100}?\\b4\\b",
+     "(?i)Kestrel\\ Ford[\\s\\S]{0,100}?\\b22\\b",
+     "(?i)Orrin\\ Hollow[\\s\\S]{0,100}?\\b14\\b",
+     "(?i)Morrow\\ Bend[\\s\\S]{0,100}?\\b7\\b",
+     "(?i)Ilsey\\ Flats[\\s\\S]{0,100}?\\b8\\b",
+     "(?i)Pell\\ Shoals[\\s\\S]{0,100}?\\b27\\b",
+     "(?i)Saddle\\ Crossing[\\s\\S]{0,100}?\\b24\\b",
+     "(?i)Longest\\W{0,8}(?:the\\s+)?Pell\\ Shoals"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy10_a.pdf",
+   "delivery_policy10_b.pdf",
+   "delivery_policy10_c.pdf",
+   "delivery_policy10_d.pdf",
+   "delivery_policy10_e.pdf",
+   "delivery_policy10_f.pdf",
+   "delivery_policy10_g.pdf",
+   "delivery_policy10_h.pdf",
+   "delivery_policy10_i.pdf",
+   "delivery_policy10_j.pdf"
+  ],
+  "notes": "Comparison cell: 10 policy PDFs, arm held, warm follow-up. Turn 1 needs every document's response target (scored by the readout from the turn's own answer), turn 2 every document's retention period (scored here)."
+ },
+ {
+  "id": "attachment_delivery.compare_10_policies_held_cold",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "I've attached 10 district operations policies for a benchmarking comparison. For each district, give its critical-incident response target in hours, one line per district. Then end with a line 'Shortest: <district>' naming the district with the shortest target."
+   },
+   {
+    "prompt": "Now the same comparison for records retention: for each district, give its records retention period in years, one line per district. Then end with a line 'Longest: <district>' naming the district with the longest period.",
+    "pause_seconds": 330
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default",
+   "file_arms": {
+    "delivery_policy10_a.pdf": "native",
+    "delivery_policy10_b.pdf": "native",
+    "delivery_policy10_c.pdf": "native",
+    "delivery_policy10_d.pdf": "native",
+    "delivery_policy10_e.pdf": "native",
+    "delivery_policy10_f.pdf": "native",
+    "delivery_policy10_g.pdf": "native",
+    "delivery_policy10_h.pdf": "native",
+    "delivery_policy10_i.pdf": "native",
+    "delivery_policy10_j.pdf": "native"
+   }
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Kestrel\\ Hollow[\\s\\S]{0,100}?\\b19\\b",
+     "(?i)Brack\\ Shoals[\\s\\S]{0,100}?\\b23\\b",
+     "(?i)Ilsey\\ Gap[\\s\\S]{0,100}?\\b17\\b",
+     "(?i)Quill\\ Ford[\\s\\S]{0,100}?\\b4\\b",
+     "(?i)Kestrel\\ Ford[\\s\\S]{0,100}?\\b22\\b",
+     "(?i)Orrin\\ Hollow[\\s\\S]{0,100}?\\b14\\b",
+     "(?i)Morrow\\ Bend[\\s\\S]{0,100}?\\b7\\b",
+     "(?i)Ilsey\\ Flats[\\s\\S]{0,100}?\\b8\\b",
+     "(?i)Pell\\ Shoals[\\s\\S]{0,100}?\\b27\\b",
+     "(?i)Saddle\\ Crossing[\\s\\S]{0,100}?\\b24\\b",
+     "(?i)Longest\\W{0,8}(?:the\\s+)?Pell\\ Shoals"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy10_a.pdf",
+   "delivery_policy10_b.pdf",
+   "delivery_policy10_c.pdf",
+   "delivery_policy10_d.pdf",
+   "delivery_policy10_e.pdf",
+   "delivery_policy10_f.pdf",
+   "delivery_policy10_g.pdf",
+   "delivery_policy10_h.pdf",
+   "delivery_policy10_i.pdf",
+   "delivery_policy10_j.pdf"
+  ],
+  "notes": "Comparison cell: 10 policy PDFs, arm held, cold follow-up. Turn 1 needs every document's response target (scored by the readout from the turn's own answer), turn 2 every document's retention period (scored here). Turn 2 waits past the cache TTL."
+ },
+ {
+  "id": "attachment_delivery.compare_10_policies_held_terse",
+  "family": "attachment_delivery",
+  "turns": [
+   {
+    "prompt": "These are 10 district operations policies for a benchmarking comparison. Which district commits to the fastest critical-incident response? End with a line 'Shortest: <district>'."
+   }
+  ],
+  "run": {
+   "enabled_tools": [],
+   "enabled_skills": [],
+   "arm": "auto",
+   "ceiling": "default",
+   "file_arms": {
+    "delivery_policy10_a.pdf": "native",
+    "delivery_policy10_b.pdf": "native",
+    "delivery_policy10_c.pdf": "native",
+    "delivery_policy10_d.pdf": "native",
+    "delivery_policy10_e.pdf": "native",
+    "delivery_policy10_f.pdf": "native",
+    "delivery_policy10_g.pdf": "native",
+    "delivery_policy10_h.pdf": "native",
+    "delivery_policy10_i.pdf": "native",
+    "delivery_policy10_j.pdf": "native"
+   }
+  },
+  "expect": {
+   "regex": {
+    "search": [
+     "(?i)Shortest\\W{0,8}(?:the\\s+)?Ilsey\\ Flats",
+     "\\b16\\b"
+    ]
+   }
+  },
+  "files": [
+   "delivery_policy10_a.pdf",
+   "delivery_policy10_b.pdf",
+   "delivery_policy10_c.pdf",
+   "delivery_policy10_d.pdf",
+   "delivery_policy10_e.pdf",
+   "delivery_policy10_f.pdf",
+   "delivery_policy10_g.pdf",
+   "delivery_policy10_h.pdf",
+   "delivery_policy10_i.pdf",
+   "delivery_policy10_j.pdf"
+  ],
+  "notes": "Comparison cell, terse: 10 policy PDFs, arm held. One question naming no district and not asking for each figure; only reading every document finds the extreme."
  }
 ]

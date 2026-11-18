@@ -142,6 +142,9 @@ export function describeActivity(
         if (field === 'editorsManageMembers') {
           return after['editorsManageMembers'] ? 'let editors manage members' : 'limited managing members to the owner';
         }
+        if (field === 'voiceEnabled') {
+          return after['voiceEnabled'] ? 'turned voice mode on' : 'turned voice mode off';
+        }
         return `changed ${field}`;
       });
       return line(parts.length ? list(parts) : 'updated the project');

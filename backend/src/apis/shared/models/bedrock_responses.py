@@ -225,8 +225,40 @@ EXPLICIT_CACHE_ENABLED_ENV = "BEDROCK_RESPONSES_EXPLICIT_CACHE_ENABLED"
 # and a 51st entry fails changeset validation after synth, tsc, jest and green
 # CI — which is why the flag above was never wired into CDK either.
 #
-# Matched as a SUBSTRING so both `us.` and `global.` inference profiles hit.
+# ⛔ AND IT DOES NOT GENERALIZE TO KIMI K3.1 EITHER — the next model in the
+# same family has the opposite sign again. Measured clean-room on 2026-11-15
+# (dev-ai, us-west-2, unique prefix per arm, 6.7k stable prefix, 4 turns with
+# history carried, priced at US CRIS $4.40 / $0.22 / $5.50):
+#
+#                                          read    write  uncached  4-turn in $
+#   kimi-k3.1  stock (no options)        20,541        0     7,031      0.03546
+#   kimi-k3.1  options, no breakpoint         0        0    27,466      0.12085
+#   kimi-k3.1  FULL explicit (opts+bp)   20,223    6,741       512      0.04378
+#
+# K3.1's stock implicit caching works: it reports no write on turn 1 and reads
+# the WHOLE growing conversation back on every later turn, where explicit
+# pins reads at the static prefix and bills a write on top (+23% here, and the
+# gap widens with history — through a Strands agent with a tool call each turn,
+# stock input was ~40% cheaper). So K3.1 must stay OFF this list.
+#
+# Matched on the model id after the inference-profile prefix, not as a
+# substring: `us.` / `global.` / `in.` all hit, but `moonshotai.kimi-k3.1`
+# does NOT — a substring match on "moonshotai.kimi-k3" swept it onto the
+# measurably worse path.
 _EXPLICIT_CACHE_REQUIRED_MODELS = ("moonshotai.kimi-k3",)
+
+
+def _requires_explicit_cache(model_id: str) -> bool:
+    """Whether ``model_id`` names a member of the explicit-only list exactly.
+
+    ``model_id`` may be a bare model id or an inference profile
+    (``<geo>.<model id>``); a later version that merely starts with a listed
+    id (``moonshotai.kimi-k3.1``) is a different model and does not match.
+    """
+    return any(
+        model_id == name or model_id.endswith("." + name)
+        for name in _EXPLICIT_CACHE_REQUIRED_MODELS
+    )
 
 # Request-level cache controls. `ttl` is the string form of the same window
 # the cache-status classifier measures gaps against
@@ -266,7 +298,7 @@ def explicit_prompt_cache_enabled(model_id: Optional[str] = None) -> bool:
     Read per call (no module-level caching) so tests and live config changes
     behave predictably; the env read is negligible next to request assembly.
     """
-    if model_id and any(name in model_id for name in _EXPLICIT_CACHE_REQUIRED_MODELS):
+    if model_id and _requires_explicit_cache(model_id):
         return True
     return os.environ.get(EXPLICIT_CACHE_ENABLED_ENV, "").lower() == "true"
 

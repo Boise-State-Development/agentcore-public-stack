@@ -887,6 +887,28 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Concurrent tool execution feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED;
+      expect(loadConfig(app).concurrentToolExecution.enabled).toBe(false);
+      process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED = '';
+      expect(loadConfig(app).concurrentToolExecution.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED = 'True';
+      expect(loadConfig(app).concurrentToolExecution.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED = value;
+        expect(loadConfig(app).concurrentToolExecution.enabled).toBe(false);
+      }
+    });
+  });
+
   describe('Web Search default maxResults feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED;
@@ -1184,18 +1206,18 @@ describe('RAG Ingestion Configuration', () => {
       delete process.env.CDK_SESSION_FORK_ENABLED;
     });
 
-    test('defaults to disabled, and an unset GitHub variable stays off', () => {
+    test('defaults to enabled, and an unset GitHub variable stays on', () => {
       delete process.env.CDK_SESSION_FORK_ENABLED;
-      expect(loadConfig(app).sessionFork.enabled).toBe(false);
+      expect(loadConfig(app).sessionFork.enabled).toBe(true);
       process.env.CDK_SESSION_FORK_ENABLED = '';
-      expect(loadConfig(app).sessionFork.enabled).toBe(false);
+      expect(loadConfig(app).sessionFork.enabled).toBe(true);
     });
 
-    test('only "true" turns it on', () => {
-      process.env.CDK_SESSION_FORK_ENABLED = ' TRUE ';
-      expect(loadConfig(app).sessionFork.enabled).toBe(true);
-      process.env.CDK_SESSION_FORK_ENABLED = 'yes';
+    test('only "false" turns it off', () => {
+      process.env.CDK_SESSION_FORK_ENABLED = ' FALSE ';
       expect(loadConfig(app).sessionFork.enabled).toBe(false);
+      process.env.CDK_SESSION_FORK_ENABLED = 'no';
+      expect(loadConfig(app).sessionFork.enabled).toBe(true);
     });
   });
 
@@ -1204,24 +1226,24 @@ describe('RAG Ingestion Configuration', () => {
       delete process.env.CDK_SESSION_REWIND_ENABLED;
     });
 
-    test('defaults to disabled when CDK_SESSION_REWIND_ENABLED is unset', () => {
+    test('defaults to enabled when CDK_SESSION_REWIND_ENABLED is unset', () => {
       delete process.env.CDK_SESSION_REWIND_ENABLED;
-      expect(loadConfig(app).sessionRewind.enabled).toBe(false);
-    });
-
-    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
-      process.env.CDK_SESSION_REWIND_ENABLED = '';
-      expect(loadConfig(app).sessionRewind.enabled).toBe(false);
-    });
-
-    test('CDK_SESSION_REWIND_ENABLED="true" turns it on', () => {
-      process.env.CDK_SESSION_REWIND_ENABLED = ' TRUE ';
       expect(loadConfig(app).sessionRewind.enabled).toBe(true);
     });
 
-    test('anything but "true" leaves it off', () => {
-      process.env.CDK_SESSION_REWIND_ENABLED = 'yes';
+    test('treats empty string (unset GitHub Actions variable) as enabled', () => {
+      process.env.CDK_SESSION_REWIND_ENABLED = '';
+      expect(loadConfig(app).sessionRewind.enabled).toBe(true);
+    });
+
+    test('CDK_SESSION_REWIND_ENABLED="false" turns it off', () => {
+      process.env.CDK_SESSION_REWIND_ENABLED = ' FALSE ';
       expect(loadConfig(app).sessionRewind.enabled).toBe(false);
+    });
+
+    test('anything but "false" leaves it on', () => {
+      process.env.CDK_SESSION_REWIND_ENABLED = 'no';
+      expect(loadConfig(app).sessionRewind.enabled).toBe(true);
     });
   });
 

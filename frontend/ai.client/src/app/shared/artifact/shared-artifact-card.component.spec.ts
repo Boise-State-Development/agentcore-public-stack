@@ -4,7 +4,12 @@ import { Dialog } from '@angular/cdk/dialog';
 
 import { SharedArtifactCardComponent } from './shared-artifact-card.component';
 import { SharedArtifactDialogComponent } from './shared-artifact-dialog.component';
-import type { SharedConversationArtifact } from '../../session/services/share/share.service';
+import {
+  ShareService,
+  type SharedConversationArtifact,
+} from '../../session/services/share/share.service';
+import { ArtifactHttpService } from '../../session/services/artifacts/artifact-http.service';
+import { ArtifactShareService } from '../../session/services/artifacts/artifact-share.service';
 
 function stubArtifact(
   overrides: Partial<SharedConversationArtifact> = {},
@@ -22,6 +27,7 @@ function stubArtifact(
 describe('SharedArtifactCardComponent', () => {
   let fixture: ComponentFixture<SharedArtifactCardComponent>;
   let mockDialog: { open: ReturnType<typeof vi.fn> };
+  let mockShares: { mintConversationArtifactToken: ReturnType<typeof vi.fn> };
 
   const el = () => fixture.nativeElement as HTMLElement;
   const button = () => el().querySelector('button')!;
@@ -39,9 +45,19 @@ describe('SharedArtifactCardComponent', () => {
   beforeEach(() => {
     TestBed.resetTestingModule();
     mockDialog = { open: vi.fn() };
+    // The thumbnail's mint; rejecting leaves its placeholder standing.
+    mockShares = {
+      mintConversationArtifactToken: vi.fn().mockRejectedValue(new Error('no preview')),
+    };
     TestBed.configureTestingModule({
       imports: [SharedArtifactCardComponent],
-      providers: [{ provide: Dialog, useValue: mockDialog }],
+      providers: [
+        { provide: Dialog, useValue: mockDialog },
+        { provide: ShareService, useValue: mockShares },
+        // The owner and artifact-share mints, which a recipient card never uses.
+        { provide: ArtifactHttpService, useValue: {} },
+        { provide: ArtifactShareService, useValue: {} },
+      ],
     });
   });
 
@@ -73,6 +89,14 @@ describe('SharedArtifactCardComponent', () => {
     expect(el().textContent).not.toContain('Download');
     expect(el().textContent).not.toContain('Delete');
     expect(el().textContent).not.toContain('Share');
+  });
+
+  it('previews through the conversation share, never an owner mint', () => {
+    render(stubArtifact({ artifactId: 'art-4' }), 'conv-share-2');
+    expect(mockShares.mintConversationArtifactToken).toHaveBeenCalledWith(
+      'conv-share-2',
+      'art-4',
+    );
   });
 
   it('names the artifact for screen readers', () => {
