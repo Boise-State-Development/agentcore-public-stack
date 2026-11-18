@@ -696,3 +696,6 @@ says "Kept in sync with *{folder}*" and offers no per-file schedule. Until the
 first run stamps `syncPolicyId`, the section treats the documents that import
 just returned as covered, which closes the §11.1 window on this page for those
 copies. Copies the import passed over as already held join on that first run.
+That cover lives only in the page: after a reload, copies a run has not yet
+adopted (a first run that paused for re-consent, say) offer their own
+schedules again, the same window Save as project leaves on the Files page.

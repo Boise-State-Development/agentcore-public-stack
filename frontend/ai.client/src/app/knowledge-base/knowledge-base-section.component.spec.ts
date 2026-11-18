@@ -1380,12 +1380,21 @@ describe('KnowledgeBaseSectionComponent — synced folders', () => {
     );
     const list = syncedFolders();
     expect(list?.textContent).toContain('My Drive/Grants');
+    expect(list?.textContent).toContain('first sync within about 15 minutes');
     expect(list?.querySelectorAll('app-sync-policy-control')).toHaveLength(1);
     expect(el().textContent).toContain('Kept in sync with My Drive/Grants');
     // Only the file no folder covers offers its own schedule.
     expect(perFileControls()).toBe(1);
     // The folded card's summary counts the folder beside the documents.
     expect(fixture.componentInstance.cardSummary()).toBe('2 documents · 1 synced folder');
+  });
+
+  it('promises a first sync only until one has run', async () => {
+    await render([], [folderPolicy({ lastSyncAt: '2026-11-17T23:58:31Z', lastResult: 'skipped', state: 'paused_reauth' })]);
+    const list = syncedFolders()!;
+    expect(list.textContent).toContain('Auto-sync from Google Drive');
+    expect(list.textContent).not.toContain('first sync within');
+    expect(list.textContent).toContain('Reconnect Google Drive');
   });
 
   it('has no synced-folders list without a folder policy', async () => {

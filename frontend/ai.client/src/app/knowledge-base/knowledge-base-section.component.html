@@ -435,7 +435,7 @@
                 <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">{{ text }}</p>
               } @else {
                 <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
-                  Auto-sync from {{ folderConnectorName(policy) || 'the folder' }} · first sync within about 15 minutes
+                  Auto-sync from {{ folderConnectorName(policy) || 'the folder' }}@if (!policy.lastSyncAt) { · first sync within about 15 minutes}
                 </p>
               }
               <app-sync-policy-control
