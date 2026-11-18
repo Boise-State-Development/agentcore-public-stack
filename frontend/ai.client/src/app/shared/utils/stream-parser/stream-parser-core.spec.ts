@@ -427,6 +427,12 @@ describe('stream-parser-core', () => {
       })).toBe(false);
     });
 
+    it('should accept a web page citation and reject a non-string sourceUrl', () => {
+      const base = { assistantId: 'a', documentId: 'd', fileName: 'Page.md', text: 't' };
+      expect(validateCitation({ ...base, sourceUrl: 'https://example.edu/page' })).toBe(true);
+      expect(validateCitation({ ...base, sourceUrl: 42 })).toBe(false);
+    });
+
     it('should return false for non-string fields', () => {
       expect(validateCitation({
         assistantId: 123,

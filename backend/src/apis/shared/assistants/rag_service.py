@@ -53,11 +53,13 @@ client already reads. The rename stops at the seam; no caller has to change.
 """
 
 import asyncio
+import dataclasses
 import logging
 import os
 import re
 import time
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
+from urllib.parse import urlsplit
 
 from apis.shared.assistants.kb_access import KbAccess
 from apis.shared.kb_backend.dual_read import schedule_observation, start_managed_read
@@ -374,11 +376,59 @@ def _filter_chunks_by_document_status(chunks: List[Chunk], assistant_id: str) ->
         The subset of chunks whose parent document is 'complete'
     """
     views = [{"metadata": chunk.metadata, "_chunk_index": index} for index, chunk in enumerate(chunks)]
-    surviving = _filter_vectors_by_document_status(views, assistant_id)
-    return [chunks[view["_chunk_index"]] for view in surviving]
+    source_urls: Dict[str, str] = {}
+    surviving = _filter_vectors_by_document_status(views, assistant_id, source_urls=source_urls)
+    return [_with_source_url(chunks[view["_chunk_index"]], source_urls) for view in surviving]
 
 
-def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_id: str) -> List[Dict[str, Any]]:
+#: Chunk metadata key for the web page a crawled document came from. Set only
+#: here, from the document's own row, so it is never read from the index: a
+#: knowledge-base attribute of the same name is overwritten or removed.
+SOURCE_URL_METADATA_KEY = "source_url"
+
+#: The ``sourceConnectorId`` the web crawler writes. Drive imports also carry a
+#: ``sourceFileId``, but theirs is an opaque provider id, not an address.
+_WEB_CONNECTOR_ID = "web"
+
+
+def web_source_url(item: Mapping[str, Any]) -> Optional[str]:
+    """The page URL a crawled ``DOC#`` row was fetched from, else ``None``.
+
+    The crawler stores the normalized URL as ``sourceFileId`` (after
+    redirects). Only an ``http``/``https`` address is returned, so nothing
+    else can reach a link the SPA renders.
+    """
+    if item.get("sourceConnectorId") != _WEB_CONNECTOR_ID:
+        return None
+    url = item.get("sourceFileId")
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return None
+    return url
+
+
+def _with_source_url(chunk: Chunk, source_urls: Mapping[str, str]) -> Chunk:
+    """``chunk`` with its document's page URL in metadata, or with none at all."""
+    url = source_urls.get(chunk.metadata.get("document_id"))
+    if url is None and SOURCE_URL_METADATA_KEY not in chunk.metadata:
+        return chunk
+    metadata = {k: v for k, v in chunk.metadata.items() if k != SOURCE_URL_METADATA_KEY}
+    if url is not None:
+        metadata[SOURCE_URL_METADATA_KEY] = url
+    return dataclasses.replace(chunk, metadata=metadata)
+
+
+def _filter_vectors_by_document_status(
+    vectors: List[Dict[str, Any]],
+    assistant_id: str,
+    *,
+    source_urls: Optional[Dict[str, str]] = None,
+) -> List[Dict[str, Any]]:
     """
     Filter vector results to only include chunks from documents with status='complete'.
 
@@ -397,6 +447,9 @@ def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_
     Args:
         vectors: List of vector results from S3 Vectors search
         assistant_id: Assistant identifier for DynamoDB key construction
+        source_urls: Filled in, when given, with ``document_id`` → page URL for
+            each complete document the web crawler added (:func:`web_source_url`).
+            The row is already read for its status, so this costs no extra read.
 
     Returns:
         Filtered list of vectors from complete documents only
@@ -441,6 +494,10 @@ def _filter_vectors_by_document_status(vectors: List[Dict[str, Any]], assistant_
                     item = response.get("Item")
                     if item and item.get("status") == "complete":
                         valid_doc_ids.add(doc_id)
+                        if source_urls is not None:
+                            url = web_source_url(item)
+                            if url:
+                                source_urls[doc_id] = url
                     else:
                         logger.info(
                             f"Filtering out doc {doc_id}: "
