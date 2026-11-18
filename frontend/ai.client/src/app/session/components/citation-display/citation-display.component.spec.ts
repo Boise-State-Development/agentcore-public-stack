@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { CitationDisplayComponent } from './citation-display.component';
+import { CitationDisplayComponent, citationPage } from './citation-display.component';
 import { Citation } from '../../services/models/message.model';
 
 describe('CitationDisplayComponent', () => {
@@ -351,6 +351,66 @@ describe('CitationDisplayComponent', () => {
       expect(text).not.toContain('Download source');
       // The citation itself still renders — only the download affordance is withheld.
       expect(text).toContain('test.pdf');
+    });
+  });
+  describe('Web page citations', () => {
+    const web: Citation = {
+      assistantId: 'a1',
+      documentId: 'd1',
+      fileName: 'Research Centers.md',
+      text: 'excerpt',
+      sourceUrl: 'https://www.example.edu/research/centers/',
+    };
+    const upload: Citation = { assistantId: 'a1', documentId: 'd2', fileName: 'handbook.pdf', text: 'excerpt' };
+
+    function render(citations: Citation[], allowDownload = true): HTMLElement {
+      fixture.componentRef.setInput('citations', citations);
+      fixture.componentRef.setInput('allowDownload', allowDownload);
+      component.isExpanded.set(true);
+      fixture.detectChanges();
+      return fixture.nativeElement as HTMLElement;
+    }
+
+    it('shows the page title and address and links to the page in a new tab', () => {
+      const el = render([web]);
+      const link = el.querySelector<HTMLAnchorElement>('a[href]');
+      expect(link?.href).toBe('https://www.example.edu/research/centers/');
+      expect(link?.target).toBe('_blank');
+      expect(link?.rel).toBe('noopener noreferrer');
+      expect(link?.textContent).toContain('Open page');
+      expect(el.querySelector('[data-testid="citation-page-address"]')?.textContent?.trim()).toBe(
+        'www.example.edu/research/centers',
+      );
+      expect(el.textContent).toContain('Research Centers');
+      expect(el.textContent).not.toContain('Research Centers.md');
+      expect(el.textContent).not.toContain('Download source');
+    });
+
+    it('still links to the page when downloads are disabled', () => {
+      const el = render([web], false);
+      expect(el.querySelector('a[href]')).not.toBeNull();
+    });
+
+    it('leaves an uploaded file as it was', () => {
+      const el = render([upload]);
+      expect(el.querySelector('a[href]')).toBeNull();
+      expect(el.querySelector('[data-testid="citation-page-address"]')).toBeNull();
+      expect(el.textContent).toContain('handbook.pdf');
+      expect(el.textContent).toContain('Download source');
+    });
+
+    it('never links to a non-web address', () => {
+      expect(citationPage('javascript:alert(1)')).toBeNull();
+      expect(citationPage('ftp://example.edu/x')).toBeNull();
+      expect(citationPage('not a url')).toBeNull();
+      expect(citationPage(undefined)).toBeNull();
+      const el = render([{ ...web, sourceUrl: 'javascript:alert(1)' }]);
+      expect(el.querySelector('a[href]')).toBeNull();
+      expect(el.textContent).toContain('Research Centers.md');
+    });
+
+    it('labels a site root by its host', () => {
+      expect(citationPage('https://www.example.edu/')?.label).toBe('www.example.edu');
     });
   });
 });

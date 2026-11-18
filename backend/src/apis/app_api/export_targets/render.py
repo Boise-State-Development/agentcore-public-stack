@@ -201,7 +201,7 @@ def _reasoning_text(reasoning: Optional[Dict[str, Any]]) -> str:
 
 def _render_citations(citations: Sequence[Citation]) -> List[str]:
     out = ["**Sources:**", ""]
-    out += [f"- {c.file_name}" for c in citations]
+    out += [f"- {c.file_name} — {c.source_url}" if c.source_url else f"- {c.file_name}" for c in citations]
     out.append("")
     return out
 

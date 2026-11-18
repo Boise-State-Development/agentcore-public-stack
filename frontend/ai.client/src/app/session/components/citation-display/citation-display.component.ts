@@ -1,5 +1,43 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { Citation } from '../../services/models/message.model';
+
+/** A crawled web page a citation came from, ready to link to. */
+export interface CitationPage {
+  /** The page's address (http or https only). */
+  url: string;
+  /** Host and path, for the line under the title. */
+  label: string;
+}
+
+export interface CitationItem {
+  citation: Citation;
+  /** The filename, or a web page's title without the `.md` the crawler adds. */
+  title: string;
+  page: CitationPage | null;
+}
+
+/**
+ * The page a citation links to, or null. The server only sends http(s)
+ * addresses; this checks again so nothing else can become a link.
+ */
+export function citationPage(sourceUrl: string | undefined): CitationPage | null {
+  if (!sourceUrl) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(sourceUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  const path = parsed.pathname.replace(/\/+$/, '');
+  return { url: parsed.href, label: parsed.host + path };
+}
+
+function toItem(citation: Citation): CitationItem {
+  const page = citationPage(citation.sourceUrl);
+  const title = page ? citation.fileName.replace(/\.md$/i, '') || citation.fileName : citation.fileName;
+  return { citation, title, page };
+}
 import { DocumentService } from '../../../assistants/services/document.service';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 
@@ -58,7 +96,8 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
 
             <!-- Citation Items -->
             <div class="divide-y divide-gray-100 dark:divide-gray-700">
-              @for (citation of citations(); track $index; let i = $index) {
+              @for (item of items(); track $index; let i = $index) {
+                @let citation = item.citation;
                 <div
                   class="group px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700
                          transition-colors motion-reduce:transition-none
@@ -77,18 +116,41 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
 
                     <!-- Citation Content -->
                     <div class="min-w-0 flex-1">
-                      <!-- Filename -->
+                      <!-- Filename, or a web page's title and address -->
                       <p class="truncate text-sm font-medium text-gray-900 dark:text-gray-100">
-                        {{ citation.fileName }}
+                        {{ item.title }}
                       </p>
+                      @if (item.page) {
+                        <p class="truncate text-xs text-gray-500 dark:text-gray-400" data-testid="citation-page-address">
+                          {{ item.page.label }}
+                        </p>
+                      }
 
                       <!-- Text excerpt -->
                       <p class="mt-1 line-clamp-2 text-xs text-gray-500 dark:text-gray-400">
                         {{ citation.text }}
                       </p>
 
+                      <!-- A crawled web page links to the page itself. It is a public
+                           address, not the author's file, so the #111 download switch
+                           does not withhold it (show_citations still does, server-side). -->
+                      @if (item.page) {
+                      <a
+                        [href]="item.page.url"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary-accessible hover:text-primary-700 hover:underline
+                               dark:text-primary-accessible-dark dark:hover:text-primary-300
+                               focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+                      >
+                        <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                        </svg>
+                        <span>Open page</span>
+                        <span class="sr-only">(opens in new tab)</span>
+                      </a>
+                      } @else if (allowDownload()) {
                       <!-- Download button (#111: hidden when downloads are disabled) -->
-                      @if (allowDownload()) {
                       <button
                         type="button"
                         class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary-accessible hover:text-primary-700 hover:underline
@@ -145,6 +207,9 @@ export class CitationDisplayComponent {
 
   // Computed for derived state - avoids multiple signal reads in template
   citationCount = computed(() => this.citations().length);
+
+  /** Each citation with what its card shows: a title, and a page to open when it has one. */
+  items = computed(() => this.citations().map(toItem));
 
   private collapseTimeout: ReturnType<typeof setTimeout> | null = null;
 

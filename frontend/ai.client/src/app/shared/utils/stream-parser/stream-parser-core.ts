@@ -1047,7 +1047,8 @@ export function validateCitation(data: unknown): data is Citation {
     typeof citation.assistantId === 'string' &&
     typeof citation.documentId === 'string' &&
     typeof citation.fileName === 'string' &&
-    typeof citation.text === 'string'
+    typeof citation.text === 'string' &&
+    (citation.sourceUrl === undefined || typeof citation.sourceUrl === 'string')
   );
 }
 

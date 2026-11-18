@@ -999,6 +999,9 @@ class Citation(BaseModel):
     document_id: str = Field(..., alias="documentId", description="Document identifier in the knowledge base")
     file_name: str = Field(..., alias="fileName", description="Original filename of the source document")
     text: str = Field(..., description="Relevant text excerpt from the document")
+    source_url: Optional[str] = Field(
+        None, alias="sourceUrl", description="Web page a crawled document was fetched from"
+    )
 
 
 #: Reason codes a down-thumb may carry — the six buckets of
