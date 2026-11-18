@@ -50,7 +50,7 @@ ANNUAL_PERMIT_FEE = "$181"
 LAKEVIEW_RATE_2026 = "$240"
 LAKEVIEW_RATE_2025 = "$210"
 
-#: overflow_part_c.pdf: the one fact in the part that goes by reference.
+#: overflow_part_e.pdf: the one fact in the part that goes by reference.
 ARCHIVE_RETENTION_CODE = "RX-4417"
 
 #: enrollment_chart.png: the three bars.
@@ -128,7 +128,7 @@ def _text_pdf(heading: str, paragraphs: List[str], *, padding_bytes: int = 0, se
         y = page.paragraph(72, y, paragraph, width=468) - 10
     if padding_bytes:
         # An image of noise drawn in a corner: it adds bytes, never words, so a
-        # set of these crosses the 7 MB inline budget without filling the context.
+        # set of these crosses the request's byte budget without filling the context.
         side = int((padding_bytes / 3) ** 0.5) + 1
         noise = random.Random(seed).randbytes(side * side * 3)
         page.image(pdf.Image(side, side, noise), 560, 20, 24, 24)
@@ -144,15 +144,24 @@ def shuttle_schedule() -> bytes:
     ])
 
 
-#: Each overflow part is about 2.45 MB: two fit the 7 MB inline budget, the third does not.
-OVERFLOW_PART_BYTES = 2_450_000
+#: Each overflow part is about 3.6 MB, under the 4 MiB upload limit for a PDF.
+#: The ``token`` profile holds a turn's native blocks to 16 MiB of request
+#: (``TOKEN_REQUEST_ATTACHMENT_MAX_BYTES``, less what a warm history re-sends,
+#: which is nothing on this case's first turn): four parts fit and the fifth,
+#: which holds the code, goes by reference. Five is also the per-message file
+#: count the ``legacy`` profile allows, where the 7 MB budget sends parts B-E by
+#: reference and the code is still only in a file read with ``document_read``.
+OVERFLOW_PART_BYTES = 3_600_000
+OVERFLOW_PARTS = "abcde"
 
 
 def overflow_part(letter: str) -> Callable[[], bytes]:
     facts = {
         "a": "Part A covers the archive's opening hours, which are 08:00 to 17:00 on weekdays.",
         "b": "Part B covers request forms. Requests are answered within five working days.",
-        "c": f"Part C covers retention. Records under this policy carry the retention code {ARCHIVE_RETENTION_CODE}.",
+        "c": "Part C covers the reading room. Bags and coats are left in the lockers by the door.",
+        "d": "Part D covers copying. Staff scan fragile items; visitors may photograph the rest.",
+        "e": f"Part E covers retention. Records under this policy carry the retention code {ARCHIVE_RETENTION_CODE}.",
     }
 
     def build() -> bytes:
@@ -284,9 +293,7 @@ GENERATED: Dict[str, Callable[[], bytes]] = {
     "lab_equipment_inventory.docx": lab_equipment_inventory,
     "travel_policy_redline.docx": travel_policy_redline,
     "shuttle_schedule.pdf": shuttle_schedule,
-    "overflow_part_a.pdf": overflow_part("a"),
-    "overflow_part_b.pdf": overflow_part("b"),
-    "overflow_part_c.pdf": overflow_part("c"),
+    **{f"overflow_part_{x}.pdf": overflow_part(x) for x in OVERFLOW_PARTS},
     "parking_notice.html": parking_notice,
     "room_rates_2025.html": room_rates("2025", LAKEVIEW_RATE_2025, "$150"),
     "room_rates_2026.html": room_rates("2026", LAKEVIEW_RATE_2026, "$165"),

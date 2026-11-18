@@ -27,7 +27,6 @@ from apis.shared.evals.cases import load_cases  # noqa: E402
 from apis.shared.evals.fixtures import mime_type_for  # noqa: E402
 from apis.shared.files.models import (  # noqa: E402
     ALLOWED_EXTENSIONS,
-    INLINE_ATTACHMENTS_MAX_TOTAL_BYTES,
     INLINE_DOCUMENT_MAX_BYTES,
     is_presentation_file,
     is_tabular_file,
@@ -98,14 +97,36 @@ class TestPdf:
         text = self._text("shuttle_schedule.pdf")
         assert b.LAST_WEEKDAY_SHUTTLE in text and b.LAST_WEEKEND_SHUTTLE in text
 
-    def test_only_part_c_holds_the_retention_code(self):
-        assert b.ARCHIVE_RETENTION_CODE in self._text("overflow_part_c.pdf")
-        assert b.ARCHIVE_RETENTION_CODE not in self._text("overflow_part_a.pdf") + self._text("overflow_part_b.pdf")
+    def test_only_the_last_part_holds_the_retention_code(self):
+        *earlier, last = b.OVERFLOW_PARTS
+        assert b.ARCHIVE_RETENTION_CODE in self._text(f"overflow_part_{last}.pdf")
+        assert b.ARCHIVE_RETENTION_CODE not in " ".join(self._text(f"overflow_part_{x}.pdf") for x in earlier)
 
-    def test_two_parts_fit_the_inline_budget_and_the_third_does_not(self):
-        sizes = [len(b.build(f"overflow_part_{x}.pdf")) for x in "abc"]
+    def test_the_last_part_overflows_the_request_budget_and_goes_by_reference(self):
+        """The case's premise, asked of the planner itself under both profiles.
+
+        Under ``token`` (on in prod) four parts fit the request's 16 MiB and the
+        fifth goes ``on_demand``; under ``legacy`` the 7 MB budget sends parts B
+        onward by reference. Either way the code is only in a file
+        ``document_read`` reads. A change to the budgets or the part size that
+        sends the last part native fails here, not as a ``tool_missing`` on dev.
+        """
+        from apis.shared.files import attachment_plan as ap
+
+        names = [f"overflow_part_{x}.pdf" for x in b.OVERFLOW_PARTS]
+        sizes = [len(b.build(name)) for name in names]
+        token = ap.token_profile()
+        assert len(names) <= min(token.max_files_per_message, ap.legacy_profile().max_files_per_message)
+        assert all(size <= ap.UPLOAD_GENERAL_MAX_BYTES for size in sizes), "each part must pass the 4 MiB upload limit"
         assert all(size <= INLINE_DOCUMENT_MAX_BYTES for size in sizes), "each part must stay an inline-class file"
-        assert sizes[0] + sizes[1] <= INLINE_ATTACHMENTS_MAX_TOTAL_BYTES < sum(sizes)
+        files = [ap.FileFacts(filename=n, mime_type="application/pdf", size_bytes=s, upload_id=n, has_row=True)
+                 for n, s in zip(names, sizes)]
+        for profile, native in ((token, len(names) - 1), (ap.legacy_profile(), 1)):
+            plan = ap.plan_attachments(files, None, ap.ConversationFacts(), profile=profile)
+            modes = [entry.mode for entry in plan.entries]
+            assert modes[:native] == [ap.MODE_NATIVE] * native, (profile.name, modes)
+            assert set(modes[native:]) == {ap.MODE_ON_DEMAND}, (profile.name, modes)
+        assert sum(sizes[:-1]) <= ap.TOKEN_REQUEST_ATTACHMENT_MAX_BYTES < sum(sizes)
 
 
 class TestSpreadsheets:
