@@ -1,6 +1,7 @@
 """Command-line entrypoint.
 
-``aps-tui`` with no subcommand launches the chat UI. The subcommands cover
+``aps-tui`` with no subcommand launches the chat UI, and ``aps-tui -p`` runs one
+turn without it (pipe mode, see :mod:`aps_tui.pipe`). The subcommands cover
 credential and diagnostic tasks that do not need a full-screen app.
 """
 
@@ -83,6 +84,19 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Terminal client for the AgentCore platform. Run with no arguments to start chatting.",
     )
     parser.add_argument("--version", action="version", version=f"aps-tui {__version__}")
+    parser.add_argument(
+        "-p",
+        "--print",
+        dest="print_prompt",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PROMPT",
+        help=(
+            "Pipe mode: send PROMPT (plus anything piped on stdin), print the answer to stdout, and exit. "
+            "No local tools. Exit codes: 0 answered, 1 failed, 2 nothing sent, 3 paused waiting for you."
+        ),
+    )
     # Banner flags are on the root parser only: they affect the chat UI, which
     # is the no-subcommand path. A mutually exclusive group means
     # `--banner --no-banner` is rejected rather than silently resolved.
@@ -161,7 +175,19 @@ PASSPHRASE_ATTEMPTS = 3
 
 
 def _interactive() -> bool:
-    return sys.stdin.isatty()
+    """True when a passphrase can be asked for.
+
+    Not just "stdin is a terminal": ``getpass`` reads the controlling terminal
+    directly, so ``cat file | aps-tui -p ...`` can still ask while stdin is a
+    pipe.
+    """
+    if sys.stdin.isatty():
+        return True
+    try:
+        with open("/dev/tty", encoding="utf-8"):
+            return True
+    except OSError:
+        return False
 
 
 def _ask(prompt: str) -> str:
@@ -479,13 +505,61 @@ def _command_chat(args: argparse.Namespace) -> int:
         force_banner = False
 
 
+def _read_piped_stdin() -> str | None:
+    """Whatever was piped in, or None when stdin is a terminal.
+
+    Read as bytes and decoded leniently: piped input is often a log or a build
+    output, and one stray byte should not fail the whole run.
+    """
+    if sys.stdin is None or sys.stdin.isatty():
+        return None
+    return sys.stdin.buffer.read().decode("utf-8", errors="replace")
+
+
+def _command_print(args: argparse.Namespace) -> int:
+    """Pipe mode: one turn, the answer on stdout, then exit."""
+    import asyncio
+    import os
+
+    from . import pipe
+
+    if args.command is not None:
+        print(f"error: -p/--print cannot be combined with `{args.command}`.", file=sys.stderr)
+        return pipe.EXIT_USAGE
+    if args.local_tools is True:
+        print("error: --local-tools is not available with -p/--print.", file=sys.stderr)
+        print("  Nothing in pipe mode can approve a local tool call. Use `aps-tui` for those.", file=sys.stderr)
+        return pipe.EXIT_USAGE
+
+    prompt = pipe.compose_prompt(args.print_prompt, _read_piped_stdin())
+    if not prompt:
+        print('error: no prompt. Pass one (`aps-tui -p "..."`) or pipe text on stdin.', file=sys.stderr)
+        return pipe.EXIT_USAGE
+
+    _prepare_credential_store(args, create=False)
+    config = resolve_config(base_url=args.base_url, model_id=args.model_id, config_file=args.config_file, local_tools=False)
+    if not config.is_complete:
+        print(f"error: not configured: no {' and '.join(config.missing())}.", file=sys.stderr)
+        if config.keyring_unavailable_reason:
+            print(f"  {config.keyring_unavailable_reason}", file=sys.stderr)
+        print("  Run `aps-tui login --sso --base-url https://your-host/api`, or set AGENTCORE_API_KEY.", file=sys.stderr)
+        return pipe.EXIT_USAGE
+
+    code = asyncio.run(pipe.run_pipe(config, prompt, out=sys.stdout, err=sys.stderr))
+    if code == pipe.EXIT_BROKEN_PIPE:
+        # The reader is gone. Point stdout at /dev/null so the interpreter's
+        # final flush does not print a BrokenPipeError traceback on exit.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    return code
+
+
 def _normalise(args: argparse.Namespace) -> argparse.Namespace:
     """Fill in attributes that ``argparse.SUPPRESS`` left unset.
 
     Shared flags default to SUPPRESS so a subcommand cannot overwrite a value
     given before it; the cost is that absent flags have no attribute at all.
     """
-    for name in ("base_url", "model_id", "config_file", "api_key", "command", "log_level", "log_file", "banner", "local_tools"):
+    for name in ("base_url", "model_id", "config_file", "api_key", "command", "log_level", "log_file", "banner", "local_tools", "print_prompt"):
         if not hasattr(args, name):
             setattr(args, name, None)
     return args
@@ -506,7 +580,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": _command_status,
         None: _command_chat,
     }
-    handler = handlers[args.command]
+    handler = _command_print if args.print_prompt is not None else handlers[args.command]
 
     try:
         return handler(args)

@@ -371,6 +371,8 @@ tui/src/aps_tui/
 ├── conversation.py   domain: Message + ConversationStore
 ├── turn.py           BaseTurnController + TurnController/AgentTurnController,
 │                     behind the TurnSink protocol
+├── pipe.py           `aps-tui -p`: one turn, answer to stdout, a TurnSink with
+│                     no app; no local tools, a pause exits 3
 ├── usage.py          token counts, shared by wire/domain/view
 ├── errors.py         typed errors, each carrying an actionable `hint`
 ├── logging_setup.py  rotating file log; content redacted unless opted in
