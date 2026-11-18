@@ -376,15 +376,24 @@ def _filter_chunks_by_document_status(chunks: List[Chunk], assistant_id: str) ->
         The subset of chunks whose parent document is 'complete'
     """
     views = [{"metadata": chunk.metadata, "_chunk_index": index} for index, chunk in enumerate(chunks)]
-    source_urls: Dict[str, str] = {}
-    surviving = _filter_vectors_by_document_status(views, assistant_id, source_urls=source_urls)
-    return [_with_source_url(chunks[view["_chunk_index"]], source_urls) for view in surviving]
+    row_metadata: Dict[str, Dict[str, str]] = {}
+    surviving = _filter_vectors_by_document_status(views, assistant_id, row_metadata=row_metadata)
+    return [_with_row_metadata(chunks[view["_chunk_index"]], row_metadata) for view in surviving]
 
 
-#: Chunk metadata key for the web page a crawled document came from. Set only
-#: here, from the document's own row, so it is never read from the index: a
-#: knowledge-base attribute of the same name is overwritten or removed.
+#: Chunk metadata key for the web page a crawled document came from.
 SOURCE_URL_METADATA_KEY = "source_url"
+
+#: Chunk metadata key for the document's name as its owner sees it (the row's
+#: ``filename``). The name the index returns is not that: the managed engine's
+#: comes back out of the S3 key, which holds the sanitized form
+#: (``home_-_dred_at_boise_state_university.md`` for "Home - DRED at Boise State
+#: University.md").
+DISPLAY_NAME_METADATA_KEY = "display_name"
+
+#: Keys set only here, from the document's own row, so they are never read from
+#: the index: a knowledge-base attribute of the same name is replaced or removed.
+_ROW_METADATA_KEYS = (SOURCE_URL_METADATA_KEY, DISPLAY_NAME_METADATA_KEY)
 
 #: The ``sourceConnectorId`` the web crawler writes. Drive imports also carry a
 #: ``sourceFileId``, but theirs is an opaque provider id, not an address.
@@ -412,14 +421,25 @@ def web_source_url(item: Mapping[str, Any]) -> Optional[str]:
     return url
 
 
-def _with_source_url(chunk: Chunk, source_urls: Mapping[str, str]) -> Chunk:
-    """``chunk`` with its document's page URL in metadata, or with none at all."""
-    url = source_urls.get(chunk.metadata.get("document_id"))
-    if url is None and SOURCE_URL_METADATA_KEY not in chunk.metadata:
+def row_display_metadata(item: Mapping[str, Any]) -> Dict[str, str]:
+    """What a citation shows about a ``DOC#`` row: its name, and a crawled page's URL."""
+    facts: Dict[str, str] = {}
+    name = item.get("filename")
+    if isinstance(name, str) and name.strip():
+        facts[DISPLAY_NAME_METADATA_KEY] = name
+    url = web_source_url(item)
+    if url:
+        facts[SOURCE_URL_METADATA_KEY] = url
+    return facts
+
+
+def _with_row_metadata(chunk: Chunk, row_metadata: Mapping[str, Mapping[str, str]]) -> Chunk:
+    """``chunk`` with its document row's display metadata, and none from the index."""
+    facts = row_metadata.get(chunk.metadata.get("document_id")) or {}
+    if not facts and not any(key in chunk.metadata for key in _ROW_METADATA_KEYS):
         return chunk
-    metadata = {k: v for k, v in chunk.metadata.items() if k != SOURCE_URL_METADATA_KEY}
-    if url is not None:
-        metadata[SOURCE_URL_METADATA_KEY] = url
+    metadata = {k: v for k, v in chunk.metadata.items() if k not in _ROW_METADATA_KEYS}
+    metadata.update(facts)
     return dataclasses.replace(chunk, metadata=metadata)
 
 
@@ -427,7 +447,7 @@ def _filter_vectors_by_document_status(
     vectors: List[Dict[str, Any]],
     assistant_id: str,
     *,
-    source_urls: Optional[Dict[str, str]] = None,
+    row_metadata: Optional[Dict[str, Dict[str, str]]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Filter vector results to only include chunks from documents with status='complete'.
@@ -447,9 +467,10 @@ def _filter_vectors_by_document_status(
     Args:
         vectors: List of vector results from S3 Vectors search
         assistant_id: Assistant identifier for DynamoDB key construction
-        source_urls: Filled in, when given, with ``document_id`` → page URL for
-            each complete document the web crawler added (:func:`web_source_url`).
-            The row is already read for its status, so this costs no extra read.
+        row_metadata: Filled in, when given, with ``document_id`` → what a
+            citation shows about each complete document (its name, and a crawled
+            page's URL; :func:`row_display_metadata`). The row is already read for
+            its status, so this costs no extra read.
 
     Returns:
         Filtered list of vectors from complete documents only
@@ -494,10 +515,10 @@ def _filter_vectors_by_document_status(
                     item = response.get("Item")
                     if item and item.get("status") == "complete":
                         valid_doc_ids.add(doc_id)
-                        if source_urls is not None:
-                            url = web_source_url(item)
-                            if url:
-                                source_urls[doc_id] = url
+                        if row_metadata is not None:
+                            facts = row_display_metadata(item)
+                            if facts:
+                                row_metadata[doc_id] = facts
                     else:
                         logger.info(
                             f"Filtering out doc {doc_id}: "

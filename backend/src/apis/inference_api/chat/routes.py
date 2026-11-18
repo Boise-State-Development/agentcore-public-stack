@@ -5081,12 +5081,14 @@ def _build_citations(assistant, context_chunks, rag_assistant_id: Optional[str])
             citation = {
                 "assistantId": rag_assistant_id,
                 "documentId": metadata.get("document_id", ""),
-                # Managed KBs carry the filename under ``filename`` (set at ingest,
-                # managed_backend.py); legacy S3-Vectors used ``source``. Read
-                # managed first, fall back to legacy, then the placeholder — before
-                # this, every managed-KB citation rendered "Unknown Source".
+                # The document's own name from its row (rag_service.row_display_metadata),
+                # e.g. "Home - DRED at Boise State University.md". The index's names are
+                # fallbacks: managed carries ``filename`` (the sanitized form in the S3
+                # key), legacy S3-Vectors ``source``. Before either, every managed-KB
+                # citation rendered "Unknown Source".
                 "fileName": (
-                    metadata.get("filename")
+                    metadata.get("display_name")
+                    or metadata.get("filename")
                     or metadata.get("source")
                     or "Unknown Source"
                 ),
