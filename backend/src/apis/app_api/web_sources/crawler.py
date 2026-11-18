@@ -13,6 +13,11 @@ always finalize the `CrawlJob` it owns. Failure modes:
 - a URL or redirect hop that is, or resolves to, a non-public address → it is
   never requested; it never becomes a doc (the root's doc is marked failed)
 - timeout on the whole crawl → caught, crawl marked 'failed'
+- a link to a PDF → its bytes are staged as they are, like a device upload of
+  a PDF; the documents pipeline extracts it. One over the per-file limit is a
+  'failed' doc that says so
+- a link to anything else that isn't a page (an image, a zip, a video) → never
+  becomes a doc and gives its page-budget slot back; its body is never read
 
 The hot loop is small on purpose: discover links, gate them through
 robots+scope+depth+visited, fetch with per-host jitter, extract markdown,
@@ -21,15 +26,15 @@ the existing documents pipeline.
 """
 
 import asyncio
+import hashlib
 import logging
-import mimetypes
 import random
 import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, List, Optional, Set, Tuple
-from urllib.parse import urljoin
+from typing import Awaitable, Callable, Dict, List, Literal, Optional, Set, Tuple
+from urllib.parse import unquote, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 import httpx
@@ -67,13 +72,46 @@ USER_AGENT = "BoiseStateAI-Assistant-Crawler/1.0 (+contact)"
 PER_PAGE_TIMEOUT_SECONDS = 20.0
 CRAWL_BUDGET_SECONDS = 15 * 60  # hard ceiling: must outlive any reasonable crawl
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
+# The most PDF bytes one fetch reads, before the knowledge base's own per-file
+# limit (`upload_limit.max_file_bytes`) can lower it. A body is held in memory
+# until it is staged, and a crawl runs up to `CrawlSettings.concurrency` (5)
+# fetches at once inside app-api or the kb-sync Lambda, so this stays at the
+# classic engine's processing limit rather than the managed 50 MiB. Reports
+# and catalogs a university links are well under it; a larger one can still be
+# uploaded from the device.
+MAX_PDF_BYTES = 20 * 1024 * 1024
 # Redirects followed per fetch. Real sites chain two at most (http → https,
 # bare → www, `/x` → `/x/`); httpx's own default of 20 only gives a hostile
 # page more hops to hide an internal address behind.
 MAX_REDIRECTS = 5
 ACCEPT_HEADER = (
-    "text/html;q=0.9, application/xhtml+xml;q=0.9, text/plain;q=0.5, */*;q=0.1"
+    "text/html;q=0.9, application/xhtml+xml;q=0.9, application/pdf;q=0.8, "
+    "text/plain;q=0.5, */*;q=0.1"
 )
+_HTML_CONTENT_TYPES = ("text/html", "application/xhtml", "text/plain")
+_PDF_CONTENT_TYPES = ("application/pdf", "application/x-pdf")
+# Content types a server sends when it doesn't say what a file is. A `.pdf` URL
+# served as one of these is taken as a PDF if its bytes start like one.
+_GENERIC_CONTENT_TYPES = ("application/octet-stream", "binary/octet-stream", "")
+_PDF_MAGIC = b"%PDF-"
+
+PageKind = Literal["html", "pdf"]
+
+
+class UnsupportedContentType(ValueError):
+    """The URL serves something the crawler doesn't index (not a page or a PDF)."""
+
+
+class ResponseTooLarge(ValueError):
+    """A response body is over the limit for its kind. `size_bytes` is None when
+    the server sent no Content-Length and the read was cut off at the limit."""
+
+    def __init__(self, kind: PageKind, limit_bytes: int, size_bytes: Optional[int]) -> None:
+        self.kind = kind
+        self.limit_bytes = limit_bytes
+        self.size_bytes = size_bytes
+        shown = size_bytes if size_bytes is not None else f"over {limit_bytes}"
+        super().__init__(f"Response too large: {shown} bytes (max {limit_bytes})")
 
 
 class _DocumentCreator:
@@ -97,7 +135,10 @@ class _DocumentCreator:
         existing = self.records.get(normalized_url)
         if existing:
             return existing
-        provisional_filename = f"{_sanitize_filename(url_extension_hint(normalized_url))}.html"
+        hint = _sanitize_filename(url_extension_hint(normalized_url))
+        # A PDF link keeps its own name on a row that fails before staging
+        # (one over the size limit), rather than reading `report.pdf.html`.
+        provisional_filename = hint if hint.endswith(".pdf") else f"{hint}.html"
         document_id = await _create_pending_document(
             assistant_id=self.assistant_id,
             normalized_url=normalized_url,
@@ -224,9 +265,12 @@ class RefreshState:
 
 
 def _content_sha256(markdown: str) -> str:
-    import hashlib
+    return _bytes_sha256(markdown.encode("utf-8"))
 
-    return hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+
+def _bytes_sha256(payload: bytes) -> str:
+    """The refresh hash gate's value for staged bytes (markdown or a PDF)."""
+    return hashlib.sha256(payload).hexdigest()
 
 
 # ── robots.txt cache ─────────────────────────────────────────────────────────
@@ -254,16 +298,18 @@ class _RobotsCache:
     async def _fetch(self, host: str, sample_url: str) -> Optional[RobotFileParser]:
         # Reuse the original scheme — if the user gave us https://, we ask
         # https://host/robots.txt; same for http.
-        from urllib.parse import urlparse
-
         scheme = urlparse(sample_url).scheme or "https"
         robots_url = f"{scheme}://{host}/robots.txt"
         try:
             resp = await _get_following_redirects(self._client, robots_url)
-            if resp.status_code >= 400:
-                return None
+            try:
+                if resp.status_code >= 400:
+                    return None
+                body = await _read_capped(resp, MAX_RESPONSE_BYTES, "html")
+            finally:
+                await resp.aclose()
             parser = RobotFileParser()
-            parser.parse(resp.text.splitlines())
+            parser.parse(_decode_text(resp, body).splitlines())
             return parser
         except (httpx.HTTPError, ValueError) as e:
             logger.info("robots.txt unreachable for %s (%s); allowing all", host, e)
@@ -388,6 +434,9 @@ class _FetchedPage:
     # Where the request ended up after redirects, normalized. Two URLs that
     # land on the same final URL are the same page.
     final_url: str
+    kind: PageKind = "html"
+    # A PDF's bytes, staged as they are. Empty for a page (`html` holds it).
+    body: bytes = b""
 
 
 async def _get_following_redirects(
@@ -402,6 +451,10 @@ async def _get_following_redirects(
     connects (`PublicOnlyTransport` in production). Returns the last hop's
     response, so `resp.url` is where the request landed.
 
+    The response is returned with its body UNREAD, so a caller can look at
+    the status and content type before deciding whether to read it, and read
+    it no further than a limit (`_read_capped`). The caller must `aclose()` it.
+
     Raises:
         BlockedAddressError: a hop names a non-public address.
         InvalidUrlError: a hop is not an http(s) URL.
@@ -410,64 +463,153 @@ async def _get_following_redirects(
     current = url
     for _ in range(MAX_REDIRECTS + 1):
         assert_url_is_public(current, resolve=False)
-        resp = await client.get(
-            current,
-            follow_redirects=False,
-            timeout=PER_PAGE_TIMEOUT_SECONDS,
-            headers=headers,
+        request = client.build_request(
+            "GET", current, headers=headers, timeout=PER_PAGE_TIMEOUT_SECONDS
         )
+        resp = await client.send(request, stream=True, follow_redirects=False)
         # A 3xx with a Location header (301/302/303/307/308); a 304 has none.
         if not resp.has_redirect_location:
             return resp
+        await resp.aclose()
         current = urljoin(str(resp.url), resp.headers["location"])
     raise httpx.TooManyRedirects(
         f"More than {MAX_REDIRECTS} redirects from {url}", request=resp.request
     )
 
 
+async def _read_capped(resp: httpx.Response, limit_bytes: int, kind: PageKind) -> bytes:
+    """Read a streamed body, stopping as soon as it passes `limit_bytes`.
+
+    A declared Content-Length over the limit is refused before any of the
+    body is read; one that lies (or is absent) is cut off at the limit.
+    """
+    declared = resp.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit_bytes:
+        raise ResponseTooLarge(kind, limit_bytes, int(declared))
+    chunks: List[bytes] = []
+    received = 0
+    async for chunk in resp.aiter_bytes():
+        received += len(chunk)
+        if received > limit_bytes:
+            raise ResponseTooLarge(kind, limit_bytes, None)
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _decode_text(resp: httpx.Response, body: bytes) -> str:
+    """Decode a body read with `_read_capped` as httpx's `.text` would."""
+    return body.decode(resp.encoding or "utf-8", errors="replace")
+
+
+def _content_kind(content_type: str, final_url: str) -> Optional[PageKind]:
+    """What the crawler does with a response, from its headers alone.
+
+    None means it doesn't index it, so its body is never read.
+    """
+    if any(ct in content_type for ct in _HTML_CONTENT_TYPES):
+        return "html"
+    if any(ct in content_type for ct in _PDF_CONTENT_TYPES):
+        return "pdf"
+    bare_type = content_type.split(";", 1)[0].strip()
+    if bare_type in _GENERIC_CONTENT_TYPES and urlparse(final_url).path.lower().endswith(".pdf"):
+        return "pdf"
+    return None
+
+
 async def _fetch_page(
     client: httpx.AsyncClient, url: str, if_none_match: Optional[str] = None
 ) -> _FetchedPage:
-    """Fetch a single page, following redirects (see `_get_following_redirects`).
+    """Fetch a single page or PDF, following redirects (see `_get_following_redirects`).
 
     When `if_none_match` is set (KB-sync refresh with a stored ETag), a 304
     response short-circuits with an empty body and `not_modified=True` — no
-    body transfer, no re-extraction. Raises on non-2xx (other than 304) or
-    non-HTML, and `BlockedAddressError` for a non-public address anywhere
-    on the way.
+    body transfer, no re-extraction. A page's body is read up to
+    MAX_RESPONSE_BYTES; a PDF's up to MAX_PDF_BYTES (the knowledge base's own
+    per-file limit, when lower, is applied by the caller: see `_crawl_pdf_limit`).
+
+    Raises:
+        httpx.HTTPStatusError: a non-2xx response other than 304.
+        UnsupportedContentType: neither a page nor a PDF (body not read).
+        ResponseTooLarge: the body is over the limit for its kind.
+        ValueError: a response that calls itself a PDF and isn't one.
+        BlockedAddressError: a non-public address anywhere on the way.
     """
     headers = {"If-None-Match": if_none_match} if if_none_match else None
     resp = await _get_following_redirects(client, url, headers)
     try:
-        final_url = normalize_url(str(resp.url))
-    except InvalidUrlError:
-        final_url = url
-    if if_none_match and resp.status_code == 304:
-        return _FetchedPage("", if_none_match, True, final_url)
-    resp.raise_for_status()
-    content_type = (resp.headers.get("content-type") or "").lower()
-    if not any(
-        ct in content_type for ct in ("text/html", "application/xhtml", "text/plain")
-    ):
-        raise ValueError(
-            f"Unsupported content-type for crawl: {content_type or 'unknown'}"
+        try:
+            final_url = normalize_url(str(resp.url))
+        except InvalidUrlError:
+            final_url = url
+        if if_none_match and resp.status_code == 304:
+            return _FetchedPage("", if_none_match, True, final_url)
+        resp.raise_for_status()
+        content_type = (resp.headers.get("content-type") or "").lower()
+        kind = _content_kind(content_type, final_url)
+        if kind is None:
+            raise UnsupportedContentType(
+                f"Unsupported content-type for crawl: {content_type or 'unknown'}"
+            )
+        etag = resp.headers.get("etag")
+        if kind == "pdf":
+            body = await _read_capped(resp, MAX_PDF_BYTES, "pdf")
+            if not body.startswith(_PDF_MAGIC):
+                raise ValueError("The response is labeled a PDF but is not one.")
+            return _FetchedPage("", etag, False, final_url, kind="pdf", body=body)
+        body = await _read_capped(resp, MAX_RESPONSE_BYTES, "html")
+        return _FetchedPage(_decode_text(resp, body), etag, False, final_url)
+    finally:
+        await resp.aclose()
+
+
+def _pdf_filename(url: str) -> str:
+    """A crawled PDF's document name: the last path segment, as a person reads it."""
+    name = unquote(url_extension_hint(url)).strip() or "document"
+    return name if name.lower().endswith(".pdf") else f"{name}.pdf"
+
+
+async def _crawl_pdf_limit(assistant_id: str) -> int:
+    """The most PDF bytes this crawl stages: MAX_PDF_BYTES, or the knowledge
+    base's per-file limit (`upload_limit.max_file_bytes`) if that is lower.
+
+    Read once per crawl. A record that can't be read falls back to the managed
+    limit, as a file-source import does; the classic handler and the managed
+    consumer each hold the stored object to their own limit regardless.
+    """
+    from apis.shared.kb_backend import upload_limit
+    from apis.shared.kb_backend.records import ENGINE_MANAGED, get_kb_record, resolve_engine
+
+    try:
+        record = await asyncio.to_thread(get_kb_record, assistant_id, assistant_id)
+        managed = resolve_engine(record) == ENGINE_MANAGED
+    except Exception:  # noqa: BLE001 — fall back, never fail the crawl
+        logger.warning(
+            "Could not read the knowledge-base record for %s; using the managed file limit",
+            assistant_id,
+            exc_info=True,
         )
-    content = resp.content
-    if len(content) > MAX_RESPONSE_BYTES:
-        raise ValueError(
-            f"Response too large: {len(content)} bytes (max {MAX_RESPONSE_BYTES})"
-        )
-    # Use httpx's encoding inference; surface bytes as text for parsing.
-    return _FetchedPage(resp.text, resp.headers.get("etag"), False, final_url)
+        managed = True
+    return min(MAX_PDF_BYTES, upload_limit.max_file_bytes(managed=managed))
+
+
+def _fetch_failure_message(err: Exception) -> str:
+    """The sentence a page's failed row shows."""
+    if isinstance(err, ResponseTooLarge) and err.kind == "pdf":
+        from apis.shared.kb_backend import upload_limit
+
+        return f"This PDF is too large to add. {upload_limit.too_large_message(err.limit_bytes, err.size_bytes)}"
+    if isinstance(err, UnsupportedContentType):
+        return "This address isn't a web page or a PDF."
+    return "The page could not be fetched."
 
 
 # ── S3 stage ────────────────────────────────────────────────────────────────
 
 
-async def _put_markdown(
-    *, assistant_id: str, document_id: str, markdown: str, filename: str
+async def _put_object(
+    *, assistant_id: str, document_id: str, body: bytes, filename: str, content_type: str
 ) -> str:
-    """PUT extracted markdown into the documents bucket. Returns the final S3 key.
+    """PUT bytes into the documents bucket. Returns the final S3 key.
 
     Triggers the existing S3-event ingestion Lambda which drives the doc
     through chunking/embedding — exactly like a device upload.
@@ -481,17 +623,41 @@ async def _put_markdown(
     loop = asyncio.get_event_loop()
     s3_client = boto3.client("s3")
     bucket = _get_documents_bucket()
-    body = markdown.encode("utf-8")
     await loop.run_in_executor(
         None,
         lambda: s3_client.put_object(
             Bucket=bucket,
             Key=s3_key,
             Body=body,
-            ContentType="text/markdown",
+            ContentType=content_type,
         ),
     )
     return s3_key
+
+
+async def _put_markdown(
+    *, assistant_id: str, document_id: str, markdown: str, filename: str
+) -> str:
+    """PUT a page's extracted markdown. Returns the final S3 key."""
+    return await _put_object(
+        assistant_id=assistant_id,
+        document_id=document_id,
+        body=markdown.encode("utf-8"),
+        filename=filename,
+        content_type="text/markdown",
+    )
+
+
+async def _put_pdf(*, assistant_id: str, document_id: str, body: bytes, filename: str) -> str:
+    """PUT a PDF's bytes as fetched, as a device upload of one would be.
+    Returns the final S3 key."""
+    return await _put_object(
+        assistant_id=assistant_id,
+        document_id=document_id,
+        body=body,
+        filename=filename,
+        content_type="application/pdf",
+    )
 
 
 # ── Public entry point ──────────────────────────────────────────────────────
@@ -579,6 +745,7 @@ async def run_crawl(
         worker_tasks: Set[asyncio.Task] = set()
         async with (http_client_factory or _default_client)() as client:
             robots = _RobotsCache(client)
+            pdf_limit: List[int] = []
             in_flight = 0
             done_event = asyncio.Event()
             done_event.set()  # starts "done" until we launch the first task
@@ -618,6 +785,41 @@ async def run_crawl(
                         discovered_delta=1,
                     )
                     await frontier.put((normalized, depth + 1))
+
+            async def record_fetch_failure(
+                url: str, requested: Optional[RefreshDoc], err: Exception
+            ) -> None:
+                logger.warning("Fetch failed for %s: %s", url, err)
+                if refresh is not None:
+                    # Seen = survived the robots gate. Fetch failures
+                    # still count as seen (transient outage ≠ missing
+                    # page); robots-disallowed pages returned above and
+                    # do NOT (the site said stop indexing them).
+                    refresh.seen_urls.add(url)
+                document_id = await creator.get_or_create(url)
+                if requested is None:
+                    # Refresh mode never clobbers an existing indexed
+                    # doc's status over a transient fetch error — its
+                    # last-good content stays served.
+                    await update_document_status(
+                        assistant_id=assistant_id,
+                        document_id=document_id,
+                        status="failed",
+                        error_message=_fetch_failure_message(err),
+                        error_details=str(err)[:500],
+                    )
+                await increment_counters(
+                    assistant_id=assistant_id,
+                    crawl_id=crawl_id,
+                    failed_delta=1,
+                )
+
+            async def pdf_limit_bytes() -> int:
+                # Resolved on the first PDF, so a crawl of pages alone never
+                # reads the knowledge-base record for it.
+                if not pdf_limit:
+                    pdf_limit.append(await _crawl_pdf_limit(assistant_id))
+                return pdf_limit[0]
 
             async def worker(url: str, depth: int) -> None:
                 nonlocal in_flight
@@ -677,31 +879,29 @@ async def run_crawl(
                             discovered_delta=-1,
                         )
                         return
-                    except Exception as fetch_err:
-                        logger.warning("Fetch failed for %s: %s", url, fetch_err)
-                        if refresh is not None:
-                            # Seen = survived the robots gate. Fetch failures
-                            # still count as seen (transient outage ≠ missing
-                            # page); robots-disallowed pages returned above and
-                            # do NOT (the site said stop indexing them).
-                            refresh.seen_urls.add(url)
-                        document_id = await creator.get_or_create(url)
-                        if requested is None:
-                            # Refresh mode never clobbers an existing indexed
-                            # doc's status over a transient fetch error — its
-                            # last-good content stays served.
-                            await update_document_status(
-                                assistant_id=assistant_id,
-                                document_id=document_id,
-                                status="failed",
-                                error_message="The page could not be fetched.",
-                                error_details=str(fetch_err)[:500],
-                            )
+                    except UnsupportedContentType as unsupported:
+                        if url == root_key or requested is not None:
+                            # A record already exists for this URL (the
+                            # route's root, or a page a refresh knows), so it
+                            # is handled as any failed fetch is: the root says
+                            # why it is empty, and a known page keeps its
+                            # last-good content and counts as seen.
+                            await record_fetch_failure(url, requested, unsupported)
+                            return
+                        # An image, a zip, a video: not something to index,
+                        # and not a failure. No document, its body is never
+                        # read, and the page budget slot goes back.
+                        logger.info("Crawl %s skipping %s: %s", crawl_id, url, unsupported)
+                        aliases.add(url)
+                        visited.discard(url)
                         await increment_counters(
                             assistant_id=assistant_id,
                             crawl_id=crawl_id,
-                            failed_delta=1,
+                            discovered_delta=-1,
                         )
+                        return
+                    except Exception as fetch_err:
+                        await record_fetch_failure(url, requested, fetch_err)
                         return
 
                     # The page is recorded under where it landed; the root
@@ -776,30 +976,72 @@ async def run_crawl(
                         # miss counter (not this run) decides their fate.
                         return
 
-                    # _extract_markdown runs trafilatura.extract() (and a
-                    # BeautifulSoup fallback) — both CPU-bound. Offload to the
-                    # thread pool so extraction never blocks the shared loop.
-                    loop = asyncio.get_running_loop()
-                    markdown, title = await loop.run_in_executor(
-                        None, _extract_markdown, html, final_url
-                    )
-                    if not markdown.strip():
-                        if existing is None:
-                            await update_document_status(
+                    if page.kind == "pdf":
+                        # Staged as fetched: the documents pipeline extracts a
+                        # PDF (Docling, or Bedrock on a managed knowledge base)
+                        # exactly as it does a device upload. A PDF has no
+                        # links to walk.
+                        limit = await pdf_limit_bytes()
+                        if len(page.body) > limit:
+                            too_large = ResponseTooLarge("pdf", limit, len(page.body))
+                            logger.info("Crawl %s not staging %s: %s", crawl_id, key, too_large)
+                            if existing is None:
+                                await update_document_status(
+                                    assistant_id=assistant_id,
+                                    document_id=document_id,
+                                    status="failed",
+                                    error_message=_fetch_failure_message(too_large),
+                                )
+                            await increment_counters(
                                 assistant_id=assistant_id,
-                                document_id=document_id,
-                                status="failed",
-                                error_message="The page had no extractable content.",
+                                crawl_id=crawl_id,
+                                failed_delta=1,
                             )
-                        await increment_counters(
-                            assistant_id=assistant_id,
-                            crawl_id=crawl_id,
-                            failed_delta=1,
+                            return
+                        payload = page.body
+                        content_type = "application/pdf"
+                        filename = _pdf_filename(key)
+                        links_html: Optional[str] = None
+                        markdown = ""
+                    else:
+                        # _extract_markdown runs trafilatura.extract() (and a
+                        # BeautifulSoup fallback) — both CPU-bound. Offload to the
+                        # thread pool so extraction never blocks the shared loop.
+                        loop = asyncio.get_running_loop()
+                        markdown, title = await loop.run_in_executor(
+                            None, _extract_markdown, html, final_url
                         )
-                        return
+                        if not markdown.strip():
+                            if existing is None:
+                                await update_document_status(
+                                    assistant_id=assistant_id,
+                                    document_id=document_id,
+                                    status="failed",
+                                    error_message="The page had no extractable content.",
+                                )
+                            await increment_counters(
+                                assistant_id=assistant_id,
+                                crawl_id=crawl_id,
+                                failed_delta=1,
+                            )
+                            return
+                        payload = markdown.encode("utf-8")
+                        content_type = "text/markdown"
+                        display_name = (
+                            title or url_extension_hint(key)
+                        ).strip() or "page"
+                        filename = f"{display_name}.md"
+                        links_html = html
 
+                    async def walk_links() -> None:
+                        if links_html is not None:
+                            await enqueue_links(links_html, final_url, depth)
+
+                    content_hash: Optional[str] = None
                     if refresh is not None:
-                        content_hash = _content_sha256(markdown)
+                        # Hashing a PDF of up to MAX_PDF_BYTES is real CPU;
+                        # keep it off the loop like the extraction above.
+                        content_hash = await asyncio.to_thread(_bytes_sha256, payload)
                         if existing is not None:
                             if existing.content_hash and existing.content_hash == content_hash:
                                 # Same bytes under a new/absent ETag: record
@@ -811,7 +1053,7 @@ async def run_crawl(
                                     crawl_id=crawl_id,
                                     fetched_delta=1,
                                 )
-                                await enqueue_links(html, final_url, depth)
+                                await walk_links()
                                 return
                             # Changed: let the worker stash the previous
                             # chunk count BEFORE the S3 overwrite fires the
@@ -819,23 +1061,28 @@ async def run_crawl(
                             await refresh._emit(key, document_id, "changed", etag, content_hash)
                         else:
                             await refresh._emit(key, document_id, "created", etag, content_hash)
-                    display_name = (
-                        title or url_extension_hint(key)
-                    ).strip() or "page"
-                    filename = f"{display_name}.md"
                     logger.info(
-                        "Crawl %s staging %s -> s3 (%d bytes markdown)",
+                        "Crawl %s staging %s -> s3 (%d bytes %s)",
                         crawl_id,
                         key,
-                        len(markdown.encode("utf-8")),
+                        len(payload),
+                        content_type,
                     )
                     try:
-                        s3_key = await _put_markdown(
-                            assistant_id=assistant_id,
-                            document_id=document_id,
-                            markdown=markdown,
-                            filename=filename,
-                        )
+                        if page.kind == "pdf":
+                            s3_key = await _put_pdf(
+                                assistant_id=assistant_id,
+                                document_id=document_id,
+                                body=payload,
+                                filename=filename,
+                            )
+                        else:
+                            s3_key = await _put_markdown(
+                                assistant_id=assistant_id,
+                                document_id=document_id,
+                                markdown=markdown,
+                                filename=filename,
+                            )
                     except Exception as stage_err:
                         logger.warning("Staging %s to S3 failed: %s", key, stage_err)
                         if refresh is not None:
@@ -857,14 +1104,14 @@ async def run_crawl(
                         # Not walking them would leave every page below this
                         # one unseen, and a refresh counts unseen pages as
                         # misses toward deletion.
-                        await enqueue_links(html, final_url, depth)
+                        await walk_links()
                         return
                     await update_document_import_metadata(
                         assistant_id=assistant_id,
                         document_id=document_id,
                         filename=filename,
-                        content_type="text/markdown",
-                        size_bytes=len(markdown.encode("utf-8")),
+                        content_type=content_type,
+                        size_bytes=len(payload),
                         s3_key=s3_key,
                         source_etag=etag,
                     )
@@ -882,7 +1129,7 @@ async def run_crawl(
                     if on_progress is not None:
                         await on_progress(key)
 
-                    await enqueue_links(html, final_url, depth)
+                    await walk_links()
                 finally:
                     in_flight -= 1
                     if in_flight == 0 and frontier.empty():
@@ -944,8 +1191,3 @@ def _default_client() -> httpx.AsyncClient:
         transport=PublicOnlyTransport(),
     )
 
-
-# Silence unused-import lint for mimetypes; it's reserved for filename hints
-# in future cases (e.g. `.txt` URLs) and stays here for parity with the
-# documents pipeline.
-_ = mimetypes
