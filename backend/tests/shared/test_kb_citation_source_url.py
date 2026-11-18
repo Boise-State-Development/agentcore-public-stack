@@ -1,4 +1,4 @@
-"""A crawled web page's citation names the address it came from.
+"""A citation names its document as the owner sees it, and a crawled page by its address.
 
 The URL is read off the document's own ``DOC#`` row by the status filter, which
 already fetches that row for its status, so it reaches the citation on either
@@ -13,6 +13,7 @@ import pytest
 
 from apis.shared.assistants import rag_service
 from apis.shared.assistants.rag_service import (
+    DISPLAY_NAME_METADATA_KEY,
     SOURCE_URL_METADATA_KEY,
     _filter_chunks_by_document_status,
     augment_prompt_with_context,
@@ -35,8 +36,11 @@ def _table(rows):
     return table
 
 
+PAGE_TITLE = "Home - DRED at Boise State University.md"
+
+
 def _web_row(url=PAGE_URL, status="complete"):
-    return {"status": status, "sourceConnectorId": "web", "sourceFileId": url}
+    return {"status": status, "sourceConnectorId": "web", "sourceFileId": url, "filename": PAGE_TITLE}
 
 
 def _chunk(doc_id, **extra):
@@ -110,11 +114,38 @@ class TestStatusFilterCarriesUrl:
         assert _filter([original], {"doc-upload": {"status": "complete"}})[0] is original
 
 
+class TestStatusFilterCarriesDisplayName:
+    """The row's name, not the sanitized one the managed index returns from the S3 key."""
+
+    def test_row_filename_rides_beside_the_index_filename(self):
+        out = _filter(
+            [_chunk("doc-web", filename="home_-_dred_at_boise_state_university.md"), _chunk("doc-upload", filename="my_report_(final).pdf")],
+            {"doc-web": _web_row(), "doc-upload": {"status": "complete", "filename": "My Report (final).pdf"}},
+        )
+        assert [c.metadata[DISPLAY_NAME_METADATA_KEY] for c in out] == [PAGE_TITLE, "My Report (final).pdf"]
+        # The index's own attribute is left as it was.
+        assert out[0].metadata["filename"] == "home_-_dred_at_boise_state_university.md"
+
+    @pytest.mark.parametrize("name", [None, "", "   ", 42])
+    def test_row_without_a_usable_name_adds_none(self, name):
+        row = {"status": "complete"} if name is None else {"status": "complete", "filename": name}
+        out = _filter([_chunk("doc-upload")], {"doc-upload": row})
+        assert DISPLAY_NAME_METADATA_KEY not in out[0].metadata
+
+    def test_index_attribute_cannot_supply_the_name(self):
+        out = _filter([_chunk("doc-upload", display_name="Spoofed.pdf")], {"doc-upload": {"status": "complete"}})
+        assert DISPLAY_NAME_METADATA_KEY not in out[0].metadata
+
+
 def test_url_never_reaches_the_model_excerpts():
-    chunk = {"text": "Centers list", "metadata": {"document_id": "d", SOURCE_URL_METADATA_KEY: PAGE_URL}}
+    chunk = {
+        "text": "Centers list",
+        "metadata": {"document_id": "d", SOURCE_URL_METADATA_KEY: PAGE_URL, DISPLAY_NAME_METADATA_KEY: PAGE_TITLE},
+    }
     without = {"text": "Centers list", "metadata": {"document_id": "d"}}
     assert augment_prompt_with_context("q", [chunk]) == augment_prompt_with_context("q", [without])
     assert PAGE_URL not in augment_prompt_with_context("q", [chunk])
+    assert PAGE_TITLE not in augment_prompt_with_context("q", [chunk])
 
 
 class TestBuildCitations:
@@ -133,6 +164,16 @@ class TestBuildCitations:
         assert out[0]["sourceUrl"] == PAGE_URL
         assert "sourceUrl" not in out[1]
         assert out[1] == {"assistantId": ASSISTANT_ID, "documentId": "d2", "fileName": "handbook.pdf", "text": "b"}
+
+    def test_row_name_wins_over_the_index_names(self, build):
+        chunks = [
+            {"text": "a", "metadata": {"document_id": "d1", "display_name": PAGE_TITLE, "filename": "home_-_dred.md"}},
+            {"text": "b", "metadata": {"document_id": "d2", "filename": "managed.pdf", "source": "legacy.pdf"}},
+            {"text": "c", "metadata": {"document_id": "d3", "source": "legacy.pdf"}},
+            {"text": "d", "metadata": {"document_id": "d4"}},
+        ]
+        names = [c["fileName"] for c in build(SimpleNamespace(show_citations=True), chunks, ASSISTANT_ID)]
+        assert names == [PAGE_TITLE, "managed.pdf", "legacy.pdf", "Unknown Source"]
 
     def test_citations_off_still_suppresses_everything(self, build):
         chunks = [{"text": "a", "metadata": {"document_id": "d1", "source_url": PAGE_URL}}]
