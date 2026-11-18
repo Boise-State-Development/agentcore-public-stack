@@ -1,7 +1,8 @@
 import { Component, inject, effect, Signal, signal, computed, untracked, viewChild, OnDestroy, PLATFORM_ID, ChangeDetectionStrategy } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { ActivatedRoute, Router } from '@angular/router';
-import { Subscription } from 'rxjs';
+import { Subscription, firstValueFrom } from 'rxjs';
+import { ProjectApiService } from '../projects/services/project-api.service';
 import { v4 as uuidv4 } from 'uuid';
 import { ChatRequestService } from './services/chat/chat-request.service';
 import { MessageMapService } from './services/session/message-map.service';
@@ -100,6 +101,7 @@ export class ConversationPage implements OnDestroy {
   private toast = inject(ToastService);
   private features = inject(FEATURES);
   private agentHandoff = inject(AgentHandoffService);
+  private projectApi = inject(ProjectApiService);
   /** Protected: the template hands the URL binding to the composer's voice control (#625). */
   protected readonly binding = inject(ConversationBindingService);
   private platformId = inject(PLATFORM_ID);
@@ -271,6 +273,39 @@ export class ConversationPage implements OnDestroy {
       return { projectId: assistant.projectId, name: assistant.name };
     }
     return null;
+  });
+
+  /**
+   * Whether the conversation's project can use voice mode (#2021), keyed by project
+   * so a switch never shows the previous project's answer. Read each time a project
+   * conversation is opened from somewhere else; a failed read leaves voice hidden.
+   */
+  private readonly projectVoice = signal<{ projectId: string; available: boolean } | null>(null);
+  readonly projectVoiceAvailable = computed<boolean | null>(() => {
+    const project = this.composerProject();
+    const voice = this.projectVoice();
+    return project && voice?.projectId === project.projectId ? voice.available : null;
+  });
+  /** The project whose voice status was last asked for, so one open reads it once. */
+  private projectVoiceRequested: string | null = null;
+  private readonly projectVoiceLoader = effect(() => {
+    const projectId = this.composerProject()?.projectId ?? null;
+    untracked(() => {
+      if (!projectId) {
+        this.projectVoiceRequested = null;
+        this.projectVoice.set(null);
+        return;
+      }
+      if (this.projectVoiceRequested === projectId) return;
+      this.projectVoiceRequested = projectId;
+      // A late answer for a project the page has since left is dropped.
+      const settle = (available: boolean) => {
+        if (this.composerProject()?.projectId === projectId) this.projectVoice.set({ projectId, available });
+      };
+      firstValueFrom(this.projectApi.voice(projectId))
+        .then(v => settle(v.available))
+        .catch(() => settle(false));
+    });
   });
 
   // Computed signal to determine if assistant can be closed
@@ -1036,10 +1071,18 @@ export class ConversationPage implements OnDestroy {
     if (!this.effectiveSessionId()) {
       const user = this.userService.currentUser();
       const userId = user?.user_id || 'anonymous';
-      this.sessionService.addSessionToCache(sessionId, userId);
       // Carry the assistant id forward if one is attached to this view —
-      // keeps the URL the single source of truth after voice ends.
+      // keeps the URL the single source of truth after voice ends. The row
+      // carries it too, with the project, so the sidebar groups a project's
+      // voice conversation under it without waiting for a reload (#2021).
       const assistantId = this.binding.boundAgentId() || this.assistant()?.assistantId;
+      const projectId = this.composerProject()?.projectId;
+      this.sessionService.addSessionToCache(
+        sessionId,
+        userId,
+        '',
+        assistantId ? { assistantId, ...(projectId ? { projectId } : {}) } : undefined,
+      );
       this.router.navigate(['s', sessionId], {
         replaceUrl: true,
         queryParams: this.binding.queryParamsFor(assistantId),

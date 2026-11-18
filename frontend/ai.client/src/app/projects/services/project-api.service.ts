@@ -23,6 +23,7 @@ import {
   ProjectMember,
   ProjectTasksResponse,
   ProjectUploadUrlResponse,
+  ProjectVoice,
   SettingsVersion,
   SettingsVersionsResponse,
   SharedTasksResponse,
@@ -95,6 +96,11 @@ export class ProjectApiService {
 
   update(projectId: string, request: UpdateProjectRequest): Observable<Project> {
     return this.http.patch<Project>(this.url(projectId), request, this.options());
+  }
+
+  /** Whether the project's conversations can use voice mode, and why not (#2021). */
+  voice(projectId: string): Observable<ProjectVoice> {
+    return this.http.get<ProjectVoice>(this.url(projectId, '/voice'), this.options());
   }
 
   /** Purge an archived project (owner). */

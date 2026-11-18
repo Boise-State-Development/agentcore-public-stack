@@ -36,6 +36,10 @@ class ProjectSettings(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     editors_manage_members: bool = Field(True, alias="editorsManageMembers")
+    # Voice mode in the project's conversations (#2021). On by default, so a project
+    # stored before the switch existed reads as on; the owner can turn it off.
+    # Voice is still off while ``apis.shared.projects.voice`` finds a reason.
+    voice_enabled: bool = Field(True, alias="voiceEnabled")
 
 
 class Project(BaseModel):

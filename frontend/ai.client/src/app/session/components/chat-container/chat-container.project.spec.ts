@@ -161,9 +161,36 @@ describe('ChatContainerComponent — a project conversation', () => {
       expect(composer().voiceAgentId()).toBe('ast-1');
     });
 
-    it('hides voice in a project conversation', () => {
-      render({ assistant: { ...HARNESS, voiceEnabled: true }, project: PROJECT });
-      expect(composer().showVoiceControl()).toBe(false);
+    describe('in a project conversation (#2021)', () => {
+      const bound = { boundAgentId: 'harness-1', hasUrlBinding: true };
+
+      it('offers voice once the harness has loaded and the project allows it', () => {
+        render({ assistant: HARNESS, project: PROJECT, projectVoiceAvailable: true, ...bound });
+        expect(composer().showVoiceControl()).toBe(true);
+        expect(composer().voiceAgentId()).toBe('harness-1');
+      });
+
+      it('follows the project, not the harness record’s own voice setting', () => {
+        render({ assistant: { ...HARNESS, voiceEnabled: true }, project: PROJECT, projectVoiceAvailable: false, ...bound });
+        expect(composer().showVoiceControl()).toBe(false);
+      });
+
+      it('hides voice until the project’s status is known', () => {
+        render({ assistant: HARNESS, project: PROJECT, projectVoiceAvailable: null, ...bound });
+        expect(composer().showVoiceControl()).toBe(false);
+      });
+
+      it('hides voice while the harness is still loading, so it never starts as a plain chat', () => {
+        render({ assistant: null, project: PROJECT, projectVoiceAvailable: true, boundAgentId: null, hasUrlBinding: true });
+        expect(composer().showVoiceControl()).toBe(false);
+      });
+
+      it('hides voice while another project’s harness is still loaded', () => {
+        render({
+          assistant: { ...HARNESS, projectId: 'p0' }, project: PROJECT, projectVoiceAvailable: true, ...bound,
+        });
+        expect(composer().showVoiceControl()).toBe(false);
+      });
     });
   });
 });

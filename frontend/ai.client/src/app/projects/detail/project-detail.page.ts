@@ -72,6 +72,8 @@ export class ProjectDetailPage {
   private readonly rail = viewChild(ProjectRailComponent);
   /** The rail reads the project's model; the composer locks its picker to it. */
   protected readonly projectModelId = computed(() => this.rail()?.boundModelId());
+  /** The rail reads the project's voice status; the composer offers voice by it (#2021). */
+  protected readonly projectVoiceAvailable = computed(() => this.rail()?.voiceAvailable());
 
   protected readonly isOwner = computed(() => this.project()?.role === 'owner');
   protected readonly archived = computed(() => this.project()?.status === 'archived');

@@ -50,13 +50,14 @@ class CreateProjectRequest(BaseModel):
 
 
 class UpdateProjectRequest(BaseModel):
-    """Absent fields are untouched. ``status`` and ``editorsManageMembers`` are owner-only."""
+    """Absent fields are untouched. ``status``, ``editorsManageMembers`` and ``voiceEnabled`` are owner-only."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     name: Optional[str] = Field(None, min_length=1, max_length=NAME_MAX_LENGTH)
     description: Optional[str] = Field(None, max_length=DESCRIPTION_MAX_LENGTH)
     editors_manage_members: Optional[bool] = Field(None, alias="editorsManageMembers")
+    voice_enabled: Optional[bool] = Field(None, alias="voiceEnabled")
     status: Optional[ProjectStatus] = None
 
 
@@ -130,6 +131,9 @@ class ProjectResponse(BaseModel):
     role: ProjectRole = Field(..., description="The caller's role on this project")
     status: ProjectStatus
     editors_manage_members: bool = Field(..., alias="editorsManageMembers")
+    voice_enabled: bool = Field(
+        True, alias="voiceEnabled", description="The owner's voice switch; see GET /projects/{id}/voice for whether voice runs"
+    )
     member_count: int = Field(..., alias="memberCount", description="Members besides the owner")
     harness_agent_id: str = Field(..., alias="harnessAgentId")
     created_at: str = Field(..., alias="createdAt")
@@ -146,6 +150,7 @@ class ProjectResponse(BaseModel):
             role=role,
             status=project.status,
             editors_manage_members=project.settings.editors_manage_members,
+            voice_enabled=project.settings.voice_enabled,
             member_count=project.member_count,
             harness_agent_id=project.harness_agent_id,
             created_at=project.created_at,
@@ -468,3 +473,44 @@ class ProjectImportResponse(ImportDocumentsResponse, SharingNotice):
 
 class ProjectStartCrawlResponse(StartCrawlResponse, SharingNotice):
     pass
+
+
+# ---- voice mode (#2021) -------------------------------------------------
+
+
+class VoiceBlockedTool(BaseModel):
+    """A bound tool voice can't run. ``name`` is the catalog's display name, else the id."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    tool_id: str = Field(..., alias="toolId")
+    name: str
+
+
+class VoiceFilesTooLarge(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    reason: str = Field(
+        ...,
+        description="over_budget, document_over_budget or raw_bytes (the files are too large to fetch), "
+        "or voice_files_off (this deployment keeps files out of voice)",
+    )
+    estimated_tokens: int = Field(0, alias="estimatedTokens")
+    budget_tokens: int = Field(0, alias="budgetTokens")
+
+
+class ProjectVoiceResponse(BaseModel):
+    """Whether the project's conversations can use voice mode, and why not.
+
+    ``available`` is what the voice button and the voice route follow: the owner's
+    ``enabled`` switch, and no ``blockedTools`` or ``filesTooLarge``. Those two turn
+    voice off without changing ``enabled``, so voice comes back once they're fixed.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool
+    available: bool
+    can_change: bool = Field(..., alias="canChange", description="The caller may flip ``enabled`` (the owner)")
+    blocked_tools: List[VoiceBlockedTool] = Field(default_factory=list, alias="blockedTools")
+    files_too_large: Optional[VoiceFilesTooLarge] = Field(None, alias="filesTooLarge")

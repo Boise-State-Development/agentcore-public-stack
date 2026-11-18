@@ -1121,6 +1121,9 @@ export class SessionService {
    * @param sessionId - The session ID
    * @param userId - The user ID
    * @param title - Optional title for the session (defaults to empty string)
+   * @param preferences - The binding the caller already knows (an Agent, a project),
+   *   so the row is grouped under its project before the API row arrives. A voice
+   *   session's row needs it: no turn reloads the list after the backend writes it.
    *
    * @example
    * ```typescript
@@ -1128,7 +1131,7 @@ export class SessionService {
    * sessionService.addSessionToCache('new-session-id', 'user-123');
    * ```
    */
-  addSessionToCache(sessionId: string, userId: string, title: string = ''): void {
+  addSessionToCache(sessionId: string, userId: string, title: string = '', preferences?: SessionPreferences): void {
     const newSession: SessionMetadata = {
       sessionId,
       userId,
@@ -1136,7 +1139,8 @@ export class SessionService {
       status: 'active',
       createdAt: new Date().toISOString(),
       lastMessageAt: new Date().toISOString(),
-      messageCount: 0
+      messageCount: 0,
+      ...(preferences ? { preferences } : {}),
     };
 
     // Mark this session as new to skip metadata fetches

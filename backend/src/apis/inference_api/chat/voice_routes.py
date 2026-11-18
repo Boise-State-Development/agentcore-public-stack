@@ -275,16 +275,18 @@ async def _load_voice_settings(user_id: str) -> dict:
 
 
 async def _voice_system_prompt(
-    session_id: str, settings: dict, user: Optional["User"]
+    session_id: str, settings: dict, user: Optional["User"], user_id: Optional[str] = None
 ) -> Optional[str]:
     """The voice session's base system prompt, or None for the default.
 
     Composed by the text path's plain-turn helper, so voice and text build the
-    same prompt: base → Role Instructions (#13) → Personal Instructions (#2020).
-    ``VoiceAgent`` then appends memory context and its voice guidelines after
-    these. A user with neither section gets None, so ``BaseAgent`` builds the
-    default prompt exactly as before. A preview session (an author testing an
-    Agent) gets none of the user's own sections, as in text chat.
+    same prompt: base → Role Instructions (#13) → Active Mode → Personal
+    Instructions (#2020). The mode is the one saved on the session (#2021):
+    voice has no per-turn picker, so it reads what a text turn would fall back
+    to. ``VoiceAgent`` then appends memory context and its voice guidelines
+    after these. A user with none of these sections gets None, so ``BaseAgent``
+    builds the default prompt exactly as before. A preview session (an author
+    testing an Agent) gets none of the user's own sections, as in text chat.
     """
     if is_preview_session(session_id):
         return None
@@ -292,10 +294,14 @@ async def _voice_system_prompt(
         compose_plain_turn_prompt,
         resolve_role_instructions,
     )
+    from apis.inference_api.chat.system_prompt_resolver import resolve_active_prompt_text
 
+    owner_id = user_id or (user.user_id if user is not None else None)
+    active_mode = await resolve_active_prompt_text(session_id=session_id, user_id=owner_id) if owner_id else None
     return compose_plain_turn_prompt(
         None,
         role_instructions=await resolve_role_instructions(user),
+        mode=active_mode,
         personal=personal_instructions_from(settings),
     )
 
@@ -317,7 +323,11 @@ async def _voice_session_incognito(session_id: str, user_id: str, requested: boo
 
 
 async def _ensure_session_metadata(
-    session_id: str, user_id: str, incognito: bool = False, assistant_id: Optional[str] = None
+    session_id: str,
+    user_id: str,
+    incognito: bool = False,
+    assistant_id: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> None:
     """Create session metadata entry if one doesn't already exist.
 
@@ -327,7 +337,8 @@ async def _ensure_session_metadata(
     records the conversation's Agent (#625) so it reopens as an Agent chat; it
     is written onto an existing row only when that row names no Agent yet
     (``session_agent_id`` already refused to move a conversation between
-    Agents).
+    Agents). ``project_id`` goes with it for a project's harness (#2021), as a
+    text turn records it, so the conversation is listed in the project.
     """
     try:
         existing = await get_session_metadata(session_id, user_id)
@@ -336,6 +347,8 @@ async def _ensure_session_metadata(
             if assistant_id and not stored:
                 prefs = existing.preferences.model_dump(by_alias=False) if existing.preferences else {}
                 prefs["assistant_id"] = assistant_id
+                if project_id:
+                    prefs["project_id"] = project_id
                 await store_session_metadata(
                     session_id=session_id,
                     user_id=user_id,
@@ -349,7 +362,7 @@ async def _ensure_session_metadata(
         preferences = None
         if incognito or assistant_id:
             preferences = SessionPreferences(
-                incognito=True if incognito else None, assistant_id=assistant_id
+                incognito=True if incognito else None, assistant_id=assistant_id, project_id=project_id
             )
 
         now = datetime.now(timezone.utc).isoformat()
@@ -443,10 +456,15 @@ async def _end_for_capacity(websocket: WebSocket, session_id: str) -> None:
         pass
 
 
-async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: Any) -> None:
+async def _finalize_voice_session(
+    session_id: str, user_id: str, voice_agent: Any, *, project_id: Optional[str] = None
+) -> None:
     """Update session metadata and store cost/token data after voice session ends.
 
     Called in the finally block of voice_stream to persist usage metrics.
+    ``project_id`` marks a project's harness session (#2021): the cost row
+    carries it as ``projectId``, as a text turn's does, so the project's
+    cost rollup counts voice too.
     """
     # Use response_start_count as fallback when turns are interrupted before completion
     completed_turns = getattr(voice_agent, "turn_count", 0)
@@ -593,6 +611,7 @@ async def _finalize_voice_session(session_id: str, user_id: str, voice_agent: An
             model_info=model_info,
             attribution=attribution,
             cost=cost,
+            **({"projectId": project_id} if project_id else {}),
         )
 
         await store_message_metadata(
@@ -801,7 +820,7 @@ async def voice_stream(
                 cap_memory_mode(memory_mode_from(settings), "read_only" if incognito else "on")
             )
             system_prompt = await _voice_system_prompt(
-                session_id, settings, _voice_user(auth_token, user_id)
+                session_id, settings, _voice_user(auth_token, user_id), user_id
             )
         voice_agent = VoiceAgent(
             session_id=session_id,
@@ -814,6 +833,9 @@ async def voice_stream(
             memory_extraction=memory_extraction,
             knowledge_context=agent_plan.knowledge_context if agent_plan else None,
             voice_guidelines=agent_plan.voice_guidelines if agent_plan else True,
+            # A project's memory block and its session-bound tools (#2021).
+            memory_context=agent_plan.memory_context if agent_plan else None,
+            extra_tools=agent_plan.extra_tools if agent_plan else None,
         )
         if requested_voice and voice_agent.voice_id != str(requested_voice).strip().lower():
             logger.warning(
@@ -848,6 +870,7 @@ async def voice_stream(
             user_id,
             incognito=incognito,
             assistant_id=agent_plan.assistant_id if agent_plan else None,
+            project_id=agent_plan.project_id if agent_plan else None,
         )
 
         # Run bidirectional communication
@@ -904,7 +927,9 @@ async def voice_stream(
                 logger.debug(f"Voice event drain: {type(e).__name__}: {e}")
             # 3. NOW finalize with complete accumulated usage data
             try:
-                await _finalize_voice_session(session_id, user_id, voice_agent)
+                await _finalize_voice_session(
+                    session_id, user_id, voice_agent, project_id=agent_plan.project_id if agent_plan else None
+                )
             except BaseException as e:
                 logger.debug(f"Voice session finalization error: {type(e).__name__}: {e}")
         try:
