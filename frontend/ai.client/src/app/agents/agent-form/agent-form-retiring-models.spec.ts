@@ -2,7 +2,7 @@ import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { describe, it, expect, vi } from 'vitest';
 import { provideRouter, ActivatedRoute } from '@angular/router';
 import { ReactiveFormsModule } from '@angular/forms';
-import { Component, input, output } from '@angular/core';
+import { Component, input, output, model as modelSignal } from '@angular/core';
 import { AgentFormPage } from './agent-form.page';
 import { AgentPreviewComponent } from './components/agent-preview.component';
 import { KnowledgeBaseSectionComponent } from '../../knowledge-base/knowledge-base-section.component';
@@ -42,6 +42,7 @@ class StubKnowledgeBaseComponent {
   userPermission = input('owner');
   permissionResolved = input(false);
   createDraft = input<unknown>(null);
+  open = modelSignal(false);
 }
 
 
@@ -141,6 +142,11 @@ describe('AgentFormPage — retiring models', () => {
     expect(notice.action).toContain('keeps working for now');
     expect(notice.action).toContain('resubmit');
 
+    // A saved agent's Model card opens folded to the chosen model; the notice
+    // sits outside the fold, so it is in the page either way.
+    expect(fixture.nativeElement.textContent).toContain('Claude Sonnet 4.6 is being retired.');
+    page.modelOpen.set(true);
+    fixture.detectChanges();
     const card = [...fixture.nativeElement.querySelectorAll('button[aria-pressed]')].find((b: Element) =>
       b.textContent?.includes('Claude Sonnet 4.6'),
     ) as HTMLElement;

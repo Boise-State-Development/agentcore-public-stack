@@ -399,3 +399,54 @@ describe('FileSourceBrowserDialogComponent — attach a whole folder', () => {
     expect(folderButton(fixture)?.disabled).toBe(true);
   });
 });
+
+describe('FileSourceBrowserDialogComponent — import a whole folder', () => {
+  beforeEach(() => TestBed.resetTestingModule());
+  afterEach(() => TestBed.resetTestingModule());
+
+  function folderButton(fixture: { nativeElement: HTMLElement }): HTMLButtonElement | null {
+    return fixture.nativeElement.querySelector('[data-testid="file-source-import-folder"]');
+  }
+
+  async function enterFolder(component: Record<string, never>, fixture: { detectChanges(): void }) {
+    await (component['openFolder'] as (id: string, name: string) => Promise<void>)('fold-1', 'Grants');
+    fixture.detectChanges();
+  }
+
+  it('is offered only to an agent knowledge base that asks for it', async () => {
+    const browse = vi.fn().mockResolvedValue({ entries: [], breadcrumbs: [], nextCursor: null });
+    const plain = setup({ browse }, { target: 'AST-1', connector: CONNECTED });
+    await enterFolder(plain.component, plain.fixture);
+    expect(folderButton(plain.fixture)).toBeNull();
+
+    // A project's knowledge has no folder route, so it is never offered there.
+    const project = setup({ browse }, { target: { projectId: 'p1' }, connector: CONNECTED, allowFolderImport: true });
+    await enterFolder(project.component, project.fixture);
+    expect(folderButton(project.fixture)).toBeNull();
+  });
+
+  it('imports the folder it is in and closes with what the server created', async () => {
+    const response = { documents: [{ documentId: 'DOC-1' }], listed: 3, alreadyImported: 1, skippedType: 1, truncated: false };
+    const importFolder = vi.fn().mockResolvedValue(response);
+    const { fixture, component, dialogRef } = setup(
+      {
+        browse: vi.fn().mockResolvedValue({ entries: [], breadcrumbs: [], nextCursor: null }),
+        importFolder,
+      },
+      { target: 'AST-1', connector: CONNECTED, allowFolderImport: true },
+    );
+    await vi.waitFor(() => expect((component['roots'] as () => unknown[])()).toHaveLength(1));
+    await enterFolder(component, fixture);
+    const button = folderButton(fixture)!;
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-label')).toBe('Import the folder Grants');
+    button.click();
+
+    await vi.waitFor(() => expect(dialogRef.close).toHaveBeenCalled());
+    expect(importFolder).toHaveBeenCalledWith('AST-1', 'google', 'fold-1');
+    expect(dialogRef.close).toHaveBeenCalledWith({
+      documents: response.documents,
+      folderImport: { ...response, folderName: 'Grants' },
+    });
+  });
+});

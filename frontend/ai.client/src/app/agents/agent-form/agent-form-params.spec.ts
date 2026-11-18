@@ -2,7 +2,7 @@ import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { provideRouter, ActivatedRoute } from '@angular/router';
 import { ReactiveFormsModule } from '@angular/forms';
-import { Component, input, output } from '@angular/core';
+import { Component, input, output, model } from '@angular/core';
 import { AgentFormPage } from './agent-form.page';
 import { AgentPreviewComponent } from './components/agent-preview.component';
 import { KnowledgeBaseSectionComponent } from '../../knowledge-base/knowledge-base-section.component';
@@ -41,6 +41,7 @@ class StubKnowledgeBaseComponent {
   userPermission = input('owner');
   permissionResolved = input(false);
   createDraft = input<unknown>(null);
+  open = model(false);
 }
 
 async function settle(fixture: ComponentFixture<AgentFormPage>): Promise<void> {

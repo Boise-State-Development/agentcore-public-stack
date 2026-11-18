@@ -30,6 +30,7 @@ from apis.shared.auth.models import User
 from apis.shared.feature_flags import skills_enabled
 from apis.shared.models.managed_models import list_all_managed_models
 from apis.shared.skills.access import resolve_accessible_skill_ids
+from apis.shared.skills.models import SYSTEM_OWNER_ID
 from apis.shared.skills.repository import get_skill_catalog_repository
 
 from apis.app_api.admin.services.model_access import (
@@ -182,7 +183,19 @@ async def _list_skills(user: User) -> List[BindableItem]:
             ref=s.skill_id,
             label=s.display_name,
             description=s.description or "",
-            meta={"compose": s.compose},
+            meta={"compose": s.compose, "ownership": _skill_ownership(s.owner_id, user.user_id)},
         )
         for s in skills
     ]
+
+
+def _skill_ownership(owner_id: str, user_id: str) -> str:
+    """Whose skill this is, for the Designer to group by: ``mine`` (the caller wrote
+    it), ``organization`` (the admin catalog) or ``shared`` (another user's, shared
+    with the caller). Display only: access was already decided by
+    ``resolve_accessible_skill_ids``."""
+    if owner_id == user_id:
+        return "mine"
+    if owner_id == SYSTEM_OWNER_ID:
+        return "organization"
+    return "shared"

@@ -109,3 +109,19 @@ export interface ImportDocumentsRequest {
 export interface ImportDocumentsResponse {
   documents: Document[];
 }
+
+/**
+ * `POST /assistants/{id}/documents/import-folder`: the documents a folder import
+ * created, and what the server's walk of the folder passed over.
+ */
+export interface ImportFolderResponse {
+  documents: Document[];
+  /** Files seen in the folder and its subfolders. */
+  listed: number;
+  /** Files this knowledge base already holds from the same source. */
+  alreadyImported: number;
+  /** Files of a type the knowledge base cannot read. */
+  skippedType: number;
+  /** The folder held more than one import takes; importing it again continues. */
+  truncated: boolean;
+}

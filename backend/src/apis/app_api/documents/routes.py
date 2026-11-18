@@ -18,6 +18,8 @@ from apis.app_api.documents.models import (
     ExtractedChunksResponse,
     ImportDocumentsRequest,
     ImportDocumentsResponse,
+    ImportFolderRequest,
+    ImportFolderResponse,
     KbUsage,
     ReportUploadFailureRequest,
     UploadUrlResponse,
@@ -35,7 +37,9 @@ from apis.app_api.documents.services.storage_service import (
     generate_download_url,
     generate_upload_url,
 )
+from apis.app_api.file_sources.folder_walk import WALK_AUTH, WALK_NOT_FOUND, FolderWalk, walk_folder
 from apis.app_api.file_sources.service import require_file_source_token, resolve_file_source
+from apis.shared.files.folder_attachments import FOLDER_ATTACH_MAX_FILES, FOLDER_ATTACH_MAX_PAGES
 from apis.app_api.kb_migration.ingestion_consumer import UPLOAD_URL_TTL_SECONDS
 from apis.app_api.kb_upgrade.born_managed import STATUS_PROVISIONING, begin_born_managed, initial_document_status
 from apis.shared.auth import User, get_current_user_from_session
@@ -414,37 +418,75 @@ async def import_documents(
         #    An import can be the agent's first knowledge, so it starts
         #    born-managed provisioning like a first upload, and every file waits
         #    on it while the knowledge base is built.
-        initial_status = await initial_document_status(assistant_id, owner_user_id=assistant_owner_id)
-        # The per-file limit a device upload to this knowledge base is held to,
-        # resolved after born-managed so a first import gets the managed limit.
-        max_file_bytes = await _import_max_file_bytes(assistant_id)
-        created: list = []
-        items: list = []
-        for file_ref in request.files:
-            document_id = _generate_document_id()
-            guessed_type, _ = mimetypes.guess_type(file_ref.name)
-            provisional_key = _get_s3_key(
-                assistant_id, document_id, _sanitize_filename(file_ref.name)
-            )
-            document = await create_document(
-                assistant_id=assistant_id,
-                filename=file_ref.name,
-                content_type=guessed_type or "application/octet-stream",
-                size_bytes=0,
-                s3_key=provisional_key,
-                document_id=document_id,
-                status=initial_status,
-                provenance=DocumentProvenance(
-                    source_connector_id=provider.provider_id,
-                    source_adapter_key=adapter.metadata.key,
-                    source_file_id=file_ref.file_id,
-                    imported_by_user_id=current_user.user_id,
-                ),
-            )
-            created.append(document)
-            items.append((document_id, file_ref.file_id))
+        created = await _create_import_records(
+            assistant_id,
+            assistant_owner_id,
+            provider_id=provider.provider_id,
+            adapter=adapter,
+            access_token=access_token,
+            importer_user_id=current_user.user_id,
+            file_refs=[(f.file_id, f.name) for f in request.files],
+        )
+        return ImportDocumentsResponse(
+            documents=[DocumentResponse.model_validate(doc.model_dump(by_alias=True)) for doc in created]
+        )
 
-        # 4. Fire-and-forget the download + S3 stage (response already formed).
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error importing documents: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to import documents: {str(e)}")
+
+
+async def _create_import_records(
+    assistant_id: str,
+    assistant_owner_id: str,
+    *,
+    provider_id: str,
+    adapter,
+    access_token: str,
+    importer_user_id: str,
+    file_refs: list,
+) -> list:
+    """Create one document record per ``(file_id, name)`` and start the download.
+
+    Values are provisional; the async task backfills the real filename, type,
+    size and key after the adapter download (Google-native docs change
+    extension on export). An import can be the agent's first knowledge, so it
+    starts born-managed provisioning like a first upload, and every file waits
+    on it while the knowledge base is built. Shared by the file import and the
+    folder import, so both create exactly the same records.
+    """
+    initial_status = await initial_document_status(assistant_id, owner_user_id=assistant_owner_id)
+    # The per-file limit a device upload to this knowledge base is held to,
+    # resolved after born-managed so a first import gets the managed limit.
+    max_file_bytes = await _import_max_file_bytes(assistant_id)
+    created: list = []
+    items: list = []
+    for file_id, name in file_refs:
+        document_id = _generate_document_id()
+        guessed_type, _ = mimetypes.guess_type(name)
+        provisional_key = _get_s3_key(assistant_id, document_id, _sanitize_filename(name))
+        document = await create_document(
+            assistant_id=assistant_id,
+            filename=name,
+            content_type=guessed_type or "application/octet-stream",
+            size_bytes=0,
+            s3_key=provisional_key,
+            document_id=document_id,
+            status=initial_status,
+            provenance=DocumentProvenance(
+                source_connector_id=provider_id,
+                source_adapter_key=adapter.metadata.key,
+                source_file_id=file_id,
+                imported_by_user_id=importer_user_id,
+            ),
+        )
+        created.append(document)
+        items.append((document_id, file_id))
+
+    if items:
+        # Fire-and-forget the download + S3 stage (response already formed).
         asyncio.ensure_future(
             run_import(
                 assistant_id=assistant_id,
@@ -454,19 +496,108 @@ async def import_documents(
                 max_file_bytes=max_file_bytes,
             )
         )
+    return created
 
-        return ImportDocumentsResponse(
-            documents=[
-                DocumentResponse.model_validate(doc.model_dump(by_alias=True))
-                for doc in created
-            ]
+
+def _already_imported_count(walk: FolderWalk) -> int:
+    """Files the walk passed over because this knowledge base already holds them.
+
+    The walk counts every file it sees in ``listed``, then returns it, skips it
+    as already held, skips it for its type, or stops on it at the file cap (that
+    last file is counted but neither returned nor skipped).
+    """
+    stopped_on_one = walk.truncated and len(walk.files) >= FOLDER_ATTACH_MAX_FILES
+    return max(0, walk.listed - len(walk.files) - walk.skipped_type - (1 if stopped_on_one else 0))
+
+
+@router.post(
+    "/import-folder",
+    response_model=ImportFolderResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def import_folder(
+    assistant_id: str,
+    request: ImportFolderRequest,
+    current_user: User = Depends(get_current_user_from_session),
+    provider_repo: OAuthProviderRepository = Depends(get_provider_repository),
+    role_service: AppRoleService = Depends(get_app_role_service),
+) -> ImportFolderResponse:
+    """Import every readable file in a connected folder, subfolders included.
+
+    The folder is listed with the same bounded walk a folder attachment and a
+    folder sync use (``file_sources/folder_walk.py``), under the same caps, so
+    importing a folder, attaching it and keeping it in sync all see the same
+    files. A file already in this knowledge base from the same source is
+    skipped rather than imported twice, which also makes a second import of the
+    folder pick up only what is new. The records are then created exactly as
+    the file import creates them.
+    """
+    try:
+        assistant_owner_id = await _require_edit_permission(assistant_id, current_user)
+        provider, adapter = await resolve_file_source(
+            request.connector_id, current_user, provider_repo, role_service
+        )
+        access_token = await require_file_source_token(provider, current_user.user_id)
+
+        already: set = set()
+        page_token: Optional[str] = None
+        while True:
+            existing, page_token = await list_assistant_documents(
+                assistant_id=assistant_id, owner_id=assistant_owner_id, next_token=page_token
+            )
+            already.update(
+                d.source_file_id
+                for d in existing
+                if d.source_file_id and d.source_connector_id == provider.provider_id
+            )
+            if not page_token:
+                break
+
+        walk = await walk_folder(
+            adapter,
+            access_token,
+            request.folder_id,
+            max_files=FOLDER_ATTACH_MAX_FILES,
+            max_pages=FOLDER_ATTACH_MAX_PAGES,
+            skip_ids=already,
+        )
+        if walk.error == WALK_AUTH:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Reconnect this file source to import the folder.",
+            )
+        if walk.error == WALK_NOT_FOUND:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That folder could not be found.")
+        if walk.error is not None:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="The folder could not be listed. Try again in a moment.",
+            )
+
+        created = await _create_import_records(
+            assistant_id,
+            assistant_owner_id,
+            provider_id=provider.provider_id,
+            adapter=adapter,
+            access_token=access_token,
+            importer_user_id=current_user.user_id,
+            file_refs=[(w.entry.id, w.entry.name) for w in walk.files],
+        )
+        return ImportFolderResponse(
+            documents=[DocumentResponse.model_validate(doc.model_dump(by_alias=True)) for doc in created],
+            listed=walk.listed,
+            alreadyImported=_already_imported_count(walk),
+            skippedType=walk.skipped_type,
+            truncated=walk.truncated,
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error importing documents: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to import documents: {str(e)}")
+        logger.error(f"Error importing folder: {type(e).__name__}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to import the folder."
+        )
 
 
 @router.post("/{document_id}/upload-failed", response_model=DocumentResponse, status_code=status.HTTP_200_OK)

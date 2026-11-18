@@ -3,6 +3,7 @@ import {
   ChangeDetectionStrategy,
   inject,
   input,
+  model,
   signal,
   computed,
   effect,
@@ -15,6 +16,11 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowDownTray,
   heroArrowPath,
+  heroArrowTopRightOnSquare,
+  heroDocumentText,
+  heroEllipsisVertical,
+  heroEye,
+  heroFolder,
   heroArrowUpTray,
   heroBookOpen,
   heroCheckCircle,
@@ -49,6 +55,8 @@ import { SpinnerComponent } from '../components/spinner/spinner.component';
 import {
   FileSourceBrowserDialogComponent,
   FileSourceBrowserDialogData,
+  FileSourceBrowserDialogResult,
+  isFolderImportResult,
 } from '../assistants/components/file-source-browser-dialog.component';
 import {
   WebSourceDialogComponent,
@@ -83,6 +91,18 @@ import {
 import { parseIso } from '../utils/date';
 import { FEATURES } from '../services/features';
 import { KnowledgeModeLineComponent } from './knowledge-mode-line.component';
+import { SettingsCardComponent } from '../components/settings-card/settings-card.component';
+import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
+import { ConnectedPosition } from '@angular/cdk/overlay';
+import {
+  DocumentViewerDialogComponent,
+  DocumentViewerDialogData,
+} from './document-viewer-dialog.component';
+import {
+  DocumentSourceKind,
+  documentOpenAction,
+  documentSourceKind,
+} from './document-source';
 
 /**
  * The reusable "Knowledge base" authoring section — device upload, web-crawl
@@ -105,11 +125,25 @@ import { KnowledgeModeLineComponent } from './knowledge-mode-line.component';
   // Block, so a parent's space-y gap (a margin on this element) takes effect.
   host: { class: 'block' },
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, SyncPolicyControlComponent, SpinnerComponent, KnowledgeModeLineComponent],
+  imports: [
+    NgIcon,
+    SyncPolicyControlComponent,
+    SpinnerComponent,
+    KnowledgeModeLineComponent,
+    SettingsCardComponent,
+    CdkMenuTrigger,
+    CdkMenu,
+    CdkMenuItem,
+  ],
   providers: [
     provideIcons({
       heroArrowDownTray,
       heroArrowPath,
+      heroArrowTopRightOnSquare,
+      heroDocumentText,
+      heroEllipsisVertical,
+      heroEye,
+      heroFolder,
       heroArrowUpTray,
       heroBookOpen,
       heroCheckCircle,
@@ -156,6 +190,8 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
    * parent implementation also patches its own form/state from the draft.
    */
   readonly createDraft = input.required<() => Promise<string>>();
+  /** Whether the card is unfolded. Two-way: `[(open)]`. */
+  readonly open = model(false);
 
   /**
    * The effective record id. Mirrors {@link entityId} (once non-null) and is
@@ -969,21 +1005,27 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
       return;
     }
 
-    const dialogRef = this.dialog.open<Document[] | undefined, FileSourceBrowserDialogData>(
+    const dialogRef = this.dialog.open<FileSourceBrowserDialogResult, FileSourceBrowserDialogData>(
       FileSourceBrowserDialogComponent,
       {
-        data: { target: recordId, connector },
+        data: { target: recordId, connector, allowFolderImport: true },
         hasBackdrop: false,
       },
     );
 
-    const imported = await firstValueFrom(dialogRef.closed);
-    if (imported && imported.length > 0) {
-      this.toast.success(
-        `Importing ${imported.length} file${imported.length === 1 ? '' : 's'}…`,
-      );
-      // loadDocuments() picks up the new 'uploading' records and starts polling
-      // them through to 'complete', exactly like a device upload.
+    const result = await firstValueFrom(dialogRef.closed);
+    const imported = isFolderImportResult(result) ? result.documents : Array.isArray(result) ? result : [];
+    if (isFolderImportResult(result)) {
+      this.announceFolderImport(result.folderImport);
+    } else if (imported.length > 0) {
+      this.toast.success(`Importing ${imported.length} file${imported.length === 1 ? '' : 's'}…`);
+    }
+    if (imported.length > 0) {
+      // The new rows go in at once, each with its own spinner, so the list grows
+      // by exactly what was added instead of waiting on a round-trip. The reload
+      // then starts polling them through to 'complete', like a device upload.
+      this.addDocuments(imported);
+      this.open.set(true);
       await this.loadDocuments();
     }
   }
@@ -1188,8 +1230,10 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
       return;
     }
 
-    this.isLoadingDocuments.set(true);
-
+    // No `isLoadingDocuments.set(true)` here. The skeleton is for the first load
+    // only, which the hydrate effect raises; a refresh after an upload or import
+    // swaps the rows in place. Raising it again turned the whole list into a
+    // skeleton on every import and back, and the card jumped twice.
     try {
       const response = await this.documentService.listDocuments(recordId);
       this.uploadedDocuments.set(response.documents);
@@ -1814,6 +1858,157 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
       }
     }
   }
+
+  // ── Folder imports ──────────────────────────────────────────────────────
+
+  /** Put documents the server just created at the top of the list, once each. */
+  private addDocuments(docs: Document[]): void {
+    this.uploadedDocuments.update((current) => {
+      const known = new Set(current.map((d) => d.documentId));
+      return [...docs.filter((d) => !known.has(d.documentId)), ...current];
+    });
+  }
+
+  /** Say what a folder import did, including what it passed over and why. */
+  private announceFolderImport(r: {
+    documents: Document[];
+    alreadyImported: number;
+    skippedType: number;
+    truncated: boolean;
+    folderName: string;
+  }): void {
+    const n = r.documents.length;
+    const notes: string[] = [];
+    if (r.alreadyImported) notes.push(`${r.alreadyImported} already here`);
+    if (r.skippedType) notes.push(`${r.skippedType} of a type it can't read`);
+    const tail = notes.length ? ` (${notes.join(', ')})` : '';
+    if (n === 0) {
+      this.toast.info(`Nothing new to import from ${r.folderName}${tail}.`);
+      return;
+    }
+    const more = r.truncated ? ' The folder holds more; import it again to continue.' : '';
+    this.toast.success(`Importing ${n} file${n === 1 ? '' : 's'} from ${r.folderName}${tail}.${more}`);
+  }
+
+  // ── Document list: search, filter and opening ───────────────────────────
+
+  /** The row menu opens under its button, right edges aligned, so it stays inside the card. */
+  readonly rowMenuPositions: ConnectedPosition[] = [
+    { originX: 'end', originY: 'bottom', overlayX: 'end', overlayY: 'top', offsetY: 4 },
+    { originX: 'end', originY: 'top', overlayX: 'end', overlayY: 'bottom', offsetY: -4 },
+  ];
+
+  /** Above this many documents the list gets a search box and filters. */
+  readonly searchThreshold = 6;
+  readonly documentQuery = signal('');
+  readonly documentFilter = signal<DocumentSourceKind | 'attention' | 'all'>('all');
+
+  private readonly connectorNames = computed(() => {
+    const names = new Map<string, string>();
+    for (const source of this.fileSources()) names.set(source.providerId, source.displayName);
+    return names;
+  });
+
+  private readonly connectorIcons = computed(() => {
+    const icons = new Map<string, string>();
+    for (const source of this.fileSources()) if (source.iconData) icons.set(source.providerId, source.iconData);
+    return icons;
+  });
+
+  /** The filter chips worth showing: only kinds the list actually holds. */
+  readonly documentFilters = computed(() => {
+    const docs = this.uploadedDocuments();
+    const kinds = new Set(docs.map((d) => documentSourceKind(d)));
+    const chips: { value: DocumentSourceKind | 'attention' | 'all'; label: string }[] = [{ value: 'all', label: 'All' }];
+    if (kinds.has('upload')) chips.push({ value: 'upload', label: 'Uploaded' });
+    if (kinds.has('connector')) {
+      const names = new Set(
+        docs
+          .filter((d) => documentSourceKind(d) === 'connector')
+          .map((d) => this.connectorNames().get(d.sourceConnectorId ?? '') ?? 'Connected'),
+      );
+      chips.push({ value: 'connector', label: names.size === 1 ? [...names][0] : 'Connected sources' });
+    }
+    if (kinds.has('web')) chips.push({ value: 'web', label: 'Web pages' });
+    if (docs.some((d) => d.status === 'failed' || d.removedFromSource)) {
+      chips.push({ value: 'attention', label: 'Needs attention' });
+    }
+    return chips.length > 2 ? chips : [];
+  });
+
+  readonly filteredDocuments = computed(() => {
+    const q = this.documentQuery().trim().toLowerCase();
+    const filter = this.documentFilter();
+    return this.displayedDocuments().filter((doc) => {
+      if (q && !doc.filename.toLowerCase().includes(q) && !(doc.sourceFileId ?? '').toLowerCase().includes(q)) {
+        return false;
+      }
+      if (filter === 'all') return true;
+      if (filter === 'attention') return doc.status === 'failed' || !!doc.removedFromSource;
+      return documentSourceKind(doc) === filter;
+    });
+  });
+
+  readonly isFilteringDocuments = computed(
+    () => !!this.documentQuery().trim() || this.documentFilter() !== 'all',
+  );
+
+  onDocumentQuery(event: Event): void {
+    this.documentQuery.set((event.target as HTMLInputElement).value);
+  }
+
+  clearDocumentFilters(): void {
+    this.documentQuery.set('');
+    this.documentFilter.set('all');
+  }
+
+  /** What "Open" does for a row. See `documentOpenAction`. */
+  openAction(doc: Document) {
+    return documentOpenAction(doc, this.connectorNames().get(doc.sourceConnectorId ?? ''));
+  }
+
+  sourceIcon(doc: Document): string | null {
+    return documentSourceKind(doc) === 'connector'
+      ? (this.connectorIcons().get(doc.sourceConnectorId ?? '') ?? null)
+      : null;
+  }
+
+  sourceKind(doc: Document): DocumentSourceKind {
+    return documentSourceKind(doc);
+  }
+
+  /** The row's primary action for a document that is not a link out. */
+  async openDocument(doc: Document): Promise<void> {
+    const action = this.openAction(doc);
+    if (action.kind === 'view') {
+      const recordId = this.id();
+      if (!recordId) return;
+      this.dialog.open<void, DocumentViewerDialogData>(DocumentViewerDialogComponent, {
+        data: { target: recordId, documentId: doc.documentId, filename: doc.filename, format: action.format },
+      });
+      return;
+    }
+    if (action.kind === 'file') {
+      await this.downloadDocument(doc.documentId);
+    }
+  }
+
+  /** The card's folded line: what the knowledge base holds, and anything to act on. */
+  readonly cardSummary = computed(() => {
+    const docs = this.uploadedDocuments();
+    const crawls = this.webCrawls().length;
+    if (this.isLoadingKnowledge()) return 'Loading…';
+    if (!docs.length && !crawls && !this.currentUpload()) {
+      return 'No documents. Add files, web pages or a folder for this agent to answer from.';
+    }
+    const parts = [`${docs.length} ${docs.length === 1 ? 'document' : 'documents'}`];
+    if (crawls) parts.push(`${crawls} ${crawls === 1 ? 'web source' : 'web sources'}`);
+    const processing = docs.filter((d) => PROCESSING_STATUSES.includes(d.status)).length;
+    if (processing) parts.push(`${processing} processing`);
+    const failed = docs.filter((d) => d.status === 'failed').length;
+    if (failed) parts.push(`${failed} failed`);
+    return parts.join(' · ');
+  });
 
   formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';

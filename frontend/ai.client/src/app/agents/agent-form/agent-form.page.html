@@ -33,62 +33,41 @@
     <div class="min-w-0 flex-1 overflow-y-auto lg:border-r lg:border-gray-200/80 dark:lg:border-gray-700/60">
   @if (loading()) {
     <!-- Form skeleton: mirrors the section rhythm below so the real form lands in place -->
-    <div class="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6" role="status" aria-live="polite" aria-busy="true">
+    <div class="mx-auto max-w-4xl space-y-4 px-4 py-8 sm:px-6" role="status" aria-live="polite" aria-busy="true">
       <span class="sr-only">Loading agent…</span>
 
-      <!-- Persona -->
-      <div class="animate-pulse rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-        <div class="h-4 w-24 rounded bg-gray-200 dark:bg-gray-700"></div>
-        <div class="mt-2 h-3 w-2/3 rounded bg-gray-100 dark:bg-gray-700/50"></div>
-        <div class="mt-5 flex items-start gap-4">
-          <div class="size-10 shrink-0 rounded-2xl bg-gray-100 dark:bg-gray-700/50"></div>
-          <div class="h-10 flex-1 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
-        </div>
-        <div class="mt-4 h-10 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
-        <div class="mt-4 h-32 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
-        <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div class="h-10 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
-          <div class="h-10 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
-        </div>
-      </div>
-
-      <!-- Model -->
-      <div class="animate-pulse rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-        <div class="flex items-center gap-2">
-          <div class="size-5 rounded bg-gray-200 dark:bg-gray-700"></div>
-          <div class="h-4 w-20 rounded bg-gray-200 dark:bg-gray-700"></div>
-        </div>
-        <div class="mt-2 h-3 w-3/5 rounded bg-gray-100 dark:bg-gray-700/50"></div>
-        <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          @for (i of [1, 2, 3, 4]; track i) {
-            <div class="rounded-xl border border-gray-200 px-3 py-2.5 dark:border-gray-700">
-              <div class="h-3.5 w-1/3 rounded bg-gray-200 dark:bg-gray-700"></div>
-              <div class="mt-1.5 h-3 w-3/4 rounded bg-gray-100 dark:bg-gray-700/50"></div>
-            </div>
-          }
-        </div>
-      </div>
-
-      <!-- Tools / skills (pill rows) -->
-      @for (section of [1, 2]; track section) {
-        <div class="animate-pulse rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-          <div class="flex items-center gap-2">
-            <div class="size-5 rounded bg-gray-200 dark:bg-gray-700"></div>
-            <div class="h-4 w-16 rounded bg-gray-200 dark:bg-gray-700"></div>
+      <!-- Persona: the one card that is always open -->
+      <div class="animate-pulse rounded-2xl border border-gray-200/80 bg-white shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+        <div class="flex items-start gap-3 px-5 py-4 sm:px-6">
+          <div class="size-8 shrink-0 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
+          <div class="flex-1 pt-1">
+            <div class="h-4 w-24 rounded bg-gray-200 dark:bg-gray-700"></div>
+            <div class="mt-2 h-3 w-1/2 rounded bg-gray-100 dark:bg-gray-700/50"></div>
           </div>
-          <div class="mt-2 h-3 w-1/2 rounded bg-gray-100 dark:bg-gray-700/50"></div>
-          <div class="mt-4 flex flex-wrap gap-2">
-            <div class="h-8 w-24 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
-            <div class="h-8 w-32 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
-            <div class="h-8 w-20 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
-            <div class="h-8 w-28 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
-            <div class="h-8 w-24 rounded-full bg-gray-100 dark:bg-gray-700/50"></div>
+        </div>
+        <div class="border-t border-gray-200/70 px-5 py-5 sm:px-6 dark:border-gray-700/60">
+          <div class="flex items-start gap-4">
+            <div class="size-10 shrink-0 rounded-2xl bg-gray-100 dark:bg-gray-700/50"></div>
+            <div class="h-10 flex-1 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
+          </div>
+          <div class="mt-4 h-10 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
+          <div class="mt-4 h-32 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
+        </div>
+      </div>
+
+      <!-- The folded cards: a header and a summary line each -->
+      @for (row of [40, 55, 48, 62, 44, 36]; track $index) {
+        <div class="flex animate-pulse items-start gap-3 rounded-2xl border border-gray-200/80 bg-white px-5 py-4 shadow-xs sm:px-6 dark:border-gray-700/60 dark:bg-gray-800/80">
+          <div class="size-8 shrink-0 rounded-lg bg-gray-100 dark:bg-gray-700/50"></div>
+          <div class="flex-1 pt-1">
+            <div class="h-4 w-20 rounded bg-gray-200 dark:bg-gray-700"></div>
+            <div class="mt-2 h-3 rounded bg-gray-100 dark:bg-gray-700/50" [style.width.%]="row"></div>
           </div>
         </div>
       }
     </div>
   } @else {
-  <form [formGroup]="form" (ngSubmit)="onSubmit()" class="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6">
+  <form [formGroup]="form" (ngSubmit)="onSubmit()" class="mx-auto max-w-4xl space-y-4 px-4 py-8 sm:px-6">
     @if (isViewer()) {
       <div class="rounded-xl border border-state-warning-200 bg-state-warning-50 px-4 py-3 text-sm text-state-warning-800 dark:border-state-warning-800/50 dark:bg-state-warning-900/20 dark:text-state-warning-300">
         You have viewer access to this agent — changes can't be saved.
@@ -124,17 +103,17 @@
       </div>
     }
 
-    <!-- Persona -->
-    <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-      <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Persona</h2>
-      <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Name, description and the system instructions that define this agent.</p>
+    <!-- Every section is an <app-settings-card>: same header, same summary line,
+         same fold. See `modelOpen` in the component for when each one opens. -->
 
-      <div class="mt-5 flex items-start gap-4">
+    <!-- Persona: never folds — it is the agent. -->
+    <app-settings-card title="Persona" icon="heroUserCircle" [collapsible]="false" summary="Who this agent is and how it behaves.">
+      <div class="flex items-start gap-4">
         <!-- Emoji -->
         <div class="shrink-0">
           <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Emoji</label>
           <div class="relative mt-1">
-            <button type="button" cdkOverlayOrigin #emojiTrigger="cdkOverlayOrigin" (click)="toggleEmojiPicker()" class="flex size-10 items-center justify-center rounded-2xl border border-gray-300 bg-white text-xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700">
+            <button type="button" cdkOverlayOrigin #emojiTrigger="cdkOverlayOrigin" (click)="toggleEmojiPicker()" [attr.aria-label]="form.get('emoji')?.value ? 'Change emoji' : 'Choose an emoji'" class="flex size-10 items-center justify-center rounded-2xl border border-gray-300 bg-white text-xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700">
               @if (form.get('emoji')?.value) {
                 <span>{{ form.get('emoji')?.value }}</span>
               } @else {
@@ -145,7 +124,7 @@
               <div class="overflow-hidden rounded-2xl shadow-lg ring-1 ring-black/5 dark:ring-white/10">
                 <div class="flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2 dark:border-gray-700 dark:bg-gray-800">
                   <span class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Select Emoji</span>
-                  <button type="button" (click)="closeEmojiPicker()" class="rounded-2xl p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-200">
+                  <button type="button" (click)="closeEmojiPicker()" aria-label="Close" class="rounded-2xl p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-200">
                     <ng-icon name="heroXMark" class="size-4" />
                   </button>
                 </div>
@@ -206,89 +185,39 @@
         <textarea id="instructions" formControlName="instructions" rows="6" placeholder="You are a helpful assistant that…" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"></textarea>
         @if (getFieldError('instructions'); as e) { <p class="mt-1 text-xs/5 text-state-danger-600 dark:text-state-danger-400">{{ e }}</p> }
       </div>
+    </app-settings-card>
 
-      <!-- Visibility + tags -->
-      <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
-          <label for="visibility" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Visibility</label>
-          <select id="visibility" formControlName="visibility" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
-            <option value="PRIVATE">Private</option>
-            <option value="SHARED">Shared</option>
-            <option value="PUBLIC">Public</option>
-          </select>
-        </div>
-        <div>
-          <label for="tag-input" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Tags</label>
-          <input id="tag-input" #tagInput type="text" (keydown.enter)="$event.preventDefault(); addTag(tagInput.value); tagInput.value=''" placeholder="Type a tag and press Enter" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
-          @if (tags.length) {
-            <div class="mt-2 flex flex-wrap gap-1.5">
-              @for (tag of tags; track tag) {
-                <span class="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-xs/5 text-gray-700 dark:bg-gray-700 dark:text-gray-200">
-                  {{ tag }}
-                  <button type="button" (click)="removeTag(tag)" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><ng-icon name="heroXMark" class="size-3" /></button>
-                </span>
-              }
-            </div>
-          }
-        </div>
-      </div>
-
-      <!-- Conversation starters -->
-      <div class="mt-4" formArrayName="starters">
-        <div class="flex items-center justify-between">
-          <label class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Conversation starters</label>
-          <button type="button" (click)="addStarter()" class="inline-flex items-center gap-1 text-xs/5 font-medium text-primary-accessible hover:text-primary-700 dark:text-primary-accessible-dark">
-            <ng-icon name="heroPlus" class="size-3.5" /> Add
-          </button>
-        </div>
-        @for (starter of starters.controls; track $index) {
-          <div class="mt-2 flex items-center gap-2">
-            <input [formControlName]="$index" type="text" placeholder="Suggested first message" class="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
-            <button type="button" (click)="removeStarter($index)" class="rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-state-danger-600 dark:hover:bg-gray-700"><ng-icon name="heroTrash" class="size-4" /></button>
-          </div>
-        }
-      </div>
-    </section>
-
-    <!-- Model (governed single-select, D3) -->
-    <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-      <div class="flex items-center gap-2">
-        <ng-icon name="heroCpuChip" class="size-5 text-primary-500" aria-hidden="true" />
-        <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Model</h2>
-        <span class="text-xs/5 text-state-danger-500">required</span>
-      </div>
-      <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">The agent runs on this model. Only models your role allows are shown.</p>
-
-      @if (visibleModels().length === 0) {
-        <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">No models are available to your role.</p>
-      } @else {
-        <!--
-          Selection is a **stroke, not a fill**. These cards are the largest tap targets
-          on the page, and a `primary-50` wash across one of them turned the section into
-          a block of colour that pulled rank on everything below it. The outline says the
-          same thing at the edge, where the eye is already reading the card's boundary.
-
-          `border` + `ring-1` on the same colour, rather than `border-2`: the ring is
-          drawn outside the border box, so the stroke thickens without the card shifting
-          by a pixel against its unselected neighbours in the grid.
-
-          The check stays. Colour is never the only carrier of state (WCAG 1.4.1), and a
-          stroke is a weaker signal than a wash — dropping the fill makes the glyph load
-          bearing rather than decorative.
-
-          ⚠️ Dark mode steps up to `primary-300`. Measured against the dark card, the
-          brand navy is a **1.45:1** stroke and `primary-400` only reaches 2.24:1 — both
-          under the 3:1 WCAG 1.4.11 floor for a non-text indicator. The old fill hid that:
-          a wash reads even when its edge does not. `primary-300` measures 3.45:1. Same
-          reason the check steps up with it.
-        -->
-        @if (retiringModelNotice(); as notice) {
-          <div class="mt-3 rounded-lg bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">
+    <!-- Model (governed single-select, D3). Folds to the chosen model. -->
+    <app-settings-card
+      title="Model"
+      icon="heroCpuChip"
+      badge="Required"
+      [summary]="modelSummary()"
+      openSummary="The agent runs on this model. Only models your role allows are shown."
+      [(open)]="modelOpen"
+    >
+      @if (retiringModelNotice(); as notice) {
+        <!-- Outside the fold: an agent whose model is going away must see it. -->
+        <div cardNotice class="px-5 pb-4 sm:px-6">
+          <div class="rounded-lg bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">
             <p><span class="font-medium">{{ notice.lead }}</span>{{ notice.detail ? ' ' + notice.detail : '' }}</p>
             <p class="mt-1.5">{{ notice.action }}</p>
           </div>
-        }
-        <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        </div>
+      }
+
+      @if (visibleModels().length === 0) {
+        <p class="text-sm text-gray-500 dark:text-gray-400">No models are available to your role.</p>
+      } @else {
+        <!--
+          Selection is a **stroke, not a fill**: a `primary-50` wash across the largest
+          tap targets on the page pulled rank on everything below it. `border` +
+          `ring-1` on the same colour so the stroke thickens without the card shifting.
+          The check stays — colour is never the only carrier of state (WCAG 1.4.1).
+          ⚠️ Dark mode steps up to `primary-300` (3.45:1 against the dark card); the
+          brand navy is 1.45:1, under the 3:1 floor for a non-text indicator.
+        -->
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
           @for (m of visibleModels(); track m.ref) {
             <button
               type="button"
@@ -311,25 +240,35 @@
                 <p class="truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ m.description }}</p>
               </div>
               @if (selectedModelId() === m.ref) {
-                <ng-icon
-                  name="heroCheck"
-                  class="size-5 shrink-0 text-primary-500 dark:text-primary-300"
-                  aria-hidden="true"
-                />
+                <ng-icon name="heroCheck" class="size-5 shrink-0 text-primary-500 dark:text-primary-300" aria-hidden="true" />
               }
             </button>
           }
         </div>
       }
 
-      <!-- Model parameters (governed by the model's admin supportedParams) -->
+      <!-- Model parameters (governed by the model's admin supportedParams). The
+           advanced half of the card: folded unless the agent already tunes one. -->
       @if (selectedModelId() && hasParamControls()) {
-        <div class="mt-5 border-t border-gray-200/70 pt-5 dark:border-gray-700/60">
-          <div class="flex items-center gap-2">
-            <ng-icon name="heroAdjustmentsHorizontal" class="size-4 text-gray-500 dark:text-gray-400" aria-hidden="true" />
-            <h3 class="text-xs/6 font-semibold text-gray-900 dark:text-white">Parameters</h3>
-          </div>
-          <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Optional. Leave blank to use the model's default. Your inputs are bounded by what the administrator allows.</p>
+        <div class="mt-5 border-t border-gray-200/70 pt-4 dark:border-gray-700/60">
+          <h3>
+            <button
+              type="button"
+              (click)="toggleParamsOpen()"
+              [attr.aria-expanded]="paramsOpen()"
+              aria-controls="agent-model-params"
+              class="flex w-full items-center gap-2 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+            >
+              <ng-icon name="heroAdjustmentsHorizontal" class="size-4 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+              <span class="text-xs/6 font-semibold text-gray-900 dark:text-white">Advanced parameters</span>
+              <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ modelParamsSummary() }}</span>
+              <ng-icon name="heroChevronDown" class="ml-auto size-4 shrink-0 text-gray-400 transition-transform dark:text-gray-500" [class.rotate-180]="paramsOpen()" aria-hidden="true" />
+            </button>
+          </h3>
+
+          @if (paramsOpen()) {
+          <div id="agent-model-params">
+          <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">Optional. Leave blank to use the model's default. Your inputs are bounded by what the administrator allows.</p>
 
           <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
             @for (p of numberParams(); track p.key) {
@@ -355,14 +294,10 @@
               <div>
                 <label [attr.for]="'param-' + p.key" class="block text-xs/5 font-medium text-gray-700 dark:text-gray-300">{{ p.label }}</label>
                 <!--
-                  Bind [selected] on each <option>, never [value] on the <select>.
-                  `select.value` is a one-time DOM property write applied before
-                  @for has mounted the options in the same change-detection tick,
-                  so the browser drops the unmatched value and falls back to the
-                  first option ("Default") — and Angular never re-applies it,
-                  because the bound value itself never changed. A saved
-                  `reasoning_effort: high` then reads as the model's default
-                  forever. Same failure this pattern caused in chat preferences (#161).
+                  Bind [selected] on each <option>, never [value] on the <select>:
+                  `select.value` is written before @for mounts the options, so the
+                  browser drops it and a saved `reasoning_effort: high` reads as the
+                  default forever (#161).
                 -->
                 <select
                   [id]="'param-' + p.key"
@@ -389,120 +324,95 @@
               }
             </div>
           }
+          </div>
+          }
         </div>
       }
-    </section>
+    </app-settings-card>
 
     <!-- Tools -->
     @if (tools().length) {
-      <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
+      <app-settings-card
+        title="Tools"
+        icon="heroWrenchScrewdriver"
+        [count]="selectedToolCount() || null"
+        [summary]="toolsCardSummary()"
+        openSummary="Capabilities this agent can call. It never uses the tools people turn on for their own chats, so with none selected it runs without tools."
+        [(open)]="toolsOpen"
+      >
         <!--
-          Tools is a disclosure, not a chip cloud. The cloud had outgrown itself: a
-          ragged wrap of 30-plus pills with no scanning order, descriptions trapped in
-          hover-only tooltips, and — the structural tell — a per-tool panel that could
-          not open beneath the chip that owned it, so it was rendered after the whole
-          cloud instead. A column of rows fixes all three and lets the panel nest where
-          it belongs. The collapse default is conditional; see `toolsOpen`.
-        -->
-        <h2>
-          <button
-            type="button"
-            (click)="toggleToolsOpen()"
-            [attr.aria-expanded]="toolsOpen()"
-            aria-controls="agent-tools-panel"
-            class="flex w-full items-center gap-2 rounded-lg text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
-          >
-            <ng-icon name="heroWrenchScrewdriver" class="size-5 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
-            <span id="agent-tools-heading" class="text-sm/6 font-semibold text-gray-900 dark:text-white">Tools</span>
-            @if (selectedToolCount()) {
-              <span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs/5 font-medium tabular-nums text-gray-600 dark:bg-white/10 dark:text-gray-300">{{ selectedToolCount() }}</span>
-            }
-            <ng-icon name="heroChevronDown" class="ml-auto size-4 shrink-0 text-gray-400 transition-transform dark:text-gray-500" [class.rotate-180]="toolsOpen()" aria-hidden="true" />
-          </button>
-        </h2>
-        @if (toolsOpen()) {
-          <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Capabilities this agent can call. It never uses the tools people turn on for their own chats, so with none selected it runs without tools.</p>
-        } @else {
-          <!-- Collapsed, the summary IS the section: the names are the whole point of
-               closing it, and a bare "Tools ▸" would trade a click for nothing. -->
-          <p class="mt-0.5 truncate text-xs/5 text-gray-500 dark:text-gray-400">{{ selectedToolSummary() || 'No tools selected. This agent runs without tools.' }}</p>
-        }
-
-        <!--
-          Deliberately OUTSIDE the `toolsOpen()` disclosure: the notice is the one thing
-          in this section the author has to act on, and collapsing Tools must not be a way
-          to stop seeing it. See docs/specs/mcp-server-retirement.md §7.
+          Outside the fold on purpose: the notice is the one thing in this section the
+          author has to act on, and folding Tools must not be a way to stop seeing it.
+          See docs/specs/mcp-server-retirement.md §7. One line per tool: two retiring
+          tools are usually two different stories, with different replacements.
         -->
         @if (retiringSelectedTools().length; as retiringCount) {
-          <div class="mt-2 rounded-lg bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">
-            <!-- One line per tool, not one sentence listing them all: two tools being
-                 retired are usually two different stories, with different replacements
-                 and different dates, and a comma-joined list would attribute one
-                 tool's replacement to the other. -->
-            <ul class="flex flex-col gap-1">
-              @for (t of retiringSelectedTools(); track t.label) {
-                <li><span class="font-medium">{{ t.label }}</span> is being retired. {{ t.detail }}</li>
-              }
-            </ul>
-            <p class="mt-1.5">
-              This agent keeps working until then — please remove {{ retiringCount === 1 ? 'it' : 'them' }}. If this agent is published, resubmit it so the change reaches the people using it.
-            </p>
+          <div cardNotice class="px-5 pb-4 sm:px-6">
+            <div class="rounded-lg bg-state-warning-50 px-3 py-2 text-xs/5 text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-300">
+              <ul class="flex flex-col gap-1">
+                @for (t of retiringSelectedTools(); track t.label) {
+                  <li><span class="font-medium">{{ t.label }}</span> is being retired. {{ t.detail }}</li>
+                }
+              </ul>
+              <p class="mt-1.5">
+                This agent keeps working until then — please remove {{ retiringCount === 1 ? 'it' : 'them' }}. If this agent is published, resubmit it so the change reaches the people using it.
+              </p>
+            </div>
           </div>
         }
 
-        @if (toolsOpen()) {
-          <!-- Search and grouping are what scale past thirty, not the scroll box; the
-               ceiling is generous so most authors never hit a nested scroller. -->
-          <app-tool-selector
-            id="agent-tools-panel"
-            class="mt-4"
-            [items]="toolItems()"
-            [selected]="selectedToolRefs()"
-            (selectedChange)="onToolSelectionChange($event)"
-            labelledBy="agent-tools-heading"
-            maxHeight="lg"
-          />
-        }
-      </section>
+        <app-tool-selector
+          id="agent-tools-panel"
+          [items]="toolItems()"
+          [selected]="selectedToolRefs()"
+          (selectedChange)="onToolSelectionChange($event)"
+          label="Tools"
+          maxHeight="lg"
+        />
+      </app-settings-card>
     }
 
-    <!-- Skills -->
+    <!-- Skills: the same list as Tools, grouped by whose skill it is. -->
     @if (skills().length) {
-      <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-        <div class="flex items-center gap-2">
-          <ng-icon name="heroSparkles" class="size-5 text-category-accent-skills-500" aria-hidden="true" />
-          <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Skills</h2>
-        </div>
-        <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">Reusable instruction bundles the agent can load on demand. It never uses the skills people turn on for their own chats, so with none selected it runs without skills.</p>
-        <!-- Skills' selected-chip accent is a section identity color (which capability
-             section this is), not a status — see the category-accent-* note in
-             identity.css. Kept distinct from Tools (primary brand). -->
-        <div class="mt-4 flex flex-wrap gap-2">
-          @for (s of skills(); track s.ref) {
-            <button type="button" (click)="toggleSkill(s.ref)" class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition" [class.border-category-accent-skills-500]="isSkillSelected(s.ref)" [class.bg-category-accent-skills-50]="isSkillSelected(s.ref)" [class.text-category-accent-skills-700]="isSkillSelected(s.ref)" [class.dark:bg-category-accent-skills-900/30]="isSkillSelected(s.ref)" [class.dark:text-category-accent-skills-300]="isSkillSelected(s.ref)" [class.border-gray-200]="!isSkillSelected(s.ref)" [class.text-gray-700]="!isSkillSelected(s.ref)" [class.dark:border-gray-700]="!isSkillSelected(s.ref)" [class.dark:text-gray-300]="!isSkillSelected(s.ref)" [appTooltip]="s.description" appTooltipPosition="top">
-              @if (isSkillSelected(s.ref)) { <ng-icon name="heroCheck" class="size-3.5" /> }
-              {{ s.label }}
-            </button>
-          }
-        </div>
-      </section>
+      <app-settings-card
+        title="Skills"
+        icon="heroSparkles"
+        [count]="selectedSkillCount() || null"
+        [summary]="skillsCardSummary()"
+        openSummary="Reusable instruction bundles the agent loads when they're relevant. It never uses the skills people turn on for their own chats."
+        [(open)]="skillsOpen"
+      >
+        <app-tool-selector
+          id="agent-skills-panel"
+          [items]="skillItems()"
+          [selected]="selectedSkillRefs()"
+          (selectedChange)="onSkillSelectionChange($event)"
+          label="Skills"
+          noun="skill"
+          nounPlural="skills"
+          [bulkActions]="false"
+          maxHeight="md"
+        />
+      </app-settings-card>
     }
 
-    <!-- Knowledge base. Response strictness (#112) is projected to the bottom of its card. -->
+    <!-- Knowledge base. It draws its own card; what the agent does with the
+         documents (strictness #112, citations #111) is projected to its foot. -->
     <app-knowledge-base-section
       [entityId]="agentId()"
       [userPermission]="userPermission()"
       [permissionResolved]="permissionResolved()"
       [createDraft]="createDraftAgent"
+      [(open)]="knowledgeOpen"
     >
-      <div class="border-t border-gray-200 pt-4 dark:border-gray-700">
+      <div class="space-y-5 border-t border-gray-200/70 pt-5 dark:border-gray-700/60">
         <fieldset>
           <legend class="text-sm/6 font-semibold text-gray-900 dark:text-white">Response strictness</legend>
-          <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+          <p class="mt-0.5 text-xs/5 text-gray-500 dark:text-gray-400">
             How closely this agent sticks to its knowledge base documents.
           </p>
 
-          <div class="mt-4 inline-flex flex-wrap rounded-lg border border-gray-300 p-0.5 dark:border-gray-600">
+          <div class="mt-3 inline-flex flex-wrap rounded-lg border border-gray-300 p-0.5 dark:border-gray-600">
             @for (opt of strictnessOptions; track opt.value) {
               <label
                 class="cursor-pointer rounded-md px-3 py-1.5 text-sm font-medium text-gray-700 has-checked:bg-primary-600 has-checked:text-white has-focus-visible:ring-2 has-focus-visible:ring-primary-500 dark:text-gray-300 dark:has-checked:text-white"
@@ -515,67 +425,109 @@
 
           @for (opt of strictnessOptions; track opt.value) {
             @if (opt.value === liveResponseStrictness()) {
-              <p class="mt-3 text-xs/5 text-gray-500 dark:text-gray-400">{{ opt.help }}</p>
+              <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400">{{ opt.help }}</p>
             }
           }
+        </fieldset>
+
+        <!-- Sources: citations & document download (#111). Retrieval quality is
+             unaffected either way; this is only what people see. -->
+        <fieldset>
+          <legend class="text-sm/6 font-semibold text-gray-900 dark:text-white">Sources people see</legend>
+          <label class="mt-2 flex items-start gap-3">
+            <input
+              type="checkbox"
+              formControlName="showCitations"
+              class="mt-0.5 size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
+            />
+            <span class="min-w-0">
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">Show source citations</span>
+              <span class="block text-xs/5 text-gray-500 dark:text-gray-400">
+                Show the documents used to answer, as citations beneath each reply.
+              </span>
+            </span>
+          </label>
+          <label
+            class="mt-3 ml-7 flex items-start gap-3"
+            [attr.title]="liveShowCitations() ? null : 'Turn on source citations to allow downloads.'"
+          >
+            <input
+              type="checkbox"
+              formControlName="allowDocumentDownload"
+              class="mt-0.5 size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700"
+            />
+            <span class="min-w-0" [class.opacity-50]="!liveShowCitations()">
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">Allow document downloads</span>
+              <span class="block text-xs/5 text-gray-500 dark:text-gray-400">
+                Let people download the original source document from a citation.
+              </span>
+            </span>
+          </label>
         </fieldset>
       </div>
     </app-knowledge-base-section>
 
-    <!-- Sources: citations & document download (#111) -->
-    <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-      <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Sources</h2>
-      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-        Control what end users see about the knowledge-base documents behind this agent's
-        answers. Retrieval quality is unaffected — the model still uses the documents either way.
-      </p>
+    <!-- Starters & discovery: what people see before they type. -->
+    <app-settings-card
+      title="Starters & discovery"
+      icon="heroChatBubbleLeftRight"
+      [summary]="discoverySummary()"
+      openSummary="Suggested first messages, and how people find this agent."
+      [(open)]="discoveryOpen"
+    >
+      <div formArrayName="starters">
+        <div class="flex items-center justify-between">
+          <p id="agent-starters-label" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Conversation starters</p>
+          <button type="button" (click)="addStarter()" class="inline-flex items-center gap-1 text-xs/5 font-medium text-primary-accessible hover:text-primary-700 dark:text-primary-accessible-dark">
+            <ng-icon name="heroPlus" class="size-3.5" aria-hidden="true" /> Add
+          </button>
+        </div>
+        @if (!starters.controls.length) {
+          <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">None yet. Starters show on the agent's first screen as one-click prompts.</p>
+        }
+        @for (starter of starters.controls; track $index) {
+          <div class="mt-2 flex items-center gap-2">
+            <input [formControlName]="$index" type="text" placeholder="Suggested first message" aria-labelledby="agent-starters-label" class="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
+            <button type="button" (click)="removeStarter($index)" aria-label="Remove starter" class="rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-state-danger-600 dark:hover:bg-gray-700"><ng-icon name="heroTrash" class="size-4" aria-hidden="true" /></button>
+          </div>
+        }
+      </div>
 
-      <!-- Show source citations -->
-      <label class="mt-4 flex items-start gap-3">
-        <input
-          type="checkbox"
-          formControlName="showCitations"
-          class="mt-0.5 size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-700"
-        />
-        <span class="min-w-0">
-          <span class="block text-sm font-medium text-gray-900 dark:text-white">Show source citations</span>
-          <span class="block text-xs/5 text-gray-500 dark:text-gray-400">
-            Show the documents used to answer, as citations beneath each reply.
-          </span>
-        </span>
-      </label>
-
-      <!-- Allow document downloads (nested; disabled when citations are off) -->
-      <label
-        class="mt-3 ml-7 flex items-start gap-3"
-        [attr.title]="liveShowCitations() ? null : 'Turn on source citations to allow downloads.'"
-      >
-        <input
-          type="checkbox"
-          formControlName="allowDocumentDownload"
-          class="mt-0.5 size-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700"
-        />
-        <span class="min-w-0" [class.opacity-50]="!liveShowCitations()">
-          <span class="block text-sm font-medium text-gray-900 dark:text-white">Allow document downloads</span>
-          <span class="block text-xs/5 text-gray-500 dark:text-gray-400">
-            Let users download the original source document from a citation.
-          </span>
-        </span>
-      </label>
-    </section>
+      <div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label for="visibility" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Visibility</label>
+          <select id="visibility" formControlName="visibility" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white">
+            <option value="PRIVATE">Private</option>
+            <option value="SHARED">Shared</option>
+            <option value="PUBLIC">Public</option>
+          </select>
+        </div>
+        <div>
+          <label for="tag-input" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Tags</label>
+          <input id="tag-input" #tagInput type="text" (keydown.enter)="$event.preventDefault(); addTag(tagInput.value); tagInput.value=''" placeholder="Type a tag and press Enter" class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white" />
+          @if (tags.length) {
+            <div class="mt-2 flex flex-wrap gap-1.5">
+              @for (tag of tags; track tag) {
+                <span class="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-xs/5 text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+                  {{ tag }}
+                  <button type="button" (click)="removeTag(tag)" [attr.aria-label]="'Remove tag ' + tag" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><ng-icon name="heroXMark" class="size-3" aria-hidden="true" /></button>
+                </span>
+              }
+            </div>
+          }
+        </div>
+      </div>
+    </app-settings-card>
 
     <!-- Voice mode (#625) -->
-    <section class="rounded-2xl border border-gray-200/80 bg-white p-6 shadow-xs dark:border-gray-700/60 dark:bg-gray-800/80">
-      <div class="flex items-center gap-2">
-        <ng-icon name="heroMicrophone" class="size-5 text-gray-400 dark:text-gray-500" aria-hidden="true" />
-        <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">Voice mode</h2>
-      </div>
-      <p class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
-        Let people talk to this agent out loud. Voice conversations always use Amazon Nova 2 Sonic,
-        whichever model is selected above.
-      </p>
-
-      <label class="mt-4 flex items-start gap-3">
+    <app-settings-card
+      title="Voice mode"
+      icon="heroMicrophone"
+      [summary]="voiceSummary()"
+      openSummary="Let people talk to this agent out loud. Voice conversations always use Amazon Nova 2 Sonic, whichever model is selected above."
+      [(open)]="voiceOpen"
+    >
+      <label class="flex items-start gap-3">
         <input
           type="checkbox"
           formControlName="voiceEnabled"
@@ -638,7 +590,7 @@
           </div>
         }
       }
-    </section>
+    </app-settings-card>
 
   </form>
   }

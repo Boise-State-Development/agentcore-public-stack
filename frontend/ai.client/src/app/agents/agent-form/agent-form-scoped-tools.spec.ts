@@ -2,7 +2,7 @@ import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { provideRouter, ActivatedRoute } from '@angular/router';
 import { ReactiveFormsModule } from '@angular/forms';
-import { Component, input, output } from '@angular/core';
+import { Component, input, output, model } from '@angular/core';
 import { AgentFormPage } from './agent-form.page';
 import { AgentPreviewComponent } from './components/agent-preview.component';
 import { KnowledgeBaseSectionComponent } from '../../knowledge-base/knowledge-base-section.component';
@@ -44,6 +44,7 @@ class StubKnowledgeBaseComponent {
   userPermission = input('owner');
   permissionResolved = input(false);
   createDraft = input<unknown>(null);
+  open = model(false);
 }
 
 const CANVAS = {
@@ -278,6 +279,8 @@ describe('AgentFormPage — scoped tool bindings', () => {
     });
 
     it('renders an empty state rather than a blank list when nothing matches', () => {
+      component.toolsOpen.set(true);
+      fixture.detectChanges();
       const root: HTMLElement = fixture.nativeElement;
       const input = root.querySelector('#agent-tools-panel input[type="search"]') as HTMLInputElement;
       input.value = 'zzz-no-such-tool';
@@ -287,6 +290,8 @@ describe('AgentFormPage — scoped tool bindings', () => {
     });
 
     it('selects a plain tool through the rendered checkbox', () => {
+      component.toolsOpen.set(true);
+      fixture.detectChanges();
       const root: HTMLElement = fixture.nativeElement;
       const name = [...root.querySelectorAll('#agent-tools-panel [id$="-name"]')].find(
         (n) => n.textContent?.trim() === 'Calculator',
@@ -299,29 +304,30 @@ describe('AgentFormPage — scoped tool bindings', () => {
   });
 
   /**
-   * The Tools section is a disclosure, and the default it opens at is the whole
-   * design: closed is only right when there is a summary to close *to*. A saved
-   * agent gets its one-line answer; a new or empty one keeps the list in front of
-   * the author, who otherwise has no way to learn what the platform can do.
+   * The Tools section is a folded card, like every optional card on the page. Folded,
+   * its summary still answers the question: the tools a saved agent has, or how many
+   * a new one could have ("None selected · 2 available"), so a first-time author can
+   * see what the platform offers without a long list standing in front of Save.
    */
   describe('the Tools disclosure', () => {
-    it('opens collapsed for a saved agent that already has tools', async () => {
+    it('opens folded for a saved agent that already has tools, naming them', async () => {
       ({ component } = await mount([{ kind: 'tool', ref: 'canvas_faculty' }]));
       expect(component.toolsOpen()).toBe(false);
       expect(component.selectedToolCount()).toBe(1);
-      expect(component.selectedToolSummary()).toBe('Canvas Faculty');
+      expect(component.toolsCardSummary()).toBe('Canvas Faculty');
     });
 
-    it('stays open for a saved agent with no tools bound', async () => {
+    it('opens folded for a saved agent with no tools, saying what is available', async () => {
       ({ component } = await mount([]));
-      expect(component.toolsOpen()).toBe(true);
+      expect(component.toolsOpen()).toBe(false);
       expect(component.selectedToolSummary()).toBe('');
+      expect(component.toolsCardSummary()).toContain('None selected · 2 available');
     });
 
-    it('stays open in create mode', async () => {
+    it('opens folded in create mode too', async () => {
       ({ component } = await mount([], null));
       expect(component.mode()).toBe('create');
-      expect(component.toolsOpen()).toBe(true);
+      expect(component.toolsOpen()).toBe(false);
     });
 
     it('caps the summary at three names', async () => {

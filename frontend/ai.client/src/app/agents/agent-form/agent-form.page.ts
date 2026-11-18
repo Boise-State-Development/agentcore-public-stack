@@ -56,6 +56,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
 import { splitToolDescription } from '../../shared/utils/tool-description';
 import { baseToolId } from '../../shared/utils/scoped-tool-id';
 import { ToolSelectorComponent } from '../../components/tool-selector/tool-selector.component';
+import { SettingsCardComponent } from '../../components/settings-card/settings-card.component';
 import { ToolSelectorItem } from '../../components/tool-selector/tool-selector.model';
 import { isItemSelected } from '../../components/tool-selector/tool-selection';
 import { AgentPreviewComponent } from './components/agent-preview.component';
@@ -113,6 +114,22 @@ const PARAM_LABELS: Record<string, string> = {
  */
 const AUTHOR_HIDDEN_PARAMS: ReadonlySet<string> = new Set(['max_tokens']);
 
+const VISIBILITY_LABELS: Record<string, string> = {
+  PRIVATE: 'Private',
+  SHARED: 'Shared',
+  PUBLIC: 'Public',
+};
+
+/** The Skills list's groups, in display order; a skill's rank indexes this. */
+const SKILL_GROUPS = ['My skills', 'Shared with me', 'Organization'] as const;
+
+function skillOwnershipRank(item: BindableItem): number {
+  const ownership = item.meta?.['ownership'];
+  if (ownership === 'mine') return 0;
+  if (ownership === 'shared') return 1;
+  return 2;
+}
+
 /**
  * Agent Designer — the authoring surface (Phase 4). A persona + a governed model
  * single-select + binding pickers (tools, skills), each populated
@@ -134,6 +151,7 @@ const AUTHOR_HIDDEN_PARAMS: ReadonlySet<string> = new Set(['max_tokens']);
     CdkConnectedOverlay,
     TooltipDirective,
     ToolSelectorComponent,
+    SettingsCardComponent,
     AgentPreviewComponent,
     AgentIconComponent,
     KnowledgeBaseSectionComponent,
@@ -244,8 +262,33 @@ export class AgentFormPage implements OnInit, OnDestroy {
    * deliberately NOT persisted across visits — a remembered collapse state is one
    * whose cause the author cannot see.
    */
-  readonly toolsOpen = signal(true);
+  readonly toolsOpen = signal(false);
   readonly selectedSkillRefs = signal<Set<string>>(new Set());
+
+  /**
+   * Which settings cards are open. One rule for all of them, so the page always
+   * opens the same way: a card opens when it needs the author, and otherwise shows
+   * the one-line answer it would give.
+   *
+   * - **Model** is required, so it opens while none is chosen and folds to the
+   *   chosen model once there is one.
+   * - **Tools, Skills, Knowledge base** are optional. They start folded, with a
+   *   summary that says what is available ("None selected · 34 available"), so a
+   *   first-time author can see what the platform offers without a 30-row list
+   *   standing between them and Save. A template opens Tools instead: its toolset
+   *   is the point of starting from one.
+   * - **Persona** never folds; it is the agent.
+   *
+   * Not persisted across visits: a remembered fold is one whose cause the author
+   * cannot see.
+   */
+  readonly modelOpen = signal(true);
+  readonly skillsOpen = signal(false);
+  readonly knowledgeOpen = signal(false);
+  readonly discoveryOpen = signal(false);
+  readonly voiceOpen = signal(false);
+  /** The model's advanced parameters, folded inside the Model card. */
+  readonly paramsOpen = signal(false);
   /**
    * The model as stored on the loaded record. A share editor's palette lists only
    * their own models, so the agent's model may be absent from it; saving must then
@@ -345,6 +388,9 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
   /** #625: mirrors the voiceEnabled control so the voice section's notices show only when it is on. */
   readonly liveVoiceEnabled = signal(false);
+  readonly liveVoiceInstructionsOnly = signal(true);
+  readonly liveVisibility = signal<string>('PRIVATE');
+  readonly liveTags = signal<string[]>([]);
   /** #625: how the saved knowledge base would reach a voice conversation. Null until read. */
   readonly voiceKnowledge = signal<VoiceKnowledgeModeStatus | null>(null);
 
@@ -496,6 +542,9 @@ export class AgentFormPage implements OnInit, OnDestroy {
     this.liveShowCitations.set(this.form.get('showCitations')?.value !== false);
     this.liveResponseStrictness.set(this.form.get('responseStrictness')?.value ?? 'balanced');
     this.liveVoiceEnabled.set(this.form.get('voiceEnabled')?.value === true);
+    this.liveVoiceInstructionsOnly.set(this.form.get('voiceInstructionsOnly')?.value !== false);
+    this.liveVisibility.set(this.form.get('visibility')?.value ?? 'PRIVATE');
+    this.liveTags.set(this.form.get('tags')?.value ?? []);
   }
 
   /** #625: re-read the knowledge base's voice mode. Needs a saved agent; editors only. */
@@ -626,6 +675,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
     // A template's whole point is the toolset it hands you, so override the collapse
     // `applyAgentToForm` just derived: the author should see what they were given.
     this.toolsOpen.set(true);
+    this.skillsOpen.set(this.selectedSkillRefs().size > 0);
 
     // Surface reconcile outcomes as a dismissible, one-line-each notice.
     if (flagged.length > 0) {
@@ -703,9 +753,12 @@ export class AgentFormPage implements OnInit, OnDestroy {
       // the knowledge-base section — no read-only display state to hydrate.
     }
     this.selectedToolRefs.set(toolRefs);
-    // Collapse Tools only when there is something to collapse *to* — see `toolsOpen`.
-    this.toolsOpen.set(toolRefs.size === 0);
     this.selectedSkillRefs.set(skillRefs);
+    // See `modelOpen` for the rule. Optional cards stay folded; the model opens
+    // only while none is chosen.
+    this.modelOpen.set(!agent.modelConfig?.modelId);
+    this.toolsOpen.set(false);
+    this.paramsOpen.set(Object.keys(this.modelParams()).length > 0);
     this.syncFormToSignals();
   }
 
@@ -765,6 +818,10 @@ export class AgentFormPage implements OnInit, OnDestroy {
     if (next !== this.selectedModelId()) this.modelParams.set({});
     this.selectedModelId.set(next);
     this.bindingsDirty.set(true);
+    // Choosing works like a select: the grid folds to the choice, which is the
+    // one fact the author needs from it afterwards. Deselecting leaves it open,
+    // since the card now needs an answer again.
+    if (next) this.modelOpen.set(false);
   }
 
   /** `meta.status` non-active. An older backend omits it, which reads as active. */
@@ -1018,6 +1075,94 @@ export class AgentFormPage implements OnInit, OnDestroy {
   );
   isToolSelected(ref: string): boolean {
     return isItemSelected(this.selectedToolRefs(), ref);
+  }
+
+  // ---- card summaries ---------------------------------------------------
+
+  /** The Model card's folded line: the chosen model, and whether it is tuned. */
+  readonly modelSummary = computed(() => {
+    const model = this.selectedModel();
+    const id = this.selectedModelId();
+    if (!id) return 'Choose the model this agent runs on.';
+    const label = model?.label ?? 'A model not available to your account';
+    const tuned = Object.keys(this.modelParams()).length;
+    const desc = model?.description ? ` — ${model.description}` : '';
+    return tuned ? `${label} · ${tuned} custom ${tuned === 1 ? 'setting' : 'settings'}` : `${label}${desc}`;
+  });
+
+  readonly toolsCardSummary = computed(() => {
+    const names = this.selectedToolSummary();
+    if (names) return names;
+    const available = this.tools().length;
+    return `None selected · ${available} available. With none, this agent runs without tools.`;
+  });
+
+  readonly selectedSkillCount = computed(
+    () => this.skills().filter((s) => this.selectedSkillRefs().has(s.ref)).length,
+  );
+
+  readonly skillsCardSummary = computed(() => {
+    const labels = this.skills()
+      .filter((s) => this.selectedSkillRefs().has(s.ref))
+      .map((s) => s.label)
+      .sort((a, b) => a.localeCompare(b));
+    if (!labels.length) {
+      return `None selected · ${this.skills().length} available. With none, this agent runs without skills.`;
+    }
+    const shown = labels.slice(0, 3).join(', ');
+    return labels.length > 3 ? `${shown} +${labels.length - 3} more` : shown;
+  });
+
+  readonly discoverySummary = computed(() => {
+    const starters = this.liveFormStarters().filter((s) => !!s?.trim()).length;
+    const tags = this.liveTags().length;
+    const parts = [
+      VISIBILITY_LABELS[this.liveVisibility()] ?? 'Private',
+      starters ? `${starters} ${starters === 1 ? 'starter' : 'starters'}` : 'No starters',
+    ];
+    if (tags) parts.push(`${tags} ${tags === 1 ? 'tag' : 'tags'}`);
+    return parts.join(' · ');
+  });
+
+  readonly voiceSummary = computed(() => {
+    if (!this.liveVoiceEnabled()) return 'Off. People can only type to this agent.';
+    return this.liveVoiceInstructionsOnly()
+      ? 'On · uses only this agent’s instructions'
+      : 'On · adds the built-in voice guidelines';
+  });
+
+  readonly modelParamsSummary = computed(() => {
+    const tuned = Object.keys(this.modelParams()).length;
+    return tuned ? `${tuned} custom` : 'Model defaults';
+  });
+
+  toggleParamsOpen(): void {
+    this.paramsOpen.update((open) => !open);
+  }
+
+  // ---- skills (the shared selector, grouped by whose skill it is) ---------
+
+  /**
+   * The Skills list's rows, grouped My skills → Shared with me → Organization and
+   * then by name. `meta.ownership` is display only; an older backend omits it and
+   * every skill lands under Organization, which is where they all came from then.
+   */
+  readonly skillItems = computed<ToolSelectorItem[]>(() =>
+    [...this.skills()]
+      .map((s) => ({ s, rank: skillOwnershipRank(s) }))
+      .sort((a, b) => a.rank - b.rank || a.s.label.localeCompare(b.s.label))
+      .map(({ s, rank }) => ({
+        id: s.ref,
+        name: s.label,
+        description: s.description,
+        group: SKILL_GROUPS[rank],
+      })),
+  );
+
+  onSkillSelectionChange(next: ReadonlySet<string>): void {
+    if (sameRefs(next, this.selectedSkillRefs())) return;
+    this.selectedSkillRefs.set(new Set(next));
+    this.bindingsDirty.set(true);
   }
 
   // ---- skills (multi-select toggles) -----------------------------------
