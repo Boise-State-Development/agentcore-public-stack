@@ -13,9 +13,13 @@ These tests pin the three things that fix it:
 * the orphaned-crawl cascade runs once per burst, not once per page;
 * background cleanups are capped per task.
 
-And one that measures the result rather than the mechanism: a burst of deletes
+And one that checks the whole path rather than each piece: a burst of deletes
 through the real route, against a table whose every call blocks like a network
-round trip, must leave the loop responsive.
+round trip, must make none of those calls on the loop's thread. It counts calls
+by thread rather than timing the loop, because a wall-clock bound on loop lag
+fails whenever another thread in the test process holds the GIL: one spinning
+thread put the healthy path at 800 ms against its usual 35, and CI failed the
+old 250 ms bound at 1152 and 1385 ms on two unrelated branches (2026-11-18).
 
 The shared assistant lookups go through ``apis.shared.blocking_io``: a thread on
 app-api, inline on the Runtime, whose turn path would only pay for the hop.
@@ -385,8 +389,25 @@ class TestCleanupConcurrencyCap:
 _ROUND_TRIP_S = 0.01
 # Twice the size of the 2026-11-16 burst's busiest minute in flight at once.
 _BURST = 200
-# The worst stall tolerated, against the 1,000 ms the lag monitor warns at.
-_MAX_LAG_S = 0.25
+
+
+class _ThreadLedger:
+    """Counts the blocking calls made on the event loop's thread and elsewhere."""
+
+    def __init__(self, loop_thread: int) -> None:
+        self.loop_thread = loop_thread
+        self.on_loop = 0
+        self.off_loop = 0
+        self._lock = threading.Lock()
+
+    def hold(self) -> None:
+        """Record which thread is calling, then block it for a round trip."""
+        with self._lock:
+            if threading.get_ident() == self.loop_thread:
+                self.on_loop += 1
+            else:
+                self.off_loop += 1
+        time.sleep(_ROUND_TRIP_S)
 
 
 def _assistant_item() -> dict:
@@ -427,51 +448,28 @@ def _document_item(document_id: str) -> dict:
 class _SlowTable:
     """Answers like the assistants table, after blocking its thread for a round trip."""
 
+    def __init__(self, ledger: _ThreadLedger) -> None:
+        self._ledger = ledger
+
     def get_item(self, Key: dict, **_kwargs) -> dict:  # noqa: N803 - boto3's spelling
-        time.sleep(_ROUND_TRIP_S)
+        self._ledger.hold()
         return {"Item": _assistant_item()} if Key["SK"] == "METADATA" else {}
 
     def update_item(self, Key: dict, **_kwargs) -> dict:  # noqa: N803
-        time.sleep(_ROUND_TRIP_S)
+        self._ledger.hold()
         return {"Attributes": _document_item(Key["SK"].removeprefix("DOC#"))}
 
     def query(self, **_kwargs) -> dict:
-        time.sleep(_ROUND_TRIP_S)
+        self._ledger.hold()
         return {"Items": []}
 
     def delete_item(self, **_kwargs) -> dict:
-        time.sleep(_ROUND_TRIP_S)
+        self._ledger.hold()
         return {}
 
 
-class _LagProbe:
-    """How late a short sleep wakes: the same measure as app-api's lag monitor."""
-
-    def __init__(self, interval_s: float = 0.005) -> None:
-        self.interval_s = interval_s
-        self.worst_s = 0.0
-        self._task: asyncio.Task | None = None
-
-    async def _run(self) -> None:
-        loop = asyncio.get_running_loop()
-        while True:
-            started = loop.time()
-            await asyncio.sleep(self.interval_s)
-            self.worst_s = max(self.worst_s, loop.time() - started - self.interval_s)
-
-    async def __aenter__(self) -> "_LagProbe":
-        self._task = asyncio.create_task(self._run())
-        await asyncio.sleep(0)
-        return self
-
-    async def __aexit__(self, *_exc) -> None:
-        assert self._task is not None
-        self._task.cancel()
-        await asyncio.gather(self._task, return_exceptions=True)
-
-
-async def _delete_burst() -> tuple[float, list[int], int]:
-    """Send the burst through the route; return the worst lag, the statuses, the cleanups."""
+async def _delete_burst() -> tuple[_ThreadLedger, list[int], int]:
+    """Send the burst through the route; return the call ledger, the statuses, the cleanups."""
     app = FastAPI()
     app.include_router(documents_router)
     app.dependency_overrides[get_current_user_from_session] = lambda: User(
@@ -493,46 +491,45 @@ async def _delete_burst() -> tuple[float, list[int], int]:
             all_cleaned.set()
         return True
 
+    ledger = _ThreadLedger(threading.get_ident())
+
     def no_kb_record(*_args, **_kwargs):
-        time.sleep(_ROUND_TRIP_S)
+        ledger.hold()
         return None
 
     transport = httpx.ASGITransport(app=app)
     with (
-        patch("boto3.resource", return_value=SimpleNamespace(Table=lambda _name: _SlowTable())),
+        patch("boto3.resource", return_value=SimpleNamespace(Table=lambda _name: _SlowTable(ledger))),
         patch("apis.shared.kb_backend.records.get_kb_record", no_kb_record),
         patch.object(cleanup_service, "_cleanup_document_resources", cleanup_body),
         patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE}),
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://app-api") as client:
-            async with _LagProbe() as probe:
-                responses = await asyncio.gather(
-                    *(
-                        client.delete(f"/assistants/{ASSISTANT_ID}/documents/DOC-{i}")
-                        for i in range(_BURST)
-                    )
-                )
-                await asyncio.wait_for(all_cleaned.wait(), timeout=60)
-    return probe.worst_s, [r.status_code for r in responses], cleaned
+            responses = await asyncio.gather(
+                *(client.delete(f"/assistants/{ASSISTANT_ID}/documents/DOC-{i}") for i in range(_BURST))
+            )
+            await asyncio.wait_for(all_cleaned.wait(), timeout=60)
+    return ledger, [r.status_code for r in responses], cleaned
 
 
 class TestDeleteBurstKeepsTheLoopResponsive:
     @pytest.mark.asyncio
-    async def test_a_burst_of_deletes_never_stalls_the_loop(self):
-        worst_s, statuses, cleaned = await _delete_burst()
+    async def test_a_burst_of_deletes_never_blocks_the_loop(self):
+        ledger, statuses, cleaned = await _delete_burst()
 
         assert statuses == [204] * _BURST
         assert cleaned == _BURST
-        assert worst_s < _MAX_LAG_S, (
-            f"the loop stalled {worst_s * 1000:.0f} ms during a burst of {_BURST} deletes: "
-            "a blocking call on the delete path is running on the event loop"
+        assert ledger.off_loop >= _BURST, "the burst made no blocking calls, so it checked nothing"
+        assert ledger.on_loop == 0, (
+            f"{ledger.on_loop} of {ledger.on_loop + ledger.off_loop} blocking calls in a burst of {_BURST} "
+            "deletes ran on the event loop's thread: a blocking call on the delete path is running on the loop"
         )
 
     @pytest.mark.asyncio
-    async def test_the_probe_sees_a_blocking_call(self):
-        """The same burst with the assistant lookups inline stalls it, so the test has teeth."""
+    async def test_the_ledger_sees_a_blocking_call(self):
+        """The same burst with the assistant lookups inline puts calls on the loop, so the test has teeth."""
         blocking_io.run_blocking_io_inline()
-        worst_s, statuses, _ = await _delete_burst()
+        ledger, statuses, _ = await _delete_burst()
 
         assert statuses == [204] * _BURST
-        assert worst_s >= _MAX_LAG_S
+        assert ledger.on_loop >= _BURST
