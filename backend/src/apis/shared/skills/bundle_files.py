@@ -17,9 +17,10 @@ no RBAC dependency, so building it does not build ``AppRoleAdminService``.
 
 import logging
 import re
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Protocol, Tuple
 
 from apis.shared.auth.models import User
+from apis.shared.blocking_io import run_blocking
 from apis.shared.extraction.field_sets import validate_field_set_upload
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.bundle import generate_skill_md
@@ -33,6 +34,7 @@ from apis.shared.skills.resource_store import (
     SkillResourceStoreError,
     compute_content_hash,
     get_skill_resource_store,
+    resource_key,
     skill_md_key,
 )
 from apis.shared.skills.resource_types import resolve_upload_content_type
@@ -50,6 +52,15 @@ MAX_RESOURCES_PER_SKILL = 50
 # Safe, flat filenames only — no path separators, no traversal. Mirrors the
 # skill_id discipline: visible, predictable object keys.
 _FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+class ImportedFile(Protocol):
+    """One file of an imported bundle (``bundle_import.BundleFile``'s shape)."""
+
+    filename: str
+    kind: str
+    content: bytes
+    content_hash: str
 
 
 class SkillBundleFiles:
@@ -177,6 +188,86 @@ class SkillBundleFiles:
             },
         )
         return new_resources
+
+    async def put_imported_files(
+        self,
+        skill_id: str,
+        files: Iterable[ImportedFile],
+        existing: List[SkillResourceRef],
+    ) -> List[SkillResourceRef]:
+        """Store a bundle import's files and return the manifest that names them.
+
+        The bulk form of :meth:`add_resource` for docs/specs/skill-bundle-import.md
+        §6: every file is checked by the same rules (kind, filename, type
+        allowlist, size, field set), a file whose bytes, kind and key already
+        match ``existing`` is not written again, and the S3 puts run in a worker
+        thread so a 50-file import never holds app-api's event loop. It does not
+        write the manifest: the caller writes it in the same row update as the
+        skill's fields, then calls :meth:`gc_orphaned`.
+
+        Raises:
+            ValueError: A file breaks a rule, or the manifest would exceed the cap.
+        """
+        current = {r.filename: r for r in existing}
+        refs: List[SkillResourceRef] = []
+        for f in files:
+            if f.kind not in VALID_RESOURCE_KINDS:
+                raise ValueError(f"Invalid resource kind '{f.kind}'.")
+            self.validate_filename(f.filename)
+            resolved_type = resolve_upload_content_type(f.filename)
+            if not f.content or len(f.content) > MAX_RESOURCE_BYTES:
+                raise ValueError(
+                    f"'{f.filename}' must be between 1 and {MAX_RESOURCE_BYTES} bytes."
+                )
+            if f.kind == "reference":
+                validate_field_set_upload(f.filename, f.content)
+
+            key = resource_key(skill_id, f.kind, f.filename)
+            ref = current.get(f.filename)
+            if ref is not None and (ref.content_hash, ref.kind, ref.s3_key) == (
+                f.content_hash,
+                f.kind,
+                key,
+            ):
+                refs.append(ref)
+                continue
+
+            s3_key = await run_blocking(
+                lambda f=f, t=resolved_type: self.resource_store.put(
+                    skill_id=skill_id,
+                    filename=f.filename,
+                    content=f.content,
+                    content_type=t,
+                    kind=f.kind,
+                )
+            )
+            refs.append(
+                SkillResourceRef(
+                    filename=f.filename,
+                    content_hash=compute_content_hash(f.content),
+                    size=len(f.content),
+                    content_type=resolved_type,
+                    s3_key=s3_key,
+                    kind=f.kind,
+                )
+            )
+
+        if len({r.filename for r in refs}) != len(refs):
+            raise ValueError("Two imported files share a filename.")
+        if len(refs) > MAX_RESOURCES_PER_SKILL:
+            raise ValueError(
+                f"A skill holds at most {MAX_RESOURCES_PER_SKILL} files; this import has {len(refs)}."
+            )
+        refs.sort(key=lambda r: r.filename)
+        return refs
+
+    async def gc_orphaned(
+        self,
+        old_resources: List[SkillResourceRef],
+        new_resources: List[SkillResourceRef],
+    ) -> None:
+        """:meth:`_gc_orphaned` in a worker thread (one S3 delete per dropped key)."""
+        await run_blocking(self._gc_orphaned, old_resources, new_resources)
 
     async def read_resource(
         self, skill_id: str, filename: str

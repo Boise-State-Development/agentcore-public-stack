@@ -178,9 +178,20 @@ def _resolve_resource(record: Any, path: str) -> Optional[Any]:
     ``s3_key`` is the only thing ever read.
     """
     wanted = (path or "").strip().lstrip("/")
-    for ref in getattr(record, "resources", None) or []:
+    refs = list(getattr(record, "resources", None) or [])
+    for ref in refs:
         if wanted == ref.filename or wanted == _manifest_path(ref):
             return ref
+    # An imported bundle keeps its SKILL.md's own links (``reference/eval.md``,
+    # ``scripts/office/pack.py``) while the manifest is flat, so on a miss a
+    # path's basename names the file when exactly one file has it
+    # (skill-bundle-import.md §4). A lookup inside the tool call: nothing here
+    # reaches the prompt.
+    if "/" in wanted:
+        tail = wanted.rsplit("/", 1)[-1]
+        matches = [ref for ref in refs if ref.filename == tail]
+        if len(matches) == 1:
+            return matches[0]
     return None
 
 

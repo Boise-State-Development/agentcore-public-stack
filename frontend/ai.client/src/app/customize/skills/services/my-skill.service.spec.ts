@@ -65,6 +65,64 @@ describe('MySkillService', () => {
     expect(service.error$()).toBeNull();
   });
 
+  describe('bundle import', () => {
+    it('previews a GitHub URL as multipart, with the target skill and no path unless chosen', async () => {
+      const promise = service.previewImport({ url: ' https://github.com/a/b ' }, 'grant_writing');
+      const req = httpMock.expectOne(`${BASE}/import/preview`);
+      expect(req.request.method).toBe('POST');
+      const body = req.request.body as FormData;
+      expect(body.get('url')).toBe('https://github.com/a/b');
+      expect(body.get('skillId')).toBe('grant_writing');
+      expect(body.has('path')).toBe(false);
+      expect(body.has('file')).toBe(false);
+      req.flush({ candidates: [], files: [] });
+      await promise;
+    });
+
+    it("sends a chosen path even when it is the archive's top level", async () => {
+      const zip = new File(['PK'], 'bundle.zip', { type: 'application/zip' });
+      const promise = service.previewImport({ file: zip, path: '' });
+      const req = httpMock.expectOne(`${BASE}/import/preview`);
+      const body = req.request.body as FormData;
+      expect((body.get('file') as File).name).toBe('bundle.zip');
+      expect(body.get('path')).toBe('');
+      expect(body.has('url')).toBe(false);
+      req.flush({ candidates: [], files: [] });
+      await promise;
+    });
+
+    it('creates from a bundle with the preview hash and adds the skill to local state', async () => {
+      const promise = service.importSkill(
+        { url: 'https://github.com/a/b', path: 'skills/x' },
+        { displayName: 'X', expectedBundleHash: 'h1' },
+      );
+      const req = httpMock.expectOne(`${BASE}/import`);
+      const body = req.request.body as FormData;
+      expect(body.get('path')).toBe('skills/x');
+      expect(body.get('displayName')).toBe('X');
+      expect(body.get('expectedBundleHash')).toBe('h1');
+      req.flush({ skill: stubSkill(), files: [] });
+      await promise;
+      expect(service.skills$().map((s) => s.skillId)).toEqual(['grant_writing']);
+      expect(invalidateBindable).toHaveBeenCalledWith('skill');
+    });
+
+    it('re-imports into the skill with the preview hash and updatedAt', async () => {
+      const promise = service.reimportSkill(
+        'grant_writing',
+        { url: 'https://github.com/a/b' },
+        { expectedBundleHash: 'h1', expectedUpdatedAt: '2026-11-18T00:00:00+00:00' },
+      );
+      const req = httpMock.expectOne(`${BASE}/grant_writing/import`);
+      const body = req.request.body as FormData;
+      expect(body.get('expectedBundleHash')).toBe('h1');
+      expect(body.get('expectedUpdatedAt')).toBe('2026-11-18T00:00:00+00:00');
+      req.flush({ skill: stubSkill(), files: [] });
+      await promise;
+      expect(invalidateBindable).toHaveBeenCalledWith('skill');
+    });
+  });
+
   it('treats a 404 as the kill switch, not an error', async () => {
     const promise = service.loadSkills();
 
