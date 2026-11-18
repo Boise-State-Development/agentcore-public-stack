@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentcore-stack"
 version = "1.37.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 description = "Multi-agent conversational AI system with AWS Bedrock AgentCore"
 readme = "README.md"
 license = {text = "MIT"}
@@ -48,7 +48,7 @@ dependencies = [
     "urllib3==2.8.0",
     "idna==3.20",
     "pyasn1==0.6.5",
-    "soupsieve==2.9.0",
+    "soupsieve==4.1.1",
     # Transitive via starlette/httpx/fastapi. Pinned to 4.14.2 for
     # GHSA-82r6-8w77-94w6 (TLSStream IDNA 2003 host-name encoding allowed
     # TLS certificate spoofing for internationalized domain names).
@@ -173,7 +173,14 @@ constraint-dependencies = [
 # `strands_tools.calculator` (sympy + rich, no PIL). The PIL users,
 # image_reader and use_computer, are never loaded. Remove this once a
 # strands-agents-tools release allows pillow 13, and bump it with that release.
-override-dependencies = ["pillow==13.0.0"]
+#
+# opentelemetry-api: aws-opentelemetry-distro 0.22.0 hard-pins 1.45.1, which
+# carries GHSA-mf5v-w3w3-f6cg (quadratic traceparent parsing). The only API
+# change in 1.45.2 is a 512-character traceparent cap in
+# trace/propagation/tracecontext.py, so the 1.45.1 SDK and ADOT run on it
+# unchanged. ADOT main already moved to 1.45.2 (aws-otel-python-instrumentation
+# #961); drop this entry when the ADOT release that carries it is pinned.
+override-dependencies = ["pillow==13.0.0", "opentelemetry-api==1.45.2"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -192,7 +199,7 @@ line-length = 150
 target-version = "py310"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
