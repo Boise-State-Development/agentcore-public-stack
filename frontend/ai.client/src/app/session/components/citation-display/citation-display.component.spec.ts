@@ -413,4 +413,42 @@ describe('CitationDisplayComponent', () => {
       expect(citationPage('https://www.example.edu/')?.label).toBe('www.example.edu');
     });
   });
+  describe('Excerpt as plain text', () => {
+    function excerptOf(citation: Citation): string {
+      fixture.componentRef.setInput('citations', [citation]);
+      component.isExpanded.set(true);
+      fixture.detectChanges();
+      return component.items()[0].excerpt;
+    }
+
+    it("drops markdown syntax and a heading that repeats the page's title", () => {
+      const excerpt = excerptOf({
+        assistantId: 'a1',
+        documentId: 'd1',
+        fileName: 'Home - DRED at Boise State University.md',
+        text: '# Home - DRED at Boise State University\n\n## Supporting research\n\n**The Division** leads [this](https://x.edu) effort.',
+        sourceUrl: 'https://www.example.edu/research/',
+      });
+      expect(excerpt).toBe('Supporting research · The Division leads this effort.');
+      const shown = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(shown).not.toContain('##');
+      expect(shown).not.toContain('**');
+    });
+
+    it('keeps a leading heading that is not the title', () => {
+      expect(
+        excerptOf({ assistantId: 'a1', documentId: 'd2', fileName: 'handbook.pdf', text: '# Grading\n\nLate work loses 10%.' }),
+      ).toBe('Grading · Late work loses 10%.');
+    });
+
+    it('keeps the only block even when it matches the title', () => {
+      expect(excerptOf({ assistantId: 'a1', documentId: 'd3', fileName: 'Notes.md', text: '# Notes' })).toBe('Notes');
+    });
+
+    it('passes plain text through', () => {
+      expect(
+        excerptOf({ assistantId: 'a1', documentId: 'd4', fileName: 'h.pdf', text: 'A plain sentence from a PDF.' }),
+      ).toBe('A plain sentence from a PDF.');
+    });
+  });
 });
