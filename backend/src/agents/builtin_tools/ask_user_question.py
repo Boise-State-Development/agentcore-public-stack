@@ -122,8 +122,11 @@ _INPUT_SCHEMA: Dict[str, Any] = {
                             "maxItems": MAX_OPTIONS,
                             "description": (
                                 f"{MIN_OPTIONS}-{MAX_OPTIONS} distinct choices. "
-                                "Do not add an 'Other' or 'Skip' choice — the "
-                                "interface always offers both."
+                                "Keep an open question to 2-4; list more only "
+                                "when the user must pick one exact item from a "
+                                "known set (a file, a template). Do not add an "
+                                "'Other' or 'Skip' choice — the interface "
+                                "always offers both."
                             ),
                             "items": {
                                 "type": "object",
@@ -189,7 +192,7 @@ def ask_user_question(
 
     Args:
         questions: The questions to ask. Each needs a short `header`, the full
-            `question` text, and 2-4 `options` with a `label` and an optional
+            `question` text, and 2-8 `options` with a `label` and an optional
             `description`. Set `multiSelect` when several answers may apply.
 
     Returns:

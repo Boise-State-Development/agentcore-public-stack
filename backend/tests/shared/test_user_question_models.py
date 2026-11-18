@@ -82,6 +82,16 @@ class TestNormalizeQuestions:
         assert len(questions) == MAX_QUESTIONS
         assert all(len(q.options) == MAX_OPTIONS for q in questions)
 
+    def test_a_known_set_of_up_to_eight_survives_whole(self):
+        """Picking one exact item (five contract playbooks) must not be cut to
+        four, or the model has to group them and ask twice."""
+        assert MAX_OPTIONS == 8
+        labels = [f"Playbook {i}" for i in range(1, MAX_OPTIONS + 1)]
+        [question] = normalize_questions(
+            [{"header": "Playbook", "question": "Which one?", "options": labels}]
+        )
+        assert [o.label for o in question.options] == labels
+
     def test_missing_header_gets_a_positional_fallback(self):
         [question] = normalize_questions(
             [{"question": "Which?", "options": ["a", "b"]}]
