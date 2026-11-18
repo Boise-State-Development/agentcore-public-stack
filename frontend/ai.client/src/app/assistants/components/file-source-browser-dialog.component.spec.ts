@@ -14,6 +14,8 @@ import { UserConnectorsService } from '../../settings/connectors/services/user-c
 import { OAuthConsentService } from '../../services/oauth-consent/oauth-consent.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { FileEntry, FileSourceConnector } from '../models/file-source.model';
+import { FEATURES } from '../../services/features';
+import { environment } from '../../../environments/environment';
 
 const CONNECTED: FileSourceConnector = {
   providerId: 'google',
@@ -30,6 +32,7 @@ function fileEntry(over: Partial<FileEntry>): FileEntry {
 function setup(
   fileSourceOverrides: Partial<Record<string, unknown>> = {},
   dialogData: Record<string, unknown> = { target: 'AST-1' },
+  folderSync = true,
 ) {
   const fileSourceService = {
     listFileSources: vi.fn().mockResolvedValue([CONNECTED]),
@@ -60,6 +63,7 @@ function setup(
       { provide: UserConnectorsService, useValue: connectorsService },
       { provide: OAuthConsentService, useValue: consentService },
       { provide: ToastService, useValue: toast },
+      { provide: FEATURES, useValue: { ...environment.features, folderSync } },
     ],
   });
 
@@ -446,7 +450,83 @@ describe('FileSourceBrowserDialogComponent — import a whole folder', () => {
     expect(importFolder).toHaveBeenCalledWith('AST-1', 'google', 'fold-1');
     expect(dialogRef.close).toHaveBeenCalledWith({
       documents: response.documents,
-      folderImport: { ...response, folderName: 'Grants' },
+      folderImport: {
+        ...response,
+        folderName: 'Grants',
+        connectorId: 'google',
+        folderId: 'fold-1',
+        folderPath: 'Grants',
+        keepInSync: false,
+      },
+    });
+  });
+
+  describe('Keep in sync', () => {
+    function syncBox(fixture: { nativeElement: HTMLElement }): HTMLInputElement | null {
+      return fixture.nativeElement.querySelector('[data-testid="file-source-keep-in-sync"]');
+    }
+
+    const response = { documents: [{ documentId: 'DOC-1' }], listed: 1, alreadyImported: 0, skippedType: 0, truncated: false };
+    const crumbs = { entries: [], breadcrumbs: [{ id: 'root', name: 'My Drive' }], nextCursor: null };
+    // Two roots, so the picker stays at the roots list rather than opening the only one.
+    const listRoots = vi.fn().mockResolvedValue([{ id: 'root', name: 'My Drive' }, { id: 'shared', name: 'Shared' }]);
+    const atRoots = (component: Record<string, never>) =>
+      vi.waitFor(() => expect((component['roots'] as () => unknown[])()).toHaveLength(2));
+
+    it('is not offered without folder sync', async () => {
+      const { fixture, component } = setup(
+        { listRoots, browse: vi.fn().mockResolvedValue(crumbs) },
+        { target: 'AST-1', connector: CONNECTED, allowFolderImport: true },
+        false,
+      );
+      await atRoots(component);
+      await enterFolder(component, fixture);
+      expect(folderButton(fixture)).not.toBeNull();
+      expect(syncBox(fixture)).toBeNull();
+    });
+
+    it('is offered only inside a folder, and not while files are ticked', async () => {
+      const file = fileEntry({ id: 'a', name: 'a.pdf', mimeType: 'application/pdf' });
+      const { fixture, component } = setup(
+        { listRoots, browse: vi.fn().mockResolvedValue({ ...crumbs, entries: [file] }) },
+        { target: 'AST-1', connector: CONNECTED, allowFolderImport: true },
+      );
+      await atRoots(component);
+      fixture.detectChanges();
+      expect(syncBox(fixture)).toBeNull();
+
+      await enterFolder(component, fixture);
+      expect(syncBox(fixture)).not.toBeNull();
+
+      (component['toggleSelect'] as (e: FileEntry) => void)(file);
+      fixture.detectChanges();
+      expect(syncBox(fixture)).toBeNull();
+    });
+
+    it('closes with keepInSync and the folder path the schedule is named by', async () => {
+      const importFolder = vi.fn().mockResolvedValue(response);
+      const { fixture, component, dialogRef } = setup(
+        { listRoots, browse: vi.fn().mockResolvedValue(crumbs), importFolder },
+        { target: 'AST-1', connector: CONNECTED, allowFolderImport: true },
+      );
+      await atRoots(component);
+      await enterFolder(component, fixture);
+      const box = syncBox(fixture)!;
+      box.click();
+      fixture.detectChanges();
+      expect(box.checked).toBe(true);
+      folderButton(fixture)!.click();
+
+      await vi.waitFor(() => expect(dialogRef.close).toHaveBeenCalled());
+      expect(dialogRef.close).toHaveBeenCalledWith({
+        documents: response.documents,
+        folderImport: expect.objectContaining({
+          connectorId: 'google',
+          folderId: 'fold-1',
+          folderPath: 'My Drive/Grants',
+          keepInSync: true,
+        }),
+      });
     });
   });
 });

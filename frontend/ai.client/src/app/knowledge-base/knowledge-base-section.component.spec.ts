@@ -6,6 +6,7 @@ import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { KnowledgeBaseSectionComponent } from './knowledge-base-section.component';
 import { KbUpgradeService, UpgradeStatus, DocumentNotCarried } from './kb-upgrade.service';
 import { Document, KbUsage, PROCESSING_STATUSES } from '../assistants/models/document.model';
+import { SyncPolicy } from '../assistants/models/sync-policy.model';
 import { ConfigService } from '../services/config.service';
 import { ToastService } from '../services/toast/toast.service';
 import { DocumentService, DocumentUploadError } from '../assistants/services/document.service';
@@ -1245,6 +1246,246 @@ describe('KnowledgeBaseSectionComponent — document list', () => {
     expect(el().querySelector('button[aria-label="Open file: Report.pdf"]')).not.toBeNull();
     // The download moved into the row menu; it is no longer a row icon.
     expect(el().querySelector('button[aria-label="Download Report.pdf"]')).toBeNull();
+  });
+});
+
+describe('KnowledgeBaseSectionComponent — synced folders', () => {
+  let fixture: ComponentFixture<KnowledgeBaseSectionComponent>;
+  let documents: Record<string, ReturnType<typeof vi.fn>>;
+  let sync: Record<string, ReturnType<typeof vi.fn>>;
+  let connectors: Record<string, ReturnType<typeof vi.fn>>;
+  let dialog: { open: ReturnType<typeof vi.fn> };
+  let toast: Record<'success' | 'error' | 'warning' | 'info', ReturnType<typeof vi.fn>>;
+
+  const GOOGLE = { providerId: 'google', displayName: 'Google Drive', iconName: 'heroCloud', connected: true };
+
+  function doc(overrides: Partial<Document> = {}): Document {
+    return {
+      documentId: 'doc-1',
+      assistantId: 'ast-1',
+      filename: 'notes.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 1234,
+      status: 'complete',
+      sourceConnectorId: 'google',
+      sourceAdapterKey: 'google-drive',
+      sourceFileId: 'file-1',
+      createdAt: '2026-09-01T00:00:00Z',
+      updatedAt: '2026-09-01T00:00:00Z',
+      ...overrides,
+    } as Document;
+  }
+
+  function folderPolicy(overrides: Partial<SyncPolicy> = {}): SyncPolicy {
+    return {
+      policyId: 'pol-folder',
+      assistantId: 'ast-1',
+      sourceType: 'drive_folder',
+      sourceRef: 'google:fold-1',
+      sourceName: 'My Drive/Grants',
+      interval: 'weekly',
+      state: 'active',
+      createdAt: '2026-11-17T00:00:00Z',
+      updatedAt: '2026-11-17T00:00:00Z',
+      ...overrides,
+    };
+  }
+
+  function folderImportResult(created: Document[], keepInSync: boolean) {
+    return {
+      documents: created,
+      folderImport: {
+        documents: created,
+        listed: created.length,
+        alreadyImported: 0,
+        skippedType: 0,
+        truncated: false,
+        folderName: 'Grants',
+        connectorId: 'google',
+        folderId: 'fold-1',
+        folderPath: 'My Drive/Grants',
+        keepInSync,
+      },
+    };
+  }
+
+  beforeEach(async () => {
+    TestBed.resetTestingModule();
+    const collaborators = quietCollaborators();
+    const useValue = (i: number) =>
+      (collaborators[i] as unknown as { useValue: Record<string, ReturnType<typeof vi.fn>> }).useValue;
+    documents = useValue(0);
+    useValue(1)['listFileSources'].mockResolvedValue([GOOGLE]);
+    sync = useValue(3);
+    connectors = useValue(4);
+    dialog = { open: vi.fn() };
+    toast = { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() };
+    await TestBed.configureTestingModule({
+      imports: [KnowledgeBaseSectionComponent],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        ...collaborators,
+        { provide: ConfigService, useValue: { appApiUrl: () => 'http://api.test' } },
+        {
+          provide: KbUpgradeService,
+          useValue: { getStatus: vi.fn().mockResolvedValue(status()), start: vi.fn(), retry: vi.fn(), dismissNotice: vi.fn() },
+        },
+        { provide: ToastService, useValue: toast },
+        { provide: Dialog, useValue: dialog },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(KnowledgeBaseSectionComponent);
+    fixture.componentRef.setInput('createDraft', async () => 'ast-1');
+    fixture.componentRef.setInput('open', true);
+  });
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  function el(): HTMLElement {
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  async function render(docs: Document[], policies: SyncPolicy[] = []) {
+    documents['listDocuments'].mockResolvedValue({ documents: docs, nextToken: null });
+    sync['listPolicies'].mockResolvedValue(policies);
+    fixture.componentRef.setInput('entityId', 'ast-1');
+    fixture.componentRef.setInput('userPermission', 'owner');
+    fixture.componentRef.setInput('permissionResolved', true);
+    fixture.detectChanges();
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(fixture.componentInstance.isLoadingKnowledge()).toBe(false);
+    });
+  }
+
+  function syncedFolders(): HTMLElement | null {
+    return el().querySelector('[data-testid="kb-synced-folders"]');
+  }
+
+  /** Per-file sync controls: every control outside the synced-folders list. */
+  function perFileControls(): number {
+    return Array.from(el().querySelectorAll('app-sync-policy-control')).filter(
+      (c) => !c.closest('[data-testid="kb-synced-folders"]'),
+    ).length;
+  }
+
+  it('lists a synced folder with its controls, and hides per-file sync for the files it covers', async () => {
+    await render(
+      [
+        doc({ documentId: 'a', filename: 'Budget.pdf', syncPolicyId: 'pol-folder' }),
+        doc({ documentId: 'b', filename: 'Other.pdf', sourceFileId: 'file-2' }),
+      ],
+      [folderPolicy()],
+    );
+    const list = syncedFolders();
+    expect(list?.textContent).toContain('My Drive/Grants');
+    expect(list?.textContent).toContain('first sync within about 15 minutes');
+    expect(list?.querySelectorAll('app-sync-policy-control')).toHaveLength(1);
+    expect(el().textContent).toContain('Kept in sync with My Drive/Grants');
+    // Only the file no folder covers offers its own schedule.
+    expect(perFileControls()).toBe(1);
+    // The folded card's summary counts the folder beside the documents.
+    expect(fixture.componentInstance.cardSummary()).toBe('2 documents · 1 synced folder');
+  });
+
+  it('promises a first sync only until one has run', async () => {
+    await render([], [folderPolicy({ lastSyncAt: '2026-11-17T23:58:31Z', lastResult: 'skipped', state: 'paused_reauth' })]);
+    const list = syncedFolders()!;
+    expect(list.textContent).toContain('Auto-sync from Google Drive');
+    expect(list.textContent).not.toContain('first sync within');
+    expect(list.textContent).toContain('Reconnect Google Drive');
+  });
+
+  it('has no synced-folders list without a folder policy', async () => {
+    await render([doc()]);
+    expect(syncedFolders()).toBeNull();
+    expect(perFileControls()).toBe(1);
+  });
+
+  it('schedules the folder after a "Keep in sync" import, before its first run marks the files', async () => {
+    await render([]);
+    const created = [doc({ documentId: 'n1', filename: 'a.pdf', status: 'uploading' })];
+    sync['createPolicy'].mockResolvedValue(folderPolicy());
+    dialog.open.mockReturnValue({ closed: of(folderImportResult(created, true)) });
+    // The reload answers before the folder's first run, so the copy is still unmarked.
+    documents['listDocuments'].mockResolvedValue({ documents: created, nextToken: null });
+
+    await fixture.componentInstance.openFileSourceBrowser();
+    fixture.detectChanges();
+
+    expect(sync['createPolicy']).toHaveBeenCalledWith('ast-1', {
+      sourceType: 'drive_folder',
+      sourceRef: 'google:fold-1',
+      interval: 'weekly',
+      sourceName: 'My Drive/Grants',
+    });
+    expect(syncedFolders()?.textContent).toContain('My Drive/Grants');
+    expect(el().textContent).toContain('Kept in sync with My Drive/Grants');
+    expect(perFileControls()).toBe(0);
+  });
+
+  it('makes no schedule when "Keep in sync" is not ticked', async () => {
+    await render([]);
+    const created = [doc({ documentId: 'n1', status: 'uploading' })];
+    dialog.open.mockReturnValue({ closed: of(folderImportResult(created, false)) });
+    await fixture.componentInstance.openFileSourceBrowser();
+    expect(sync['createPolicy']).not.toHaveBeenCalled();
+  });
+
+  it('keeps the schedule a folder already has when it is imported again', async () => {
+    await render([], [folderPolicy()]);
+    const created = [doc({ documentId: 'n2', status: 'uploading' })];
+    dialog.open.mockReturnValue({ closed: of(folderImportResult(created, true)) });
+    documents['listDocuments'].mockResolvedValue({ documents: created, nextToken: null });
+    await fixture.componentInstance.openFileSourceBrowser();
+    fixture.detectChanges();
+    expect(sync['createPolicy']).not.toHaveBeenCalled();
+    expect(perFileControls()).toBe(0);
+  });
+
+  it('says so when the schedule fails, and keeps what was imported', async () => {
+    await render([]);
+    const created = [doc({ documentId: 'n1', status: 'uploading' })];
+    sync['createPolicy'].mockRejectedValue(new Error(''));
+    dialog.open.mockReturnValue({ closed: of(folderImportResult(created, true)) });
+    documents['listDocuments'].mockResolvedValue({ documents: created, nextToken: null });
+    await fixture.componentInstance.openFileSourceBrowser();
+    fixture.detectChanges();
+    expect(toast.success).toHaveBeenCalledWith('Importing 1 file from Grants.');
+    expect(toast.error).toHaveBeenCalledWith('The files were imported, but Grants could not be kept in sync.');
+    expect(syncedFolders()).toBeNull();
+    expect(perFileControls()).toBe(1);
+  });
+
+  it('stops syncing a folder only after confirming, then re-reads its files', async () => {
+    await render([doc({ documentId: 'a', syncPolicyId: 'pol-folder' })], [folderPolicy()]);
+    sync['deletePolicy'].mockResolvedValue(undefined);
+    const stop = () => el().querySelector<HTMLButtonElement>('[data-testid="kb-stop-folder-sync"]')!;
+
+    dialog.open.mockReturnValueOnce({ closed: of(false) });
+    stop().click();
+    await vi.waitFor(() => expect(dialog.open).toHaveBeenCalledTimes(1));
+    expect(sync['deletePolicy']).not.toHaveBeenCalled();
+
+    // The server unmarks the folder's files with the schedule.
+    documents['listDocuments'].mockResolvedValue({ documents: [doc({ documentId: 'a' })], nextToken: null });
+    dialog.open.mockReturnValueOnce({ closed: of(true) });
+    stop().click();
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(syncedFolders()).toBeNull();
+      expect(perFileControls()).toBe(1);
+    });
+    expect(sync['deletePolicy']).toHaveBeenCalledWith('ast-1', 'pol-folder');
+    expect(dialog.open.mock.calls[1][1].data.title).toBe('Stop syncing this folder?');
+  });
+
+  it('reconnects a paused folder through the connector in its source', async () => {
+    await render([], [folderPolicy({ state: 'paused_reauth' })]);
+    connectors['initiateConsent'].mockResolvedValue({ connected: false, authorizationUrl: 'https://consent.test' });
+    await fixture.componentInstance.onSyncReconnect('google:fold-1');
+    expect(connectors['initiateConsent']).toHaveBeenCalledWith('google');
   });
 });
 

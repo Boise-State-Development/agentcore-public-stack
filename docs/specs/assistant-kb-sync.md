@@ -672,3 +672,30 @@ worker invoke) and counted `FolderSyncDisabled`. Leaving it due would starve
 the sweep: the index is read most-overdue first, 20 at a time, so policies that
 are never re-armed would fill every tick. The worker checks the flag too and
 records `skipped`, for a run already in flight when it is turned off.
+
+### 11.8 An agent's folder import
+
+An agent's knowledge base imports a whole Drive folder from the file picker
+("Import this folder", `POST /assistants/{id}/documents/import-folder`). With
+`features.folderSync` on, the picker's footer also offers **Keep in sync with
+the folder**. Ticked, the knowledge base section creates the folder's
+`drive_folder` policy right after the import returns: `source_ref`
+`{connectorId}:{folderId}`, `source_name` the breadcrumb path, interval weekly
+(the owner changes it on the card). That is the same shape Save as project
+leaves, an import followed by a policy whose first run adopts the copies, so
+the worker needs nothing new. The import itself is unchanged and never waits
+on the policy. If the policy cannot be made, the files stay and the section
+says so. A folder that already has a policy keeps it.
+
+The knowledge base card lists every `drive_folder` policy under **Synced
+folders**, with the shared sync control (interval, run now, pause and resume,
+reconnect through the connector named in `source_ref`) and a stop button.
+Stopping asks first, because only another folder import can make the policy
+again. The files stay as ordinary imports. A document a folder policy covers
+says "Kept in sync with *{folder}*" and offers no per-file schedule. Until the
+first run stamps `syncPolicyId`, the section treats the documents that import
+just returned as covered, which closes the §11.1 window on this page for those
+copies. Copies the import passed over as already held join on that first run.
+That cover lives only in the page: after a reload, copies a run has not yet
+adopted (a first run that paused for re-consent, say) offer their own
+schedules again, the same window Save as project leaves on the Files page.

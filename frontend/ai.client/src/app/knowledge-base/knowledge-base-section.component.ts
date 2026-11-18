@@ -56,6 +56,7 @@ import {
   FileSourceBrowserDialogComponent,
   FileSourceBrowserDialogData,
   FileSourceBrowserDialogResult,
+  FolderImportResult,
   isFolderImportResult,
 } from '../assistants/components/file-source-browser-dialog.component';
 import {
@@ -71,7 +72,13 @@ import { WebSourceService } from '../assistants/services/web-source.service';
 import { SyncPolicyService } from '../assistants/services/sync-policy.service';
 import { FileSourceConnector } from '../assistants/models/file-source.model';
 import { CrawlJob } from '../assistants/models/web-source.model';
-import { SyncPolicy, SyncSourceType } from '../assistants/models/sync-policy.model';
+import {
+  folderConnectorId,
+  folderRunSummaryText,
+  SyncInterval,
+  SyncPolicy,
+  SyncSourceType,
+} from '../assistants/models/sync-policy.model';
 import {
   SyncPolicyControlComponent,
   SyncIntervalSelection,
@@ -103,6 +110,9 @@ import {
   documentOpenAction,
   documentSourceKind,
 } from './document-source';
+
+/** A folder kept in sync from an import checks weekly until its owner changes it, as Save as project does. */
+const FOLDER_SYNC_DEFAULT_INTERVAL: SyncInterval = 'weekly';
 
 /**
  * The reusable "Knowledge base" authoring section — device upload, web-crawl
@@ -290,6 +300,13 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
   readonly isLoadingCrawls = signal<boolean>(false);
   /** Source refs (document/crawl ids) with a sync mutation in flight. */
   readonly syncBusySourceRefs = signal<Set<string>>(new Set());
+  /**
+   * Documents a folder import just made, by the folder policy scheduled with it.
+   * The policy's first run (due at once, spec §11.1) marks each copy with its
+   * `syncPolicyId`; until then this keeps the row from offering its own per-file
+   * schedule, which would split the folder across two kinds of policy.
+   */
+  private readonly pendingFolderCover = signal<ReadonlyMap<string, string>>(new Map());
 
   // ── Knowledge base upgrade (managed-kb-migration, Requirements 21 & 23) ──
   //
@@ -562,6 +579,14 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
 
   private readonly policiesBySourceRef = computed(
     () => new Map(this.syncPolicies().map((p) => [p.sourceRef, p])),
+  );
+
+  /** Drive folders this knowledge base is kept in step with (assistant-kb-sync spec §11). */
+  readonly folderPolicies = computed(() =>
+    this.syncPolicies().filter((p) => p.sourceType === 'drive_folder'),
+  );
+  private readonly folderPoliciesById = computed(
+    () => new Map(this.folderPolicies().map((p) => [p.policyId, p])),
   );
 
   /**
@@ -1017,6 +1042,9 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     const imported = isFolderImportResult(result) ? result.documents : Array.isArray(result) ? result : [];
     if (isFolderImportResult(result)) {
       this.announceFolderImport(result.folderImport);
+      if (result.folderImport.keepInSync) {
+        await this.keepFolderInSync(recordId, result);
+      }
     } else if (imported.length > 0) {
       this.toast.success(`Importing ${imported.length} file${imported.length === 1 ? '' : 's'}…`);
     }
@@ -1590,6 +1618,102 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     return this.policiesBySourceRef().get(sourceRef) ?? null;
   }
 
+  /**
+   * The folder schedule that keeps a document in sync, if one does: the one the
+   * server marked it with, or the one a folder import just scheduled for it.
+   */
+  folderPolicyFor(doc: Document): SyncPolicy | null {
+    const policyId = doc.syncPolicyId ?? this.pendingFolderCover().get(doc.documentId);
+    return policyId ? (this.folderPoliciesById().get(policyId) ?? null) : null;
+  }
+
+  folderLabel(policy: SyncPolicy): string {
+    return policy.sourceName || 'Drive folder';
+  }
+
+  folderRunText(policy: SyncPolicy): string | null {
+    return folderRunSummaryText(policy.lastRunSummary);
+  }
+
+  /** The file source behind a folder schedule, by name ("" when it is no longer offered). */
+  folderConnectorName(policy: SyncPolicy): string {
+    const providerId = folderConnectorId(policy.sourceRef);
+    return this.fileSources().find((s) => s.providerId === providerId)?.displayName ?? '';
+  }
+
+  /**
+   * "Keep in sync" on a folder import: schedule the folder (spec §11). Its first
+   * run is due at once and adopts the copies the import just made, so the import
+   * plus this policy is the same shape Save as project leaves. A folder already
+   * on a schedule keeps the one it has. The import itself has already happened,
+   * so a failure here is said on its own and never undoes it.
+   */
+  private async keepFolderInSync(recordId: string, result: FolderImportResult): Promise<void> {
+    const folder = result.folderImport;
+    const sourceRef = `${folder.connectorId}:${folder.folderId}`;
+    let policy = this.syncPolicyFor(sourceRef);
+    if (!policy) {
+      try {
+        policy = await this.syncPolicyService.createPolicy(recordId, {
+          sourceType: 'drive_folder',
+          sourceRef,
+          interval: FOLDER_SYNC_DEFAULT_INTERVAL,
+          sourceName: folder.folderPath || folder.folderName,
+        });
+        this.upsertPolicy(policy);
+      } catch (error) {
+        this.toastSyncError(error, `The files were imported, but ${folder.folderName} could not be kept in sync.`);
+        void this.loadSyncData();
+        return;
+      }
+    }
+    const policyId = policy.policyId;
+    if (result.documents.length > 0) {
+      this.pendingFolderCover.update((map) => {
+        const next = new Map(map);
+        for (const doc of result.documents) next.set(doc.documentId, policyId);
+        return next;
+      });
+    }
+  }
+
+  /**
+   * Turning a folder's sync off deletes its schedule, and only another folder
+   * import can make one again, so it asks first. The files stay.
+   */
+  async onFolderIntervalSelected(policy: SyncPolicy, selection: SyncIntervalSelection): Promise<void> {
+    if (selection === 'manual') {
+      await this.stopFolderSync(policy);
+      return;
+    }
+    await this.onSyncIntervalSelected('drive_folder', policy.sourceRef, selection);
+  }
+
+  /** Remove a folder's schedule after confirming; its files stay as ordinary imports. */
+  async stopFolderSync(policy: SyncPolicy): Promise<void> {
+    const ref = this.dialog.open<boolean, ConfirmationDialogData>(ConfirmationDialogComponent, {
+      data: {
+        title: 'Stop syncing this folder?',
+        message: `The files from “${this.folderLabel(policy)}” stay in this knowledge base, but changes in the folder will no longer reach it.`,
+        confirmText: 'Stop syncing',
+        cancelText: 'Keep syncing',
+        destructive: true,
+      },
+    });
+    if ((await firstValueFrom(ref.closed)) !== true) {
+      // The control may already show "Don't auto-sync"; put the schedule back in view.
+      this.syncPolicies.update((list) => [...list]);
+      return;
+    }
+    await this.onSyncIntervalSelected('drive_folder', policy.sourceRef, 'manual');
+    if (this.syncPolicyFor(policy.sourceRef)) {
+      return;
+    }
+    this.pendingFolderCover.update((map) => new Map([...map].filter(([, id]) => id !== policy.policyId)));
+    // The server unmarks the folder's files; re-read them so each offers its own schedule again.
+    await this.loadDocuments();
+  }
+
   isSyncBusy(sourceRef: string): boolean {
     return this.syncBusySourceRefs().has(sourceRef);
   }
@@ -1714,8 +1838,10 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
    * never enter paused_reauth.
    */
   async onSyncReconnect(sourceRef: string): Promise<void> {
-    const doc = this.uploadedDocuments().find((d) => d.documentId === sourceRef);
-    const providerId = doc?.sourceConnectorId;
+    const providerId =
+      this.syncPolicyFor(sourceRef)?.sourceType === 'drive_folder'
+        ? folderConnectorId(sourceRef)
+        : this.uploadedDocuments().find((d) => d.documentId === sourceRef)?.sourceConnectorId;
     if (!providerId || providerId === 'web') {
       this.toast.error('This source cannot be reconnected from here.');
       return;
@@ -2003,6 +2129,8 @@ export class KnowledgeBaseSectionComponent implements OnDestroy {
     }
     const parts = [`${docs.length} ${docs.length === 1 ? 'document' : 'documents'}`];
     if (crawls) parts.push(`${crawls} ${crawls === 1 ? 'web source' : 'web sources'}`);
+    const folders = this.folderPolicies().length;
+    if (folders) parts.push(`${folders} synced ${folders === 1 ? 'folder' : 'folders'}`);
     const processing = docs.filter((d) => PROCESSING_STATUSES.includes(d.status)).length;
     if (processing) parts.push(`${processing} processing`);
     const failed = docs.filter((d) => d.status === 'failed').length;

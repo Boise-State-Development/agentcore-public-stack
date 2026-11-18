@@ -33,7 +33,12 @@ import {
 import { KnowledgeTarget } from '../../assistants/models/knowledge-target.model';
 import { FileSourceConnector } from '../../assistants/models/file-source.model';
 import { CrawlJob } from '../../assistants/models/web-source.model';
-import { FolderRunSummary, SyncPolicy, SyncSourceType } from '../../assistants/models/sync-policy.model';
+import {
+  folderConnectorId,
+  folderRunSummaryText,
+  SyncPolicy,
+  SyncSourceType,
+} from '../../assistants/models/sync-policy.model';
 import { FileSourceService } from '../../assistants/services/file-source.service';
 import { WebSourceService } from '../../assistants/services/web-source.service';
 import { SyncPolicyService } from '../../assistants/services/sync-policy.service';
@@ -93,31 +98,6 @@ interface UploadState {
   progress: number;
   status: 'uploading' | 'done' | 'error';
   error?: string;
-}
-
-/**
- * A folder sync's last run, in words: how many files the folder holds and what
- * changed (assistant-kb-sync spec §11). `null` before the first run.
- */
-export function folderRunSummaryText(summary: FolderRunSummary | null | undefined): string | null {
-  if (!summary) return null;
-  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  const parts = [
-    summary.updated ? `${summary.updated} updated` : '',
-    summary.added ? `${summary.added} added` : '',
-    summary.removedFromSource ? `${summary.removedFromSource} no longer in the folder` : '',
-    summary.failed ? `${plural(summary.failed, 'file', 'files')} couldn’t be fetched` : '',
-    summary.skipped ? `${plural(summary.skipped, 'file', 'files')} too large` : '',
-    summary.deferred ? `${summary.deferred} waiting for the next sync` : '',
-  ].filter(Boolean);
-  const listed = `${plural(summary.listed, 'file', 'files')} in the folder${summary.truncated ? ' (more than are checked)' : ''}`;
-  return parts.length ? `${listed} · last sync: ${parts.join(', ')}` : `${listed} · up to date at the last sync`;
-}
-
-/** The connector half of a `drive_folder` policy's `{connectorId}:{folderId}`. */
-export function folderConnectorId(sourceRef: string): string | null {
-  const at = sourceRef.lastIndexOf(':');
-  return at > 0 ? sourceRef.slice(0, at) : null;
 }
 
 export function formatBytes(bytes: number): string {
