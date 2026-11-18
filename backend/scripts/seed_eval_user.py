@@ -14,6 +14,13 @@ grants" is a fixed thing a baseline can describe. This writes, idempotently:
   SecureString (``/<prefix>/eval-harness/credentials``), and never printed.
   A re-run reuses the stored password, so the user and the parameter never
   drift apart;
+* a standing quota: the ``eval-harness`` tier (``--monthly-limit``, $300 by
+  default) assigned to the ``eval_harness`` app role, so both eval users keep
+  a budget sized for the nightly and the k=3 release runs from one month to
+  the next. Before this, the eval user lived on the $10 default tier plus
+  hand-made overrides and extensions; when those ran out on dev (2026-11-15)
+  every nightly eval stopped and every smoke row failed. An active override
+  still wins over the tier, and extensions still stack on top of it;
 * the user's settings with long-term memory off. Retention cases plant facts
   ("the gate code is 7319"), and a user whose memory kept them would let a
   later run answer from memory instead of the conversation — a pass that
@@ -41,6 +48,7 @@ import os
 import secrets
 import string
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -74,6 +82,15 @@ MAIN = Account(USERNAME, EMAIL, "eval-harness")
 MEMBER2 = Account("eval-harness-2", "eval-harness-2@example.invalid", "eval-harness-2")
 ACCOUNTS = (MAIN, MEMBER2)
 DEFAULT_MODELS = ["*"]
+#: The eval users' quota tier and its app-role assignment. Fixed ids, so a
+#: re-run finds and updates the same rows instead of adding more.
+QUOTA_TIER_ID = "eval-harness"
+QUOTA_ASSIGNMENT_ID = "eval-harness-app-role"
+#: The three-model nightly is about $6 a night (~$180 a month), and a k=3
+#: release run on four models about $20; the rest is ad-hoc measurement.
+DEFAULT_MONTHLY_LIMIT = Decimal("300")
+#: Default priority for an app-role assignment (QuotaAssignment's table).
+APP_ROLE_PRIORITY = 250
 CASES_DIR = Path(__file__).resolve().parent.parent / "evals" / "cases"
 
 
@@ -194,6 +211,46 @@ async def upsert_role(role, repository) -> str:
     return "updated"
 
 
+async def ensure_quota(repository, monthly_limit: Decimal, *, now: str) -> str:
+    """Upsert the eval tier and its app-role assignment. Returns ``created``, ``updated`` or ``current``."""
+    from agents.main_agent.quota.models import QuotaAssignment, QuotaAssignmentType, QuotaTier
+
+    outcomes = []
+    tier = await repository.get_tier(QUOTA_TIER_ID)
+    if tier is None:
+        await repository.create_tier(QuotaTier(
+            tier_id=QUOTA_TIER_ID, tier_name="Eval harness",
+            description="The eval harness users (seed_eval_user.py): the nightly and release eval runs",
+            monthly_cost_limit=monthly_limit, enabled=True, created_at=now, updated_at=now,
+            created_by="seed_eval_user",
+        ))
+        outcomes.append("created")
+    elif tier.monthly_cost_limit != monthly_limit or not tier.enabled:
+        await repository.update_tier(QUOTA_TIER_ID, {"monthlyCostLimit": monthly_limit, "enabled": True})
+        outcomes.append("updated")
+
+    assignment = await repository.get_assignment(QUOTA_ASSIGNMENT_ID)
+    if assignment is None:
+        await repository.create_assignment(QuotaAssignment(
+            assignment_id=QUOTA_ASSIGNMENT_ID, tier_id=QUOTA_TIER_ID,
+            assignment_type=QuotaAssignmentType.APP_ROLE, app_role_id=ROLE_ID,
+            priority=APP_ROLE_PRIORITY, enabled=True, created_at=now, updated_at=now,
+            created_by="seed_eval_user",
+        ))
+        outcomes.append("created")
+    elif (assignment.tier_id != QUOTA_TIER_ID or assignment.app_role_id != ROLE_ID
+            or assignment.assignment_type != QuotaAssignmentType.APP_ROLE or not assignment.enabled):
+        # A whole-row put, not a partial update: it rebuilds the GSI keys the resolver reads by role.
+        await repository.create_assignment(QuotaAssignment(
+            assignment_id=QUOTA_ASSIGNMENT_ID, tier_id=QUOTA_TIER_ID,
+            assignment_type=QuotaAssignmentType.APP_ROLE, app_role_id=ROLE_ID,
+            priority=APP_ROLE_PRIORITY, enabled=True, created_at=assignment.created_at, updated_at=now,
+            created_by=assignment.created_by,
+        ))
+        outcomes.append("updated")
+    return "created" if "created" in outcomes else "updated" if outcomes else "current"
+
+
 async def turn_memory_off(user_id: str, repository) -> None:
     await repository.update_settings(user_id, {"memoryMode": "off"})
 
@@ -238,13 +295,22 @@ async def main_async(args: argparse.Namespace) -> int:
     settings_table = _ssm_value(ssm, f"/{prefix}/settings/user-settings-table-name", f"{prefix}-user-settings")
     pool_id = _ssm_value(ssm, f"/{prefix}/auth/cognito/user-pool-id")
     os.environ["DYNAMODB_APP_ROLES_TABLE_NAME"] = roles_table
+    os.environ["DYNAMODB_QUOTA_TABLE"] = f"{prefix}-user-quotas"
+    os.environ["DYNAMODB_QUOTA_EVENTS_TABLE"] = f"{prefix}-quota-events"
     os.environ["DYNAMODB_USER_SETTINGS_TABLE_NAME"] = settings_table
     os.environ.setdefault("AWS_REGION", args.region)
 
+    from agents.main_agent.quota.repository import QuotaRepository
     from apis.shared.rbac.repository import AppRoleRepository
+    from apis.shared.timestamps import utc_now_iso
     from apis.shared.user_settings.repository import UserSettingsRepository
 
     outcome = await upsert_role(role, AppRoleRepository(table_name=roles_table))
+    try:
+        quota_outcome = await ensure_quota(QuotaRepository(), args.monthly_limit, now=utc_now_iso())
+    except Exception as exc:  # noqa: BLE001 — a missing quota grant must not stop tonight's run
+        logger.warning("could not write the eval quota tier (%s); the users keep whatever quota they have", exc)
+        quota_outcome = "not written"
     users = {}
     for account in ACCOUNTS:
         creds = ensure_credentials(ssm, prefix, account)
@@ -255,6 +321,8 @@ async def main_async(args: argparse.Namespace) -> int:
     logger.info("  tools:  %s", ", ".join(role.granted_tools))
     logger.info("  skills: %s", ", ".join(role.granted_skills))
     logger.info("  models: %s", ", ".join(role.granted_models))
+    logger.info("%s quota tier %s: $%s a month, assigned to role %s (an active override still wins)",
+                quota_outcome, QUOTA_TIER_ID, args.monthly_limit, ROLE_ID)
     for account in ACCOUNTS:
         logger.info("user %s (user id %s) is in group %s, long-term memory off", account.username,
                     users[account.username], GROUP)
@@ -267,6 +335,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--prefix", help="CDK project prefix, e.g. dev-boisestateai-v2")
     p.add_argument("--region", default=os.environ.get("AWS_REGION", "us-west-2"))
     p.add_argument("--models", default=",".join(DEFAULT_MODELS), help="comma-separated model ids ('*' = all)")
+    p.add_argument("--monthly-limit", type=Decimal, default=DEFAULT_MONTHLY_LIMIT,
+                   help=f"the eval users' monthly quota in USD (default {DEFAULT_MONTHLY_LIMIT})")
     p.add_argument("--dry-run", action="store_true", help="print the role, write nothing")
     args = p.parse_args(argv)
     if not args.dry_run and not args.prefix:

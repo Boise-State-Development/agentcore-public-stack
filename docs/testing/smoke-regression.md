@@ -296,9 +296,12 @@ first look, not the whole proof.
   `QuotaExceededError`, and the turn smoke stops at the first refused turn and
   exits 2 ("over its quota") without publishing. Before that change it
   published `pass 0 / fail 14` rows that read like a broken build (dev,
-  2026-11-15 to 11-17). The three-model nightly costs about $6 a night against
-  that quota, so check `GET /costs/quota-status` as the eval user before a
-  long ad-hoc or k=3 run on dev. Like every track it is opt-in:
+  2026-11-15 to 11-17). `seed_eval_user.py` now gives both eval users a
+  standing `eval-harness` tier ($300 a month, `--monthly-limit`) through their
+  app role, rewritten by each nightly; an active override still wins over it.
+  The three-model nightly costs about $6 a night of that, so check
+  `GET /costs/quota-status` as the eval user before a long ad-hoc or k=3 run
+  on dev. Like every track it is opt-in:
   add `eval-develop` to the `NIGHTLY_TRACKS` repository variable once the eval
   user is seeded. `all` leaves it out because it spends against a real
   environment.
