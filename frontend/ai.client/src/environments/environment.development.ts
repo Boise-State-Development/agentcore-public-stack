@@ -33,8 +33,7 @@ export const environment = {
         handoffs: true,
         // The `development` GitHub environment sets CDK_HANDOFF_BRIEF_ENABLED=true.
         handoffBrief: true,
-        // The `development` GitHub environment sets CDK_SESSION_REWIND_ENABLED=true
-        // and CDK_SESSION_FORK_ENABLED=true.
+        // Default on, matching CDK_SESSION_REWIND_ENABLED / CDK_SESSION_FORK_ENABLED.
         sessionRewind: true,
         sessionFork: true,
         // The `development` GitHub environment sets CDK_QUOTA_REQUESTS_ENABLED=true.

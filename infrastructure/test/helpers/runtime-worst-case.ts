@@ -30,8 +30,10 @@ export function synthWorstCasePlatformStack(overrides: Partial<AppConfig> = {}):
     mcpSandbox: { extraFrameAncestors: [], certificateArn: cert },
     fineTuning: { enabled: true, defaultQuotaHours: 0 },
     handoffs: { enabled: true, briefEnabled: true },
-    sessionRewind: { enabled: true },
-    sessionFork: { enabled: true },
+    // Rewind and fork are default on and write their Runtime variable only
+    // while OFF, so the worst case is off (the mock config's default).
+    sessionRewind: { enabled: false },
+    sessionFork: { enabled: false },
     tokenExchange: { url: 'https://tokens.example.com/v2/oauth/token', clientId: 'test-client' },
     ...overrides,
   });

@@ -266,7 +266,7 @@ class TestRewoundCopy:
         assert TurnBasedSessionManager.rewound_copy(_manager_stub(live_epoch=1), live, row) == SOURCE
 
     def test_with_rewind_off_it_is_a_plain_copy(self, monkeypatch):
-        monkeypatch.delenv("SESSION_REWIND_ENABLED", raising=False)
+        monkeypatch.setenv("SESSION_REWIND_ENABLED", "false")
         row = {"rewind": {"epoch": 1, "spans": [[2, 4]], "cuts": [{"epoch": 1, "cut": 2, "visibleBefore": 4}]}}
 
         assert TurnBasedSessionManager.rewound_copy(_manager_stub(), copy.deepcopy(SOURCE), row) == SOURCE

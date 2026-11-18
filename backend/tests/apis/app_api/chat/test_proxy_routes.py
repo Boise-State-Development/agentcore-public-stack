@@ -199,7 +199,7 @@ def test_a_fork_pins_to_its_root_conversation_only_while_forks_are_on(
     if fork_on:
         monkeypatch.setenv("SESSION_FORK_ENABLED", "true")
     else:
-        monkeypatch.delenv("SESSION_FORK_ENABLED", raising=False)
+        monkeypatch.setenv("SESSION_FORK_ENABLED", "false")
     seen: list = []
 
     def handler(request: httpx.Request) -> httpx.Response:
