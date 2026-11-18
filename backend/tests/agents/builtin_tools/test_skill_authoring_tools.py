@@ -174,7 +174,7 @@ class TestToolset:
         digest = hashlib.sha256(
             json.dumps(specs, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
-        assert digest == "62bea023d9c5201b1cf4c7db0cb398006800db134aac37e64660b45ae6680862"
+        assert digest == "ac839bf403e28f653fe6dfd311fabc8077937782c0db37a2d6089cf733df3cf8"
 
 
 class TestCreate:
@@ -502,3 +502,269 @@ class TestRunsFromAnEventLoop:
         must not hit a nested asyncio.run."""
         result = _tools()["my_skill_list"]()
         assert result["status"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# my_skill_write_file(from_attachment=…) (spec, "Writing a file from an attachment")
+# ---------------------------------------------------------------------------
+
+_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+class _FakeFiles:
+    """The conversation file index, keyed by conversation like the real GSI."""
+
+    def __init__(self, rows, bodies):
+        self.rows = rows
+        self.bodies = bodies
+        self.listed = []
+
+    def list_session_files_sync(self, session_id, status=None):
+        self.listed.append(session_id)
+        return [r for r in self.rows if r.session_id == session_id]
+
+    async def get_file(self, user_id, upload_id):
+        return next((r for r in self.rows if r.user_id == user_id and r.upload_id == upload_id), None)
+
+
+def _row(upload_id, filename, mime, body, *, session_id="sess-1", user_id=OWNER, **kw):
+    from apis.shared.files.models import FileMetadata, FileStatus
+
+    fields = {
+        "upload_id": upload_id,
+        "user_id": user_id,
+        "session_id": session_id,
+        "filename": filename,
+        "mime_type": mime,
+        "size_bytes": len(body),
+        "s3_key": f"k/{upload_id}",
+        "s3_bucket": "files",
+        "status": FileStatus.READY,
+        **kw,
+    }
+    return FileMetadata(**fields)
+
+
+@pytest.fixture()
+def attachments(monkeypatch):
+    """Install a fake file index and S3 read; returns ``add(upload_id, name, mime, body)``."""
+    from agents.builtin_tools.skill_authoring import attachment_source
+    from apis.shared.files import repository
+
+    files = _FakeFiles([], {})
+    monkeypatch.setattr(repository, "get_file_upload_repository", lambda: files)
+    monkeypatch.setattr(attachment_source, "_fetch", lambda meta: files.bodies[meta.s3_key])
+
+    def add(upload_id, filename, mime, body, **kw):
+        row = _row(upload_id, filename, mime, body, **kw)
+        files.rows.append(row)
+        files.bodies.setdefault(row.s3_key, body)
+        return row
+
+    add.files = files
+    return add
+
+
+def _playbook_docx():
+    from tests.shared.docx_fixtures import build_docx, deleted, inserted, paragraph, run
+
+    return build_docx(
+        paragraph(run("Indemnification", bold=True)),
+        paragraph(run("The Sponsor shall indemnify the University "), deleted("fully"), inserted("to the extent permitted by law"), run(".")),
+        paragraph(run("Governing law: Idaho.")),
+    )
+
+
+def _write(**kw):
+    return _tools()["my_skill_write_file"](skill_id="grant_review", **kw)
+
+
+def _stored(service, filename):
+    import asyncio
+
+    _, raw = asyncio.run(
+        service.read_resource("grant_review", filename, User(email="", user_id=OWNER, name="", roles=[]))
+    )
+    return raw
+
+
+class TestFromAttachment:
+    def test_a_markdown_attachment_is_copied_byte_for_byte(self, service, attachments):
+        _create()
+        body = "# Playbook\n\nCláusula 4 — keep “exactly” this.\r\n\n- one\n- two\n".encode()
+        attachments("up-1", "playbook.md", "text/markdown", body)
+        result = _write(filename="playbook.md", from_attachment="playbook.md")
+        assert result["status"] == "success", result
+        assert _stored(service, "playbook.md") == body
+        text = _text(result)
+        assert "from the attachment 'playbook.md' (copied unchanged" in text
+        assert hashlib.sha256(body).hexdigest() in text
+
+    def test_a_docx_is_stored_as_docx_markdowns_output(self, service, attachments):
+        from apis.shared.files.docx_markdown import docx_to_markdown
+
+        _create()
+        raw = _playbook_docx()
+        attachments("up-2", "Playbook.docx", _DOCX_MIME, raw)
+        result = _write(filename="playbook.md", from_attachment="up-2")
+        assert result["status"] == "success", result
+        expected = docx_to_markdown(raw)
+        assert _stored(service, "playbook.md").decode() == expected
+        assert "[deleted: fully]" in expected and "[inserted: to the extent permitted by law]" in expected
+        assert "converted from Word to Markdown" in _text(result)
+
+    def test_an_upload_id_wins_over_a_filename_and_a_name_matches_case_insensitively(self, service, attachments):
+        _create()
+        attachments("up-1", "Notes.TXT", "text/plain", b"by name")
+        assert _write(filename="a.md", from_attachment="notes.txt")["status"] == "success"
+        assert _stored(service, "a.md") == b"by name"
+
+    def test_a_name_shared_by_two_uploads_is_refused_with_both_ids(self, service, attachments):
+        _create()
+        attachments("up-old", "playbook.md", "text/markdown", b"v1")
+        attachments("up-new", "playbook.md", "text/markdown", b"v2")
+        result = _write(filename="playbook.md", from_attachment="playbook.md")
+        assert result["status"] == "error"
+        assert "up-old" in _text(result) and "up-new" in _text(result)
+        assert _write(filename="playbook.md", from_attachment="up-new")["status"] == "success"
+        assert _stored(service, "playbook.md") == b"v2"
+
+    def test_only_the_callers_files_in_this_conversation_resolve(self, service, attachments):
+        """(session, user), never the session alone."""
+        _create()
+        attachments("up-theirs", "theirs.md", "text/markdown", b"x", user_id=OTHER)
+        attachments("up-elsewhere", "elsewhere.md", "text/markdown", b"x", session_id="sess-2")
+        for ref in ("up-theirs", "theirs.md", "up-elsewhere", "elsewhere.md", "missing.md"):
+            result = _write(filename="a.md", from_attachment=ref)
+            assert result["status"] == "error", ref
+            assert "is attached to this conversation" in _text(result)
+        assert set(attachments.files.listed) == {"sess-1"}
+
+    def test_a_shared_file_reads_through_to_its_original_and_says_when_it_is_gone(self, service, attachments):
+        from apis.shared.files.models import LinkedFrom
+
+        _create()
+        attachments("orig", "playbook.md", "text/markdown", b"original text", session_id="source-sess")
+        link = LinkedFrom(upload_id="orig", session_id="source-sess", from_title="Source chat")
+        # A reference row is the original's s3Key under its own id (handoffs §4.9).
+        attachments("ref-1", "playbook.md", "text/markdown", b"", linked_from=link, s3_key="k/orig")
+        assert _write(filename="a.md", from_attachment="ref-1")["status"] == "success"
+        assert _stored(service, "a.md") == b"original text"
+        attachments.files.rows.remove(next(r for r in attachments.files.rows if r.upload_id == "orig"))
+        result = _write(filename="b.md", from_attachment="ref-1")
+        assert result["status"] == "error"
+        assert "No longer available (deleted from Source chat)" in _text(result)
+
+    def test_a_pdf_is_refused_with_the_formats_that_work(self, service, attachments):
+        _create()
+        attachments("up-1", "playbook.pdf", "application/pdf", b"%PDF-1.7")
+        result = _write(filename="a.md", from_attachment="up-1")
+        assert result["status"] == "error"
+        assert ".docx" in _text(result) and ".md" in _text(result)
+
+    def test_text_that_is_not_utf8_is_refused(self, service, attachments):
+        _create()
+        attachments("up-1", "a.txt", "text/plain", b"\xff\xfe\x00bad")
+        result = _write(filename="a.md", from_attachment="up-1")
+        assert result["status"] == "error"
+        assert "not valid UTF-8" in _text(result)
+
+    def test_the_file_cap_applies_to_the_copied_text(self, service, attachments):
+        _create()
+        attachments("up-1", "big.md", "text/markdown", b"x" * 1_048_577)
+        result = _write(filename="big.md", from_attachment="up-1")
+        assert result["status"] == "error"
+        assert "1,048,576" in _text(result)
+
+    def test_exactly_one_of_content_and_from_attachment(self, service, attachments):
+        _create()
+        attachments("up-1", "a.md", "text/markdown", b"x")
+        both = _write(filename="a.md", content="typed", from_attachment="up-1")
+        assert both["status"] == "error" and "not both" in _text(both)
+        neither = _write(filename="a.md")
+        assert neither["status"] == "error" and "from_attachment" in _text(neither)
+        # A model that sends an empty string for the unused argument is not refused.
+        assert _write(filename="a.md", content="", from_attachment="up-1")["status"] == "success"
+        assert _write(filename="b.md", content="typed", from_attachment="")["status"] == "success"
+
+    def test_the_target_type_rule_still_applies(self, service, attachments):
+        _create()
+        attachments("up-1", "a.md", "text/markdown", b"x")
+        result = _write(filename="chart.png", from_attachment="up-1")
+        assert result["status"] == "error"
+        assert "cannot be written as text" in _text(result)
+
+
+class TestFromAttachmentCard:
+    @pytest.fixture(autouse=True)
+    def _no_reach(self, monkeypatch):
+        from agents.builtin_tools.skill_authoring import approval
+        from apis.shared.skills.reach import SkillReach
+
+        monkeypatch.setattr(approval, "lookup_skill_reach", lambda s, o: SkillReach(s, []))
+
+    async def _card(self, tool_input):
+        from agents.builtin_tools.skill_authoring.approval import describe_for_approval
+
+        details = await describe_for_approval(OWNER, "my_skill_write_file", tool_input, "sess-1")
+        return details.tool_input
+
+    @pytest.mark.asyncio
+    async def test_a_new_file_shows_source_size_and_hash_of_what_is_written(self, service, attachments):
+        from apis.shared.files.docx_markdown import docx_to_markdown
+
+        _create()
+        raw = _playbook_docx()
+        attachments("up-2", "Playbook.docx", _DOCX_MIME, raw)
+        card = await self._card({"skill_id": "grant_review", "filename": "playbook.md", "from_attachment": "Playbook.docx"})
+        expected = docx_to_markdown(raw).encode()
+        assert list(card)[0] == "reach"
+        assert "from_attachment" not in card and "content" not in card
+        assert card["source"] == {
+            "attachment": "Playbook.docx",
+            "upload_id": "up-2",
+            "size_bytes": len(raw),
+            "converted": "from Word to Markdown",
+        }
+        assert card["written"]["bytes"] == len(expected)
+        assert card["written"]["sha256"] == hashlib.sha256(expected).hexdigest()
+        assert card["change"] == "new file"
+        # The card's hash is the hash the write reports.
+        result = _write(filename="playbook.md", from_attachment="Playbook.docx")
+        assert card["written"]["sha256"] in _text(result)
+
+    @pytest.mark.asyncio
+    async def test_an_edit_shows_lines_added_and_removed_and_the_whole_small_diff(self, service, attachments):
+        _create()
+        old = "".join(f"Clause {i}: keep this wording.\n" for i in range(400))
+        _write(filename="playbook.md", content=old)
+        new = old.replace("Clause 200: keep this wording.", "Clause 200: keep this exact wording.")
+        attachments("up-3", "playbook.md", "text/markdown", new.encode())
+        card = await self._card({"skill_id": "grant_review", "filename": "playbook.md", "from_attachment": "up-3"})
+        change = card["change"]
+        assert (change["lines_added"], change["lines_removed"]) == (1, 1)
+        assert "-Clause 200: keep this wording." in change["diff"]
+        assert "+Clause 200: keep this exact wording." in change["diff"]
+        assert "more characters not shown" not in change["diff"]
+
+    @pytest.mark.asyncio
+    async def test_an_identical_file_says_so(self, service, attachments):
+        _create()
+        _write(filename="a.md", content="same\n")
+        attachments("up-1", "a.md", "text/markdown", b"same\n")
+        card = await self._card({"skill_id": "grant_review", "filename": "a.md", "from_attachment": "up-1"})
+        assert card["change"].startswith("no change")
+
+    @pytest.mark.asyncio
+    async def test_an_unresolvable_attachment_still_renders_and_says_why(self, service, attachments):
+        _create()
+        card = await self._card({"skill_id": "grant_review", "filename": "a.md", "from_attachment": "nope.md"})
+        assert card["source"] == "nope.md"
+        assert "The write will fail if approved" in card["problem"]
+
+    @pytest.mark.asyncio
+    async def test_an_inline_content_write_is_unchanged(self, service, attachments):
+        card = await self._card({"skill_id": "grant_review", "filename": "a.md", "content": "hello"})
+        assert card["content"] == "hello"
+        assert "source" not in card and "change" not in card
+        assert attachments.files.listed == []
