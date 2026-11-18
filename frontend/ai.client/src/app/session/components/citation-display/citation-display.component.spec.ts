@@ -2,6 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { CitationDisplayComponent, citationPage } from './citation-display.component';
 import { Citation } from '../../services/models/message.model';
+import { FilePreviewStateService } from '../../services/file-preview/file-preview-state.service';
 
 describe('CitationDisplayComponent', () => {
   let component: CitationDisplayComponent;
@@ -449,6 +450,74 @@ describe('CitationDisplayComponent', () => {
       expect(
         excerptOf({ assistantId: 'a1', documentId: 'd4', fileName: 'h.pdf', text: 'A plain sentence from a PDF.' }),
       ).toBe('A plain sentence from a PDF.');
+    });
+  });
+
+  describe('View content', () => {
+    const web: Citation = {
+      assistantId: 'a1',
+      documentId: 'd1',
+      fileName: 'Research Centers.md',
+      text: '# Research Centers',
+      sourceUrl: 'https://www.example.edu/research/centers/',
+    };
+
+    function render(citations: Citation[], allowDownload = true): HTMLElement {
+      fixture.componentRef.setInput('citations', citations);
+      fixture.componentRef.setInput('allowDownload', allowDownload);
+      component.isExpanded.set(true);
+      fixture.detectChanges();
+      return fixture.nativeElement as HTMLElement;
+    }
+
+    const viewButton = (el: HTMLElement) =>
+      el.querySelector<HTMLButtonElement>('[data-testid="citation-view-content"]');
+
+    it('opens a web page citation in the preview pane as a knowledge-base document', () => {
+      const state = TestBed.inject(FilePreviewStateService);
+      const open = vi.spyOn(state, 'open');
+      const el = render([web]);
+
+      const button = viewButton(el);
+      expect(button?.textContent).toContain('View content');
+      button!.click();
+
+      expect(open).toHaveBeenCalledWith({
+        kind: 'kb-document',
+        assistantId: 'a1',
+        documentId: 'd1',
+        filename: 'Research Centers',
+        sourceUrl: 'https://www.example.edu/research/centers/',
+      });
+      expect(component.isExpanded()).toBe(false);
+      // Open page stays beside it.
+      expect(el.querySelector('a[href]')?.textContent).toContain('Open page');
+      open.mockRestore();
+    });
+
+    it('is offered for markdown and text uploads, beside Download source', () => {
+      const el = render([
+        { assistantId: 'a1', documentId: 'd2', fileName: 'notes.MD', text: 'x' },
+        { assistantId: 'a1', documentId: 'd3', fileName: 'readme.txt', text: 'x' },
+      ]);
+      expect(el.querySelectorAll('[data-testid="citation-view-content"]').length).toBe(2);
+      expect(el.textContent).toContain('Download source');
+    });
+
+    it('is not offered for a type the server cannot show', () => {
+      const el = render([{ assistantId: 'a1', documentId: 'd4', fileName: 'handbook.pdf', text: 'x' }]);
+      expect(viewButton(el)).toBeNull();
+    });
+
+    it('is withheld with downloads (#111), while Open page stays', () => {
+      const el = render([web], false);
+      expect(viewButton(el)).toBeNull();
+      expect(el.querySelector('a[href]')).not.toBeNull();
+    });
+
+    it('needs the ids to read the document', () => {
+      const el = render([{ ...web, assistantId: '', documentId: '' }]);
+      expect(viewButton(el)).toBeNull();
     });
   });
 });

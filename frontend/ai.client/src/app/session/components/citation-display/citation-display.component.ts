@@ -21,6 +21,8 @@ export interface CitationItem {
    * repeats the title is dropped.
    */
   excerpt: string;
+  /** Whether "View content" can show this document's indexed text. */
+  viewable: boolean;
 }
 
 /**
@@ -43,7 +45,9 @@ export function citationPage(sourceUrl: string | undefined): CitationPage | null
 function toItem(citation: Citation): CitationItem {
   const page = citationPage(citation.sourceUrl);
   const title = page ? citation.fileName.replace(/\.md$/i, '') || citation.fileName : citation.fileName;
-  return { citation, title, page, excerpt: plainExcerpt(citation.text, title) };
+  const viewable =
+    !!citation.assistantId && !!citation.documentId && isViewableCitationDocument(citation.fileName, !!page);
+  return { citation, title, page, excerpt: plainExcerpt(citation.text, title), viewable };
 }
 
 function plainExcerpt(text: string, title: string): string {
@@ -58,6 +62,8 @@ function sameWords(a: string, b: string): boolean {
 }
 import { DocumentService } from '../../../assistants/services/document.service';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import { FilePreviewStateService } from '../../services/file-preview/file-preview-state.service';
+import { isViewableCitationDocument } from '../../services/file-preview/file-preview.model';
 
 @Component({
   selector: 'app-citation-display',
@@ -149,6 +155,27 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                         {{ item.excerpt }}
                       </p>
 
+                      <div class="flex flex-wrap items-center gap-x-4">
+                      <!-- The text the knowledge base indexed, in the docked pane.
+                           Same #111 switch as a download: the server refuses it
+                           without both citations and downloads on. -->
+                      @if (allowDownload() && item.viewable) {
+                      <button
+                        type="button"
+                        class="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary-accessible hover:text-primary-700 hover:underline
+                               dark:text-primary-accessible-dark dark:hover:text-primary-300
+                               focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+                        data-testid="citation-view-content"
+                        (click)="onViewContent(item)"
+                      >
+                        <svg class="size-3" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                        </svg>
+                        <span>View content</span>
+                        <span class="sr-only">of {{ item.title }}</span>
+                      </button>
+                      }
+
                       <!-- A crawled web page links to the page itself. It is a public
                            address, not the author's file, so the #111 download switch
                            does not withhold it (show_citations still does, server-side). -->
@@ -190,6 +217,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                         }
                       </button>
                       }
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -210,6 +238,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
 })
 export class CitationDisplayComponent {
   private readonly documentService = inject(DocumentService);
+  private readonly filePreview = inject(FilePreviewStateService);
 
   citations = input<Citation[]>([]);
   /**
@@ -256,6 +285,20 @@ export class CitationDisplayComponent {
     } finally {
       this.loadingDocumentId.set(null);
     }
+  }
+
+  /** Open the cited document's indexed text in the docked preview pane. */
+  onViewContent(item: CitationItem): void {
+    const { citation } = item;
+    if (!citation.assistantId || !citation.documentId) return;
+    this.filePreview.open({
+      kind: 'kb-document',
+      assistantId: citation.assistantId,
+      documentId: citation.documentId,
+      filename: item.title,
+      sourceUrl: item.page?.url ?? null,
+    });
+    this.isExpanded.set(false);
   }
 
   onMouseEnter(): void {

@@ -8,6 +8,7 @@ import {
   UploadUrlResponse,
   Document,
   DocumentsListResponse,
+  DocumentContentResponse,
   DownloadUrlResponse,
   ExtractedChunksResponse,
   STALE_DOCUMENT_THRESHOLD_MS,
@@ -256,6 +257,31 @@ export class DocumentService {
       );
     } catch (err) {
       throw this.handleApiError(err, 'Failed to get download URL');
+    }
+  }
+
+  /**
+   * Read the text a cited document was indexed from, for the citation viewer.
+   *
+   * Unlike the other document reads this is open to anyone who can chat with
+   * the agent, not only its owner and editors. The caller shows any failure in
+   * place, so the global toast is suppressed; the thrown error carries the
+   * server's `detail` (e.g. "Only web pages and markdown or plain-text
+   * documents can be shown here.") and its HTTP status in `details.status`.
+   */
+  async getDocumentContent(
+    assistantId: string,
+    documentId: string,
+  ): Promise<DocumentContentResponse> {
+    try {
+      return await firstValueFrom(
+        this.http.get<DocumentContentResponse>(
+          `${this.baseUrl()}/${encodeURIComponent(assistantId)}/documents/${encodeURIComponent(documentId)}/content`,
+          { context: new HttpContext().set(SUPPRESS_ERROR_TOAST, true) },
+        ),
+      );
+    } catch (err) {
+      throw this.handleApiError(err, 'Failed to read the document');
     }
   }
 

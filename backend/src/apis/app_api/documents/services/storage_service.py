@@ -3,10 +3,12 @@
 Handles presigned URL generation for client-side uploads and downloads.
 """
 
+import codecs
+import functools
 import logging
 import os
 import re
-from typing import Tuple
+from typing import Any, Callable, Dict, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -126,3 +128,38 @@ async def generate_download_url(s3_key: str, expires_in: int = 3600) -> str:
 
     logger.info(f"Generated presigned download URL for {s3_key} (expires in {expires_in}s)")
     return presigned_url
+
+
+#: Largest slice of a document's staged text the content view returns. A crawled
+#: page is a few to a few hundred KB; past this the reader gets the head and a
+#: ``truncated`` flag rather than an unbounded response.
+DOCUMENT_CONTENT_MAX_BYTES = 1024 * 1024
+
+
+def read_text_object(get_object: Callable[..., Dict[str, Any]], bucket: str, key: str, max_bytes: int) -> Tuple[str, bool]:
+    """Read at most ``max_bytes`` of a UTF-8 object. Returns ``(text, truncated)``.
+
+    One ranged GET asks for one byte past the cap, so a larger object is never
+    read whole and ``truncated`` needs no separate HEAD. A multi-byte character
+    the cap splits is dropped rather than shown as a replacement character.
+    ``get_object`` is the S3 client's bound method, so this runs in a worker
+    thread with only the network call inside it.
+    """
+    response = get_object(Bucket=bucket, Key=key, Range=f"bytes=0-{max_bytes}")
+    body = response["Body"]
+    try:
+        data = body.read(max_bytes + 1)
+    finally:
+        body.close()
+    truncated = len(data) > max_bytes
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    text = decoder.decode(data[:max_bytes], final=not truncated)
+    return text, truncated
+
+
+@functools.lru_cache(maxsize=1)
+def content_s3_client() -> Any:
+    """One S3 client per process for the content view's reads (built once, reused)."""
+    import boto3
+
+    return boto3.client("s3", region_name=os.environ.get("AWS_REGION"))
