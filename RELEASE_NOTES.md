@@ -231,10 +231,11 @@ Eval and smoke harness changes:
 **On in our `development` environment only:** `CONCURRENT_TOOL_EXECUTION_ENABLED` (new), `RELEASE_LEDGER_ENABLED` / `releaseLedger`, `WORD_SKILL_SCRIPTS_ENABLED`, `HANDOFFS_ENABLED` and `HANDOFF_BRIEF_ENABLED`, `QUOTA_REQUESTS_ENABLED`.
 
 **Still opt-in, on in our prod** (#1798). None was promoted in this release:
-- `sessionRewind` and `sessionFork`: on in prod since 1.32.0 with no flip. Their condition is met, and promotion is its own change.
+- `sessionRewind` and `sessionFork`: on in prod since 1.32.0 (variables set 2026-10-31, never flipped). Their two-week condition is met; promotion is its own PR into `develop`.
 - `sessionPrewarm`: waits on the Runtime V2 readout of what turnless warms cost.
 - `attachmentKb` and `CONVERSATION_INDEX_ENABLED`: a cost and retention decision each deployment makes.
-- `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`, `AGENT_KNOWLEDGE_FILES_ENABLED` with `knowledgeBaseMode`, and `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`: on in prod past two weeks with no flip; eligible for promotion.
+- `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`: production variable set 2026-11-05, effective from the next platform deploy. Promote after two weeks with no flip.
+- `AGENT_KNOWLEDGE_FILES_ENABLED` with `knowledgeBaseMode`, and `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`: on in prod from 1.34.0 (2026-11-08). Promote after two weeks with no flip.
 - `attachmentPlan` with `ATTACHMENT_PLAN_ENABLED`: a rollout switch on in prod since 1.36.0. It retires in phase 6, when the `token` profile becomes the only one.
 - `documentExtract`, `fieldSetAuthoring` and `sourceProvenance`, with `DOCUMENT_EXTRACT_ENABLED`, `FIELD_SET_AUTHORING_ENABLED` and `SOURCE_PROVENANCE_ENABLED`: on in prod since 1.36.0, short of two weeks.
 - `attachmentCards`: on in prod since 1.36.1 (UI only), short of two weeks.
