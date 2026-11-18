@@ -70,6 +70,26 @@ describe('StreamParserService - Citation Handling', () => {
       );
     });
 
+    it("keeps a crawled web page's sourceUrl, and adds none to an uploaded file", () => {
+      service.parseEventSourceMessage('s1', 'citation', {
+        assistantId: 'a1',
+        documentId: 'd1',
+        fileName: 'home_-_dred.md',
+        text: 'excerpt',
+        sourceUrl: 'https://www.example.edu/research/',
+      });
+      service.parseEventSourceMessage('s1', 'citation', {
+        assistantId: 'a1',
+        documentId: 'd2',
+        fileName: 'handbook.pdf',
+        text: 'excerpt',
+      });
+
+      const [web, upload] = service.citationsFor('s1')();
+      expect(web.sourceUrl).toBe('https://www.example.edu/research/');
+      expect('sourceUrl' in upload).toBe(false);
+    });
+
     // Feature: rag-citation-display, Property: Missing required fields cause rejection
     it('should not add citation when required fields are missing', () => {
       fc.assert(

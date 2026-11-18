@@ -1322,15 +1322,19 @@ export class StreamParserService {
   }
 
   private handleCitation(state: ParserSessionState, data: Citation): void {
-    state.pendingCitations.update((citations) => [
-      ...citations,
-      {
-        assistantId: data.assistantId,
-        documentId: data.documentId,
-        fileName: data.fileName,
-        text: data.text,
-      },
-    ]);
+    // Copied field by field so nothing unexpected on the frame reaches the
+    // card. Every Citation field belongs here: a crawled web page's sourceUrl
+    // was once dropped at this line while the server sent it.
+    const citation: Citation = {
+      assistantId: data.assistantId,
+      documentId: data.documentId,
+      fileName: data.fileName,
+      text: data.text,
+    };
+    if (data.sourceUrl) {
+      citation.sourceUrl = data.sourceUrl;
+    }
+    state.pendingCitations.update((citations) => [...citations, citation]);
   }
 
   // =========================================================================
