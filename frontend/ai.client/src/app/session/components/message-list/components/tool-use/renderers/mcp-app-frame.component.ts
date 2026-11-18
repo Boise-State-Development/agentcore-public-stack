@@ -833,7 +833,15 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       // Width/height/position are driven entirely by the style effect below
       // (so fullscreen can absolute-fill the iframe within its host without a
       // `w-full` class fighting the inset sizing).
-      iframe.className = 'block border-0 bg-white';
+      // Transparent so the card's own surface (white, or gray-900 in dark
+      // mode) shows wherever the App leaves its background unpainted, as
+      // the ext-apps reference host does. `color-scheme: normal` is what
+      // makes that work in dark mode: the SPA's root is `color-scheme: dark`
+      // and the proxy page declares none, and when an iframe's scheme and its
+      // document's differ the browser paints an opaque WHITE canvas behind
+      // the document, whatever the iframe's background says.
+      iframe.className = 'block border-0 bg-transparent';
+      iframe.style.colorScheme = 'normal';
       iframe.style.width = '100%';
       iframe.style.height = `${this.frameHeight()}px`;
       // Append BEFORE setting src so contentWindow exists, then start the

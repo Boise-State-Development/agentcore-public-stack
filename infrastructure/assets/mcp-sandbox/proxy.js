@@ -197,8 +197,15 @@
       inner.setAttribute('allow', allow);
     }
     inner.setAttribute('referrerpolicy', 'no-referrer');
+    // Transparent, so the host's card shows through wherever the App leaves
+    // its own background unpainted (GitHub's forms pad a themed card inside
+    // a transparent body). A white fill here framed a dark-mode App in white.
+    // `color-scheme:normal` matches what an App document declares when it
+    // declares nothing at its root; a mismatch makes the browser paint an
+    // opaque canvas behind the App regardless of this background.
     inner.style.cssText =
-      'border:0;width:100%;height:100%;display:block;background:#fff';
+      'border:0;width:100%;height:100%;display:block;' +
+      'background:transparent;color-scheme:normal';
     inner.addEventListener('load', function () {
       innerReady = true;
       var queued = pendingToInner.splice(0, pendingToInner.length);
