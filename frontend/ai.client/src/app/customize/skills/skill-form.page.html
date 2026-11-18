@@ -21,6 +21,17 @@
       </div>
     }
 
+    <!-- Whole-bundle import (skill-bundle-import.md); its own section, outside the form -->
+    @if (features.skillBundleImport) {
+      <div class="mt-8">
+        <app-skill-bundle-import
+          [skillId]="skillId()"
+          [importSource]="importSource()"
+          (imported)="onBundleImported($event)"
+        />
+      </div>
+    }
+
     <form [formGroup]="form" (ngSubmit)="onSubmit()" class="mt-8 space-y-6">
       <!-- Import from SKILL.md -->
       @if (!isEdit()) {

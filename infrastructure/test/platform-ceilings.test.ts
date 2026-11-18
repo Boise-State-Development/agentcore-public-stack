@@ -277,6 +277,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     documentExtract: { ...base.documentExtract, enabled: true },
     // Field-set authoring: one app-api variable and routes, no resources.
     fieldSetAuthoring: { enabled: true },
+    // Skill bundle import: one app-api variable and routes, no resources.
+    skillBundleImport: { enabled: true },
     // Web Search's result default is one Runtime variable, written only while
     // on: here for the environment-variable ceilings and flag coverage.
     webSearchDefaultMaxResults: { enabled: true },

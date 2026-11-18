@@ -36,6 +36,7 @@ export const environment = {
         // off by default; #1798).
         documentExtract: true,
         fieldSetAuthoring: true,
+        skillBundleImport: false,
         handoffs: false,
         handoffBrief: false,
         sessionRewind: true,

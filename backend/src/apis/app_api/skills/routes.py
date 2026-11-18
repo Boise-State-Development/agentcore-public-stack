@@ -49,6 +49,7 @@ from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.models import (
     SKILL_DESCRIPTION_MAX_LENGTH,
     SkillDefinition,
+    SkillImportSource,
     SkillResourceRef,
     SkillResourcesResponse,
     SkillStatus,
@@ -71,6 +72,7 @@ from .field_sets import (
 )
 from .service import get_skill_catalog_service
 from apis.shared.skills.user_service import (
+    UserSkillConflictError,
     UserSkillError,
     UserSkillLimitError,
     UserSkillNotFoundError,
@@ -205,6 +207,8 @@ class MySkillResponse(BaseModel):
     category: Optional[str] = None
     created_at: Optional[str] = Field(None, alias="createdAt")
     updated_at: Optional[str] = Field(None, alias="updatedAt")
+    # Set once the skill was imported from a bundle (skill-bundle-import.md §3).
+    import_source: Optional[SkillImportSource] = Field(None, alias="importSource")
 
     model_config = {"populate_by_name": True}
 
@@ -222,6 +226,7 @@ class MySkillResponse(BaseModel):
             category=skill.category,
             created_at=skill.created_at.isoformat() if skill.created_at else None,
             updated_at=skill.updated_at.isoformat() if skill.updated_at else None,
+            import_source=skill.import_source,
         )
 
 
@@ -278,7 +283,7 @@ def _user_skill_error(e: UserSkillError) -> HTTPException:
     """Map a user-tier service error to its HTTP status."""
     if isinstance(e, UserSkillNotFoundError):
         return HTTPException(status_code=404, detail=str(e))
-    if isinstance(e, UserSkillLimitError):
+    if isinstance(e, (UserSkillLimitError, UserSkillConflictError)):
         return HTTPException(status_code=409, detail=str(e))
     return HTTPException(status_code=400, detail=str(e))
 

@@ -107,6 +107,31 @@ class SkillResourceRef(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class SkillImportSource(BaseModel):
+    """Where a user skill was last imported from (docs/specs/skill-bundle-import.md §3).
+
+    Display and refresh metadata on the live row only. It is deliberately not a
+    version snapshot field (``versions.SNAPSHOT_FIELDS``), so re-importing never
+    changes what a pin froze or the content hash a pin compares (spec D5).
+    """
+
+    type: str = Field(..., description="zip | github")
+    path: str = Field(default="", description="Bundle directory inside the archive")
+    bundle_hash: str = Field(..., alias="bundleHash")
+    imported_at: str = Field(..., alias="importedAt")
+    url: Optional[str] = None
+    owner: Optional[str] = None
+    repo: Optional[str] = None
+    ref: Optional[str] = None
+    commit_sha: Optional[str] = Field(None, alias="commitSha")
+    filename: Optional[str] = None
+
+    model_config = {"populate_by_name": True}
+
+    def to_item(self) -> dict:
+        return {k: v for k, v in self.model_dump(by_alias=True).items() if v is not None}
+
+
 class SkillDefinition(BaseModel):
     """
     Catalog entry for a skill stored in DynamoDB.
@@ -165,6 +190,10 @@ class SkillDefinition(BaseModel):
         default_factory=list,
         description="Manifest of S3-backed supporting reference files",
     )
+
+    # Last bundle import (user skills only). Not a snapshot field, so a re-import
+    # never moves a pinned version (skill-bundle-import.md D5).
+    import_source: Optional[SkillImportSource] = Field(default=None)
 
     # Lifecycle / grouping
     status: SkillStatus = Field(default=SkillStatus.ACTIVE)
@@ -243,6 +272,11 @@ class SkillDefinition(BaseModel):
             "updatedAt": to_iso(self.updated_at) if self.updated_at else None,
             "createdBy": self.created_by,
             "updatedBy": self.updated_by,
+            **(
+                {"importSource": self.import_source.to_item()}
+                if self.import_source
+                else {}
+            ),
         }
 
     @classmethod
@@ -283,6 +317,9 @@ class SkillDefinition(BaseModel):
             else datetime.now(timezone.utc),
             created_by=item.get("createdBy"),
             updated_by=item.get("updatedBy"),
+            import_source=SkillImportSource.model_validate(item["importSource"])
+            if item.get("importSource")
+            else None,
         )
 
 

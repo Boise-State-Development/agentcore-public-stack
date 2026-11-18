@@ -313,8 +313,9 @@ access can use this agent's skills and knowledge."*
 - **Admin skills page** — kept as-is minus the tool-picker dialog; gains the
   standard-bundle upload (below) and an `allowed-tools` display chip.
 - **My Skills (new user page)** — list/create/edit/delete own skills; upload a
-  `SKILL.md` + individual files (existing `parseSkillMarkdown` import-prefill;
-  zip support still deferred — no new dep). Reference/script/asset files upload
+  `SKILL.md` + individual files (existing `parseSkillMarkdown` import-prefill),
+  or a whole bundle as a `.zip` or a public GitHub path, with re-import to
+  refresh (`skill-bundle-import.md`, behind `SKILL_BUNDLE_IMPORT_ENABLED`). Reference/script/asset files upload
   into the standard layout; scripts get the inert label.
 - **Chat input** — skills join the model-settings panel as an opt-in picker
   (per-skill user prefs from v1 persist the selection; default unchecked per

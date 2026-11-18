@@ -470,6 +470,10 @@ jobs:
       # development, so only "true" enables. Sets the flag on app-api only; no
       # resources. The SPA half is features.fieldSetAuthoring.
       CDK_FIELD_SET_AUTHORING_ENABLED: ${{ vars.CDK_FIELD_SET_AUTHORING_ENABLED }}
+      # Skill bundle import: the /skills/mine/import* routes (a .zip or a public
+      # GitHub path). In development, so only "true" enables. app-api only; no
+      # resources. The SPA half is features.skillBundleImport.
+      CDK_SKILL_BUNDLE_IMPORT_ENABLED: ${{ vars.CDK_SKILL_BUNDLE_IMPORT_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —

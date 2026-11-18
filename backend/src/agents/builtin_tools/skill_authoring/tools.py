@@ -55,6 +55,8 @@ from apis.shared.skills.user_service import (
     get_user_skill_service,
 )
 
+from .attachment_source import AttachmentSourceError, resolve_attachment_text
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -455,8 +457,9 @@ def make_my_skill_write_file_tool(session_id: str, user_id: str, user_email: Opt
     def my_skill_write_file(
         skill_id: str,
         filename: str,
-        content: str,
+        content: Optional[str] = None,
         kind: str = "reference",
+        from_attachment: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create or replace one text file in one of the user's own skills. The user
         approves it first.
@@ -467,13 +470,36 @@ def make_my_skill_write_file_tool(session_id: str, user_id: str, user_email: Opt
         Args:
             skill_id: The skill's id, from my_skill_list.
             filename: A flat name with an extension, e.g. "forms.md" (no folders).
-            content: The file's full text.
+            content: The file's full text. Omit when using from_attachment.
             kind: "reference" (default), "script" or "asset".
+            from_attachment: Instead of content, the upload id or filename of a file
+                attached to this conversation: .md/.txt copied as is, .docx converted
+                to Markdown. Use it for a document the user attached.
         """
         if kind not in VALID_RESOURCE_KINDS:
             return _error(
                 f"Could not write '{filename}': kind must be one of "
                 f"{', '.join(VALID_RESOURCE_KINDS)}."
+            )
+        source = None
+        if from_attachment and from_attachment.strip():
+            if content:
+                return _error(
+                    f"Could not write '{filename}': pass content or from_attachment, not both."
+                )
+            try:
+                source = resolve_attachment_text(
+                    user_id, session_id, from_attachment, max_bytes=MAX_RESOURCE_BYTES
+                )
+            except AttachmentSourceError as exc:
+                return _error(f"Could not write '{filename}': {exc}")
+            except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
+                return _failure(f"read the attachment '{from_attachment}'", exc)
+            content = source.text
+        elif content is None:
+            return _error(
+                f"Could not write '{filename}': pass the file's text as content, or name "
+                "an attached file with from_attachment."
             )
         size = len((content or "").encode("utf-8"))
         if size > MAX_RESOURCE_BYTES:
@@ -490,10 +516,16 @@ def make_my_skill_write_file_tool(session_id: str, user_id: str, user_email: Opt
         except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
             return _failure(f"write '{filename}'", exc, skill_id)
         _log_applied("my_skill_write_file", skill_id, session_id)
+        origin = ""
+        if source is not None:
+            how = "converted from Word to Markdown" if source.converted else "copied unchanged"
+            origin = (
+                f" from the attachment '{source.filename}' ({how}; sha256 {source.sha256})"
+            )
         return _ok(
-            f"Saved '{filename}' ({kind}, {size:,} bytes) to skill '{skill_id}', which now "
-            f"has {len(refs)} of {MAX_RESOURCES_PER_SKILL} files. If this file was read "
-            "earlier in this conversation, that copy is out of date."
+            f"Saved '{filename}' ({kind}, {size:,} bytes){origin} to skill '{skill_id}', "
+            f"which now has {len(refs)} of {MAX_RESOURCES_PER_SKILL} files. If this file "
+            "was read earlier in this conversation, that copy is out of date."
             + _field_set_note(filename, kind, content or "")
         )
 

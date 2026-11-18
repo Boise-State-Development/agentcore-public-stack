@@ -24,14 +24,13 @@ mcp-types==2.3.0
 httpx2==2.13.1
 httpcore2==2.13.1
 truststore==0.10.4
-# OpenTelemetry is AHEAD of backend/uv.lock here, deliberately: 1.45.1 fixes
-# GHSA-xcq7-p3pf-p88h (O(N^2) tracestate parsing). backend/uv.lock cannot follow
-# until aws-opentelemetry-distro ships a release built on 1.45.1 (every release
-# through 0.21.0 hard-pins opentelemetry-api==1.44.0). This image installs no
-# ADOT, so nothing here is bound by that pin.
-opentelemetry-api==1.45.1
-opentelemetry-sdk==1.45.1
-opentelemetry-instrumentation-threading==0.66b1
+# OpenTelemetry 1.45.2 fixes GHSA-mf5v-w3w3-f6cg (quadratic traceparent
+# parsing). backend/uv.lock gets the same api version through a uv override,
+# since aws-opentelemetry-distro 0.22.0 pins 1.45.1. This image installs no
+# ADOT, so the SDK and instrumentation can move to the matching 1.45.2/0.66b2.
+opentelemetry-api==1.45.2
+opentelemetry-sdk==1.45.2
+opentelemetry-instrumentation-threading==0.66b2
 jsonschema==4.26.0
 docstring-parser==0.17.0
 pyyaml==6.0.3

@@ -22,8 +22,11 @@ app-api, inline on the Runtime, whose turn path would only pay for the hop.
 """
 
 import asyncio
+import gc
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -505,15 +508,39 @@ async def _delete_burst() -> tuple[float, list[int], int]:
         patch.dict("os.environ", {"DYNAMODB_ASSISTANTS_TABLE_NAME": TABLE}),
     ):
         async with httpx.AsyncClient(transport=transport, base_url="http://app-api") as client:
-            async with _LagProbe() as probe:
-                responses = await asyncio.gather(
-                    *(
-                        client.delete(f"/assistants/{ASSISTANT_ID}/documents/DOC-{i}")
-                        for i in range(_BURST)
+            with _no_garbage_collection():
+                async with _LagProbe() as probe:
+                    responses = await asyncio.gather(
+                        *(
+                            client.delete(f"/assistants/{ASSISTANT_ID}/documents/DOC-{i}")
+                            for i in range(_BURST)
+                        )
                     )
-                )
-                await asyncio.wait_for(all_cleaned.wait(), timeout=60)
+                    await asyncio.wait_for(all_cleaned.wait(), timeout=60)
     return probe.worst_s, [r.status_code for r in responses], cleaned
+
+
+@contextmanager
+def _no_garbage_collection() -> Iterator[None]:
+    """Keep the test process's own collector out of the measurement.
+
+    A full-suite xdist worker holds a heap of thousands of tests' objects, and
+    a gen-2 collection over it takes 0.9-1.3 s (242 such passes in one local
+    ``-n 3`` run, 2026-11-18). It pauses every thread, the loop included, so
+    one that lands in the burst reads as a 1.2-1.4 s stall: exactly what failed
+    Backend Deploy three times running. That pause belongs to the test runner's
+    heap, not the delete path, so collect first and hold automatic collection
+    off while the probe runs. An inline call still stalls the loop with the
+    collector off, which ``test_the_probe_sees_a_blocking_call`` checks.
+    """
+    gc.collect()
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
 
 
 class TestDeleteBurstKeepsTheLoopResponsive:

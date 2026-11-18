@@ -521,9 +521,10 @@ class BaseAgent(ABC):
             return set()
 
         owner_id = self.user_id
+        session_id = getattr(self, "session_id", None)
 
         async def approval_details_lookup(tool_name: str, tool_input: object):
-            return await describe_for_approval(owner_id, tool_name, tool_input)
+            return await describe_for_approval(owner_id, tool_name, tool_input, session_id)
 
         return MCPExternalApprovalHook(
             approval_names_lookup=approval_names_lookup,

@@ -368,6 +368,19 @@ jobs:
   # setup-uv is left on its default uv version, as in release.yml, so this
   # gate runs the same toolchain the release does rather than the 0.7.12 the
   # other jobs pin.
+  #
+  # This job deliberately ignores inputs.ref and checks out the ref of the
+  # event that triggered the caller. It runs a script from the checkout
+  # (build.sh). A caller-chosen ref, reachable from a workflow_dispatch in the
+  # default branch's context (nightly.yml -> nightly-deploy-pipeline.yml), would
+  # let that script write to main's Actions cache. CodeQL reports that as
+  # actions/cache-poisoning/poisonable-step (high). Only ci.yml, the PR gate,
+  # sets run_tui, and it passes no ref, so this changes nothing today. A caller
+  # that needs another ref must not get it here.
+  #
+  # No uv cache either. setup-uv's enable-cache defaults to "auto", which caches
+  # on GitHub-hosted runners, so it is turned off explicitly. The TUI's
+  # dependencies are small, so the cold sync costs seconds.
   test-tui:
     if: ${{ inputs.run_tui }}
     name: Test terminal client (aps-tui)
@@ -377,11 +390,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.ref }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
-          enable-cache: true
-          cache-dependency-glob: 'tui/uv.lock'
+          enable-cache: false
       - name: Test, lint, type-check and build
         run: bash scripts/tui/build.sh --check

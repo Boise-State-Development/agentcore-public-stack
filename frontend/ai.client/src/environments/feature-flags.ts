@@ -126,6 +126,18 @@ export interface FeatureFlags {
   fieldSetAuthoring: boolean;
 
   /**
+   * Skill bundle import (docs/specs/skill-bundle-import.md): import a whole
+   * skill bundle into My Skills from a `.zip` or a public GitHub path, preview
+   * what it adds, changes and removes, and refresh it later from the same
+   * source. Backend: SKILL_BUNDLE_IMPORT_ENABLED (app-api serves
+   * `/skills/mine/import*`, which 404s while off). The UI's share is the
+   * "Import a bundle" panel on the skill form and "Refresh from source" on an
+   * imported skill's edit page. In development: on only in the deployed dev
+   * build; off locally and in prod.
+   */
+  skillBundleImport: boolean;
+
+  /**
    * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0): a mid-thread
    * `@`-mention opens a review sheet instead of sending, then starts the Agent's
    * conversation in the background while the user stays put, tracked by a

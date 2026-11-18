@@ -76,6 +76,12 @@ export interface Citation {
   fileName: string;
   /** Relevant text excerpt from the document */
   text: string;
+  /**
+   * The web page a crawled knowledge-base document was fetched from. Present
+   * only for pages added with "Add web content"; read off the document's row
+   * on the server, never from the index.
+   */
+  sourceUrl?: string;
 }
 
 /**

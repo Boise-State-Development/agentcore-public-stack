@@ -11,6 +11,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { FEATURES } from '../../services/features';
 import { FieldSetsSectionComponent } from './components/field-sets-section.component';
+import { SkillBundleImportComponent } from './components/skill-bundle-import.component';
 import { fieldSetNameFor } from './models/field-set.model';
 import { parseSkillMarkdown } from '../../admin/skills/models/skill-import.util';
 import {
@@ -22,8 +23,10 @@ import { SKILL_DESCRIPTION_MAX_LENGTH } from '../../shared/skills/skill-field-li
 import {
   MAX_RESOURCE_BYTES,
   MAX_RESOURCES_PER_SKILL,
+  MySkill,
   MySkillResourceRef,
   RESOURCE_KINDS,
+  SkillImportSource,
   SkillResourceKind,
 } from './models/my-skill.model';
 import { MySkillService } from './services/my-skill.service';
@@ -42,7 +45,13 @@ import { MySkillService } from './services/my-skill.service';
  */
 @Component({
   selector: 'app-skill-form',
-  imports: [ReactiveFormsModule, RouterLink, NgIcon, FieldSetsSectionComponent],
+  imports: [
+    ReactiveFormsModule,
+    RouterLink,
+    NgIcon,
+    FieldSetsSectionComponent,
+    SkillBundleImportComponent,
+  ],
   templateUrl: './skill-form.page.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
   viewProviders: [
@@ -85,6 +94,8 @@ export class SkillFormPage {
    * round-trips (D2); `allowedTools` is advisory display metadata (D4).
    */
   protected readonly allowedTools = signal<string[]>([]);
+  /** The skill's last bundle import (skill-bundle-import.md), shown on edit. */
+  protected readonly importSource = signal<SkillImportSource | null>(null);
   private readonly skillMetadata = signal<Record<string, unknown>>({});
 
   protected readonly form = this.fb.nonNullable.group({
@@ -121,18 +132,38 @@ export class SkillFormPage {
 
   private async loadSkill(id: string): Promise<void> {
     try {
-      const skill = await this.skillService.getSkill(id);
-      this.form.patchValue({
-        displayName: skill.displayName,
-        description: skill.description,
-        instructions: skill.instructions,
-      });
-      this.resources.set(skill.resources);
-      this.allowedTools.set(skill.allowedTools ?? []);
-      this.skillMetadata.set(skill.skillMetadata ?? {});
+      this.applySkill(await this.skillService.getSkill(id));
     } catch {
       this.error.set("We couldn't load that skill. It may have been deleted.");
     }
+  }
+
+  private applySkill(skill: MySkill): void {
+    this.form.patchValue({
+      displayName: skill.displayName,
+      description: skill.description,
+      instructions: skill.instructions,
+    });
+    this.resources.set(skill.resources);
+    this.allowedTools.set(skill.allowedTools ?? []);
+    this.skillMetadata.set(skill.skillMetadata ?? {});
+    this.importSource.set(skill.importSource ?? null);
+  }
+
+  // ---- bundle import -----------------------------------------------------
+
+  /**
+   * A bundle import already wrote the skill server-side. A new one opens its
+   * edit page; a re-import refreshes this form from what was written, so a
+   * later Save cannot put the old instructions back.
+   */
+  protected async onBundleImported(skill: MySkill): Promise<void> {
+    if (!this.isEdit()) {
+      await this.router.navigate(['/customize/skills', skill.skillId, 'edit']);
+      return;
+    }
+    this.applySkill(skill);
+    this.form.markAsPristine();
   }
 
   // ---- SKILL.md import ---------------------------------------------------
