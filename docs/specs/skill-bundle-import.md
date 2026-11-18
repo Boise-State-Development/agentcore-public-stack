@@ -93,7 +93,9 @@ single top-level folder, which GitHub archives and most zip tools add).
 - `read_skill_file` falls back to the basename when a `dir/file` path misses, so
   a `SKILL.md` that links `reference/evaluation.md` still resolves after import.
   This is a lookup on a miss inside a tool call, so it adds nothing to the prompt
-  or the turn path.
+  or the turn path. Only reading falls back: running a skill script
+  (`WORD_SKILL_SCRIPTS_ENABLED`) keeps the strict lookup, and a path with a `..`
+  segment never falls back.
 - Ignored entirely (not listed): directories, any path segment starting with `.`
   (`.git*`, `.DS_Store`) and `__MACOSX/`.
 

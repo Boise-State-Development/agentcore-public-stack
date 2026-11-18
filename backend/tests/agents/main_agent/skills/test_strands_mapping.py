@@ -183,6 +183,16 @@ class TestReadSkillFile:
         assert read(skill_name="pdf-workflows", path="reference/eval.md") == "# Eval"
         assert "print(1)" in read(skill_name="pdf-workflows", path="scripts/office/pack.py")
 
+    def test_a_traversing_path_never_falls_back(self, monkeypatch):
+        rec = _record(resources=[_ref("eval.md")])
+        read = self._tool(monkeypatch, [rec], _FakeStore({"skills/pdf_workflows/references/eval.md": b"x"}))
+        assert "No reference file" in read(skill_name="pdf-workflows", path="../other-skill/eval.md")
+
+    def test_script_execution_keeps_the_strict_lookup(self):
+        rec = _record(resources=[_ref("engine.py", kind="script")])
+        assert sm._resolve_resource(rec, "scripts/office/engine.py") is None
+        assert sm._resolve_readable_resource(rec, "scripts/office/engine.py") is not None
+
     def test_an_ambiguous_basename_does_not_guess(self, monkeypatch):
         rec = _record(resources=[_ref("a.md"), _ref("a.md", kind="asset")])
         read = self._tool(monkeypatch, [rec], _FakeStore())

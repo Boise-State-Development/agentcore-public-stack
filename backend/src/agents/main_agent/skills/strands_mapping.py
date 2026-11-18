@@ -178,21 +178,32 @@ def _resolve_resource(record: Any, path: str) -> Optional[Any]:
     ``s3_key`` is the only thing ever read.
     """
     wanted = (path or "").strip().lstrip("/")
-    refs = list(getattr(record, "resources", None) or [])
-    for ref in refs:
+    for ref in getattr(record, "resources", None) or []:
         if wanted == ref.filename or wanted == _manifest_path(ref):
             return ref
-    # An imported bundle keeps its SKILL.md's own links (``reference/eval.md``,
-    # ``scripts/office/pack.py``) while the manifest is flat, so on a miss a
-    # path's basename names the file when exactly one file has it
-    # (skill-bundle-import.md §4). A lookup inside the tool call: nothing here
-    # reaches the prompt.
-    if "/" in wanted:
-        tail = wanted.rsplit("/", 1)[-1]
-        matches = [ref for ref in refs if ref.filename == tail]
-        if len(matches) == 1:
-            return matches[0]
     return None
+
+
+def _resolve_readable_resource(record: Any, path: str) -> Optional[Any]:
+    """:func:`_resolve_resource`, plus a basename fallback for reading only.
+
+    An imported bundle keeps its SKILL.md's own links (``reference/eval.md``)
+    while the manifest is flat (skill-bundle-import.md §4), so on a miss a
+    path's basename names the file when exactly one file has it. Only
+    ``read_skill_file`` uses this: script execution keeps the strict lookup,
+    where a path outside the manifest must be refused, not reinterpreted. A
+    path with a ``..`` segment never falls back. A lookup inside the tool call:
+    nothing here reaches the prompt.
+    """
+    ref = _resolve_resource(record, path)
+    if ref is not None:
+        return ref
+    wanted = (path or "").strip().lstrip("/")
+    segments = wanted.split("/")
+    if len(segments) < 2 or ".." in segments or "\\" in wanted:
+        return None
+    matches = [r for r in getattr(record, "resources", None) or [] if r.filename == segments[-1]]
+    return matches[0] if len(matches) == 1 else None
 
 
 class SkillsRuntime(NamedTuple):
@@ -255,7 +266,7 @@ def make_read_skill_file_tool(records: List[Any]):
                 f"Available skills: {available}"
             )
 
-        ref = _resolve_resource(record, path)
+        ref = _resolve_readable_resource(record, path)
         if ref is None:
             listing = ", ".join(_manifest_paths(record)) or "(no reference files)"
             return (
