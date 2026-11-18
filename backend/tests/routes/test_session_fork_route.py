@@ -142,7 +142,7 @@ class TestRoute:
         if enabled:
             monkeypatch.setenv("SESSION_FORK_ENABLED", "true")
         else:
-            monkeypatch.delenv("SESSION_FORK_ENABLED", raising=False)
+            monkeypatch.setenv("SESSION_FORK_ENABLED", "false")
         app = FastAPI()
         app.include_router(router)
         app.dependency_overrides[get_current_user_from_session] = lambda: MagicMock(user_id=USER)

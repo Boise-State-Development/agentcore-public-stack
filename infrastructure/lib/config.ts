@@ -551,12 +551,12 @@ export interface HandoffsConfig {
 }
 
 /**
- * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4). **Opt-in
- * while the feature is in development**: off unless CDK_SESSION_REWIND_ENABLED=true
- * (or a `sessionRewind.enabled: true` cdk.json context). Sets SESSION_REWIND_ENABLED
+ * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4). **Default ON
+ * with a kill switch** (a feature switch): on unless CDK_SESSION_REWIND_ENABLED=false
+ * (or a `sessionRewind.enabled: false` cdk.json context). Sets SESSION_REWIND_ENABLED
  * on **app-api**, which serves `POST /sessions/{id}/rewind` and filters rewound
  * messages out of `GET /messages`, and on the **AgentCore Runtime** (only while
- * on, so the default spends none of the V2 environment budget), which filters
+ * off, so the default spends none of the V2 environment budget), which filters
  * them at restore and cuts a warm agent's history in place. No new resources: the
  * state is one attribute on the existing session metadata row.
  */
@@ -565,12 +565,12 @@ export interface SessionRewindConfig {
 }
 
 /**
- * Conversation fork (docs/specs/conversation-rewind-and-fork.md §7). **Opt-in
- * while the feature is in development**: off unless CDK_SESSION_FORK_ENABLED=true
- * (or a `sessionFork.enabled: true` cdk.json context). Sets SESSION_FORK_ENABLED
+ * Conversation fork (docs/specs/conversation-rewind-and-fork.md §7). **Default ON
+ * with a kill switch** (a feature switch): on unless CDK_SESSION_FORK_ENABLED=false
+ * (or a `sessionFork.enabled: false` cdk.json context). Sets SESSION_FORK_ENABLED
  * on **app-api**, which serves `POST /sessions/{id}/fork` and lets a fork's turns
  * pin to their root conversation's microVM, and on the **AgentCore Runtime**
- * (only while on), which starts a fork's first turn from its parent's live
+ * (only while off), which starts a fork's first turn from its parent's live
  * history so the shared prefix reads from the prompt cache. No new resources.
  */
 export interface SessionForkConfig {
@@ -1899,16 +1899,16 @@ export function loadConfig(scope: cdk.App): AppConfig {
         : scope.node.tryGetContext('handoffs')?.briefEnabled ?? false,
     },
     sessionRewind: {
-      // Opt-in while in development, same parsing as sessionPrewarm above.
+      // Default ON with a kill switch, same parsing as projects above.
       enabled: process.env.CDK_SESSION_REWIND_ENABLED
-        ? process.env.CDK_SESSION_REWIND_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('sessionRewind')?.enabled ?? false,
+        ? process.env.CDK_SESSION_REWIND_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('sessionRewind')?.enabled ?? true,
     },
     sessionFork: {
-      // Opt-in while in development, same parsing as sessionPrewarm above.
+      // Default ON with a kill switch, same parsing as projects above.
       enabled: process.env.CDK_SESSION_FORK_ENABLED
-        ? process.env.CDK_SESSION_FORK_ENABLED.trim().toLowerCase() === 'true'
-        : scope.node.tryGetContext('sessionFork')?.enabled ?? false,
+        ? process.env.CDK_SESSION_FORK_ENABLED.trim().toLowerCase() !== 'false'
+        : scope.node.tryGetContext('sessionFork')?.enabled ?? true,
     },
     quotaRequests: {
       // Opt-in while in development, same parsing as sessionPrewarm above.

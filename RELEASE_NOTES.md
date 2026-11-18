@@ -15,7 +15,7 @@ The release also fixes four problems users hit:
 - Sonnet 5 could time out mid-think.
 - A web crawl wandered out of its section of the site, and could request a private address.
 
-The SPA moves to Angular 22 and `strands-agents` to 1.65.0. There is one new flag, in development and off by default (`CONCURRENT_TOOL_EXECUTION_ENABLED`), and four default-on rollout switches retire. No GSI changes and no backfills. The only manual steps are optional: a Skill Creator file edit and a catalog row for Kimi K3.1.
+Conversation rewind and fork are now **on by default** for every deployment, after running in our prod since 1.32.0. A rewind now ends with a notice that memories already saved from those messages stay. The SPA moves to Angular 22 and `strands-agents` to 1.65.0. There is one new flag, in development and off by default (`CONCURRENT_TOOL_EXECUTION_ENABLED`), and four default-on rollout switches retire. No GSI changes and no backfills. The only manual steps are optional: a Skill Creator file edit and a catalog row for Kimi K3.1.
 
 ---
 
@@ -115,6 +115,15 @@ Pages that existing crawls already fetched outside their section stay where they
   - paused-turn restore drops a stale pending execution.
 
   The guard it needed landed first: a null interrupt response is refused before the lease (#2082). The one request-byte change is a `status` field on Nova tool results. Only side channels run on Nova, and they have no cached prefix.
+
+## Conversation rewind and fork on by default
+
+"Rewind to here" and "Fork from here" ran in our prod from 1.32.0 (2026-10-30), and neither switch was ever flipped. They are now on for every deployment, including a fresh install, and they stay feature switches: `SESSION_REWIND_ENABLED=false` and `SESSION_FORK_ENABLED=false` still opt out (#2121).
+
+### What changed
+- **Readers** in `feature_flags.py` are now `!= "false"`. The CDK defaults are `true`, and an unset or empty `CDK_*` variable means on. All three `environment*.ts` files set `sessionRewind` and `sessionFork` to `true`.
+- **The Runtime copy is now written only while off**, so the default spends none of the V2 environment budget. The app-api copy is unchanged.
+- **A rewind ends with a memory notice.** Long-term memory extracts a turn about a minute after it, and a rewind cannot undo that (`docs/specs/conversation-rewind-and-fork.md` §7.3). So after a successful rewind, the SPA shows an info toast saying that anything already saved to the user's memories from those messages stays there, with a link to Memories (`ConversationRewindService`). Rewind is still one click.
 
 ## Smaller additions
 
@@ -220,7 +229,7 @@ Eval and smoke harness changes:
 |---|---|---|---|---|
 | `CONCURRENT_TOOL_EXECUTION_ENABLED` / `CDK_CONCURRENT_TOOL_EXECUTION_ENABLED` (no SPA field) | **OFF** (in development): only `"true"` enables; unset arrives as `""` | AgentCore Runtime only, written only while on | Rollout switch once promoted. Retires after a production release plus two weeks with no flip, the readout's turn duration and tool-error rate recorded, and harness-sdk#4713 fixed upstream or still guarded (#1422) | A batch of read-only tool calls runs concurrently and takes about as long as the slowest one; every other call stays serialized |
 
-**Default changes:** none.
+**Default changes** (#2121): `SESSION_REWIND_ENABLED` / `CDK_SESSION_REWIND_ENABLED` / `features.sessionRewind` and `SESSION_FORK_ENABLED` / `CDK_SESSION_FORK_ENABLED` / `features.sessionFork` went from OFF (in development) to **ON**. Each is a feature switch; `=false` opts out. Set on app-api and the AgentCore Runtime, and the Runtime copy is now written only while off.
 
 **Retired** (#2081). Each was a default-on rollout switch shipped by 1.24.0 and never turned off anywhere. Its on behaviour is now unconditional, and a deployment that set it `=false` loses that opt-out. None was forwarded through CDK or written to the Runtime:
 - `AGENT_STATUS_LIVE_DRAIN_ENABLED`: status transitions always drain while the agent stream is silent.
@@ -230,8 +239,7 @@ Eval and smoke harness changes:
 
 **On in our `development` environment only:** `CONCURRENT_TOOL_EXECUTION_ENABLED` (new), `RELEASE_LEDGER_ENABLED` / `releaseLedger`, `WORD_SKILL_SCRIPTS_ENABLED`, `HANDOFFS_ENABLED` and `HANDOFF_BRIEF_ENABLED`, `QUOTA_REQUESTS_ENABLED`.
 
-**Still opt-in, on in our prod** (#1798). None was promoted in this release:
-- `sessionRewind` and `sessionFork`: on in prod since 1.32.0 (variables set 2026-10-31, never flipped). Their two-week condition is met; promotion is its own PR into `develop`.
+**Still opt-in, on in our prod** (#1798). `sessionRewind` and `sessionFork` are promoted above; the rest stay opt-in:
 - `sessionPrewarm`: waits on the Runtime V2 readout of what turnless warms cost.
 - `attachmentKb` and `CONVERSATION_INDEX_ENABLED`: a cost and retention decision each deployment makes.
 - `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`: production variable set 2026-11-05, effective from the next platform deploy. Promote after two weeks with no flip.
@@ -268,6 +276,7 @@ To offer it, add its curated row from Admin → Models in each environment that 
   - every session with a readable document: `document_read`'s description, +32 tokens;
   - sessions where `verify_sources` is on (prod has source provenance on): its new spec;
   - a live conversation holding a Word document with charts, where documents are sent as text: that document's new rendering.
+- **Rewind and fork default.** On our prod, the `production` variables are already `true`, so nothing changes for users. The platform deploy removes `SESSION_REWIND_ENABLED` and `SESSION_FORK_ENABLED` from the Runtime's environment, because a default-on flag is written there only while off, which updates the Runtime once. A deployment that never set them gets both features with this release. To keep them off, set `CDK_SESSION_REWIND_ENABLED=false` and `CDK_SESSION_FORK_ENABLED=false` before the platform deploy.
 - **Not rewrites:** Sonnet 5's thinking display, the Nova `status` field (side channels only), and the Skill Creator's tool specs (pinned by digest).
 - **Watch after deploy:** app-api's event-loop-lag alarm under document deletes, and the `model-read-timeouts` alarm on Sonnet 5.
 

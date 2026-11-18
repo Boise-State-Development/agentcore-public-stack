@@ -20,8 +20,6 @@ describe('FEATURES', () => {
     expect(environment.features.sourceProvenance).toBe(false);
     expect(environment.features.documentExtract).toBe(false);
     expect(environment.features.fieldSetAuthoring).toBe(false);
-    expect(environment.features.sessionRewind).toBe(false);
-    expect(environment.features.sessionFork).toBe(false);
     expect(environment.features.quotaRequests).toBe(false);
     expect(environment.features.projectFileReadiness).toBe(false);
     expect(environment.features.awsLimits).toBe(false);
@@ -36,6 +34,8 @@ describe('FEATURES', () => {
     expect(environment.features.largeDocumentAttachments).toBe(true);
     expect(environment.features.folderAttachments).toBe(true);
     expect(environment.features.folderSync).toBe(true);
+    expect(environment.features.sessionRewind).toBe(true);
+    expect(environment.features.sessionFork).toBe(true);
   });
 });
 
