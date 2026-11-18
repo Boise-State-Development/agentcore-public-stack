@@ -11,6 +11,8 @@ the fail-fast on malformed model output, and the kill switch.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -20,6 +22,13 @@ from agents.builtin_tools.ask_user_question import (
     INTERRUPT_NAME,
     ask_user_question,
 )
+from apis.shared.user_questions.models import MAX_OPTIONS
+
+#: The tool spec sits in the cached ``toolConfig`` prefix of every turn that
+#: has the tool, so any change to it is one deliberate prefix rewrite at
+#: deploy. Raising the option cap 4 -> 8 (2026-11-18) was the last one. Update
+#: the pin with the change and re-run ``scripts/measure_tool_spec_tokens.py``.
+SPEC_DIGEST = "e23a507f8eee2fbf4a3a10b194d28c28214faab0a0b225f2b202b328b243c2a3"
 
 # The @tool decorator wraps the function; call the original for unit tests.
 _fn = ask_user_question._tool_func  # type: ignore[attr-defined]
@@ -147,3 +156,19 @@ class TestRegistration:
         from agents.main_agent.tools.tool_registry import create_default_registry
 
         assert not create_default_registry().has_tool("ask_user_question")
+
+
+class TestSpec:
+    """Req: the spec is pinned, and its option bound is the normalizer's."""
+
+    def test_spec_digest_is_pinned(self):
+        digest = hashlib.sha256(
+            json.dumps(ask_user_question.tool_spec, sort_keys=True).encode()
+        ).hexdigest()
+        assert digest == SPEC_DIGEST
+
+    def test_option_bound_matches_the_normalizer(self):
+        options = ask_user_question.tool_spec["inputSchema"]["json"]["properties"][
+            "questions"
+        ]["items"]["properties"]["options"]
+        assert options["maxItems"] == MAX_OPTIONS == 8

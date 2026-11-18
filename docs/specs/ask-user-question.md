@@ -54,8 +54,11 @@ the *same* tool call, and the tool is not re-invoked.
 } ] }
 ```
 
-1–4 questions, 2–4 options each. The model must **not** supply "Other" or
-"Skip" options — the picker always offers both.
+1–4 questions, 2–8 options each (raised from 4 on 2026-11-18: picking one
+exact item from a known set, such as one of five contract playbooks, otherwise
+took two rounds of grouping; the description still steers open questions to
+2–4, and 8 stays under the terminal client's 1–9 pick keys). The model must
+**not** supply "Other" or "Skip" options — the picker always offers both.
 
 **SSE**: `user_question_required`, payload `{type, interruptId, toolUseId,
 questions}`. See the event table in `CLAUDE.md`.
