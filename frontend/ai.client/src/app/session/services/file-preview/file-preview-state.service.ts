@@ -1,6 +1,6 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { DockedPaneService } from '../docked-pane/docked-pane.service';
-import type { OpenFilePreviewRef } from './file-preview.model';
+import type { FilePreviewRef } from './file-preview.model';
 
 /**
  * Open-pane state for the docked file preview.
@@ -23,14 +23,14 @@ import type { OpenFilePreviewRef } from './file-preview.model';
 export class FilePreviewStateService {
   private readonly dockedPane = inject(DockedPaneService);
 
-  private readonly openRef = signal<OpenFilePreviewRef | null>(null);
+  private readonly openRef = signal<FilePreviewRef | null>(null);
 
   /** The file the pane is showing, or null when closed. */
-  readonly openFile = computed<OpenFilePreviewRef | null>(() =>
+  readonly openFile = computed<FilePreviewRef | null>(() =>
     this.dockedPane.owner() === 'file-preview' ? this.openRef() : null,
   );
 
-  open(ref: OpenFilePreviewRef): void {
+  open(ref: FilePreviewRef): void {
     this.openRef.set(ref);
     this.dockedPane.claim('file-preview');
   }

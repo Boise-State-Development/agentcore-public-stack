@@ -132,6 +132,22 @@ export interface DownloadUrlResponse {
 }
 
 /**
+ * The text a knowledge-base document was indexed from, as
+ * `GET /assistants/{id}/documents/{docId}/content` returns it. Anyone who can
+ * chat with the agent may read it (citations on and downloads allowed); it is
+ * bounded text, never a URL to the stored object.
+ */
+export interface DocumentContentResponse {
+  filename: string;
+  /** The web page a crawled document came from (http/https only). */
+  sourceUrl?: string | null;
+  contentType: 'text/markdown' | 'text/plain';
+  text: string;
+  /** True when the document is longer than the text returned (1 MB cap). */
+  truncated: boolean;
+}
+
+/**
  * One passage as the knowledge base actually holds it.
  *
  * `text` is the FULL extracted text. The per-answer citation trace caps excerpts at

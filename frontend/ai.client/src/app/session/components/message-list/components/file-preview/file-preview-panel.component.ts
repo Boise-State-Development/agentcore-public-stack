@@ -11,6 +11,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowDownTray,
   heroArrowPath,
+  heroArrowTopRightOnSquare,
   heroExclamationTriangle,
   heroXMark,
 } from '@ng-icons/heroicons/outline';
@@ -27,12 +28,17 @@ import { CsvViewerComponent } from './csv-viewer.component';
 import { DocxViewerComponent } from './docx-viewer.component';
 import { PptxViewerComponent } from './pptx-viewer.component';
 import { XlsxViewerComponent } from './xlsx-viewer.component';
+import { KbDocumentLoadFailure, KbDocumentViewerComponent } from './kb-document-viewer.component';
 import {
+  KbDocumentPreviewRef,
+  OpenFilePreviewRef,
   PREVIEW_KIND_LABELS,
   PreviewKind,
+  isKbDocumentRef,
   previewFetchesBytes,
   previewKindFor,
 } from '../../../../services/file-preview/file-preview.model';
+import { citationPage } from '../../../citation-display/citation-display.component';
 
 /**
  * Right-docked pane that previews one uploaded file in the browser —
@@ -58,6 +64,11 @@ import {
  * durable `/files/{id}/download` route is a plain link that works
  * regardless of whether the renderer could read the file, and a user
  * whose document failed to preview still wants to open it in Word.
+ *
+ * It also shows a cited knowledge-base document's indexed text
+ * (`KbDocumentPreviewRef`, opened from a citation card). That is the
+ * agent's document, not the user's upload, so there is no download in
+ * the header for it — a crawled page offers "Open page" instead.
  */
 @Component({
   selector: 'app-file-preview-panel',
@@ -69,11 +80,13 @@ import {
     DocxViewerComponent,
     PptxViewerComponent,
     XlsxViewerComponent,
+    KbDocumentViewerComponent,
   ],
   providers: [
     provideIcons({
       heroArrowDownTray,
       heroArrowPath,
+      heroArrowTopRightOnSquare,
       heroExclamationTriangle,
       heroXMark,
     }),
@@ -124,21 +137,42 @@ import {
             </p>
           </div>
 
-          <a
-            class="flex size-8 items-center justify-center rounded-md text-gray-500 no-underline! transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
-            [href]="downloadHref()"
-            [attr.download]="ref.filename"
-            [attr.aria-label]="'Download ' + ref.filename"
-            [appTooltip]="'Download'"
-            appTooltipPosition="bottom"
-            rel="noopener noreferrer"
-          >
-            <ng-icon
-              name="heroArrowDownTray"
-              class="text-lg"
-              aria-hidden="true"
-            />
-          </a>
+          @if (kbRef()) {
+            @if (kbPageUrl(); as pageUrl) {
+              <a
+                class="flex size-8 items-center justify-center rounded-md text-gray-500 no-underline! transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+                [href]="pageUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                [attr.aria-label]="'Open page ' + ref.filename + ' (opens in new tab)'"
+                [appTooltip]="'Open page'"
+                appTooltipPosition="bottom"
+                data-testid="kb-open-page"
+              >
+                <ng-icon
+                  name="heroArrowTopRightOnSquare"
+                  class="text-lg"
+                  aria-hidden="true"
+                />
+              </a>
+            }
+          } @else {
+            <a
+              class="flex size-8 items-center justify-center rounded-md text-gray-500 no-underline! transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+              [href]="downloadHref()"
+              [attr.download]="ref.filename"
+              [attr.aria-label]="'Download ' + ref.filename"
+              [appTooltip]="'Download'"
+              appTooltipPosition="bottom"
+              rel="noopener noreferrer"
+            >
+              <ng-icon
+                name="heroArrowDownTray"
+                class="text-lg"
+                aria-hidden="true"
+              />
+            </a>
+          }
 
           <button
             type="button"
@@ -174,6 +208,28 @@ import {
                 </button>
               }
             </div>
+          } @else if (kbRef(); as doc) {
+            <app-kb-document-viewer
+              [assistantId]="doc.assistantId"
+              [documentId]="doc.documentId"
+              (loadFailed)="onLoadFailed($event)"
+              (rendered)="onRendered()"
+            />
+            @if (!ready()) {
+              <div
+                class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-gray-100 dark:bg-gray-950"
+                aria-live="polite"
+              >
+                <ng-icon
+                  name="heroArrowPath"
+                  class="animate-spin text-2xl text-gray-400"
+                  aria-hidden="true"
+                />
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  Loading document…
+                </p>
+              </div>
+            }
           } @else {
             @switch (kind()) {
               @case ('pptx') {
@@ -198,7 +254,7 @@ import {
                   so bytes() is null by design.
                 -->
                 <app-xlsx-viewer
-                  [uploadId]="ref.uploadId"
+                  [uploadId]="uploadRef()?.uploadId ?? null"
                   (renderFailed)="onRenderFailed($event)"
                   (rendered)="onRendered()"
                 />
@@ -244,6 +300,20 @@ export class FilePreviewPanelComponent {
   private readonly config = inject(ConfigService);
 
   protected readonly open = this.previewState.openFile;
+  /** The open upload, or null when the pane shows a knowledge-base document. */
+  protected readonly uploadRef = computed<OpenFilePreviewRef | null>(() => {
+    const ref = this.open();
+    return ref && !isKbDocumentRef(ref) ? ref : null;
+  });
+  /** The open knowledge-base document, or null when the pane shows an upload. */
+  protected readonly kbRef = computed<KbDocumentPreviewRef | null>(() => {
+    const ref = this.open();
+    return isKbDocumentRef(ref) ? ref : null;
+  });
+  /** A crawled page's address, checked again so nothing else becomes a link. */
+  protected readonly kbPageUrl = computed(
+    () => citationPage(this.kbRef()?.sourceUrl ?? undefined)?.url ?? null,
+  );
 
   protected readonly bytes = signal<ArrayBuffer | null>(null);
   /** Which viewer renders the current file. Derived from the filename so
@@ -254,9 +324,11 @@ export class FilePreviewPanelComponent {
     const ref = this.open();
     return (ref && previewKindFor(ref.filename)) || 'docx';
   });
-  protected readonly kindLabel = computed(
-    () => PREVIEW_KIND_LABELS[this.kind()],
-  );
+  protected readonly kindLabel = computed(() => {
+    const doc = this.kbRef();
+    if (doc) return this.kbPageUrl() ? 'Web page, as indexed' : 'Knowledge base document, as indexed';
+    return PREVIEW_KIND_LABELS[this.kind()];
+  });
   protected readonly error = signal<string | null>(null);
   protected readonly retryable = signal(false);
   /** Cleared only once the renderer reports a painted document, so the
@@ -265,7 +337,7 @@ export class FilePreviewPanelComponent {
   protected readonly ready = signal(false);
 
   protected readonly downloadHref = computed(() => {
-    const ref = this.open();
+    const ref = this.uploadRef();
     return ref ? downloadUrlFor(this.config.appApiUrl(), ref.uploadId) : '';
   });
 
@@ -291,6 +363,10 @@ export class FilePreviewPanelComponent {
       this.requestSeq++;
       this.reset();
       if (!ref) return;
+
+      // A knowledge-base document's viewer reads its own text from
+      // app-api, like the .xlsx viewer reads its rows.
+      if (isKbDocumentRef(ref)) return;
 
       // An .xlsx is read by app-api, so there is nothing to fetch here
       // — running the presigned-URL leg anyway would pull the whole
@@ -338,6 +414,12 @@ export class FilePreviewPanelComponent {
     const ref = this.open();
     if (!ref) return;
 
+    if (isKbDocumentRef(ref)) {
+      // Clearing the error re-creates the viewer, which reads again.
+      this.reset();
+      return;
+    }
+
     const kind = previewKindFor(ref.filename);
     if (kind && !previewFetchesBytes(kind)) {
       // Nothing to refetch here — clearing the error re-creates the
@@ -350,6 +432,12 @@ export class FilePreviewPanelComponent {
   }
 
   protected onRendered(): void {
+    this.ready.set(true);
+  }
+
+  protected onLoadFailed(failure: KbDocumentLoadFailure): void {
+    this.error.set(failure.message);
+    this.retryable.set(failure.retryable);
     this.ready.set(true);
   }
 

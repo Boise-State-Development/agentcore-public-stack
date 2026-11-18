@@ -3,13 +3,17 @@
 import asyncio
 import logging
 import mimetypes
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from apis.shared.assistants.service import resolve_assistant_permission
+from apis.shared.assistants.rag_service import web_source_url
+from apis.shared.assistants.service import get_assistant_with_access_check, resolve_assistant_permission
+from apis.shared.blocking_io import run_blocking
 from apis.app_api.documents.models import (
     CreateDocumentRequest,
+    DocumentContentResponse,
     DocumentProvenance,
     DocumentResponse,
     DocumentsListResponse,
@@ -32,10 +36,14 @@ from apis.app_api.documents.services.document_service import _generate_document_
 from apis.app_api.documents.services.document_service import get_document as get_document_service
 from apis.app_api.documents.services.import_service import run_import
 from apis.app_api.documents.services.storage_service import (
+    DOCUMENT_CONTENT_MAX_BYTES,
+    _get_documents_bucket,
     _get_s3_key,
     _sanitize_filename,
     generate_download_url,
     generate_upload_url,
+    content_s3_client,
+    read_text_object,
 )
 from apis.app_api.file_sources.folder_walk import WALK_AUTH, WALK_NOT_FOUND, FolderWalk, walk_folder
 from apis.app_api.file_sources.service import require_file_source_token, resolve_file_source
@@ -778,6 +786,104 @@ async def get_download_url(
     except Exception as e:
         logger.error(f"Error generating download URL: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to generate download URL: {str(e)}")
+
+
+#: Content types the content view renders, mapped to the type it reports. Crawled
+#: web pages are staged as ``text/markdown`` (``web_sources/crawler.py``).
+_VIEWABLE_CONTENT_TYPES = {
+    "text/markdown": "text/markdown",
+    "text/x-markdown": "text/markdown",
+    "text/plain": "text/plain",
+}
+
+#: Used only when the row's type says nothing (empty or octet-stream), which is
+#: what a browser sends for a ``.md`` it has no mapping for.
+_VIEWABLE_EXTENSIONS = {".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain"}
+
+_GENERIC_CONTENT_TYPES = ("", "application/octet-stream")
+
+CONTENT_NOT_VIEWABLE_DETAIL = (
+    "Only web pages and markdown or plain-text documents can be shown here."
+)
+
+
+def _viewable_text_type(content_type: Optional[str], filename: Optional[str]) -> Optional[str]:
+    """The text type the content view reports for a document, or ``None`` if it can't show it."""
+    base = (content_type or "").split(";", 1)[0].strip().lower()
+    if base in _VIEWABLE_CONTENT_TYPES:
+        return _VIEWABLE_CONTENT_TYPES[base]
+    if base in _GENERIC_CONTENT_TYPES:
+        extension = os.path.splitext(filename or "")[1].lower()
+        return _VIEWABLE_EXTENSIONS.get(extension)
+    return None
+
+
+@router.get("/{document_id}/content", response_model=DocumentContentResponse, status_code=status.HTTP_200_OK)
+async def get_document_content(
+    assistant_id: str, document_id: str, current_user: User = Depends(get_current_user_from_session)
+) -> DocumentContentResponse:
+    """The text a cited document was indexed from, for the citation card's viewer.
+
+    Unlike every other route here this is not owner|editor only: a citation is shown
+    to anyone who can chat with the agent, so anyone the chat path admits
+    (``get_assistant_with_access_check``: owner, a share, a PUBLIC agent, a project
+    member) may read what it cites. That is bounded by the #111 floor ``/download``
+    enforces (both ``show_citations`` and ``allow_document_download`` on), by
+    ``complete`` documents only, and by text-like types. The response is bounded text,
+    never a presigned URL, so a viewer cannot fetch the raw object or hand it on.
+
+    Read-only and app-api only: nothing here reaches a model's prompt.
+    """
+    try:
+        assistant, permission = await get_assistant_with_access_check(
+            assistant_id=assistant_id, user_id=current_user.user_id, user_email=current_user.email
+        )
+        if not assistant or not permission:
+            # Not found and not allowed read the same, so a probe learns nothing.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Assistant not found: {assistant_id}")
+
+        # The same #111 floor as /download: citations off implies the content is off too.
+        if not (getattr(assistant, "show_citations", True) and getattr(assistant, "allow_document_download", True)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Viewing source documents is turned off for this agent.",
+            )
+
+        document = await get_document_service(assistant_id, document_id, assistant.owner_id)
+        if not document or document.status == "deleting":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Document not found: {document_id}")
+        if document.status != "complete":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This document isn't ready to view yet."
+                if document.status != "failed"
+                else "This document couldn't be indexed, so there is nothing to show.",
+            )
+
+        text_type = _viewable_text_type(document.content_type, document.filename)
+        if not text_type:
+            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=CONTENT_NOT_VIEWABLE_DETAIL)
+
+        client = content_s3_client()
+        text, truncated = await run_blocking(
+            read_text_object, client.get_object, _get_documents_bucket(), document.s3_key, DOCUMENT_CONTENT_MAX_BYTES
+        )
+
+        return DocumentContentResponse(
+            filename=document.filename,
+            sourceUrl=web_source_url(document.model_dump(by_alias=True)),
+            contentType=text_type,
+            text=text,
+            truncated=truncated,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading document content: {scrub_log(str(e))}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read the document's content."
+        )
 
 
 @router.get(

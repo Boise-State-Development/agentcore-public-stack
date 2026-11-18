@@ -193,6 +193,20 @@ class DownloadUrlResponse(BaseModel):
     expires_in: int = Field(..., alias="expiresIn", description="URL expiration in seconds")
 
 
+class DocumentContentResponse(BaseModel):
+    """The text a knowledge-base document was indexed from, for the citation viewer."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    filename: str = Field(..., description="Document name as its owner sees it")
+    source_url: Optional[str] = Field(
+        None, alias="sourceUrl", description="Web page a crawled document was fetched from"
+    )
+    content_type: str = Field(..., alias="contentType", description="MIME type of the text (markdown or plain)")
+    text: str = Field(..., description="The indexed text, at most DOCUMENT_CONTENT_MAX_BYTES of it")
+    truncated: bool = Field(..., description="True when the document is longer than the text returned")
+
+
 class ReportUploadFailureRequest(BaseModel):
     """Request body for reporting a client-side upload failure"""
 
