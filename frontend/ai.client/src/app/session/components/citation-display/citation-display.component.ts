@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { Citation } from '../../services/models/message.model';
+import { BLOCK_SEPARATOR, markdownBlocks } from '../../../shared/utils/markdown-plain-text';
 
 /** A crawled web page a citation came from, ready to link to. */
 export interface CitationPage {
@@ -14,6 +15,12 @@ export interface CitationItem {
   /** The filename, or a web page's title without the `.md` the crawler adds. */
   title: string;
   page: CitationPage | null;
+  /**
+   * The excerpt as plain text: indexed chunks are markdown (a crawled page
+   * always is), so the syntax is removed, and a leading heading that only
+   * repeats the title is dropped.
+   */
+  excerpt: string;
 }
 
 /**
@@ -36,7 +43,18 @@ export function citationPage(sourceUrl: string | undefined): CitationPage | null
 function toItem(citation: Citation): CitationItem {
   const page = citationPage(citation.sourceUrl);
   const title = page ? citation.fileName.replace(/\.md$/i, '') || citation.fileName : citation.fileName;
-  return { citation, title, page };
+  return { citation, title, page, excerpt: plainExcerpt(citation.text, title) };
+}
+
+function plainExcerpt(text: string, title: string): string {
+  const blocks = markdownBlocks(text);
+  if (blocks.length > 1 && sameWords(blocks[0], title)) blocks.shift();
+  return blocks.join(BLOCK_SEPARATOR);
+}
+
+function sameWords(a: string, b: string): boolean {
+  const norm = (s: string) => s.replace(/\.(md|txt|pdf|docx?)$/i, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return norm(a) === norm(b);
 }
 import { DocumentService } from '../../../assistants/services/document.service';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
@@ -128,7 +146,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
 
                       <!-- Text excerpt -->
                       <p class="mt-1 line-clamp-2 text-xs text-gray-500 dark:text-gray-400">
-                        {{ citation.text }}
+                        {{ item.excerpt }}
                       </p>
 
                       <!-- A crawled web page links to the page itself. It is a public
