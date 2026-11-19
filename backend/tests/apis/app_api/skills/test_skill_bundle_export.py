@@ -229,9 +229,8 @@ class TestLayout:
             "pdf-workflows/scripts/fill.py",
         ]
         assert {i.date_time for i in infos} == {(1980, 1, 1, 0, 0, 0)}
-        modes = {i.filename.rsplit("/", 1)[-1]: (i.external_attr >> 16) & 0o777 for i in infos}
-        assert modes["fill.py"] == 0o755
-        assert {m for n, m in modes.items() if n != "fill.py"} == {0o644}
+        # Nothing arrives executable, scripts included.
+        assert {(i.external_attr >> 16) & 0o777 for i in infos} == {0o644}
 
     def test_skill_md_comes_from_the_row_not_from_storage(self):
         record, blobs = _full()

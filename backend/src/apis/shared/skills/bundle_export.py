@@ -18,7 +18,7 @@ back from the S3 projection, which can lag the row or predate the current
 projection rules. Files are exported at the flat names the manifest stores.
 
 The archive is deterministic: entries in sorted order, one fixed timestamp,
-fixed permissions and fixed compression, so an unchanged skill exports to the
+fixed permissions (``0644`` for every file) and fixed compression, so an unchanged skill exports to the
 same bytes every time. A file the manifest names that cannot be read fails the
 whole export (:class:`SkillExportFileError`); there is never a partial zip.
 
@@ -46,8 +46,10 @@ from apis.shared.skills.versions import apply_version
 _FIXED_DATE_TIME = (1980, 1, 1, 0, 0, 0)
 # Unix, so the permission bits below are what an unzip tool applies.
 _CREATE_SYSTEM_UNIX = 3
+# Every file, scripts included: a bundle may come from a third party, and
+# nothing under scripts/ (which also holds non-programs) should arrive already
+# executable. The specification does not ask for the bit.
 _FILE_MODE = 0o644
-_SCRIPT_MODE = 0o755
 _REGULAR_FILE = 0o100000
 _COMPRESS_LEVEL = 6
 
@@ -86,11 +88,10 @@ def export_response_headers(skill_id: str) -> Dict[str, str]:
     }
 
 
-def _entry(path: str, *, executable: bool = False) -> zipfile.ZipInfo:
+def _entry(path: str) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(path, date_time=_FIXED_DATE_TIME)
     info.create_system = _CREATE_SYSTEM_UNIX
-    mode = _SCRIPT_MODE if executable else _FILE_MODE
-    info.external_attr = (_REGULAR_FILE | mode) << 16
+    info.external_attr = (_REGULAR_FILE | _FILE_MODE) << 16
     info.compress_type = zipfile.ZIP_DEFLATED
     return info
 
@@ -107,7 +108,7 @@ def build_skill_zip(record: SkillDefinition, read_bytes: ReadBytes) -> bytes:
             first failing file, in archive order, is named.
     """
     slug = export_slug(record.skill_id)
-    entries: list[tuple[str, bytes, bool]] = [
+    entries: list[tuple[str, bytes]] = [
         (
             f"{slug}/SKILL.md",
             generate_skill_md(
@@ -117,7 +118,6 @@ def build_skill_zip(record: SkillDefinition, read_bytes: ReadBytes) -> bytes:
                 allowed_tools=list(record.allowed_tools),
                 skill_metadata=dict(record.skill_metadata),
             ).encode("utf-8"),
-            False,
         )
     ]
     for ref in sorted(
@@ -128,14 +128,14 @@ def build_skill_zip(record: SkillDefinition, read_bytes: ReadBytes) -> bytes:
             content = read_bytes(ref.s3_key)
         except Exception as exc:  # noqa: BLE001 - any failed read refuses the export
             raise SkillExportFileError(ref.filename) from exc
-        entries.append((f"{slug}/{subdir}/{ref.filename}", content, ref.kind == "script"))
+        entries.append((f"{slug}/{subdir}/{ref.filename}", content))
 
     entries.sort(key=lambda e: e[0])
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        for path, content, executable in entries:
+        for path, content in entries:
             archive.writestr(
-                _entry(path, executable=executable),
+                _entry(path),
                 content,
                 compress_type=zipfile.ZIP_DEFLATED,
                 compresslevel=_COMPRESS_LEVEL,
