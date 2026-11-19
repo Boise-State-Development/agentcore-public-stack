@@ -1,21 +1,32 @@
 """Where one user-authored skill is bound, and so who an edit to it reaches.
 
 skill-creator spec D9. A user's own skill runs for people other than its author
-in exactly one way: a binding on an Agent whose *owner* authored the skill
-(invoke-through, clause 3 of ``resolve_invocable_skill_ids``). A project harness
-is such an Agent (``kind == "project"``), so Shared Projects are covered by the
-same rule. Clauses 1 and 2 never widen a private skill: no role grants one, and
-ownership only admits the author.
+in two ways, and this lookup reads both:
 
-That makes the reverse lookup exact, not a heuristic: every binding that can run
-skill X for someone else lives on an Agent in X's owner's partition of the
-assistants table (``OwnerStatusIndex``, ``GSI_PK = OWNER#{owner}``), harnesses
-included, because a harness keeps the ``ownerId`` it was created with and the
-resolver judges that same field. A binding on someone else's Agent can only ever
-run the skill for its author.
+1. **Invoke-through** (clause 3 of ``resolve_invocable_skill_ids``): a binding
+   on an Agent whose *owner* authored the skill. A project harness is such an
+   Agent (``kind == "project"``) when the author created the project. Every such
+   binding lives in the owner's partition of the assistants table
+   (``OwnerStatusIndex``, ``GSI_PK = OWNER#{owner}``), drafts and harnesses
+   included, because a harness keeps the ``ownerId`` it was created with and the
+   resolver judges that same field.
+2. **Added by its author** (clause 4): a binding on *someone else's* project
+   harness that the author added as an editor (``config.addedBy``). Those are
+   found through the author's memberships (the projects table's ``MemberIndex``,
+   keyed by email, so one keyed read of the author's profile first), then one
+   ``BatchGetItem`` for those projects and one for their harnesses. Only a
+   binding whose ``addedBy`` is the author counts: on another person's Agent a
+   binding the author did not add runs the skill for its author alone.
 
-Runs inside a tool call's approval step, never on the turn path. Synchronous
-boto3; async callers wrap it in ``asyncio.to_thread``.
+Clauses 1 and 2 never widen a private skill: no role grants one, and ownership
+only admits the author.
+
+What the memberships cannot see: a project the author has since left still runs a
+skill they added, and nothing indexes a binding by adder. That case is not found.
+
+Runs on a skill write only (the approval step of a ``my_skill_*`` tool, the REST
+409), never on the turn path. Synchronous boto3; async callers wrap it in
+``asyncio.to_thread``.
 """
 
 from __future__ import annotations
@@ -25,7 +36,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
 
-from apis.shared.skills.pins import binding_pin, split_pinned_ref
+from apis.shared.skills.pins import binding_adder, binding_pin, split_pinned_ref
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +49,9 @@ MAX_PAGES = 10
 _MAX_NAMES = 5
 
 _SHARED_VISIBILITIES = frozenset({"SHARED", "PUBLIC"})
+
+# DynamoDB's BatchGetItem key limit.
+_BATCH_GET_LIMIT = 100
 
 # The ``detail.code`` of the 409 a REST skill write returns while the edit would
 # reach other people's unpinned bindings and ``confirmReach`` was not sent.
@@ -66,6 +80,10 @@ class SkillReach:
     # says so instead of claiming the skill is bound nowhere.
     complete: bool = True
     error: Optional[str] = None
+    # False when the projects the owner joined as an editor could not be read.
+    # The owner's own Agents and projects were still checked, so ``bindings`` is
+    # kept and the summary adds one sentence instead of discarding it.
+    editor_projects_checked: bool = True
 
     @property
     def unpinned(self) -> List[SkillBinding]:
@@ -148,6 +166,10 @@ class SkillReach:
             parts.append(
                 f"Only the first {MAX_PAGES} pages of your agents were checked."
             )
+        if not self.editor_projects_checked:
+            parts.append(
+                "Projects you added it to as an editor could not be checked."
+            )
         return " ".join(parts)
 
 
@@ -165,8 +187,21 @@ def _names(bindings: List[SkillBinding]) -> str:
     return f"{shown} and {extra} more" if extra > 0 else shown
 
 
-def bindings_from_items(skill_id: str, items: Iterable[Dict[str, Any]]) -> List[SkillBinding]:
+def _binding_order(binding: SkillBinding):
+    return (binding.is_project, binding.name.lower())
+
+
+def bindings_from_items(
+    skill_id: str,
+    items: Iterable[Dict[str, Any]],
+    *,
+    added_by: Optional[str] = None,
+) -> List[SkillBinding]:
     """The bindings of ``skill_id`` among projected assistant items.
+
+    With ``added_by``, only project harnesses count, and only a binding that user
+    added (clause 4): the items are someone else's harnesses, where a binding
+    anyone else added runs the skill for its author alone.
 
     Pure, so the classification is testable without DynamoDB. Ordered by name so
     the approval card reads the same on every call.
@@ -175,8 +210,12 @@ def bindings_from_items(skill_id: str, items: Iterable[Dict[str, Any]]) -> List[
     for item in items:
         if not item.get("assistantId"):
             continue
+        if added_by is not None and item.get("kind") != "project":
+            continue
         for binding in item.get("bindings") or []:
             if not isinstance(binding, dict) or binding.get("kind") != "skill":
+                continue
+            if added_by is not None and binding_adder(binding.get("config")) != added_by:
                 continue
             # A pin lives in config; a ref that already carries ``@n`` is
             # tolerated the same way the turn path splits run-time ids.
@@ -193,7 +232,7 @@ def bindings_from_items(skill_id: str, items: Iterable[Dict[str, Any]]) -> List[
                 )
             )
             break
-    return sorted(found, key=lambda b: (b.is_project, b.name.lower()))
+    return sorted(found, key=_binding_order)
 
 
 def lookup_skill_reach(skill_id: str, owner_id: str) -> SkillReach:
@@ -206,7 +245,26 @@ def lookup_skill_reach(skill_id: str, owner_id: str) -> SkillReach:
     except Exception as exc:  # noqa: BLE001 - a reach line must never block the approval
         logger.warning("Skill reach lookup failed for %s", skill_id, exc_info=True)
         return SkillReach(skill_id, complete=False, error=type(exc).__name__)
-    return SkillReach(skill_id, bindings_from_items(skill_id, items), complete=complete)
+    bindings = bindings_from_items(skill_id, items)
+
+    editor_checked = True
+    try:
+        owned = {item.get("assistantId") for item in items}
+        harnesses = [
+            item
+            for item in _query_editor_project_harnesses(table_name, owner_id)
+            if item.get("assistantId") not in owned
+        ]
+        bindings = sorted(
+            bindings + bindings_from_items(skill_id, harnesses, added_by=owner_id),
+            key=_binding_order,
+        )
+    except Exception:  # noqa: BLE001 - same rule: report, never block
+        logger.warning("Skill reach editor-project lookup failed for %s", skill_id, exc_info=True)
+        editor_checked = False
+    return SkillReach(
+        skill_id, bindings, complete=complete, editor_projects_checked=editor_checked
+    )
 
 
 def _query_owned_assistant_bindings(table_name: str, owner_id: str):
@@ -238,3 +296,68 @@ def _query_owned_assistant_bindings(table_name: str, owner_id: str):
             return items, True
         params["ExclusiveStartKey"] = last_key
     return items, False
+
+
+def _query_editor_project_harnesses(assistants_table: str, owner_id: str) -> List[Dict[str, Any]]:
+    """The harnesses of every project ``owner_id`` is a member of, projected.
+
+    Three keyed reads, no scan: the owner's email (memberships are keyed by
+    email), their ``MemberIndex`` rows, then one ``BatchGetItem`` for the projects
+    and one for the harnesses. Each harness item carries the project's name,
+    which is what a member sees. Empty when a table is not configured (a
+    deployment without projects) or the owner has no profile row.
+    """
+    users_table = os.environ.get("DYNAMODB_USERS_TABLE_NAME")
+    projects_table = os.environ.get("DYNAMODB_PROJECTS_TABLE_NAME")
+    if not users_table or not projects_table or not owner_id:
+        return []
+
+    import boto3
+
+    from apis.shared.assistants.serialization import from_ddb
+    from apis.shared.projects.repository import ProjectRepository
+
+    dynamodb = boto3.resource("dynamodb")
+    profile = dynamodb.Table(users_table).get_item(
+        Key={"PK": f"USER#{owner_id}", "SK": "PROFILE"},
+        ProjectionExpression="email",
+    ).get("Item") or {}
+    email = str(profile.get("email") or "")
+    if not email:
+        return []
+
+    repository = ProjectRepository(projects_table)
+    project_ids = [m.project_id for m in repository.list_memberships(email)]
+    if not project_ids:
+        return []
+    names = {
+        project.harness_agent_id: project.name
+        for project in repository.batch_get_projects(project_ids).values()
+        if project.harness_agent_id
+    }
+
+    items: List[Dict[str, Any]] = []
+    harness_ids = sorted(names)
+    for start in range(0, len(harness_ids), _BATCH_GET_LIMIT):
+        request: Dict[str, Any] = {
+            assistants_table: {
+                "Keys": [
+                    {"PK": f"AST#{agent_id}", "SK": "METADATA"}
+                    for agent_id in harness_ids[start:start + _BATCH_GET_LIMIT]
+                ],
+                "ProjectionExpression": "assistantId, #k, bindings",
+                "ExpressionAttributeNames": {"#k": "kind"},
+            }
+        }
+        for _ in range(MAX_PAGES):
+            response = dynamodb.batch_get_item(RequestItems=request)
+            for raw in response.get("Responses", {}).get(assistants_table, []):
+                item = from_ddb(raw)
+                item["name"] = names.get(item.get("assistantId"), item.get("assistantId"))
+                items.append(item)
+            request = response.get("UnprocessedKeys") or {}
+            if not request:
+                break
+        else:
+            raise RuntimeError("harness reads stayed unprocessed")
+    return items
