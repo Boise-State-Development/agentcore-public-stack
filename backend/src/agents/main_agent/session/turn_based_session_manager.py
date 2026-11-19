@@ -36,7 +36,7 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Set, Tuple, TYPE_CHECKING
+from typing import Optional, Collection, Dict, Any, List, Set, Tuple, TYPE_CHECKING
 
 from agents.main_agent.config.constants import Defaults, EnvVars
 from apis.shared.observability.build_stages import mark_stage
@@ -49,6 +49,7 @@ from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemory
 from .compaction_models import CompactionState, CompactionConfig, CompactionResult
 from .compaction_policy import CompactionPolicy, choose_checkpoint
 from .compaction_summary import bound_summary
+from .skill_activations import cut_skills_reminder, with_skills_reminder
 
 if TYPE_CHECKING:
     from concurrent.futures import ThreadPoolExecutor
@@ -1589,6 +1590,7 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
         context_window: Optional[int] = None,
         history_tokens: Optional[int] = None,
         model_id: Optional[str] = None,
+        available_skill_names: Optional[Collection[str]] = None,
     ) -> Optional[CompactionResult]:
         """
         Update compaction state after a turn completes.
@@ -1619,6 +1621,10 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             model_id: the turn's model. Prices the per-message estimates at
                 its tokenizer factor (``tokenizer_costs``), so a held PDF's
                 page images weigh against text as that model bills them.
+            available_skill_names: the names the turn's ``skills`` tool can
+                activate. A cut that retires a skill activation names it in
+                the summary only while it is still in this set; ``None``
+                (unknown) names every activation found.
         """
         # In-process "when did the last turn end" for the document-offload
         # cache-gap decision when compaction (whose state stamps updated_at
@@ -1841,9 +1847,17 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             region=self.region_name,
             extract_enabled=self.compaction_config.summary_extract_enabled,
         )
-        summary = bounded.text
+        # A skill activated in the retired messages leaves with them. One line
+        # names it so the model activates it again before relying on it. It is
+        # appended after bounding (compression must not paraphrase it away),
+        # derived only from the messages being cut, and persisted as part of
+        # the summary, so a restore prepends the same bytes every time.
+        summary = with_skills_reminder(
+            bounded.text,
+            cut_skills_reminder(messages[:relative_cut], available_skill_names),
+        )
 
-        deferred = bool(self.compaction_config.deferred_apply_enabled and policy.hysteresis_enabled)
+        deferred =bool(self.compaction_config.deferred_apply_enabled and policy.hysteresis_enabled)
         if deferred:
             # Park the cut. The bytes the model sees do not change until
             # ``apply_pending_compaction`` decides the re-write is free or

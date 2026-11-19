@@ -124,6 +124,20 @@ def _memory_extraction_of(main_agent_wrapper: Any) -> bool:
     return getattr(manager, "memory_extraction", True) is not False
 
 
+def _disclosed_skill_names(main_agent_wrapper: Any) -> Optional[Tuple[str, ...]]:
+    """The skill names the turn's agent can activate, or ``None`` when it cannot say.
+
+    Read from the agent's configuration (``ChatAgent.disclosed_skill_names``),
+    after the turn, for a compaction cut to name only skills that are still
+    available. ``None`` for an agent that does not expose it; anything other
+    than a tuple of strings is treated the same way.
+    """
+    value = getattr(main_agent_wrapper, "disclosed_skill_names", None)
+    if not isinstance(value, tuple) or not all(isinstance(n, str) for n in value):
+        return None
+    return value
+
+
 def _model_provider_value(model_config: Any) -> Optional[str]:
     """The ``ModelProvider`` value the turn's model runs on, or ``None`` if unknown.
 
@@ -1276,6 +1290,7 @@ class StreamCoordinator:
                                     model_id=getattr(
                                         getattr(main_agent_wrapper, "model_config", None), "model_id", None
                                     ),
+                                    available_skill_names=_disclosed_skill_names(main_agent_wrapper),
                                 )
                                 # The cut (and its forced / floor_unreachable
                                 # flags) belongs on the call that triggered it,

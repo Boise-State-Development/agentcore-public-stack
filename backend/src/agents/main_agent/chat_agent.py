@@ -8,7 +8,7 @@ This is the default agent type for standard chat interactions.
 import logging
 import os
 import threading
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple
 
 from agents.main_agent.base_agent import BaseAgent
 from agents.main_agent.core import AgentFactory
@@ -17,6 +17,7 @@ from agents.main_agent.skills.strands_mapping import build_skills_runtime
 from agents.main_agent.tools.tool_name_conflicts import skipped_tools_note
 
 from apis.shared.observability.build_stages import mark_stage
+from apis.shared.skills.bundle import slugify_skill_name
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,19 @@ class ChatAgent(BaseAgent):
         """
         self._accessible_skill_ids = accessible_skill_ids
         super().__init__(**kwargs)
+
+    @property
+    def disclosed_skill_names(self) -> Tuple[str, ...]:
+        """The names this agent's ``skills`` tool is built to activate, sorted.
+
+        Derived from the agent's configuration (the skill ids it was built
+        with, which are part of the agent-cache key), never from a session, so
+        it is the same for every session this agent serves. A compaction cut
+        reads it to name only skills the turn can still activate. Ids whose
+        catalog row is no longer active are included: the plugin drops those
+        at build, and listing one costs a "not found" at worst.
+        """
+        return tuple(sorted({slugify_skill_name(i) for i in self._accessible_skill_ids or [] if i}))
 
     def _create_agent(self) -> None:
         """Create Strands Agent with filtered tools, hooks, and skills plugin."""

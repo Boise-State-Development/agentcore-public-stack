@@ -26,7 +26,7 @@ abstraction. The third test drives the ``metadata_summary``/accumulated-usage
 surface explicitly and asserts the emit count stays at one.
 """
 
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -98,9 +98,11 @@ class _RecordingSessionManager:
         context_window: Optional[int] = None,
         history_tokens: Optional[int] = None,
         model_id: Optional[str] = None,
+        available_skill_names: Optional[Tuple[str, ...]] = None,
     ) -> Optional[CompactionResult]:
         # Same seam as TurnBasedSessionManager.update_after_turn — the policy
-        # inputs (context_window / history_tokens / model_id) are accepted and ignored.
+        # inputs (context_window / history_tokens / model_id) and the turn's
+        # skill names are accepted and ignored.
         self.calls.append(input_tokens)
         return self._result
 

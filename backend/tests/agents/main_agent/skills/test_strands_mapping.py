@@ -107,16 +107,56 @@ def test_build_skills_plugin_none_when_no_active_records(monkeypatch):
     assert sm.build_skills_plugin(["gone"]) is None
 
 
-def test_instructions_gain_reference_file_listing():
+def test_instructions_gain_bundled_files_listing():
     rec = _record(resources=[_ref("forms.md"), _ref("run.py", kind="script")])
     skill = sm.record_to_strands_skill(rec)
-    assert "## Available reference files" in skill.instructions
+    assert skill.instructions.startswith("# PDF\nExtract and fill PDFs.\n\n## Bundled files\n")
     assert "references/forms.md" in skill.instructions
     assert "scripts/run.py" in skill.instructions
     # No listing when there are no resources.
-    assert "Available reference files" not in sm.record_to_strands_skill(
-        _record()
-    ).instructions
+    assert "Bundled files" not in sm.record_to_strands_skill(_record()).instructions
+
+
+def test_bundled_files_grouped_by_kind_in_fixed_order():
+    rec = _record(
+        resources=[
+            _ref("logo.png", kind="asset", content_type="image/png"),
+            _ref("run.py", kind="script"),
+            _ref("forms.md"),
+            _ref("fill.py", kind="script"),
+            _ref("guide.md"),
+        ]
+    )
+    assert sm._reference_files_section(rec) == (
+        "\n\n## Bundled files\n"
+        "Load any of these with the `read_skill_file` tool "
+        "(skill_name `pdf-workflows`, path = one of the entries below):\n\n"
+        "### References\n- references/forms.md\n- references/guide.md\n\n"
+        "### Scripts\n- scripts/run.py\n- scripts/fill.py\n\n"
+        "### Assets\n- assets/logo.png"
+    )
+
+
+def test_bundled_files_only_references():
+    rec = _record(resources=[_ref("forms.md")])
+    assert sm._reference_files_section(rec) == (
+        "\n\n## Bundled files\n"
+        "Load any of these with the `read_skill_file` tool "
+        "(skill_name `pdf-workflows`, path = one of the entries below):\n\n"
+        "### References\n- references/forms.md"
+    )
+
+
+def test_bundled_files_unknown_kind_listed_under_references():
+    odd = SimpleNamespace(filename="notes.md", kind="other", content_type="text/markdown", size=1, s3_key="k")
+    section = sm._reference_files_section(_record(resources=[odd]))
+    assert "### References\n- references/notes.md" in section
+    assert "### Scripts" not in section and "### Assets" not in section
+
+
+def test_bundled_files_nothing_for_a_skill_with_no_files():
+    assert sm._reference_files_section(_record()) == ""
+    assert sm._reference_files_section(_record(resources=None)) == ""
 
 
 class TestBuildSkillsRuntime:
