@@ -1,3 +1,4 @@
+import { Dialog } from '@angular/cdk/dialog';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -32,8 +33,11 @@ import {
   RESOURCE_KINDS,
   SkillImportSource,
   SkillResourceKind,
+  UpdateMySkillRequest,
 } from './models/my-skill.model';
 import { MySkillService } from './services/my-skill.service';
+import { confirmSkillReach } from '../../shared/skills/confirm-skill-reach';
+import { reachConfirmationFrom } from '../../shared/skills/skill-provenance';
 
 /**
  * Create / edit one user-authored skill (Skills v2 PR-3).
@@ -68,6 +72,7 @@ export class SkillFormPage {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private skillService = inject(MySkillService);
+  private dialog = inject(Dialog);
   protected readonly features = inject(FEATURES);
 
   protected readonly resourceKinds = RESOURCE_KINDS;
@@ -353,7 +358,7 @@ export class SkillFormPage {
     try {
       const id = this.skillId();
       if (id) {
-        await this.skillService.updateSkill(id, value);
+        if (!(await this.updateConfirmingReach(id, value))) return;
       } else {
         const created = await this.skillService.createSkill(value);
         // Uploads need a skill id, so staged files go up now.
@@ -366,6 +371,24 @@ export class SkillFormPage {
       this.error.set(this.skillService.error$() ?? 'Failed to save the skill.');
     } finally {
       this.saving.set(false);
+    }
+  }
+
+  /**
+   * Save an edit, asking first when the server reports it would reach other
+   * people's agents or projects (a 409 with the reach summary). Resolves false
+   * when the user chose to keep editing, so nothing navigates away.
+   */
+  private async updateConfirmingReach(id: string, value: UpdateMySkillRequest): Promise<boolean> {
+    try {
+      await this.skillService.updateSkill(id, value);
+      return true;
+    } catch (err) {
+      const reach = reachConfirmationFrom(err);
+      if (reach === null) throw err;
+      if (!(await confirmSkillReach(this.dialog, reach))) return false;
+      await this.skillService.updateSkill(id, { ...value, confirmReach: true });
+      return true;
     }
   }
 }
