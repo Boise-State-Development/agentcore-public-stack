@@ -38,6 +38,7 @@ from apis.shared.skills.resource_types import (
     is_text_content_type,
     resolve_upload_content_type,
 )
+from apis.shared.skills.skill_md import validate_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,30 @@ def slugify_skill_id(display_name: str) -> str:
     while len(stem) < 3:
         stem = f"{stem}_x" if stem else _FALLBACK_STEM
     return stem
+
+
+def skill_id_from_frontmatter_name(name: object) -> Optional[str]:
+    """The ``skill_id`` stem an imported ``name`` maps to, or None if it cannot be one.
+
+    ``mcp-builder`` → ``mcp_builder``. The name must pass the agentskills.io
+    name rule, and the converted form must fit ``SKILL_ID_PATTERN`` (so ``ab``,
+    a name starting with a digit, and one over 50 characters fall back to the
+    display name). Allocating from the name is what lets an import export back
+    under the same ``name`` (it reverses a detail of skill-bundle-import.md §4,
+    by decision).
+    """
+    if not isinstance(name, str):
+        return None
+    if any(d.field == "name" for d in validate_frontmatter({"name": name}, strict=False)):
+        return None
+    candidate = name.replace("-", "_")
+    return candidate if _SKILL_ID_RE.match(candidate) else None
+
+
+def bundle_original_name(bundle: ParsedBundle) -> Optional[str]:
+    """The frontmatter ``name`` exactly as the bundle wrote it, if it wrote one."""
+    name = bundle.frontmatter.get("name")
+    return name if isinstance(name, str) and name else None
 
 
 class UserSkillService:
@@ -374,6 +399,7 @@ class UserSkillService:
             raise UserSkillConflictError(
                 "The source changed since you previewed it. Review the import again."
             )
+        source = source.model_copy(update={"original_name": bundle_original_name(bundle)})
         if skill_id is None:
             return await self._create_from_bundle(user, bundle, source, display_name)
 
@@ -420,7 +446,7 @@ class UserSkillService:
                 "Delete one before importing another."
             )
 
-        skill_id = await self._allocate_skill_id(name)
+        skill_id = await self.plan_import_skill_id(bundle, display_name)
         refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, [])
         skill = SkillDefinition(
             skill_id=skill_id,
@@ -447,6 +473,23 @@ class UserSkillService:
         self._invalidate(skill_id)
         self._log_import(user, skill_id, source, [], refs, created=True)
         return created
+
+    async def plan_import_skill_id(
+        self, bundle: ParsedBundle, display_name: Optional[str] = None
+    ) -> str:
+        """The ``skill_id`` creating a skill from ``bundle`` would get now.
+
+        From the frontmatter ``name`` when it can be an id
+        (:func:`skill_id_from_frontmatter_name`), else from the display name as
+        before; suffixed on collision either way. The preview calls this to say
+        what the skill's name will be; nothing is reserved, so a skill created in
+        between can move it on by a suffix.
+        """
+        stem = skill_id_from_frontmatter_name(bundle_original_name(bundle))
+        if stem is not None:
+            return await self._allocate_skill_id(stem, stem=stem)
+        name = (display_name or "").strip() or bundle.display_name
+        return await self._allocate_skill_id(name)
 
     @staticmethod
     def _log_import(
@@ -479,20 +522,23 @@ class UserSkillService:
     # Internals
     # =========================================================================
 
-    async def _allocate_skill_id(self, display_name: str) -> str:
-        """Pick a globally-unique ``skill_id`` from a display-name stem.
+    async def _allocate_skill_id(self, display_name: str, *, stem: Optional[str] = None) -> str:
+        """Pick a globally-unique ``skill_id`` from a display-name stem (or ``stem``).
 
         Collisions are resolved by suffixing rather than rejected, so a user
         naming their skill "docx" when the catalog already has one succeeds
         (as ``docx_2``) instead of hitting a 409 that would also disclose the
-        existence of a skill they cannot see.
+        existence of a skill they cannot see. A ``stem`` already shaped like an
+        id (an imported name) is used as is, and cut short only to make room
+        for a suffix.
         """
-        stem = slugify_skill_id(display_name)
+        stem = stem or slugify_skill_id(display_name)
         candidate = stem
         for suffix in range(2, 100):
             if not await self.repository.skill_exists(candidate):
                 return candidate
-            candidate = f"{stem}_{suffix}"
+            tail = f"_{suffix}"
+            candidate = f"{stem[: 50 - len(tail)].rstrip('_')}{tail}"
 
         # Astronomically unlikely; fall back to a random tail rather than loop.
         import uuid

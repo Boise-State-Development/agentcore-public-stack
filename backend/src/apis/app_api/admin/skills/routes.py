@@ -45,6 +45,8 @@ from apis.shared.skills.resource_types import (
     safe_download_content_type,
 )
 from apis.app_api.skills.service import SkillNameConflictError, get_skill_catalog_service
+from apis.app_api.skills.skill_md_parse import parse_uploaded_skill_md
+from apis.shared.skills.skill_md_import import SkillMdParseResponse
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,16 @@ async def admin_list_all_skills(
         skills=[AdminSkillResponse.from_skill_definition(s) for s in skills],
         total=len(skills),
     )
+
+
+# Registered before every ``/{skill_id}`` route so ``import`` is never read as an id.
+@router.post("/import/parse", response_model=SkillMdParseResponse)
+async def admin_parse_skill_md(
+    file: UploadFile = File(...),
+    admin: User = Depends(require_skills_admin),
+) -> SkillMdParseResponse:
+    """Read one SKILL.md into the create form's fields and diagnostics. Writes nothing."""
+    return await parse_uploaded_skill_md(file)
 
 
 @router.get("/{skill_id}", response_model=AdminSkillResponse)

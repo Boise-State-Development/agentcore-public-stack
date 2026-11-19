@@ -14,6 +14,7 @@ reused here so the preview reports exactly what a write would refuse).
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import io
 import json
@@ -39,6 +40,7 @@ from apis.shared.skills.models import (
 )
 from apis.shared.skills.skill_md import (
     MAX_FRONTMATTER_NODES,
+    Diagnostic,
     SkillMdError,
     unsafe_character_problem,
 )
@@ -127,6 +129,10 @@ class ParsedBundle:
     skipped: List[SkippedFile]
     commit_sha: Optional[str] = None
     bundle_hash: str = ""
+    # The SKILL.md frontmatter as parsed, and the parser's own notes, for the
+    # preview's diagnostics. Neither is written; the hash ignores both.
+    frontmatter: Dict[str, Any] = field(default_factory=dict)
+    parse_diagnostics: List[Diagnostic] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.bundle_hash:
@@ -313,7 +319,12 @@ def _read_bundle(
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise BundleImportError("SKILL.md is not UTF-8 text.") from None
-    frontmatter, instructions = parse_skill_md(text)
+    try:
+        parsed = _parse_skill_md(text)
+    except SkillMdError as exc:
+        raise BundleImportError(str(exc)) from None
+    frontmatter, instructions = parsed.frontmatter, parsed.body
+    parse_diagnostics = parsed.diagnostics
 
     skipped: List[SkippedFile] = []
     planned: List[Tuple[str, str, List[str], str, zipfile.ZipInfo]] = []
@@ -353,8 +364,10 @@ def _read_bundle(
             f"is {MAX_IMPORT_TOTAL_BYTES // (1024 * 1024)} MiB."
         )
 
-    name = str(frontmatter.get("name") or posixpath.basename(root) or "").strip()
-    description = str(frontmatter.get("description") or "").strip()
+    fields = skill_fields_from_frontmatter(
+        frontmatter, instructions, fallback_name=posixpath.basename(root)
+    )
+    description = fields.description
     if not description:
         raise BundleImportError(
             "SKILL.md has no description in its frontmatter. The description is "
@@ -365,24 +378,26 @@ def _read_bundle(
             f"SKILL.md's description is {len(description)} characters; the limit "
             f"is {SKILL_DESCRIPTION_MAX_LENGTH}."
         )
-    display_name = humanize_skill_name(name)
-    for label, value in (("SKILL.md's description", description), ("SKILL.md's name", display_name)):
+    for label, value in (
+        ("SKILL.md's description", description),
+        ("SKILL.md's name", fields.display_name),
+    ):
         unsafe = unsafe_character_problem(label, value)
         if unsafe:
             raise BundleImportError(unsafe[0].upper() + unsafe[1:] + ".")
 
     return ParsedBundle(
         root=root,
-        name=name,
-        display_name=display_name,
+        name=fields.name,
+        display_name=fields.display_name,
         description=description,
-        instructions=instructions,
-        allowed_tools=_allowed_tools(frontmatter.get("allowed-tools")),
-        skill_metadata=_dynamo_safe(
-            {k: v for k, v in frontmatter.items() if k not in _RESERVED_KEYS}
-        ),
+        instructions=fields.instructions,
+        allowed_tools=fields.allowed_tools,
+        skill_metadata=fields.skill_metadata,
         files=sorted(files, key=lambda f: f.filename),
         skipped=skipped,
+        frontmatter=frontmatter,
+        parse_diagnostics=list(parse_diagnostics),
     )
 
 
@@ -465,6 +480,44 @@ def parse_skill_md(text: str) -> Tuple[Dict[str, Any], str]:
     except SkillMdError as exc:
         raise BundleImportError(str(exc)) from None
     return parsed.frontmatter, parsed.body
+
+
+@dataclass(frozen=True)
+class SkillMdFields:
+    """The skill fields a ``SKILL.md`` maps to, before any rule is applied."""
+
+    name: str
+    display_name: str
+    description: str
+    instructions: str
+    allowed_tools: List[str]
+    skill_metadata: Dict[str, Any]
+
+
+def skill_fields_from_frontmatter(
+    frontmatter: Dict[str, Any], body: str, *, fallback_name: str = ""
+) -> SkillMdFields:
+    """The one mapping from a parsed ``SKILL.md`` to a skill's fields.
+
+    Bundle import and the single-file parse endpoints both use it, so a
+    ``SKILL.md`` fills the same fields whichever way it arrives. ``name`` falls
+    back to ``fallback_name`` (a bundle's directory). ``allowed-tools`` becomes a
+    list of names; every key the row does not own (``license``,
+    ``compatibility``, ``metadata`` and anything else) is kept in
+    ``skill_metadata``, nested values intact. It checks nothing: callers decide
+    what to refuse and what to report.
+    """
+    name = str(frontmatter.get("name") or fallback_name or "").strip()
+    return SkillMdFields(
+        name=name,
+        display_name=humanize_skill_name(name),
+        description=str(frontmatter.get("description") or "").strip(),
+        instructions=body,
+        allowed_tools=_allowed_tools(frontmatter.get("allowed-tools")),
+        skill_metadata=_dynamo_safe(
+            {k: v for k, v in frontmatter.items() if k not in _RESERVED_KEYS}
+        ),
+    )
 
 
 def humanize_skill_name(name: str) -> str:
@@ -562,3 +615,35 @@ def diff_fields(bundle: ParsedBundle, target: SkillDefinition) -> FieldChanges:
         allowed_tools=bundle.allowed_tools != list(target.allowed_tools),
         skill_metadata=bundle.skill_metadata != dict(target.skill_metadata),
     )
+
+
+# A diff longer than this many lines is cut, and says so.
+MAX_DIFF_LINES = 400
+
+
+@dataclass(frozen=True)
+class TextDiff:
+    """A unified diff of one text field, empty when nothing changed."""
+
+    diff: str
+    truncated: bool = False
+
+
+def text_diff(old: str, new: str, *, label: str) -> TextDiff:
+    """``old`` → ``new`` as a unified diff (3 lines of context, at most :data:`MAX_DIFF_LINES`).
+
+    What a refresh would change in a field a person reviews before applying it
+    (S4). ``label`` names both sides of the header (``a/instructions``).
+    """
+    lines = list(
+        difflib.unified_diff(
+            (old or "").splitlines(),
+            (new or "").splitlines(),
+            fromfile=f"a/{label}",
+            tofile=f"b/{label}",
+            n=3,
+            lineterm="",
+        )
+    )
+    truncated = len(lines) > MAX_DIFF_LINES
+    return TextDiff("\n".join(lines[:MAX_DIFF_LINES]), truncated)

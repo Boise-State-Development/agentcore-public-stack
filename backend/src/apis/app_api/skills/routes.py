@@ -82,6 +82,8 @@ from .field_sets import (
     markdown_for,
 )
 from .service import get_skill_catalog_service
+from .skill_md_parse import parse_uploaded_skill_md
+from apis.shared.skills.skill_md_import import SkillMdParseResponse
 from apis.shared.skills.user_service import (
     UserSkillConflictError,
     UserSkillError,
@@ -381,6 +383,17 @@ async def create_my_skill(
         raise _user_skill_error(e)
 
     return MySkillResponse.from_skill(skill)
+
+
+# Registered before every ``/mine/{skill_id}`` route so ``import`` is never read
+# as an id. Not behind SKILL_BUNDLE_IMPORT_ENABLED: single-file import predates it.
+@router.post("/mine/import/parse", response_model=SkillMdParseResponse)
+async def parse_my_skill_md(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user_from_session),
+) -> SkillMdParseResponse:
+    """Read one SKILL.md into the form's fields and diagnostics. Writes nothing."""
+    return await parse_uploaded_skill_md(file)
 
 
 @router.get("/mine/{skill_id}", response_model=MySkillResponse)

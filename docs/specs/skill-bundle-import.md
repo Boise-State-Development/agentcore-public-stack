@@ -79,10 +79,26 @@ same source again.
 The bundle root is the directory holding `SKILL.md` (after stripping a zip's
 single top-level folder, which GitHub archives and most zip tools add).
 
-- `SKILL.md`: YAML frontmatter (`yaml.safe_load`) → `description`,
-  `allowed-tools` (string or list), the rest into `skillMetadata` minus the keys
-  the projection owns; the body → `instructions`. `name` → the new skill's
+- `SKILL.md`: YAML frontmatter (the bounded parser in `apis/shared/skills/skill_md.py`)
+  → `description`, `allowed-tools` (string or list), the rest into
+  `skillMetadata` minus the keys the projection owns; the body → `instructions`.
+  `skill_fields_from_frontmatter` (`bundle_import.py`) is the one mapping, shared
+  with the single-file "Import SKILL.md" parse routes. `name` → the new skill's
   display name (`mcp-builder` → "Mcp builder"), editable before create.
+- **The skill id comes from the frontmatter `name`** (changed by decision from
+  "allocated from the display name"): `mcp-builder` → `mcp_builder`, so an import
+  exports back under the same `name`. That holds when `name` passes the
+  agentskills.io name rule and `name.replace("-", "_")` fits the id pattern;
+  otherwise (`ab`, a leading digit, over 50 characters once converted) the id is
+  allocated from the display name as before. Either way a taken id is suffixed
+  (`mcp_builder_2`). The frontmatter's `name` is kept as
+  `importSource.originalName`, and the preview returns `storedName` (the
+  activation name the skill will have) with a warning when it differs from `name`.
+- The preview also returns `diagnostics` (the frontmatter rules, the colon-quoting
+  repair, and the first 20 unsafe characters in the body and text files, with a
+  count of the rest) and, against a target skill, `descriptionDiff` /
+  `instructionsDiff` (unified, 3 lines of context, at most 400 lines with a
+  `truncated` flag) and `previousCommitSha`.
 - Kind from the first directory: `references/` or `reference/` → reference,
   `scripts/` → script, `assets/` → asset. Anything else (root files such as
   `FORMS.md`, or `examples/`) → reference if its type is text, else asset.

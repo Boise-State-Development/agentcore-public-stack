@@ -135,6 +135,9 @@ class SkillImportSource(BaseModel):
     ref: Optional[str] = None
     commit_sha: Optional[str] = Field(None, alias="commitSha")
     filename: Optional[str] = None
+    # The frontmatter ``name`` as the bundle wrote it. The stored activation
+    # name is derived from ``skill_id`` and can differ (a suffix on collision).
+    original_name: Optional[str] = Field(None, alias="originalName")
 
     model_config = {"populate_by_name": True}
 

@@ -24,17 +24,29 @@ from pydantic import BaseModel, Field
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.blocking_io import run_blocking
 from apis.shared.feature_flags import skill_bundle_import_enabled
+from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.bundle_import import (
     MAX_UPLOAD_ARCHIVE_BYTES,
     BundleImportError,
     BundleLoad,
     ParsedBundle,
+    TextDiff,
     diff_fields,
     diff_files,
     load_bundle,
+    text_diff,
 )
 from apis.shared.skills.models import SkillDefinition, SkillImportSource
-from apis.shared.skills.user_service import UserSkillError, get_user_skill_service
+from apis.shared.skills.resource_types import is_text_content_type
+from apis.shared.skills.skill_md import LEVEL_WARNING, Diagnostic, validate_frontmatter
+from apis.shared.skills.skill_md_import import DiagnosticModel, unsafe_character_diagnostics
+from apis.shared.skills.user_service import (
+    UserSkillError,
+    UserSkillService,
+    bundle_original_name,
+    get_user_skill_service,
+    skill_id_from_frontmatter_name,
+)
 
 from .github_source import GitHubSourceError, fetch_archive, parse_github_url
 from .routes import MySkillResponse, _user_skill_error
@@ -55,6 +67,9 @@ class ImportFileRow(BaseModel):
 
 class ImportedSkillSummary(BaseModel):
     name: str
+    # The activation name the skill will have: derived from its id, so it can
+    # differ from ``name`` (a suffix on collision, or a name that cannot be an id).
+    stored_name: str = Field(..., alias="storedName")
     display_name: str = Field(..., alias="displayName")
     description: str
     instructions_length: int = Field(..., alias="instructionsLength")
@@ -72,6 +87,17 @@ class ImportFieldChanges(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ImportTextDiff(BaseModel):
+    """A unified diff of one field; ``diff`` is empty when it did not change."""
+
+    diff: str
+    truncated: bool = False
+
+    @classmethod
+    def from_diff(cls, d: TextDiff) -> "ImportTextDiff":
+        return cls(diff=d.diff, truncated=d.truncated)
+
+
 class ImportPreviewResponse(BaseModel):
     source: SkillImportSource
     candidates: List[str] = Field(default_factory=list)
@@ -80,6 +106,11 @@ class ImportPreviewResponse(BaseModel):
     files: List[ImportFileRow] = Field(default_factory=list)
     bundle_hash: Optional[str] = Field(None, alias="bundleHash")
     target_updated_at: Optional[str] = Field(None, alias="targetUpdatedAt")
+    # Only against a target (a re-import or refresh).
+    description_diff: Optional[ImportTextDiff] = Field(None, alias="descriptionDiff")
+    instructions_diff: Optional[ImportTextDiff] = Field(None, alias="instructionsDiff")
+    previous_commit_sha: Optional[str] = Field(None, alias="previousCommitSha")
+    diagnostics: List[DiagnosticModel] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
 
@@ -150,6 +181,51 @@ def _rows(bundle: ParsedBundle, target: Optional[SkillDefinition]) -> List[Impor
     ]
 
 
+async def _stored_name(
+    service: UserSkillService, bundle: ParsedBundle, target: Optional[SkillDefinition]
+) -> str:
+    """The activation name the skill will have once imported."""
+    skill_id = target.skill_id if target else await service.plan_import_skill_id(bundle)
+    return slugify_skill_name(skill_id)
+
+
+def _stored_name_reason(name: str, target: Optional[SkillDefinition]) -> str:
+    if target is not None:
+        return "because a refresh keeps the skill's existing name."
+    if skill_id_from_frontmatter_name(name) is not None:
+        return "because a skill with that name already exists."
+    return "because its name cannot be used as a skill id here."
+
+
+def _preview_diagnostics(
+    bundle: ParsedBundle,
+    name: str,
+    stored_name: str,
+    target: Optional[SkillDefinition],
+) -> List[Diagnostic]:
+    """The parser's notes, the frontmatter rules, unsafe characters, and a renamed skill."""
+    diagnostics = list(bundle.parse_diagnostics)
+    diagnostics += validate_frontmatter(bundle.frontmatter, strict=False)
+    sources = [("SKILL.md", bundle.instructions)] + [
+        (f.path, f.content.decode("utf-8", errors="replace"))
+        for f in bundle.files
+        if is_text_content_type(f.content_type)
+    ]
+    diagnostics += unsafe_character_diagnostics(sources)
+    if stored_name != name:
+        diagnostics.append(
+            Diagnostic(
+                "stored_name_differs",
+                f"This skill will be stored as {stored_name}, not "
+                f"{name or 'an unnamed skill'}, {_stored_name_reason(name, target)} "
+                "The agent and an export will use the stored name.",
+                level=LEVEL_WARNING,
+                field="name",
+            )
+        )
+    return diagnostics
+
+
 def _require_bundle(load: BundleLoad) -> ParsedBundle:
     if load.bundle is None:
         raise HTTPException(
@@ -183,10 +259,13 @@ async def preview_skill_import(
 
     bundle = load.bundle
     changes = diff_fields(bundle, target) if target else None
+    name = bundle_original_name(bundle) or bundle.name
+    stored_name = await _stored_name(service, bundle, target)
     return ImportPreviewResponse(
         source=source,
         skill=ImportedSkillSummary(
             name=bundle.name,
+            stored_name=stored_name,
             display_name=target.display_name if target else bundle.display_name,
             description=bundle.description,
             instructions_length=len(bundle.instructions),
@@ -203,6 +282,23 @@ async def preview_skill_import(
         files=_rows(bundle, target),
         bundle_hash=bundle.bundle_hash,
         target_updated_at=target.updated_at.isoformat() if target else None,
+        description_diff=ImportTextDiff.from_diff(
+            text_diff(target.description, bundle.description, label="description")
+        )
+        if target
+        else None,
+        instructions_diff=ImportTextDiff.from_diff(
+            text_diff((target.instructions or "").strip(), bundle.instructions, label="SKILL.md")
+        )
+        if target
+        else None,
+        previous_commit_sha=target.import_source.commit_sha
+        if target and target.import_source
+        else None,
+        diagnostics=[
+            DiagnosticModel.from_diagnostic(d)
+            for d in _preview_diagnostics(bundle, name, stored_name, target)
+        ],
     )
 
 
