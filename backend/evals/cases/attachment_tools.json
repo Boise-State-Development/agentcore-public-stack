@@ -456,5 +456,59 @@
       "site_badge_16.png"
     ],
     "notes": "image_after_compaction without the memo: a conversation of images alone. document_read's gate used to count documents only, so after the cut no image could be reached (dev, 2026-11-14: \"I don't have access to the image contents\")."
+  },
+  {
+    "id": "attachment_tools.skill_reactivated_after_compaction",
+    "family": "attachment_tools",
+    "turns": [
+      {
+        "prompt": "I've attached the badge photos from today's Quarry Ridge site walk; leave them for later. First, using your skill for writing skills: draft the full SKILL.md for a skill that turns meeting notes into a list of action items. Show me the whole file."
+      },
+      {
+        "prompt": "Unrelated: suggest three names for a neighbourhood book club."
+      },
+      {
+        "prompt": "Now draft the full SKILL.md for a skill that formats references in APA style, following the same skill-writing guidance as before. Show me the whole file."
+      }
+    ],
+    "run": {
+      "enabled_tools": [],
+      "enabled_skills": [
+        "skill_creator"
+      ]
+    },
+    "expect": {
+      "skill": {
+        "loads": [
+          "skill_creator"
+        ]
+      },
+      "regex": {
+        "search": [
+          "^---\\s*$",
+          "(?m)^name:\\s*\\S",
+          "(?m)^description:\\s*\\S"
+        ]
+      }
+    },
+    "files": [
+      "site_badge_01.png",
+      "site_badge_02.png",
+      "site_badge_03.png",
+      "site_badge_04.png",
+      "site_badge_05.png",
+      "site_badge_06.png",
+      "site_badge_07.png",
+      "site_badge_08.png",
+      "site_badge_09.png",
+      "site_badge_10.png",
+      "site_badge_11.png",
+      "site_badge_12.png",
+      "site_badge_13.png",
+      "site_badge_14.png",
+      "site_badge_15.png",
+      "site_badge_16.png"
+    ],
+    "notes": "Turn 1 activates skill_creator; its sixteen ~4.8k-token images cross Haiku 5.5's 70k hard ceiling, so the turn after it cuts the activation into the summary, which then names skill_creator and says to activate it again. Turn 3 asks for work the skill governs: it passes only if the model calls skills again before answering. On a model whose ceiling this does not cross (Sonnet 5.5, Opus 5.5) the activation is still in context and the case measures whether the model reloads anyway."
   }
 ]
