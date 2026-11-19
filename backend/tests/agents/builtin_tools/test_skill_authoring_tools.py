@@ -820,8 +820,8 @@ class TestSkillMetadataValidation:
         "metadata,needle",
         [
             ({"compatibility": "c" * 501}, "compatibility"),
-            ({"license": 3}, "license"),
-            ({"metadata": {"version": 1}}, "metadata"),
+            ({"compatibility": 3}, "compatibility"),
+            ({"metadata": "flat"}, "metadata"),
         ],
     )
     def test_create_refuses_an_error(self, service, metadata, needle):
@@ -830,6 +830,15 @@ class TestSkillMetadataValidation:
         )
         assert result["status"] == "error"
         assert "skill_metadata" in _text(result) and needle in _text(result)
+
+    def test_a_non_string_metadata_value_is_only_a_warning(self, service):
+        _create(skill_metadata={"metadata": {"version": 2}, "license": "MIT"})
+        result = _tools()["my_skill_update"](
+            skill_id="grant_review",
+            description="New.",
+            skill_metadata={"metadata": {"version": 2}, "license": "MIT"},
+        )
+        assert result["status"] == "success", result
 
     def test_create_passes_a_warning(self, service):
         _create(skill_metadata={"version": "1.0", "license": "MIT"})

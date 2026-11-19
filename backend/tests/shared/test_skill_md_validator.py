@@ -155,6 +155,10 @@ def test_the_parser_notes_keep_working_as_diagnostics() -> None:
         {"metadata": {"author": "example-org"}},
         # Non-standard keys are warnings: they are kept under metadata.
         {"version": 2, "tags": ["a", "b"], "x-team": {"owner": "web"}},
+        # Repaired losslessly by the projection, so input only warns.
+        {"metadata": {"version": 2, "beta": True}, "license": "MIT"},
+        {"metadata": {"version": Decimal("2")}},
+        {"license": 3},
     ],
 )
 def test_skill_metadata_that_passes(skill_metadata: Any) -> None:
@@ -165,16 +169,46 @@ def test_skill_metadata_that_passes(skill_metadata: Any) -> None:
 @pytest.mark.parametrize(
     "skill_metadata,needle",
     [
-        ({"license": 3}, "license"),
         ({"compatibility": "c" * 501}, "compatibility"),
-        ({"metadata": {"version": 1}}, "metadata"),
+        ({"compatibility": 3}, "compatibility"),
         ({"metadata": "author"}, "metadata"),
+        ({"metadata": {f"k{i}": "v" for i in range(51)}}, "metadata"),
+        ({"metadata": {"big": "x" * (16 * 1024)}}, "metadata"),
+        ({"allowed-tools": " ".join(["t"] * 65)}, "allowed-tools"),
         ("not a map", "skillMetadata"),
     ],
 )
 def test_skill_metadata_that_is_refused(skill_metadata: Any, needle: str) -> None:
     problem = skill_metadata_problem(skill_metadata)
     assert problem is not None and needle in problem
+
+
+def test_non_string_metadata_values_and_license_warn_on_input_but_fail_output() -> None:
+    stored = {"metadata": {"version": 2}, "license": ["MIT"]}
+    warnings = validate_skill_metadata(stored)
+    assert {(d.level, d.code) for d in warnings} == {
+        ("warning", "metadata_value_not_string"),
+        ("warning", "license_invalid"),
+    }
+    # Output stays strict: the same values written as frontmatter are errors.
+    assert {d.code for d in _errors(_valid(**stored))} == {
+        "metadata_value_not_string",
+        "license_invalid",
+    }
+
+
+@pytest.mark.parametrize("version", [2, Decimal("2")])
+def test_a_stored_non_string_metadata_value_projects_strictly_valid(version: Any) -> None:
+    md = generate_skill_md(
+        skill_id="stored_skill",
+        description="d",
+        instructions="i",
+        skill_metadata={"metadata": {"version": version}, "license": "MIT"},
+    )
+    frontmatter = parse_skill_md(md).frontmatter
+    assert validate_frontmatter(frontmatter, strict=True) == []
+    assert frontmatter["license"] == "MIT"
+    assert frontmatter["metadata"] == {"version": "2"}
 
 
 def test_unknown_skill_metadata_keys_are_warnings() -> None:

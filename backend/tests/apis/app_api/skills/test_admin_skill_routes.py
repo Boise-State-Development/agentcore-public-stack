@@ -414,7 +414,7 @@ def test_create_and_update_round_trip_allowed_tools_and_skill_metadata(client, s
 
 @pytest.mark.parametrize(
     "metadata",
-    [{"compatibility": "c" * 501}, {"license": 3}, {"metadata": {"version": 1}}],
+    [{"compatibility": "c" * 501}, {"compatibility": 3}, {"metadata": "flat"}],
 )
 def test_create_and_update_refuse_skill_metadata_the_validator_rejects(client, metadata):
     assert client.post("/skills/", json=_create_body(skillMetadata=metadata)).status_code == 422
@@ -459,3 +459,36 @@ async def test_a_legacy_row_with_an_empty_description_still_saves_and_projects(c
         "compatibility": "Needs uv",
         "allowed-tools": "Read",
     }
+
+
+@pytest.mark.parametrize("version", [2, "decimal"])
+@pytest.mark.asyncio
+async def test_a_stored_non_string_metadata_value_does_not_block_an_admin_edit(
+    client, skill_service, version
+):
+    from decimal import Decimal
+
+    from apis.shared.skills.models import SkillDefinition
+    from apis.shared.skills.skill_md import validate_frontmatter
+
+    stored = Decimal("2") if version == "decimal" else version
+    await skill_service.repository.create_skill(
+        SkillDefinition(
+            skill_id="stored_skill",
+            display_name="Stored",
+            description="Old.",
+            instructions="# Stored",
+            skill_metadata={"metadata": {"version": stored}, "license": "MIT"},
+        )
+    )
+    resp = client.put(
+        "/skills/stored_skill",
+        json={
+            "description": "New.",
+            "skillMetadata": {"metadata": {"version": 2}, "license": "MIT"},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    frontmatter = _projection(skill_service, "stored_skill")
+    assert validate_frontmatter(frontmatter, strict=True) == []
+    assert frontmatter["metadata"] == {"version": "2"}
