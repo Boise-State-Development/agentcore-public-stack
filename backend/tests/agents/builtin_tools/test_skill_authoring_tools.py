@@ -768,3 +768,46 @@ class TestFromAttachmentCard:
         assert card["content"] == "hello"
         assert "source" not in card and "change" not in card
         assert attachments.files.listed == []
+
+
+class TestHardening:
+    """Unsafe characters in names and descriptions, and the instructions cap."""
+
+    def test_create_refuses_a_bidi_override_in_the_description(self, service):
+        result = _tools()["my_skill_create"](
+            display_name="Fine", description="Reviews ‮grants.", instructions=""
+        )
+        assert result["status"] == "error"
+        assert "U+202E" in _text(result)
+
+    def test_create_refuses_a_zero_width_character_in_the_name(self, service):
+        result = _tools()["my_skill_create"](
+            display_name="Gr​ant", description="Reviews grants.", instructions=""
+        )
+        assert result["status"] == "error"
+        assert "U+200B" in _text(result)
+
+    def test_update_refuses_a_bidi_override_in_the_description(self, service):
+        _create()
+        result = _tools()["my_skill_update"](
+            skill_id="grant_review", description="Reviews ‮grants."
+        )
+        assert result["status"] == "error"
+        assert "U+202E" in _text(result)
+
+    def test_create_and_update_cap_the_instructions(self, service):
+        from apis.shared.skills.models import SKILL_INSTRUCTIONS_MAX_BYTES
+
+        over = "x" * (SKILL_INSTRUCTIONS_MAX_BYTES + 1)
+        result = _tools()["my_skill_create"](
+            display_name="Big", description="Reviews grants.", instructions=over
+        )
+        assert result["status"] == "error"
+        assert "200 KiB" in _text(result)
+        _create()
+        result = _tools()["my_skill_update"](skill_id="grant_review", instructions=over)
+        assert result["status"] == "error"
+        assert "200 KiB" in _text(result)
+        at_cap = "x" * SKILL_INSTRUCTIONS_MAX_BYTES
+        result = _tools()["my_skill_update"](skill_id="grant_review", instructions=at_cap)
+        assert result["status"] == "success", result

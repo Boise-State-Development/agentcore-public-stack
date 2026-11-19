@@ -36,7 +36,7 @@ from apis.shared.skills.resource_types import (
     resource_download_headers,
     safe_download_content_type,
 )
-from apis.app_api.skills.service import get_skill_catalog_service
+from apis.app_api.skills.service import SkillNameConflictError, get_skill_catalog_service
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +126,8 @@ async def admin_create_skill(
             category=request.category,
         )
         created = await service.create_skill(skill, admin)
+    except SkillNameConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

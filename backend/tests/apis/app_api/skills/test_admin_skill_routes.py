@@ -287,3 +287,75 @@ async def test_admin_cannot_touch_user_authored_reference_files(
         skill.skill_id, "notes.md", author_user
     )
     assert content == b"owner content"
+
+
+# -- Hardening: activation-name collisions, field checks, body cap ------------
+
+from apis.shared.skills.models import SKILL_INSTRUCTIONS_MAX_BYTES  # noqa: E402
+
+_RLO = "‮"
+
+
+@pytest.mark.parametrize("existing,new", [("web_research", "web__research"), ("abc", "abc_")])
+def test_create_refuses_an_id_with_an_existing_activation_name(client, existing, new):
+    assert client.post("/skills/", json=_create_body(existing)).status_code == 200
+    resp = client.post("/skills/", json=_create_body(new))
+    assert resp.status_code == 409, resp.text
+    assert existing in resp.json()["detail"]
+    assert client.get(f"/skills/{new}").status_code == 404
+    assert client.get(f"/skills/{existing}").status_code == 200
+
+
+def test_create_of_the_same_id_is_still_the_existing_400(client):
+    client.post("/skills/", json=_create_body())
+    assert client.post("/skills/", json=_create_body()).status_code == 400
+
+
+def test_create_and_update_refuse_a_blank_description(client):
+    assert client.post("/skills/", json=_create_body(description="   ")).status_code == 422
+    client.post("/skills/", json=_create_body())
+    assert client.put("/skills/pdf_workflows", json={"description": " "}).status_code == 422
+
+
+@pytest.mark.parametrize("field", ["description", "displayName"])
+def test_create_and_update_refuse_unsafe_characters(client, field):
+    resp = client.post("/skills/", json=_create_body(**{field: f"Fill {_RLO}PDFs"}))
+    assert resp.status_code == 422
+    assert "U+202E" in resp.text
+    client.post("/skills/", json=_create_body())
+    resp = client.put("/skills/pdf_workflows", json={field: f"Fill {_RLO}PDFs"})
+    assert resp.status_code == 422
+    assert "U+202E" in resp.text
+
+
+def test_create_and_update_cap_the_instructions(client):
+    at_cap = "x" * SKILL_INSTRUCTIONS_MAX_BYTES
+    over = at_cap + "x"
+    assert client.post("/skills/", json=_create_body("big_skill", instructions=over)).status_code == 422
+    assert client.post("/skills/", json=_create_body("big_skill", instructions=at_cap)).status_code == 200
+    resp = client.put("/skills/big_skill", json={"instructions": over})
+    assert resp.status_code == 422
+    assert "200 KiB" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_row_with_an_empty_description_reads_lists_and_disables(client, skill_service):
+    from apis.shared.skills.models import SkillDefinition
+
+    await skill_service.repository.create_skill(
+        SkillDefinition(
+            skill_id="legacy_skill",
+            display_name="Legacy",
+            description="",
+            instructions="# Legacy",
+        )
+    )
+    got = client.get("/skills/legacy_skill")
+    assert got.status_code == 200
+    assert got.json()["description"] == ""
+    assert "legacy_skill" in {s["skillId"] for s in client.get("/skills/").json()["skills"]}
+
+    disabled = client.put("/skills/legacy_skill", json={"status": "disabled"})
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["status"] == "disabled"
+    assert client.delete("/skills/legacy_skill").status_code == 200
