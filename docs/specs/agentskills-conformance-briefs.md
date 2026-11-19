@@ -1,6 +1,6 @@
 # Agent Skills conformance: decisions and per-PR briefs
 
-Companion to `agentskills-conformance.md` (the audit and design). This file is what an
+Companion to `agentskills-conformance.md` (the audit and design). All eight PRs are merged; see that file's section 10. This file is what an
 implementing session is handed: the decisions it must not re-open, the rules every PR
 follows, and one brief per PR with acceptance criteria.
 
@@ -77,8 +77,11 @@ points most likely to be missed:
 
 **QA.** Backend-only PRs are proven by tests. A PR with a UI change is checked in the
 in-app browser against a local stack from the worktree (`SKIP_AUTH`), clicking by
-element reference. Dev validation happens after merge, in a new session started after
-the deploy finishes, and is recorded on the PR.
+element reference. **Dev validation happens in the PR's own conversation** (decided
+2026-11-18, from PR 3 on): after the developer merges and the deploy finishes, they
+return to the implementing session, which runs the brief's dev checks in the in-app
+browser and records the result as a comment on the PR. The orchestrating session reviews
+the diff before merge; it does not run the dev checks.
 
 ## 3. Order
 

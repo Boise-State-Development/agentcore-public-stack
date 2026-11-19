@@ -1,6 +1,6 @@
 # Agent Skills (agentskills.io) conformance and hardening
 
-**Status:** proposed. Audit taken 2026-11-18 against `develop` at `5336f41cc`.
+**Status:** implemented on `develop` (2026-11-19); not yet released to production. Audit taken 2026-11-18 against `develop` at `5336f41cc`. Section 10 records what shipped.
 **Extends:** `skills-as-agent-primitive.md` (D1, D2, D4, D5), `skill-bundle-import.md`,
 `skill-creator.md`. Where this document disagrees with them, it says so and says why.
 
@@ -355,3 +355,29 @@ pinning imported skills by default when they are bound (D-7).
 > administrator has enabled sandboxed execution, in Python, without network access or
 > dependency installation. Skills are disclosed to the model as a catalog in the system
 > prompt and loaded on demand through a tool.
+
+## 10. Outcome (2026-11-19)
+
+All eight PRs merged into `develop` and passed their dev checks, each recorded as a comment on its pull request.
+
+| PR | Pull request | Closed |
+|---|---|---|
+| 1. Parser hardening | 2147 | S1, S6 (new admin ids), S7, S8 (name and description), S9, F4, F11 |
+| 2. Isolate skill script execution | 2149 | S2: skill scripts run in a `SANDBOX` Code Interpreter with a 120 s limit. Dev check: public internet and both S3 endpoints unreachable, the Contract Redline script unaffected |
+| 3. Validator and conformant projection | 2151, follow-up 2153 | F5–F9, F13. The follow-up made non-string metadata a warning on input, so stored skills stay editable |
+| 4. Export | 2155 | F3 for the artifact, F12 |
+| 5. One ingest path | 2157 | F1, F2, C5, C6, S4 |
+| 6. Provenance and reach | 2162 | S3 (REST writes), S5, S11 |
+| 7. Nested paths | 2163 | F10. Uniqueness is by path across kinds, not `(kind, path)`, which keeps re-upload under a new kind a move |
+| 8. Context management | 2159 | C1, C3 |
+
+Dev data: the projection backfill (`backfill_skill_bundles.py --projections-only`) ran on dev after PR 3: 18 skills, 4 projections rewritten, no shared activation names, none failing strict validation.
+
+Still open:
+
+- **Production.** None of this is released. S2 is live in production until it is: `WORD_SKILL_SCRIPTS_ENABLED` is on there and scripts still run in the public interpreter. After the release, run the projection backfill against the production tables (dry-run first).
+- **Reach gap.** `lookup_skill_reach` misses a skill a project editor bound into someone else's project (the `addedBy` clause), so neither the approval card nor the 409 mentions it. A separate fix is in progress.
+- **Legacy admin ids** that slug to the same name as a newer user-tier id are not prevented at user allocation; the backfill found none on dev.
+- **Emoji joiners in names.** PR 1 refuses U+200D in names, which also blocks compound emoji and some scripts. Undecided.
+- **Eval.** The compaction case passes on Haiku 5.5 with and without the summary line, because its prompt names the skill's subject; a case that isolates the line is a follow-up.
+- **Out of the plan by decision:** hash-bound consent and pinned-only execution for scripts (section 6.6 items 3–4), a general script runner, narrowing `allowed-tools`, local skill discovery in the terminal client.
