@@ -169,17 +169,41 @@ class TestOldRowsAreUnchanged:
         assert "path" not in version.model_copy(update={"version": 1}).to_dynamo_item()["resources"][0]
         assert content_hash(skill) == _pre_nesting_hash(skill)
 
-    def test_the_available_reference_files_listing_is_byte_identical(self):
+    def test_the_bundled_files_listing_is_exactly_the_flat_listing(self):
+        """A skill with only top-level files lists exactly as the grouped "Bundled
+        files" section writes it for a flat manifest (the wording is that
+        section's; this pins that nested paths add nothing to it)."""
         skill = SkillDefinition.from_dynamo_item(
             _old_row([_old_item("forms.md"), _old_item("engine.py", kind="script")])
         )
         assert sm._reference_files_section(skill) == (
-            "\n\n## Available reference files\n"
+            "\n\n## Bundled files\n"
             "Load any of these with the `read_skill_file` tool "
-            "(skill_name `pdf-workflows`, path = one of the entries below):\n"
-            "- references/forms.md\n"
+            "(skill_name `pdf-workflows`, path = one of the entries below):\n\n"
+            "### References\n"
+            "- references/forms.md\n\n"
+            "### Scripts\n"
             "- scripts/engine.py"
         )
+
+    def test_a_nested_file_is_listed_at_its_manifest_path_in_its_group(self):
+        refs = [
+            _old_item("forms.md"),
+            {**_old_item("nda.md"), "path": "legal/nda.md",
+             "s3Key": "skills/pdf_workflows/references/legal/nda.md"},
+            {**_old_item("check.py", kind="script"), "path": "tools/check.py",
+             "s3Key": "skills/pdf_workflows/scripts/tools/check.py"},
+        ]
+        skill = SkillDefinition.from_dynamo_item(_old_row(refs))
+        listing = sm._reference_files_section(skill)
+        assert listing.endswith(
+            "### References\n"
+            "- references/forms.md\n"
+            "- references/legal/nda.md\n\n"
+            "### Scripts\n"
+            "- scripts/tools/check.py"
+        )
+        assert "- references/nda.md" not in listing
 
     def test_a_nested_entry_stores_and_hashes_its_path(self):
         flat = SkillResourceRef(filename="nda.md", content_hash="h", size=1, content_type="text/markdown", s3_key="k")
@@ -500,3 +524,39 @@ class TestScripts:
         for guess in ("y.py", "tools/y.py", "scripts/y.py"):
             with pytest.raises(SkillScriptError):
                 resolve_skill_script([rec], "contract-redline", guess)
+
+
+# =============================================================================
+# Audit records identify files by path
+# =============================================================================
+
+
+class TestAuditRecords:
+    def _skill(self, refs):
+        return SkillDefinition.from_dynamo_item(_old_row(refs))
+
+    def test_two_nested_files_with_one_filename_are_both_recorded(self):
+        from apis.shared.skills.audit import skill_state
+
+        legal = {**_old_item("nda.md"), "path": "legal/nda.md", "contentHash": "a" * 64}
+        hr = {**_old_item("nda.md"), "path": "hr/nda.md", "contentHash": "b" * 64}
+        assert skill_state(self._skill([legal, hr]))["files"] == {
+            "legal/nda.md": "a" * 64,
+            "hr/nda.md": "b" * 64,
+        }
+
+    def test_a_top_level_file_is_recorded_under_its_filename_as_before(self):
+        from apis.shared.skills.audit import skill_state
+
+        item = _old_item("forms.md")
+        assert skill_state(self._skill([item]))["files"] == {"forms.md": item["contentHash"]}
+
+    def test_moving_a_file_to_another_folder_is_not_a_no_op(self):
+        from apis.shared.skills.audit import changed_keys, is_no_op, skill_state
+
+        top = _old_item("nda.md")
+        moved = {**top, "path": "legal/nda.md", "s3Key": "skills/pdf_workflows/references/legal/nda.md"}
+        before, after = self._skill([top]), self._skill([moved])
+        assert not is_no_op(before, after)
+        assert "files" in changed_keys(skill_state(before), skill_state(after))
+        assert is_no_op(before, self._skill([dict(top)]))

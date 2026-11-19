@@ -21,7 +21,7 @@ from strands import AgentSkills, Skill, tool
 
 # Single source of truth for the slug rule (shared with the app-api SKILL.md
 # write-through projection — the import-boundary forbids app_api importing here).
-from apis.shared.skills.bundle import slugify_skill_name
+from apis.shared.skills.bundle import KIND_DIRS, slugify_skill_name
 from apis.shared.skills.resource_paths import PathLookup, lookup_resource, manifest_path
 from apis.shared.skills.resource_store import (
     SkillResourceStoreError,
