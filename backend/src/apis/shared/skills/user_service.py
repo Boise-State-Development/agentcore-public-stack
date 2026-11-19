@@ -18,9 +18,11 @@ import logging
 import re
 from typing import Dict, List, Optional, Tuple
 
+from apis.shared.audit.models import AuditAction
 from apis.shared.auth.models import User
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.bundle_files import SkillBundleFiles, get_skill_bundle_files
+from apis.shared.skills.audit import is_no_op, record_skill_event
 from apis.shared.skills.bundle_import import ParsedBundle
 from apis.shared.skills.models import (
     SKILL_ID_PATTERN,
@@ -213,6 +215,7 @@ class UserSkillService:
         created = await self.repository.create_skill(skill)
         self.bundle_files.write_skill_md(created)
         self._invalidate(skill_id)
+        await record_skill_event(AuditAction.SKILL_CREATED, user, skill_id, after=created)
 
         logger.info(
             f"User {scrub_log(user.email)} created skill: {scrub_log(skill_id)}",
@@ -233,7 +236,7 @@ class UserSkillService:
         route DTO — ``owner_id``, ``visibility`` and audit fields are never
         routed through here.
         """
-        await self.require_owned(skill_id, user)
+        before = await self.require_owned(skill_id, user)
 
         updated = await self.repository.update_skill(
             skill_id, updates, admin_user_id=user.user_id
@@ -243,6 +246,10 @@ class UserSkillService:
 
         self.bundle_files.write_skill_md(updated)
         self._invalidate(skill_id)
+        if not is_no_op(before, updated):
+            await record_skill_event(
+                AuditAction.SKILL_UPDATED, user, skill_id, before=before, after=updated
+            )
 
         logger.info(
             f"User {scrub_log(user.email)} updated skill: {scrub_log(skill_id)}",
@@ -273,6 +280,7 @@ class UserSkillService:
         await self.repository.delete_skill(skill_id)
         await self.bundle_files.delete_versions(skill_id)
         self._invalidate(skill_id)
+        await record_skill_event(AuditAction.SKILL_DELETED, user, skill_id, before=skill)
 
         logger.info(
             f"User {scrub_log(user.email)} deleted skill: {scrub_log(skill_id)}",
@@ -302,11 +310,12 @@ class UserSkillService:
         user: User,
         kind: str = "reference",
     ) -> List[SkillResourceRef]:
-        await self.require_owned(skill_id, user)
+        before = await self.require_owned(skill_id, user)
         refs = await self.bundle_files.add_resource(
             skill_id, filename, content, content_type, user, kind=kind
         )
         self._invalidate(skill_id)
+        await self._record_files_changed(user, before, refs)
         return refs
 
     async def read_resource(
@@ -318,10 +327,22 @@ class UserSkillService:
     async def delete_resource(
         self, skill_id: str, filename: str, user: User
     ) -> List[SkillResourceRef]:
-        await self.require_owned(skill_id, user)
+        before = await self.require_owned(skill_id, user)
         refs = await self.bundle_files.delete_resource(skill_id, filename, user)
         self._invalidate(skill_id)
+        await self._record_files_changed(user, before, refs)
         return refs
+
+    @staticmethod
+    async def _record_files_changed(
+        user: User, before: SkillDefinition, refs: List[SkillResourceRef]
+    ) -> None:
+        """One ``skill.updated`` for a file write, none when the bytes were the same."""
+        after = before.model_copy(update={"resources": list(refs)})
+        if not is_no_op(before, after):
+            await record_skill_event(
+                AuditAction.SKILL_UPDATED, user, before.skill_id, before=before, after=after
+            )
 
     async def write_text_file(
         self,
@@ -428,6 +449,10 @@ class UserSkillService:
         self.bundle_files.write_skill_md(updated)
         self._invalidate(skill_id)
         await self.bundle_files.gc_orphaned(old_refs, new_refs)
+        if not is_no_op(skill, updated):
+            await record_skill_event(
+                AuditAction.SKILL_REFRESHED, user, skill_id, before=skill, after=updated
+            )
         self._log_import(user, skill_id, source, old_refs, new_refs, created=False)
         return updated
 
@@ -471,6 +496,7 @@ class UserSkillService:
             raise
         self.bundle_files.write_skill_md(created)
         self._invalidate(skill_id)
+        await record_skill_event(AuditAction.SKILL_IMPORTED, user, skill_id, after=created)
         self._log_import(user, skill_id, source, [], refs, created=True)
         return created
 

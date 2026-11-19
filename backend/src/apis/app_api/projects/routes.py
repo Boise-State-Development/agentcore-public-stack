@@ -383,6 +383,7 @@ async def _skills(view: HarnessView, user: User) -> SkillBindingsResponse:
                 available=label is not None,
                 display_name=label[0] if label else None,
                 description=label[1] if label else None,
+                import_source=label[2] if label else None,
             )
         )
     return SkillBindingsResponse(bindings=bindings, version=view.version, can_edit=view.can_edit)

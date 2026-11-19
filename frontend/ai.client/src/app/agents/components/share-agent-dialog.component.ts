@@ -32,6 +32,7 @@ import { AgentService } from '../services/agent.service';
 import { AgentListingService } from '../services/agent-listing.service';
 import { AgentListingBlock } from '../models/agent.model';
 import { ListingState, SkillExposure } from '../models/store.model';
+import { provenanceLine } from '../../shared/skills/skill-provenance';
 import { AgentIconComponent } from './agent-icon.component';
 import { ListingStatusComponent } from './listing-status.component';
 import {
@@ -337,8 +338,13 @@ export type ShareAgentDialogResult = { action: 'shared' } | undefined;
                     their instructions.
                   </p>
                   <ul class="mt-1.5 space-y-0.5" aria-label="Your skills that come along with this agent">
-                    @for (skill of exposedSkills(); track skill.ref) {
-                      <li class="text-sm/6 text-state-warning-900 dark:text-state-warning-200">· {{ skill.label }}</li>
+                    @for (skill of exposedSkillRows(); track skill.ref) {
+                      <li class="text-sm/6 text-state-warning-900 dark:text-state-warning-200">
+                        · {{ skill.label }}
+                        @if (skill.provenance) {
+                          <span class="text-xs/5" data-testid="exposed-skill-provenance">({{ skill.provenance }})</span>
+                        }
+                      </li>
                     }
                   </ul>
                 </div>
@@ -557,6 +563,10 @@ export class ShareAgentDialogComponent {
    * failure — the generic line above still says skills come along.
    */
   protected readonly exposedSkills = signal<SkillExposure[]>([]);
+  /** Each exposed skill with its provenance line ("Imported from owner/repo @ sha7"), as text. */
+  protected readonly exposedSkillRows = computed(() =>
+    this.exposedSkills().map((skill) => ({ ...skill, provenance: provenanceLine(skill.importSource) })),
+  );
 
   /**
    * Shown once the agent reaches anyone: PUBLIC, or at least one person on the working

@@ -84,6 +84,7 @@ from apis.shared.assistants.service import (
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import skills_enabled
 from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.skills.models import skill_provenance
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.timestamps import utc_now_iso
 
@@ -260,7 +261,11 @@ async def exposed_skills(assistant: Assistant) -> List[SkillExposure]:
         return [SkillExposure(ref=r, label=r) for r in refs]
 
     return [
-        SkillExposure(ref=s.skill_id, label=s.display_name)
+        SkillExposure(
+            ref=s.skill_id,
+            label=s.display_name,
+            import_source=skill_provenance(s),
+        )
         for s in skills
         if s.owner_id == assistant.owner_id
     ]

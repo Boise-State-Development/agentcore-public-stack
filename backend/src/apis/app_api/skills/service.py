@@ -12,6 +12,7 @@ there is no tool-catalog validation here.
 import logging
 from typing import Dict, List, Optional, Tuple
 
+from apis.shared.audit.models import AuditAction
 from apis.shared.auth.models import User
 from apis.shared.rbac.admin_service import (
     AppRoleAdminService,
@@ -29,6 +30,7 @@ from apis.shared.skills.repository import (
     get_skill_catalog_repository,
 )
 from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.skills.audit import is_no_op, record_skill_event
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.bundle_files import SkillBundleFiles
 from apis.shared.skills.resource_store import (
@@ -187,6 +189,7 @@ class SkillCatalogService:
 
         created = await self.repository.create_skill(skill)
         self.bundle_files.write_skill_md(created)
+        await record_skill_event(AuditAction.SKILL_CREATED, admin, skill.skill_id, after=created)
 
         logger.info(
             f"Admin {scrub_log(admin.email)} created skill: {scrub_log(skill.skill_id)}",
@@ -232,13 +235,18 @@ class SkillCatalogService:
         Returns:
             Updated SkillDefinition or None if not found
         """
-        if await self.get_catalog_skill(skill_id) is None:
+        before = await self.get_catalog_skill(skill_id)
+        if before is None:
             return None
 
         updated = await self.repository.update_skill(
             skill_id, updates, admin_user_id=admin.user_id
         )
 
+        if updated and not is_no_op(before, updated):
+            await record_skill_event(
+                AuditAction.SKILL_UPDATED, admin, skill_id, before=before, after=updated
+            )
         if updated:
             # Keep the SKILL.md projection in sync with the row (best-effort).
             # A pure resource-manifest update also lands here, but regenerating
@@ -279,6 +287,7 @@ class SkillCatalogService:
         if existing is None:
             return False
 
+        result = None
         if soft:
             result = await self.repository.soft_delete_skill(skill_id, admin.user_id)
             deleted = result is not None
@@ -288,6 +297,14 @@ class SkillCatalogService:
                 await self.delete_versions(skill_id)
 
         if deleted:
+            await record_skill_event(
+                AuditAction.SKILL_DELETED,
+                admin,
+                skill_id,
+                before=existing,
+                after=result if soft else None,
+                extra_after={"softDelete": soft},
+            )
             logger.info(
                 f"Admin {scrub_log(admin.email)} deleted skill: {scrub_log(skill_id)}",
                 extra={
@@ -336,9 +353,12 @@ class SkillCatalogService:
         kind: str = "reference",
     ) -> List[SkillResourceRef]:
         """Upload (or replace) one supporting file; see ``SkillBundleFiles.add_resource``."""
-        return await self.bundle_files.add_resource(
+        before = await self.get_catalog_skill(skill_id)
+        refs = await self.bundle_files.add_resource(
             skill_id, filename, content, content_type, admin, kind=kind
         )
+        await self._record_files_changed(admin, before, refs)
+        return refs
 
     async def read_resource(
         self, skill_id: str, filename: str
@@ -350,7 +370,23 @@ class SkillCatalogService:
         self, skill_id: str, filename: str, admin: User
     ) -> List[SkillResourceRef]:
         """Remove one reference file from the manifest (and GC its object)."""
-        return await self.bundle_files.delete_resource(skill_id, filename, admin)
+        before = await self.get_catalog_skill(skill_id)
+        refs = await self.bundle_files.delete_resource(skill_id, filename, admin)
+        await self._record_files_changed(admin, before, refs)
+        return refs
+
+    @staticmethod
+    async def _record_files_changed(
+        admin: User, before: Optional[SkillDefinition], refs: List[SkillResourceRef]
+    ) -> None:
+        """One ``skill.updated`` for a file write, none when the bytes were the same."""
+        if before is None:
+            return
+        after = before.model_copy(update={"resources": list(refs)})
+        if not is_no_op(before, after):
+            await record_skill_event(
+                AuditAction.SKILL_UPDATED, admin, before.skill_id, before=before, after=after
+            )
 
     def write_skill_md(self, skill: SkillDefinition) -> None:
         """Write the skill's SKILL.md projection to S3 (best-effort)."""

@@ -941,6 +941,12 @@ class SkillExposure(BaseModel):
 
     ref: str = Field(..., description="Skill identifier")
     label: str = Field(..., description="Skill display name, for the submit dialog's enumeration")
+    import_source: Optional[Dict[str, str]] = Field(
+        None,
+        alias="importSource",
+        description="Where an imported skill came from (SkillImportSource.provenance); "
+        "None when hand-written",
+    )
 
 
 class ShareSkillExposureResponse(BaseModel):

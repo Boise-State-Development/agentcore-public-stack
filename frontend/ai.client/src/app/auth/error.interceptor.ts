@@ -8,6 +8,7 @@ import { catchError, throwError } from 'rxjs';
 import { ErrorService } from '../services/error/error.service';
 import { isStreamingRequest } from './retry.interceptor';
 import { SessionService } from './session.service';
+import { reachConfirmationFrom } from '../shared/skills/skill-provenance';
 
 /**
  * Set on a request's `HttpContext` to opt out of the global error toast.
@@ -59,7 +60,13 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
         // toast — it just flashes before the redirect lands.
         if (error.status === 401) {
           sessionService.handleUnauthorized();
-        } else if (!isSilentEndpoint && !req.context.get(SUPPRESS_ERROR_TOAST)) {
+        } else if (
+          !isSilentEndpoint &&
+          !req.context.get(SUPPRESS_ERROR_TOAST) &&
+          // A skill write asking to confirm its reach is a question, not a
+          // failure: the form answers it with its own confirmation dialog.
+          reachConfirmationFrom(error) === null
+        ) {
           // Use ErrorService to display the error
           errorService.handleHttpError(error);
         }

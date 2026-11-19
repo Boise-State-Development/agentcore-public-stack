@@ -174,6 +174,11 @@ export interface UpdateMySkillRequest {
   skillMetadata?: Record<string, unknown>;
   category?: string | null;
   status?: SkillStatus;
+  /**
+   * Sent once the user confirmed the reach a 409 reported: the edit changes what
+   * runs in shared agents or projects that use this skill unpinned.
+   */
+  confirmReach?: boolean;
 }
 
 /**

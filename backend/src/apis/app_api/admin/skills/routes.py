@@ -20,8 +20,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
+from apis.shared.audit.models import AuditAction
 from apis.shared.auth import User, require_admin_scope
 from apis.shared.blocking_io import run_blocking
+from apis.shared.skills.audit import record_skill_event
 from apis.shared.skills.bundle_export import (
     SkillExportFileError,
     SkillExportVersionNotFoundError,
@@ -412,6 +414,13 @@ async def export_skill(
         logger.warning("Admin skill export refused: a manifest file could not be read")
         raise HTTPException(status_code=409, detail=str(e))
     logger.info("Admin exported catalog skill")
+    await record_skill_event(
+        AuditAction.SKILL_EXPORTED,
+        admin,
+        skill_id,
+        after=record,
+        extra_after={"exportedVersion": version} if version else None,
+    )
     return Response(
         content=data,
         media_type="application/zip",

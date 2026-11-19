@@ -49,7 +49,7 @@ from apis.shared.skills.user_service import (
 )
 
 from .github_source import GitHubSourceError, fetch_archive, parse_github_url
-from .routes import MySkillResponse, _user_skill_error
+from .routes import MySkillResponse, _user_skill_error, require_reach_confirmed
 
 logger = logging.getLogger(__name__)
 
@@ -340,9 +340,14 @@ async def reimport_skill(
     path: Optional[str] = Form(None),
     expected_bundle_hash: Optional[str] = Form(None, alias="expectedBundleHash"),
     expected_updated_at: Optional[str] = Form(None, alias="expectedUpdatedAt"),
+    confirm_reach: bool = Form(False, alias="confirmReach"),
     user: User = Depends(get_current_user_from_session),
 ) -> ImportApplyResponse:
-    """Refresh an owned skill from its bundle. Never cuts a version (D5)."""
+    """Refresh an owned skill from its bundle. Never cuts a version (D5).
+
+    Without ``confirmReach``, 409s with the reach summary when the skill runs
+    unpinned in a shared Agent or project (``require_reach_confirmed``).
+    """
     _require_enabled()
     logger.info(f"User {user.name} re-importing a skill bundle")
     service = get_user_skill_service()
@@ -350,6 +355,8 @@ async def reimport_skill(
         target = await service.require_owned(skill_id, user)
     except UserSkillError as e:
         raise _user_skill_error(e)
+    if not confirm_reach:
+        await require_reach_confirmed(skill_id, user)
 
     load, source = await _load(file, url, path)
     bundle = _require_bundle(load)

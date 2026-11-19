@@ -41,11 +41,13 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Respon
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from apis.shared.audit.models import AuditAction
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.blocking_io import run_blocking
 from apis.shared.extraction.field_sets import FieldSetError, require_field_set_name
 from apis.shared.feature_flags import field_set_authoring_enabled
 from apis.shared.skills.access import resolve_accessible_skill_ids
+from apis.shared.skills.audit import record_skill_event
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.bundle_export import (
     SkillExportFileError,
@@ -64,7 +66,9 @@ from apis.shared.skills.models import (
     check_instructions,
     check_skill_metadata,
     check_text_field,
+    skill_provenance,
 )
+from apis.shared.skills.reach import lookup_skill_reach
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.skills.resource_store import compute_content_hash
 from apis.shared.skills.resource_types import (
@@ -308,6 +312,9 @@ class UpdateMySkillRequest(BaseModel):
     skill_metadata: Optional[Dict] = Field(None, alias="skillMetadata")
     category: Optional[str] = None
     status: Optional[SkillStatus] = None
+    # Sent once the user has seen the reach summary of a 409 and confirmed the
+    # edit should reach the shared Agents and projects that run it unpinned.
+    confirm_reach: bool = Field(False, alias="confirmReach")
 
     model_config = {"populate_by_name": True}
 
@@ -330,6 +337,20 @@ class UpdateMySkillRequest(BaseModel):
     @classmethod
     def _skill_metadata_valid(cls, value: Optional[Dict]) -> Optional[Dict]:
         return check_skill_metadata(value)
+
+
+async def require_reach_confirmed(skill_id: str, user: User) -> None:
+    """409 with the reach summary when an edit would reach others' unpinned bindings.
+
+    Only the caller's own Agents and projects can run the caller's skill for
+    anyone else (``apis/shared/skills/reach.py``), so the lookup reads only the
+    caller's partition and discloses nothing. It is blocking boto3, so it runs
+    in a worker thread. A lookup that fails does not block the save, the same
+    as the approval card, whose summary then says it could not check.
+    """
+    reach = await run_blocking(lookup_skill_reach, skill_id, user.user_id)
+    if reach.reaches_others_unpinned:
+        raise HTTPException(status_code=409, detail=reach.conflict_detail())
 
 
 def _user_skill_error(e: UserSkillError) -> HTTPException:
@@ -420,6 +441,9 @@ async def update_my_skill(
     logger.info(f"User {user.name} updating an authored skill")
 
     updates = request.model_dump(exclude_unset=True, exclude_none=True)
+    updates.pop("confirm_reach", None)
+    if not request.confirm_reach:
+        await require_reach_confirmed(skill_id, user)
     try:
         skill = await get_user_skill_service().update_my_skill(skill_id, updates, user)
     except UserSkillError as e:
@@ -582,6 +606,13 @@ async def export_my_skill(
             extra={"skill_id": scrub_log(skill_id)},
         )
         raise HTTPException(status_code=409, detail=str(e))
+    await record_skill_event(
+        AuditAction.SKILL_EXPORTED,
+        user,
+        skill_id,
+        after=record,
+        extra_after={"exportedVersion": version} if version else None,
+    )
     return Response(
         content=data,
         media_type="application/zip",
@@ -784,6 +815,9 @@ class SkillDetailResponse(BaseModel):
     is_owned: bool = Field(..., alias="isOwned")
     created_at: Optional[str] = Field(None, alias="createdAt")
     updated_at: Optional[str] = Field(None, alias="updatedAt")
+    #: Where an imported skill came from (``SkillImportSource.provenance``: type,
+    #: owner, repo, ref, commit SHA; no URL or bundle hash). None when hand-written.
+    import_source: Optional[Dict[str, str]] = Field(None, alias="importSource")
 
     model_config = {"populate_by_name": True}
 
@@ -848,6 +882,7 @@ async def get_accessible_skill(
         # the two must agree or the page would contradict the list it came from.
         is_enabled=preferences.get(skill.skill_id, False),
         is_owned=skill.owner_id == user.user_id,
+        import_source=skill_provenance(skill),
         created_at=skill.created_at.isoformat() if skill.created_at else None,
         updated_at=skill.updated_at.isoformat() if skill.updated_at else None,
     )

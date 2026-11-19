@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { Dialog } from '@angular/cdk/dialog';
+import { HttpErrorResponse } from '@angular/common/http';
+import { of } from 'rxjs';
 import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
 import { environment } from '../../../environments/environment';
 import { FEATURES } from '../../services/features';
@@ -110,5 +113,89 @@ describe('SkillFormPage (My Skills) — Import a SKILL.md', () => {
     expect((fixture.nativeElement as HTMLElement).textContent).toContain(
       'SKILL.md is larger than 200 KiB.',
     );
+  });
+});
+
+describe('SkillFormPage (My Skills) — reach confirmation on save', () => {
+  const reach = 'This skill runs unpinned in 1 shared agent ("Contracts Desk").';
+  const conflict = new HttpErrorResponse({
+    status: 409,
+    error: { detail: { code: 'skill_reach_unconfirmed', message: 'Confirm', reach } },
+  });
+  let service: {
+    getSkill: ReturnType<typeof vi.fn>;
+    updateSkill: ReturnType<typeof vi.fn>;
+    error$: () => string | null;
+  };
+  let dialog: { open: ReturnType<typeof vi.fn> };
+
+  function setup(confirmed: boolean) {
+    service = {
+      getSkill: vi.fn().mockResolvedValue({
+        skillId: 'grant_review',
+        displayName: 'Grant Review',
+        description: 'Reviews grants.',
+        instructions: 'Step 1.',
+        allowedTools: [],
+        skillMetadata: {},
+        resources: [],
+        status: 'active',
+        category: null,
+        createdAt: null,
+        updatedAt: null,
+      }),
+      updateSkill: vi.fn().mockRejectedValueOnce(conflict).mockResolvedValue({ skillId: 'grant_review' }),
+      error$: () => null,
+    };
+    dialog = { open: vi.fn(() => ({ closed: of(confirmed) })) };
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([]),
+        { provide: MySkillService, useValue: service },
+        { provide: Dialog, useValue: dialog },
+        { provide: FEATURES, useValue: { ...environment.features, skillBundleImport: false } },
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            snapshot: {
+              paramMap: convertToParamMap({ skillId: 'grant_review' }),
+              queryParamMap: convertToParamMap({}),
+            },
+          },
+        },
+      ],
+    });
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function submit(): Promise<ReturnType<typeof vi.spyOn>> {
+    const fixture = TestBed.createComponent(SkillFormPage);
+    fixture.detectChanges();
+    await settle();
+    fixture.detectChanges();
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLFormElement>('form')!.dispatchEvent(new Event('submit'));
+    await settle();
+    await settle();
+    return navigate;
+  }
+
+  it('shows the reach summary and resubmits with confirmReach on confirm', async () => {
+    setup(true);
+    const navigate = await submit();
+    expect(dialog.open).toHaveBeenCalledTimes(1);
+    expect(dialog.open.mock.calls[0][1].data.message).toBe(reach);
+    expect(service.updateSkill).toHaveBeenCalledTimes(2);
+    expect(service.updateSkill.mock.calls[0][1].confirmReach).toBeUndefined();
+    expect(service.updateSkill.mock.calls[1][1]).toEqual(expect.objectContaining({ confirmReach: true }));
+    expect(navigate).toHaveBeenCalledWith(['/customize/skills']);
+  });
+
+  it('saves nothing more and stays on the page when the user keeps editing', async () => {
+    setup(false);
+    const navigate = await submit();
+    expect(service.updateSkill).toHaveBeenCalledTimes(1);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

@@ -144,6 +144,32 @@ class SkillImportSource(BaseModel):
     def to_item(self) -> dict:
         return {k: v for k, v in self.model_dump(by_alias=True).items() if v is not None}
 
+    def provenance(self) -> dict:
+        """Where it came from, for display and audit: no URL, path or hash.
+
+        ``{"type": "github", "owner", "repo", "ref", "commitSha"}`` or
+        ``{"type": "zip"}``. The SPA renders "Imported from owner/repo @ sha7" or
+        "Imported from a zip file" from it, as text.
+        """
+        fields = {
+            "type": self.type,
+            "owner": self.owner,
+            "repo": self.repo,
+            "ref": self.ref,
+            "commitSha": self.commit_sha,
+        }
+        return {k: v for k, v in fields.items() if v}
+
+
+def skill_provenance(skill: object) -> Optional[dict]:
+    """``SkillImportSource.provenance()`` for an imported skill, else None.
+
+    Takes any object with an ``import_source`` (or none), so a response builder
+    can call it on whatever record shape it holds.
+    """
+    source = getattr(skill, "import_source", None)
+    return source.provenance() if source is not None else None
+
 
 class SkillDefinition(BaseModel):
     """

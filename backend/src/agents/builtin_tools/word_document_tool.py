@@ -47,11 +47,16 @@ Design notes
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from strands import tool
+
+from apis.shared.audit.models import TARGET_SKILL, AuditAction
+from apis.shared.audit.service import get_audit_service
+from apis.shared.auth.models import User
 
 from agents.builtin_tools.office.docx_compare import DEFAULT_AUTHOR, NoDifferences, compare
 from agents.builtin_tools.office.docx_redline import (
@@ -274,6 +279,66 @@ def _run_docx_skill_script(
 
 
 async def _run_skill_script_bounded(
+    code_interpreter_id: str,
+    script: Any,
+    params_json: str,
+    filename: str,
+    source_bytes: Optional[bytes] = None,
+    timeout_seconds: Optional[float] = None,
+    *,
+    actor_user_id: Optional[str] = None,
+) -> Tuple[bytes, str]:
+    """:func:`_run_skill_script_timed`, then one ``skill.script_run`` audit record.
+
+    The record names the skill, the script path, the script's sha256 and the
+    outcome (``ok``, ``error``, ``timeout`` or ``cancelled``), and is written after
+    the run, in a worker thread, so it adds nothing before the run and a failed
+    write never fails the tool (agentskills-conformance §6.5).
+    """
+    outcome = "error"
+    try:
+        result = await _run_skill_script_timed(
+            code_interpreter_id, script, params_json, filename, source_bytes, timeout_seconds
+        )
+        outcome = "ok"
+        return result
+    except _SkillScriptTimeoutError:
+        outcome = "timeout"
+        raise
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        if actor_user_id:
+            # Not awaited: a cancelled task must not block on bookkeeping.
+            asyncio.get_running_loop().run_in_executor(
+                None, _record_script_run, actor_user_id, script, outcome
+            )
+        raise
+    finally:
+        if actor_user_id and outcome != "cancelled":
+            await asyncio.to_thread(_record_script_run, actor_user_id, script, outcome)
+
+
+def _record_script_run(actor_user_id: str, script: Any, outcome: str) -> None:
+    """Write the ``skill.script_run`` record. Blocking; never raises."""
+    try:
+        source = getattr(script, "source", b"") or b""
+        get_audit_service().record(
+            action=AuditAction.SKILL_SCRIPT_RUN,
+            actor=User(email="", user_id=actor_user_id, name="", roles=[]),
+            target_id=getattr(script, "skill_id", "") or getattr(script, "skill_name", ""),
+            target_type=TARGET_SKILL,
+            changes=["scriptRun"],
+            after={
+                "scriptPath": getattr(script, "path", ""),
+                "scriptSha256": hashlib.sha256(source).hexdigest(),
+                "outcome": outcome,
+            },
+        )
+    except Exception:  # noqa: BLE001 - an audit gap never fails the tool
+        logger.exception("skill.script_run audit record could not be written")
+
+
+async def _run_skill_script_timed(
     code_interpreter_id: str,
     script: Any,
     params_json: str,
@@ -577,7 +642,7 @@ async def _create_word_document(
             )
         else:
             file_bytes, output = await _run_skill_script_bounded(
-                code_interpreter_id, script, params_json, filename
+                code_interpreter_id, script, params_json, filename, actor_user_id=user_id
             )
     except _SkillScriptTimeoutError as exc:
         return _error(f"❌ Failed to create '{filename}': {exc}")
@@ -665,6 +730,7 @@ async def _modify_word_document(
                 params_json,
                 output_filename,
                 source_bytes,
+                actor_user_id=user_id,
             )
     except _SkillScriptTimeoutError as exc:
         return _error(f"❌ Failed to modify '{source.filename}': {exc}")

@@ -1,4 +1,7 @@
+import { Dialog } from '@angular/cdk/dialog';
+import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
+import { of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ImportPreview, MySkill, SkillImportSource } from '../models/my-skill.model';
 import { MySkillService } from '../services/my-skill.service';
@@ -41,6 +44,7 @@ describe('SkillBundleImportComponent', () => {
   async function render(
     service: Partial<Record<keyof MySkillService, unknown>>,
     inputs: { skillId?: string | null; importSource?: SkillImportSource | null } = {},
+    extraProviders: unknown[] = [],
   ) {
     TestBed.configureTestingModule({
       imports: [SkillBundleImportComponent],
@@ -49,6 +53,7 @@ describe('SkillBundleImportComponent', () => {
           provide: MySkillService,
           useValue: { describeError: (_: unknown, fallback: string) => fallback, ...service },
         },
+        ...(extraProviders as never[]),
       ],
     });
     const fixture = TestBed.createComponent(SkillBundleImportComponent);
@@ -254,5 +259,52 @@ describe('SkillBundleImportComponent', () => {
     expect(r.el.textContent).toContain('Activation name: mcp-builder-2');
     const row = r.el.querySelector('[data-testid="skill-md-diagnostics"] li')!;
     expect(row.textContent).toContain('Warning: Stored as mcp-builder-2.');
+  });
+
+  describe('a re-import that reaches other people', () => {
+    const reach = 'This skill runs unpinned in 1 project ("Legal").';
+    const conflict = new HttpErrorResponse({
+      status: 409,
+      error: { detail: { code: 'skill_reach_unconfirmed', message: 'Confirm', reach } },
+    });
+
+    async function reimportWith(confirmed: boolean) {
+      const source: SkillImportSource = preview().source;
+      const previewImport = vi.fn().mockResolvedValue(
+        preview({ changes: { description: false, instructions: true, allowedTools: false, skillMetadata: false } }),
+      );
+      const reimportSkill = vi
+        .fn()
+        .mockRejectedValueOnce(conflict)
+        .mockResolvedValue({ skill: SKILL, files: [] });
+      const dialog = {
+        open: vi.fn((_component: unknown, _config: { data: { message: string } }) => ({ closed: of(confirmed) })),
+      };
+      const r = await render(
+        { previewImport, reimportSkill },
+        { skillId: 'contract_redline', importSource: source },
+        [{ provide: Dialog, useValue: dialog }],
+      );
+      r.button('Check GitHub for changes')!.click();
+      await r.settle();
+      r.button('Re-import')!.click();
+      await r.settle();
+      return { r, reimportSkill, dialog };
+    }
+
+    it('shows the reach summary and resubmits with confirmReach on confirm', async () => {
+      const { r, reimportSkill, dialog } = await reimportWith(true);
+      expect(dialog.open.mock.calls[0][1].data.message).toBe(reach);
+      expect(reimportSkill).toHaveBeenCalledTimes(2);
+      expect(reimportSkill.mock.calls[1][2]).toEqual(expect.objectContaining({ confirmReach: true }));
+      expect(r.emitted).toEqual([SKILL]);
+    });
+
+    it('writes nothing and shows no error when the user keeps the current version', async () => {
+      const { r, reimportSkill } = await reimportWith(false);
+      expect(reimportSkill).toHaveBeenCalledTimes(1);
+      expect(r.emitted).toEqual([]);
+      expect(r.el.querySelector('[role="alert"]')).toBeNull();
+    });
   });
 });

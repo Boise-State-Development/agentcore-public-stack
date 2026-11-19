@@ -858,3 +858,61 @@ class TestSkillMetadataValidation:
 
         row = asyncio.run(service.repository.get_skill("grant_review"))
         assert row.skill_metadata == {"license": "MIT"}
+
+
+# =============================================================================
+# Audit (agentskills-conformance D-6): the four writes are recorded once each
+# =============================================================================
+
+
+class TestAuditRecords:
+    @pytest.fixture()
+    def audit_items(self, monkeypatch):
+        from apis.shared.audit.service import AuditService
+        from apis.shared.skills import audit as skill_audit
+
+        items = []
+
+        class _Repo:
+            def put(self, record):
+                items.append(record.to_item())
+
+        service = AuditService(repository=_Repo())
+        monkeypatch.setattr(skill_audit, "get_audit_service", lambda: service)
+        return items
+
+    def test_each_write_tool_records_once_after_it_succeeds(self, service, audit_items):
+        tools = _tools()
+        _create()
+        sid = _skill_id(service)
+        assert tools["my_skill_update"](skill_id=sid, description="Reviews grants.")["status"] == "success"
+        assert tools["my_skill_write_file"](skill_id=sid, filename="notes.md", content="hi")["status"] == "success"
+        assert tools["my_skill_delete_file"](skill_id=sid, filename="notes.md")["status"] == "success"
+
+        assert [i["action"] for i in audit_items] == [
+            "skill.created",
+            "skill.updated",
+            "skill.updated",
+            "skill.updated",
+        ]
+        assert {i["actorUserId"] for i in audit_items} == {OWNER}
+        assert "Step 1." not in json.dumps(audit_items, default=str)
+
+    def test_a_refused_write_records_nothing(self, service, audit_items):
+        _create()
+        result = _tools(OTHER)["my_skill_update"](skill_id=_skill_id(service), description="x")
+        assert result["status"] == "error"
+        assert [i["action"] for i in audit_items] == ["skill.created"]
+
+    def test_a_failing_audit_write_does_not_fail_the_tool(self, service, monkeypatch):
+        from apis.shared.audit.service import AuditService
+        from apis.shared.skills import audit as skill_audit
+
+        class _Down:
+            def put(self, record):
+                raise RuntimeError("DynamoDB is down")
+
+        monkeypatch.setattr(skill_audit, "get_audit_service", lambda: AuditService(repository=_Down()))
+        _create()
+        sid = _skill_id(service)
+        assert _tools()["my_skill_update"](skill_id=sid, description="Reviews grants.")["status"] == "success"

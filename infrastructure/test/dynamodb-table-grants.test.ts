@@ -179,6 +179,8 @@ describe('DynamoDB table grants', () => {
       indexes: true,
     },
     'shared-conversations': { actions: ['dynamodb:GetItem'], indexes: false },
+    // Append-only, for skill audit records (agentskills-conformance §6.5).
+    'audit-log': { actions: ['dynamodb:PutItem'], indexes: false },
   };
 
   it('Runtime role reaches the tables it uses, with exactly the actions it held, and no others', () => {
@@ -197,7 +199,8 @@ describe('DynamoDB table grants', () => {
           .toEqual({ index: `${table.name}/${index}`, query: expected.indexes });
       }
     }
-    // Non-vacuous: the sensitive tables the Runtime must never reach exist here.
+    // Non-vacuous: the sensitive tables the Runtime must never reach (and the
+    // audit log it may only append to) exist here.
     for (const suffix of ['bff-sessions', 'oidc-state', 'audit-log']) {
       expect(tables.map((t) => t.name)).toContain(`${config.projectPrefix}-${suffix}`);
     }

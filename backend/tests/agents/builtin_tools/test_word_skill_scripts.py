@@ -819,3 +819,91 @@ class TestInterpreterIdResolution:
 
         monkeypatch.setattr(skill_scripts, "_read_interpreter_id_parameter", must_not_read)
         assert skill_scripts.resolve_skill_script_interpreter_id() == "local-ci"
+
+
+# =============================================================================
+# Audit (agentskills-conformance D-6): one skill.script_run record per run
+# =============================================================================
+
+
+class TestScriptRunAudit:
+    @pytest.fixture()
+    def audit_items(self, monkeypatch):
+        from apis.shared.audit.service import AuditService
+
+        items = []
+
+        class _Repo:
+            def put(self, record):
+                items.append(record.to_item())
+
+        service = AuditService(repository=_Repo())
+        monkeypatch.setattr(word, "get_audit_service", lambda: service)
+        return items
+
+    def _script(self):
+        from agents.main_agent.skills.skill_scripts import SkillScript
+
+        return SkillScript(
+            skill_name="contract-redline", path="scripts/run.py", source=b"print(1)", skill_id="contract_redline"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_run_records_skill_path_hash_and_outcome(self, audit_items, monkeypatch):
+        import hashlib
+
+        async def ran(*args, **kwargs):
+            return b"docx", "done"
+
+        monkeypatch.setattr(word, "_run_skill_script_timed", ran)
+        result = await word._run_skill_script_bounded(
+            "ci", self._script(), "{}", "out.docx", actor_user_id="user-1"
+        )
+        assert result == (b"docx", "done")
+        (item,) = audit_items
+        assert item["action"] == "skill.script_run"
+        assert item["targetType"] == "skill"
+        assert item["targetId"] == "contract_redline"
+        assert item["actorUserId"] == "user-1"
+        assert item["after"] == {
+            "scriptPath": "scripts/run.py",
+            "scriptSha256": hashlib.sha256(b"print(1)").hexdigest(),
+            "outcome": "ok",
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_failed_run_is_recorded_and_still_raises(self, audit_items, monkeypatch):
+        async def failed(*args, **kwargs):
+            raise word._SkillScriptTimeoutError("too slow")
+
+        monkeypatch.setattr(word, "_run_skill_script_timed", failed)
+        with pytest.raises(word._SkillScriptTimeoutError):
+            await word._run_skill_script_bounded("ci", self._script(), "{}", "out.docx", actor_user_id="u")
+        assert [i["after"]["outcome"] for i in audit_items] == ["timeout"]
+
+    @pytest.mark.asyncio
+    async def test_a_failing_audit_write_does_not_fail_the_run(self, monkeypatch):
+        from apis.shared.audit.service import AuditService
+
+        class _Down:
+            def put(self, record):
+                raise RuntimeError("DynamoDB is down")
+
+        async def ran(*args, **kwargs):
+            return b"docx", ""
+
+        monkeypatch.setattr(word, "get_audit_service", lambda: AuditService(repository=_Down()))
+        monkeypatch.setattr(word, "_run_skill_script_timed", ran)
+        assert await word._run_skill_script_bounded(
+            "ci", self._script(), "{}", "out.docx", actor_user_id="u"
+        ) == (b"docx", "")
+
+    @pytest.mark.asyncio
+    async def test_the_tool_records_the_turns_user_and_skill(self, sandbox, audit_items):
+        tool = make_create_word_document_tool("s", "user-9", _bound_holder())
+        await tool._tool_func(document_name="fresh", skill_name="contract-redliner", path="engine.py")
+        (item,) = audit_items
+        assert item["actorUserId"] == "user-9"
+        assert item["targetId"] == _record().skill_id
+        assert item["after"]["scriptPath"] == "scripts/engine.py"
+        assert item["after"]["outcome"] == "ok"

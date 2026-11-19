@@ -1,3 +1,4 @@
+import { Dialog } from '@angular/cdk/dialog';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -12,12 +13,15 @@ import { heroArrowPath, heroArrowUpTray } from '@ng-icons/heroicons/outline';
 import {
   ImportFileRow,
   ImportFileStatus,
+  ImportApplyResult,
   ImportPreview,
   MAX_IMPORT_ZIP_BYTES,
   MySkill,
   SkillImportInput,
   SkillImportSource,
 } from '../models/my-skill.model';
+import { confirmSkillReach } from '../../../shared/skills/confirm-skill-reach';
+import { reachConfirmationFrom } from '../../../shared/skills/skill-provenance';
 import { MySkillService } from '../services/my-skill.service';
 import { SkillMdDiagnosticsComponent } from '../../../shared/skills/skill-md-diagnostics.component';
 import { ImportDiffComponent } from './import-diff.component';
@@ -308,6 +312,7 @@ const STATUS_CLASSES: Record<ImportFileStatus, string> = {
 })
 export class SkillBundleImportComponent {
   private readonly skills = inject(MySkillService);
+  private readonly dialog = inject(Dialog);
 
   /** The skill to re-import into; null creates a new skill. */
   readonly skillId = input<string | null>(null);
@@ -450,14 +455,14 @@ export class SkillBundleImportComponent {
     try {
       const id = this.skillId();
       const result = id
-        ? await this.skills.reimportSkill(id, chosen, {
-            expectedBundleHash: p.bundleHash,
-            expectedUpdatedAt: p.targetUpdatedAt,
-          })
+        ? await this.reimportConfirmingReach(id, chosen, p)
         : await this.skills.importSkill(chosen, {
             displayName: this.displayName().trim() || undefined,
             expectedBundleHash: p.bundleHash,
           });
+      if (result === null) {
+        return;
+      }
       this.preview.set(null);
       this.notice.set(id ? 'Re-imported.' : null);
       this.imported.emit(result.skill);
@@ -465,6 +470,27 @@ export class SkillBundleImportComponent {
       this.error.set(this.skills.describeError(err, "We couldn't import that bundle."));
     } finally {
       this.busy.set(false);
+    }
+  }
+
+  /**
+   * Re-import, asking first when the server reports the change would reach other
+   * people's agents or projects (a 409 with the reach summary). Null when the user
+   * keeps the current version: nothing is written and the preview stays open.
+   */
+  private async reimportConfirmingReach(
+    id: string,
+    chosen: SkillImportInput,
+    p: ImportPreview,
+  ): Promise<ImportApplyResult | null> {
+    const options = { expectedBundleHash: p.bundleHash, expectedUpdatedAt: p.targetUpdatedAt };
+    try {
+      return await this.skills.reimportSkill(id, chosen, options);
+    } catch (err) {
+      const reach = reachConfirmationFrom(err);
+      if (reach === null) throw err;
+      if (!(await confirmSkillReach(this.dialog, reach))) return null;
+      return this.skills.reimportSkill(id, chosen, { ...options, confirmReach: true });
     }
   }
 

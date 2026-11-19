@@ -248,9 +248,17 @@ export class MySkillService {
   async reimportSkill(
     skillId: string,
     input: SkillImportInput,
-    options: { expectedBundleHash?: string | null; expectedUpdatedAt?: string | null },
+    options: {
+      expectedBundleHash?: string | null;
+      expectedUpdatedAt?: string | null;
+      /** Sent after the user confirmed the reach a 409 reported. */
+      confirmReach?: boolean;
+    },
   ): Promise<ImportApplyResult> {
     const form = importForm(input);
+    if (options.confirmReach) {
+      form.append('confirmReach', 'true');
+    }
     if (options.expectedBundleHash) {
       form.append('expectedBundleHash', options.expectedBundleHash);
     }
@@ -282,6 +290,10 @@ export class MySkillService {
     const detail = (err as { error?: { detail?: unknown } } | null)?.error?.detail;
     if (typeof detail === 'string' && detail.trim()) {
       return detail;
+    }
+    const message = (detail as { message?: unknown } | null)?.message;
+    if (typeof message === 'string' && message.trim()) {
+      return message;
     }
     return err instanceof Error ? err.message : fallback;
   }
