@@ -263,9 +263,9 @@ export function createRuntimeExecutionRole(
   // ── DynamoDB tables (Users, Roles, OAuth, Quotas, Costs, etc.) ──
   // Named table by table, unlike app-api's one `table/{prefix}-*` statement:
   // the Runtime reads only 20 of the stack's 29 tables, and the ones it never
-  // touches include bff-sessions (a write there is a forged login), oidc-state
-  // and audit-log. Each table's entry is `<tableArn>*`, which IAM matches
-  // against the table AND its `/index/*`, so one entry does what a table ARN
+  // touches include bff-sessions (a write there is a forged login) and
+  // oidc-state; audit-log gets PutItem alone (below). Each table's entry is
+  // `<tableArn>*`, which IAM matches against the table AND its `/index/*`, so one entry does what a table ARN
   // plus an index ARN did. The trailing `*` would also match a future table
   // whose name extends one of these (`{prefix}-users-archive`), so
   // dynamodb-table-grants.test.ts requires every such entry to match exactly
@@ -296,6 +296,21 @@ export function createRuntimeExecutionRole(
   // its prefix extends this one's; deployment-table-grants.ts explains the
   // collision and this Deny.
   role.addToPolicy(otherDeploymentsTablesDeny(config, 'OtherDeploymentsTablesDeny'));
+
+  // ── Audit log (PutItem only) ──
+  // Skill edits made by the `my_skill_*` tools and each skill script run are
+  // audited from the Runtime (agentskills-conformance §6.5): a skill bound to a
+  // shared Agent or project runs in other people's sessions, so "who changed
+  // it, and what ran?" needs an answer there too. Append-only: no read, no
+  // update, no delete, and no index, so the Runtime can add a record but never
+  // read the trail or rewrite one. Its name is derived from the prefix
+  // (derived_environment.json), so it spends none of the V2 environment budget.
+  role.addToPolicy(new iam.PolicyStatement({
+    sid: 'AuditLogPutItem',
+    effect: iam.Effect.ALLOW,
+    actions: ['dynamodb:PutItem'],
+    resources: [refs.auditLogTable.tableArn],
+  }));
 
   // ── User settings table (read + write) ──
   // inference_api/chat/routes.py resolves the user's saved defaultModelId via

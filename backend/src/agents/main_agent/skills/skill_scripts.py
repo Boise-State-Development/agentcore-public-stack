@@ -128,6 +128,8 @@ class SkillScript:
     skill_name: str
     path: str
     source: bytes
+    # The catalog id of the skill the script came from, for the audit record.
+    skill_id: str = ""
 
     @property
     def label(self) -> str:
@@ -237,7 +239,22 @@ def load_skill_script(records: Iterable[Any], skill_name: str, path: str) -> Ski
         source.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise SkillScriptError(f"'{shown}' is not UTF-8 text.") from exc
-    return SkillScript(skill_name=skill_name.strip(), path=shown, source=source)
+    return SkillScript(
+        skill_name=skill_name.strip(),
+        path=shown,
+        source=source,
+        skill_id=_record_skill_id(records, skill_name),
+    )
+
+
+def _record_skill_id(records: Iterable[Any], skill_name: str) -> str:
+    """The catalog id of the bound skill ``skill_name`` activates (already resolved)."""
+    wanted = (skill_name or "").strip()
+    for record in records or []:
+        skill_id = getattr(record, "skill_id", "")
+        if slugify_skill_name(skill_id) == wanted:
+            return skill_id
+    return ""
 
 
 def parse_script_params(params: Any) -> str:
