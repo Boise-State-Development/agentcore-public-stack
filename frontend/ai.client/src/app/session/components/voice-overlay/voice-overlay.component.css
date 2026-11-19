@@ -191,6 +191,11 @@
   50% { opacity: 0.4; }
 }
 
+/* Mic level meter: smooth the 10 updates a second from the recorder. */
+.mic-meter-fill {
+  transition: width 90ms linear;
+}
+
 /* === Reduced motion === */
 @media (prefers-reduced-motion: reduce) {
   :host { animation: none; opacity: 1; }
@@ -198,4 +203,5 @@
   .voice-ripple { animation: none !important; opacity: 0; }
   .voice-wave-bar { animation: none !important; transform: scaleY(0.6); }
   .status-dot { animation: none !important; }
+  .mic-meter-fill { transition: none; }
 }

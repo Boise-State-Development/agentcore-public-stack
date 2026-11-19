@@ -9,6 +9,8 @@ import { IncognitoChatService } from '../incognito';
 import { ToastService } from '../../../services/toast/toast.service';
 import { DEFAULT_VOICE_ID, findVoice, type NovaSonicVoice } from './voice-catalog';
 import { Message } from '../models/message.model';
+import { EchoGate } from './echo-gate';
+import { pcm16ToBase64 } from './pcm-utils';
 import {
   IDLE_TIMEOUT_MS,
   WS_CONNECT_TIMEOUT_MS,
@@ -17,7 +19,19 @@ import {
   REVEAL_CHARS_PER_TICK,
   REVEAL_TICK_MS,
   REVEAL_FLUSH_CHARS_PER_TICK,
+  INTERRUPT_LEVEL_DEFAULT_DB,
+  INTERRUPT_LEVEL_MIN_DB,
+  INTERRUPT_LEVEL_MAX_DB,
+  INTERRUPT_OPEN_CHUNKS,
+  INTERRUPT_PRE_ROLL_CHUNKS,
+  ECHO_TAIL_MS,
 } from './voice.config';
+
+/**
+ * Per browser, like the microphone choice: the right interrupt level depends
+ * on the mic, the speakers and the room, not on the account.
+ */
+const INTERRUPT_LEVEL_KEY = 'voice-interrupt-level-db';
 
 export type VoiceStatus = 'idle' | 'connecting' | 'listening' | 'speaking';
 
@@ -82,6 +96,33 @@ export class VoiceChatService implements OnDestroy {
   /** The voice the live session actually opened with (the server confirms it). */
   private readonly _activeVoiceId = signal<string | null>(null);
   readonly activeVoiceId = this._activeVoiceId.asReadonly();
+
+  // --- Echo gate (#2019) ---
+  /**
+   * The mic level, in dBFS, the user must reach to interrupt the agent while
+   * it is speaking. Quieter input during playback is treated as echo and
+   * replaced by silence. Set from the slider in the voice overlay.
+   */
+  private readonly _interruptLevelDb = signal<number>(this.loadInterruptLevel());
+  readonly interruptLevelDb = this._interruptLevelDb.asReadonly();
+
+  /** Level of the latest mic chunk in dBFS, for the overlay's meter. */
+  private readonly _micLevelDb = signal<number>(-Infinity);
+  readonly micLevelDb = this._micLevelDb.asReadonly();
+
+  private readonly echoGate = new EchoGate({
+    thresholdDb: this._interruptLevelDb(),
+    openChunks: INTERRUPT_OPEN_CHUNKS,
+    preRollChunks: INTERRUPT_PRE_ROLL_CHUNKS,
+    tailMs: ECHO_TAIL_MS,
+  });
+
+  /**
+   * Set when the user talked over the agent and playback was stopped here.
+   * Audio still in flight belongs to the interrupted reply, so it is dropped
+   * until Nova confirms the interruption or starts its next reply.
+   */
+  private _discardAgentAudio = false;
 
   // --- State signals ---
   private readonly _status = signal<VoiceStatus>('idle');
@@ -186,6 +227,63 @@ export class VoiceChatService implements OnDestroy {
   }
 
   /**
+   * Set the level needed to interrupt the agent. Applies at once, including
+   * in a live session, and is remembered in this browser.
+   */
+  setInterruptLevel(levelDb: number): void {
+    if (!Number.isFinite(levelDb)) return;
+    const clamped = Math.round(
+      Math.max(INTERRUPT_LEVEL_MIN_DB, Math.min(INTERRUPT_LEVEL_MAX_DB, levelDb)),
+    );
+    this._interruptLevelDb.set(clamped);
+    this.echoGate.setThresholdDb(clamped);
+    try {
+      localStorage.setItem(INTERRUPT_LEVEL_KEY, String(clamped));
+    } catch {
+      // Private mode or blocked storage: the level still applies this visit.
+    }
+  }
+
+  private loadInterruptLevel(): number {
+    try {
+      const stored = Number(localStorage.getItem(INTERRUPT_LEVEL_KEY) ?? NaN);
+      if (Number.isFinite(stored) && stored >= INTERRUPT_LEVEL_MIN_DB && stored <= INTERRUPT_LEVEL_MAX_DB) {
+        return stored;
+      }
+    } catch {
+      // Fall through to the default.
+    }
+    return INTERRUPT_LEVEL_DEFAULT_DB;
+  }
+
+  /**
+   * Gate one mic chunk and send what the gate lets through.
+   *
+   * When the user talks over the agent, playback stops here rather than
+   * waiting for `bidi_interruption`: if Nova already finished generating,
+   * the rest of the reply exists only in the local queue and Nova has
+   * nothing to interrupt.
+   */
+  private handleMicChunk(pcm: Int16Array, sampleRate: number): void {
+    const result = this.echoGate.process(pcm, this.player.isPlaying(), Date.now());
+    this._micLevelDb.set(result.levelDb);
+
+    if (result.bargeIn) {
+      this.player.clear();
+      this._discardAgentAudio = true;
+      this._status.set('listening');
+    }
+
+    for (const chunk of result.send) {
+      this.sendMessage({
+        type: 'bidi_audio_input',
+        audio: pcm16ToBase64(chunk),
+        sample_rate: sampleRate,
+      });
+    }
+  }
+
+  /**
    * Connect to the voice endpoint and start recording.
    * If no sessionId is provided, one is auto-generated. `agentId` is the
    * conversation's Agent (#625); the backend checks it against the Agent
@@ -213,6 +311,9 @@ export class VoiceChatService implements OnDestroy {
     this._prevTurnCumulativeUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     this._cumulativeCost = null;
     this._prevTurnCumulativeCost = null;
+    this.echoGate.reset();
+    this._discardAgentAudio = false;
+    this._micLevelDb.set(-Infinity);
 
     try {
       // Issue #211: voice now flows through a BFF WebSocket proxy.
@@ -240,14 +341,8 @@ export class VoiceChatService implements OnDestroy {
         return;
       }
 
-      // Wire audio chunks to WebSocket
-      this.recorder.onAudioChunk = (base64, sampleRate) => {
-        this.sendMessage({
-          type: 'bidi_audio_input',
-          audio: base64,
-          sample_rate: sampleRate,
-        });
-      };
+      // Wire audio chunks to WebSocket, through the echo gate (#2019)
+      this.recorder.onAudioChunk = (pcm, sampleRate) => this.handleMicChunk(pcm, sampleRate);
 
       this._status.set('listening');
       this._isConnected.set(true);
@@ -425,6 +520,11 @@ export class VoiceChatService implements OnDestroy {
         break;
 
       case 'bidi_audio_stream':
+        // The rest of a reply the user just talked over: don't play it.
+        if (this._discardAgentAudio) {
+          this.resetIdleTimer();
+          break;
+        }
         // Play audio from agent
         this._status.set('speaking');
         if (data['audio']) {
@@ -489,6 +589,8 @@ export class VoiceChatService implements OnDestroy {
       }
 
       case 'bidi_response_start':
+        // A new reply: its audio is meant to be heard.
+        this._discardAgentAudio = false;
         // Flush accumulated user speech as a user Message.
         // _userTranscript is cleared after push, so the second
         // bidi_response_start (FINAL pass) is a no-op here.
@@ -586,8 +688,10 @@ export class VoiceChatService implements OnDestroy {
       }
 
       case 'bidi_interruption':
-        // User interrupted — stop playback
+        // User interrupted — stop playback. Nova has stopped the old reply,
+        // so later audio belongs to the next one.
         this.player.clear();
+        this._discardAgentAudio = false;
         this._status.set('listening');
         break;
 
