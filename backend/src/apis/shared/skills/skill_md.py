@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -133,19 +133,93 @@ class _BoundedSafeLoader(yaml.SafeLoader):
             self._collection_depth -= 1
 
 
+class _YamlSyntaxError(Exception):
+    """Plain YAML syntax error: the only failure the colon repair may retry."""
+
+    def __init__(self, nodes_composed: int) -> None:
+        super().__init__("not valid YAML")
+        self.nodes_composed = nodes_composed
+
+
 def _load_frontmatter(block: str) -> Any:
+    """Load ``block`` through the bounded loader.
+
+    Raises:
+        SkillMdError: A bound was broken (alias, anchor, depth, nodes). Never retried.
+        _YamlSyntaxError: The block is not valid YAML.
+    """
     loader = _BoundedSafeLoader(block)
     try:
         return loader.get_single_data()
     except SkillMdError:
         raise
     except yaml.YAMLError:
-        raise SkillMdError(
-            "SKILL.md's frontmatter is not valid YAML.",
-            nodes_composed=loader.nodes_composed,
-        ) from None
+        raise _YamlSyntaxError(loader.nodes_composed) from None
     finally:
         loader.dispose()
+
+
+# ``key: value`` on one line, the key a plain word (Strands' ``_fix_yaml_colons``
+# matches the same shape).
+_KEY_VALUE_LINE = re.compile(r"^(\s*[A-Za-z_][\w-]*):[ \t]+(\S.*)$")
+# A value YAML reads as something other than a plain scalar: quoted, a flow
+# collection, a block scalar, an alias, anchor or tag, or a comment.
+_NOT_PLAIN_START = tuple("\"'[{|>*&!#%@`")
+
+
+def quote_colon_values(block: str) -> Tuple[str, List[str]]:
+    """Quote unquoted scalar values that contain ``": "``, and name the keys changed.
+
+    The commonest authoring slip in a ``SKILL.md`` is
+    ``description: Use when: the user asks``, which YAML reads as a nested
+    mapping and refuses. Each such value is rewritten as a double-quoted scalar
+    with backslashes and double quotes escaped. A value that starts as anything
+    but a plain scalar is left alone.
+    """
+    lines: List[str] = []
+    repaired: List[str] = []
+    for line in block.split("\n"):
+        match = _KEY_VALUE_LINE.match(line)
+        if match:
+            key, value = match.group(1), match.group(2).rstrip()
+            if ": " in value and not value.startswith(_NOT_PLAIN_START):
+                escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+                line = f'{key}: "{escaped}"'
+                repaired.append(key.strip())
+        lines.append(line)
+    return "\n".join(lines), repaired
+
+
+def _load_frontmatter_leniently(block: str) -> Tuple[Any, Optional[Diagnostic]]:
+    """Load ``block``; on a YAML syntax error only, retry once with colon values quoted.
+
+    The retried text goes through the same bounded loader, so every bound still
+    holds. A refusal for a bound is never retried.
+    """
+    try:
+        return _load_frontmatter(block), None
+    except _YamlSyntaxError as first:
+        fixed, keys = quote_colon_values(block)
+        if not keys:
+            raise _invalid_yaml(first.nodes_composed) from None
+        try:
+            loaded = _load_frontmatter(fixed)
+        except _YamlSyntaxError:
+            raise _invalid_yaml(first.nodes_composed) from None
+    named = ", ".join(keys)
+    return loaded, Diagnostic(
+        "frontmatter_repaired",
+        f"SKILL.md's frontmatter was not valid YAML because the value of {named} "
+        "contains \": \". It was read as if quoted. To fix it at the source, put the "
+        f"value in double quotes, e.g. {keys[0]}: \"…\".",
+        field=keys[0] if len(keys) == 1 else "",
+    )
+
+
+def _invalid_yaml(nodes_composed: int) -> SkillMdError:
+    return SkillMdError(
+        "SKILL.md's frontmatter is not valid YAML.", nodes_composed=nodes_composed
+    )
 
 
 def parse_skill_md(text: str) -> ParsedSkillMd:
@@ -153,7 +227,10 @@ def parse_skill_md(text: str) -> ParsedSkillMd:
 
     A leading byte-order mark is dropped and CRLF line ends become LF. No
     frontmatter (or an opening ``---`` that is never closed) means an empty
-    mapping and the whole text as the body.
+    mapping and the whole text as the body. A frontmatter that is not valid
+    YAML is retried once with unquoted ``": "`` values quoted
+    (:func:`quote_colon_values`); a retry that succeeds adds a
+    ``frontmatter_repaired`` warning.
 
     Raises:
         SkillMdError: The frontmatter is too large, not valid YAML, not a
@@ -188,7 +265,11 @@ def parse_skill_md(text: str) -> ParsedSkillMd:
             f"{MAX_FRONTMATTER_BYTES // 1024} KiB. Move long content into the body."
         )
 
-    loaded = _load_frontmatter(block) if block.strip() else {}
+    loaded: Any = {}
+    if block.strip():
+        loaded, repaired = _load_frontmatter_leniently(block)
+        if repaired is not None:
+            diagnostics.append(repaired)
     if not isinstance(loaded, dict):
         raise SkillMdError("SKILL.md's frontmatter must be a set of key: value lines.")
     return ParsedSkillMd({str(k).lower(): v for k, v in loaded.items()}, body.strip(), diagnostics)
