@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from apis.app_api.agent_designer.services.binding_validation import (
     BindingValidationError,
+    pin_imported_skills,
     validate_agent_write,
 )
 from apis.app_api.agent_designer.services.agent_deletion import delete_owned_agent
@@ -124,6 +125,7 @@ async def create_assistant_endpoint(request: CreateAssistantRequest, current_use
         await validate_agent_write(
             current_user, bindings=request.bindings, model_settings=request.model_settings
         )
+        bindings = await pin_imported_skills(current_user, request.bindings)
     except BindingValidationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
 
@@ -140,7 +142,7 @@ async def create_assistant_endpoint(request: CreateAssistantRequest, current_use
             tags=request.tags,
             starters=request.starters,
             emoji=request.emoji,
-            bindings=request.bindings,
+            bindings=bindings,
             model_settings=request.model_settings,
             show_citations=request.show_citations,
             allow_document_download=request.allow_document_download,
@@ -371,6 +373,9 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
                 existing_bindings=assistant.bindings,
                 existing_model_settings=assistant.model_settings,
             )
+            bindings = await pin_imported_skills(
+                current_user, request.bindings, assistant.bindings
+            )
         except BindingValidationError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
 
@@ -387,7 +392,7 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
             emoji=request.emoji,
             status=request.status,
             image_url=request.image_url,
-            bindings=request.bindings,
+            bindings=bindings,
             model_settings=request.model_settings,
             show_citations=request.show_citations,
             allow_document_download=request.allow_document_download,

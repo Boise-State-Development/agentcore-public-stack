@@ -12,12 +12,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from apis.shared.timestamps import to_iso, utc_now_iso
 
 from .models import SkillDefinition, SkillResourceRef
-from .pins import split_pinned_ref
+from .pins import PIN_CONFIG_KEY, binding_pin, split_pinned_ref
 from .repository import SkillVersionExistsError, get_skill_catalog_repository
 from .resource_store import get_skill_resource_store
 from .versions import SkillVersion, apply_version, content_hash, snapshot_of
@@ -172,3 +172,61 @@ async def load_skill_records(refs: List[str]) -> List[SkillDefinition]:
         records.append(record)
     return records
 
+
+
+async def pin_imported_skill_bindings(
+    bindings: Optional[List[Any]],
+    existing_bindings: Optional[Iterable[Any]] = None,
+    *,
+    pinned_by: Optional[str],
+) -> Optional[List[Any]]:
+    """Pin each newly bound skill that was imported from a bundle (agentskills D-7).
+
+    A skill with an ``import_source`` was written by a third party; the binding
+    runs what its owner reviewed when they bound it, until someone moves the pin.
+    So a skill binding whose ref was not bound before, names no version, and
+    whose row has an ``import_source`` gets ``{"version": n}`` from
+    :func:`pin_current`. A hand-written skill, a skill already bound, and a
+    binding that already names a version are returned unchanged.
+
+    ``bindings`` are ``AgentBinding`` objects (``kind``, ``ref``, ``config``);
+    ``None`` (a save that does not touch bindings) is returned as is. Call it
+    after ``validate_agent_write``, so nothing is pinned for a skill the saver
+    may not bind. Raises what :func:`pin_current` raises.
+    """
+    if not bindings:
+        return bindings
+    bound_before = {
+        split_pinned_ref(b.ref)[0]
+        for b in (existing_bindings or [])
+        if getattr(b, "kind", None) == "skill"
+    }
+    candidates = [
+        b
+        for b in bindings
+        if b.kind == "skill"
+        and split_pinned_ref(b.ref)[1] is None
+        and binding_pin(b.config) is None
+        and b.ref not in bound_before
+    ]
+    if not candidates:
+        return bindings
+    rows = await get_skill_catalog_repository().batch_get_skills(
+        list(dict.fromkeys(b.ref for b in candidates))
+    )
+    imported = {s.skill_id for s in rows if s.import_source is not None}
+    if not imported:
+        return bindings
+
+    versions: Dict[str, int] = {}
+    for ref in imported:
+        versions[ref] = (await pin_current(ref, pinned_by=pinned_by)).version
+    candidate_ids = {id(b) for b in candidates}
+    out: List[Any] = []
+    for binding in bindings:
+        if id(binding) in candidate_ids and binding.ref in versions:
+            binding = binding.model_copy(
+                update={"config": {**dict(binding.config or {}), PIN_CONFIG_KEY: versions[binding.ref]}}
+            )
+        out.append(binding)
+    return out
