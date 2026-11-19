@@ -29,24 +29,32 @@ token into their grant record (renewing the 30-day login-recency window);
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Coroutine, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from pydantic import BaseModel, Field
 
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import scheduled_runs_enabled
 from apis.shared.harness import (
+    BearerAuthStrategy,
     CognitoRefreshBearerAuth,
+    GovernanceFloor,
     HeadlessAuthError,
     HeadlessGrant,
     HeadlessGrantService,
+    RunAuditRecorder,
     RunResult,
+    StaticBearerAuth,
     run_agent_headless,
 )
 from apis.shared.rbac.service import get_app_role_service
+from apis.shared.scheduled_prompts.models import HEADLESS_SESSION_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +62,14 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 _MAX_PROMPT_CHARS = 20_000
 
+_RUN_ID_PATTERN = r"^run-[0-9a-f]{12}$"
+
 _grant_service: Optional[HeadlessGrantService] = None
+_audit_recorder: Optional[RunAuditRecorder] = None
+
+# Strong references to runs in flight. The event loop holds tasks weakly, so a
+# bare ``create_task`` can be garbage-collected mid-run.
+_run_tasks: set[asyncio.Task[None]] = set()
 
 
 def get_headless_grant_service() -> HeadlessGrantService:
@@ -63,6 +78,26 @@ def get_headless_grant_service() -> HeadlessGrantService:
     if _grant_service is None:
         _grant_service = HeadlessGrantService()
     return _grant_service
+
+
+def get_run_audit_recorder() -> RunAuditRecorder:
+    """Lazy module singleton; tests monkeypatch this factory."""
+    global _audit_recorder
+    if _audit_recorder is None:
+        _audit_recorder = RunAuditRecorder()
+    return _audit_recorder
+
+
+def get_headless_auth() -> BearerAuthStrategy:
+    """Mints the caller's bearer from their headless grant; tests monkeypatch it."""
+    return CognitoRefreshBearerAuth(grants=get_headless_grant_service())
+
+
+def spawn_run(coro: Coroutine[Any, Any, None]) -> None:
+    """Start a run in the background; tests monkeypatch this to run it inline."""
+    task = asyncio.get_running_loop().create_task(coro)
+    _run_tasks.add(task)
+    task.add_done_callback(_run_tasks.discard)
 
 
 async def require_scheduled_runs_user(
@@ -98,73 +133,43 @@ class RunNowRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class ToolTraceEntryResponse(BaseModel):
-    tool_use_id: str = Field(..., alias="toolUseId")
-    name: str
-    input: Dict[str, Any] = Field(default_factory=dict)
-    result_preview: Optional[str] = Field(None, alias="resultPreview")
-    is_error: bool = Field(False, alias="isError")
+class RunStartedResponse(BaseModel):
+    """``202`` body of ``POST /runs/now``: the ids to poll and to open."""
+
+    run_id: str = Field(..., alias="runId")
+    session_id: str = Field(..., alias="sessionId")
+    status: str = "started"
 
     model_config = {"populate_by_name": True}
 
 
-class OAuthConsentRequiredResponse(BaseModel):
-    provider_id: str = Field(..., alias="providerId")
-    authorization_url: str = Field(..., alias="authorizationUrl")
+class RunStatusResponse(BaseModel):
+    """``GET /runs/{runId}``: the run's audit row, without the prompt.
 
-    model_config = {"populate_by_name": True}
+    ``status`` is ``started`` while the turn runs, then one of the
+    ``RunStatus`` values. The answer itself is in the run's conversation.
+    """
 
-
-class RunNowResponse(BaseModel):
     run_id: str = Field(..., alias="runId")
     session_id: str = Field(..., alias="sessionId")
     status: str
-    final_message: str = Field("", alias="finalMessage")
-    stop_reason: Optional[str] = Field(None, alias="stopReason")
-    error: Optional[str] = None
     title: Optional[str] = None
-    tool_trace: List[ToolTraceEntryResponse] = Field(
-        default_factory=list, alias="toolTrace"
-    )
-    usage: Dict[str, Any] = Field(default_factory=dict)
-    oauth_required: List[OAuthConsentRequiredResponse] = Field(
-        default_factory=list, alias="oauthRequired"
-    )
+    error: Optional[str] = None
     started_at: str = Field("", alias="startedAt")
-    finished_at: str = Field("", alias="finishedAt")
+    finished_at: Optional[str] = Field(None, alias="finishedAt")
 
     model_config = {"populate_by_name": True}
 
     @classmethod
-    def from_run_result(cls, result: RunResult) -> "RunNowResponse":
+    def from_audit_item(cls, item: Dict[str, Any]) -> "RunStatusResponse":
         return cls(
-            run_id=result.run_id,
-            session_id=result.session_id,
-            status=result.status,
-            final_message=result.final_message,
-            stop_reason=result.stop_reason,
-            error=result.error,
-            title=result.title,
-            tool_trace=[
-                ToolTraceEntryResponse(
-                    tool_use_id=t.tool_use_id,
-                    name=t.name,
-                    input=t.input,
-                    result_preview=t.result_preview,
-                    is_error=t.is_error,
-                )
-                for t in result.tool_trace
-            ],
-            usage=result.usage,
-            oauth_required=[
-                OAuthConsentRequiredResponse(
-                    provider_id=o.provider_id,
-                    authorization_url=o.authorization_url,
-                )
-                for o in result.oauth_required
-            ],
-            started_at=result.started_at,
-            finished_at=result.finished_at,
+            run_id=item["runId"],
+            session_id=item["sessionId"],
+            status=item.get("status", "started"),
+            title=item.get("title") or None,
+            error=item.get("errorDetail") or None,
+            started_at=item.get("startedAt", ""),
+            finished_at=item.get("finishedAt") or None,
         )
 
 
@@ -237,18 +242,65 @@ async def _resolve_grant(request: Request, user: User) -> HeadlessGrant:
     return grant
 
 
-@router.post("/now", response_model=RunNowResponse, response_model_by_alias=True)
+async def _execute_run(*, governance: GovernanceFloor, **run_kwargs: Any) -> None:
+    """The background half of ``POST /runs/now``.
+
+    ``run_agent_headless`` writes the end audit row itself. If it raises
+    instead, write an ``error`` end row here so the SPA's poll stops at once
+    rather than waiting for the run to count as lost.
+    """
+    run_id = run_kwargs["run_id"]
+    user_id = run_kwargs["user_id"]
+    try:
+        result = await run_agent_headless(
+            **run_kwargs, governance=governance, audit_started=True
+        )
+    except Exception:
+        logger.error("Run-now %s for user %s raised", run_id, user_id, exc_info=True)
+        await governance.on_run_end(
+            result=RunResult(
+                run_id=run_id,
+                session_id=run_kwargs["session_id"],
+                user_id=user_id,
+                status="error",
+                error="The run stopped unexpectedly.",
+                title=run_kwargs.get("title"),
+                finished_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            )
+        )
+        return
+    logger.info(
+        "Run-now %s for user %s finished status=%s session=%s",
+        result.run_id,
+        user_id,
+        result.status,
+        result.session_id,
+    )
+
+
+@router.post(
+    "/now",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=RunStartedResponse,
+    response_model_by_alias=True,
+)
 async def run_now(
     body: RunNowRequest,
     request: Request,
     user: User = Depends(require_scheduled_runs_user),
-) -> RunNowResponse:
-    """Execute one agent turn as the caller through the headless harness.
+) -> RunStartedResponse:
+    """Start one agent turn as the caller through the headless harness.
 
-    Synchronous from the caller's perspective: the response is the full
-    ``RunResult`` once the turn drains (bounded by the harness's 300s
-    budget, matching the chat proxy). The result also lands as a session in
-    the caller's conversation list, so a closed tab loses nothing.
+    Returns ``202`` with the run and session ids as soon as the run is
+    authorized and audited; the turn itself runs in the background (up to
+    the harness's 300s budget, longer than the 60s CloudFront and ALB
+    timeouts in front of app-api). Poll ``GET /runs/{runId}`` for the
+    outcome; the answer lands as a session in the caller's conversations.
+
+    Everything that can reject the run happens before the ``202``: the
+    grant, the RBAC tool filter, the bearer mint, and the start audit row.
+    A run lost to an app-api restart keeps a ``started`` row; the SPA
+    treats one older than the harness budget as lost.
     """
     await _resolve_grant(request, user)
 
@@ -267,18 +319,10 @@ async def run_now(
             )
         enabled_tools = allowed
 
+    # Mint here, not in the background, so a dead credential is still a 409
+    # the form can show. A Cognito access token outlives the 300s budget.
     try:
-        result = await run_agent_headless(
-            user_id=user.user_id,
-            prompt=body.prompt,
-            auth=CognitoRefreshBearerAuth(grants=get_headless_grant_service()),
-            title=body.title,
-            model_id=body.model_id,
-            rag_assistant_id=body.rag_assistant_id,
-            enabled_tools=enabled_tools,
-            agent_type=body.agent_type,
-            trigger="run_now",
-        )
+        bearer = await get_headless_auth().mint_bearer_for_user(user.user_id)
     except HeadlessAuthError as exc:
         # The grant exists but could not mint (Cognito refused — token
         # expired or revoked upstream). 409, not 401: a 401 here would
@@ -290,14 +334,40 @@ async def run_now(
             detail="Headless credential could not be minted; log in again to renew it.",
         )
 
-    logger.info(
-        "Run-now %s for user %s finished status=%s session=%s",
-        result.run_id,
-        user.user_id,
-        result.status,
-        result.session_id,
+    run_id = f"run-{uuid.uuid4().hex[:12]}"
+    session_id = f"{HEADLESS_SESSION_PREFIX}{uuid.uuid4().hex[:16]}"
+    governance = GovernanceFloor(audit=get_run_audit_recorder())
+
+    # Fail-closed audit before the 202: a run that can't be audited must not
+    # execute, and the caller should hear about it now rather than via a poll.
+    await governance.on_run_start(
+        run_id=run_id,
+        user_id=user.user_id,
+        session_id=session_id,
+        trigger="run_now",
+        prompt=body.prompt,
+        title=body.title,
     )
-    return RunNowResponse.from_run_result(result)
+
+    spawn_run(
+        _execute_run(
+            governance=governance,
+            user_id=user.user_id,
+            prompt=body.prompt,
+            auth=StaticBearerAuth(bearer),
+            run_id=run_id,
+            session_id=session_id,
+            title=body.title,
+            model_id=body.model_id,
+            rag_assistant_id=body.rag_assistant_id,
+            enabled_tools=enabled_tools,
+            agent_type=body.agent_type,
+            trigger="run_now",
+        )
+    )
+
+    logger.info("Run-now %s for user %s started session=%s", run_id, user.user_id, session_id)
+    return RunStartedResponse(run_id=run_id, session_id=session_id)
 
 
 @router.post(
@@ -338,3 +408,21 @@ async def revoke_grant(
     credential is deleted in the same write)."""
     revoked = await get_headless_grant_service().revoke(user.user_id)
     return GrantRevokeResponse(revoked=revoked)
+
+
+# Registered after the literal ``/grant`` routes so ``GET /runs/grant`` is
+# never read as a run id.
+@router.get(
+    "/{run_id}", response_model=RunStatusResponse, response_model_by_alias=True
+)
+async def get_run(
+    run_id: str = Path(..., pattern=_RUN_ID_PATTERN),
+    user: User = Depends(require_scheduled_runs_user),
+) -> RunStatusResponse:
+    """The caller's own run, read from its audit row. 404 for any other run."""
+    item = await asyncio.to_thread(
+        get_run_audit_recorder().get, user_id=user.user_id, run_id=run_id
+    )
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    return RunStatusResponse.from_audit_item(item)

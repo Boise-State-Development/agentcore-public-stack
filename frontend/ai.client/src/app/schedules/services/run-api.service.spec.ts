@@ -6,20 +6,24 @@ import { signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { RunApiService } from './run-api.service';
 import { ConfigService } from '../../services/config.service';
-import { RunNowResponse } from '../models/schedule.model';
+import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
+import { RunStartedResponse, RunStatusResponse } from '../models/schedule.model';
 
 const BASE = 'http://localhost:8000/runs';
 
-function stubRunResponse(overrides: Partial<RunNowResponse> = {}): RunNowResponse {
+function stubStarted(): RunStartedResponse {
+  return { runId: 'run-0123456789ab', sessionId: 'headless-1', status: 'started' };
+}
+
+function stubStatus(): RunStatusResponse {
   return {
-    runId: 'run-1',
-    sessionId: 'sess-1',
+    runId: 'run-0123456789ab',
+    sessionId: 'headless-1',
     status: 'completed',
-    finalMessage: 'done',
-    stopReason: null,
+    title: 'T',
     error: null,
-    title: null,
-    ...overrides,
+    startedAt: '2026-11-19T00:00:00Z',
+    finishedAt: '2026-11-19T00:01:10Z',
   };
 }
 
@@ -47,13 +51,27 @@ describe('RunApiService', () => {
   });
 
   it('POSTs to /runs/now with the prompt payload', async () => {
-    const result = stubRunResponse();
+    const result = stubStarted();
     const promise = firstValueFrom(service.runNow({ prompt: 'Do the thing', title: 'Test' }));
 
     await vi.waitFor(() => {
       const req = httpMock.expectOne(`${BASE}/now`);
       expect(req.request.method).toBe('POST');
       expect(req.request.body).toEqual({ prompt: 'Do the thing', title: 'Test' });
+      req.flush(result);
+    });
+
+    expect(await promise).toEqual(result);
+  });
+
+  it('GETs /runs/{runId} without the global error toast', async () => {
+    const result = stubStatus();
+    const promise = firstValueFrom(service.getRun('run-0123456789ab'));
+
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne(`${BASE}/run-0123456789ab`);
+      expect(req.request.method).toBe('GET');
+      expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
       req.flush(result);
     });
 

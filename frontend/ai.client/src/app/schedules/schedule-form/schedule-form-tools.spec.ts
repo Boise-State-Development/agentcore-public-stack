@@ -73,7 +73,7 @@ describe('ScheduleFormPage — tools picker', () => {
             updateSchedule: vi.fn(),
           },
         },
-        { provide: RunNowService, useValue: { run: vi.fn() } },
+        { provide: RunNowService, useValue: { run: vi.fn(), running: signal(false) } },
         { provide: AgentService, useValue: { agents$: signal([]), loadAgents: vi.fn().mockResolvedValue(undefined) } },
         {
           provide: ToolService,

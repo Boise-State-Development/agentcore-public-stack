@@ -235,9 +235,11 @@ that has it defaults to web for clients that omit it.
   complete call (S3-event ingestion), poll the document until `status == complete`.
 * **`GET /shared/{share_id}` is not public** despite a comment saying so; it
   calls `get_current_user_from_session`.
-* **`POST /runs/now`** is a complete non-streaming agent turn in one request,
-  returning `finalMessage`, `toolTrace`, `usage` and `oauthRequired` — a natural
-  fit for a scriptable `aps-tui run "prompt"`.
+* **`POST /runs/now`** starts a non-streaming agent turn and returns `202` with
+  `runId` and `sessionId` (#2113: a turn can outlast the 60s CloudFront and ALB
+  timeouts). Poll `GET /runs/{runId}` until `status` is no longer `started`, then
+  read the answer from the session's messages. Still a fit for a scriptable
+  `aps-tui run "prompt"`.
 * **Most reads are cheap and pollable.** `/tools/` is backed by a 10-second TTL
   cache. Every `/memory/*` read is a vector search and is *not* cheap; neither is
   `/costs/*`, `/tools/{id}/discover`, or anything that starts an agent turn.
