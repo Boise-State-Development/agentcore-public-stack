@@ -240,3 +240,57 @@ def test_frontmatter_metadata_cannot_replace_the_true_id_or_name():
     assert skill.metadata["display_name"] == "PDF Workflows"
     assert skill.metadata["license"] == "MIT"
     assert skill.name == "pdf-workflows"
+
+
+# =============================================================================
+# license / compatibility → Strands Skill, and the activation text
+# =============================================================================
+
+
+def _activate(record):
+    import asyncio
+
+    plugin = AgentSkills(skills=[sm.record_to_strands_skill(record)])
+    skill = plugin.get_available_skills()[0]
+    return asyncio.run(plugin._format_skill_response(skill, None))
+
+
+def test_license_and_compatibility_reach_the_strands_skill():
+    skill = sm.record_to_strands_skill(
+        _record(skill_metadata={"license": "Apache-2.0", "compatibility": "Requires uv"})
+    )
+    assert skill.license == "Apache-2.0"
+    assert skill.compatibility == "Requires uv"
+
+
+@pytest.mark.parametrize("value", [None, "", 3, ["uv"], {"a": "b"}])
+def test_a_non_string_license_or_compatibility_is_left_out(value):
+    skill = sm.record_to_strands_skill(
+        _record(skill_metadata={"license": value, "compatibility": value})
+    )
+    assert skill.license is None and skill.compatibility is None
+
+
+def test_activation_shows_a_compatibility_line_for_a_skill_that_declares_one():
+    text = _activate(_record(skill_metadata={"compatibility": "Requires uv and network"}))
+    assert text == "# PDF\nExtract and fill PDFs.\n\n---\nCompatibility: Requires uv and network"
+
+
+def test_activation_without_compatibility_is_exactly_todays_text():
+    # A license (shown nowhere) and other metadata change nothing either.
+    assert _activate(_record()) == "# PDF\nExtract and fill PDFs."
+    assert (
+        _activate(_record(skill_metadata={"license": "MIT", "version": "1"}))
+        == "# PDF\nExtract and fill PDFs."
+    )
+    assert (
+        _activate(_record(allowed_tools=["Read"]))
+        == "# PDF\nExtract and fill PDFs.\n\n---\nAllowed tools: Read"
+    )
+
+
+def test_a_skill_with_both_lists_tools_then_compatibility():
+    text = _activate(
+        _record(allowed_tools=["Read"], skill_metadata={"compatibility": "Needs git"})
+    )
+    assert text.endswith("\n---\nAllowed tools: Read\nCompatibility: Needs git")
