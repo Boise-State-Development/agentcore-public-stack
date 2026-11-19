@@ -16,6 +16,7 @@ function preview(overrides: Partial<ImportPreview> = {}): ImportPreview {
     candidates: [],
     skill: {
       name: 'contract-redline',
+      storedName: 'contract-redline',
       displayName: 'Contract redline',
       description: 'Redline a contract.',
       instructionsLength: 120,
@@ -185,5 +186,73 @@ describe('SkillBundleImportComponent', () => {
     await r.settle();
 
     expect(r.el.querySelector('[role="alert"]')?.textContent).toContain('not public');
+  });
+
+  it('shows a refresh diff as text with markers, and the commit it moves between', async () => {
+    const previewImport = vi.fn().mockResolvedValue(
+      preview({
+        changes: { description: false, instructions: true, allowedTools: false, skillMetadata: false },
+        source: { ...preview().source, commitSha: 'b'.repeat(40) },
+        previousCommitSha: 'a'.repeat(40),
+        descriptionDiff: { diff: '', truncated: false },
+        instructionsDiff: {
+          diff: '--- a/SKILL.md\n+++ b/SKILL.md\n@@ -1,3 +1,3 @@\n Line one.\n-Line two.\n+Line <b>2</b>.\n Line three.',
+          truncated: false,
+        },
+      }),
+    );
+    const r = await render({ previewImport }, { skillId: 'contract_redline', importSource: preview().source });
+    r.button('Check GitHub for changes')!.click();
+    await r.settle();
+
+    const diffs = r.el.querySelectorAll<HTMLDetailsElement>('[data-testid="import-diff"]');
+    expect(diffs.length).toBe(1); // the unchanged description shows nothing
+    expect(diffs[0].open).toBe(true);
+    expect(diffs[0].querySelector('summary')!.textContent).toContain('1 added, 1 removed');
+    const added = diffs[0].querySelector('[data-kind="added"]')!;
+    const removed = diffs[0].querySelector('[data-kind="removed"]')!;
+    expect(added.textContent).toBe('Added: +Line <b>2</b>.');
+    expect(added.querySelector('b')).toBeNull();
+    expect(removed.textContent).toBe('Removed: -Line two.');
+    expect(r.el.textContent).toContain('aaaaaaa');
+    expect(r.el.textContent).toContain('bbbbbbb');
+  });
+
+  it('collapses a long diff and says when it was cut', async () => {
+    const long = ['--- a/SKILL.md', '+++ b/SKILL.md', '@@ -1,40 +1,40 @@']
+      .concat(Array.from({ length: 40 }, (_, i) => `+line ${i}`))
+      .join('\n');
+    const previewImport = vi.fn().mockResolvedValue(
+      preview({
+        changes: { description: false, instructions: true, allowedTools: false, skillMetadata: false },
+        instructionsDiff: { diff: long, truncated: true },
+      }),
+    );
+    const r = await render({ previewImport }, { skillId: 'contract_redline', importSource: preview().source });
+    r.button('Check GitHub for changes')!.click();
+    await r.settle();
+
+    const diff = r.el.querySelector<HTMLDetailsElement>('[data-testid="import-diff"]')!;
+    expect(diff.open).toBe(false);
+    expect(r.el.querySelector('[data-testid="import-diff-truncated"]')).not.toBeNull();
+  });
+
+  it('shows the stored name and the diagnostics the preview returned', async () => {
+    const previewImport = vi.fn().mockResolvedValue(
+      preview({
+        skill: { ...preview().skill!, name: 'mcp-builder', storedName: 'mcp-builder-2' },
+        diagnostics: [
+          { level: 'warning', field: 'name', code: 'stored_name_differs', message: 'Stored as mcp-builder-2.' },
+        ],
+      }),
+    );
+    const r = await render({ previewImport });
+    r.typeUrl('https://github.com/acme/skills/tree/main/skills/mcp-builder');
+    r.button('Preview')!.click();
+    await r.settle();
+
+    expect(r.el.textContent).toContain('Activation name: mcp-builder-2');
+    const row = r.el.querySelector('[data-testid="skill-md-diagnostics"] li')!;
+    expect(row.textContent).toContain('Warning: Stored as mcp-builder-2.');
   });
 });

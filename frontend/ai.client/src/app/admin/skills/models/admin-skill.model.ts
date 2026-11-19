@@ -95,6 +95,10 @@ export interface SkillCreateRequest {
   compose?: string[];
   status?: SkillStatus;
   category?: string | null;
+  /** Advisory `allowed-tools` from an imported SKILL.md; never grants a tool. */
+  allowedTools?: string[];
+  /** Frontmatter beyond name and description (license, compatibility, metadata, ...). */
+  skillMetadata?: Record<string, unknown>;
 }
 
 /**
@@ -120,6 +124,27 @@ export interface SetSkillRolesRequest {
  * skill_id regex — identical to the backend SKILL_ID_PATTERN.
  */
 export const SKILL_ID_PATTERN = /^[a-z][a-z0-9_]{2,49}$/;
+
+/**
+ * Best-effort skill_id from a SKILL.md `name` (`pdf-tools` → `pdf_tools`):
+ * lowercase, non-`[a-z0-9_]` → `_`, collapse and trim underscores, a letter
+ * first, at most 50 characters. It may still be invalid (e.g. too short); the
+ * form validates it and the admin corrects it.
+ */
+export function slugifySkillId(name: string): string {
+  let slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  if (slug && !/^[a-z]/.test(slug)) {
+    slug = `s_${slug}`;
+  }
+  if (slug.length > 50) {
+    slug = slug.slice(0, 50).replace(/_+$/g, '');
+  }
+  return slug;
+}
 
 /**
  * Available skill statuses for dropdowns.

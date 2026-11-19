@@ -12,6 +12,7 @@ import {
   SkillResourceRef,
   SkillResourcesResponse,
 } from '../models/admin-skill.model';
+import { SkillMdParseResult } from '../../../shared/skills/skill-md-parse';
 
 /**
  * Service for admin skill management.
@@ -68,6 +69,18 @@ export class AdminSkillService {
       url += `?status=${status}`;
     }
     return firstValueFrom(this.http.get<AdminSkillListResponse>(url));
+  }
+
+  /**
+   * Read one SKILL.md into create-form fields and diagnostics. Writes nothing;
+   * the server owns the format (one parser for every ingest path).
+   */
+  async parseSkillMd(file: File): Promise<SkillMdParseResult> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return firstValueFrom(
+      this.http.post<SkillMdParseResult>(`${this.baseUrl()}/import/parse`, form),
+    );
   }
 
   /**

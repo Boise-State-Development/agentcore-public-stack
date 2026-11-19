@@ -3,6 +3,7 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { AgentService } from '../../../agents/services/agent.service';
 import { ConfigService } from '../../../services/config.service';
+import { SkillMdParseResult } from '../../../shared/skills/skill-md-parse';
 import {
   CreateMySkillRequest,
   ImportApplyResult,
@@ -184,6 +185,22 @@ export class MySkillService {
       ),
     );
     return response?.resources ?? [];
+  }
+
+  // ---- SKILL.md import ------------------------------------------------------
+
+  /**
+   * Read one SKILL.md into form fields and diagnostics. Writes nothing; the
+   * server owns the format (one parser for every ingest path).
+   */
+  parseSkillMd(file: File): Promise<SkillMdParseResult> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return firstValueFrom(
+      this.http.post<SkillMdParseResult>(`${this.baseUrl()}/import/parse`, form, {
+        withCredentials: true,
+      }),
+    );
   }
 
   // ---- bundle import (skill-bundle-import.md) ------------------------------

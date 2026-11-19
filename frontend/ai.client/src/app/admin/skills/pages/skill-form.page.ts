@@ -26,6 +26,7 @@ import {
   SKILL_STATUSES,
   SKILL_CATEGORIES,
   SKILL_ID_PATTERN,
+  slugifySkillId,
 } from '../models/admin-skill.model';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import {
@@ -35,9 +36,10 @@ import {
 } from '../../../shared/skills/skill-export';
 import { SKILL_DESCRIPTION_MAX_LENGTH } from '../../../shared/skills/skill-field-limits';
 import {
-  parseSkillMarkdown,
-  slugifySkillId,
-} from '../models/skill-import.util';
+  SkillMdDiagnostic,
+  skillMdParseErrorMessage,
+} from '../../../shared/skills/skill-md-parse';
+import { SkillMdDiagnosticsComponent } from '../../../shared/skills/skill-md-diagnostics.component';
 import {
   DISALLOWED_RESOURCE_MESSAGE,
   RESOURCE_ACCEPT_ATTR,
@@ -47,7 +49,7 @@ import {
 @Component({
   selector: 'app-skill-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, ReactiveFormsModule, NgIcon, SpinnerComponent],
+  imports: [RouterLink, ReactiveFormsModule, NgIcon, SpinnerComponent, SkillMdDiagnosticsComponent],
   providers: [
     provideIcons({
       heroArrowDownTray,
@@ -105,18 +107,26 @@ import {
                 class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
               >
                 <ng-icon name="heroArrowUpTray" class="size-4" aria-hidden="true" />
-                Import SKILL.md
+                {{ importing() ? 'Reading…' : 'Import SKILL.md' }}
               </label>
               <input
                 id="skillImport"
                 type="file"
                 accept=".md,.markdown,text/markdown,text/plain"
                 class="sr-only"
+                [disabled]="importing()"
                 (change)="onImportSelected($event)"
               />
             </div>
           }
         </div>
+        @if (!isEditMode()) {
+          <app-skill-md-diagnostics
+            class="mb-6 block"
+            headingId="admin-skill-md-diagnostics"
+            [diagnostics]="importDiagnostics()"
+          />
+        }
 
         @if (loading()) {
           <div class="flex h-64 items-center justify-center">
@@ -428,6 +438,15 @@ export class SkillFormPage implements OnInit {
   saving = signal(false);
   error = signal<string | null>(null);
   importNotice = signal<string | null>(null);
+  readonly importing = signal(false);
+  /** The server's notes on the last imported SKILL.md (rendered as text only). */
+  readonly importDiagnostics = signal<SkillMdDiagnostic[]>([]);
+  /**
+   * Frontmatter from an imported SKILL.md with no form control of its own,
+   * sent on create so the skill keeps it (advisory tools, license, metadata, ...).
+   */
+  readonly importedAllowedTools = signal<string[]>([]);
+  readonly importedSkillMetadata = signal<Record<string, unknown>>({});
   skillId = signal<string | null>(null);
 
   readonly isEditMode = computed(() => !!this.skillId());
@@ -532,11 +551,13 @@ export class SkillFormPage implements OnInit {
     input.value = ''; // allow re-importing the same file
     if (!file) return;
 
+    this.importing.set(true);
+    this.error.set(null);
+    this.importNotice.set(null);
     try {
-      const text = await file.text();
-      const parsed = parseSkillMarkdown(text);
+      const parsed = await this.adminSkillService.parseSkillMd(file);
       const patch: Record<string, string> = {
-        displayName: parsed.name || this.form.get('displayName')?.value || '',
+        displayName: parsed.displayName || this.form.get('displayName')?.value || '',
         description: parsed.description || this.form.get('description')?.value || '',
         instructions: parsed.instructions || this.form.get('instructions')?.value || '',
       };
@@ -544,11 +565,17 @@ export class SkillFormPage implements OnInit {
         patch['skillId'] = slugifySkillId(parsed.name);
       }
       this.form.patchValue(patch);
+      this.importedAllowedTools.set(parsed.allowedTools);
+      this.importedSkillMetadata.set(parsed.skillMetadata);
+      this.importDiagnostics.set(parsed.diagnostics);
       this.importNotice.set(
         'Imported from SKILL.md. Review the Skill ID, then add reference files.'
       );
-    } catch {
-      this.error.set('Could not read the selected SKILL.md file.');
+    } catch (err: unknown) {
+      this.importDiagnostics.set([]);
+      this.error.set(skillMdParseErrorMessage(err));
+    } finally {
+      this.importing.set(false);
     }
   }
 
@@ -686,6 +713,8 @@ export class SkillFormPage implements OnInit {
           instructions: v.instructions,
           status: v.status,
           category,
+          allowedTools: this.importedAllowedTools(),
+          skillMetadata: this.importedSkillMetadata(),
         });
         // Upload any staged reference files now that the skill exists.
         for (const file of this.pendingFiles()) {

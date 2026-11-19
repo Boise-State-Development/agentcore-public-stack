@@ -13,7 +13,11 @@ import { FEATURES } from '../../services/features';
 import { FieldSetsSectionComponent } from './components/field-sets-section.component';
 import { SkillBundleImportComponent } from './components/skill-bundle-import.component';
 import { fieldSetNameFor } from './models/field-set.model';
-import { parseSkillMarkdown } from '../../admin/skills/models/skill-import.util';
+import {
+  SkillMdDiagnostic,
+  skillMdParseErrorMessage,
+} from '../../shared/skills/skill-md-parse';
+import { SkillMdDiagnosticsComponent } from '../../shared/skills/skill-md-diagnostics.component';
 import {
   DISALLOWED_RESOURCE_MESSAGE,
   RESOURCE_ACCEPT_ATTR,
@@ -51,6 +55,7 @@ import { MySkillService } from './services/my-skill.service';
     NgIcon,
     FieldSetsSectionComponent,
     SkillBundleImportComponent,
+    SkillMdDiagnosticsComponent,
   ],
   templateUrl: './skill-form.page.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -75,6 +80,9 @@ export class SkillFormPage {
   protected readonly saving = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly importNotice = signal<string | null>(null);
+  protected readonly importing = signal(false);
+  /** The server's notes on the last imported SKILL.md (rendered as text only). */
+  protected readonly importDiagnostics = signal<SkillMdDiagnostic[]>([]);
   /** Arrived via `Add → Upload skill` rather than `Add → Create a skill`. */
   protected readonly importMode = signal(false);
 
@@ -171,29 +179,37 @@ export class SkillFormPage {
   protected async onImportSelected(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
+    // Let the same file be re-picked if the user wants to redo the import.
+    input.value = '';
     if (!file) {
       return;
     }
 
-    const text = await file.text();
-    const parsed = parseSkillMarkdown(text);
-
-    this.form.patchValue({
-      displayName: parsed.name || this.form.controls.displayName.value,
-      description: parsed.description || this.form.controls.description.value,
-      instructions: parsed.instructions,
-    });
-    // Everything the form has no control for still round-trips (D2/D4).
-    this.allowedTools.set(parsed.allowedTools);
-    this.skillMetadata.set(parsed.metadata);
-    this.importNotice.set(
-      parsed.name || parsed.description
-        ? `Prefilled from ${file.name}. Review the name and description before saving.`
-        : `${file.name} had no frontmatter, so its whole body became the instructions.`,
-    );
-
-    // Let the same file be re-picked if the user wants to redo the import.
-    input.value = '';
+    this.importing.set(true);
+    this.error.set(null);
+    this.importNotice.set(null);
+    try {
+      const parsed = await this.skillService.parseSkillMd(file);
+      this.form.patchValue({
+        displayName: parsed.displayName || this.form.controls.displayName.value,
+        description: parsed.description || this.form.controls.description.value,
+        instructions: parsed.instructions,
+      });
+      // Everything the form has no control for still round-trips (D2/D4).
+      this.allowedTools.set(parsed.allowedTools);
+      this.skillMetadata.set(parsed.skillMetadata);
+      this.importDiagnostics.set(parsed.diagnostics);
+      this.importNotice.set(
+        parsed.name || parsed.description
+          ? `Prefilled from ${file.name}. Review the name and description before saving.`
+          : `${file.name} had no frontmatter, so its whole body became the instructions.`,
+      );
+    } catch (err: unknown) {
+      this.importDiagnostics.set([]);
+      this.error.set(skillMdParseErrorMessage(err));
+    } finally {
+      this.importing.set(false);
+    }
   }
 
   // ---- bundle files ------------------------------------------------------
