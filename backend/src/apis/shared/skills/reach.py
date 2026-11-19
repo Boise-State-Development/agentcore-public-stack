@@ -39,6 +39,10 @@ _MAX_NAMES = 5
 
 _SHARED_VISIBILITIES = frozenset({"SHARED", "PUBLIC"})
 
+# The ``detail.code`` of the 409 a REST skill write returns while the edit would
+# reach other people's unpinned bindings and ``confirmReach`` was not sent.
+REACH_CONFIRMATION_CODE = "skill_reach_unconfirmed"
+
 
 @dataclass(frozen=True)
 class SkillBinding:
@@ -70,6 +74,29 @@ class SkillReach:
     @property
     def pinned(self) -> List[SkillBinding]:
         return [b for b in self.bindings if b.pinned_version is not None]
+
+    @property
+    def reaches_others_unpinned(self) -> bool:
+        """Whether an edit would change what runs in someone else's session next turn.
+
+        True when an unpinned binding is on a shared Agent or a project: those run
+        for people other than the skill's owner. A private Agent runs only for the
+        owner, and a pinned binding keeps running the version it pinned, so
+        neither needs the owner to confirm (agentskills-conformance S3).
+        """
+        return any(b.shared for b in self.unpinned)
+
+    def conflict_detail(self) -> Dict[str, Any]:
+        """The 409 body a REST write returns until the caller confirms the reach.
+
+        ``reach`` is :meth:`summary`, the same paragraph the ``my_skill_*``
+        approval card shows, so the two surfaces never word it differently.
+        """
+        return {
+            "code": REACH_CONFIRMATION_CODE,
+            "message": "This change reaches other people's agents or projects. Confirm to save it.",
+            "reach": self.summary(),
+        }
 
     def summary(self) -> str:
         """One paragraph for the approval card: who the edit reaches."""

@@ -66,7 +66,9 @@ from apis.shared.skills.models import (
     check_instructions,
     check_skill_metadata,
     check_text_field,
+    skill_provenance,
 )
+from apis.shared.skills.reach import lookup_skill_reach
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.skills.resource_store import compute_content_hash
 from apis.shared.skills.resource_types import (
@@ -310,6 +312,9 @@ class UpdateMySkillRequest(BaseModel):
     skill_metadata: Optional[Dict] = Field(None, alias="skillMetadata")
     category: Optional[str] = None
     status: Optional[SkillStatus] = None
+    # Sent once the user has seen the reach summary of a 409 and confirmed the
+    # edit should reach the shared Agents and projects that run it unpinned.
+    confirm_reach: bool = Field(False, alias="confirmReach")
 
     model_config = {"populate_by_name": True}
 
@@ -332,6 +337,20 @@ class UpdateMySkillRequest(BaseModel):
     @classmethod
     def _skill_metadata_valid(cls, value: Optional[Dict]) -> Optional[Dict]:
         return check_skill_metadata(value)
+
+
+async def require_reach_confirmed(skill_id: str, user: User) -> None:
+    """409 with the reach summary when an edit would reach others' unpinned bindings.
+
+    Only the caller's own Agents and projects can run the caller's skill for
+    anyone else (``apis/shared/skills/reach.py``), so the lookup reads only the
+    caller's partition and discloses nothing. It is blocking boto3, so it runs
+    in a worker thread. A lookup that fails does not block the save, the same
+    as the approval card, whose summary then says it could not check.
+    """
+    reach = await run_blocking(lookup_skill_reach, skill_id, user.user_id)
+    if reach.reaches_others_unpinned:
+        raise HTTPException(status_code=409, detail=reach.conflict_detail())
 
 
 def _user_skill_error(e: UserSkillError) -> HTTPException:
@@ -422,6 +441,9 @@ async def update_my_skill(
     logger.info(f"User {user.name} updating an authored skill")
 
     updates = request.model_dump(exclude_unset=True, exclude_none=True)
+    updates.pop("confirm_reach", None)
+    if not request.confirm_reach:
+        await require_reach_confirmed(skill_id, user)
     try:
         skill = await get_user_skill_service().update_my_skill(skill_id, updates, user)
     except UserSkillError as e:
