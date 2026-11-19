@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from apis.shared.skills.skill_md import (
     ALLOWED_TOOLS_MAX_NAMES,
@@ -104,7 +104,7 @@ class SkillResourceRef(BaseModel):
         ...,
         alias="s3Key",
         description="Object key in the skill-resources bucket, in the standard "
-        "agentskills.io layout (skills/{skill_id}/{references|scripts|assets}/{filename})",
+        "agentskills.io layout (skills/{skill_id}/{references|scripts|assets}/{path})",
     )
     # Skills v2: which agentskills.io bundle directory the file belongs to.
     # ``script`` files are accept-and-inert (stored + listed, never executed).
@@ -113,8 +113,59 @@ class SkillResourceRef(BaseModel):
         default="reference",
         description="Bundle directory: reference | script | asset",
     )
+    # Where the file sits below its kind directory, '/'-separated, at most 4
+    # segments (``resource_paths``): ``forms.md`` or ``legal/nda.md``. Rows
+    # written before nested paths have none stored and read back with
+    # ``path == filename``, so they need no migration; ``filename`` stays the
+    # basename. Unique within a manifest across kinds.
+    path: str = Field(
+        default="",
+        description="Path below the kind directory, e.g. 'legal/nda.md'",
+    )
 
     model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _default_path(self) -> "SkillResourceRef":
+        if not self.path:
+            self.path = self.filename
+        elif not self.filename:
+            self.filename = self.path.rsplit("/", 1)[-1]
+        return self
+
+    def to_item(self) -> Dict:
+        """The manifest entry as stored on a row (camelCase).
+
+        ``path`` is written only when it differs from ``filename``, so an entry
+        at the top of its directory is stored exactly as it was before nested
+        paths existed.
+        """
+        item = {
+            "filename": self.filename,
+            "contentHash": self.content_hash,
+            "size": self.size,
+            "contentType": self.content_type,
+            "s3Key": self.s3_key,
+            "kind": self.kind,
+        }
+        if self.path != self.filename:
+            item["path"] = self.path
+        return item
+
+    @classmethod
+    def from_item(cls, item: Dict) -> "SkillResourceRef":
+        """Inverse of :meth:`to_item`; a stored entry with no ``path`` is a top-level file."""
+        return cls(
+            filename=item.get("filename", ""),
+            content_hash=item.get("contentHash", ""),
+            # DynamoDB returns numbers as Decimal — coerce to int.
+            size=int(item.get("size", 0)),
+            content_type=item.get("contentType", ""),
+            s3_key=item.get("s3Key", ""),
+            # Old rows predate kind → default to reference.
+            kind=item.get("kind", "reference"),
+            path=item.get("path") or "",
+        )
 
 
 class SkillImportSource(BaseModel):
@@ -288,17 +339,7 @@ class SkillDefinition(BaseModel):
             "skillMetadata": dict(self.skill_metadata),
             # Reference-file manifest (camelCase maps, mirroring the row's
             # convention). The bytes live in S3; this is just pointers.
-            "resources": [
-                {
-                    "filename": r.filename,
-                    "contentHash": r.content_hash,
-                    "size": r.size,
-                    "contentType": r.content_type,
-                    "s3Key": r.s3_key,
-                    "kind": r.kind,
-                }
-                for r in self.resources
-            ],
+            "resources": [r.to_item() for r in self.resources],
             "status": self.status
             if isinstance(self.status, str)
             else self.status.value,
@@ -332,17 +373,7 @@ class SkillDefinition(BaseModel):
             allowed_tools=list(item.get("allowedTools") or []),
             skill_metadata=dict(item.get("skillMetadata") or {}),
             resources=[
-                SkillResourceRef(
-                    filename=r.get("filename", ""),
-                    content_hash=r.get("contentHash", ""),
-                    # DynamoDB returns numbers as Decimal — coerce to int.
-                    size=int(r.get("size", 0)),
-                    content_type=r.get("contentType", ""),
-                    s3_key=r.get("s3Key", ""),
-                    # Old rows predate kind → default to reference.
-                    kind=r.get("kind", "reference"),
-                )
-                for r in (item.get("resources") or [])
+                SkillResourceRef.from_item(r) for r in (item.get("resources") or [])
             ],
             status=item.get("status", SkillStatus.ACTIVE),
             category=item.get("category"),
