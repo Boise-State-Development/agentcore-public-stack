@@ -103,6 +103,9 @@ class PinStatus:
     pinned_at: Optional[str]
     # The live skill's content differs from the pinned version (always False unpinned).
     update_available: bool
+    # Where the pinned version came from (``SkillVersion.import_source``); None unpinned,
+    # for a skill never imported, or for a version cut before this was recorded.
+    import_source: Optional[Dict[str, str]] = None
 
 
 async def pin_status(bindings: Iterable[Tuple[str, Optional[int]]]) -> Dict[str, PinStatus]:
@@ -133,6 +136,7 @@ async def pin_status(bindings: Iterable[Tuple[str, Optional[int]]]) -> Dict[str,
             n,
             version.created_at,
             current is not None and content_hash(current) != version.content_hash,
+            version.import_source,
         )
     return out
 

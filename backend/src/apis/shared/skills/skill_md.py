@@ -618,6 +618,41 @@ def _soften_on_input(diagnostic: Diagnostic) -> Diagnostic:
     )
 
 
+# What an import does with each frontmatter error instead of refusing. The skill's
+# name is replaced by its stored name (the preview's ``stored_name_differs`` says
+# which); everything else is kept in ``skill_metadata``, and the projection writes a
+# value that is not a valid top-level field under ``metadata`` as a string
+# (``bundle._projected_metadata``). A description that is missing or too long never
+# gets here: ``parse_bundle`` refuses it.
+_REPAIRED_ON_IMPORT = {
+    "name_missing": "The skill is stored under a valid name instead.",
+    "name_too_long": "The skill is stored under a valid name instead.",
+    "name_invalid": "The skill is stored under a valid name instead.",
+    "license_invalid": "It is kept and written under metadata.",
+    "license_too_long": "It is kept and written under metadata.",
+    "compatibility_invalid": "It is kept and written under metadata.",
+    "compatibility_too_long": "It is kept and written under metadata.",
+    "metadata_invalid": "It is kept and written under metadata as a string.",
+    "metadata_value_not_string": "It is kept and written as a string.",
+}
+
+
+def as_import_diagnostic(diagnostic: Diagnostic) -> Diagnostic:
+    """A frontmatter error an import repairs, as the warning it really is.
+
+    An import never refuses for these, so calling them errors told the user the
+    import would fail and then it succeeded. The wording keeps the rule and says
+    what happens instead. Anything not listed is returned unchanged.
+    """
+    remedy = _REPAIRED_ON_IMPORT.get(diagnostic.code)
+    if remedy is None or not diagnostic.is_error:
+        return diagnostic
+    rule = diagnostic.message.rstrip(".")
+    return Diagnostic(
+        diagnostic.code, f"{rule}. {remedy}", level=LEVEL_WARNING, field=diagnostic.field
+    )
+
+
 def validate_skill_metadata(skill_metadata: Optional[Dict[str, Any]]) -> List[Diagnostic]:
     """Lenient check of a stored skill's ``skill_metadata`` (the frontmatter beyond name and description).
 

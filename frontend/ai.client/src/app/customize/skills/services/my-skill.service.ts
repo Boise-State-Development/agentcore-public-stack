@@ -17,6 +17,7 @@ import {
   UpdateMySkillRequest,
 } from '../models/my-skill.model';
 import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
+import { reachConfirmationFrom } from '../../../shared/skills/skill-provenance';
 
 /**
  * Signal-based state for the user-authored skills tier (Skills v2 PR-3).
@@ -119,16 +120,26 @@ export class MySkillService {
     }
   }
 
-  async deleteSkill(skillId: string): Promise<void> {
+  /**
+   * Delete an authored skill. While a project or shared agent uses it, the server
+   * answers 409 with who loses it; that error is rethrown without the banner so
+   * the caller can ask, then call again with `confirmReach`.
+   */
+  async deleteSkill(skillId: string, options: { confirmReach?: boolean } = {}): Promise<void> {
     this.error.set(null);
     try {
       await firstValueFrom(
-        this.http.delete(`${this.baseUrl()}/${skillId}`, { withCredentials: true }),
+        this.http.delete(`${this.baseUrl()}/${skillId}`, {
+          withCredentials: true,
+          params: options.confirmReach ? { confirmReach: 'true' } : {},
+        }),
       );
       this.skills.update((current) => current.filter((s) => s.skillId !== skillId));
       this.agents.invalidateBindable('skill');
     } catch (err) {
-      this.error.set(this.messageFor(err, 'Failed to delete the skill'));
+      if (reachConfirmationFrom(err) === null) {
+        this.error.set(this.messageFor(err, 'Failed to delete the skill'));
+      }
       throw err;
     }
   }

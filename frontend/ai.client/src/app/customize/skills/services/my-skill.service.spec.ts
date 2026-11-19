@@ -197,6 +197,25 @@ describe('MySkillService', () => {
     expect(service.skills$()).toEqual([]);
   });
 
+  it('hands a delete reach 409 back to the caller without the error banner', async () => {
+    // A project or shared agent uses the skill: the page asks with the server's
+    // summary, so a banner saying "Failed to delete" would be wrong.
+    const first = service.deleteSkill('grant_writing');
+    httpMock.expectOne(`${BASE}/grant_writing`).flush(
+      { detail: { code: 'skill_reach_unconfirmed', message: 'm', reach: 'Used by 1 project ("Legal").' } },
+      { status: 409, statusText: 'Conflict' },
+    );
+    await expect(first).rejects.toBeDefined();
+    expect(service.error$()).toBeNull();
+
+    const confirmed = service.deleteSkill('grant_writing', { confirmReach: true });
+    const req = httpMock.expectOne((r) => r.url === `${BASE}/grant_writing`);
+    expect(req.request.method).toBe('DELETE');
+    expect(req.request.params.get('confirmReach')).toBe('true');
+    req.flush({ message: 'ok' });
+    await confirmed;
+  });
+
   it('drops the bindable skill palette after every write, not after a failed one', async () => {
     // A project's Skills page memoises the palette for the whole tab; an authored
     // skill is part of the accessible set, so each write must make it re-fetch.

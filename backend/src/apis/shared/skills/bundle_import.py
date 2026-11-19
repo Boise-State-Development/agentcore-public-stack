@@ -278,6 +278,27 @@ def _is_ignored(name: str) -> bool:
     return any(seg.startswith(".") or seg == "__MACOSX" for seg in name.split("/"))
 
 
+# How many skill folders the "No SKILL.md at …" message names before "and N more".
+_MAX_NAMED_SKILL_DIRS = 10
+
+
+def _largest_folders_hint(files: List["BundleFile"]) -> str:
+    """`` Most are in csharp/ (12), go/ (9).`` — where an over-the-cap bundle's files are.
+
+    Counted by the file's first folder in the bundle, so the author can see which
+    part to leave out. Empty when every file is at the top level.
+    """
+    counts: Dict[str, int] = {}
+    for f in files:
+        head, sep, _ = f.path.partition("/")
+        if sep:
+            counts[head] = counts.get(head, 0) + 1
+    if not counts:
+        return ""
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+    return " Most are in " + ", ".join(f"{name}/ ({n})" for name, n in ranked) + "."
+
+
 def _choose_root(skill_dirs: List[str], path: Optional[str]) -> Optional[str]:
     """The bundle root: ``path`` when given (``""`` is the top level), else the only one."""
     if path is not None:
@@ -286,7 +307,10 @@ def _choose_root(skill_dirs: List[str], path: Optional[str]) -> Optional[str]:
             return wanted
         hint = ""
         if skill_dirs:
-            shown = ", ".join(d or "(top level)" for d in skill_dirs[:10])
+            shown = ", ".join(d or "(top level)" for d in skill_dirs[:_MAX_NAMED_SKILL_DIRS])
+            extra = len(skill_dirs) - _MAX_NAMED_SKILL_DIRS
+            if extra > 0:
+                shown += f" and {extra} more"
             hint = f" Skills found: {shown}."
         raise BundleImportError(f"No SKILL.md at '{wanted or '/'}'.{hint}")
     if not skill_dirs:
@@ -363,7 +387,8 @@ def _read_bundle(
     if len(files) > MAX_RESOURCES_PER_SKILL:
         raise BundleImportError(
             f"This skill has {len(files)} files to import; a skill holds at most "
-            f"{MAX_RESOURCES_PER_SKILL}."
+            f"{MAX_RESOURCES_PER_SKILL}.{_largest_folders_hint(files)} Upload a .zip "
+            "of the skill without the files it can do without."
         )
     total = sum(f.size for f in files)
     if total > MAX_IMPORT_TOTAL_BYTES:

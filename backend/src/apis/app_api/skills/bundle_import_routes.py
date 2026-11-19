@@ -38,7 +38,12 @@ from apis.shared.skills.bundle_import import (
 )
 from apis.shared.skills.models import SkillDefinition, SkillImportSource
 from apis.shared.skills.resource_types import is_text_content_type
-from apis.shared.skills.skill_md import LEVEL_WARNING, Diagnostic, validate_frontmatter
+from apis.shared.skills.skill_md import (
+    LEVEL_WARNING,
+    Diagnostic,
+    as_import_diagnostic,
+    validate_frontmatter,
+)
 from apis.shared.skills.skill_md_import import DiagnosticModel, unsafe_character_diagnostics
 from apis.shared.skills.user_service import (
     UserSkillError,
@@ -205,7 +210,10 @@ def _preview_diagnostics(
 ) -> List[Diagnostic]:
     """The parser's notes, the frontmatter rules, unsafe characters, and a renamed skill."""
     diagnostics = list(bundle.parse_diagnostics)
-    diagnostics += validate_frontmatter(bundle.frontmatter, strict=False)
+    # An import repairs every frontmatter error it lets through, so none reads as one.
+    diagnostics += [
+        as_import_diagnostic(d) for d in validate_frontmatter(bundle.frontmatter, strict=False)
+    ]
     sources = [("SKILL.md", bundle.instructions)] + [
         (f.path, f.content.decode("utf-8", errors="replace"))
         for f in bundle.files

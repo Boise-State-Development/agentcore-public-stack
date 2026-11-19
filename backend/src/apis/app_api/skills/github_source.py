@@ -132,6 +132,26 @@ def parse_github_url(url: str) -> GitHubLocation:
     return GitHubLocation(owner=owner, repo=repo, ref=ref, path="/".join(rest))
 
 
+def _not_found_message(location: GitHubLocation) -> str:
+    """Why codeload had nothing, including the one way a valid URL reads as missing.
+
+    A tree URL can't say where a branch name ends and the path begins, so
+    ``…/tree/feature/x/skills`` is read as branch ``feature``. When a URL named both
+    a ref and a path, the message says so, since that is the likely cause.
+    """
+    message = (
+        f"{location.owner}/{location.repo}"
+        f"{'@' + location.ref if location.ref else ''} was not found, "
+        "or the repository is not public."
+    )
+    if location.ref and location.path:
+        message += (
+            f" If the branch name has a '/' in it, it was read as '{location.ref}': "
+            "use a tag or a commit SHA in the URL instead."
+        )
+    return message
+
+
 async def fetch_archive(
     location: GitHubLocation,
     *,
@@ -167,12 +187,7 @@ async def _download(
         try:
             async with client.stream("GET", location.archive_url) as response:
                 if response.status_code == 404:
-                    raise GitHubSourceError(
-                        f"{location.owner}/{location.repo}"
-                        f"{'@' + location.ref if location.ref else ''} was not found, "
-                        "or the repository is not public.",
-                        404,
-                    )
+                    raise GitHubSourceError(_not_found_message(location), 404)
                 if response.status_code != 200:
                     raise GitHubSourceError(
                         f"GitHub answered {response.status_code}. Try again later.", 502

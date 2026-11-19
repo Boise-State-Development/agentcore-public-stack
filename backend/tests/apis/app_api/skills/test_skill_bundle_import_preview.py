@@ -200,8 +200,28 @@ class TestPreviewDiagnostics:
         files = {"s/SKILL.md": "---\nname: diag-skill\ndescription: d\nlicense: 7\nx-extra: y\n---\nB"}
         preview = _preview(client, files)
         by_code = {d["code"]: d for d in preview["diagnostics"]}
-        assert by_code["license_invalid"]["level"] == "error"
+        # The import keeps a non-string license under metadata rather than refusing,
+        # so the preview says so as a warning instead of calling it an error.
+        assert by_code["license_invalid"]["level"] == "warning"
+        assert "kept and written under metadata" in by_code["license_invalid"]["message"]
         assert by_code["unknown_field"]["field"] == "x-extra"
+
+    def test_no_preview_diagnostic_is_an_error_for_a_bundle_that_imports(self, client):
+        """Every frontmatter error an import lets through is repaired, so none says "error"."""
+        files = {
+            "s/SKILL.md": (
+                "---\nname: ZeeLin Auto-PPT\ndescription: d\nlicense: 7\n"
+                "compatibility: [a, b]\nmetadata:\n  version: 2\n---\nB"
+            )
+        }
+        preview = _preview(client, files)
+        levels = {d["code"]: d["level"] for d in preview["diagnostics"]}
+        assert "error" not in levels.values(), levels
+        for code in ("name_invalid", "license_invalid", "compatibility_invalid", "metadata_value_not_string"):
+            assert levels[code] == "warning", code
+        name = next(d for d in preview["diagnostics"] if d["code"] == "name_invalid")
+        assert "stored under a valid name instead" in name["message"]
+        assert _create(client, files)["skillId"]
 
     def test_the_colon_repair_is_reported(self, client):
         files = {"s/SKILL.md": "---\nname: colon-skill\ndescription: Use when: asked\n---\nB"}

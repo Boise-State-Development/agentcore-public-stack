@@ -24,6 +24,8 @@ import { CustomizeCardComponent } from '../components/customize-card.component';
 import { SkillRowComponent } from './components/skill-row.component';
 import { MySkillService } from './services/my-skill.service';
 import { MySkill } from './models/my-skill.model';
+import { confirmSkillReach, DELETE_REACH_LABELS } from '../../shared/skills/confirm-skill-reach';
+import { reachConfirmationFrom } from '../../shared/skills/skill-provenance';
 
 /** Which half of the page is showing. Mirrored into the `scope` query param. */
 export type SkillScope = 'yours' | 'discover';
@@ -683,7 +685,16 @@ export class CustomizeSkillsPage {
 
     this.pending.update(set => new Set(set).add(skillId));
     try {
-      await this.mySkillService.deleteSkill(skillId);
+      try {
+        await this.mySkillService.deleteSkill(skillId);
+      } catch (err) {
+        // A project or shared agent uses it: the server names them, and the
+        // user decides with that in front of them.
+        const reach = reachConfirmationFrom(err);
+        if (reach === null) throw err;
+        if (!(await confirmSkillReach(this.dialog, reach, DELETE_REACH_LABELS))) return;
+        await this.mySkillService.deleteSkill(skillId, { confirmReach: true });
+      }
       // The deleted skill is still in the picker feed until it is re-read, and
       // a ghost row that 404s on click is worse than a brief spinner.
       await this.skillService.reload();
