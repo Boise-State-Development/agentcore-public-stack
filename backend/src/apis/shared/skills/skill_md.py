@@ -507,11 +507,43 @@ ROW_OWNED_METADATA_KEYS = frozenset(
 )
 
 
+# Problems the projection repairs losslessly, so input reports them as warnings
+# rather than refusing: a non-string value inside ``metadata`` is written as a
+# string, and a non-string ``license`` is kept under ``metadata``. Stored rows
+# already hold such values (bundle import keeps YAML ints and booleans), and the
+# edit forms send ``skillMetadata`` back unchanged on every save, so refusing
+# them would block an edit to an unrelated field. Output stays strict.
+_REPAIRED_ON_OUTPUT = {
+    "metadata_value_not_string": (
+        "metadata keys and values should be strings; {detail} It is kept and "
+        "written as a string."
+    ),
+    "license_invalid": (
+        "license should be a string. It is kept and written under metadata."
+    ),
+}
+
+
+def _soften_on_input(diagnostic: Diagnostic) -> Diagnostic:
+    template = _REPAIRED_ON_OUTPUT.get(diagnostic.code)
+    if template is None or not diagnostic.is_error:
+        return diagnostic
+    detail = diagnostic.message.split("; ", 1)[-1]
+    return Diagnostic(
+        diagnostic.code,
+        template.format(detail=detail),
+        level=LEVEL_WARNING,
+        field=diagnostic.field,
+    )
+
+
 def validate_skill_metadata(skill_metadata: Optional[Dict[str, Any]]) -> List[Diagnostic]:
     """Lenient check of a stored skill's ``skill_metadata`` (the frontmatter beyond name and description).
 
     ``license``, ``compatibility``, ``metadata`` and ``allowed-tools`` follow
-    the specification's rules; every other key is a warning, because the
+    the specification's rules, except that a non-string value inside
+    ``metadata`` and a non-string ``license`` are warnings, because the
+    projection stringifies them; every other key is a warning, because the
     projection keeps it under ``metadata``. A key the row owns (``name``,
     ``description``, ``instructions``, ...) is a warning too: the row's own
     field is what gets written. Callers refuse on errors and pass warnings.
@@ -523,7 +555,7 @@ def validate_skill_metadata(skill_metadata: Optional[Dict[str, Any]]) -> List[Di
     diagnostics: List[Diagnostic] = []
     for key, check in _OPTIONAL_CHECKS.items():
         if key in skill_metadata:
-            diagnostics += check(skill_metadata[key])
+            diagnostics += [_soften_on_input(d) for d in check(skill_metadata[key])]
     for key in sorted(str(k) for k in skill_metadata if k in ROW_OWNED_METADATA_KEYS):
         diagnostics.append(
             _warning(

@@ -238,7 +238,38 @@ def test_skill_metadata_errors_refuse_and_warnings_pass(client):
     assert accepted.json()["skillMetadata"] == {"license": "MIT", "version": 2}
 
     refused_update = client.put(
-        "/skills/mine/meta", json={"skillMetadata": {"metadata": {"version": 1}}}
+        "/skills/mine/meta", json={"skillMetadata": {"metadata": "flat"}}
     )
     assert refused_update.status_code == 422
     assert client.get("/skills/mine/meta").json()["skillMetadata"]["license"] == "MIT"
+
+
+@pytest.mark.parametrize("version", [2, "decimal"])
+@pytest.mark.asyncio
+async def test_a_stored_non_string_metadata_value_does_not_block_an_edit(
+    client, user_skill_service, version
+):
+    """Bundle import keeps YAML ints, and the edit form sends skillMetadata back unchanged."""
+    from decimal import Decimal
+
+    from apis.shared.skills.resource_store import skill_md_key
+    from apis.shared.skills.skill_md import parse_skill_md, validate_frontmatter
+
+    client.post("/skills/mine", json={"displayName": "Stored", "description": "Old."})
+    stored = Decimal("2") if version == "decimal" else version
+    await user_skill_service.repository.update_skill(
+        "stored", {"skill_metadata": {"metadata": {"version": stored}, "license": "MIT"}}
+    )
+    sent_back = {"metadata": {"version": 2}, "license": "MIT"}
+
+    resp = client.put(
+        "/skills/mine/stored", json={"description": "New.", "skillMetadata": sent_back}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["description"] == "New."
+
+    raw = user_skill_service.bundle_files.resource_store.get(skill_md_key("stored"))
+    frontmatter = parse_skill_md(raw.decode("utf-8")).frontmatter
+    assert validate_frontmatter(frontmatter, strict=True) == []
+    assert frontmatter["metadata"] == {"version": "2"}
+    assert frontmatter["license"] == "MIT"
