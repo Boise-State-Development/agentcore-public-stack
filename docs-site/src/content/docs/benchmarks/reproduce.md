@@ -27,7 +27,7 @@ uv run python scripts/eval_harness.py run --out /tmp/bench-haiku --auth cognito 
   --model-id us.anthropic.claude-haiku-5-5 --k 3 --workers 4
 ```
 
-Add `--yes` to run. A full run is 429 samples. On the project's development deployment each took 21 to 25 minutes on 2026-11-13, and cost $0.27 on Haiku 5.5, $4.34 on Sonnet 5 and $9.39 on Opus 5.5.
+Add `--yes` to run. A full run is 429 samples. On the project's development deployment each took 21 to 25 minutes on 2026-11-13, and cost $0.27 on Haiku 5.5, $3.52 on Sonnet 5.5 and $9.39 on Opus 5.5.
 
 ## 3. Publish
 
