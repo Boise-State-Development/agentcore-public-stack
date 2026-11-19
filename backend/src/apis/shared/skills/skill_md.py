@@ -15,6 +15,11 @@ while it is composed:
 Because the counts are taken while composing, a refused document is never
 expanded or constructed into Python objects.
 
+:func:`validate_frontmatter` checks a parsed frontmatter against the
+agentskills.io rules (lenient on input, strict for what this platform writes);
+:func:`validate_skill_metadata` applies the same rules to a stored skill's
+``skill_metadata``.
+
 :func:`find_unsafe_characters` reports characters that render as nothing or
 reorder text (controls, zero-width and bidirectional format characters, the
 tag block), for fields a person reads and the model is shown.
@@ -22,6 +27,7 @@ tag block), for fields a person reads and the model is shown.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -32,6 +38,9 @@ MAX_FRONTMATTER_BYTES = 16 * 1024
 MAX_FRONTMATTER_NODES = 2_000
 # Nesting of mappings and sequences; the top-level mapping is depth 1.
 MAX_FRONTMATTER_DEPTH = 8
+
+LEVEL_ERROR = "error"
+LEVEL_WARNING = "warning"
 
 _BOM = "﻿"
 _CLOSING_DELIMITER = re.compile(r"\n---[ \t]*(\n|$)")
@@ -51,10 +60,22 @@ class SkillMdError(ValueError):
 
 @dataclass(frozen=True)
 class Diagnostic:
-    """Something about the file worth telling its author that did not stop the parse."""
+    """Something about the file worth telling its author.
+
+    The parser's notes (``byte_order_mark``, ``frontmatter_unclosed``) are
+    warnings about the file as a whole, so ``level`` and ``field`` default to
+    that. :func:`validate_frontmatter` sets both: ``level`` is ``"error"`` or
+    ``"warning"`` and ``field`` names the frontmatter key.
+    """
 
     code: str
     message: str
+    level: str = "warning"
+    field: str = ""
+
+    @property
+    def is_error(self) -> bool:
+        return self.level == LEVEL_ERROR
 
 
 @dataclass
@@ -241,3 +262,290 @@ def unsafe_character_problem(label: str, text: Optional[str]) -> Optional[str]:
         f"{label} contains an invisible or control character ({first.label} at "
         f"position {first.index}{more}); remove it and try again"
     )
+
+
+# =============================================================================
+# Validation (agentskills.io frontmatter rules)
+# =============================================================================
+
+# The six top-level keys the agentskills.io specification defines, in the
+# order the projection writes them.
+STANDARD_KEYS = ("name", "description", "license", "compatibility", "metadata", "allowed-tools")
+
+NAME_MAX_LENGTH = 64
+DESCRIPTION_MAX_LENGTH = 1024
+COMPATIBILITY_MAX_LENGTH = 500
+LICENSE_MAX_LENGTH = 500
+METADATA_MAX_KEYS = 50
+METADATA_MAX_BYTES = 16 * 1024
+ALLOWED_TOOLS_MAX_NAMES = 64
+
+_NAME_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+
+
+def _error(field_name: str, code: str, message: str) -> Diagnostic:
+    return Diagnostic(code, message, level=LEVEL_ERROR, field=field_name)
+
+
+def _warning(field_name: str, code: str, message: str) -> Diagnostic:
+    return Diagnostic(code, message, level=LEVEL_WARNING, field=field_name)
+
+
+def _check_name(value: Any) -> List[Diagnostic]:
+    if not isinstance(value, str) or not value:
+        return [_error("name", "name_missing", "name is required and must be a string.")]
+    if len(value) > NAME_MAX_LENGTH:
+        return [
+            _error(
+                "name",
+                "name_too_long",
+                f"name is {len(value)} characters; the limit is {NAME_MAX_LENGTH}.",
+            )
+        ]
+    if "--" in value or not _NAME_PATTERN.match(value):
+        return [
+            _error(
+                "name",
+                "name_invalid",
+                "name may use only lowercase letters, digits and single hyphens, and "
+                "cannot start or end with a hyphen.",
+            )
+        ]
+    return []
+
+
+def _check_description(value: Any) -> List[Diagnostic]:
+    if not isinstance(value, str) or not value.strip():
+        return [
+            _error(
+                "description",
+                "description_missing",
+                "description is required and cannot be blank.",
+            )
+        ]
+    length = len(value.strip())
+    if length > DESCRIPTION_MAX_LENGTH:
+        return [
+            _error(
+                "description",
+                "description_too_long",
+                f"description is {length:,} characters; the limit is "
+                f"{DESCRIPTION_MAX_LENGTH:,}.",
+            )
+        ]
+    return []
+
+
+def _check_compatibility(value: Any) -> List[Diagnostic]:
+    if not isinstance(value, str) or not value:
+        return [
+            _error(
+                "compatibility",
+                "compatibility_invalid",
+                "compatibility, when given, must be a non-empty string.",
+            )
+        ]
+    if len(value) > COMPATIBILITY_MAX_LENGTH:
+        return [
+            _error(
+                "compatibility",
+                "compatibility_too_long",
+                f"compatibility is {len(value)} characters; the limit is "
+                f"{COMPATIBILITY_MAX_LENGTH}.",
+            )
+        ]
+    return []
+
+
+def _check_license(value: Any) -> List[Diagnostic]:
+    if not isinstance(value, str):
+        return [_error("license", "license_invalid", "license, when given, must be a string.")]
+    if len(value) > LICENSE_MAX_LENGTH:
+        return [
+            _error(
+                "license",
+                "license_too_long",
+                f"license is {len(value)} characters; the limit is {LICENSE_MAX_LENGTH}.",
+            )
+        ]
+    return []
+
+
+def metadata_serialized_bytes(value: Dict[Any, Any]) -> int:
+    """Size of a ``metadata`` map as the validator measures it (compact JSON, UTF-8)."""
+    return len(
+        json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str)
+        .encode("utf-8")
+    )
+
+
+def _check_metadata(value: Any) -> List[Diagnostic]:
+    if not isinstance(value, dict):
+        return [
+            _error(
+                "metadata",
+                "metadata_invalid",
+                "metadata, when given, must be a map of string keys to string values.",
+            )
+        ]
+    problems: List[Diagnostic] = []
+    bad = sorted(
+        str(key)
+        for key, item in value.items()
+        if not isinstance(key, str) or not isinstance(item, str)
+    )
+    if bad:
+        named = ", ".join(bad[:5]) + (f" and {len(bad) - 5} more" if len(bad) > 5 else "")
+        problems.append(
+            _error(
+                "metadata",
+                "metadata_value_not_string",
+                f"metadata keys and values must be strings; {named} is not.",
+            )
+        )
+    if len(value) > METADATA_MAX_KEYS:
+        problems.append(
+            _error(
+                "metadata",
+                "metadata_too_many_keys",
+                f"metadata has {len(value)} keys; the limit is {METADATA_MAX_KEYS}.",
+            )
+        )
+    size = metadata_serialized_bytes(value)
+    if size > METADATA_MAX_BYTES:
+        problems.append(
+            _error(
+                "metadata",
+                "metadata_too_large",
+                f"metadata is {size:,} bytes; the limit is {METADATA_MAX_BYTES // 1024} KiB.",
+            )
+        )
+    return problems
+
+
+def allowed_tool_names(value: Any) -> Optional[List[str]]:
+    """``allowed-tools`` as a list of names, or None if it is neither a string nor a list of strings.
+
+    The specification writes it as one space-separated string; a YAML list is
+    accepted on input.
+    """
+    if isinstance(value, str):
+        return value.split()
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return [name for item in value for name in item.split()]
+    return None
+
+
+def _check_allowed_tools(value: Any) -> List[Diagnostic]:
+    names = allowed_tool_names(value)
+    if names is None:
+        return [
+            _error(
+                "allowed-tools",
+                "allowed_tools_invalid",
+                "allowed-tools, when given, must be a space-separated string or a list of names.",
+            )
+        ]
+    if len(names) > ALLOWED_TOOLS_MAX_NAMES:
+        return [
+            _error(
+                "allowed-tools",
+                "allowed_tools_too_many",
+                f"allowed-tools names {len(names)} tools; the limit is {ALLOWED_TOOLS_MAX_NAMES}.",
+            )
+        ]
+    return []
+
+
+_OPTIONAL_CHECKS = {
+    "license": _check_license,
+    "compatibility": _check_compatibility,
+    "metadata": _check_metadata,
+    "allowed-tools": _check_allowed_tools,
+}
+
+
+def _unknown_key_diagnostics(keys: List[str], *, strict: bool) -> List[Diagnostic]:
+    diagnostics: List[Diagnostic] = []
+    for key in keys:
+        message = (
+            f"{key} is not an agentskills.io frontmatter field. "
+            + (
+                "A conformant SKILL.md has only name, description, license, "
+                "compatibility, metadata and allowed-tools."
+                if strict
+                else "It is kept and written under metadata."
+            )
+        )
+        make = _error if strict else _warning
+        diagnostics.append(make(key, "unknown_field", message))
+    return diagnostics
+
+
+def validate_frontmatter(frontmatter: Dict[str, Any], *, strict: bool) -> List[Diagnostic]:
+    """Check a ``SKILL.md`` frontmatter against the agentskills.io rules.
+
+    Returns every problem found, in key order, each an ``error`` or a
+    ``warning`` naming its field. ``strict`` decides only how a top-level key
+    outside the six standard ones is reported: a warning on input (it is kept
+    and folded under ``metadata``), an error for output, which must be
+    conformant.
+    """
+    diagnostics = _check_name(frontmatter.get("name"))
+    diagnostics += _check_description(frontmatter.get("description"))
+    for key, check in _OPTIONAL_CHECKS.items():
+        if key in frontmatter:
+            diagnostics += check(frontmatter[key])
+    unknown = sorted(str(key) for key in frontmatter if key not in STANDARD_KEYS)
+    return diagnostics + _unknown_key_diagnostics(unknown, strict=strict)
+
+
+# Keys a stored skill's ``skill_metadata`` may hold that the row itself owns:
+# the projection writes them from the row's own fields, never from here.
+ROW_OWNED_METADATA_KEYS = frozenset(
+    {"name", "description", "allowed-tools", "instructions", "compose"}
+)
+
+
+def validate_skill_metadata(skill_metadata: Optional[Dict[str, Any]]) -> List[Diagnostic]:
+    """Lenient check of a stored skill's ``skill_metadata`` (the frontmatter beyond name and description).
+
+    ``license``, ``compatibility``, ``metadata`` and ``allowed-tools`` follow
+    the specification's rules; every other key is a warning, because the
+    projection keeps it under ``metadata``. A key the row owns (``name``,
+    ``description``, ``instructions``, ...) is a warning too: the row's own
+    field is what gets written. Callers refuse on errors and pass warnings.
+    """
+    if skill_metadata is None:
+        return []
+    if not isinstance(skill_metadata, dict):
+        return [_error("skillMetadata", "skill_metadata_invalid", "skillMetadata must be a map.")]
+    diagnostics: List[Diagnostic] = []
+    for key, check in _OPTIONAL_CHECKS.items():
+        if key in skill_metadata:
+            diagnostics += check(skill_metadata[key])
+    for key in sorted(str(k) for k in skill_metadata if k in ROW_OWNED_METADATA_KEYS):
+        diagnostics.append(
+            _warning(
+                key,
+                "row_owned_field",
+                f"{key} in skillMetadata is ignored; the skill's own {key} is used.",
+            )
+        )
+    unknown = sorted(
+        str(key)
+        for key in skill_metadata
+        if key not in STANDARD_KEYS and key not in ROW_OWNED_METADATA_KEYS
+    )
+    return diagnostics + _unknown_key_diagnostics(unknown, strict=False)
+
+
+def skill_metadata_problem(skill_metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The first error :func:`validate_skill_metadata` finds, as a sentence, or None.
+
+    Warnings never refuse a write, so they are not reported here.
+    """
+    for diagnostic in validate_skill_metadata(skill_metadata):
+        if diagnostic.is_error:
+            return diagnostic.message
+    return None
