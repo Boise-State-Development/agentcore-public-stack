@@ -33,6 +33,10 @@ SKILL_ID_PATTERN = r"^[a-z][a-z0-9_]{2,49}$"
 # enabled skill, on every turn.
 SKILL_DESCRIPTION_MAX_LENGTH = 1024
 
+# Max size of a skill's ``instructions`` (the SKILL.md body), in UTF-8 bytes, on
+# every write path. The body shares a 400 KB DynamoDB item with the manifest.
+SKILL_INSTRUCTIONS_MAX_BYTES = 200 * 1024
+
 # ``owner_id`` of an admin-catalog skill. Anything else is a user-authored
 # skill (Skills v2 PR-3): governed by ownership, not by RBAC ``granted_skills``.
 SYSTEM_OWNER_ID = "system"
