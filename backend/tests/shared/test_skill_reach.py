@@ -188,3 +188,152 @@ class TestLookup:
         result = lookup_skill_reach("s1", "u1")
         assert result.error == "RuntimeError"
         assert not result.complete
+
+
+def _adder_skill(ref, adder, version=None):
+    config = {"addedBy": adder}
+    if version:
+        config["version"] = version
+    return {"kind": "skill", "ref": ref, "config": config}
+
+
+class TestEditorProjects:
+    """Clause 4: a skill its author added, as an editor, to someone else's project.
+
+    The harness is owned by the project's creator, so the owner partition never
+    sees it; the lookup reaches it through the author's memberships instead.
+    """
+
+    @pytest.fixture()
+    def tables(self, monkeypatch):
+        monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+        monkeypatch.setenv("DYNAMODB_ASSISTANTS_TABLE_NAME", "test-assistants")
+        monkeypatch.setenv("DYNAMODB_USERS_TABLE_NAME", "test-users")
+        monkeypatch.setenv("DYNAMODB_PROJECTS_TABLE_NAME", "test-projects")
+
+        def gsi(name, pk, sk):
+            return {
+                "IndexName": name,
+                "KeySchema": [
+                    {"AttributeName": pk, "KeyType": "HASH"},
+                    {"AttributeName": sk, "KeyType": "RANGE"},
+                ],
+                "Projection": {"ProjectionType": "ALL"},
+            }
+
+        def create(client, name, attrs, gsis=()):
+            params = dict(
+                TableName=name,
+                KeySchema=[
+                    {"AttributeName": "PK", "KeyType": "HASH"},
+                    {"AttributeName": "SK", "KeyType": "RANGE"},
+                ],
+                AttributeDefinitions=[{"AttributeName": a, "AttributeType": "S"} for a in attrs],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            if gsis:
+                params["GlobalSecondaryIndexes"] = list(gsis)
+            client.create_table(**params)
+
+        with mock_aws():
+            client = boto3.client("dynamodb", region_name="us-east-1")
+            create(client, "test-assistants", ("PK", "SK", "GSI_PK", "GSI_SK"),
+                   [gsi("OwnerStatusIndex", "GSI_PK", "GSI_SK")])
+            create(client, "test-users", ("PK", "SK"))
+            create(client, "test-projects", ("PK", "SK", "GSI1PK", "GSI1SK", "GSI2PK", "GSI2SK"),
+                   [gsi("OwnerIndex", "GSI1PK", "GSI1SK"), gsi("MemberIndex", "GSI2PK", "GSI2SK")])
+            resource = boto3.resource("dynamodb", region_name="us-east-1")
+            resource.Table("test-users").put_item(
+                Item={"PK": "USER#author", "SK": "PROFILE", "userId": "author", "email": "author@example.edu"}
+            )
+            yield resource
+
+    def _project(self, resource, project_id, name, owner, *, bindings, member="author@example.edu"):
+        from decimal import Decimal
+
+        from apis.shared.projects.models import Project, ProjectMember
+        from apis.shared.projects.repository import ProjectRepository
+
+        now = "2026-11-19T00:00:00Z"
+        repository = ProjectRepository("test-projects")
+        repository.create_project(Project(
+            project_id=project_id, name=name, owner_id=owner, owner_email=f"{owner}@example.edu",
+            harness_agent_id=f"h-{project_id}", created_at=now, updated_at=now,
+        ))
+        repository._table.put_item(Item=repository._member_to_item(ProjectMember(
+            project_id=project_id, email=member, role="editor", user_id="author",
+            invited_by=owner, created_at=now, updated_at=now,
+        )))
+        for b in bindings:
+            if b["config"].get("version"):
+                b["config"]["version"] = Decimal(b["config"]["version"])
+        resource.Table("test-assistants").put_item(Item={
+            "PK": f"AST#h-{project_id}", "SK": "METADATA",
+            "GSI_PK": f"OWNER#{owner}", "GSI_SK": f"STATUS#COMPLETE#CREATED#h-{project_id}",
+            "assistantId": f"h-{project_id}", "name": f"{name} harness", "kind": "project",
+            "visibility": "PRIVATE", "bindings": bindings,
+        })
+
+    def test_an_unpinned_skill_added_to_someone_elses_project_is_reported(self, tables):
+        self._project(tables, "p1", "Grant Office", "creator", bindings=[_adder_skill("s1", "author")])
+
+        result = lookup_skill_reach("s1", "author")
+
+        assert result.editor_projects_checked and result.error is None
+        assert result.bindings == [SkillBinding("Grant Office", is_project=True, shared=True, pinned_version=None)]
+        assert result.reaches_others_unpinned
+        assert 'project ("Grant Office")' in result.summary()
+        assert 'project ("Grant Office")' in result.conflict_detail()["reach"]
+
+    def test_a_pinned_one_is_not_a_reach(self, tables):
+        self._project(tables, "p1", "Grant Office", "creator", bindings=[_adder_skill("s1", "author", 4)])
+
+        result = lookup_skill_reach("s1", "author")
+
+        assert result.bindings == [SkillBinding("Grant Office", is_project=True, shared=True, pinned_version=4)]
+        assert not result.reaches_others_unpinned
+        assert "Pinned, so unaffected" in result.summary()
+
+    def test_a_binding_someone_else_added_runs_only_for_its_author(self, tables):
+        """The author is a member, but another editor bound the skill, so clause 4
+        names that editor, not the author, and the skill never runs for others."""
+        self._project(tables, "p1", "Grant Office", "creator", bindings=[_adder_skill("s1", "other-editor")])
+
+        result = lookup_skill_reach("s1", "author")
+
+        assert result.bindings == []
+        assert not result.reaches_others_unpinned
+
+    def test_the_authors_own_project_is_counted_once(self, tables):
+        self._project(tables, "p1", "Mine", "author", bindings=[_adder_skill("s1", "author")])
+
+        result = lookup_skill_reach("s1", "author")
+
+        assert [b.name for b in result.bindings] == ["Mine harness"]
+
+    def test_a_failed_editor_read_keeps_the_owner_bindings_and_says_so(self, tables, monkeypatch):
+        tables.Table("test-assistants").put_item(Item={
+            "PK": "AST#a1", "SK": "METADATA", "GSI_PK": "OWNER#author", "GSI_SK": "STATUS#COMPLETE#CREATED#a1",
+            "assistantId": "a1", "name": "Advisor", "visibility": "SHARED", "bindings": [_skill("s1")],
+        })
+
+        def boom(*a, **k):
+            raise RuntimeError("throttled")
+
+        monkeypatch.setattr(reach, "_query_editor_project_harnesses", boom)
+        result = lookup_skill_reach("s1", "author")
+
+        assert [b.name for b in result.bindings] == ["Advisor"]
+        assert result.error is None and not result.editor_projects_checked
+        assert "as an editor could not be checked" in result.summary()
+
+    def test_without_the_projects_table_there_is_nothing_to_check(self, tables, monkeypatch):
+        monkeypatch.delenv("DYNAMODB_PROJECTS_TABLE_NAME")
+        result = lookup_skill_reach("s1", "author")
+        assert result.editor_projects_checked and result.bindings == []
+
+    def test_added_by_only_reads_project_harnesses(self):
+        items = [_item("a1", "Agent", visibility="SHARED", bindings=[_adder_skill("s1", "author")])]
+        assert bindings_from_items("s1", items, added_by="author") == []
