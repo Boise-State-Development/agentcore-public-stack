@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
@@ -197,6 +197,76 @@ describe('CustomizeSkillDetailPage', () => {
     expect(
       fixture.nativeElement.querySelector('a[href$="/edit"]'),
     ).toBeNull();
+  });
+
+  const downloadButton = (fixture: ComponentFixture<CustomizeSkillDetailPage>) =>
+    Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'),
+    ).find(b => b.textContent?.includes('Download skill'));
+
+  it('offers Download skill for a skill the user wrote', async () => {
+    const mine = await create(
+      'my_skill',
+      detail({ skillId: 'my_skill', displayName: 'My Skill', isOwned: true }),
+    );
+    expect(downloadButton(mine)).toBeTruthy();
+  });
+
+  it('offers no download for a skill the user can only use', async () => {
+    const fixture = await create(
+      'web_research',
+      detail({ skillId: 'web_research', displayName: 'Web Research', isOwned: false }),
+    );
+    expect(downloadButton(fixture)).toBeUndefined();
+  });
+
+  it('downloads through the owner export route and saves the zip', async () => {
+    const original = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+    const revokeUrl = vi.fn();
+    URL.createObjectURL = vi.fn(() => 'blob:skill');
+    URL.revokeObjectURL = revokeUrl;
+    const clicked: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clicked.push(this.download);
+      });
+    try {
+      const mine = await create(
+        'my_skill',
+        detail({ skillId: 'my_skill', displayName: 'My Skill', isOwned: true }),
+      );
+      downloadButton(mine)!.click();
+      const req = http.expectOne('/api/skills/mine/my_skill/export');
+      expect(req.request.method).toBe('GET');
+      expect(req.request.responseType).toBe('blob');
+      expect(req.request.withCredentials).toBe(true);
+      req.flush(new Blob(['zip'], { type: 'application/zip' }));
+      await mine.whenStable();
+      await settle();
+      expect(clicked).toEqual(['my-skill.zip']);
+      expect(revokeUrl).toHaveBeenCalledWith('blob:skill');
+    } finally {
+      click.mockRestore();
+      URL.createObjectURL = original.create;
+      URL.revokeObjectURL = original.revoke;
+    }
+  });
+
+  it('names the unreadable file when the export is refused', async () => {
+    const mine = await create(
+      'my_skill',
+      detail({ skillId: 'my_skill', displayName: 'My Skill', isOwned: true }),
+    );
+    downloadButton(mine)!.click();
+    http.expectOne('/api/skills/mine/my_skill/export').flush(
+      new Blob([JSON.stringify({ detail: "The skill's file 'engine.py' could not be read" })]),
+      { status: 409, statusText: 'Conflict' },
+    );
+    await mine.whenStable();
+    await settle();
+    mine.detectChanges();
+    expect(text(mine)).toContain("'engine.py' could not be read");
   });
 
   it('distinguishes a missing skill from a failed read', async () => {

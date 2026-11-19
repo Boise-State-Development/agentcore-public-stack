@@ -10,6 +10,7 @@ import {
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
+  heroArrowDownTray,
   heroArrowLeft,
   heroDocumentText,
   heroPencilSquare,
@@ -23,6 +24,12 @@ import {
 } from '../../services/skill-detail/skill-detail.service';
 import { monogramFor } from '../../shared/utils/monogram';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
+import {
+  saveBlob,
+  skillExportErrorMessage,
+  skillExportFilename,
+} from '../../shared/skills/skill-export';
+import { MySkillService } from './services/my-skill.service';
 
 /** Bundle-directory labels, in the order agentskills.io lists them. */
 const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 };
@@ -67,7 +74,7 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, RouterLink, SpinnerComponent, MarkdownComponent],
   providers: [
-    provideIcons({ heroArrowLeft, heroDocumentText, heroPencilSquare }),
+    provideIcons({ heroArrowDownTray, heroArrowLeft, heroDocumentText, heroPencilSquare }),
   ],
   template: `
     <div class="min-h-dvh">
@@ -108,13 +115,25 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                  path. This is a read surface; it links there rather than
                  growing a second editor. -->
             @if (s.isOwned) {
-              <a
-                [routerLink]="['/customize/skills', s.skillId, 'edit']"
-                class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-gray-200 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white"
-              >
-                Edit
-                <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
-              </a>
+              <div class="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  (click)="onDownload()"
+                  [disabled]="downloading()"
+                  [attr.aria-busy]="downloading()"
+                  class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-gray-200 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white"
+                >
+                  {{ downloading() ? 'Downloading…' : 'Download skill' }}
+                  <ng-icon name="heroArrowDownTray" class="size-4" aria-hidden="true" />
+                </button>
+                <a
+                  [routerLink]="['/customize/skills', s.skillId, 'edit']"
+                  class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-gray-200 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white"
+                >
+                  Edit
+                  <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+                </a>
+              </div>
             }
           </div>
 
@@ -154,6 +173,15 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
               ></span>
             </button>
           </div>
+
+          @if (downloadError()) {
+            <div
+              role="alert"
+              class="mt-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
+            >
+              {{ downloadError() }}
+            </div>
+          }
 
           @if (saveError()) {
             <div
@@ -339,12 +367,15 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
 export class CustomizeSkillDetailPage {
   protected readonly skillService = inject(SkillService);
   protected readonly detailService = inject(SkillDetailService);
+  private readonly mySkills = inject(MySkillService);
 
   /** Bound from the `:skillId` route param by `withComponentInputBinding()`. */
   readonly skillId = input.required<string>();
 
   protected readonly saving = signal(false);
   protected readonly saveError = signal<string | null>(null);
+  protected readonly downloading = signal(false);
+  protected readonly downloadError = signal<string | null>(null);
 
   constructor() {
     // The toggle writes through SkillService, which silently no-ops on a skill
@@ -458,6 +489,26 @@ export class CustomizeSkillDetailPage {
       );
     } finally {
       this.saving.set(false);
+    }
+  }
+
+  /**
+   * Download the skill as an agentskills.io bundle. Offered only for a skill
+   * the user wrote, the one case the owner-only export route serves.
+   */
+  protected async onDownload(): Promise<void> {
+    const s = this.skill();
+    if (!s?.isOwned || this.downloading()) return;
+
+    this.downloading.set(true);
+    this.downloadError.set(null);
+    try {
+      const blob = await this.mySkills.exportSkill(s.skillId);
+      saveBlob(blob, skillExportFilename(s.skillId));
+    } catch (err) {
+      this.downloadError.set(await skillExportErrorMessage(err));
+    } finally {
+      this.downloading.set(false);
     }
   }
 }

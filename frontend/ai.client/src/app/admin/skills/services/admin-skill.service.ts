@@ -170,6 +170,20 @@ export class AdminSkillService {
   // ===========================================================================
 
   /**
+   * A catalog skill as an agentskills.io bundle (`{slug}.zip`), optionally a
+   * frozen version. A user-authored skill is a 404 on this route.
+   */
+  async exportSkill(skillId: string, version?: number): Promise<Blob> {
+    const params: Record<string, string> = version ? { version: String(version) } : {};
+    return firstValueFrom(
+      this.http.get(`${this.baseUrl()}/${encodeURIComponent(skillId)}/export`, {
+        params,
+        responseType: 'blob',
+      }),
+    );
+  }
+
+  /**
    * List a skill's reference-file manifest.
    */
   async listResources(skillId: string): Promise<SkillResourceRef[]> {

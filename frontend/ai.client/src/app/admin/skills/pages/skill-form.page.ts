@@ -10,6 +10,7 @@ import { RouterLink, Router, ActivatedRoute } from '@angular/router';
 import { FormBuilder, FormGroup, Validators, ReactiveFormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
+  heroArrowDownTray,
   heroArrowLeft,
   heroPlus,
   heroTrash,
@@ -27,6 +28,11 @@ import {
   SKILL_ID_PATTERN,
 } from '../models/admin-skill.model';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import {
+  saveBlob,
+  skillExportErrorMessage,
+  skillExportFilename,
+} from '../../../shared/skills/skill-export';
 import { SKILL_DESCRIPTION_MAX_LENGTH } from '../../../shared/skills/skill-field-limits';
 import {
   parseSkillMarkdown,
@@ -44,6 +50,7 @@ import {
   imports: [RouterLink, ReactiveFormsModule, NgIcon, SpinnerComponent],
   providers: [
     provideIcons({
+      heroArrowDownTray,
       heroArrowLeft,
       heroPlus,
       heroTrash,
@@ -75,6 +82,21 @@ import {
               {{ isEditMode() ? 'Update skill instructions and reference files.' : 'Author a new skill, or import a SKILL.md to prefill it.' }}
             </p>
           </div>
+
+          @if (catalogLoaded()) {
+            <div>
+              <button
+                type="button"
+                (click)="downloadSkill()"
+                [disabled]="downloading()"
+                [attr.aria-busy]="downloading()"
+                class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-200 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white"
+              >
+                {{ downloading() ? 'Downloading…' : 'Download skill' }}
+                <ng-icon name="heroArrowDownTray" class="size-4" aria-hidden="true" />
+              </button>
+            </div>
+          }
 
           @if (!isEditMode()) {
             <div>
@@ -409,6 +431,12 @@ export class SkillFormPage implements OnInit {
   skillId = signal<string | null>(null);
 
   readonly isEditMode = computed(() => !!this.skillId());
+  /**
+   * The edited skill loaded from the admin route, which serves catalog skills
+   * only, so the export route will serve it too. Gates Download skill.
+   */
+  readonly catalogLoaded = signal(false);
+  readonly downloading = signal(false);
 
   // Reference files: live manifest in edit mode, staged Files in create mode.
   readonly resources = signal<SkillResourceRef[]>([]);
@@ -460,10 +488,27 @@ export class SkillFormPage implements OnInit {
         category: skill.category ?? '',
       });
       this.resources.set([...skill.resources]);
+      this.catalogLoaded.set(true);
     } catch (err: unknown) {
       this.error.set(err instanceof Error ? err.message : 'Failed to load skill.');
     } finally {
       this.loading.set(false);
+    }
+  }
+
+  /** Download the catalog skill as an agentskills.io bundle (`{slug}.zip`). */
+  async downloadSkill(): Promise<void> {
+    const id = this.skillId();
+    if (!id || !this.catalogLoaded() || this.downloading()) return;
+    this.downloading.set(true);
+    this.error.set(null);
+    try {
+      const blob = await this.adminSkillService.exportSkill(id);
+      saveBlob(blob, skillExportFilename(id));
+    } catch (err: unknown) {
+      this.error.set(await skillExportErrorMessage(err));
+    } finally {
+      this.downloading.set(false);
     }
   }
 
