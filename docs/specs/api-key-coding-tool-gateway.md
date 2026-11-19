@@ -192,8 +192,12 @@ class ApiKeyCall:
     release_slot: Callable[[], None]
 
 async def authorize_api_key_call(raw_key: str, model_id: str, *,
-                                 needs_worker_slot: bool) -> ApiKeyCall: ...
+                                 needs_worker_slot: bool,
+                                 require_quota_tier: bool) -> ApiKeyCall: ...
 ```
+
+`require_quota_tier` is `True` on every `/v1` route (D1) and `False` on
+api-converse, which keeps its current behavior.
 
 It raises one typed `ApiKeyCallRefused(status, kind, message, retry_after)`.
 Each route renders that refusal in its own format:
@@ -355,12 +359,12 @@ Non-Claude Converse models (Nova, Llama, and others) are out of v1.
 | --- | --- | --- |
 | Rate limit | 60/min per key, hardcoded (`rate_limit.py`) | A setting, `API_KEY_GATEWAY_RATE_LIMIT_PER_MINUTE`, for the `/v1` routes. Each tool round trip is one request, Claude Code makes background calls, and subagents run in parallel, so one busy session can pass 60. Start at 120 and measure (D2). |
 | Concurrency | none on async paths | Per-key cap on open `/v1` streams (default 8), so one user's subagent fan-out cannot crowd out a task |
-| Quota with no tier | fail-open (`converse_routes.py:755`) | **Fail closed on `/v1`**: no tier means 403 "no quota assigned". Coding traffic is far more expensive than script traffic (D1). |
+| Quota with no tier | fail-open (`converse_routes.py:755`) | **Decided (D1): fail closed on `/v1`.** No tier means 403 "no quota assigned", in the route's own error format. Quota is always enforced for these routes. Coding traffic is far more expensive than script traffic. |
 | Quota error | fail-open | unchanged |
 | Overshoot | quota checked before the call | unchanged: one request at most. The `max_tokens` cap bounds it. |
 | Non-streaming duration | CloudFront and ALB cut at 60 s | Document "use `stream: true`". Coding tools always stream. Long non-streamed notebook calls 504; raising CloudFront's origin read timeout (a quota increase, up to 180 s) is a follow-up if notebooks hit it. |
 | Request size | not measured | Coding agents send multi-MB bodies. The spike sends a 5 MB body through CloudFront → ALB → app-api → Bedrock. |
-| Keys per user | one; minting revokes the old key (`service.py:38`); 90-day expiry (`service.py:13`) | Unchanged in v1, but a real problem: making a key for Jupyter breaks the user's Claude Code. Multiple named keys is a follow-up (D6). |
+| Keys per user | one; minting revokes the old key (`service.py:38`); 90-day expiry (`service.py:13`) | **Decided (D6): stays at one key per user.** The same key works in every tool. The setup tab (§5.10) says so, and warns that making a new key signs out every tool using the old one. |
 
 ### 5.9 Flag, config, infrastructure
 
@@ -401,17 +405,20 @@ client = OpenAI(base_url="https://<host>/api/v1", api_key="<your key>")
 Pinning `ANTHROPIC_DEFAULT_HAIKU_MODEL` matters for cost. Behind a gateway,
 Claude Code otherwise runs its background tasks on the main model.
 
+Each user has one key (D6), so the tab tells them to use that same key in
+every tool, and that creating a new key revokes the old one everywhere.
+
 ## 6. Plan
 
 | PR | Content | Size |
 | --- | --- | --- |
 | PR-0 | **Spike, dev only, no merge.** From the app-api task role in dev, call `/anthropic/v1/messages` with a minted token. Record: which header form the route accepts (`x-api-key` vs `Authorization`), which IAM action it evaluates, whether the stream carries `ping`, the exact error bodies for a rejected `anthropic-beta` value and for `context_management`, the usage fields on a cache-hit turn, which model-id forms it accepts (`us.` / `global.`), and whether a 5 MB body survives CloudFront. Capture one real tool-using stream as a test fixture. Findings go back into this spec. | 0.5 day |
 | PR-1 | Extract `authorize_api_key_call()`; `api_converse` uses it. No behavior change. | 1 day |
-| PR-2 | Flag, credential headers, `/v1/messages` pass-through, `/v1/models`, cost recording, ping keepalive, per-key stream cap. | 2–3 days |
+| PR-2 | Flag, credential headers, `/v1/messages` pass-through, `/v1/models`, cost recording, ping keepalive, per-key stream cap, fail-closed quota (D1). | 2–3 days |
 | PR-3 | `/v1/messages/count_tokens`. | 0.5 day |
 | PR-4 | `/v1/chat/completions`: OpenAI → Anthropic translation for Claude, pass-through for Chat-Completions-mode Mantle models. | 3–4 days |
 | PR-5 | SPA tab and user docs. | 1 day |
-| PR-6 | Rate limit setting, fail-closed no-tier quota on `/v1` (after D1 and D2 are decided). | 1 day |
+| PR-6 | Rate limit setting (after D2 is decided). | 0.5 day |
 
 About two weeks of work for one developer. PR-2 alone makes Claude Code,
 Cline and the `anthropic` SDK work, so it can ship to dev on its own.
@@ -430,7 +437,8 @@ Cline and the `anthropic` SDK work, so it can ship to dev on its own.
   right.
 - **Guard parity.** PR-1 changes no existing assertion. A property test runs
   the same refusal cases through all three routes and checks they agree on the
-  status code.
+  status code. A user with no quota tier gets 403 on every `/v1` route and
+  still passes on api-converse.
 - **Security.** A `Bearer` JWT is rejected and never decoded. The client's
   `Authorization` and `x-api-key` never appear on the upstream request. The
   minted token never appears in a response body, a header or a log record.
@@ -445,12 +453,12 @@ Cline and the `anthropic` SDK work, so it can ship to dev on its own.
 
 | # | Question | Recommendation |
 | --- | --- | --- |
-| D1 | Should `/v1` refuse a user with no quota tier? | Yes. api-converse keeps failing open. |
+| D1 | Should `/v1` refuse a user with no quota tier? | **Decided 2026-11-19: yes.** Quota is always enforced on `/v1`. api-converse is unchanged. |
 | D2 | `/v1` rate limit default | 120/min, then measure in dev |
 | D3 | Can every key holder use `/v1`, or only a role permission? | Every key holder. Model grants and quota already gate it, and a second permission is one more thing an admin can misconfigure. |
 | D4 | One-hour cache writes (`cache_creation.ephemeral_1h_input_tokens`) cost 2× input, not 1.25×, and the pricing snapshot has one write rate | v1 prices all writes at the 5-minute rate and logs the 1-hour volume; add the second rate if it turns out to matter |
 | D5 | Show Claude thinking to OpenAI clients? | No, not in v1 (§5.7) |
-| D6 | Multiple named keys per user | Follow-up spec; needed before a wide rollout |
+| D6 | Multiple named keys per user? | **Decided 2026-11-19: no.** One key per user, used in every tool. |
 
 ## 9. Out of scope and alternatives rejected
 
