@@ -153,7 +153,8 @@ describe('Single-stack integration', () => {
 
     it('creates the AgentCore Memory + CI + Browser + Gateway', () => {
       template.resourceCountIs('AWS::BedrockAgentCore::Memory', 1);
-      template.resourceCountIs('AWS::BedrockAgentCore::CodeInterpreterCustom', 1);
+      // The model-code interpreter (PUBLIC) and the skill-script one (SANDBOX).
+      template.resourceCountIs('AWS::BedrockAgentCore::CodeInterpreterCustom', 2);
       template.resourceCountIs('AWS::BedrockAgentCore::BrowserCustom', 1);
       template.resourceCountIs('AWS::BedrockAgentCore::Gateway', 1);
     });

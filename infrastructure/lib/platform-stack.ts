@@ -270,6 +270,8 @@ export class PlatformStack extends cdk.Stack {
   public readonly agentCoreCodeInterpreter: bedrock.CfnCodeInterpreterCustom;
   public readonly agentCoreCodeInterpreterArn: string;
   public readonly agentCoreCodeInterpreterId: string;
+  public readonly agentCoreSkillScriptInterpreterArn: string;
+  public readonly agentCoreSkillScriptInterpreterIdParameterArn: string;
   public readonly agentCoreBrowser: bedrock.CfnBrowserCustom;
   public readonly agentCoreBrowserArn: string;
   public readonly browserPolicyBucketName: string;
@@ -806,6 +808,9 @@ export class PlatformStack extends cdk.Stack {
     this.agentCoreCodeInterpreter = agentCoreCodeInterpreterConstruct.codeInterpreter;
     this.agentCoreCodeInterpreterArn = agentCoreCodeInterpreterConstruct.codeInterpreterArn;
     this.agentCoreCodeInterpreterId = agentCoreCodeInterpreterConstruct.codeInterpreterId;
+    this.agentCoreSkillScriptInterpreterArn = agentCoreCodeInterpreterConstruct.skillScriptInterpreterArn;
+    this.agentCoreSkillScriptInterpreterIdParameterArn =
+      agentCoreCodeInterpreterConstruct.skillScriptInterpreterIdParameter.parameterArn;
 
     const agentCoreBrowserConstruct = new AgentCoreBrowserConstruct(
       this,
@@ -1036,6 +1041,8 @@ export class PlatformStack extends cdk.Stack {
       memoryId: this.agentCoreMemoryId,
       codeInterpreterArn: this.agentCoreCodeInterpreterArn,
       codeInterpreterId: this.agentCoreCodeInterpreterId,
+      skillScriptInterpreterArn: this.agentCoreSkillScriptInterpreterArn,
+      skillScriptInterpreterIdParameterArn: this.agentCoreSkillScriptInterpreterIdParameterArn,
       browserArn: this.agentCoreBrowserArn,
       browserId: this.agentCoreBrowserId,
       browserPolicyBucketName: this.browserPolicyBucketName,

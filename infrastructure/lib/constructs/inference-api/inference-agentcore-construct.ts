@@ -48,6 +48,13 @@ export interface InferenceAgentCoreConstructProps {
   /** AgentCore Code Interpreter ID — same provenance as codeInterpreterArn. */
   codeInterpreterId: string;
   /**
+   * ARN of the no-network interpreter skill scripts run in. Its id is NOT an
+   * environment variable: the Runtime reads it from the SSM parameter below.
+   */
+  skillScriptInterpreterArn: string;
+  /** ARN of the SSM parameter holding the skill-script interpreter's id. */
+  skillScriptInterpreterIdParameterArn: string;
+  /**
    * AgentCore Browser ARN. Sourced from PlatformStack as a typed
    * typed construct ref (Browser hoisted to Platform).
    */
@@ -216,6 +223,29 @@ export class InferenceAgentCoreConstruct extends Construct {
         'bedrock-agentcore:ListCodeInterpreterSessions',
       ],
       resources: [props.codeInterpreterArn],
+    }));
+
+    // The skill-script interpreter (SANDBOX network): the same session actions
+    // as above, on that interpreter only, plus a read of the one parameter that
+    // names it, so its id never enters the Runtime's environment.
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'SkillScriptInterpreterAccess',
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock-agentcore:StartCodeInterpreterSession',
+        'bedrock-agentcore:InvokeCodeInterpreter',
+        'bedrock-agentcore:StopCodeInterpreterSession',
+        'bedrock-agentcore:GetCodeInterpreter',
+        'bedrock-agentcore:GetCodeInterpreterSession',
+        'bedrock-agentcore:ListCodeInterpreterSessions',
+      ],
+      resources: [props.skillScriptInterpreterArn],
+    }));
+    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'SkillScriptInterpreterIdRead',
+      effect: iam.Effect.ALLOW,
+      actions: ['ssm:GetParameter'],
+      resources: [props.skillScriptInterpreterIdParameterArn],
     }));
 
     // Grant Runtime permission to use Browser.
