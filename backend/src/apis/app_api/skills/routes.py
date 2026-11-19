@@ -41,11 +41,13 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Respon
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from apis.shared.audit.models import AuditAction
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.blocking_io import run_blocking
 from apis.shared.extraction.field_sets import FieldSetError, require_field_set_name
 from apis.shared.feature_flags import field_set_authoring_enabled
 from apis.shared.skills.access import resolve_accessible_skill_ids
+from apis.shared.skills.audit import record_skill_event
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.bundle_export import (
     SkillExportFileError,
@@ -582,6 +584,13 @@ async def export_my_skill(
             extra={"skill_id": scrub_log(skill_id)},
         )
         raise HTTPException(status_code=409, detail=str(e))
+    await record_skill_event(
+        AuditAction.SKILL_EXPORTED,
+        user,
+        skill_id,
+        after=record,
+        extra_after={"exportedVersion": version} if version else None,
+    )
     return Response(
         content=data,
         media_type="application/zip",
