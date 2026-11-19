@@ -63,6 +63,7 @@ describe('ScheduleFormPage', () => {
 
   const mockRunNow = {
     run: vi.fn().mockReturnValue('bgtask-1'),
+    running: signal(false),
   };
 
   function configure(routeParams: Record<string, string> = {}) {
@@ -70,6 +71,7 @@ describe('ScheduleFormPage', () => {
     vi.clearAllMocks();
     mockScheduleService.getSchedule.mockResolvedValue(undefined);
     mockRunNow.run.mockReturnValue('bgtask-1');
+    mockRunNow.running.set(false);
 
     TestBed.configureTestingModule({
       imports: [ReactiveFormsModule],
@@ -300,6 +302,15 @@ describe('ScheduleFormPage', () => {
       component.runNow();
       expect(mockRunNow.run).not.toHaveBeenCalled();
       expect(component.form.controls.promptText.errors).toEqual({ required: true });
+    });
+
+    it('run now does nothing while an earlier run is still in flight', () => {
+      component.form.patchValue({ promptText: 'Go' });
+      mockRunNow.running.set(true);
+
+      expect(component.runInFlight()).toBe(true);
+      component.runNow();
+      expect(mockRunNow.run).not.toHaveBeenCalled();
     });
   });
 
