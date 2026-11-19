@@ -457,14 +457,16 @@ async def get_project_skill(
         compose=list(record.compose),
         allowed_tools=list(record.allowed_tools),
         files=[
-            ProjectSkillFile(filename=r.filename, kind=r.kind, size=r.size, content_type=r.content_type)
+            ProjectSkillFile(
+                filename=r.filename, kind=r.kind, size=r.size, content_type=r.content_type, path=r.path
+            )
             for r in record.resources
         ],
         is_owned=record.owner_id == user.user_id,
     )
 
 
-@router.get("/{project_id}/skills/{skill_id}/files/{filename}")
+@router.get("/{project_id}/skills/{skill_id}/files/{filename:path}")
 async def read_project_skill_file(
     project_id: str, skill_id: str, filename: str, user: User = Depends(require_projects_user)
 ) -> Response:

@@ -34,6 +34,7 @@ from apis.shared.skills.models import SkillDefinition, SkillResourceRef, SkillSt
 from apis.shared.skills.pinning import load_skill_records
 from apis.shared.skills.pins import base_skill_id, binding_pin, pinned_ref, project_skill_adders
 from apis.shared.skills.repository import get_skill_catalog_repository
+from apis.shared.skills.resource_paths import lookup_resource
 from apis.shared.skills.resource_store import get_skill_resource_store
 
 SKILL = "skill"
@@ -123,9 +124,13 @@ async def read_bound_skill(harness: Assistant, user: User, skill_id: str) -> Tup
 async def read_bound_skill_file(
     harness: Assistant, user: User, skill_id: str, filename: str
 ) -> Tuple[SkillResourceRef, bytes]:
-    """One bundle file of the bound version, by the same rules as ``read_bound_skill``."""
+    """One bundle file of the bound version, by the same rules as ``read_bound_skill``.
+
+    ``filename`` is the file's path below its kind directory, or a bare filename
+    only one file has.
+    """
     record, _ = await read_bound_skill(harness, user, skill_id)
-    ref = next((r for r in record.resources if r.filename == filename), None)
+    ref = lookup_resource(record.resources, filename or "").ref
     if ref is None:
         raise SkillNotBoundError(f"The skill has no file '{filename}'.")
     content = await asyncio.to_thread(get_skill_resource_store().get, ref.s3_key)

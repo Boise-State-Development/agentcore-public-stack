@@ -351,11 +351,12 @@ class SkillCatalogService:
         content_type: str,
         admin: User,
         kind: str = "reference",
+        path: Optional[str] = None,
     ) -> List[SkillResourceRef]:
         """Upload (or replace) one supporting file; see ``SkillBundleFiles.add_resource``."""
         before = await self.get_catalog_skill(skill_id)
         refs = await self.bundle_files.add_resource(
-            skill_id, filename, content, content_type, admin, kind=kind
+            skill_id, filename, content, content_type, admin, kind=kind, path=path
         )
         await self._record_files_changed(admin, before, refs)
         return refs

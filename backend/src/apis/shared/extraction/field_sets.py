@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field as dataclass_field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # ---------------------------------------------------------------------------
 # The field types
@@ -248,6 +248,23 @@ def field_set_name_for(path_or_filename: str) -> Optional[str]:
         return None
     name = tail[len(FIELD_SET_PREFIX) : -len(FIELD_SET_SUFFIX)]
     return name if _SET_NAME_RE.match(name) else None
+
+
+def field_set_name_of_ref(ref: Any) -> Optional[str]:
+    """The set name a manifest entry declares, or ``None``.
+
+    A field set is a ``reference`` at the top of ``references/``: a file of the
+    same name in a subfolder (``references/legal/field-set.x.md``) or of another
+    kind is an ordinary file. Duck-typed, so it reads a ``SkillResourceRef`` or
+    anything shaped like one; an entry with no ``path`` is a top-level one.
+    """
+    if (getattr(ref, "kind", "reference") or "reference") != "reference":
+        return None
+    filename = getattr(ref, "filename", "") or ""
+    path = getattr(ref, "path", None) or filename
+    if path != filename:
+        return None
+    return field_set_name_for(filename)
 
 
 #: The frontmatter keys the set itself reads. Every other frontmatter line is
@@ -805,6 +822,7 @@ __all__ = [
     "TYPE_LIST",
     "default_field_title",
     "field_set_name_for",
+    "field_set_name_of_ref",
     "parse_field_set",
     "read_field_set_file",
     "require_field_set_name",

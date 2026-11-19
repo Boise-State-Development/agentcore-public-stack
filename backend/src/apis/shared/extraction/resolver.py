@@ -39,14 +39,9 @@ from apis.shared.skills.resource_store import (
     get_skill_resource_store,
 )
 
-from .field_sets import FieldSet, FieldSetError, field_set_name_for, parse_field_set
+from .field_sets import FieldSet, FieldSetError, field_set_name_of_ref, parse_field_set
 
 logger = logging.getLogger(__name__)
-
-#: Bundle directory a field set is read from. Only ``reference`` files are
-#: considered: a ``script`` is accept-and-inert and an ``asset`` is bytes, and
-#: neither is somewhere a schema should be able to hide.
-_REFERENCE_KIND = "reference"
 
 
 def _resource_refs(record: Any) -> Iterable[Any]:
@@ -74,9 +69,9 @@ def declared_field_sets(records: Iterable[Any]) -> Dict[str, Tuple[Any, Any]]:
     ):
         skill_id = getattr(record, "skill_id", "") or ""
         for ref in _resource_refs(record):
-            if getattr(ref, "kind", _REFERENCE_KIND) != _REFERENCE_KIND:
-                continue
-            name = field_set_name_for(getattr(ref, "filename", ""))
+            # Only a top-level reference declares a field set
+            # (``field_set_name_of_ref``); a same-named nested file is not one.
+            name = field_set_name_of_ref(ref)
             if name is None:
                 continue
             if name in found:
@@ -103,9 +98,7 @@ def turn_has_field_set(records: Optional[Iterable[Any]]) -> bool:
         return False
     for record in records:
         for ref in _resource_refs(record):
-            if getattr(ref, "kind", _REFERENCE_KIND) != _REFERENCE_KIND:
-                continue
-            if field_set_name_for(getattr(ref, "filename", "")) is not None:
+            if field_set_name_of_ref(ref) is not None:
                 return True
     return False
 

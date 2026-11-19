@@ -38,7 +38,12 @@ from typing import Any, Coroutine, Dict, List, Optional, TypeVar
 from strands import tool
 
 from apis.shared.auth.models import User
-from apis.shared.extraction.field_sets import FieldSetError, field_set_name_for, parse_field_set
+from apis.shared.extraction.field_sets import (
+    FieldSetError,
+    field_set_name_for,
+    field_set_name_of_ref,
+    parse_field_set,
+)
 from apis.shared.feature_flags import document_extract_enabled
 from apis.shared.skills.bundle_files import (
     MAX_RESOURCE_BYTES,
@@ -192,15 +197,6 @@ def _log_applied(tool_name: str, skill_id: str, session_id: str) -> None:
     )
 
 
-def _field_set_of(filename: str, kind: Optional[str]) -> Optional[str]:
-    """The field-set name a bundle file declares, or None.
-
-    Only ``references/`` is read for field sets (``declared_field_sets``), so a
-    same-named script or asset is not one.
-    """
-    return field_set_name_for(filename) if kind == "reference" else None
-
-
 def _field_set_note(filename: str, kind: str, content: str) -> str:
     """What a write result adds when the file is, or looks like, a field set.
 
@@ -302,14 +298,17 @@ def make_my_skill_read_tool(session_id: str, user_id: str, user_email: Optional[
                 "instructions": skill.instructions,
                 "files": [
                     {
-                        "filename": r.filename,
+                        # The path below the kind directory: a top-level
+                        # file's filename, as always; a nested file's
+                        # ``legal/nda.md``, which my_skill_read_file accepts.
+                        "filename": r.path,
                         "kind": r.kind,
                         "size": r.size,
                         "content_type": r.content_type,
                         # Only on a field set, so other files cost nothing more.
                         **(
                             {"field_set": name}
-                            if (name := _field_set_of(r.filename, r.kind))
+                            if (name := field_set_name_of_ref(r))
                             else {}
                         ),
                     }
@@ -571,7 +570,7 @@ def make_my_skill_delete_file_tool(session_id: str, user_id: str, user_email: Op
             skill_id: The skill's id, from my_skill_list.
             filename: The file's name as listed by my_skill_read.
         """
-        name = field_set_name_for(filename)
+        name = field_set_name_for(filename) if "/" not in (filename or "") else None
         try:
             refs = _run(
                 get_user_skill_service().delete_resource(
