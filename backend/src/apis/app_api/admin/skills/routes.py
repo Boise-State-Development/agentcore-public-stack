@@ -21,6 +21,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import Response
 
 from apis.shared.auth import User, require_admin_scope
+from apis.shared.blocking_io import run_blocking
+from apis.shared.skills.bundle_export import (
+    SkillExportFileError,
+    SkillExportVersionNotFoundError,
+    build_skill_zip,
+    export_response_headers,
+    load_export_record,
+)
 from apis.shared.skills.models import (
     AddRemoveSkillRolesRequest,
     AdminSkillListResponse,
@@ -362,6 +370,40 @@ async def read_skill_resource(
         content=content,
         media_type=safe_download_content_type(ref.filename),
         headers=resource_download_headers(ref.filename),
+    )
+
+
+@router.get("/{skill_id}/export")
+async def export_skill(
+    skill_id: str,
+    version: Optional[int] = Query(None, ge=1, description="Export this frozen version"),
+    admin: User = Depends(require_skills_admin),
+):
+    """Download a catalog skill as an agentskills.io bundle (``{slug}.zip``).
+
+    Catalog-scoped: a user-authored skill is 404, exactly as it is absent from
+    ``GET /admin/skills/``. ``?version=n`` exports that frozen version. A file
+    the manifest names that cannot be read is 409, naming it; there is never a
+    partial zip. The archive is built in a worker thread, off the event loop.
+    """
+    service = get_skill_catalog_service()
+    skill = await service.get_catalog_skill(skill_id)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+    try:
+        record = await load_export_record(skill, version, service.repository)
+    except SkillExportVersionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    try:
+        data = await run_blocking(build_skill_zip, record, service.resource_store.get)
+    except SkillExportFileError as e:
+        logger.warning("Admin skill export refused: a manifest file could not be read")
+        raise HTTPException(status_code=409, detail=str(e))
+    logger.info("Admin exported catalog skill")
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers=export_response_headers(skill_id),
     )
 
 

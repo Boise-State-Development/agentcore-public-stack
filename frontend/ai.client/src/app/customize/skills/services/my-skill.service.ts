@@ -131,6 +131,21 @@ export class MySkillService {
     }
   }
 
+  /**
+   * The owned skill as an agentskills.io bundle (`{slug}.zip`), optionally a
+   * frozen version. Owner only on the server: anything else is a 404.
+   */
+  exportSkill(skillId: string, version?: number): Promise<Blob> {
+    const params: Record<string, string> = version ? { version: String(version) } : {};
+    return firstValueFrom(
+      this.http.get(`${this.baseUrl()}/${encodeURIComponent(skillId)}/export`, {
+        params,
+        responseType: 'blob',
+        withCredentials: true,
+      }),
+    );
+  }
+
   // ---- bundle files ------------------------------------------------------
 
   async uploadResource(
