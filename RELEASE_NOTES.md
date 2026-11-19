@@ -1,3 +1,233 @@
+# Release Notes — v1.38.0
+
+**Release Date:** November 19, 2026
+**Previous Release:** v1.37.0 (November 17, 2026)
+
+---
+
+## Highlights
+
+Skills now follow the [agentskills.io](https://agentskills.io) format all the way through.
+- A skill can be downloaded as a standard bundle.
+- A skill can be imported from a bundle, as a `.zip` or from a public GitHub path. Import is in development and off by default.
+- A skill's files keep their folders.
+- Every `SKILL.md` goes through one parser and one validator.
+
+Word skill scripts now run in a dedicated sandbox, without network access and with a time limit. Skill changes are audited. An edit that would reach other people's agents asks the author to confirm first, and an imported skill is pinned when it is bound to an Agent.
+
+Knowledge-base citations now name the document, link to the web page they came from, and can open the text the knowledge base indexed.
+
+**Action required:** run the platform (CDK) deploy **before** the backend deploy. Two of the skill changes add infrastructure. After both deploys finish, there are two short post-deploy steps (see Manual steps). One flag is new, in development and off by default (`SKILL_BUNDLE_IMPORT_ENABLED`).
+
+---
+
+## Skills follow the agentskills.io format
+
+A skill is a set of instructions plus a bundle of files, and agentskills.io is the open layout for that bundle. This release makes our skills read, write, import and export that layout consistently. A skill written here can therefore leave as a standard bundle and come back unchanged.
+
+### Download a skill (#2155)
+- The owner gets **Download skill** on the skill's page, and an admin gets it on a catalog skill's edit page. The download is `{slug}.zip`, holding `{slug}/SKILL.md` plus `references/`, `scripts/` and `assets/`.
+- Routes:
+  - `GET /skills/mine/{skill_id}/export`, owner only;
+  - `GET /admin/skills/{skill_id}/export`, under the `admin.skills` scope.
+
+  Both take an optional `?version=n` to export a frozen version.
+- `SKILL.md` is rendered from the stored skill, never read back from storage. Entries are sorted and use one fixed timestamp and fixed permissions (`0644`, scripts included), so an unchanged skill exports to identical bytes. The zip reads back to the same skill through our importer and through Strands.
+
+### Import a bundle, in development (#2127, #2157)
+- **My Skills → Import a skill bundle** takes a `.zip` or a public GitHub path (`https://github.com/owner/repo/tree/branch/path`).
+  - A preview lists what the import adds, updates, deletes and skips, with a reason for each skip.
+  - A **re-import** from the same source refreshes the skill and shows a diff first.
+- **A re-import never cuts a version.** It writes the live skill only, like the edit form. A Shared Project pinned to `skill@N` keeps running N and shows *Update available*.
+- **Archives are bounded:** at most 50 files and 20 MiB in total, a 10 MiB upload, a 25 MiB GitHub archive, and a 200 KiB `SKILL.md`. Unsafe paths and encrypted entries are refused. GitHub is fetched from `codeload.github.com` only. Private repositories are not supported.
+- Routes: `POST /skills/mine/import/preview`, `POST /skills/mine/import` and `POST /skills/mine/{skill_id}/import`. They return 404 after authentication while the flag is off (see Feature flags).
+- An imported skill takes its id from its frontmatter `name`, so `mcp-builder` exports back as `mcp-builder` (#2157).
+
+### Files keep their folders (#2163)
+- A bundle's `references/legal/nda.md` now stays at that path. Before, it was flattened to `nda.md`, or renamed on a clash. The path is kept through import, export, `read_skill_file`, the REST download and delete routes, the project skill view and the SPA's file lists.
+- A bare filename still works when only one file has it. When two files share a name, the result names both.
+- Every existing skill reads, hashes, lists and serves exactly as before. There is no migration.
+
+### One parser and one validator (#2147, #2151, #2153, #2157)
+- `apis/shared/skills/skill_md.py` is the one `SKILL.md` parser on every read and write path. It applies these bounds:
+  - frontmatter of at most 16 KiB, checked before YAML runs;
+  - no YAML anchors or aliases;
+  - at most 2,000 nodes, at a nesting depth of at most 8;
+  - instructions of at most 200 KiB.
+
+  Skill names and descriptions refuse invisible and control characters. Admin create refuses an id that would activate under the same name as an existing skill.
+- The `SKILL.md` stored beside each skill now passes agentskills.io validation in strict mode. Its keys are `name`, `description`, `license`, `compatibility`, `metadata` and `allowed-tools`, in that order. Other keys fold under `metadata`.
+- Admin create and update accept and return `allowedTools` and `skillMetadata`. When a skill declares `compatibility`, activating it shows that line to the model.
+- A skill whose stored metadata holds booleans, lists or nested values can be edited again. On input those values are warnings, not errors (#2153).
+- Both **Import SKILL.md** buttons, admin and My Skills, now use the server parser and list its errors and warnings. The admin form keeps `allowed-tools` and metadata. A frontmatter slip like `description: Use when: …` imports with a warning instead of failing.
+- `backfill_skill_bundles.py --projections-only` rewrites stored `SKILL.md` files that differ from what the platform would write today. It also reports, by skill id only, any ids that would activate under the same name and any rows that fail strict validation. See Manual steps.
+
+### Word skill scripts run in their own sandbox (#2149)
+- A skill script that `create_word_document` or `modify_word_document` runs (`skill_name` + `path`, behind `WORD_SKILL_SCRIPTS_ENABLED`) now runs in a **dedicated Code Interpreter without network access**. A run is stopped after **120 seconds** with an error result.
+  - The script, its `params` and the document are written into the sandbox as files, and `python-docx` is already in the sandbox image, so a Word script needs nothing from the network.
+  - Model-written `python_code` is unchanged and keeps the existing interpreter.
+- The Runtime reads the new interpreter's id from SSM (`/<prefix>/agentcore/skill-script-interpreter-id`) inside the tool call, never before the first token. If the id cannot be read, the script is refused with a clear message, and no session starts on either interpreter.
+
+### Changes are recorded, and edits that reach others ask first (#2162)
+- **Audit.** These skill actions each write one audit record:
+  - create, update, import, refresh and delete;
+  - export;
+  - a Word skill-script run, with its script hash and outcome.
+
+  Records carry ids and hashes, never instruction or description text, and a save that changes nothing records nothing. The `my_skill_*` tools and script runs are recorded from the Runtime. A failed audit write is logged and never fails the change.
+- **Reach.** A skill bound, unpinned, to a shared Agent or a project runs in other people's sessions. Saving or re-importing such a skill returns `409 skill_reach_unconfirmed` with a summary of who it reaches. The SPA shows the summary and resubmits with `confirmReach` on **Save anyway**. A skill bound nowhere, only to the owner's private Agents, or only with pins saves as before.
+- **Pinned by default.** Binding an imported skill to an Agent pins its current version. Pickers show "Pinned to v*n*". Hand-written skills behave as before.
+- **Provenance.** The skill page, both skill pickers and the share dialog show "Imported from *owner/repo* @ *sha*" or "Imported from a zip file".
+
+### Writing a skill file from an attachment (#2128)
+- `my_skill_write_file` takes `from_attachment`, an upload id or filename from the conversation, as the alternative to `content`.
+  - A `.md` or `.txt` file is copied byte for byte.
+  - A `.docx` is converted to Markdown with the renderer the documents-as-text projection uses.
+  - Other formats are refused with a message naming the ones that work.
+- A one-word change to a long playbook no longer costs thousands of output tokens or risks wording nobody asked to change. The approval card shows:
+  - the source file;
+  - the SHA-256 of exactly what will be written;
+  - a diff against the current file.
+- The Skill Creator's seeded guidance tells the model to use it. An existing deployment gets that line only through Manual steps.
+
+### Compaction names the skills it retires (#2159)
+A skill's instructions reach the model as a `skills` tool result. When compaction removes the turn that activated a skill, the summary written at that cut now adds one line. The line names the skills that were active and tells the model to activate them again before relying on them. It is written once, into the persisted summary, so restored history stays byte-identical. Activation results now list a skill's files as **Bundled files**, grouped as References, Scripts and Assets.
+
+### Test coverage
+New suites cover:
+- the parser's bounds, and the validator in both modes;
+- export determinism and the import refusals and skips;
+- nested paths, including the refused shapes;
+- the interpreter choice and timeout;
+- the audit records, reach and pins;
+- the compaction line.
+
+A prompt-cache pin test (`test_skills_prompt_cache_pin.py`) holds the `<available_skills>` block and the skills tool specs byte-identical across the series.
+
+## Knowledge-base citations you can follow
+
+- **A cited web page has its address and an Open page link** (#2130, #2132). The URL comes from the document row the search already reads, so there is no extra read, no re-ingest and no backfill. The model's excerpts are unchanged.
+- **A cited document shows its own name**, such as "My Report (final).pdf", not the indexed `my_report_(final).pdf` (#2134).
+- **Excerpts read as plain text** instead of raw markdown (#2141). This is a display change only.
+- **View content** opens the text the knowledge base indexed for a web page or a markdown or plain-text document, in the docked preview pane (#2142).
+  - Route: `GET /assistants/{assistant_id}/documents/{document_id}/content`.
+  - Anyone who can use the Agent may call it, only when the Agent shows citations and allows downloads. It returns at most 1 MB, and no presigned URL.
+  - Raw HTML renders as text, and remote images are not fetched.
+
+## Smaller additions
+
+- **The clarifying-question picker lists up to 8 options** (#2144), so the agent can offer one of five playbooks in a single picker. The tool description still steers open questions to 2–4 options.
+
+---
+
+## 🐛 Bug fixes
+
+- **An MCP App form sat in a white frame in dark mode, and showed an empty form after a reload** (#2138). Both iframes around an App painted white. They are now transparent, with a matching `color-scheme`. After a submit, a reload now hands the App its latest successful result for that tool, so the form shows "Issue created successfully" instead of "Waiting for you".
+- **A skill with non-string stored metadata could not be saved** (#2153), described above.
+
+## 🔒 Security
+
+- Dependabot alerts patched (#2125):
+  - `soupsieve` 2.9 → 4.1.1;
+  - `opentelemetry-api` 1.45.1 → 1.45.2, through a `uv` override, because ADOT 0.22.0 pins 1.45.1;
+  - docs-site `astro` 7.3.3 → 7.4.12.
+- The skill sandbox, the bounded parser, audit records and reach confirmation are described in the skills spotlight.
+
+## ⚠️ Breaking changes
+
+None that need a migration. Two behaviour changes to know about:
+- Saving or re-importing a skill that is bound, unpinned, to a shared Agent or a project now needs a confirmation. A REST client that does not send `confirmReach` gets `409 skill_reach_unconfirmed` (#2162).
+- The backend now requires Python 3.12 or later. Every runtime image already is (#2125).
+
+## 🏗️ Infrastructure
+
+- **A second Code Interpreter for skill scripts** (#2149). It is a `CfnCodeInterpreterCustom` with a name derived from the prefix and `networkMode: SANDBOX`, on the existing logs-only execution role. Its id is published to `/<prefix>/agentcore/skill-script-interpreter-id`. That is two new resources.
+  - The Runtime role gets session actions on this interpreter only, and `ssm:GetParameter` on this parameter only.
+  - The existing interpreter is unchanged.
+- **The Runtime can append to the audit log** (#2162). It gets `dynamodb:PutItem` on the audit-log table, with no read, update, delete or index access. The table name is derived from the prefix (`DYNAMODB_AUDIT_LOG_TABLE_NAME` in `derived_environment.json`), so it adds nothing to the Runtime's V2 environment budget.
+- `CDK_SKILL_BUNDLE_IMPORT_ENABLED` is forwarded in `platform.yml`, to app-api only (#2127).
+- The MCP App sandbox proxy (`infrastructure/assets/mcp-sandbox/proxy.js`) ships through the platform deploy (#2138). The SPA half ships through the frontend deploy. Either can land first, and the white frame goes away once both are live.
+
+## 🔧 CI/CD
+
+- The delete-burst event-loop test keeps garbage-collector pauses out of its lag probe. They had failed dev deploys with false stalls (#2131).
+- The eval set benchmarks Sonnet 5.5 instead of Sonnet 5 (#2136).
+
+## 📦 Dependencies
+
+| Package | From | To |
+|---|---|---|
+| `soupsieve` (backend) | 2.9 | 4.1.1 |
+| `opentelemetry-api` (backend override; scheduled-runs Lambda api/sdk) | 1.45.1 | 1.45.2 |
+| `astro` (docs-site) | 7.3.3 | 7.4.12 |
+| backend `requires-python` | `>=3.11` | `>=3.12` |
+
+## 🚩 Feature flags
+
+| Flag | Default | Set on | Kind | What on does |
+|---|---|---|---|---|
+| `SKILL_BUNDLE_IMPORT_ENABLED` / `CDK_SKILL_BUNDLE_IMPORT_ENABLED` / `features.skillBundleImport` | **OFF** (in development): only `"true"` enables; unset arrives as `""` and is off | app-api only, and the SPA build. Set both together. The Runtime gets no variable, because an imported skill is stored like any other | Feature switch, permanent: app-api fetches from GitHub on a user's behalf | Lets a user import a whole agentskills.io bundle into My Skills from a `.zip` or a public GitHub path, preview it, and re-import it later to refresh it (#2127) |
+
+**Default changes:** none. **Retired:** none.
+
+The skills series (#2147–#2163) adds no flag. Its changes extend tools and routes that `SKILL_AUTHORING_ENABLED`, `WORD_SKILL_SCRIPTS_ENABLED` and the existing skill routes already gate. Export, nested paths, validation, audit and reach are on wherever skills are.
+
+**On in our `development` environment only:** `SKILL_BUNDLE_IMPORT_ENABLED` (new), `CONCURRENT_TOOL_EXECUTION_ENABLED`, `RELEASE_LEDGER_ENABLED` / `releaseLedger`, `HANDOFFS_ENABLED` and `HANDOFF_BRIEF_ENABLED`, `QUOTA_REQUESTS_ENABLED`.
+
+**Still opt-in, on in our prod** (#1798). None is promoted in this release:
+- `sessionPrewarm`: waits on the Runtime V2 readout of what turnless warms cost.
+- `attachmentKb` and `CONVERSATION_INDEX_ENABLED`: a cost and retention decision each deployment makes.
+- `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`: production variable set 2026-11-05, effective from the next platform deploy. Promote after two weeks in effect with no flip.
+- `AGENT_KNOWLEDGE_FILES_ENABLED` with `knowledgeBaseMode`, and `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`: on in prod from 1.34.0 (2026-11-08), short of two weeks.
+- `attachmentPlan` with `ATTACHMENT_PLAN_ENABLED`: a rollout switch on in prod since 1.36.0. It retires in phase 6, when the `token` profile becomes the only one.
+- `documentExtract`, `fieldSetAuthoring` and `sourceProvenance`, with `DOCUMENT_EXTRACT_ENABLED`, `FIELD_SET_AUTHORING_ENABLED` and `SOURCE_PROVENANCE_ENABLED`: on in prod since 1.36.0, short of two weeks.
+- `attachmentCards`: on in prod since 1.36.1 (UI only), short of two weeks.
+- `WORD_SKILL_SCRIPTS_ENABLED`: on in prod since 2026-11-18. From this release, scripts run in the dedicated sandbox. Promotion is reviewed after two weeks there.
+
+## 🛠️ Manual steps
+
+### 1. Confirm a Word skill script still produces its document (production, after both deploys)
+`WORD_SKILL_SCRIPTS_ENABLED` is on in our prod, so the first skill-script run after the deploy is the real check of the new sandbox. In a **new conversation**, run one existing skill's Word script, and confirm that it returns its document and that the document opens. A script that waits past 120 seconds now returns a time-limit error.
+
+### 2. Regenerate stored `SKILL.md` projections (each environment, after the backend deploy)
+Stored projections keep their old bytes until a skill is next saved. The model never reads the projection, so no prompt changes. The script is idempotent and does a dry run by default. Run the dry run first:
+
+```bash
+AWS_PROFILE=<env-profile> backend/.venv/bin/python backend/scripts/backfill_skill_bundles.py \
+    --table <prefix>-app-roles --bucket <prefix>-skill-resources --projections-only
+```
+
+Run it again with `--apply` **only if** the report lists no skill ids that share an activation name and no rows that fail strict validation. Otherwise, resolve those skills first. A second `--apply` run writes nothing.
+
+### 3. Skill Creator: attach-by-reference guidance (optional, every deployment already seeded)
+The seeder does not overwrite a skill that already exists. To give an existing deployment's Skill Creator the new line about `from_attachment`, an admin adds it under Admin → Skills from `backend/scripts/seed_skills/skill_creator/SKILL.md` (Saving section). A fresh install seeds it.
+
+### 4. Skill bundle import (optional)
+To offer it, set `CDK_SKILL_BUNDLE_IMPORT_ENABLED=true` on the GitHub environment, and build the SPA with `features.skillBundleImport: true`.
+
+1.37.0's optional steps still apply if they are not done yet.
+
+## 🚀 Deployment notes
+
+**Order: `platform.yml` must complete before `backend.yml`, then `frontend-deploy.yml`.** This release's skill sandbox (#2149) and the Runtime's audit grant (#2162) are infrastructure.
+
+- **If the backend lands first:**
+  - Word skill scripts are refused with a clear message until the platform deploy finishes. `python_code`, the other Word tools and every other tool behave as before. The next script run after the platform deploy picks up the interpreter, with no restart.
+  - Runtime audit writes for `my_skill_*` and script runs fail with AccessDenied and are only logged (`audit_write_failed`). The tools work, and app-api's audit writes are unaffected.
+- **Platform** adds two resources (the interpreter and its SSM parameter) and three statements on the Runtime role: the interpreter's session actions, the parameter read and the audit-log `PutItem`.
+- **Backend before frontend.** The SPA's **Download skill**, **View content** and the reach confirmation call new app-api routes or responses.
+- **Expected one-time prompt-cache rewrites** on the first turn after deploy:
+  - turns with `ask_user_question` (on by default): `toolConfig` grows +32 tokens (678 → 710);
+  - users granted skill authoring: the `my_skill_*` family grows +79 tokens (1,303 → 1,382).
+
+  Both were measured with Bedrock CountTokens.
+- **Not rewrites:** the Word tool specs, the `skills` and `read_skill_file` specs and `<available_skills>` (all pinned). The compaction line and the **Bundled files** wording appear in new results only.
+- **Watch after deploy:** Word skill-script outcomes in the audit log (`skill.script_run`: `ok`, `error`, `timeout`) and `audit_write_failed` in the Runtime logs. Both should be quiet.
+
+**Ledger readout of the outgoing release** (1.37.0 vs 1.36.1) is in the release PR body. It is read from dev, because the ledger is not on in prod yet.
+
+---
+
 # Release Notes — v1.37.0
 
 **Release Date:** November 17, 2026
