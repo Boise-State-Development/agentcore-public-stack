@@ -234,4 +234,43 @@ describe('errorInterceptor', () => {
       });
     });
   });
+
+  it('does not toast a skill reach confirmation 409, but propagates it to the form', async () => {
+    const url = 'http://localhost:8000/skills/mine/grant_review';
+    const error = new HttpErrorResponse({
+      status: 409,
+      url,
+      error: { detail: { code: 'skill_reach_unconfirmed', message: 'Confirm', reach: 'Runs in "Desk".' } },
+    });
+    const nextFn: HttpHandlerFn = vi.fn().mockReturnValue(throwError(() => error));
+
+    await new Promise<void>((resolve) => {
+      TestBed.runInInjectionContext(() => {
+        errorInterceptor(new HttpRequest('PUT', url, {}), nextFn).subscribe({
+          error: (e) => {
+            expect(e).toBe(error);
+            expect(errorService.handleHttpError).not.toHaveBeenCalled();
+            resolve();
+          },
+        });
+      });
+    });
+  });
+
+  it('still toasts any other 409', async () => {
+    const url = 'http://localhost:8000/skills/mine/grant_review';
+    const error = new HttpErrorResponse({ status: 409, url, error: { detail: 'stale' } });
+    const nextFn: HttpHandlerFn = vi.fn().mockReturnValue(throwError(() => error));
+
+    await new Promise<void>((resolve) => {
+      TestBed.runInInjectionContext(() => {
+        errorInterceptor(new HttpRequest('PUT', url, {}), nextFn).subscribe({
+          error: () => {
+            expect(errorService.handleHttpError).toHaveBeenCalledWith(error);
+            resolve();
+          },
+        });
+      });
+    });
+  });
 });
