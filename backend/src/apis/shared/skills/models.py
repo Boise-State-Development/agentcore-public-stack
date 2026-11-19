@@ -21,7 +21,11 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from apis.shared.skills.skill_md import unsafe_character_problem
+from apis.shared.skills.skill_md import (
+    ALLOWED_TOOLS_MAX_NAMES,
+    skill_metadata_problem,
+    unsafe_character_problem,
+)
 from apis.shared.timestamps import from_iso, to_iso
 
 
@@ -363,6 +367,31 @@ def check_instructions(value: Optional[str]) -> Optional[str]:
     return value
 
 
+def check_skill_metadata(value: Optional[dict]) -> Optional[dict]:
+    """Pydantic-validator body: refuse ``skillMetadata`` the lenient validator rejects.
+
+    Errors refuse (a non-string ``license``, a ``compatibility`` over 500
+    characters, a non-string ``metadata`` value); warnings pass, because an
+    unknown key is kept and written under ``metadata`` in the projection.
+    """
+    problem = skill_metadata_problem(value)
+    if problem:
+        raise ValueError(f"skillMetadata: {problem}")
+    return value
+
+
+def check_allowed_tools(value: Optional[List[str]]) -> Optional[List[str]]:
+    """Pydantic-validator body: refuse an ``allowedTools`` list over the specification's cap."""
+    if value is None:
+        return None
+    names = [name for item in value for name in item.split()]
+    if len(names) > ALLOWED_TOOLS_MAX_NAMES:
+        raise ValueError(
+            f"allowedTools names {len(names)} tools; the limit is {ALLOWED_TOOLS_MAX_NAMES}"
+        )
+    return names
+
+
 def check_description_not_blank(value: Optional[str]) -> Optional[str]:
     """Pydantic-validator body: refuse a blank description when one is given."""
     if value is not None and not value.strip():
@@ -390,10 +419,24 @@ class SkillCreateRequest(BaseModel):
     # an admin can save a draft and fill it in later.
     instructions: str = Field(default="")
     compose: List[str] = Field(default_factory=list)
+    # Advisory only (D4); written to SKILL.md as one space-separated string.
+    allowed_tools: List[str] = Field(default_factory=list, alias="allowedTools")
+    # license, compatibility, metadata and any other frontmatter fields.
+    skill_metadata: Dict = Field(default_factory=dict, alias="skillMetadata")
     status: SkillStatus = Field(default=SkillStatus.ACTIVE)
     category: Optional[str] = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("allowed_tools")
+    @classmethod
+    def _allowed_tools_valid(cls, value: List[str]) -> List[str]:
+        return check_allowed_tools(value)
+
+    @field_validator("skill_metadata")
+    @classmethod
+    def _skill_metadata_valid(cls, value: Dict) -> Dict:
+        return check_skill_metadata(value)
 
     @field_validator("display_name")
     @classmethod
@@ -423,10 +466,22 @@ class SkillUpdateRequest(BaseModel):
     )
     instructions: Optional[str] = None
     compose: Optional[List[str]] = None
+    allowed_tools: Optional[List[str]] = Field(None, alias="allowedTools")
+    skill_metadata: Optional[Dict] = Field(None, alias="skillMetadata")
     status: Optional[SkillStatus] = None
     category: Optional[str] = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("allowed_tools")
+    @classmethod
+    def _allowed_tools_valid(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        return check_allowed_tools(value)
+
+    @field_validator("skill_metadata")
+    @classmethod
+    def _skill_metadata_valid(cls, value: Optional[Dict]) -> Optional[Dict]:
+        return check_skill_metadata(value)
 
     @field_validator("display_name")
     @classmethod
@@ -497,6 +552,8 @@ class AdminSkillResponse(BaseModel):
     description: str
     instructions: str
     compose: List[str] = Field(default_factory=list)
+    allowed_tools: List[str] = Field(default_factory=list, alias="allowedTools")
+    skill_metadata: Dict = Field(default_factory=dict, alias="skillMetadata")
     resources: List[SkillResourceRef] = Field(default_factory=list)
     status: SkillStatus
     category: Optional[str] = None
@@ -523,6 +580,8 @@ class AdminSkillResponse(BaseModel):
             description=skill.description,
             instructions=skill.instructions,
             compose=list(skill.compose),
+            allowed_tools=list(skill.allowed_tools),
+            skill_metadata=dict(skill.skill_metadata),
             resources=list(skill.resources),
             status=skill.status,
             category=skill.category,

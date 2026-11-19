@@ -50,7 +50,7 @@ from apis.shared.skills.models import (
     SkillStatus,
     instructions_size_problem,
 )
-from apis.shared.skills.skill_md import unsafe_character_problem
+from apis.shared.skills.skill_md import skill_metadata_problem, unsafe_character_problem
 from apis.shared.skills.resource_types import is_text_content_type
 from apis.shared.skills.user_service import (
     MAX_SKILLS_PER_USER,
@@ -134,6 +134,12 @@ def _failure(action: str, exc: Exception, skill_id: Optional[str] = None) -> Dic
 
 def _blank(value: Optional[str]) -> bool:
     return value is not None and not value.strip()
+
+
+def _metadata_problems(skill_metadata: Any) -> List[str]:
+    """The lenient agentskills.io check of ``skill_metadata``: errors refuse, warnings pass."""
+    problem = skill_metadata_problem(skill_metadata)
+    return [f"skill_metadata: {problem}"] if problem else []
 
 
 def _field_problems(
@@ -377,6 +383,7 @@ def make_my_skill_create_tool(session_id: str, user_id: str, user_email: Optiona
             skill_metadata: Optional extra frontmatter fields, e.g. {"version": "1.0"}.
         """
         problems = _field_problems(display_name or "", description or "", instructions)
+        problems += _metadata_problems(skill_metadata)
         if problems:
             return _error("Could not create the skill: " + "; ".join(problems) + ".")
         try:
@@ -452,6 +459,7 @@ def make_my_skill_update_tool(session_id: str, user_id: str, user_email: Optiona
                 )
             updates["status"] = SkillStatus(status)
         problems = _field_problems(display_name, description, instructions)
+        problems += _metadata_problems(skill_metadata)
         if problems:
             return _error("Could not update the skill: " + "; ".join(problems) + ".")
         if not updates:

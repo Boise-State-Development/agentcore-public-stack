@@ -122,6 +122,8 @@ async def admin_create_skill(
             description=request.description,
             instructions=request.instructions,
             compose=request.compose,
+            allowed_tools=request.allowed_tools,
+            skill_metadata=request.skill_metadata,
             status=request.status,
             category=request.category,
         )
