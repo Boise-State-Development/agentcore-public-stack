@@ -45,7 +45,12 @@ from apis.shared.skills.bundle_files import (
     MAX_RESOURCES_PER_SKILL,
     VALID_RESOURCE_KINDS,
 )
-from apis.shared.skills.models import SKILL_DESCRIPTION_MAX_LENGTH, SkillStatus
+from apis.shared.skills.models import (
+    SKILL_DESCRIPTION_MAX_LENGTH,
+    SkillStatus,
+    instructions_size_problem,
+)
+from apis.shared.skills.skill_md import unsafe_character_problem
 from apis.shared.skills.resource_types import is_text_content_type
 from apis.shared.skills.user_service import (
     MAX_SKILLS_PER_USER,
@@ -131,12 +136,20 @@ def _blank(value: Optional[str]) -> bool:
     return value is not None and not value.strip()
 
 
-def _field_problems(display_name: Optional[str], description: Optional[str]) -> List[str]:
+def _field_problems(
+    display_name: Optional[str],
+    description: Optional[str],
+    instructions: Optional[str] = None,
+) -> List[str]:
     problems = []
     if _blank(display_name):
         problems.append("the name cannot be blank")
     elif display_name is not None and len(display_name) > MAX_DISPLAY_NAME_CHARS:
         problems.append(f"the name is over {MAX_DISPLAY_NAME_CHARS} characters")
+    else:
+        unsafe = unsafe_character_problem("the name", display_name)
+        if unsafe:
+            problems.append(unsafe)
     if _blank(description):
         problems.append(
             "the description cannot be blank (it is the line the agent reads when "
@@ -147,6 +160,13 @@ def _field_problems(display_name: Optional[str], description: Optional[str]) -> 
             f"the description is {len(description)} characters; the limit is "
             f"{SKILL_DESCRIPTION_MAX_LENGTH}"
         )
+    else:
+        unsafe = unsafe_character_problem("the description", description)
+        if unsafe:
+            problems.append(unsafe)
+    too_large = instructions_size_problem(instructions)
+    if too_large:
+        problems.append(too_large)
     return problems
 
 
@@ -356,7 +376,7 @@ def make_my_skill_create_tool(session_id: str, user_id: str, user_email: Optiona
             category: Optional grouping label.
             skill_metadata: Optional extra frontmatter fields, e.g. {"version": "1.0"}.
         """
-        problems = _field_problems(display_name or "", description or "")
+        problems = _field_problems(display_name or "", description or "", instructions)
         if problems:
             return _error("Could not create the skill: " + "; ".join(problems) + ".")
         try:
@@ -431,7 +451,7 @@ def make_my_skill_update_tool(session_id: str, user_id: str, user_email: Optiona
                     f"Could not update the skill: status must be one of {', '.join(_STATUSES)}."
                 )
             updates["status"] = SkillStatus(status)
-        problems = _field_problems(display_name, description)
+        problems = _field_problems(display_name, description, instructions)
         if problems:
             return _error("Could not update the skill: " + "; ".join(problems) + ".")
         if not updates:

@@ -19,7 +19,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from apis.shared.skills.skill_md import unsafe_character_problem
 from apis.shared.timestamps import from_iso, to_iso
 
 
@@ -32,6 +34,10 @@ SKILL_ID_PATTERN = r"^[a-z][a-z0-9_]{2,49}$"
 # the Level-1 catalog line injected into the cacheable system prompt for every
 # enabled skill, on every turn.
 SKILL_DESCRIPTION_MAX_LENGTH = 1024
+
+# Max size of a skill's ``instructions`` (the SKILL.md body), in UTF-8 bytes, on
+# every write path. The body shares a 400 KB DynamoDB item with the manifest.
+SKILL_INSTRUCTIONS_MAX_BYTES = 200 * 1024
 
 # ``owner_id`` of an admin-catalog skill. Anything else is a user-authored
 # skill (Skills v2 PR-3): governed by ownership, not by RBAC ``granted_skills``.
@@ -324,6 +330,50 @@ class SkillDefinition(BaseModel):
 
 
 # =============================================================================
+# Field checks shared by every write path
+# =============================================================================
+
+
+def instructions_size_problem(instructions: Optional[str]) -> Optional[str]:
+    """A sentence saying ``instructions`` is over the size cap, or None."""
+    if instructions is None:
+        return None
+    size = len(instructions.encode("utf-8"))
+    if size <= SKILL_INSTRUCTIONS_MAX_BYTES:
+        return None
+    return (
+        f"the instructions are {size:,} bytes; the limit is "
+        f"{SKILL_INSTRUCTIONS_MAX_BYTES // 1024} KiB. Move long detail into reference files"
+    )
+
+
+def check_text_field(label: str, value: Optional[str]) -> Optional[str]:
+    """Pydantic-validator body: refuse unsafe characters in a display field."""
+    problem = unsafe_character_problem(label, value)
+    if problem:
+        raise ValueError(problem)
+    return value
+
+
+def check_instructions(value: Optional[str]) -> Optional[str]:
+    """Pydantic-validator body: refuse instructions over the size cap."""
+    problem = instructions_size_problem(value)
+    if problem:
+        raise ValueError(problem[0].upper() + problem[1:])
+    return value
+
+
+def check_description_not_blank(value: Optional[str]) -> Optional[str]:
+    """Pydantic-validator body: refuse a blank description when one is given."""
+    if value is not None and not value.strip():
+        raise ValueError(
+            "The description cannot be blank; it is the line the agent reads when "
+            "deciding whether to use the skill"
+        )
+    return value
+
+
+# =============================================================================
 # API Request Models (admin) — mirror apis/shared/tools/models.py
 # =============================================================================
 
@@ -336,7 +386,7 @@ class SkillCreateRequest(BaseModel):
         ..., min_length=1, max_length=100, alias="displayName"
     )
     description: str = Field(..., max_length=SKILL_DESCRIPTION_MAX_LENGTH)
-    # SKILL.md body — uncapped (instructions can be long); empty is allowed so
+    # SKILL.md body, capped at SKILL_INSTRUCTIONS_MAX_BYTES; empty is allowed so
     # an admin can save a draft and fill it in later.
     instructions: str = Field(default="")
     compose: List[str] = Field(default_factory=list)
@@ -344,6 +394,22 @@ class SkillCreateRequest(BaseModel):
     category: Optional[str] = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_safe(cls, value: str) -> str:
+        return check_text_field("The name", value)
+
+    @field_validator("description")
+    @classmethod
+    def _description_valid(cls, value: str) -> str:
+        check_description_not_blank(value)
+        return check_text_field("The description", value)
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions_size(cls, value: str) -> str:
+        return check_instructions(value)
 
 
 class SkillUpdateRequest(BaseModel):
@@ -361,6 +427,22 @@ class SkillUpdateRequest(BaseModel):
     category: Optional[str] = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_safe(cls, value: Optional[str]) -> Optional[str]:
+        return check_text_field("The name", value)
+
+    @field_validator("description")
+    @classmethod
+    def _description_valid(cls, value: Optional[str]) -> Optional[str]:
+        check_description_not_blank(value)
+        return check_text_field("The description", value)
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions_size(cls, value: Optional[str]) -> Optional[str]:
+        return check_instructions(value)
 
 
 class SkillRoleAssignment(BaseModel):

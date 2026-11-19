@@ -230,3 +230,13 @@ class TestReadSkillFile:
         read = self._tool(monkeypatch, [rec], _FakeStore(raises=True))
         out = read(skill_name="pdf-workflows", path="forms.md")
         assert "Could not read" in out
+
+
+def test_frontmatter_metadata_cannot_replace_the_true_id_or_name():
+    skill = sm.record_to_strands_skill(
+        _record(skill_metadata={"skill_id": "evil", "display_name": "x", "license": "MIT"})
+    )
+    assert skill.metadata["skill_id"] == "pdf_workflows"
+    assert skill.metadata["display_name"] == "PDF Workflows"
+    assert skill.metadata["license"] == "MIT"
+    assert skill.name == "pdf-workflows"

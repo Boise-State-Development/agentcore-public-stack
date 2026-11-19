@@ -29,6 +29,7 @@ from apis.shared.skills.repository import (
     get_skill_catalog_repository,
 )
 from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.bundle_files import SkillBundleFiles
 from apis.shared.skills.resource_store import (
     SkillResourceStore,
@@ -36,6 +37,10 @@ from apis.shared.skills.resource_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class SkillNameConflictError(ValueError):
+    """A new ``skill_id`` would activate under the same name as an existing skill (409)."""
 
 
 class SkillCatalogService:
@@ -171,8 +176,12 @@ class SkillCatalogService:
             Created SkillDefinition
 
         Raises:
+            SkillNameConflictError: Another skill's id has the same activation
+                name (``slugify_skill_name``), e.g. ``web__research`` and
+                ``web_research``.
             ValueError: If the skill already exists
         """
+        await self._refuse_name_collision(skill.skill_id)
         skill.created_by = admin.user_id
         skill.updated_by = admin.user_id
 
@@ -190,6 +199,21 @@ class SkillCatalogService:
         )
 
         return created
+
+    async def _refuse_name_collision(self, skill_id: str) -> None:
+        """Refuse an id whose activation name another skill (either tier) already has.
+
+        The runtime activates a skill by ``slugify_skill_name(skill_id)``, so two
+        ids with one slug cannot both be told apart. An identical id is left to
+        the repository's own "already exists" check. Existing rows are untouched.
+        """
+        slug = slugify_skill_name(skill_id)
+        for existing in await self.repository.list_skills():
+            if existing.skill_id != skill_id and slugify_skill_name(existing.skill_id) == slug:
+                raise SkillNameConflictError(
+                    f"Skill id '{skill_id}' would be used as '{slug}', the same as the "
+                    f"existing skill '{existing.skill_id}'. Choose a different id."
+                )
 
     async def update_skill(
         self, skill_id: str, updates: Dict, admin: User

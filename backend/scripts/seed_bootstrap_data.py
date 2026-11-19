@@ -1513,6 +1513,12 @@ def load_seed_skill_bundle(directory: Path) -> SeedSkillBundle:
     The frontmatter is read as flat ``key: value`` lines (the subset the SPA's
     importer also reads), so this standalone script needs no YAML dependency.
     A double-quoted value is decoded as JSON.
+
+    This is deliberately separate from ``apis.shared.skills.skill_md``: the
+    bootstrap environment installs only boto3 and httpx (no PyYAML, no
+    pydantic), and it reads only our own checked-in bundles.
+    ``tests/test_seed_skill_md_parity.py`` pins the two parsers to the same
+    result for every bundle under ``seed_skills/``.
     """
     text = (directory / "SKILL.md").read_text(encoding="utf-8")
     match = re.match(r"\A---\n(.*?)\n---\n(.*)\Z", text, re.S)

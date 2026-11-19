@@ -182,3 +182,40 @@ def test_resource_upload_rejects_a_traversal_filename(client):
     )
 
     assert resp.status_code == 400
+
+
+# -- Hardening: unsafe characters and the instructions cap --------------------
+
+
+def test_create_and_update_refuse_a_bidi_override_in_the_description(client):
+    resp = client.post(
+        "/skills/mine", json={"displayName": "Notes", "description": "Takes ‮notes."}
+    )
+    assert resp.status_code == 422
+    assert "U+202E" in resp.text
+    client.post("/skills/mine", json={"displayName": "Notes", "description": "Old."})
+    resp = client.put("/skills/mine/notes", json={"description": "Takes ‮notes."})
+    assert resp.status_code == 422
+
+
+def test_create_and_update_refuse_unsafe_characters_in_the_name(client):
+    resp = client.post(
+        "/skills/mine", json={"displayName": "No​tes", "description": "Takes notes."}
+    )
+    assert resp.status_code == 422
+    assert "U+200B" in resp.text
+
+
+def test_create_and_update_cap_the_instructions(client):
+    from apis.shared.skills.models import SKILL_INSTRUCTIONS_MAX_BYTES
+
+    over = "x" * (SKILL_INSTRUCTIONS_MAX_BYTES + 1)
+    resp = client.post(
+        "/skills/mine",
+        json={"displayName": "Notes", "description": "Takes notes.", "instructions": over},
+    )
+    assert resp.status_code == 422
+    client.post("/skills/mine", json={"displayName": "Notes", "description": "Takes notes."})
+    assert client.put("/skills/mine/notes", json={"instructions": over}).status_code == 422
+    at_cap = "x" * SKILL_INSTRUCTIONS_MAX_BYTES
+    assert client.put("/skills/mine/notes", json={"instructions": at_cap}).status_code == 200

@@ -25,8 +25,6 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-import yaml
-
 from apis.shared.extraction.field_sets import validate_field_set_upload
 from apis.shared.skills.bundle import KIND_DIRS
 from apis.shared.skills.bundle_files import (
@@ -34,7 +32,17 @@ from apis.shared.skills.bundle_files import (
     MAX_RESOURCES_PER_SKILL,
     SkillBundleFiles,
 )
-from apis.shared.skills.models import SKILL_DESCRIPTION_MAX_LENGTH, SkillDefinition
+from apis.shared.skills.models import (
+    SKILL_DESCRIPTION_MAX_LENGTH,
+    SKILL_INSTRUCTIONS_MAX_BYTES,
+    SkillDefinition,
+)
+from apis.shared.skills.skill_md import (
+    MAX_FRONTMATTER_NODES,
+    SkillMdError,
+    unsafe_character_problem,
+)
+from apis.shared.skills.skill_md import parse_skill_md as _parse_skill_md
 from apis.shared.skills.resource_store import compute_content_hash
 from apis.shared.skills.resource_types import (
     SkillResourceTypeError,
@@ -48,8 +56,8 @@ MAX_UPLOAD_ARCHIVE_BYTES = 10 * 1024 * 1024
 MAX_GITHUB_ARCHIVE_BYTES = 25 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES = 5_000
 # SKILL.md becomes the row's ``instructions``, which shares a 400 KB DynamoDB
-# item with the manifest.
-MAX_SKILL_MD_BYTES = 200 * 1024
+# item with the manifest: the same cap as every other write of instructions.
+MAX_SKILL_MD_BYTES = SKILL_INSTRUCTIONS_MAX_BYTES
 MAX_IMPORT_TOTAL_BYTES = 20 * 1024 * 1024
 MAX_DISPLAY_NAME_LENGTH = 100
 
@@ -357,17 +365,22 @@ def _read_bundle(
             f"SKILL.md's description is {len(description)} characters; the limit "
             f"is {SKILL_DESCRIPTION_MAX_LENGTH}."
         )
+    display_name = humanize_skill_name(name)
+    for label, value in (("SKILL.md's description", description), ("SKILL.md's name", display_name)):
+        unsafe = unsafe_character_problem(label, value)
+        if unsafe:
+            raise BundleImportError(unsafe[0].upper() + unsafe[1:] + ".")
 
     return ParsedBundle(
         root=root,
         name=name,
-        display_name=humanize_skill_name(name),
+        display_name=display_name,
         description=description,
         instructions=instructions,
         allowed_tools=_allowed_tools(frontmatter.get("allowed-tools")),
-        skill_metadata={
-            str(k): _dynamo_safe(v) for k, v in frontmatter.items() if k not in _RESERVED_KEYS
-        },
+        skill_metadata=_dynamo_safe(
+            {k: v for k, v in frontmatter.items() if k not in _RESERVED_KEYS}
+        ),
         files=sorted(files, key=lambda f: f.filename),
         skipped=skipped,
     )
@@ -440,26 +453,18 @@ def _flat_name(candidate: str) -> Optional[str]:
 def parse_skill_md(text: str) -> Tuple[Dict[str, Any], str]:
     """Split a SKILL.md into its YAML frontmatter and its body.
 
-    No frontmatter means an empty mapping and the whole text as the body.
+    A thin wrapper over :func:`apis.shared.skills.skill_md.parse_skill_md`. No
+    frontmatter means an empty mapping and the whole text as the body.
 
     Raises:
-        BundleImportError: The frontmatter is not valid YAML or not a mapping.
+        BundleImportError: The frontmatter cannot be read (not valid YAML, not a
+            mapping, over a size, node or depth bound, or uses an alias).
     """
-    normalized = text.replace("\r\n", "\n")
-    if not normalized.startswith("---\n"):
-        return {}, normalized.strip()
-    match = re.search(r"\n---[ \t]*(\n|$)", normalized[3:])
-    if match is None:
-        return {}, normalized.strip()
-    block = normalized[4 : 3 + match.start()]
-    body = normalized[3 + match.end() :]
     try:
-        loaded = yaml.safe_load(block) if block.strip() else {}
-    except yaml.YAMLError:
-        raise BundleImportError("SKILL.md's frontmatter is not valid YAML.") from None
-    if not isinstance(loaded, dict):
-        raise BundleImportError("SKILL.md's frontmatter must be a set of key: value lines.")
-    return {str(k).lower(): v for k, v in loaded.items()}, body.strip()
+        parsed = _parse_skill_md(text)
+    except SkillMdError as exc:
+        raise BundleImportError(str(exc)) from None
+    return parsed.frontmatter, parsed.body
 
 
 def humanize_skill_name(name: str) -> str:
@@ -482,11 +487,26 @@ def _allowed_tools(value: Any) -> List[str]:
 
 
 def _dynamo_safe(value: Any) -> Any:
-    """Frontmatter values as types a DynamoDB put accepts (no floats, no dates)."""
+    """Frontmatter values as types a DynamoDB put accepts (no floats, no dates).
+
+    Walks at most :data:`MAX_FRONTMATTER_NODES` values. The parser already
+    bounds what it hands over; this keeps the walk bounded for a structure that
+    came from anywhere else.
+    """
+    budget = [MAX_FRONTMATTER_NODES]
+    return _dynamo_safe_value(value, budget)
+
+
+def _dynamo_safe_value(value: Any, budget: List[int]) -> Any:
+    budget[0] -= 1
+    if budget[0] < 0:
+        raise BundleImportError(
+            f"SKILL.md's frontmatter has more than {MAX_FRONTMATTER_NODES:,} values."
+        )
     if isinstance(value, dict):
-        return {str(k): _dynamo_safe(v) for k, v in value.items()}
+        return {str(k): _dynamo_safe_value(v, budget) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_dynamo_safe(v) for v in value]
+        return [_dynamo_safe_value(v, budget) for v in value]
     if isinstance(value, bool) or value is None or isinstance(value, (str, int)):
         return value
     if isinstance(value, (datetime, date)):

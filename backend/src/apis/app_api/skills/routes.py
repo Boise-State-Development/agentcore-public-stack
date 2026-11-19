@@ -39,7 +39,7 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.extraction.field_sets import FieldSetError, require_field_set_name
@@ -53,6 +53,8 @@ from apis.shared.skills.models import (
     SkillResourceRef,
     SkillResourcesResponse,
     SkillStatus,
+    check_instructions,
+    check_text_field,
 )
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.skills.resource_store import compute_content_hash
@@ -257,6 +259,21 @@ class CreateMySkillRequest(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_safe(cls, value: str) -> str:
+        return check_text_field("The name", value)
+
+    @field_validator("description")
+    @classmethod
+    def _description_safe(cls, value: str) -> str:
+        return check_text_field("The description", value)
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions_size(cls, value: str) -> str:
+        return check_instructions(value)
+
 
 class UpdateMySkillRequest(BaseModel):
     """Request body for PUT /skills/mine/{skill_id}.
@@ -277,6 +294,21 @@ class UpdateMySkillRequest(BaseModel):
     status: Optional[SkillStatus] = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_safe(cls, value: Optional[str]) -> Optional[str]:
+        return check_text_field("The name", value)
+
+    @field_validator("description")
+    @classmethod
+    def _description_safe(cls, value: Optional[str]) -> Optional[str]:
+        return check_text_field("The description", value)
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions_size(cls, value: Optional[str]) -> Optional[str]:
+        return check_instructions(value)
 
 
 def _user_skill_error(e: UserSkillError) -> HTTPException:
