@@ -434,6 +434,20 @@ describe('ShareAgentDialogComponent', () => {
       expect(rendered).toContain('Everyone at Boise State who opens it');
     });
 
+    it('says where an imported skill came from, beside it, as text', async () => {
+      const { fixture } = await open({
+        visibility: 'PUBLIC',
+        getShareSkillExposure: async () => [
+          { ref: 'redline', label: 'Contract Redline', importSource: { type: 'github', owner: 'acme', repo: 'skills', commitSha: '0a1b2c3d4e' } },
+          { ref: 'rubric', label: 'Grading Rubric', importSource: null },
+        ],
+      });
+      const lines = [
+        ...(fixture.nativeElement as HTMLElement).querySelectorAll('[data-testid="exposed-skill-provenance"]'),
+      ].map((n) => n.textContent?.trim());
+      expect(lines).toEqual(['(Imported from acme/skills @ 0a1b2c3)']);
+    });
+
     it('says nothing when the owner bound no skills of their own', async () => {
       const { c } = await open({
         visibility: 'SHARED',

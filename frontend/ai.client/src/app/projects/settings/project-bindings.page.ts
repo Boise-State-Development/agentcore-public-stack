@@ -10,6 +10,7 @@ import { ToolSelectorComponent } from '../../components/tool-selector/tool-selec
 import { ToolSelectorItem } from '../../components/tool-selector/tool-selector.model';
 import { ToastService } from '../../services/toast/toast.service';
 import { BindingRef, BindingsResponse, BoundBinding } from '../models/project.model';
+import { SkillProvenance, pinnedLabel, provenanceLine } from '../../shared/skills/skill-provenance';
 import { ProjectApiService } from '../services/project-api.service';
 import { projectErrorMessage } from '../services/projects.service';
 import { injectProjectPage } from './project-page-state';
@@ -179,6 +180,8 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
   private readonly saved = signal<string[]>([]);
   protected readonly selected = signal<ReadonlySet<string>>(new Set());
   private readonly pins = signal<Record<string, BoundBinding>>({});
+  /** "Imported from owner/repo @ sha7" per skill ref, from the palette and the bound rows. */
+  private readonly provenance = signal<Record<string, string>>({});
   /** The skill whose pin is being updated. */
   private readonly pinning = signal<string | null>(null);
   protected readonly loaded = signal(false);
@@ -194,10 +197,12 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
     const pinning = this.pinning();
     const busy = pinning !== null || this.saving();
     const canEdit = this.state.canEdit();
+    const provenance = this.provenance();
     return choices.map(item => {
       const pin = saved.includes(item.id) ? pins[item.id] : undefined;
-      if (!pin) return item;
-      const line = pinLine(pin);
+      const source = provenance[item.id];
+      if (!pin) return source ? { ...item, note: source, noteTone: 'muted' as const } : item;
+      const line = source ? `${pinLine(pin)} ${source}.` : pinLine(pin);
       const offer = canEdit && !item.locked && (pin.updateAvailable || !pin.version);
       const foreign = pin.available ? FOREIGN_AVAILABLE_NOTE : FOREIGN_NOTE;
       return {
@@ -262,6 +267,7 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
       this.saved.set(refs);
       this.selected.set(new Set(refs));
       this.pins.set(pinsOf(bound));
+      this.provenance.set(provenanceOf(bound.bindings, palette));
       this.loaded.set(true);
     } catch (err) {
       if (projectId === this.id()) this.loadError.set(projectErrorMessage(err, `The ${KIND_COPY[kind].nounPlural} could not be loaded.`));
@@ -340,13 +346,27 @@ export function pinsOf(response: BindingsResponse): Record<string, BoundBinding>
   return Object.fromEntries(response.bindings.map(b => [b.ref, b]));
 }
 
-/** "Version 3 · since Oct 8, 2026 · A newer version is available", or the pre-pin line. */
+/** "Pinned to v3 · since Oct 8, 2026 · A newer version is available", or the pre-pin line. */
 function pinLine(pin: BoundBinding): string {
   if (!pin.version) return 'Uses the latest version.';
-  const parts = [`Version ${pin.version}`];
+  const parts = [pinnedLabel(pin.version)];
   if (pin.pinnedAt) parts.push(`since ${formatDate(pin.pinnedAt, 'MMM d, y', 'en-US')}`);
   if (pin.updateAvailable) parts.push('A newer version is available');
   return `${parts.join(' · ')}.`;
+}
+
+/** Each skill's provenance line, by ref: the bound row's (it may not be in the palette), else the palette's. */
+export function provenanceOf(bound: BoundBinding[], palette: BindableItem[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of palette) {
+    const line = provenanceLine(p.meta?.['importSource'] as SkillProvenance | undefined);
+    if (line) out[p.ref] = line;
+  }
+  for (const b of bound) {
+    const line = provenanceLine(b.importSource);
+    if (line) out[b.ref] = line;
+  }
+  return out;
 }
 
 /**

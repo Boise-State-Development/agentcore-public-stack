@@ -107,6 +107,25 @@ describe('CustomizeSkillDetailPage', () => {
     expect(text(fixture)).toContain('web_research');
   });
 
+  it('says where an imported skill came from, as text', async () => {
+    const fixture = await create(
+      'contract_redline',
+      detail({
+        skillId: 'contract_redline',
+        displayName: 'Contract Redline',
+        importSource: { type: 'github', owner: 'acme', repo: '<b>skills</b>', commitSha: '0123456789abcdef' },
+      }),
+    );
+    const line = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="skill-provenance"]')!;
+    expect(line.textContent?.trim()).toBe('Imported from acme/<b>skills</b> @ 0123456');
+    expect(line.querySelector('b')).toBeNull();
+  });
+
+  it('shows no provenance line for a hand-written skill', async () => {
+    const fixture = await create('web_research', detail({ skillId: 'web_research', displayName: 'Web Research' }));
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="skill-provenance"]')).toBeNull();
+  });
+
   it('renders the SKILL.md body expanded, with no click needed', async () => {
     const fixture = await create(
       'web_research',

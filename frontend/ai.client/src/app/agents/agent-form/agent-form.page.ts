@@ -1,4 +1,10 @@
 import {
+  SkillProvenance,
+  bindingPinVersion,
+  pinnedLabel,
+  provenanceLine,
+} from '../../shared/skills/skill-provenance';
+import {
   Component,
   ChangeDetectionStrategy,
   inject,
@@ -122,6 +128,22 @@ const VISIBILITY_LABELS: Record<string, string> = {
 
 /** The Skills list's groups, in display order; a skill's rank indexes this. */
 const SKILL_GROUPS = ['My skills', 'Shared with me', 'Organization'] as const;
+
+/**
+ * A skill row's note: "Pinned to v3" when this agent's binding pins it, and where
+ * an imported skill came from. Text only; owner and repo are a third party's names.
+ */
+export function skillRowNote(
+  item: BindableItem,
+  config: Record<string, unknown> | undefined,
+): string | null {
+  const pin = bindingPinVersion(config);
+  const parts = [
+    pin ? pinnedLabel(pin) : null,
+    provenanceLine(item.meta?.['importSource'] as SkillProvenance | undefined),
+  ].filter((p): p is string => !!p);
+  return parts.length ? parts.join(' · ') : null;
+}
 
 function skillOwnershipRank(item: BindableItem): number {
   const ownership = item.meta?.['ownership'];
@@ -264,6 +286,12 @@ export class AgentFormPage implements OnInit, OnDestroy {
    */
   readonly toolsOpen = signal(false);
   readonly selectedSkillRefs = signal<Set<string>>(new Set());
+  /**
+   * Each bound skill's stored `config` (its pin), by ref, as loaded. Sent back on
+   * save so a pin survives an edit; dropped when the skill is turned off, so
+   * adding it again binds (and, for an imported skill, pins) its current version.
+   */
+  readonly skillBindingConfigs = signal<Record<string, Record<string, unknown>>>({});
 
   /**
    * Which settings cards are open. One rule for all of them, so the page always
@@ -746,14 +774,19 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
     const toolRefs = new Set<string>();
     const skillRefs = new Set<string>();
+    const skillConfigs: Record<string, Record<string, unknown>> = {};
     for (const b of agent.bindings ?? []) {
       if (b.kind === 'tool') toolRefs.add(b.ref);
-      else if (b.kind === 'skill') skillRefs.add(b.ref);
+      else if (b.kind === 'skill') {
+        skillRefs.add(b.ref);
+        if (b.config && Object.keys(b.config).length) skillConfigs[b.ref] = { ...b.config };
+      }
       // knowledge_base bindings are welded/synthesized and managed live by
       // the knowledge-base section — no read-only display state to hydrate.
     }
     this.selectedToolRefs.set(toolRefs);
     this.selectedSkillRefs.set(skillRefs);
+    this.skillBindingConfigs.set(skillConfigs);
     // See `modelOpen` for the rule. Optional cards stay folded; the model opens
     // only while none is chosen.
     this.modelOpen.set(!agent.modelConfig?.modelId);
@@ -1151,34 +1184,51 @@ export class AgentFormPage implements OnInit, OnDestroy {
     [...this.skills()]
       .map((s) => ({ s, rank: skillOwnershipRank(s) }))
       .sort((a, b) => a.rank - b.rank || a.s.label.localeCompare(b.s.label))
-      .map(({ s, rank }) => ({
-        id: s.ref,
-        name: s.label,
-        description: s.description,
-        group: SKILL_GROUPS[rank],
-      })),
+      .map(({ s, rank }) => {
+        const note = skillRowNote(s, this.skillBindingConfigs()[s.ref]);
+        return {
+          id: s.ref,
+          name: s.label,
+          description: s.description,
+          group: SKILL_GROUPS[rank],
+          ...(note ? { note, noteTone: 'muted' as const } : {}),
+        };
+      }),
   );
 
   onSkillSelectionChange(next: ReadonlySet<string>): void {
     if (sameRefs(next, this.selectedSkillRefs())) return;
     this.selectedSkillRefs.set(new Set(next));
+    this.dropUnselectedSkillConfigs();
     this.bindingsDirty.set(true);
   }
 
   // ---- skills (multi-select toggles) -----------------------------------
   toggleSkill(ref: string): void {
     this.selectedSkillRefs.update((set) => toggle(set, ref));
+    this.dropUnselectedSkillConfigs();
     this.bindingsDirty.set(true);
   }
   isSkillSelected(ref: string): boolean {
     return this.selectedSkillRefs().has(ref);
   }
 
+  private dropUnselectedSkillConfigs(): void {
+    const selected = this.selectedSkillRefs();
+    this.skillBindingConfigs.update((configs) =>
+      Object.fromEntries(Object.entries(configs).filter(([ref]) => selected.has(ref))),
+    );
+  }
+
   // ---- submit ----------------------------------------------------------
   private buildBindings(): AgentBinding[] {
     const bindings: AgentBinding[] = [];
     for (const ref of this.selectedToolRefs()) bindings.push({ kind: 'tool', ref });
-    for (const ref of this.selectedSkillRefs()) bindings.push({ kind: 'skill', ref });
+    const configs = this.skillBindingConfigs();
+    for (const ref of this.selectedSkillRefs()) {
+      const config = configs[ref];
+      bindings.push(config ? { kind: 'skill', ref, config } : { kind: 'skill', ref });
+    }
     // KB bindings are welded/synthesized — never sent (backend rejects an explicit one).
     return bindings;
   }

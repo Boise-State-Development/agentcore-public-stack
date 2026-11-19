@@ -280,6 +280,56 @@ describe('AgentFormPage — invalid submit feedback', () => {
     });
   });
 
+  describe('skill pins and provenance', () => {
+    const imported = {
+      kind: 'skill',
+      ref: 'redline',
+      label: 'Contract Redline',
+      description: '',
+      meta: {
+        ownership: 'mine',
+        importSource: { type: 'github', owner: 'acme', repo: 'skills', commitSha: 'abcdef0123456' },
+      },
+    };
+    const zipped = { kind: 'skill', ref: 'zipped', label: 'Zipped', description: '', meta: { importSource: { type: 'zip' } } };
+    const hand = { kind: 'skill', ref: 'hand', label: 'Hand Written', description: '', meta: { ownership: 'mine' } };
+
+    function load(bindings: unknown[]): void {
+      (component as unknown as { applyAgentToForm(agent: unknown): void }).applyAgentToForm({
+        agentId: 'agt-1',
+        name: 'A',
+        description: 'd',
+        instructions: 'i',
+        bindings,
+      });
+    }
+
+    it('labels a pinned skill "Pinned to v<n>" and says where an imported skill came from', () => {
+      component.skills.set([imported, zipped, hand]);
+      load([{ kind: 'skill', ref: 'redline', config: { version: 2 } }, { kind: 'skill', ref: 'hand' }]);
+      const notes = Object.fromEntries(component.skillItems().map((i) => [i.id, i.note]));
+      expect(notes['redline']).toBe('Pinned to v2 · Imported from acme/skills @ abcdef0');
+      expect(notes['zipped']).toBe('Imported from a zip file');
+      expect(notes['hand']).toBeUndefined();
+    });
+
+    it('sends a bound skill’s pin back on save, and drops it when the skill is turned off', () => {
+      load([{ kind: 'skill', ref: 'redline', config: { version: 2 } }, { kind: 'skill', ref: 'hand' }]);
+      const build = () => (component as unknown as { buildBindings(): unknown[] }).buildBindings();
+      expect(build()).toEqual([
+        { kind: 'skill', ref: 'redline', config: { version: 2 } },
+        { kind: 'skill', ref: 'hand' },
+      ]);
+
+      component.onSkillSelectionChange(new Set(['hand']));
+      component.onSkillSelectionChange(new Set(['hand', 'redline']));
+      expect(build()).toEqual([
+        { kind: 'skill', ref: 'hand' },
+        { kind: 'skill', ref: 'redline' },
+      ]);
+    });
+  });
+
   describe('voice mode (#625)', () => {
     function checkbox(testId: string): HTMLInputElement | null {
       return fixture.nativeElement.querySelector(`[data-testid="${testId}"]`);

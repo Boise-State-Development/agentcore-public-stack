@@ -1,4 +1,5 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
+import { SkillProvenance } from '../../shared/skills/skill-provenance';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
@@ -47,6 +48,8 @@ export interface SkillDetail {
   isOwned: boolean;
   createdAt: string | null;
   updatedAt: string | null;
+  /** Where an imported skill came from; null or absent when hand-written. */
+  importSource?: SkillProvenance | null;
 }
 
 type Entry =

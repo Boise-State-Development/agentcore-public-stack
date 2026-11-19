@@ -1,3 +1,4 @@
+import type { SkillProvenance } from '../../shared/skills/skill-provenance';
 import { ListingReachability } from './reachability';
 /**
  * Agent Marketplace store types (Phase 2).
@@ -147,6 +148,8 @@ export interface SubmitListingRequest {
 export interface SkillExposure {
   ref: string;
   label: string;
+  /** Where an imported skill came from; null or absent when hand-written. */
+  importSource?: SkillProvenance | null;
 }
 
 /**

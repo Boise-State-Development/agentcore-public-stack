@@ -1,3 +1,4 @@
+import { provenanceLine } from '../../shared/skills/skill-provenance';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -139,6 +140,11 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
 
           @if (s.description) {
             <p class="mt-4 text-sm/6 text-gray-600 dark:text-gray-300">{{ s.description }}</p>
+          }
+          @if (provenance(); as source) {
+            <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400" data-testid="skill-provenance">
+              {{ source }}
+            </p>
           }
 
           <!-- Master switch -->
@@ -391,6 +397,9 @@ export class CustomizeSkillDetailPage {
   protected readonly skill = computed<SkillDetail | null>(() =>
     this.detailService.detailFor(this.skillId()),
   );
+
+  /** "Imported from owner/repo @ sha7" for an imported skill, as text. */
+  protected readonly provenance = computed(() => provenanceLine(this.skill()?.importSource));
 
   /** The detail read has settled, whatever the answer. */
   protected readonly resolved = computed(

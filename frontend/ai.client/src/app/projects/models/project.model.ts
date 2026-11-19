@@ -8,6 +8,7 @@
  */
 
 import type { Document, KbUsage, UploadUrlResponse } from '../../assistants/models/document.model';
+import type { SkillProvenance } from '../../shared/skills/skill-provenance';
 import type { SessionMetadata } from '../../session/services/models/session-metadata.model';
 import type { IntervalUnit, ScheduleCadence, ScheduledPromptState } from '../../schedules/models/schedule.model';
 
@@ -166,6 +167,8 @@ export interface BoundBinding extends BindingRef {
   available?: boolean;
   displayName?: string | null;
   description?: string | null;
+  /** Skills only, when `available`: where an imported skill came from. */
+  importSource?: SkillProvenance | null;
 }
 
 /** One file in a bound skill's bundle. */
