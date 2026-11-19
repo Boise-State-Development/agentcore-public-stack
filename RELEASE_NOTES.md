@@ -68,7 +68,7 @@ A skill is a set of instructions plus a bundle of files, and agentskills.io is t
   - Model-written `python_code` is unchanged and keeps the existing interpreter.
 - The Runtime reads the new interpreter's id from SSM (`/<prefix>/agentcore/skill-script-interpreter-id`) inside the tool call, never before the first token. If the id cannot be read, the script is refused with a clear message, and no session starts on either interpreter.
 
-### Changes are recorded, and edits that reach others ask first (#2162)
+### Changes are recorded, and edits that reach others ask first (#2162, #2165)
 - **Audit.** These skill actions each write one audit record:
   - create, update, import, refresh and delete;
   - export;
@@ -76,6 +76,7 @@ A skill is a set of instructions plus a bundle of files, and agentskills.io is t
 
   Records carry ids and hashes, never instruction or description text, and a save that changes nothing records nothing. The `my_skill_*` tools and script runs are recorded from the Runtime. A failed audit write is logged and never fails the change.
 - **Reach.** A skill bound, unpinned, to a shared Agent or a project runs in other people's sessions. Saving or re-importing such a skill returns `409 skill_reach_unconfirmed` with a summary of who it reaches. The SPA shows the summary and resubmits with `confirmReach` on **Save anyway**. A skill bound nowhere, only to the owner's private Agents, or only with pins saves as before.
+  The summary also names Shared Projects that someone else created where the author added the skill as an editor, because it runs there for every member (#2165). If that lookup cannot be read, the summary says so and the save still goes ahead. A project the author has since left is not found.
 - **Pinned by default.** Binding an imported skill to an Agent pins its current version. Pickers show "Pinned to v*n*". Hand-written skills behave as before.
 - **Provenance.** The skill page, both skill pickers and the share dialog show "Imported from *owner/repo* @ *sha*" or "Imported from a zip file".
 
@@ -124,6 +125,7 @@ A prompt-cache pin test (`test_skills_prompt_cache_pin.py`) holds the `<availabl
 
 - **An MCP App form sat in a white frame in dark mode, and showed an empty form after a reload** (#2138). Both iframes around an App painted white. They are now transparent, with a matching `color-scheme`. After a submit, a reload now hands the App its latest successful result for that tool, so the form shows "Issue created successfully" instead of "Waiting for you".
 - **A skill with non-string stored metadata could not be saved** (#2153), described above.
+- **The reach summary missed projects the author added the skill to as an editor** (#2165), described above.
 
 ## 🔒 Security
 

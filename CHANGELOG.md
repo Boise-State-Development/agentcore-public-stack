@@ -34,6 +34,7 @@ Skills follow the agentskills.io format end to end. A skill can be downloaded as
 
 ### 🐛 Fixed
 
+- **The reach check also names projects the author added the skill to as an editor.** A skill its author bound, unpinned, into someone else's Shared Project now appears in the approval card and the `409 skill_reach_unconfirmed` summary; a pinned binding there is listed as pinned. Keyed reads only, on skill writes (#2165)
 - **An MCP App form no longer sits in a white frame in dark mode**, and a submitted form shows its result after a reload instead of an empty form marked "Waiting for you" (#2138)
 
 ### 🔒 Security
