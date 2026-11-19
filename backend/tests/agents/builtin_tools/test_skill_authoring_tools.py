@@ -916,3 +916,28 @@ class TestAuditRecords:
         _create()
         sid = _skill_id(service)
         assert _tools()["my_skill_update"](skill_id=sid, description="Reviews grants.")["status"] == "success"
+
+
+class TestNestedFiles:
+    """A file imported into a subfolder (agentskills-conformance F10). The specs are
+    unchanged: my_skill_read lists it at its path under ``filename``, and
+    my_skill_read_file reads by that listed name. Writes stay flat."""
+
+    def test_a_nested_file_is_listed_at_its_path_and_readable_by_it(self, service):
+        import asyncio
+
+        _create()
+        skill_id = _skill_id(service)
+        owner = User(email="", user_id=OWNER, name="", roles=[])
+        asyncio.run(
+            service.add_resource(skill_id, "x.md", b"Legal NDA", "text/markdown", owner, path="legal/nda.md")
+        )
+        asyncio.run(service.add_resource(skill_id, "forms.md", b"Forms", "text/markdown", owner))
+
+        listed = _text(_tools()["my_skill_read"](skill_id=skill_id))
+        assert [(f["filename"], f["kind"]) for f in listed["files"]] == [
+            ("forms.md", "reference"),
+            ("legal/nda.md", "reference"),
+        ]
+        assert _text(_tools()["my_skill_read_file"](skill_id=skill_id, filename="legal/nda.md")) == "Legal NDA"
+        assert _text(_tools()["my_skill_read_file"](skill_id=skill_id, filename="forms.md")) == "Forms"
