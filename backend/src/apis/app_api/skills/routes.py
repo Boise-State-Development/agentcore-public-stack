@@ -54,6 +54,7 @@ from apis.shared.skills.models import (
     SkillResourcesResponse,
     SkillStatus,
     check_instructions,
+    check_skill_metadata,
     check_text_field,
 )
 from apis.shared.skills.repository import get_skill_catalog_repository
@@ -274,6 +275,11 @@ class CreateMySkillRequest(BaseModel):
     def _instructions_size(cls, value: str) -> str:
         return check_instructions(value)
 
+    @field_validator("skill_metadata")
+    @classmethod
+    def _skill_metadata_valid(cls, value: Dict) -> Dict:
+        return check_skill_metadata(value)
+
 
 class UpdateMySkillRequest(BaseModel):
     """Request body for PUT /skills/mine/{skill_id}.
@@ -309,6 +315,11 @@ class UpdateMySkillRequest(BaseModel):
     @classmethod
     def _instructions_size(cls, value: Optional[str]) -> Optional[str]:
         return check_instructions(value)
+
+    @field_validator("skill_metadata")
+    @classmethod
+    def _skill_metadata_valid(cls, value: Optional[Dict]) -> Optional[Dict]:
+        return check_skill_metadata(value)
 
 
 def _user_skill_error(e: UserSkillError) -> HTTPException:

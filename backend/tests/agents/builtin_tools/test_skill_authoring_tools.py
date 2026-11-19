@@ -811,3 +811,41 @@ class TestHardening:
         at_cap = "x" * SKILL_INSTRUCTIONS_MAX_BYTES
         result = _tools()["my_skill_update"](skill_id="grant_review", instructions=at_cap)
         assert result["status"] == "success", result
+
+
+class TestSkillMetadataValidation:
+    """skill_metadata goes through the lenient agentskills.io check: errors refuse, warnings pass."""
+
+    @pytest.mark.parametrize(
+        "metadata,needle",
+        [
+            ({"compatibility": "c" * 501}, "compatibility"),
+            ({"license": 3}, "license"),
+            ({"metadata": {"version": 1}}, "metadata"),
+        ],
+    )
+    def test_create_refuses_an_error(self, service, metadata, needle):
+        result = _tools()["my_skill_create"](
+            display_name="Meta", description="d", instructions="", skill_metadata=metadata
+        )
+        assert result["status"] == "error"
+        assert "skill_metadata" in _text(result) and needle in _text(result)
+
+    def test_create_passes_a_warning(self, service):
+        _create(skill_metadata={"version": "1.0", "license": "MIT"})
+        import asyncio
+
+        row = asyncio.run(service.repository.get_skill("grant_review"))
+        assert row.skill_metadata == {"version": "1.0", "license": "MIT"}
+
+    def test_update_refuses_an_error_and_leaves_the_row(self, service):
+        _create(skill_metadata={"license": "MIT"})
+        result = _tools()["my_skill_update"](
+            skill_id="grant_review", skill_metadata={"compatibility": ""}
+        )
+        assert result["status"] == "error"
+        assert "compatibility" in _text(result)
+        import asyncio
+
+        row = asyncio.run(service.repository.get_skill("grant_review"))
+        assert row.skill_metadata == {"license": "MIT"}

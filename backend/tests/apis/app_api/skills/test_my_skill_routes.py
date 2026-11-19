@@ -219,3 +219,26 @@ def test_create_and_update_cap_the_instructions(client):
     assert client.put("/skills/mine/notes", json={"instructions": over}).status_code == 422
     at_cap = "x" * SKILL_INSTRUCTIONS_MAX_BYTES
     assert client.put("/skills/mine/notes", json={"instructions": at_cap}).status_code == 200
+
+
+def test_skill_metadata_errors_refuse_and_warnings_pass(client):
+    body = {"displayName": "Meta", "description": "Has frontmatter."}
+    refused = client.post(
+        "/skills/mine", json={**body, "skillMetadata": {"compatibility": "c" * 501}}
+    )
+    assert refused.status_code == 422
+    assert "compatibility" in refused.text
+
+    # An unknown key is only a warning: it is kept, and written under metadata.
+    accepted = client.post(
+        "/skills/mine",
+        json={**body, "skillMetadata": {"license": "MIT", "version": 2}},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["skillMetadata"] == {"license": "MIT", "version": 2}
+
+    refused_update = client.put(
+        "/skills/mine/meta", json={"skillMetadata": {"metadata": {"version": 1}}}
+    )
+    assert refused_update.status_code == 422
+    assert client.get("/skills/mine/meta").json()["skillMetadata"]["license"] == "MIT"

@@ -317,7 +317,7 @@ async def test_resource_routes_enforce_ownership(
 async def test_skill_md_projection_is_written_for_user_skills(
     user_skill_service, skill_resource_store, author_user
 ):
-    """A user skill's S3 prefix must be a valid, portable agentskills.io bundle."""
+    """A user skill's S3 prefix must carry its SKILL.md projection."""
     skill = await user_skill_service.create_my_skill(
         author_user,
         display_name="Grant Writing",

@@ -106,6 +106,8 @@ def record_to_strands_skill(record: Any) -> Skill:
     passthrough, so downstream code (access checks, ``read_skill_file``) can
     recover the catalog id from an activated skill. The instructions gain a
     generated reference-file listing (L3 disclosure) when the skill has any.
+    ``license`` and ``compatibility`` come from ``skill_metadata`` when they
+    are strings.
     """
     skill_id = getattr(record, "skill_id", "")
     # Frontmatter passthrough first, so a ``skill_id`` / ``display_name`` key in
@@ -119,13 +121,24 @@ def record_to_strands_skill(record: Any) -> Skill:
     instructions = (getattr(record, "instructions", "") or "") + _reference_files_section(
         record
     )
+    stored = getattr(record, "skill_metadata", None) or {}
     return Skill(
         name=slugify_skill_name(skill_id),
         description=getattr(record, "description", "") or "",
         instructions=instructions,
         allowed_tools=allowed_tools or None,
         metadata=metadata,
+        # The plugin adds a "Compatibility:" line to the activation result for a
+        # skill that declares one; license is carried but shown nowhere. Neither
+        # reaches <available_skills>, so the cached prefix is unchanged.
+        license=_string_or_none(stored.get("license")),
+        compatibility=_string_or_none(stored.get("compatibility")),
     )
+
+
+def _string_or_none(value: Any) -> Optional[str]:
+    """A non-empty string as is; anything else (absent, blank, not a string) as None."""
+    return value if isinstance(value, str) and value else None
 
 
 def _is_active_status(status: Any) -> bool:
