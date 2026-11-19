@@ -38,6 +38,7 @@ import {
 import { MySkillService } from './services/my-skill.service';
 import { confirmSkillReach } from '../../shared/skills/confirm-skill-reach';
 import { reachConfirmationFrom } from '../../shared/skills/skill-provenance';
+import { isNestedSkillFile, skillFilePath } from '../../shared/utils/skill-resource-path';
 
 /**
  * Create / edit one user-authored skill (Skills v2 PR-3).
@@ -68,6 +69,9 @@ import { reachConfirmationFrom } from '../../shared/skills/skill-provenance';
   ],
 })
 export class SkillFormPage {
+  /** A skill file's path below its kind directory (its filename at the top). */
+  protected readonly filePath = skillFilePath;
+
   private fb = inject(FormBuilder);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
@@ -329,7 +333,9 @@ export class SkillFormPage {
    * file it is, and gains an Edit link (field-set-authoring §3).
    */
   protected editableFieldSet(resource: MySkillResourceRef): string | null {
-    if (!this.features.fieldSetAuthoring || resource.kind !== 'reference') {
+    // Only a top-level reference is a field set; a same-named file in a
+    // subfolder is an ordinary file.
+    if (!this.features.fieldSetAuthoring || resource.kind !== 'reference' || isNestedSkillFile(resource)) {
       return null;
     }
     return fieldSetNameFor(resource.filename);

@@ -16,6 +16,7 @@ import {
   SkillResourceKind,
   UpdateMySkillRequest,
 } from '../models/my-skill.model';
+import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
 
 /**
  * Signal-based state for the user-authored skills tier (Skills v2 PR-3).
@@ -170,7 +171,7 @@ export class MySkillService {
 
   async readResource(skillId: string, filename: string): Promise<string> {
     return firstValueFrom(
-      this.http.get(`${this.baseUrl()}/${skillId}/resources/${encodeURIComponent(filename)}`, {
+      this.http.get(`${this.baseUrl()}/${skillId}/resources/${encodeSkillFilePath(filename)}`, {
         withCredentials: true,
         responseType: 'text',
       }),
@@ -180,7 +181,7 @@ export class MySkillService {
   async deleteResource(skillId: string, filename: string): Promise<MySkillResourceRef[]> {
     const response = await firstValueFrom(
       this.http.delete<MySkillResourcesResponse>(
-        `${this.baseUrl()}/${skillId}/resources/${encodeURIComponent(filename)}`,
+        `${this.baseUrl()}/${skillId}/resources/${encodeSkillFilePath(filename)}`,
         { withCredentials: true },
       ),
     );

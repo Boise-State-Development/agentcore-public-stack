@@ -55,6 +55,7 @@ import {
   UpdateProjectScheduleRequest,
 } from '../models/project.model';
 import { CreateDocumentRequest, DownloadUrlResponse } from '../../assistants/models/document.model';
+import { encodeSkillFilePath } from '../../shared/utils/skill-resource-path';
 
 /**
  * HTTP surface for `/projects` (shared-projects §5).
@@ -189,7 +190,7 @@ export class ProjectApiService {
   /** One file of a bound skill's pinned bundle, as text for the viewer. */
   skillFile(projectId: string, skillId: string, filename: string): Observable<string> {
     return this.http.get(
-      this.url(projectId, `/skills/${encodeURIComponent(skillId)}/files/${encodeURIComponent(filename)}`),
+      this.url(projectId, `/skills/${encodeURIComponent(skillId)}/files/${encodeSkillFilePath(filename)}`),
       { ...this.options(), responseType: 'text' },
     );
   }

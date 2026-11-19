@@ -4,6 +4,7 @@ import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../config.service';
 import { SkillResourceKind } from '../../customize/skills/models/my-skill.model';
+import { encodeSkillFilePath } from '../../shared/utils/skill-resource-path';
 
 /**
  * One supporting file on a skill's agentskills.io bundle. Bytes live in S3;
@@ -16,6 +17,8 @@ export interface SkillDetailResource {
   contentType: string;
   s3Key: string;
   kind: SkillResourceKind;
+  /** Path below the kind directory (`legal/nda.md`); equals `filename` for a top-level file. */
+  path?: string;
 }
 
 /**
@@ -129,8 +132,9 @@ export class SkillDetailService {
    * owner-scoped, so a catalog skill's reference files open for anyone the
    * skill is granted to. Served `attachment` + `nosniff` by the backend.
    */
-  resourceUrl(skillId: string, filename: string): string {
-    return `${this.baseUrl()}/${encodeURIComponent(skillId)}/resources/${encodeURIComponent(filename)}`;
+  /** `path` is the file's path below its kind directory (its filename at the top). */
+  resourceUrl(skillId: string, path: string): string {
+    return `${this.baseUrl()}/${encodeURIComponent(skillId)}/resources/${encodeSkillFilePath(path)}`;
   }
 
   /** Drop a cached record so the next `ensure` re-reads it. */

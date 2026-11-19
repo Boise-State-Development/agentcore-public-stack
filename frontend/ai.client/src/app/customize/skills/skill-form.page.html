@@ -203,10 +203,10 @@
         <!-- Uploaded (edit mode) -->
         @if (resources().length > 0) {
           <ul role="list" class="mt-4 divide-y divide-gray-100 dark:divide-gray-700">
-            @for (resource of resources(); track resource.filename) {
+            @for (resource of resources(); track filePath(resource)) {
               <li class="flex items-center justify-between gap-3 py-2">
                 <span class="min-w-0 text-sm/6 text-gray-900 dark:text-white">
-                  <span class="truncate">{{ resource.filename }}</span>
+                  <span class="truncate">{{ filePath(resource) }}</span>
                   <span class="ml-2 text-xs text-gray-500 capitalize dark:text-gray-500">
                     {{ resource.kind }}
                   </span>
@@ -215,7 +215,7 @@
                   @if (editableFieldSet(resource); as setName) {
                     <a
                       [routerLink]="['/customize/skills', skillId(), 'field-sets', setName]"
-                      [attr.aria-label]="'Edit field set ' + resource.filename"
+                      [attr.aria-label]="'Edit field set ' + filePath(resource)"
                       class="rounded-2xl p-1.5 text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700"
                     >
                       <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
@@ -223,16 +223,16 @@
                   }
                   <button
                     type="button"
-                    (click)="viewResource(resource.filename)"
-                    [attr.aria-label]="'View ' + resource.filename"
+                    (click)="viewResource(filePath(resource))"
+                    [attr.aria-label]="'View ' + filePath(resource)"
                     class="rounded-2xl p-1.5 text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-700"
                   >
                     <ng-icon name="heroEye" class="size-4" aria-hidden="true" />
                   </button>
                   <button
                     type="button"
-                    (click)="deleteResource(resource.filename)"
-                    [attr.aria-label]="'Delete ' + resource.filename"
+                    (click)="deleteResource(filePath(resource))"
+                    [attr.aria-label]="'Delete ' + filePath(resource)"
                     class="rounded-2xl p-1.5 text-state-danger-700 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
                   >
                     <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />

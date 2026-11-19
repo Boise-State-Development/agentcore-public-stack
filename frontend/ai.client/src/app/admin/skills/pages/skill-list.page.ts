@@ -28,6 +28,7 @@ import {
   SkillRoleDialogResult,
 } from '../components/skill-role-dialog.component';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import { skillFilePath } from '../../../shared/utils/skill-resource-path';
 
 @Component({
   selector: 'app-skill-list',
@@ -246,9 +247,9 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
                           <dt class="text-xs/5 font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">Reference files</dt>
                           <dd class="mt-1 flex flex-wrap gap-1.5">
                             @if (skill.resources.length > 0) {
-                              @for (res of skill.resources; track res.filename) {
+                              @for (res of skill.resources; track filePath(res)) {
                                 <span class="inline-flex items-center rounded-lg bg-gray-100 px-2 py-0.5 font-mono text-xs/5 text-gray-700 dark:bg-gray-700 dark:text-gray-300" [title]="res.size + ' bytes'">
-                                  {{ res.filename }}
+                                  {{ filePath(res) }}
                                 </span>
                               }
                             } @else {
@@ -284,6 +285,9 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
   `,
 })
 export class SkillListPage {
+  /** A skill file's path below its kind directory (its filename at the top). */
+  protected readonly filePath = skillFilePath;
+
   adminSkillService = inject(AdminSkillService);
   private dialog = inject(Dialog);
   private roleOptionsService = inject(RoleOptionsService);

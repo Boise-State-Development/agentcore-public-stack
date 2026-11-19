@@ -31,6 +31,7 @@ import {
   skillExportFilename,
 } from '../../shared/skills/skill-export';
 import { MySkillService } from './services/my-skill.service';
+import { skillFilePath } from '../../shared/utils/skill-resource-path';
 
 /** Bundle-directory labels, in the order agentskills.io lists them. */
 const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 };
@@ -234,7 +235,7 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                 Reference material the assistant can open on demand — not loaded up front.
               </p>
               <ul class="mt-3 flex flex-col gap-2">
-                @for (file of files(); track file.filename) {
+                @for (file of files(); track filePath(file)) {
                   <li
                     class="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 px-4 py-3 dark:border-white/10"
                   >
@@ -247,7 +248,7 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                       <span class="min-w-0">
                         <span
                           class="block truncate font-mono text-sm/6 font-medium text-gray-900 dark:text-white"
-                          >{{ file.filename }}</span
+                          >{{ filePath(file) }}</span
                         >
                         <span class="block text-xs/5 text-gray-500 capitalize dark:text-gray-400">
                           {{ file.kind }} · {{ sizeLabel(file.size) }}
@@ -260,7 +261,7 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                          Opened in a new tab with rel=noopener so a download
                          never navigates the SPA away from this page. -->
                     <a
-                      [href]="resourceUrl(s.skillId, file.filename)"
+                      [href]="resourceUrl(s.skillId, filePath(file))"
                       target="_blank"
                       rel="noopener"
                       class="shrink-0 text-sm/6 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
@@ -371,6 +372,9 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
   `,
 })
 export class CustomizeSkillDetailPage {
+  /** A skill file's path below its kind directory (its filename at the top). */
+  protected readonly filePath = skillFilePath;
+
   protected readonly skillService = inject(SkillService);
   protected readonly detailService = inject(SkillDetailService);
   private readonly mySkills = inject(MySkillService);
@@ -439,7 +443,7 @@ export class CustomizeSkillDetailPage {
     [...(this.skill()?.resources ?? [])].sort(
       (a, b) =>
         (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9) ||
-        a.filename.localeCompare(b.filename),
+        skillFilePath(a).localeCompare(skillFilePath(b)),
     ),
   );
 

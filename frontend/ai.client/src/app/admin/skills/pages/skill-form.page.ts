@@ -45,6 +45,7 @@ import {
   RESOURCE_ACCEPT_ATTR,
   isAllowedResourceFilename,
 } from '../../../shared/skills/skill-resource-types';
+import { skillFilePath } from '../../../shared/utils/skill-resource-path';
 
 @Component({
   selector: 'app-skill-form',
@@ -328,17 +329,17 @@ import {
               @if (isEditMode()) {
                 @if (resources().length > 0) {
                   <ul class="divide-y divide-gray-200 overflow-hidden rounded-lg border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
-                    @for (res of resources(); track res.filename) {
+                    @for (res of resources(); track filePath(res)) {
                       <li class="flex items-center gap-3 px-3 py-2">
                         <ng-icon name="heroDocumentText" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
                         <div class="min-w-0 flex-1">
-                          <span class="block truncate font-mono text-sm/6 text-gray-900 dark:text-white">{{ res.filename }}</span>
+                          <span class="block truncate font-mono text-sm/6 text-gray-900 dark:text-white">{{ filePath(res) }}</span>
                           <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ formatSize(res.size) }} · {{ res.contentType }}</span>
                         </div>
                         <button
                           type="button"
                           (click)="viewResource(res)"
-                          [attr.aria-label]="'View ' + res.filename"
+                          [attr.aria-label]="'View ' + filePath(res)"
                           class="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                         >
                           <ng-icon name="heroEye" class="size-4" aria-hidden="true" />
@@ -347,7 +348,7 @@ import {
                           type="button"
                           (click)="deleteResource(res)"
                           [disabled]="resourceBusy()"
-                          [attr.aria-label]="'Delete ' + res.filename"
+                          [attr.aria-label]="'Delete ' + filePath(res)"
                           class="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 disabled:opacity-50 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                         >
                           <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
@@ -426,6 +427,9 @@ import {
   `,
 })
 export class SkillFormPage implements OnInit {
+  /** A skill file's path below its kind directory (its filename at the top). */
+  protected readonly filePath = skillFilePath;
+
   private fb = inject(FormBuilder);
   private router = inject(Router);
   private route = inject(ActivatedRoute);
@@ -659,8 +663,8 @@ export class SkillFormPage implements OnInit {
     if (!id) return;
     this.resourceBusy.set(true);
     try {
-      const content = await this.adminSkillService.readResource(id, res.filename);
-      this.viewing.set({ filename: res.filename, content });
+      const content = await this.adminSkillService.readResource(id, skillFilePath(res));
+      this.viewing.set({ filename: skillFilePath(res), content });
     } catch (err: unknown) {
       this.error.set(err instanceof Error ? err.message : 'Failed to read reference file.');
     } finally {
@@ -671,13 +675,13 @@ export class SkillFormPage implements OnInit {
   async deleteResource(res: SkillResourceRef): Promise<void> {
     const id = this.skillId();
     if (!id) return;
-    if (!confirm(`Delete reference file "${res.filename}"?`)) return;
+    if (!confirm(`Delete reference file "${skillFilePath(res)}"?`)) return;
     this.resourceBusy.set(true);
     this.error.set(null);
     try {
-      const manifest = await this.adminSkillService.deleteResource(id, res.filename);
+      const manifest = await this.adminSkillService.deleteResource(id, skillFilePath(res));
       this.resources.set(manifest);
-      if (this.viewing()?.filename === res.filename) {
+      if (this.viewing()?.filename === skillFilePath(res)) {
         this.viewing.set(null);
       }
     } catch (err: unknown) {
