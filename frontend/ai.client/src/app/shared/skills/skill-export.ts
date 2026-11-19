@@ -22,16 +22,27 @@ export function skillExportFilename(skillId: string): string {
   return `${skillExportSlug(skillId)}.zip`;
 }
 
+/**
+ * How long the object URL outlives the click. Safari and Firefox read the URL
+ * after the click returns, so revoking it in the same tick can cancel the save
+ * or produce an empty file.
+ */
+export const SAVE_BLOB_REVOKE_DELAY_MS = 10_000;
+
 /** Hand a downloaded body to the browser's save flow. */
 export function saveBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.style.display = 'none';
+  // Firefox ignores a click on a link that is not in the document.
+  document.body.appendChild(link);
   try {
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
     link.click();
   } finally {
-    URL.revokeObjectURL(url);
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), SAVE_BLOB_REVOKE_DELAY_MS);
   }
 }
 

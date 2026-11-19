@@ -222,9 +222,8 @@ describe('CustomizeSkillDetailPage', () => {
 
   it('downloads through the owner export route and saves the zip', async () => {
     const original = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
-    const revokeUrl = vi.fn();
     URL.createObjectURL = vi.fn(() => 'blob:skill');
-    URL.revokeObjectURL = revokeUrl;
+    URL.revokeObjectURL = vi.fn();
     const clicked: string[] = [];
     const click = vi
       .spyOn(HTMLAnchorElement.prototype, 'click')
@@ -245,7 +244,6 @@ describe('CustomizeSkillDetailPage', () => {
       await mine.whenStable();
       await settle();
       expect(clicked).toEqual(['my-skill.zip']);
-      expect(revokeUrl).toHaveBeenCalledWith('blob:skill');
     } finally {
       click.mockRestore();
       URL.createObjectURL = original.create;

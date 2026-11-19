@@ -1,6 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { HttpErrorResponse } from '@angular/common/http';
-import { skillExportErrorMessage, skillExportFilename, skillExportSlug } from './skill-export';
+import {
+  SAVE_BLOB_REVOKE_DELAY_MS,
+  saveBlob,
+  skillExportErrorMessage,
+  skillExportFilename,
+  skillExportSlug,
+} from './skill-export';
 
 describe('skill export helpers', () => {
   it('slugs a skill id the way the backend names the bundle', () => {
@@ -23,5 +29,39 @@ describe('skill export helpers', () => {
     const err = new HttpErrorResponse({ status: 500, error: new Blob(['oops']) });
     expect(await skillExportErrorMessage(err)).toContain("Couldn't download the skill");
     expect(await skillExportErrorMessage(new Error('x'))).toContain("Couldn't download the skill");
+  });
+
+  describe('saveBlob', () => {
+    const original = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      URL.createObjectURL = original.create;
+      URL.revokeObjectURL = original.revoke;
+    });
+
+    it('clicks a link in the document and revokes the URL only after a delay', () => {
+      vi.useFakeTimers();
+      URL.createObjectURL = vi.fn(() => 'blob:skill');
+      const revoke = vi.fn();
+      URL.revokeObjectURL = revoke;
+      const seen: { download: string; href: string; attached: boolean }[] = [];
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+        this: HTMLAnchorElement,
+      ) {
+        seen.push({ download: this.download, href: this.href, attached: this.isConnected });
+      });
+
+      saveBlob(new Blob(['zip']), 'my-skill.zip');
+
+      expect(seen).toEqual([{ download: 'my-skill.zip', href: 'blob:skill', attached: true }]);
+      expect(document.querySelector('a[download]')).toBeNull();
+      expect(revoke).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(SAVE_BLOB_REVOKE_DELAY_MS - 1);
+      expect(revoke).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(revoke).toHaveBeenCalledWith('blob:skill');
+    });
   });
 });
