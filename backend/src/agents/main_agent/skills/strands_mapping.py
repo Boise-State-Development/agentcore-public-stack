@@ -78,23 +78,44 @@ def _manifest_paths(record: Any) -> List[str]:
     return [_manifest_path(r) for r in getattr(record, "resources", None) or []]
 
 
+#: The listing's groups, in the order they appear: (manifest kind, heading).
+#: A kind outside these is listed under References, the directory
+#: ``_manifest_path`` already reads it from.
+_BUNDLED_FILE_GROUPS = (("reference", "References"), ("script", "Scripts"), ("asset", "Assets"))
+
+
+def _bundled_group(ref: Any) -> str:
+    """The listing group a manifest entry belongs to: its kind, or ``reference`` for any other."""
+    kind = getattr(ref, "kind", "reference")
+    return kind if kind in KIND_DIRS else "reference"
+
+
 def _reference_files_section(record: Any) -> str:
-    """A generated 'Available reference files' block for a skill's instructions.
+    """A generated 'Bundled files' block for a skill's instructions.
 
     Programmatic ``Skill`` instances carry no filesystem, so the plugin cannot
     list resources on activation. We append this listing to the instructions so
     the model knows what it can pull with ``read_skill_file`` (spec §5, L3).
+    Files are grouped as References, Scripts and Assets, in manifest order
+    within a group, and a group the skill has no files of is left out. Only new
+    activation results carry this wording; history already written keeps the
+    listing it was written with.
     """
-    paths = _manifest_paths(record)
-    if not paths:
+    refs = list(getattr(record, "resources", None) or [])
+    if not refs:
         return ""
-    lines = "\n".join(f"- {p}" for p in paths)
+    groups = []
+    for kind, heading in _BUNDLED_FILE_GROUPS:
+        members = [r for r in refs if _bundled_group(r) == kind]
+        if members:
+            lines = "\n".join(f"- {_manifest_path(r)}" for r in members)
+            groups.append(f"### {heading}\n{lines}")
     return (
-        "\n\n## Available reference files\n"
+        "\n\n## Bundled files\n"
         "Load any of these with the `read_skill_file` tool "
         f"(skill_name `{slugify_skill_name(getattr(record, 'skill_id', ''))}`, "
-        "path = one of the entries below):\n"
-        f"{lines}"
+        "path = one of the entries below):\n\n"
+        + "\n\n".join(groups)
     )
 
 
