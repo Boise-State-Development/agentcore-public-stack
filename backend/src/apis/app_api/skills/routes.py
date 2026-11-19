@@ -342,9 +342,10 @@ class UpdateMySkillRequest(BaseModel):
 async def require_reach_confirmed(skill_id: str, user: User) -> None:
     """409 with the reach summary when an edit would reach others' unpinned bindings.
 
-    Only the caller's own Agents and projects can run the caller's skill for
-    anyone else (``apis/shared/skills/reach.py``), so the lookup reads only the
-    caller's partition and discloses nothing. It is blocking boto3, so it runs
+    The caller's skill runs for anyone else only through the caller's own Agents
+    and projects, or a project the caller added it to as an editor
+    (``apis/shared/skills/reach.py``), so the lookup reads only those and names
+    nothing the caller cannot already see. It is blocking boto3, so it runs
     in a worker thread. A lookup that fails does not block the save, the same
     as the approval card, whose summary then says it could not check.
     """
