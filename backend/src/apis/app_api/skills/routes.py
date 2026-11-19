@@ -492,6 +492,7 @@ async def upload_my_skill_resource(
     skill_id: str,
     file: UploadFile = File(...),
     kind: str = Form("reference"),
+    path: Optional[str] = Form(None),
     user: User = Depends(get_current_user_from_session),
 ):
     """Upload (or replace) one supporting file on an owned skill.
@@ -499,6 +500,10 @@ async def upload_my_skill_resource(
     Bytes land in the standard agentskills.io bundle layout (``references/`` |
     ``scripts/`` | ``assets/`` per ``kind``). ``script`` files are stored inert
     — listed and readable, never executed (spec D5).
+
+    ``path`` (optional form field) places the file below its kind directory,
+    e.g. ``legal/nda.md``: at most 4 folders, each segment by the filename rule.
+    Without it the file sits at the top of the directory under its filename.
     """
     logger.info(f"User {user.name} uploading a skill bundle file")
 
@@ -511,6 +516,7 @@ async def upload_my_skill_resource(
             content_type=file.content_type or "",
             user=user,
             kind=kind,
+            path=path,
         )
     except UserSkillError as e:
         raise _user_skill_error(e)
@@ -520,7 +526,7 @@ async def upload_my_skill_resource(
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
 
 
-@router.get("/mine/{skill_id}/resources/{filename}")
+@router.get("/mine/{skill_id}/resources/{filename:path}")
 async def read_my_skill_resource(
     skill_id: str,
     filename: str,
@@ -550,7 +556,7 @@ async def read_my_skill_resource(
 
 
 @router.delete(
-    "/mine/{skill_id}/resources/{filename}", response_model=SkillResourcesResponse
+    "/mine/{skill_id}/resources/{filename:path}", response_model=SkillResourcesResponse
 )
 async def delete_my_skill_resource(
     skill_id: str,
@@ -689,7 +695,9 @@ async def read_my_field_set(
         raise _user_skill_error(e)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"Field set '{name}' not found")
-    if ref.kind != "reference":
+    # Only a top-level reference is a field set; a bare name that matched a
+    # nested file of the same name is not one.
+    if ref.kind != "reference" or ref.path != ref.filename:
         raise HTTPException(status_code=404, detail=f"Field set '{name}' not found")
 
     try:
@@ -740,7 +748,7 @@ async def write_my_field_set(
 
     filename = field_set_filename(name)
     content = markdown.encode("utf-8")
-    stored = next((r for r in skill.resources if r.filename == filename), None)
+    stored = next((r for r in skill.resources if r.path == filename), None)
     if stored is not None and stored.kind != "reference":
         raise HTTPException(
             status_code=409,
@@ -888,7 +896,7 @@ async def get_accessible_skill(
     )
 
 
-@router.get("/{skill_id}/resources/{filename}")
+@router.get("/{skill_id}/resources/{filename:path}")
 async def read_accessible_skill_resource(
     skill_id: str,
     filename: str,
