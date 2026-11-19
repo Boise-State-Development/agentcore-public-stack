@@ -456,13 +456,26 @@ async def update_my_skill(
 @router.delete("/mine/{skill_id}")
 async def delete_my_skill(
     skill_id: str,
+    confirm_reach: bool = Query(False, alias="confirmReach"),
     user: User = Depends(get_current_user_from_session),
 ):
-    """Delete one of the current user's authored skills and its bundle files."""
+    """Delete one of the current user's authored skills and its bundle files.
+
+    409 with the reach summary (``skill_reach_unconfirmed``) while a project or
+    shared Agent uses the skill and ``confirmReach`` was not sent. Pinned
+    bindings count too: a delete removes the skill from every binding.
+    """
     logger.info(f"User {user.name} deleting an authored skill")
 
+    service = get_user_skill_service()
     try:
-        await get_user_skill_service().delete_my_skill(skill_id, user)
+        if not confirm_reach:
+            # Ownership first, so a skill the caller doesn't own 404s before any lookup.
+            await service.require_owned(skill_id, user)
+            reach = await run_blocking(lookup_skill_reach, skill_id, user.user_id)
+            if reach.delete_reaches_others:
+                raise HTTPException(status_code=409, detail=reach.delete_conflict_detail())
+        await service.delete_my_skill(skill_id, user)
     except UserSkillError as e:
         raise _user_skill_error(e)
 

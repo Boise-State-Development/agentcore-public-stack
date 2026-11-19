@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .models import SkillDefinition, SkillResourceRef
+from .models import SkillDefinition, SkillResourceRef, skill_provenance
 
 VERSION_SK_PREFIX = "VERSION#"
 VERSION_NUMBER_WIDTH = 8
@@ -112,6 +112,17 @@ class SkillVersion(BaseModel):
     allowed_tools: List[str] = Field(default_factory=list, alias="allowedTools")
     skill_metadata: Dict[str, Any] = Field(default_factory=dict, alias="skillMetadata")
     resources: List[SkillResourceRef] = Field(default_factory=list)
+    import_source: Optional[Dict[str, str]] = Field(
+        None,
+        alias="importSource",
+        description=(
+            "Where the live skill had been imported from when this was cut "
+            "(``SkillImportSource.provenance()``), for display only. Not a snapshot "
+            "field and not in ``content_hash``: re-importing identical content reuses "
+            "the version. None for a skill never imported, and on rows cut before "
+            "this was recorded."
+        ),
+    )
 
     def to_dynamo_item(self) -> Dict[str, Any]:
         """The row. Deliberately no ``GSI4PK``: the owner index lists skills, not versions."""
@@ -133,6 +144,7 @@ class SkillVersion(BaseModel):
             "allowedTools": list(self.allowed_tools),
             "skillMetadata": dict(self.skill_metadata),
             "resources": [r.to_item() for r in self.resources],
+            **({"importSource": dict(self.import_source)} if self.import_source else {}),
         }
 
     @classmethod
@@ -151,6 +163,7 @@ class SkillVersion(BaseModel):
             allowed_tools=list(item.get("allowedTools") or []),
             skill_metadata=dict(item.get("skillMetadata") or {}),
             resources=[SkillResourceRef.from_item(r) for r in (item.get("resources") or [])],
+            import_source=dict(item["importSource"]) if item.get("importSource") else None,
         )
 
 
@@ -176,6 +189,7 @@ def snapshot_of(
         allowed_tools=list(skill.allowed_tools),
         skill_metadata=dict(skill.skill_metadata),
         resources=list(frozen_resources),
+        import_source=skill_provenance(skill),
     )
 
 

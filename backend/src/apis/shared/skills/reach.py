@@ -116,6 +116,49 @@ class SkillReach:
             "reach": self.summary(),
         }
 
+    @property
+    def shared_bindings(self) -> List[SkillBinding]:
+        """Bindings that run for someone other than the owner, pinned or not."""
+        return [b for b in self.bindings if b.shared]
+
+    @property
+    def delete_reaches_others(self) -> bool:
+        """Whether deleting the skill would take it away from someone else.
+
+        Unlike an edit, a pin does not shield a binding from a delete: a version
+        is overlaid on the live row (``versions.apply_version``), so once the row
+        is gone every binding of it stops running the skill.
+        """
+        return bool(self.shared_bindings)
+
+    def delete_conflict_detail(self) -> Dict[str, Any]:
+        """The 409 body ``DELETE /skills/mine/{id}`` returns until the caller confirms."""
+        return {
+            "code": REACH_CONFIRMATION_CODE,
+            "message": "Other people's agents or projects use this skill. Confirm to delete it.",
+            "reach": self.delete_summary(),
+        }
+
+    def delete_summary(self) -> str:
+        """One paragraph for the delete confirmation: who loses the skill."""
+        shared = self.shared_bindings
+        agents = [b for b in shared if not b.is_project]
+        projects = [b for b in shared if b.is_project]
+        groups = []
+        if projects:
+            groups.append(_count(len(projects), "project") + f" ({_names(projects)})")
+        if agents:
+            groups.append(_count(len(agents), "shared agent") + f" ({_names(agents)})")
+        parts = [
+            f"This skill is used by {' and '.join(groups)}. Deleting it removes it from "
+            "them for everyone who uses them, including where it is pinned to a version."
+        ]
+        if not self.complete:
+            parts.append(f"Only the first {MAX_PAGES} pages of your agents were checked.")
+        if not self.editor_projects_checked:
+            parts.append("Projects you added it to as an editor could not be checked.")
+        return " ".join(parts)
+
     def summary(self) -> str:
         """One paragraph for the approval card: who the edit reaches."""
         if self.error is not None:

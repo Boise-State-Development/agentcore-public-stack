@@ -273,6 +273,24 @@ class TestRefusals:
         with pytest.raises(BundleImportError, match=f"{MAX_RESOURCES_PER_SKILL + 1} files"):
             load_bundle(make_zip(files))
 
+    def test_too_many_files_names_the_folders_that_hold_them(self):
+        """The cap message says where the files are, so the author knows what to leave out."""
+        files = {"SKILL.md": SKILL_MD}
+        files |= {f"csharp/c{i}.md": "x" for i in range(30)}
+        files |= {f"go/g{i}.md": "x" for i in range(20)}
+        files |= {f"references/r{i}.md": "x" for i in range(5)}
+        with pytest.raises(BundleImportError) as e:
+            load_bundle(make_zip(files))
+        message = str(e.value)
+        assert "Most are in csharp/ (30), go/ (20), references/ (5)." in message
+        assert "Upload a .zip" in message
+
+    def test_a_missing_skill_folder_says_how_many_more_were_found(self):
+        files = {f"s{i:02d}/SKILL.md": SKILL_MD for i in range(13)}
+        with pytest.raises(BundleImportError) as e:
+            load_bundle(make_zip(files), path="nope")
+        assert "s09 and 3 more." in str(e.value)
+
     def test_too_many_bytes_in_total(self, monkeypatch):
         monkeypatch.setattr(bundle_import, "MAX_IMPORT_TOTAL_BYTES", 10)
         with pytest.raises(BundleImportError, match="add up to"):
@@ -444,6 +462,20 @@ class TestFetch:
         with pytest.raises(GitHubSourceError, match="not public") as e:
             await self._fetch(lambda r: httpx.Response(404))
         assert e.value.status == 404
+
+    @pytest.mark.asyncio
+    async def test_not_found_with_a_path_explains_a_slash_in_the_branch(self):
+        """``…/tree/feature/x/skills`` reads as branch ``feature``; the 404 says why."""
+        with pytest.raises(GitHubSourceError) as e:
+            await self._fetch(lambda r: httpx.Response(404))
+        assert "has a '/' in it, it was read as 'main'" in str(e.value)
+
+    @pytest.mark.asyncio
+    async def test_not_found_without_a_path_has_no_branch_hint(self):
+        loc = GitHubLocation("anthropics", "nope", None, "")
+        with pytest.raises(GitHubSourceError) as e:
+            await fetch_archive(loc, transport=httpx.MockTransport(lambda r: httpx.Response(404)))
+        assert "'/'" not in str(e.value)
 
     @pytest.mark.asyncio
     async def test_a_declared_oversize_archive_is_refused(self):

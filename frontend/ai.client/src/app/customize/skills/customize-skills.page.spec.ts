@@ -7,6 +7,8 @@ import { CustomizeSkillsPage } from './customize-skills.page';
 import { SkillService, UserSkill } from '../../services/skill/skill.service';
 import { MySkill } from './models/my-skill.model';
 import { ConfigService } from '../../services/config.service';
+import { Dialog } from '@angular/cdk/dialog';
+import { of } from 'rxjs';
 
 /**
  * The rejection from a failed save travels catch → signal set, which lands a
@@ -123,6 +125,60 @@ describe('CustomizeSkillsPage', () => {
     fixture.componentRef.setInput('scope', 'discover');
     fixture.detectChanges();
   }
+
+  describe('deleting a skill other people use', () => {
+    /** A Dialog whose prompts answer in order, recording what each one said. */
+    function answerDialogs(...answers: boolean[]): { title: string; message: string }[] {
+      const shown: { title: string; message: string }[] = [];
+      const dialog = TestBed.inject(Dialog);
+      dialog.open = ((_: unknown, config?: { data?: { title: string; message: string } }) => {
+        shown.push({ title: config?.data?.title ?? '', message: config?.data?.message ?? '' });
+        return { closed: of(answers.shift()) };
+      }) as unknown as Dialog['open'];
+      return shown;
+    }
+
+    const REACH_409 = {
+      detail: {
+        code: 'skill_reach_unconfirmed',
+        message: 'm',
+        reach: 'This skill is used by 1 project ("Legal").',
+      },
+    };
+
+    it('asks again with the server\'s summary, then deletes with confirmReach', async () => {
+      const fixture = await create();
+      const shown = answerDialogs(true, true);
+      const done = fixture.componentInstance['confirmDelete']('sk_own', 'My Own Skill');
+
+      await settle();
+      http.expectOne('/api/skills/mine/sk_own').flush(REACH_409, { status: 409, statusText: 'Conflict' });
+      await settle();
+      const confirmed = http.expectOne(r => r.url === '/api/skills/mine/sk_own');
+      expect(confirmed.request.params.get('confirmReach')).toBe('true');
+      confirmed.flush({ message: 'ok' });
+      await settle();
+      http.expectOne('/api/skills/').flush({ skills: [], totalCount: 0 });
+      await done;
+
+      expect(shown.map(d => d.title)).toEqual(['Delete this skill?', 'Other people use this skill']);
+      expect(shown[1].message).toContain('"Legal"');
+    });
+
+    it('keeps the skill when the user backs out of the second prompt', async () => {
+      const fixture = await create();
+      answerDialogs(true, false);
+      const done = fixture.componentInstance['confirmDelete']('sk_own', 'My Own Skill');
+
+      await settle();
+      http.expectOne('/api/skills/mine/sk_own').flush(REACH_409, { status: 409, statusText: 'Conflict' });
+      await done;
+
+      // No second DELETE (afterEach's verify), and no error banner for a choice.
+      fixture.detectChanges();
+      expect(text(fixture)).not.toContain('Failed to delete');
+    });
+  });
 
   it('reads both tiers — the picker feed and the authored tier', async () => {
     const fixture = await create();
