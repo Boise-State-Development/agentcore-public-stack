@@ -37,15 +37,23 @@ way to fix it in-product.
 import logging
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from apis.shared.auth import User, get_current_user_from_session
+from apis.shared.blocking_io import run_blocking
 from apis.shared.extraction.field_sets import FieldSetError, require_field_set_name
 from apis.shared.feature_flags import field_set_authoring_enabled
 from apis.shared.skills.access import resolve_accessible_skill_ids
 from apis.shared.skills.bundle import slugify_skill_name
+from apis.shared.skills.bundle_export import (
+    SkillExportFileError,
+    SkillExportVersionNotFoundError,
+    build_skill_zip,
+    export_response_headers,
+    load_export_record,
+)
 from apis.shared.skills.models import (
     SKILL_DESCRIPTION_MAX_LENGTH,
     SkillDefinition,
@@ -525,6 +533,47 @@ async def delete_my_skill_resource(
         raise _resource_value_error(e)
 
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
+
+
+@router.get("/mine/{skill_id}/export")
+async def export_my_skill(
+    skill_id: str,
+    version: Optional[int] = Query(None, ge=1, description="Export this frozen version"),
+    user: User = Depends(get_current_user_from_session),
+):
+    """Download an owned skill as an agentskills.io bundle (``{slug}.zip``).
+
+    Owner only: a skill the caller can merely *use* (through a shared Agent or a
+    role grant) is 404, exactly like one that does not exist, because use is
+    shared and content is not. Not behind ``SKILL_BUNDLE_IMPORT_ENABLED``: it
+    returns nothing an owner cannot already read file by file. ``?version=n``
+    exports that frozen version's content and files. A file the manifest names
+    that cannot be read is 409, naming it; there is never a partial zip. The
+    archive is built in a worker thread, off the event loop.
+    """
+    service = get_user_skill_service()
+    try:
+        skill = await service.require_owned(skill_id, user)
+        record = await load_export_record(skill, version, service.repository)
+    except UserSkillError as e:
+        raise _user_skill_error(e)
+    except SkillExportVersionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    try:
+        data = await run_blocking(
+            build_skill_zip, record, service.bundle_files.resource_store.get
+        )
+    except SkillExportFileError as e:
+        logger.warning(
+            "Skill export refused: a manifest file could not be read",
+            extra={"skill_id": scrub_log(skill_id)},
+        )
+        raise HTTPException(status_code=409, detail=str(e))
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers=export_response_headers(skill_id),
+    )
 
 
 # -----------------------------------------------------------------------------
