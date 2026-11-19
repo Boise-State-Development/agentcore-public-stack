@@ -13,6 +13,7 @@ import {
   SkillResourcesResponse,
 } from '../models/admin-skill.model';
 import { SkillMdParseResult } from '../../../shared/skills/skill-md-parse';
+import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
 
 /**
  * Service for admin skill management.
@@ -228,7 +229,7 @@ export class AdminSkillService {
   async readResource(skillId: string, filename: string): Promise<string> {
     return firstValueFrom(
       this.http.get(
-        `${this.baseUrl()}/${skillId}/resources/${encodeURIComponent(filename)}`,
+        `${this.baseUrl()}/${skillId}/resources/${encodeSkillFilePath(filename)}`,
         { responseType: 'text' }
       )
     );
@@ -240,7 +241,7 @@ export class AdminSkillService {
   async deleteResource(skillId: string, filename: string): Promise<SkillResourceRef[]> {
     const response = await firstValueFrom(
       this.http.delete<SkillResourcesResponse>(
-        `${this.baseUrl()}/${skillId}/resources/${encodeURIComponent(filename)}`
+        `${this.baseUrl()}/${skillId}/resources/${encodeSkillFilePath(filename)}`
       )
     );
     this.skillsResource.reload();

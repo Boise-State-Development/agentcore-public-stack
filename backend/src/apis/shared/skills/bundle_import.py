@@ -45,6 +45,7 @@ from apis.shared.skills.skill_md import (
     unsafe_character_problem,
 )
 from apis.shared.skills.skill_md import parse_skill_md as _parse_skill_md
+from apis.shared.skills.resource_paths import MAX_PATH_SEGMENTS
 from apis.shared.skills.resource_store import compute_content_hash
 from apis.shared.skills.resource_types import (
     SkillResourceTypeError,
@@ -94,11 +95,18 @@ class BundleFile:
     """One file the import would write."""
 
     path: str  # relative to the bundle root, as the author wrote it
-    filename: str  # the manifest name (§4)
+    filename: str  # the manifest name (§4): the last segment of resource_path
     kind: str
     content: bytes
     content_type: str
     content_hash: str
+    # Where it is stored below its kind directory (``legal/nda.md``); equals
+    # ``filename`` for a file at the top of its directory.
+    resource_path: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.resource_path:
+            object.__setattr__(self, "resource_path", self.filename)
 
     @property
     def size(self) -> int:
@@ -394,7 +402,7 @@ def _read_bundle(
         instructions=fields.instructions,
         allowed_tools=fields.allowed_tools,
         skill_metadata=fields.skill_metadata,
-        files=sorted(files, key=lambda f: f.filename),
+        files=sorted(files, key=lambda f: (f.filename, f.resource_path)),
         skipped=skipped,
         frontmatter=frontmatter,
         parse_diagnostics=list(parse_diagnostics),
@@ -406,19 +414,44 @@ def _name_and_read(
     planned: List[Tuple[str, str, List[str], str, zipfile.ZipInfo]],
     skipped: List[SkippedFile],
 ) -> List[BundleFile]:
-    """Pick each file's flat manifest name (§4), then read it within bounds."""
-    basenames: Dict[str, int] = {}
-    for _, _, sub, _, _ in planned:
-        basenames[sub[-1]] = basenames.get(sub[-1], 0) + 1
+    """Pick each file's manifest path (§4), then read it within bounds.
 
+    A file keeps its place below its kind directory (``references/legal/nda.md``
+    is stored at ``legal/nda.md``), each segment cleaned by the manifest's
+    filename rule as a flat name always was. A path deeper than
+    :data:`MAX_PATH_SEGMENTS`, one with a segment that cannot be made to fit, or
+    one already taken (paths are unique across kinds) is skipped with the reason.
+    ``planned`` is in archive order, so which of two same-path files is kept is
+    deterministic: the first.
+    """
     files: List[BundleFile] = []
-    taken: set = set()
+    taken: Dict[str, str] = {}
     for rel, kind, sub, content_type, info in planned:
-        candidate = sub[-1] if basenames[sub[-1]] == 1 else "-".join(sub)
-        filename = _flat_name(candidate)
-        if filename is None or filename in taken:
-            skipped.append(SkippedFile(rel, "name clashes with another file or is not allowed", info.file_size))
+        if len(sub) > MAX_PATH_SEGMENTS:
+            skipped.append(
+                SkippedFile(
+                    rel,
+                    f"more than {MAX_PATH_SEGMENTS} folders deep inside {KIND_DIRS[kind]}/",
+                    info.file_size,
+                )
+            )
             continue
+        segments = [_flat_name(seg) for seg in sub]
+        if any(seg is None for seg in segments):
+            skipped.append(SkippedFile(rel, "name is not allowed", info.file_size))
+            continue
+        resource_path = "/".join(segments)  # type: ignore[arg-type]
+        if resource_path in taken:
+            skipped.append(
+                SkippedFile(
+                    rel,
+                    f"same path as '{taken[resource_path]}' "
+                    f"({KIND_DIRS[kind]}/{resource_path}); a skill holds one file per path",
+                    info.file_size,
+                )
+            )
+            continue
+        filename = segments[-1]  # type: ignore[assignment]
         if info.file_size > MAX_RESOURCE_BYTES:
             skipped.append(SkippedFile(rel, "larger than 1 MiB", info.file_size))
             continue
@@ -429,13 +462,14 @@ def _name_and_read(
         if not content:
             skipped.append(SkippedFile(rel, "empty file", 0))
             continue
-        if kind == "reference":
+        if kind == "reference" and len(segments) == 1:
+            # Only a top-level reference is read as a field set.
             try:
                 validate_field_set_upload(filename, content)
             except ValueError as e:
                 skipped.append(SkippedFile(rel, f"invalid field set: {e}", len(content)))
                 continue
-        taken.add(filename)
+        taken[resource_path] = rel
         files.append(
             BundleFile(
                 path=rel,
@@ -444,13 +478,14 @@ def _name_and_read(
                 content=content,
                 content_type=content_type,
                 content_hash=compute_content_hash(content),
+                resource_path=resource_path,
             )
         )
     return files
 
 
 def _flat_name(candidate: str) -> Optional[str]:
-    """``candidate`` if it passes the manifest's filename rule, else a cleaned form."""
+    """One segment if it passes the manifest's filename rule, else a cleaned form."""
     for name in (candidate, _UNSAFE_NAME_CHARS.sub("_", candidate).lstrip("._-")):
         try:
             SkillBundleFiles.validate_filename(name)
@@ -579,7 +614,13 @@ def _bundle_hash(bundle: ParsedBundle) -> str:
         "instructions": bundle.instructions,
         "allowedTools": bundle.allowed_tools,
         "skillMetadata": bundle.skill_metadata,
-        "files": [[f.filename, f.kind, f.content_hash] for f in bundle.files],
+        # The stored path joins a file's entry only when it is nested, so a flat
+        # bundle hashes as it did before nested paths.
+        "files": [
+            [f.filename, f.kind, f.content_hash]
+            + ([f.resource_path] if f.resource_path != f.filename else [])
+            for f in bundle.files
+        ],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -587,10 +628,12 @@ def _bundle_hash(bundle: ParsedBundle) -> str:
 
 def diff_files(bundle: ParsedBundle, target: Optional[SkillDefinition]) -> List[FileChange]:
     """One row per file: what the import does to it against ``target`` (spec §3)."""
-    existing = {r.filename: r for r in (target.resources if target else [])}
+    # Keyed by path: unique across kinds, so a file moved to another kind
+    # directory is "changed", not one removed and one added.
+    existing = {r.path: r for r in (target.resources if target else [])}
     rows: List[FileChange] = []
     for f in bundle.files:
-        ref = existing.get(f.filename)
+        ref = existing.get(f.resource_path)
         if ref is None:
             status = "added"
         elif ref.content_hash == f.content_hash and ref.kind == f.kind:
@@ -598,11 +641,11 @@ def diff_files(bundle: ParsedBundle, target: Optional[SkillDefinition]) -> List[
         else:
             status = "changed"
         rows.append(FileChange(f.path, status, f.filename, f.kind, f.size))
-    imported = {f.filename for f in bundle.files}
-    for name in sorted(set(existing) - imported):
-        ref = existing[name]
+    imported = {f.resource_path for f in bundle.files}
+    for path in sorted(set(existing) - imported, key=lambda p: (existing[p].filename, p)):
+        ref = existing[path]
         subdir = KIND_DIRS.get(ref.kind, "references")
-        rows.append(FileChange(f"{subdir}/{name}", "removed", name, ref.kind, ref.size))
+        rows.append(FileChange(f"{subdir}/{path}", "removed", ref.filename, ref.kind, ref.size))
     for s in bundle.skipped:
         rows.append(FileChange(s.path, "skipped", size=s.size, reason=s.reason))
     return rows

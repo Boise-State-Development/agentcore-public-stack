@@ -22,6 +22,7 @@ from strands import AgentSkills, Skill, tool
 # Single source of truth for the slug rule (shared with the app-api SKILL.md
 # write-through projection — the import-boundary forbids app_api importing here).
 from apis.shared.skills.bundle import KIND_DIRS, slugify_skill_name
+from apis.shared.skills.resource_paths import PathLookup, lookup_resource, manifest_path
 from apis.shared.skills.resource_store import (
     SkillResourceStoreError,
     get_skill_resource_store,
@@ -68,9 +69,14 @@ def _script_notice() -> str:
 
 
 def _manifest_path(ref: Any) -> str:
-    """Standard bundle path for a manifest entry, e.g. ``references/forms.md``."""
-    subdir = KIND_DIRS.get(getattr(ref, "kind", "reference"), "references")
-    return f"{subdir}/{ref.filename}"
+    """Standard bundle path for a manifest entry, e.g. ``references/forms.md``.
+
+    ``{kind_dir}/{path}``: for a file at the top of its directory (every row
+    written before nested paths) the path is its filename, so the listing an
+    activation shows is byte-identical; a nested file lists as
+    ``references/legal/nda.md``.
+    """
+    return manifest_path(ref)
 
 
 def _manifest_paths(record: Any) -> List[str]:
@@ -206,18 +212,29 @@ def fetch_active_skill_records(skill_ids: List[str]) -> List[Any]:
         return []
 
 
-def _resolve_resource(record: Any, path: str) -> Optional[Any]:
+def _lookup(record: Any, path: str, *, nested_bare_names: bool = True) -> PathLookup:
+    wanted = (path or "").strip().lstrip("/")
+    return lookup_resource(
+        getattr(record, "resources", None) or [],
+        wanted,
+        accept_manifest_path=True,
+        nested_bare_names=nested_bare_names,
+    )
+
+
+def _resolve_resource(
+    record: Any, path: str, *, nested_bare_names: bool = True
+) -> Optional[Any]:
     """Resolve ``path`` against a skill's manifest (no filesystem, no traversal).
 
-    Accepts either the bare filename (``forms.md``) or the standard bundle path
-    (``references/forms.md``). Pure manifest lookup — the returned ref's stored
-    ``s3_key`` is the only thing ever read.
+    Accepts the standard bundle path (``references/legal/nda.md``), the path
+    below the kind directory (``legal/nda.md``; for a top-level file that is
+    its filename), or a bare filename when exactly one file has it. Pure
+    manifest lookup — the returned ref's stored ``s3_key`` is the only thing
+    ever read. ``nested_bare_names=False`` (script resolution) stops a bare
+    name reaching into a subfolder.
     """
-    wanted = (path or "").strip().lstrip("/")
-    for ref in getattr(record, "resources", None) or []:
-        if wanted == ref.filename or wanted == _manifest_path(ref):
-            return ref
-    return None
+    return _lookup(record, path, nested_bare_names=nested_bare_names).ref
 
 
 def _resolve_readable_resource(record: Any, path: str) -> Optional[Any]:
@@ -240,6 +257,11 @@ def _resolve_readable_resource(record: Any, path: str) -> Optional[Any]:
         return None
     matches = [r for r in getattr(record, "resources", None) or [] if r.filename == segments[-1]]
     return matches[0] if len(matches) == 1 else None
+
+
+def _ambiguous_paths(record: Any, path: str) -> List[str]:
+    """The manifest paths a bare ``path`` could mean, when more than one file has that name."""
+    return [_manifest_path(r) for r in _lookup(record, path).ambiguous]
 
 
 class SkillsRuntime(NamedTuple):
@@ -304,6 +326,12 @@ def make_read_skill_file_tool(records: List[Any]):
 
         ref = _resolve_readable_resource(record, path)
         if ref is None:
+            ambiguous = _ambiguous_paths(record, path)
+            if ambiguous:
+                return (
+                    f"More than one file in skill '{skill_name}' is named '{path}': "
+                    f"{', '.join(ambiguous)}. Read it by one of those paths."
+                )
             listing = ", ".join(_manifest_paths(record)) or "(no reference files)"
             return (
                 f"No reference file '{path}' in skill '{skill_name}'. "

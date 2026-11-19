@@ -178,6 +178,8 @@ export interface ProjectSkillFile {
   kind: string;
   size: number;
   contentType: string;
+  /** Path below the kind directory; sent only for a file in a subfolder (`legal/nda.md`). */
+  path?: string;
 }
 
 /** `GET /projects/{id}/skills/{skillId}`: a bound skill as the project runs it (its pinned version). */

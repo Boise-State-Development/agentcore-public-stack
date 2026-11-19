@@ -120,15 +120,17 @@ def build_skill_zip(record: SkillDefinition, read_bytes: ReadBytes) -> bytes:
             ).encode("utf-8"),
         )
     ]
+    # Each file at its path below its kind directory (``references/legal/nda.md``);
+    # for a top-level file that is its filename, as before nested paths.
     for ref in sorted(
-        record.resources, key=lambda r: (KIND_DIRS.get(r.kind, "references"), r.filename)
+        record.resources, key=lambda r: (KIND_DIRS.get(r.kind, "references"), r.path)
     ):
         subdir = KIND_DIRS.get(ref.kind, "references")
         try:
             content = read_bytes(ref.s3_key)
         except Exception as exc:  # noqa: BLE001 - any failed read refuses the export
-            raise SkillExportFileError(ref.filename) from exc
-        entries.append((f"{slug}/{subdir}/{ref.filename}", content))
+            raise SkillExportFileError(ref.path) from exc
+        entries.append((f"{slug}/{subdir}/{ref.path}", content))
 
     entries.sort(key=lambda e: e[0])
     buffer = io.BytesIO()

@@ -56,7 +56,8 @@ def version_sk(number: int) -> str:
 def content_hash(skill: SkillDefinition) -> str:
     """A digest of what a pin would freeze, used to reuse an unchanged version.
 
-    Resources contribute their filename, kind and content hash, not their S3 key: a
+    Resources contribute their filename, kind and content hash (and their path
+    when it differs from the filename), not their S3 key: a
     version's key is the frozen copy and the live row's is the bundle path, and the
     two must hash the same when the bytes are the same.
     """
@@ -67,10 +68,23 @@ def content_hash(skill: SkillDefinition) -> str:
         "compose": list(skill.compose),
         "allowed_tools": list(skill.allowed_tools),
         "skill_metadata": skill.skill_metadata,
-        "resources": [[r.filename, r.kind, r.content_hash] for r in skill.resources],
+        "resources": [_resource_hash_entry(r) for r in skill.resources],
     }
     encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _resource_hash_entry(ref: SkillResourceRef) -> List[str]:
+    """``[filename, kind, contentHash]``, plus the path only for a nested file.
+
+    A file at the top of its kind directory (every row written before nested
+    paths) hashes exactly as it did, so a pin cut before the change is still
+    "current" after it rather than reading as an update.
+    """
+    entry = [ref.filename, ref.kind, ref.content_hash]
+    if ref.path != ref.filename:
+        entry.append(ref.path)
+    return entry
 
 
 class SkillVersion(BaseModel):
@@ -118,7 +132,7 @@ class SkillVersion(BaseModel):
             "compose": list(self.compose),
             "allowedTools": list(self.allowed_tools),
             "skillMetadata": dict(self.skill_metadata),
-            "resources": [r.model_dump(by_alias=True) for r in self.resources],
+            "resources": [r.to_item() for r in self.resources],
         }
 
     @classmethod
@@ -136,17 +150,7 @@ class SkillVersion(BaseModel):
             compose=list(item.get("compose") or []),
             allowed_tools=list(item.get("allowedTools") or []),
             skill_metadata=dict(item.get("skillMetadata") or {}),
-            resources=[
-                SkillResourceRef(
-                    filename=r.get("filename", ""),
-                    content_hash=r.get("contentHash", ""),
-                    size=int(r.get("size", 0)),
-                    content_type=r.get("contentType", ""),
-                    s3_key=r.get("s3Key", ""),
-                    kind=r.get("kind", "reference"),
-                )
-                for r in (item.get("resources") or [])
-            ],
+            resources=[SkillResourceRef.from_item(r) for r in (item.get("resources") or [])],
         )
 
 

@@ -6,7 +6,7 @@ tools and skill script runs) writes the same shape:
 
 * the tier (``catalog`` or ``user``) and the owner id;
 * the version content hash (``versions.content_hash``), the digest a pin compares;
-* the bundle's file names with their content hashes;
+* the bundle's file paths (below their kind directory) with their content hashes;
 * for an imported skill, the source type, owner, repo, ref and commit SHA.
 
 **Ids and hashes only, never instruction or description text.** A skill's text
@@ -54,7 +54,9 @@ def skill_state(skill: SkillDefinition) -> Dict[str, Any]:
         "tier": skill_tier(skill),
         "ownerId": skill.owner_id,
         "contentHash": content_hash(skill),
-        "files": {r.filename: r.content_hash for r in skill.resources},
+        # Keyed by path, unique within a skill (two nested files can share a
+        # filename); a top-level file's path is its filename, as before.
+        "files": {r.path: r.content_hash for r in skill.resources},
         "status": str(getattr(skill.status, "value", skill.status)),
     }
     source = import_source_fields(skill)

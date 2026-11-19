@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 from apis.app_api.documents.models import (
     DocumentResponse,
@@ -389,6 +389,17 @@ class ProjectSkillFile(BaseModel):
     kind: str = Field(..., description="reference | script | asset")
     size: int
     content_type: str = Field(..., alias="contentType")
+    path: str = Field(
+        "", description="Path below the kind directory; sent only for a nested file"
+    )
+
+    @model_serializer(mode="wrap")
+    def _omit_top_level_path(self, handler: Any) -> Any:
+        """A top-level file serializes exactly as it did before nested paths."""
+        data = handler(self)
+        if isinstance(data, dict) and data.get("path") in ("", self.filename):
+            data.pop("path", None)
+        return data
 
 
 class ProjectSkillContentResponse(BaseModel):

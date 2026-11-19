@@ -189,7 +189,10 @@ def resolve_skill_script(records: Iterable[Any], skill_name: str, path: str) -> 
             f"Available skills: {available}"
         )
 
-    ref = _resolve_resource(record, path)
+    # Strict: the full manifest path, or the bare name of a top-level file. A
+    # bare name never reaches into a subfolder (``scripts/x.py`` is not
+    # ``scripts/tools/x.py``), because what runs must be exactly what was named.
+    ref = _resolve_resource(record, path, nested_bare_names=False)
     if ref is None:
         listing = ", ".join(_manifest_paths(record)) or "(no files)"
         raise SkillScriptError(

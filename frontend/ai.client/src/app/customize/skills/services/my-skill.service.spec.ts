@@ -256,4 +256,14 @@ describe('MySkillService', () => {
     expect(del.request.method).toBe('DELETE');
     del.flush({ skillId: 'grant_writing', resources: [] });
   });
+
+  it('keeps the slashes of a nested file path and encodes each segment', async () => {
+    void service.readResource('grant_writing', 'legal/v1 notes/nda.md');
+    httpMock.expectOne(`${BASE}/grant_writing/resources/legal/v1%20notes/nda.md`).flush('body');
+
+    void service.deleteResource('grant_writing', 'legal/nda.md');
+    const del = httpMock.expectOne(`${BASE}/grant_writing/resources/legal/nda.md`);
+    expect(del.request.method).toBe('DELETE');
+    del.flush({ skillId: 'grant_writing', resources: [] });
+  });
 });

@@ -309,10 +309,11 @@ class UserSkillService:
         content_type: str,
         user: User,
         kind: str = "reference",
+        path: Optional[str] = None,
     ) -> List[SkillResourceRef]:
         before = await self.require_owned(skill_id, user)
         refs = await self.bundle_files.add_resource(
-            skill_id, filename, content, content_type, user, kind=kind
+            skill_id, filename, content, content_type, user, kind=kind, path=path
         )
         self._invalidate(skill_id)
         await self._record_files_changed(user, before, refs)
@@ -527,8 +528,8 @@ class UserSkillService:
         *,
         created: bool,
     ) -> None:
-        old = {r.filename: r.content_hash for r in old_refs}
-        new = {r.filename: r.content_hash for r in new_refs}
+        old = {r.path: r.content_hash for r in old_refs}
+        new = {r.path: r.content_hash for r in new_refs}
         logger.info(
             f"User {scrub_log(user.email)} imported a skill bundle into {scrub_log(skill_id)}",
             extra={

@@ -32,6 +32,8 @@ export interface MySkillResourceRef {
   contentType: string;
   s3Key: string;
   kind: SkillResourceKind;
+  /** Path below the kind directory (`legal/nda.md`); equals `filename` for a top-level file. */
+  path?: string;
 }
 
 /**

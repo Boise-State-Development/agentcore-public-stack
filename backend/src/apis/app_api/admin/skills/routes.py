@@ -321,6 +321,7 @@ async def upload_skill_resource(
     skill_id: str,
     file: UploadFile = File(...),
     kind: str = Form("reference"),
+    path: Optional[str] = Form(None),
     admin: User = Depends(require_skills_admin),
 ):
     """Upload (or replace) one supporting file for a catalog skill.
@@ -330,6 +331,10 @@ async def upload_skill_resource(
     row's manifest is updated atomically. Re-uploading the same filename
     replaces it. ``script`` files are stored inert (never executed). Returns the
     skill's updated manifest.
+
+    ``path`` (optional form field) places the file below its kind directory,
+    e.g. ``legal/nda.md``: at most 4 folders, each segment by the filename rule.
+    Without it the file sits at the top of the directory under its filename.
     """
     logger.info("Admin uploading skill reference file")
 
@@ -344,6 +349,7 @@ async def upload_skill_resource(
             content_type=file.content_type or "",
             admin=admin,
             kind=kind,
+            path=path,
         )
     except ValueError as e:
         raise _skill_value_error(e)
@@ -355,7 +361,7 @@ async def upload_skill_resource(
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
 
 
-@router.get("/{skill_id}/resources/{filename}")
+@router.get("/{skill_id}/resources/{filename:path}")
 async def read_skill_resource(
     skill_id: str,
     filename: str,
@@ -428,7 +434,7 @@ async def export_skill(
     )
 
 
-@router.delete("/{skill_id}/resources/{filename}", response_model=SkillResourcesResponse)
+@router.delete("/{skill_id}/resources/{filename:path}", response_model=SkillResourcesResponse)
 async def delete_skill_resource(
     skill_id: str,
     filename: str,
