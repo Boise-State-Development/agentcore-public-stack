@@ -153,4 +153,13 @@ Pinned versions read frozen content-addressed copies, so no project sees it.
 
 Private repositories (would need a GitHub connector token), branch names with
 `/`, admin-catalog bundle import, scheduled auto-refresh (would quietly change a
-skill under its users; refresh stays a click), and exporting a skill as a zip.
+skill under its users; refresh stays a click).
+
+Exporting a skill as a zip was built separately, with no flag of its own:
+`GET /skills/mine/{skill_id}/export` (the owner only) and
+`GET /admin/skills/{skill_id}/export` (`admin.skills`, catalog skills only), each
+with an optional `?version=n` for a frozen version. The archive is
+`{slug}/SKILL.md` plus `references/`, `scripts/` and `assets/`, with `SKILL.md`
+rendered from the row, and this importer reads it back to the same skill
+(`apis/shared/skills/bundle_export.py`; the **Download skill** action on the
+skill detail page and the admin skill page).
