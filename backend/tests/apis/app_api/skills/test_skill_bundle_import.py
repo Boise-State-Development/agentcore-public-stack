@@ -4,7 +4,7 @@ What these pin, in the order a mistake would hurt: a security bound refuses the
 whole archive (traversal, absolute paths, encryption, entry and size caps); a
 content rule skips one file and says why (symlinks, disallowed types, oversize,
 invalid field sets); the GitHub fetch only ever goes to codeload, with redirects
-off; and the mapping onto our flat manifest is deterministic.
+off; and the mapping onto our manifest is deterministic.
 """
 
 from __future__ import annotations
@@ -131,7 +131,9 @@ class TestMapping:
         assert b.root == ""
         assert [f.path for f in b.files] == ["references/a.md"]
 
-    def test_basename_clashes_take_their_joined_path(self):
+    def test_nested_files_keep_their_path_below_the_kind_directory(self):
+        # Before nested paths this flattened, renaming the clash to
+        # "office-__init__.py". Now each file keeps its folder.
         b = bundle_of(
             {
                 "SKILL.md": SKILL_MD,
@@ -140,13 +142,13 @@ class TestMapping:
                 "scripts/office/pack.py": "z",
             }
         )
-        names = {f.path: f.filename for f in b.files}
+        names = {f.path: (f.resource_path, f.filename) for f in b.files}
         assert names == {
-            # Manifest names start with a letter or digit, so the clash's
-            # joined name is cleaned.
-            "scripts/__init__.py": "init__.py",
-            "scripts/office/__init__.py": "office-__init__.py",
-            "scripts/office/pack.py": "pack.py",
+            # Manifest names start with a letter or digit, so each segment is
+            # cleaned as a flat name always was.
+            "scripts/__init__.py": ("init__.py", "init__.py"),
+            "scripts/office/__init__.py": ("office/init__.py", "init__.py"),
+            "scripts/office/pack.py": ("office/pack.py", "pack.py"),
         }
 
     def test_hidden_files_and_macos_metadata_are_ignored(self):
