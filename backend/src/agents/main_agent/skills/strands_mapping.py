@@ -108,10 +108,12 @@ def record_to_strands_skill(record: Any) -> Skill:
     generated reference-file listing (L3 disclosure) when the skill has any.
     """
     skill_id = getattr(record, "skill_id", "")
+    # Frontmatter passthrough first, so a ``skill_id`` / ``display_name`` key in
+    # it can never stand in for the record's own.
     metadata = {
+        **(getattr(record, "skill_metadata", None) or {}),
         "skill_id": skill_id,
         "display_name": getattr(record, "display_name", "") or skill_id,
-        **(getattr(record, "skill_metadata", None) or {}),
     }
     allowed_tools = list(getattr(record, "allowed_tools", None) or [])
     instructions = (getattr(record, "instructions", "") or "") + _reference_files_section(
