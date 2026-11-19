@@ -9,6 +9,8 @@
  * models and knowledge bind on the Agent, never on a skill.
  */
 
+import { SkillMdDiagnostic } from '../../../shared/skills/skill-md-parse';
+
 import { SkillStatus } from '../../../admin/skills/models/admin-skill.model';
 
 export type { SkillStatus };
@@ -66,6 +68,8 @@ export interface SkillImportSource {
   ref?: string | null;
   commitSha?: string | null;
   filename?: string | null;
+  /** The frontmatter `name` as the bundle wrote it. */
+  originalName?: string | null;
 }
 
 /** What an import does to one file, against the skill it would write. */
@@ -88,6 +92,8 @@ export interface ImportPreview {
   candidates: string[];
   skill: {
     name: string;
+    /** The activation name the skill will have; can differ from `name` (a diagnostic says why). */
+    storedName: string;
     displayName: string;
     description: string;
     instructionsLength: number;
@@ -103,6 +109,19 @@ export interface ImportPreview {
   files: ImportFileRow[];
   bundleHash: string | null;
   targetUpdatedAt: string | null;
+  /** Against the target skill only (a re-import or refresh); null when creating. */
+  descriptionDiff?: ImportTextDiff | null;
+  instructionsDiff?: ImportTextDiff | null;
+  /** The commit the target skill was last imported from, beside `source.commitSha`. */
+  previousCommitSha?: string | null;
+  /** Frontmatter rules, the colon repair, unsafe characters, a renamed skill. */
+  diagnostics?: SkillMdDiagnostic[];
+}
+
+/** A unified diff of one field (`''` when unchanged), cut at 400 lines. */
+export interface ImportTextDiff {
+  diff: string;
+  truncated: boolean;
 }
 
 export interface ImportApplyResult {

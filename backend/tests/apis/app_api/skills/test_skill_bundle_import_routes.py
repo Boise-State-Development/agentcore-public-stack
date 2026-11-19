@@ -313,6 +313,7 @@ class TestGitHub:
             "ref": "main",
             "commitSha": "e4bb5d960d87126ff3b3a8af1a104b7db67560ba",
             "filename": None,
+            "originalName": "contract-redline",
         }
         assert fetched[0].archive_url == "https://codeload.github.com/anthropics/skills/zip/main"
 

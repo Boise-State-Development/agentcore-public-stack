@@ -48,13 +48,14 @@
             class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
           >
             <ng-icon name="heroArrowUpTray" class="size-4" aria-hidden="true" />
-            Import a SKILL.md
+            {{ importing() ? 'Reading…' : 'Import a SKILL.md' }}
           </label>
           <input
             id="skill-md-import"
             type="file"
             class="sr-only"
             accept=".md,.markdown,text/markdown,text/plain"
+            [disabled]="importing()"
             (change)="onImportSelected($event)"
           />
           <p class="mt-2 text-sm/6 text-gray-600 dark:text-gray-400">
@@ -66,6 +67,10 @@
               {{ importNotice() }}
             </p>
           }
+          <app-skill-md-diagnostics
+            headingId="my-skill-md-diagnostics"
+            [diagnostics]="importDiagnostics()"
+          />
         </div>
       }
 

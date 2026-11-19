@@ -19,6 +19,8 @@ import {
   SkillImportSource,
 } from '../models/my-skill.model';
 import { MySkillService } from '../services/my-skill.service';
+import { SkillMdDiagnosticsComponent } from '../../../shared/skills/skill-md-diagnostics.component';
+import { ImportDiffComponent } from './import-diff.component';
 
 type SourceMode = 'github' | 'zip';
 
@@ -55,7 +57,7 @@ const STATUS_CLASSES: Record<ImportFileStatus, string> = {
  */
 @Component({
   selector: 'app-skill-bundle-import',
-  imports: [NgIcon],
+  imports: [NgIcon, SkillMdDiagnosticsComponent, ImportDiffComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   viewProviders: [provideIcons({ heroArrowPath, heroArrowUpTray })],
   template: `
@@ -217,11 +219,27 @@ const STATUS_CLASSES: Record<ImportFileStatus, string> = {
               />
             }
             <p class="mt-2 text-sm/6 text-gray-700 dark:text-gray-300">{{ skill.description }}</p>
+            <p class="mt-2 text-xs/5 text-gray-600 dark:text-gray-400">
+              Activation name: <code class="text-xs">{{ skill.storedName }}</code>
+            </p>
+            @if (commitRange(); as range) {
+              <p class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
+                Commit <code class="text-xs">{{ range.from }}</code> →
+                <code class="text-xs">{{ range.to }}</code>
+              </p>
+            }
             @if (fieldChanges().length > 0) {
               <p class="mt-2 text-sm/6 text-gray-700 dark:text-gray-300">
                 Changes: {{ fieldChanges().join(', ') }}.
               </p>
             }
+            <app-import-diff label="Description" [diff]="p.descriptionDiff" />
+            <app-import-diff label="Instructions (SKILL.md)" [diff]="p.instructionsDiff" />
+            <app-skill-md-diagnostics
+              headingId="bundle-import-diagnostics"
+              subject="this bundle"
+              [diagnostics]="p.diagnostics ?? []"
+            />
 
             <h3 class="mt-4 text-sm/6 font-medium text-gray-900 dark:text-white">Files</h3>
             @if (p.files.length === 0) {
@@ -331,6 +349,17 @@ export class SkillBundleImportComponent {
     if (changes.allowedTools) out.push('tools it mentions');
     if (changes.skillMetadata) out.push('frontmatter');
     return out;
+  });
+
+  /** Short SHAs of the last import and this one, when both are known and differ. */
+  protected readonly commitRange = computed(() => {
+    const p = this.preview();
+    const from = p?.previousCommitSha;
+    const to = p?.source.commitSha;
+    if (!from || !to || from === to) {
+      return null;
+    }
+    return { from: from.slice(0, 7), to: to.slice(0, 7) };
   });
 
   /** A re-import whose every file is unchanged and no field moved. */
