@@ -815,6 +815,9 @@ class SkillDetailResponse(BaseModel):
     is_owned: bool = Field(..., alias="isOwned")
     created_at: Optional[str] = Field(None, alias="createdAt")
     updated_at: Optional[str] = Field(None, alias="updatedAt")
+    #: Where an imported skill came from (``SkillImportSource.provenance``: type,
+    #: owner, repo, ref, commit SHA; no URL or bundle hash). None when hand-written.
+    import_source: Optional[Dict[str, str]] = Field(None, alias="importSource")
 
     model_config = {"populate_by_name": True}
 
@@ -879,6 +882,7 @@ async def get_accessible_skill(
         # the two must agree or the page would contradict the list it came from.
         is_enabled=preferences.get(skill.skill_id, False),
         is_owned=skill.owner_id == user.user_id,
+        import_source=skill_provenance(skill),
         created_at=skill.created_at.isoformat() if skill.created_at else None,
         updated_at=skill.updated_at.isoformat() if skill.updated_at else None,
     )

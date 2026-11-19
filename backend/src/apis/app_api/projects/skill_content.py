@@ -30,7 +30,7 @@ from apis.shared.assistants.models import AgentBinding, Assistant
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import skills_enabled
 from apis.shared.skills.access import resolve_invocable_skill_ids
-from apis.shared.skills.models import SkillDefinition, SkillResourceRef, SkillStatus
+from apis.shared.skills.models import SkillDefinition, SkillResourceRef, SkillStatus, skill_provenance
 from apis.shared.skills.pinning import load_skill_records
 from apis.shared.skills.pins import base_skill_id, binding_pin, pinned_ref, project_skill_adders
 from apis.shared.skills.repository import get_skill_catalog_repository
@@ -72,8 +72,12 @@ async def available_skill_ids(harness: Assistant, user: User, skill_ids: List[st
     return {sid for sid in skill_ids if sid in invocable}
 
 
-async def bound_skill_labels(harness: Assistant, user: User) -> Dict[str, Tuple[str, str]]:
-    """``{skill id: (display name, description)}`` for the bound skills ``user`` can run.
+async def bound_skill_labels(
+    harness: Assistant, user: User
+) -> Dict[str, Tuple[str, str, Optional[Dict[str, str]]]]:
+    """``{skill id: (display name, description, provenance)}`` for the bound skills ``user`` can run.
+
+    ``provenance`` is ``SkillImportSource.provenance()`` for an imported skill, else None.
 
     Lets the settings list name a skill someone else added (the caller's own palette
     doesn't have it) instead of showing its raw id. Skills the caller can't run stay
@@ -85,7 +89,11 @@ async def bound_skill_labels(harness: Assistant, user: User) -> Dict[str, Tuple[
         return {}
     records = await get_skill_catalog_repository().batch_get_skills([r for r in refs if r in available])
     return {
-        r.skill_id: (r.display_name, r.description)
+        r.skill_id: (
+            r.display_name,
+            r.description,
+            skill_provenance(r),
+        )
         for r in records
         if _status(r) == SkillStatus.ACTIVE.value
     }

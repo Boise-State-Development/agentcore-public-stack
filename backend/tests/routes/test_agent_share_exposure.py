@@ -101,7 +101,7 @@ class TestShareExposure:
         assert resp.status_code == 200
         body = resp.json()
         assert body["agentId"] == "ast-001"
-        assert body["exposedSkills"] == [{"ref": "skill-a", "label": "Policy Citation Format"}]
+        assert body["exposedSkills"] == [{"ref": "skill-a", "label": "Policy Citation Format", "importSource": None}]
 
     def test_no_skill_bindings_discloses_nothing(self, app, make_user, catalog):
         mock_auth_user(app, make_user())
@@ -132,7 +132,7 @@ class TestShareExposure:
             resp = TestClient(app).get(URL)
 
         assert resp.status_code == 200
-        assert resp.json()["exposedSkills"] == [{"ref": "skill-a", "label": "skill-a"}]
+        assert resp.json()["exposedSkills"] == [{"ref": "skill-a", "label": "skill-a", "importSource": None}]
 
 
 class TestWhatRecipientsRun:

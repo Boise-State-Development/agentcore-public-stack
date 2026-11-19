@@ -368,6 +368,12 @@ class SkillBindingRef(BindingRef):
         None, alias="displayName", description="The skill's name; only when ``available``"
     )
     description: Optional[str] = Field(None, description="The skill's description; only when ``available``")
+    import_source: Optional[Dict[str, str]] = Field(
+        None,
+        alias="importSource",
+        description="Where an imported skill came from (type, owner, repo, ref, commitSha); "
+        "only when ``available``",
+    )
 
 
 class SkillBindingsResponse(_SettingsResponse):
