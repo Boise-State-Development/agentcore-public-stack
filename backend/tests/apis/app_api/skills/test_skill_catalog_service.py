@@ -42,7 +42,7 @@ async def test_create_and_get(skill_service, admin_user):
 
 @pytest.mark.asyncio
 async def test_create_writes_skill_md_projection(skill_service, admin_user):
-    # The S3 prefix becomes a valid agentskills.io bundle: SKILL.md is projected
+    # The S3 prefix carries the agentskills.io layout: SKILL.md is projected
     # from the row with a slugged `name`.
     await skill_service.create_skill(
         _skill(allowed_tools=["web_search"]), admin_user

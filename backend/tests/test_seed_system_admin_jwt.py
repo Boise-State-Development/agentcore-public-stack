@@ -400,7 +400,7 @@ class TestSeedExampleSkills:
         assert b"Extraction Tips" in body
 
     def test_writes_the_skill_md_projection(self, dynamodb_table, monkeypatch):
-        """The seeded prefix must be a valid bundle, not just loose bytes.
+        """The seeded prefix must carry a SKILL.md projection, not just loose bytes.
 
         Without SKILL.md the prefix cannot be handed to a managed Harness
         (``{"s3": {"uri": ...}}``) or exported as-is.

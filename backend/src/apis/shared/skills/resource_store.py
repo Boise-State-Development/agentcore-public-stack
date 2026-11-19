@@ -6,9 +6,10 @@ progressive disclosure) are too large to inline in the DynamoDB
 ``skill-resources`` S3 bucket and the row carries only a lightweight
 ``SkillResourceRef`` manifest.
 
-Skills v2 stores objects in the **standard agentskills.io bundle layout** so a
-skill's S3 prefix is a valid bundle (attachable to the managed-Harness lane,
-exportable as-is):
+Skills v2 stores objects in the **agentskills.io bundle layout**. The prefix is
+storage, not a conformant bundle: its directory is the ``skill_id``, which can
+differ from the ``name`` the projected ``SKILL.md`` declares, and the
+specification requires the two to match. An export is the conformant artifact.
 
   - ``skills/{skill_id}/SKILL.md`` — write-through projection of the row.
   - ``skills/{skill_id}/{references|scripts|assets}/{filename}`` — supporting

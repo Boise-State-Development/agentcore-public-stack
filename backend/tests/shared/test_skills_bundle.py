@@ -41,7 +41,7 @@ class TestGenerateSkillMd:
         with_tools = generate_skill_md(
             skill_id="s", description="d", instructions="i", allowed_tools=["web_search"]
         )
-        assert _parse(with_tools)[0]["allowed-tools"] == ["web_search"]
+        assert _parse(with_tools)[0]["allowed-tools"] == "web_search"
 
     def test_metadata_passthrough_excludes_reserved(self):
         md = generate_skill_md(

@@ -342,8 +342,10 @@ class SkillBundleFiles:
     def write_skill_md(self, skill: SkillDefinition) -> None:
         """Write the skill's SKILL.md projection to S3 (best-effort).
 
-        The DynamoDB row is the source of truth; this projection exists only so
-        the S3 prefix is a valid, portable agentskills.io bundle. When storage
+        The DynamoDB row is the source of truth; this projection keeps a
+        conformant ``SKILL.md`` beside the skill's files (the prefix itself is
+        named by ``skill_id``, not ``name``, so it is storage rather than a
+        conformant bundle; an export is that). The model never reads it. When storage
         is unconfigured (local dev) or the write fails, log and continue — never
         fail the catalog write on the projection.
         """
