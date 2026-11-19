@@ -18,6 +18,7 @@ import io
 import json
 import pathlib
 import sys
+import threading
 import traceback
 import types
 import zipfile
@@ -269,8 +270,9 @@ class FakeCodeInterpreter:
         self.stopped = False
         FakeCodeInterpreter.instances.append(self)
 
-    def start(self, identifier):
+    def start(self, identifier, session_timeout_seconds=None):
         self.identifier = identifier
+        self.session_timeout_seconds = session_timeout_seconds
 
     def stop(self):
         self.stopped = True
@@ -312,6 +314,7 @@ def sandbox(monkeypatch, tmp_path, store):
 
     monkeypatch.setattr(cic, "CodeInterpreter", FakeCodeInterpreter)
     monkeypatch.setattr(word, "_get_code_interpreter_id", lambda: "ci-test")
+    monkeypatch.setattr(word, "resolve_skill_script_interpreter_id", lambda: "ci-skill")
     monkeypatch.setattr(word, "_storage_configured", lambda: True)
 
     saved: Dict[str, bytes] = {}
@@ -619,3 +622,200 @@ def test_read_skill_file_notice_follows_the_flag(monkeypatch, store, flag, expec
     text = read._tool_func(skill_name="contract-redliner", path="scripts/engine.py")
     assert expected in text.split("\n", 1)[0]
     assert text.endswith(ENGINE.decode())
+
+
+# ---------------------------------------------------------------------------
+# Isolation: a dedicated no-network interpreter, a time limit, no fallback
+# ---------------------------------------------------------------------------
+
+
+class TestInterpreterChoice:
+    @pytest.mark.asyncio
+    async def test_a_skill_script_runs_on_the_skill_script_interpreter(self, sandbox):
+        tool = make_modify_word_document_tool("s", "u", _bound_holder())
+        await tool._tool_func(
+            document_name="services-agreement", skill_name="contract-redliner", path="scripts/engine.py"
+        )
+        ci = FakeCodeInterpreter.instances[-1]
+        assert ci.identifier == "ci-skill"
+        # The session's own server-side timeout backstops the client-side one.
+        assert ci.session_timeout_seconds == (
+            skill_scripts.SKILL_SCRIPT_TIMEOUT_SECONDS + word._SKILL_SESSION_TIMEOUT_MARGIN_SECONDS
+        )
+        assert ci.stopped
+
+    @pytest.mark.asyncio
+    async def test_create_with_a_skill_script_uses_it_too(self, sandbox):
+        tool = make_create_word_document_tool("s", "u", _bound_holder())
+        await tool._tool_func(document_name="memo", skill_name="contract-redliner", path="scripts/engine.py")
+        assert FakeCodeInterpreter.instances[-1].identifier == "ci-skill"
+
+    @pytest.mark.asyncio
+    async def test_python_code_still_runs_on_the_existing_interpreter(self, sandbox, monkeypatch):
+        def no_skill_lookup():
+            raise AssertionError("python_code must not resolve the skill-script interpreter")
+
+        monkeypatch.setattr(word, "resolve_skill_script_interpreter_id", no_skill_lookup)
+        tool = make_modify_word_document_tool("s", "u", _bound_holder())
+        await tool._tool_func(document_name="x", python_code="doc.add_paragraph('added')")
+        assert FakeCodeInterpreter.instances[-1].identifier == "ci-test"
+
+    @pytest.mark.parametrize("make", [make_create_word_document_tool, make_modify_word_document_tool])
+    @pytest.mark.asyncio
+    async def test_an_unresolvable_id_refuses_and_starts_no_session(self, sandbox, monkeypatch, make):
+        def no_public_fallback():
+            raise AssertionError("a skill script must never fall back to the public interpreter")
+
+        monkeypatch.setattr(word, "resolve_skill_script_interpreter_id", lambda: None)
+        monkeypatch.setattr(word, "_get_code_interpreter_id", no_public_fallback)
+        tool = make("s", "u", _bound_holder())
+        text = _error_text(
+            await tool._tool_func(document_name="memo", skill_name="contract-redliner", path="scripts/engine.py")
+        )
+        assert "isolated sandbox" in text and "nothing was run" in text
+        assert FakeCodeInterpreter.instances == []
+        assert sandbox == {}
+
+
+class _BlockingCodeInterpreter(FakeCodeInterpreter):
+    """Runs until stopped: ``executeCode`` waits for ``stop`` instead of sleeping."""
+
+    def __init__(self, region):
+        super().__init__(region)
+        self.started = False
+        self.released = threading.Event()
+        self.finished = threading.Event()
+
+    def start(self, identifier, session_timeout_seconds=None):
+        super().start(identifier, session_timeout_seconds)
+        self.started = True
+
+    def stop(self):
+        super().stop()
+        self.released.set()
+
+    def invoke(self, op, payload):
+        if op != "executeCode":
+            return super().invoke(op, payload)
+        try:
+            # Bounded only so a broken implementation cannot hang the suite.
+            self.released.wait(timeout=10)
+            return {"stream": [{"result": {"isError": True, "structuredContent": {"stderr": "session ended"}}}]}
+        finally:
+            self.finished.set()
+
+
+class TestTimeout:
+    @pytest.mark.asyncio
+    async def test_a_script_past_the_limit_errors_and_its_session_is_stopped(self, sandbox, monkeypatch):
+        import bedrock_agentcore.tools.code_interpreter_client as cic
+
+        monkeypatch.setattr(cic, "CodeInterpreter", _BlockingCodeInterpreter)
+        monkeypatch.setattr(word, "SKILL_SCRIPT_TIMEOUT_SECONDS", 0.05)
+        tool = make_modify_word_document_tool("s", "u", _bound_holder())
+        text = _error_text(
+            await tool._tool_func(
+                document_name="services-agreement", skill_name="contract-redliner", path="scripts/engine.py"
+            )
+        )
+        assert "did not finish within 0.05 seconds" in text
+        assert "contract-redliner/scripts/engine.py" in text
+        ci = FakeCodeInterpreter.instances[-1]
+        assert ci.finished.wait(timeout=10)
+        # Started and then stopped by the timeout, not left running.
+        assert ci.started and ci.stopped
+        assert sandbox == {}
+
+    def test_a_stop_before_the_session_starts_means_it_never_starts(self):
+        client = _BlockingCodeInterpreter("r")
+        guard = word._SkillSessionGuard(client)
+        guard.stop()
+        with pytest.raises(word._DocGenError):
+            guard.start("ci-skill", 150)
+        assert not client.started and not client.stopped
+
+    def test_stop_is_called_once_however_often_it_is_asked(self):
+        calls: List[str] = []
+        client = SimpleNamespace(
+            start=lambda identifier, session_timeout_seconds: calls.append("start"),
+            stop=lambda: calls.append("stop"),
+        )
+        guard = word._SkillSessionGuard(client)
+        guard.start("ci-skill", 150)
+        guard.stop()
+        guard.stop()
+        assert calls == ["start", "stop"]
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_error_from_inside_the_run_is_not_mistaken_for_the_limit(self, monkeypatch):
+        def socket_timeout(*args, **kwargs):
+            raise TimeoutError("read timed out")
+
+        import bedrock_agentcore.tools.code_interpreter_client as cic
+
+        monkeypatch.setattr(cic, "CodeInterpreter", FakeCodeInterpreter)
+        monkeypatch.setattr(word, "_run_docx_skill_script", socket_timeout)
+        script = SimpleNamespace(label="contract-redliner/scripts/engine.py")
+        with pytest.raises(TimeoutError, match="read timed out"):
+            await word._run_skill_script_bounded("ci-skill", script, "{}", "out.docx", timeout_seconds=60)
+
+
+class TestInterpreterIdResolution:
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        skill_scripts._reset_interpreter_id_cache()
+        monkeypatch.delenv(skill_scripts.SKILL_SCRIPT_INTERPRETER_ENV, raising=False)
+        monkeypatch.setenv("PROJECT_PREFIX", "acme-ai")
+        yield
+        skill_scripts._reset_interpreter_id_cache()
+
+    def test_the_parameter_name_is_derived_from_the_prefix(self):
+        # Pinned to SKILL_SCRIPT_INTERPRETER_SSM_SUFFIX in code-interpreter-construct.ts.
+        assert skill_scripts.SKILL_SCRIPT_INTERPRETER_SSM_SUFFIX == "agentcore/skill-script-interpreter-id"
+        assert skill_scripts.skill_script_interpreter_parameter_name() == (
+            "/acme-ai/agentcore/skill-script-interpreter-id"
+        )
+
+    def test_it_is_read_once_and_kept(self, monkeypatch):
+        reads: List[str] = []
+        monkeypatch.setattr(
+            skill_scripts, "_read_interpreter_id_parameter", lambda name: reads.append(name) or "skill-ci-123"
+        )
+        assert skill_scripts.resolve_skill_script_interpreter_id() == "skill-ci-123"
+        assert skill_scripts.resolve_skill_script_interpreter_id() == "skill-ci-123"
+        assert reads == ["/acme-ai/agentcore/skill-script-interpreter-id"]
+
+    def test_a_failed_read_is_not_kept(self, monkeypatch):
+        answers = iter([RuntimeError("ParameterNotFound"), "skill-ci-123"])
+
+        def read(name):
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(skill_scripts, "_read_interpreter_id_parameter", read)
+        assert skill_scripts.resolve_skill_script_interpreter_id() is None
+        assert skill_scripts.resolve_skill_script_interpreter_id() == "skill-ci-123"
+
+    def test_an_empty_value_is_unresolved(self, monkeypatch):
+        monkeypatch.setattr(skill_scripts, "_read_interpreter_id_parameter", lambda name: "  ")
+        assert skill_scripts.resolve_skill_script_interpreter_id() is None
+
+    def test_no_prefix_means_no_read(self, monkeypatch):
+        monkeypatch.delenv("PROJECT_PREFIX", raising=False)
+
+        def must_not_read(name):
+            raise AssertionError("no parameter name to read")
+
+        monkeypatch.setattr(skill_scripts, "_read_interpreter_id_parameter", must_not_read)
+        assert skill_scripts.resolve_skill_script_interpreter_id() is None
+
+    def test_the_env_override_wins_for_local_development(self, monkeypatch):
+        monkeypatch.setenv(skill_scripts.SKILL_SCRIPT_INTERPRETER_ENV, "local-ci")
+
+        def must_not_read(name):
+            raise AssertionError("the override needs no SSM read")
+
+        monkeypatch.setattr(skill_scripts, "_read_interpreter_id_parameter", must_not_read)
+        assert skill_scripts.resolve_skill_script_interpreter_id() == "local-ci"
