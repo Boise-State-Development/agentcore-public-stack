@@ -12,6 +12,7 @@ Everything here is pure and deterministic.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from typing import Protocol, Sequence
 
 
@@ -159,6 +160,61 @@ def render_delivery_block(
     )
 
 
+#: What a run result's part says when its step has no result (``docs/specs/workflow-runs.md`` §7).
+#: Constant, and in the TypeScript copy (``DELIVERY_PART_STATUS_NOTES``), so the model is told
+#: which steps are missing and the sent bubble can tell such a part from a result.
+DELIVERY_PART_STATUS_NOTES = {
+    "stopped": "This Agent stopped before it finished, so there is no result from it.",
+    "needs_input": "This Agent is still waiting on the user, so there is no result from it yet.",
+    "running": "This Agent was still working when the results were brought back, so there is no result from it yet.",
+}
+
+
+@dataclass(frozen=True)
+class DeliveryPartBlock:
+    """One part of a run result as its block is rendered: the text sent, and the lines it names."""
+
+    text: str
+    agent_name: str
+    from_title: str
+    status: str
+    artifacts: Sequence[DeliveryArtifactLine] = ()
+    files: Sequence[FileLine] = ()
+
+
+def delivery_part_label(agent_name: str, from_title: str) -> str:
+    """What a part's block names as ``from_conversation``: the Agent, then its conversation's title.
+
+    Every step of a run starts from the same card and usually the same request, so their titles
+    read alike; the Agent's name is what tells the model whose answer is whose.
+    """
+    agent, title = agent_name.strip(), from_title.strip()
+    if agent and title and agent != title:
+        return f"{agent} · {title}"
+    return agent or title
+
+
+def render_delivery_parts(parts: Sequence[DeliveryPartBlock]) -> str:
+    """A run result as the receiving model reads it: one delivery block per part, in step order.
+
+    A ``done`` part is ``render_delivery_block`` of its text, artifacts and files, and a part with
+    nothing left (the user emptied it) gives no block. Any other part is the same wrapper around
+    its status note, so a step that stopped or still waits is named, never silently missing. The
+    blocks are joined as separate cards are (``join_delivery_blocks``): a blank line between.
+    """
+    blocks = [
+        render_delivery_block(
+            part.text, delivery_part_label(part.agent_name, part.from_title), part.artifacts, part.files
+        )
+        if part.status == "done"
+        else render_delivery_block(
+            DELIVERY_PART_STATUS_NOTES.get(part.status, ""), delivery_part_label(part.agent_name, part.from_title)
+        )
+        for part in parts
+    ]
+    return "\n\n".join(b for b in blocks if b)
+
+
 def build_handoff_message(context_block: str, request: str) -> str:
     """The target's first model message: the wrapped context, a blank line, then the request."""
     request = request.strip()
@@ -185,18 +241,22 @@ def _neutralize_inner(body: str) -> str:
 
 __all__ = [
     "ARTIFACT_TAG",
+    "DELIVERY_PART_STATUS_NOTES",
     "DeliveryArtifactLine",
+    "DeliveryPartBlock",
     "EXCERPT_TAG",
     "FILE_TAG",
     "FileLine",
     "HANDOFF_CONTEXT_TAG",
     "build_handoff_message",
     "context_hash",
+    "delivery_part_label",
     "escape_attr",
     "format_file_size",
     "neutralize_close_tags",
     "normalize_context_text",
     "render_delivery_block",
+    "render_delivery_parts",
     "render_file_line",
     "wrap_handoff_context",
 ]

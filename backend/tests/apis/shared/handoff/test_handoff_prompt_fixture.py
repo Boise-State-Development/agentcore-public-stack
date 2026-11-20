@@ -55,9 +55,33 @@ def test_the_server_still_renders_the_delivery_blocks_the_fixture_says(case):
     from apis.shared.handoff.context import render_delivery_block
     from apis.shared.handoff.delivery import DeliveryArtifact
 
+    if "parts" in case:
+        # A run result (workflow-runs §7): one block per part, joined, as ``DeliveryTurn`` renders it.
+        from apis.shared.handoff.context import DeliveryPartBlock, render_delivery_parts
+
+        parts = [
+            DeliveryPartBlock(
+                text=p["text"],
+                agent_name=p["agentName"],
+                from_title=p["fromTitle"],
+                status=p["status"],
+                artifacts=[DeliveryArtifact.model_validate(a) for a in p["artifacts"]],
+                files=_files(p),
+            )
+            for p in case["parts"]
+        ]
+        assert render_delivery_parts(parts) == case["block"]
+        return
+
     artifacts = [DeliveryArtifact.model_validate(a) for a in case["artifacts"]]
 
     assert render_delivery_block(case["text"], case["fromTitle"], artifacts, _files(case)) == case["block"]
+
+
+def test_the_fixture_pins_a_run_result_with_every_part_status():
+    statuses = {p["status"] for c in _delivery_cases() if "parts" in c for p in c["parts"]}
+
+    assert statuses == {"done", "stopped", "needs_input", "running"}
 
 
 def _files(case):

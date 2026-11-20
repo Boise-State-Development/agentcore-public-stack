@@ -17,6 +17,14 @@ only the one whose write succeeds gets the row back, so only it carries the text
 first, so a send that carries deliveries pays one round trip per card (at most
 ``DELIVERY_MAX_PER_TURN``, issued together) and nothing else before the first token.
 
+**Parts** (``docs/specs/workflow-runs.md`` §7, PR-W.2). A workflow run's result is one row with a
+part per step, in step order, each with its own sender, title, status, text, artifacts and files.
+The row-level ``text``, ``artifacts`` and ``files`` stay empty on such a row; a row with no parts is
+a delivery exactly as before. One row is still one conditional write at attach, however many steps
+the run had. Worst case, the row is ~290 KB against DynamoDB's 400 KB: eight parts of
+``SEND_BACK_MAX_CHARS`` (8,000 characters, at most 32 KB of UTF-8 each), five artifact references
+per part and ten files per run.
+
 Rows carry conversation text, so they expire with the conversation (365 days) and are deleted by
 the receiving conversation's delete cascade.
 """
@@ -48,9 +56,15 @@ SEND_BACK_MAX_CHARS = SEND_BACK_MAX_TOKENS * CHARS_PER_TOKEN
 DELIVERY_MAX_ARTIFACTS = 5
 #: Delivery blocks one turn carries; the rest stay pending for the next send (§4.8).
 DELIVERY_MAX_PER_TURN = 3
+#: Parts one delivery may carry: a workflow run's steps (``WORKFLOW_RUN_MAX_STEPS``, pinned by a test).
+DELIVERY_MAX_PARTS = 8
+#: Files one run result carries across all its parts (each part also at most ``DELIVERY_MAX_FILES``).
+RUN_RESULT_MAX_FILES = 10
 
 DeliveryOrigin = Literal["user", "agent"]
 DeliveryStatus = Literal["pending", "attached", "dismissed"]
+#: A part's step as it stood when the result was collected. Only ``done`` carries a result.
+DeliveryPartStatus = Literal["done", "stopped", "needs_input", "running"]
 
 _TTL_DAYS = 365
 _SK_PREFIX = "DELIVERY#"
@@ -112,6 +126,57 @@ class DeliveryFileView(BaseModel):
         )
 
 
+class DeliveryPart(BaseModel):
+    """One step's share of a run result (``docs/specs/workflow-runs.md`` §7).
+
+    ``fromSessionId`` is the step's conversation, empty for a step that never started.
+    ``fromTitle`` is that conversation's title when collected, read only for a ``done`` part (the
+    one whose conversation is checked as a sender); the block names the Agent and the title
+    (``delivery_part_label``). Only a ``done`` part carries text, artifacts or files; any other
+    status is named in the result with no body.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    step_id: str = Field(..., alias="stepId")
+    agent_name: str = Field("", alias="agentName")
+    from_session_id: str = Field("", alias="fromSessionId")
+    from_title: str = Field("", alias="fromTitle")
+    status: DeliveryPartStatus
+    text: str = ""
+    text_hash: str = Field("", alias="textHash")
+    artifacts: List[DeliveryArtifact] = Field(default_factory=list)
+    files: List[DeliveryFile] = Field(default_factory=list)
+
+
+class DeliveryPartView(BaseModel):
+    """A part as the card shows it: no hash, and files without their storage keys."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    step_id: str = Field(..., alias="stepId")
+    agent_name: str = Field(..., alias="agentName")
+    from_session_id: str = Field(..., alias="fromSessionId")
+    from_title: str = Field(..., alias="fromTitle")
+    status: DeliveryPartStatus
+    text: str
+    artifacts: List[DeliveryArtifact]
+    files: List[DeliveryFileView]
+
+    @classmethod
+    def from_part(cls, part: DeliveryPart) -> "DeliveryPartView":
+        return cls(
+            step_id=part.step_id,
+            agent_name=part.agent_name,
+            from_session_id=part.from_session_id,
+            from_title=part.from_title,
+            status=part.status,
+            text=part.text,
+            artifacts=part.artifacts,
+            files=[DeliveryFileView.from_file(f) for f in part.files],
+        )
+
+
 class Delivery(BaseModel):
     """One ``DELIVERY#<deliveryId>`` row, keyed under its owner and indexed by its receiving session."""
 
@@ -128,6 +193,8 @@ class Delivery(BaseModel):
     text_hash: str = Field("", alias="textHash")
     artifacts: List[DeliveryArtifact] = Field(default_factory=list)
     files: List[DeliveryFile] = Field(default_factory=list)
+    run_id: Optional[str] = Field(None, alias="runId", description="The workflow run this is the result of")
+    parts: List[DeliveryPart] = Field(default_factory=list, description="A run result's steps, in step order")
     status: DeliveryStatus = "pending"
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
@@ -150,6 +217,8 @@ class DeliveryView(BaseModel):
     text: str
     artifacts: List[DeliveryArtifact]
     files: List[DeliveryFileView] = Field(default_factory=list)
+    run_id: Optional[str] = Field(None, alias="runId")
+    parts: Optional[List[DeliveryPartView]] = Field(None, description="A run result's steps; absent on a plain card")
     created_at: str = Field(..., alias="createdAt")
 
     @classmethod
@@ -163,8 +232,15 @@ class DeliveryView(BaseModel):
             text=row.text,
             artifacts=row.artifacts,
             files=[DeliveryFileView.from_file(f) for f in row.files],
+            run_id=row.run_id,
+            parts=[DeliveryPartView.from_part(p) for p in row.parts] or None,
             created_at=row.created_at,
         )
+
+
+def delivery_file_count(row: Delivery) -> int:
+    """Every file a row carries, its own and its parts'."""
+    return len(row.files) + sum(len(p.files) for p in row.parts)
 
 
 def cap_delivery_text(text: str) -> str:
@@ -379,6 +455,15 @@ def _from_item(item: Dict[str, Any]) -> Delivery:
     data = {k: v for k, v in item.items() if k not in _KEY_ATTRS}
     if "hop" in data:
         data["hop"] = int(data["hop"])
+    _coerce_numbers(data)
+    parts = data.get("parts")
+    if isinstance(parts, list):
+        data["parts"] = [_coerce_numbers(dict(p)) for p in parts if isinstance(p, dict)]
+    return Delivery.model_validate(data)
+
+
+def _coerce_numbers(data: Dict[str, Any]) -> Dict[str, Any]:
+    """DynamoDB hands numbers back as ``Decimal``: a row's (or a part's) artifact and file ints."""
     artifacts = data.get("artifacts")
     if isinstance(artifacts, list):
         data["artifacts"] = [{**a, "version": int(a.get("version", 1))} for a in artifacts if isinstance(a, dict)]
@@ -389,7 +474,7 @@ def _from_item(item: Dict[str, Any]) -> Delivery:
             for f in files
             if isinstance(f, dict)
         ]
-    return Delivery.model_validate(data)
+    return data
 
 
 def _is_conditional_failure(exc: Exception) -> bool:
@@ -410,17 +495,23 @@ def get_delivery_store() -> DeliveryStore:
 
 __all__ = [
     "DELIVERY_MAX_ARTIFACTS",
+    "DELIVERY_MAX_PARTS",
     "DELIVERY_MAX_PER_TURN",
     "Delivery",
     "DeliveryArtifact",
     "DeliveryFile",
     "DeliveryFileView",
     "DeliveryOrigin",
+    "DeliveryPart",
+    "DeliveryPartStatus",
+    "DeliveryPartView",
     "DeliveryStatus",
     "DeliveryStore",
     "DeliveryView",
+    "RUN_RESULT_MAX_FILES",
     "SEND_BACK_MAX_CHARS",
     "SEND_BACK_MAX_TOKENS",
     "cap_delivery_text",
+    "delivery_file_count",
     "get_delivery_store",
 ]

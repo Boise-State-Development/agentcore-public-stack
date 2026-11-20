@@ -111,6 +111,8 @@ def world(monkeypatch) -> _World:
 
     monkeypatch.setattr("apis.shared.sessions.metadata.load_session_meta", load_session_meta)
     monkeypatch.setattr(routes, "get_messages", get_messages)
+    # The send-back's answer is found by the shared ``answer_message``, which a run's collect uses too.
+    monkeypatch.setattr("apis.shared.sessions.messages.get_messages", get_messages)
     monkeypatch.setattr(send_back, "_artifact_heads", lambda user, session: w.heads.get((user, session), []))
     return w
 

@@ -59,6 +59,7 @@ from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, HandoffView
 from apis.shared.handoff.send_back import (
     DeliveryRefused,
     LinkedPair,
+    answer_message,
     load_linked_pair,
     offered_artifacts,
     offered_files,
@@ -799,18 +800,10 @@ async def _deliver(
 
 async def _send_back_message(session_id: str, user_id: str, message_index: Optional[int]) -> Tuple[Dict[str, Any], int]:
     """The assistant message a send-back carries, and its index. 404 if there is no such answer."""
-    try:
-        listing = await get_messages(session_id=session_id, user_id=user_id)
-    except FileNotFoundError:
-        listing = None
-    for message in reversed(listing.messages if listing else []):
-        if message.role != "assistant":
-            continue
-        index = parse_message_index(session_id, message.id)
-        if index is None or (message_index is not None and index != message_index):
-            continue
-        return message.model_dump(by_alias=True, exclude_none=True), index
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    found = await answer_message(session_id, user_id, message_index=message_index)
+    if found is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    return found
 
 
 async def _owned_row(store: HandoffStore, user: User, session_id: str, handoff_id: str) -> Handoff:
