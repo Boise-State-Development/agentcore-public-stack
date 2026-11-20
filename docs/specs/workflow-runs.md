@@ -1,0 +1,412 @@
+# Workflow runs: several steps under one approval
+
+**Status:** Proposal, 2026-11-19. Nothing built. It asks one design question of the handoffs work: should the
+user's review sit on each hop, as it does today, or on the whole piece of delegated work? Everything else follows
+from the answer.
+**Author:** Phil Merrell (drafted with Claude)
+**Targets branch:** `develop`
+**Related:**
+- `docs/specs/agent-handoffs-and-consults.md`: Phase 0 handoffs, deliveries and file references, which this
+  generalises and mostly keeps (§12 here says what happens to each phase)
+- `docs/specs/multi-agent-patterns.md` §11: the worked example that prompted this, a fixed fan-out over one
+  document, and §5, the "durable pipeline" this makes concrete
+- `docs/specs/structured-extraction.md`, `docs/specs/decision-primitive.md`: the side-call engine that prompt and
+  checklist steps would run on
+- `docs/specs/scheduled-agent-runs.md`: `run_agent_headless`, which a run that outlives the tab needs
+- `docs/specs/field-set-authoring.md`: the authoring pattern a saved workflow reuses
+- `docs/specs/turn-path-ttft.md`: why none of this runs before a first token
+
+---
+
+## 0. Summary
+
+A handoff today is one Agent, started by the user, reviewed by the user, and brought back by the user. That is
+three clicks for one hop. A piece of work with four reviewers is a dozen clicks, in the right order, with the tab
+open.
+
+This proposal keeps the handoff as the unit of work and moves the review up one level:
+
+- A **step** is one piece of delegated work. Today's handoff is a step.
+- A **workflow run** is a set of steps the user approves **once**, with a shape, a set of shared files and limits.
+  Inside what was approved, steps start and return with no further clicks. Anything outside it pauses for the
+  user, as it does today.
+- A **workflow** is a saved run shape. It is the thing a user designs and shares.
+
+Today's handoff becomes a run of one step, so nothing that exists has to change behaviour.
+
+The first version is small: several handoffs started from one review sheet, with their results returned as one
+card. It reuses the Phase 0 store, the review sheet, file references, the relay and the notifications.
+
+## 1. Problem
+
+### 1.1 What prompted this
+
+`multi-agent-patterns.md` §11 records the first outside workflow we were asked to host: a proposal reviewer with
+four reviewer personas in parallel, a 15-section audit, a merge and a marked-up PDF. Two findings from working
+through it:
+
+- **Each reviewer is better as an Agent than as a prompt**, for one reason: the author of the proposal can open
+  the specialist reviewer's conversation and argue with it. A prompt's answer has no conversation to continue.
+- **The handoff design cannot run it.** A user can do it by hand on dev: mention each reviewer, send, wait, bring
+  back each result (`DELIVERY_MAX_PER_TURN = 3`, so four results take two sends), then ask for the merge. Nothing
+  can do it for them.
+
+### 1.2 Why the handoff design is rigid here
+
+The handoffs spec keeps a person at every hop, on purpose. Its later phases hold the same line:
+
+- `suggest_handoff` (0c) only offers a chip the user must press, at most one a turn and three a session.
+- `send_to_conversation` (Phase 2) lands as a card that waits for the user. Its unattended landing is opt-in and
+  capped at two hops and four wakes an hour.
+
+The reasons are sound: these conversations run as the user, against their quota, with tools that write to Canvas,
+Gmail and the web, often with nobody watching. But "a person at every hop" is one way to meet those reasons, and it
+is the expensive one. What the reasons actually require is that **nothing spends, writes or loops without the
+user having agreed to it**. A person can agree to four reviewers at once.
+
+### 1.3 What is not the problem
+
+The parts of Phase 0 are not rigid. A handoff row with a status, a context card, files shared by reference, a
+target's prompts relayed to the source, an inbox entry when it finishes: each is the right piece. The rigidity is
+only that each handoff is alone.
+
+## 2. What already exists (read from code, 2026-11-19)
+
+| Piece | Where | What a run reuses |
+|---|---|---|
+| `HANDOFF#` rows: `USER#` partition, `SessionLookupIndex` GSI on the source session, conditional status transitions | `apis/shared/handoff/store.py`, `models.py` | A step is this row plus a `runId` and `stepId` |
+| Statuses `open`, `running`, `needs_input`, `done`, `stopped`, `dismissed`, and `abandoned` after 24 hours | `models.py` (`HandoffStatus`, `ABANDON_AFTER`) | A step's statuses, unchanged |
+| Create, get, dismiss; send-back and deliver | `apis/app_api/handoffs/routes.py` | The run's routes sit beside these |
+| `handoff_context` and `deliveries` on the turn request | `apis/inference_api/chat/models.py` | Unchanged |
+| Background send that does not navigate | `AgentHandoffService.send` → `ChatRequestService.submitHandoffRequest` | One call per step in the first version |
+| Concurrent background streams, keyed per session | `ChatStateService`, `StreamParserService` | Already there; the handoffs spec sets no cap on concurrent handoffs |
+| Files by reference | `apis/shared/files/linked_files.py` | Each step gets the run's files as reference rows |
+| The brief, written from the source's prompt cache | `apis/inference_api/chat/handoff_brief.py` | Written once per run, not once per step (§6.3) |
+| Relayed prompts from a paused target | `apis/shared/handoff/relay.py` | Unchanged, one per paused step |
+| Inbox entries and browser notifications | `apis/shared/handoff/notify.py` | One for the run, plus one per step that needs input |
+| Deliveries, at most three per turn, 2,000 tokens each | `delivery.py` (`DELIVERY_MAX_PER_TURN`, `SEND_BACK_MAX_TOKENS`) | The run's result is one delivery with parts (§7) |
+| One headless turn as a user, on a new or existing session | `apis/shared/harness/runner.py` (`run_agent_headless`) | Step 3's server-side runs. It has no `handoff_context` parameter today |
+| A side-call fan-out with bounded concurrency and metering | `apis/shared/extraction/batch.py` (`run_bounded`) | Prompt and checklist steps |
+
+What does not exist: anything that groups handoffs, a saved shape, a result that returns without a click, and a
+run that survives the tab.
+
+## 3. The model
+
+### 3.1 Step
+
+One piece of delegated work. It has:
+
+- **A worker.** In the first version, always an Agent, in a conversation of its own. Later also a `prompt` (one
+  instruction over the run's files) or a `checklist` (a field set or question set over them). Those two are side
+  calls with no conversation.
+- **An input.** The request, the context card and the run's files by reference. Later, the bounded results of
+  the steps it comes after.
+- **An output.** A bounded result (text, artifact ids, file ids) and a status.
+
+An Agent step **is** a handoff. It is stored, streamed, paused, relayed and notified exactly as one is today. The
+only new fields on its row are `runId` and `stepId`.
+
+### 3.2 Workflow run
+
+A set of steps started by one approval. It has:
+
+- **A shape.** In the first version: every step in parallel, results returned together. Later a step may name the
+  steps it comes `after`, which gives sequences and a final merge without a graph editor.
+- **An envelope** (§4): the step list, the files shared, and the limits.
+- **One result**, delivered to the conversation that started it (§7).
+- **A status** derived from its steps: `running` while any step is, `needs_input` while any step waits on the
+  user, `done` when all are terminal, with the count that finished.
+
+### 3.3 Workflow
+
+A saved run shape with a name: its steps, their workers, what each reads, and the merge instruction. It is what a
+user designs once and starts many times, and what they share with others (§10).
+
+### 3.4 Names
+
+In conversation these were "step", "run" and "plan". The spec says **workflow run** and **workflow**, because
+`run` already means one headless turn in this codebase (`run_agent_headless`, `/runs/now`, scheduled runs), and a
+second meaning would be read as the first. "Workflow" also collides, mildly, with the Strands `workflow` tool,
+which we do not use. Open question 1.
+
+## 4. The approval and its envelope
+
+**Decision: the user approves a run once. Inside the approved envelope, nothing waits for a click. Anything
+outside it pauses.**
+
+The approval sheet is today's review sheet, widened. It shows:
+
+- every step: the Agent, its request, and the model it will run on;
+- the context card each step receives, with the same Preview, Edit and Remove;
+- the files being shared, as checkboxes, as on today's sheet;
+- how the results come back (a card on the composer, or a merge started for them);
+- an estimate of what the run will cost, and the limits below.
+
+The envelope is what the user agreed to:
+
+| Limit | First version | Why |
+|---|---|---|
+| The step list is fixed at approval | Yes | A step cannot add a step. This is what replaces the hop budget: there is nothing to loop |
+| Steps per run | At most 8 | Bounds the worst case of one click. A guess, to be replaced by what people build |
+| Steps running at once | 4 | Matches `DOCUMENT_EXTRACT_CONCURRENCY`'s default, chosen there against the Bedrock throttle alarm |
+| Depth | 1 | A step's conversation can start a run of its own only when the user, in that conversation, approves one |
+| Files | Only those ticked on the sheet | As today |
+| Cost | An estimate, shown; the user's quota applies to every step as it does to any turn | A hard ceiling per run is open question 2 |
+
+**What still pauses for the user**, relayed to the source as today: a tool approval, an OAuth consent, a question
+from `ask_user_question`, a browser sign-in. A step that pauses holds only itself. The others carry on.
+
+**What approval does not grant.** It is not a standing permission. It covers this run. A saved workflow started
+again shows the sheet again. Skipping the sheet for a workflow the user has run before is a preference to consider
+only after measuring how often the sheet is edited (§15).
+
+## 5. Who writes the step list
+
+The platform runs the shape. That is what guarantees every step runs: no model decides whether to call the fourth
+reviewer. But the list itself can come from three places, and all three open the same sheet.
+
+| Source | How it starts | State |
+|---|---|---|
+| **The user** | Mentioning one Agent, as today, or several in one message | One Agent is built. Several is step 1 |
+| **An author** | Starting a saved workflow | Step 2 |
+| **The model** | Proposing a run: "I'd get three perspectives on this" | One step is built: `suggest_handoff` and its chip (handoffs PR-0.5, #2177 and #2180). Step 4 extends it to several steps |
+
+So a designed workflow and an orchestrating agent are the same object. They differ only in who wrote the list, and
+in both cases a person approves it before anything runs.
+
+## 6. How a run executes
+
+### 6.1 First version: in the tab
+
+The SPA starts each step with the call it already makes for one handoff, up to four at a time, and queues the
+rest. Each step is a background stream in the same tab. This inherits §4.6 of the handoffs spec whole: a run lives
+as long as the tab, the page-unload guard already covers it, and a dropped stream leaves that step `stopped` with
+Continue.
+
+That limit is acceptable for the first version because it is the cheapest way to learn whether anyone wants this,
+and because the failure is visible and recoverable.
+
+### 6.2 Later: on the server
+
+A run that outlives the tab is executed by a worker that calls `run_agent_headless` once per Agent step. That
+needs:
+
+- a `handoff_context` passthrough on `run_agent_headless`, like the `file_upload_ids` passthrough the eval harness
+  added;
+- ⚠️ **Verify first** (already flagged in the handoffs spec §9.5): that the headless path resolves the same tool
+  set the web client sends. A difference re-writes each step's cached prefix, on every step of every run;
+- ⚠️ **Verify first:** where the executor runs. The scheduled-runs worker takes one schedule per invocation. A run
+  needs something that starts N steps and survives a deploy.
+
+### 6.3 One brief per run
+
+Today each handoff may write its own brief from the source's prompt cache. A run writes **one** and gives it to
+every step. Four steps reading four separately written briefs would disagree with each other and cost four side
+calls for one job.
+
+### 6.4 Prompt and checklist steps
+
+A `prompt` step is one constrained or free-text call over the run's files. A `checklist` step is a field set or a
+question set over them. Both run through `run_bounded`, write a priced `C#` row under their own `callKind`, and
+have no conversation. They are what the audit half of the worked example needs, and they are step 2, not step 1.
+
+They are also the cheaper kind of step where no follow-up conversation is wanted (§11).
+
+## 7. Results
+
+**Decision: a run returns one result, not one per step.**
+
+- The result is a single `DELIVERY#` row with **parts**, one per finished step, each bounded as a delivery is today
+  (`SEND_BACK_MAX_TOKENS`), each naming its step and Agent, with its artifacts and files by reference.
+- One row means the turn that carries it makes **one** conditional write beside the agent build, however many
+  steps the run had. Separate cards cost a write each: on dev, one card blocked the turn for 0.1–0.2 ms and three
+  for 4.3–4.5 ms (handoffs spec §11, PR-0.4), and eight would cost more.
+- The model reads it as one `<handoff_context>` block per part, as it reads several cards today, so the wrapper
+  and its parity fixture need a case, not a new format.
+- A step that stopped, or is still waiting on the user, is named in the result as such. Partial results are the
+  normal case, and the card says "3 of 4 finished".
+- It is **attached by default**, because the user started the run. That is the rule Phase 0 already applies to a
+  card the user sent themselves.
+
+**The merge.** In the first version the card waits on the composer and the user sends it, with or without their
+own words, and the source conversation's model writes the merge. From step 2, a workflow may carry a merge
+instruction, and the sheet says the merge will start by itself when the run finishes. It does so only if the
+source is idle and its composer is empty. Otherwise the card waits.
+
+## 8. Pauses, stop and failure
+
+- **A step pauses:** its prompt is relayed under its row in the source, as today. The run reads `needs_input`.
+  Answering resumes that step only.
+- **Stop:** stopping the run stops every running step with the cooperative cancel each already has, and no queued
+  step starts. A step can also be stopped alone.
+- **A step fails:** the run continues. The result names the failure.
+- **The source is deleted:** steps are conversations of their own and are not deleted with it. Today's cascade
+  (`delete_session_handoffs`) removes the source's `HANDOFF#` and `DELIVERY#` rows and leaves the targets. The run
+  row goes the same way as the handoff rows.
+- **The user opens a step's conversation and keeps working there:** allowed, and wanted. The run's result takes the
+  step's result as it stood when the step first finished. Later work comes back the way it does today, with Send
+  to *{title}*.
+
+## 9. Storage and API (sketch)
+
+No new table and no new index, following `HANDOFF#`, `DELIVERY#`, `TSUM#` and `EXTR#`.
+
+```
+PK:     USER#<user_id>
+SK:     WFRUN#<run_id>
+GSI_PK: SESSION#<source_session_id>      (SessionLookupIndex)
+GSI_SK: WFRUN#<created_at>
+```
+
+The row holds the step list as approved, the workflow's name and fingerprint when it came from a saved one, the
+file ids shared, the limits, and the id of the result delivery. Step state stays on the `HANDOFF#` rows, which gain
+`runId` and `stepId`. A handoff row with no `runId` is a run of one step, so nothing is migrated.
+
+Routes, on app-api beside the handoff routes and behind the same session dependency:
+
+| Route | Does |
+|---|---|
+| `POST /sessions/{id}/workflow-runs` | Opens a run for review: writes the `WFRUN#` row and one `open` handoff row per Agent step, and returns the sheet |
+| `POST /sessions/{id}/workflow-runs/{runId}/approve` | Fixes the envelope. Steps are then started by the SPA (first version) or the executor |
+| `GET /sessions/{id}/workflow-runs/{runId}` | The run and its steps |
+| `POST …/{runId}/stop` and `…/dismiss` | As named |
+
+Runs replay on `GET /messages` beside `handoffs`. No new SSE event is needed in the first version: every step
+already streams as its own conversation, and the run's status is derived from rows the SPA already watches.
+
+## 10. Authoring a workflow
+
+**Decision: a workflow is a reference file in a skill, read on the server. Not a new entity.**
+
+`references/workflow.<name>.md`: frontmatter (`title`, `version`, the merge instruction), then one table whose
+rows are the steps in order. This is the choice `structured-extraction.md` §4 made for field sets, for the same
+reasons: the skill already has ownership, versions, sharing, role grants, and bindings to Agents and projects. The
+SPA never parses the file.
+
+A step row names its worker. An Agent is named by id and **pinned to a published version**, so editing a reviewer
+Agent does not silently change every workflow that uses it (`multi-agent-patterns.md` §6.3). A checklist step
+names a field set in the same skill.
+
+The editor is the field-set editor's shape: step cards in authored order, moved with Move up and Move down, with a
+markdown mode. A canvas is not needed until workflows branch, and `after` gives sequences without one.
+
+The worked example, as a workflow:
+
+| Step | Worker | Reads |
+|---|---|---|
+| Generalist | Agent, pinned | The proposal |
+| Colleague | Agent, pinned | The proposal |
+| Emotional Outsider | Agent, pinned | The proposal |
+| Fiscal Outsider | Agent, pinned | The proposal |
+| Audit | Checklist: 15 field sets | The proposal |
+| Merge | The source conversation, with a merge instruction | Every result |
+
+## 11. Cost, the prompt cache and TTFT
+
+- **Nothing here runs before a first token.** A run starts from a user action outside any turn. The one write on a
+  turn path is the result's attach, which is one conditional write beside the agent build (§7).
+- **The source's cached prefix does not move.** Its conversation changes only when the result is attached, as an
+  appended user message.
+- **Each Agent step pays for the shared files by itself.** Four reviewer Agents have four system prompts, so they
+  share no cached prefix, and a 40-page document is read four times at the uncached rate. That is the price of
+  four conversations the user can continue. Where no follow-up is wanted, a `prompt` step is the cheaper worker,
+  and ⚠️ whether prompt steps can share a cached document prefix is still to be measured
+  (`multi-agent-patterns.md` §11.4 G3).
+- **No tool spec changes in steps 1 to 3.** The model-proposed run (step 4) changes one: `suggest_handoff`
+  (278 tokens, handoffs PR-0.5) gains an optional list of steps. That is one prefix rewrite for each user who
+  holds the tool, so it is cheapest while the tool is granted to few people, and its system-prompt clause should
+  wait until the shape is settled.
+- **Every step is metered where it runs.** An Agent step's calls are its conversation's `C#` rows. The run row
+  carries the step ids, so a run's cost is a sum the cost drill-down can already make.
+- **The estimate on the sheet** uses the catalog's rates and the files' token counts from their rows. It is an
+  estimate of input cost, and says so.
+
+## 12. What happens to the handoffs spec
+
+| Part | Under this proposal |
+|---|---|
+| Phase 0a, 0b, deliveries, file references, the brief, relay, notifications | Kept. A handoff is a run of one step |
+| 0c `suggest_handoff` | Kept. It is a run of one step that the model proposed. Its tool, chip, Start route and replay (PR-0.5) are what step 4 extends to several steps, with an optional list on the tool and on the event |
+| Phase 1, the consult | Its gap was "the result comes back without the user pressing anything". A one-step run with a merge instruction closes most of that. What remains is doing it **inside the turn**, which is only worth the hidden sessions and nested streaming if waiting for a background step proves too slow. Re-read §7's gate with runs in place |
+| Phase 2a, agent-sent cards | A step's result already returns with the run. `send_to_conversation` for free-form messages stays deferred |
+| Phase 2b, 2c, the hop budget | Not needed for runs. The envelope fixes the step list, so there is no chain to bound |
+| §7's six-week gate | Still the right way to decide Phase 1. This proposal asks to build step 1 **before** that reading, on the evidence of one outside workflow. That is the decision to make (§17, question 0) |
+
+The handoffs spec is not edited by this proposal. If it is accepted, each built step updates that spec in the same
+PR, as its own rule says.
+
+## 13. Flags
+
+`WORKFLOW_RUNS_ENABLED` / `CDK_WORKFLOW_RUNS_ENABLED` on app-api, and `features.workflowRuns`. In development:
+only `"true"` enables, and it requires `HANDOFFS_ENABLED`. The Runtime needs no variable in steps 1 and 2, because
+a step is an ordinary turn with `handoff_context`. It is a capability a deployment may not want (it multiplies
+what one click can spend), so it stays a **feature switch** once finished.
+
+## 14. Build order
+
+Each step is useful alone and stops if the one before shows no demand.
+
+1. **Group handoff, in the tab.** Several Agents from one sheet, `WFRUN#`, `runId` on handoff rows, the
+   concurrency queue in the SPA, one brief per run, the result as one delivery with parts, the run's row in the
+   source. No authoring and no new step kinds. Enough to try with the worked example's four reviewers.
+2. **Saved workflows, and prompt and checklist steps.** The reference file and its parser, the editor, `after`,
+   the merge instruction and the merge that starts by itself.
+3. **Runs on the server.** The executor, the `handoff_context` passthrough, the two verify-firsts in §6.2.
+4. **Runs the model proposes**, by extending `suggest_handoff` from one step to several.
+
+Evaluating a workflow across variants (models per step, wording, checklist versions) is a separate design. It is
+not in this proposal.
+
+## 15. How we'll know
+
+Counts only, on the rows and in EMF, as §4.7 of the handoffs spec does:
+
+- runs created, by source (user, saved workflow, model) and by step count;
+- runs approved, cancelled at the sheet, and **edited at the sheet** (a step removed, a request changed, a file
+  unticked). A sheet nobody edits is a candidate for skipping; a sheet often edited is doing its job;
+- steps opened by the user while running and after finishing. This is the case for Agent steps over prompt steps,
+  so it is the number to watch;
+- runs that finished whole, in part, or were stopped, and steps left `stopped` by a dropped stream, which decides
+  when step 3 is worth building;
+- results attached, edited and dismissed;
+- cost and wall time per run, by step count.
+
+## 16. Alternatives considered
+
+- **Leave handoffs alone and add agents as tools.** The orchestrating agent calls each reviewer as a tool inside
+  its turn. It is the direction `multi-agent-patterns.md` §8 already sketches, and it is faster to a single
+  answer. It was not chosen as the base because the model decides which reviewers run, the reviewers'
+  conversations are hidden, and it waits on the sub-agent runner and its two open verifications. It remains the
+  right design for delegation the model starts mid-answer, and nothing here blocks it.
+- **Run the graph with Strands' `Graph` in one turn.** Deterministic, but every node is hidden, the whole run sits
+  inside one request, and a pause in one node holds the others.
+- **A prompt panel only.** Cheapest per branch, and still wanted (§6.4), but it gives up the conversations.
+- **Raise the limits on the existing phases** (more deliveries per send, a bigger hop budget). It keeps the clicks
+  and loosens the safeguards, which is the wrong way round.
+
+## 17. Open questions
+
+0. **Build step 1 before the handoffs gate reads?** The gate was written so the cheap phase would show demand
+   before more was built. Step 1 is small and reuses Phase 0, but it is still more, on one example.
+1. **The names.** "Workflow run" and "workflow", or something that does not lean on either overloaded word.
+2. **A hard cost ceiling per run.** Between steps it is simple: a queued step does not start once the run has
+   spent past the ceiling. Inside a running step there is no per-turn spend cap to call on today. Is the estimate
+   plus the user's quota enough for the first version?
+3. **Where do step conversations appear?** Four reviewer conversations per proposal will crowd the sidebar. Nest
+   them under the source, or hide them until opened from the run's row?
+4. **Whose Agents may be steps?** Any Agent the user can use, at a pinned version. Does the Agent's owner see that
+   it is used in someone's workflow?
+5. **Shared Projects.** Deliveries refuse a Shared Project task today. Does a run inside a project follow the
+   same rule, or is a project workflow the thing members most want?
+6. **Is the merge always the source conversation's model**, or may a workflow name an Agent to write it?
+7. **A schedule as a fourth source of the step list.** A saved workflow on a clock is the durable pipeline in
+   `multi-agent-patterns.md` §5. It needs step 3 first.
+
+## 18. Non-goals
+
+- A canvas or graph editor.
+- Steps that add steps, or runs that start runs without the user.
+- Agents messaging each other outside a run.
+- Sharing a run, or its steps' conversations, with another user.
+- Evaluating or tuning a workflow (§14).
