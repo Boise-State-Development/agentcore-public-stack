@@ -54,6 +54,11 @@
       {{ thought }}
     </span>
   }
+  @if (memoryLabel(); as memory) {
+    <span class="memory-total shrink-0 text-[11px] font-medium text-gray-500 dark:text-gray-400">
+      {{ memory }}
+    </span>
+  }
   @if (failureCount(); as failures) {
     <span
       class="shrink-0 text-[11px] font-medium text-state-danger-600 dark:text-state-danger-400"
@@ -204,6 +209,38 @@
                and the box keeps one big result from pushing the answer off
                screen. Each box is focusable so a keyboard user can scroll it. -->
           <div class="detail-panel space-y-2.5 border-t border-gray-200/60 bg-gray-50/60 px-2.5 py-2 dark:border-white/5 dark:bg-black/20">
+            <!-- A memory write, read as what it saved: the file, its index
+                 line and its items as prose, anchors gone. The raw input and
+                 result stay below it to check against, as on any call. -->
+            @if (memoryDetail(call); as memory) {
+              <div class="call-memory">
+                <div class="detail-label text-gray-500 dark:text-gray-400">
+                  Memory
+                  @if (memory.scope) {
+                    <span class="font-normal">· {{ memory.scope === 'mine' ? 'Just you' : 'Project' }}</span>
+                  }
+                  @if (memory.slug) {
+                    <span class="font-mono font-normal">· {{ memory.slug }}</span>
+                  }
+                </div>
+                <div
+                  class="detail-scroll memory-text max-h-80 text-gray-600 dark:text-gray-300"
+                  tabindex="0"
+                  role="group"
+                  [attr.aria-label]="'Memory saved by ' + call.toolName"
+                >
+                  @if (memory.description) {
+                    <p class="memory-description font-medium">{{ memory.description }}</p>
+                  }
+                  <ul class="memory-items list-disc space-y-0.5 pl-4">
+                    @for (item of memory.items; track $index) {
+                      <li>{{ item }}</li>
+                    }
+                  </ul>
+                </div>
+              </div>
+            }
+
             <!-- Input -->
             @if (call.input && (call.input | keyvalue)?.length) {
               <div class="call-input">

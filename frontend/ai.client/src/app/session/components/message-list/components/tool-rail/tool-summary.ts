@@ -1,5 +1,6 @@
 import { isAwaitingUserSubmission } from '../../../../services/mcp-apps/awaiting-submission';
 import type { ToolCallDisplay } from './tool-rail.model';
+import { describeMemoryCall, memoryCallKind, memoryRollup, type MemoryCallKind } from './memory-call';
 
 /**
  * Deterministic, zero-cost descriptions of what a tool call did.
@@ -22,9 +23,10 @@ import type { ToolCallDisplay } from './tool-rail.model';
  *
  * If a specific tool ever deserves better than the pattern can infer, the
  * extension point is `describeToolCall` — branch on `call.toolName` before
- * falling through to the pattern. Deliberately not a registry service yet:
- * there is no tool today the pattern gets wrong, and an empty registry is a
- * seam to maintain rather than a feature.
+ * falling through to the pattern. The `memory_*` tools are the one such
+ * branch (`memory-call.ts`): "memory" is not a verb, and a save is worth
+ * naming exactly. Deliberately not a registry service: one branch is not a
+ * registry's worth.
  */
 
 /** The line for an MCP App call whose form is open for the user to submit. */
@@ -186,9 +188,13 @@ export function describeToolCall(call: ToolCallDisplay): string {
   // An MCP App's form is open: nothing ran yet, so no verb applies.
   if (isAwaitingUserCall(call)) return AWAITING_USER_LINE;
 
-  const { verb, subject } = splitToolName(call.toolName);
   const failed = isFailedCall(call);
   const running = call.status === 'pending';
+
+  const memory = memoryCallKind(call);
+  if (memory) return describeMemoryCall(memory, failed ? 'failed' : running ? 'running' : 'ok');
+
+  const { verb, subject } = splitToolName(call.toolName);
 
   if (!verb) {
     // No recognizable verb: fall back to naming the tool's own subject.
@@ -248,6 +254,16 @@ export function describeToolGroup(calls: readonly ToolCallDisplay[]): string {
   }
 
   const failures = calls.filter(isFailedCall).length;
+
+  // All memory work ("Read a memory, saved 2 memories"): the subject rule
+  // below would call two saves "2 lookups on memory save".
+  const memoryKinds = calls.map(memoryCallKind);
+  if (memoryKinds.every((k) => k !== null)) {
+    const done = memoryKinds.filter((k, i): k is MemoryCallKind => k !== null && !isFailedCall(calls[i]));
+    const line = memoryRollup(done);
+    if (!line) return `Couldn't complete ${calls.length} memory steps`;
+    return failures ? `${line}, ${failures} failed` : line;
+  }
 
   const subjects = new Set(calls.map(c => splitToolName(c.toolName).subject));
   if (subjects.size === 1) {

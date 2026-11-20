@@ -207,3 +207,26 @@
   font-family: inherit;
   line-height: 1.25rem;
 }
+
+/* A saved memory is prose too, read like reasoning: the file's index line,
+   then its items. `white-space: normal` because the list is markup, not a
+   payload; the margins are reset because the message block's global prose
+   rules space every <p> and list for an answer, not a detail box. */
+.memory-text {
+  font-family: inherit;
+  line-height: 1.25rem;
+  white-space: normal;
+}
+
+.memory-text .memory-description {
+  margin: 0 0 0.25rem;
+}
+
+.memory-text .memory-items {
+  margin: 0;
+}
+
+.memory-text .memory-items li {
+  margin: 0;
+  padding: 0;
+}
