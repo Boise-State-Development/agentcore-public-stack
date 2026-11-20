@@ -35,6 +35,7 @@ import {
   CONTENT_CARD_ACTION_CLASS,
   ContentCardComponent,
   type ContentCardMenuItem,
+  OUTPUT_CARD_HOST_CLASS,
 } from '../../../../../components/content-card/content-card.component';
 import {
   RenameArtifactDialogComponent,
@@ -85,9 +86,10 @@ type ArtifactCardAction = 'share' | 'download' | 'rename' | 'delete';
       heroTableCells,
     }),
   ],
-  host: { class: 'block w-80 max-w-full' },
+  host: { class: OUTPUT_CARD_HOST_CLASS },
   template: `
     <app-content-card
+      size="lg"
       [title]="title()"
       [label]="cardLabel()"
       [meta]="meta()"

@@ -1,4 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ConfigService } from '../../../../../../services/config.service';
 import { FilePreviewStateService } from '../../../../../services/file-preview/file-preview-state.service';
@@ -10,6 +12,8 @@ describe('FileDownloadRendererComponent', () => {
   beforeEach(async () => {
     await TestBed.configureTestingModule({
       imports: [FileDownloadRendererComponent],
+      // The tray's preview asks for the file's stored preview.
+      providers: [provideHttpClient(), provideHttpClientTesting()],
     }).compileComponents();
 
     TestBed.inject(ConfigService).appApiUrl.set('/api');
@@ -37,7 +41,23 @@ describe('FileDownloadRendererComponent', () => {
       '/api/files/1a098460e41_ba6e8f342f1744e2/download',
     );
     expect(fixture.nativeElement.textContent).toContain('plan.docx');
-    expect(fixture.nativeElement.textContent).toContain('51.0 KB');
+    expect(fixture.nativeElement.textContent).toContain('DOCX · 51.0 KB');
+    expect(fixture.nativeElement.textContent).toContain('Word document');
+  });
+
+  it('draws the shared content card with the file preview in the tray', () => {
+    render({ filename: 'plan.docx', upload_id: 'up1' });
+
+    const card = fixture.nativeElement.querySelector('app-content-card article');
+    expect(card?.getAttribute('aria-label')).toBe('plan.docx');
+    expect(fixture.nativeElement.querySelector('app-attachment-preview')).not.toBeNull();
+  });
+
+  it('names both actions after the file', () => {
+    const anchor = render({ filename: 'plan.docx', upload_id: 'up1' });
+
+    expect(previewButton()?.getAttribute('aria-label')).toBe('Preview plan.docx');
+    expect(anchor?.getAttribute('aria-label')).toBe('Download plan.docx');
   });
 
   it('routes a legacy presigned download_url through the same durable route', () => {
@@ -105,7 +125,8 @@ describe('FileDownloadRendererComponent', () => {
     // product generates. All of them still get their download link;
     // only the button is withheld.
     for (const filename of ['old.doc', 'old.ppt', 'old.xls', 'notes.txt']) {
-      expect(render({ filename, upload_id: 'up1' })).not.toBeNull();
+      const anchor = render({ filename, upload_id: 'up1' });
+      expect(anchor?.textContent?.trim()).toBe('Download');
       expect(previewButton()).toBeNull();
     }
   });
