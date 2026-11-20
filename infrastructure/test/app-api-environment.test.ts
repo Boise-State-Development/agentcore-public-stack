@@ -120,7 +120,7 @@ describe('buildAppApiEnvironment — handoffs', () => {
     const off = buildAppApiEnvironment(createMockConfig(), stubParams());
     expect(off.HANDOFFS_ENABLED).toBe('false');
 
-    const on = buildAppApiEnvironment(createMockConfig({ handoffs: { enabled: true, briefEnabled: false } }), stubParams());
+    const on = buildAppApiEnvironment(createMockConfig({ handoffs: { enabled: true, briefEnabled: false, suggestionsEnabled: false } }), stubParams());
     expect(on.HANDOFFS_ENABLED).toBe('true');
   });
 });

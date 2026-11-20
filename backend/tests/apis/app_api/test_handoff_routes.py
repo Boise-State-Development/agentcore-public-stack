@@ -443,3 +443,101 @@ def test_notification_routes_404_while_the_flag_is_off(inbox_client, monkeypatch
     assert client.post(
         f"/sessions/src/handoffs/{handoff_id}/notifications/events", json={"metric": "HandoffNotified"}
     ).status_code == 404
+
+
+# --- Suggestions (§4.4, PR-0.5) ------------------------------------------------------------------
+
+
+def _suggest(store: HandoffStore, *, user: str = "alice", tool_use_id: str = "tu-1") -> str:
+    from apis.shared.handoff.suggestions import normalize_suggestion, record_suggestion
+
+    record_suggestion(
+        user_id=user,
+        session_id="src",
+        tool_use_id=tool_use_id,
+        args=normalize_suggestion("Draft the rubric", "It is separate.", "Draft a rubric for the lab.", "rubric"),
+        turn_count=0,
+        store=store,
+    )
+    return next(r.handoff_id for r in store.list_for_session(user, "src") if r.tool_use_id == tool_use_id)
+
+
+def _with_suggestion_message(world: _World) -> None:
+    """Message 1 is the answer that called suggest_handoff; the conversation went on after it."""
+    world.messages = [
+        CONVERSATION[0],
+        MessageResponse(
+            id="msg-src-1",
+            role="assistant",
+            content=[
+                {"type": "text", "text": "Here is a week-by-week plan."},
+                {"type": "toolUse", "toolUse": {"toolUseId": "tu-1", "name": "suggest_handoff", "input": {}}},
+            ],
+            created_at="2026-10-22T00:00:00Z",
+        ),
+        *CONVERSATION[2:],
+    ]
+
+
+def test_start_answers_like_create_with_the_models_prompt(make_client, store, world):
+    _with_suggestion_message(world)
+    handoff_id = _suggest(store)
+
+    resp = make_client().post(f"/sessions/src/handoffs/{handoff_id}/start", json={"agentId": "rubric"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["handoffId"] == handoff_id
+    assert data["request"] == "Draft a rubric for the lab."
+    assert data["prompt"] == build_handoff_message(data["contextBlock"], "Draft a rubric for the lab.")
+    assert data["contextBlock"] == wrap_handoff_context(data["excerpt"], "Course planning")
+    # Placed under the answer that made the suggestion, not after the last message.
+    assert data["sourceMessageIndex"] == 1
+    row = store.get("alice", handoff_id)
+    assert (row.status, row.kind, row.agent_id, row.agent_name) == ("open", "suggested", "rubric", "Rubric Builder")
+    assert row.excerpt_hash == data["excerptHash"] == context_hash(data["excerpt"])
+
+
+def test_start_falls_back_to_the_last_message_when_the_suggestion_is_not_found(make_client, store):
+    handoff_id = _suggest(store)
+
+    resp = make_client().post(f"/sessions/src/handoffs/{handoff_id}/start", json={"agentId": "rubric"})
+
+    assert resp.json()["sourceMessageIndex"] == 3
+
+
+def test_a_started_suggestion_is_accepted_like_a_mention(make_client, store):
+    handoff_id = _suggest(store)
+    make_client().post(f"/sessions/src/handoffs/{handoff_id}/start", json={"agentId": "rubric"})
+
+    accepted = store.accept("alice", handoff_id, target_session_id="tgt", context_edited=False, context_removed=False)
+
+    assert accepted is not None and accepted.status == "running"
+    again = make_client().post(f"/sessions/src/handoffs/{handoff_id}/start", json={"agentId": "rubric"})
+    assert again.status_code == 409
+
+
+def test_a_dismissed_chip_cannot_be_started(make_client, store):
+    handoff_id = _suggest(store)
+    client = make_client()
+
+    assert client.post(f"/sessions/src/handoffs/{handoff_id}/dismiss").status_code == 204
+    assert client.post(f"/sessions/src/handoffs/{handoff_id}/start", json={"agentId": "rubric"}).status_code == 409
+
+
+def test_start_refuses_a_mention_another_users_chip_and_an_agent_they_cannot_use(make_client, store):
+    created = _create(make_client()).json()["handoffId"]
+    chip = _suggest(store)
+
+    assert make_client().post(f"/sessions/src/handoffs/{created}/start", json={"agentId": "rubric"}).status_code == 404
+    assert make_client(BOB).post(f"/sessions/src/handoffs/{chip}/start", json={"agentId": "rubric"}).status_code == 404
+    assert make_client().post(f"/sessions/src/handoffs/{chip}/start", json={"agentId": "nope"}).status_code == 404
+    assert store.get("alice", chip).agent_id == ""
+
+
+def test_start_is_404_while_handoffs_are_off(make_client, store, monkeypatch):
+    chip = _suggest(store)
+    client = make_client()
+    monkeypatch.setenv("HANDOFFS_ENABLED", "")
+
+    assert client.post(f"/sessions/src/handoffs/{chip}/start", json={"agentId": "rubric"}).status_code == 404

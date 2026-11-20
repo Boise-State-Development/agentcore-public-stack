@@ -100,9 +100,9 @@ send-back is a row we can count. **§7 turns those counts into the go/no-go for 
 
 | Phase | What the user gets | New plumbing | Status |
 |---|---|---|---|
-| **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | In progress: PR-0.1–0.3 built (§11) |
-| **0b — Handoff row + send back** | A row in the original thread tracks the handoff (*running / needs your input / done*) and offers **Bring back result** when it finishes; the new conversation offers "Send to *original conversation*" too, without leaving | Status on `HANDOFF#`; `DELIVERY#` rows and the `deliveries` request field (§4.8); file reference rows in both directions (§4.9) | Proposed |
-| **0c — Suggested handoffs** | The model can offer a chip ("Hand off to Rubric Builder →") without stopping its turn; Start opens the same review sheet | `suggest_handoff` tool, `handoff_suggested` SSE event | Proposed, opt-in |
+| **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | Built and dev-validated: PR-0.1–0.3c (§11) |
+| **0b — Handoff row + send back** | A row in the original thread tracks the handoff (*running / needs your input / done*) and offers **Bring back result** when it finishes; the new conversation offers "Send to *original conversation*" too, without leaving | Status on `HANDOFF#`; `DELIVERY#` rows and the `deliveries` request field (§4.8); file reference rows in both directions (§4.9) | Built and dev-validated: PR-0.4, PR-0.4a (§11) |
+| **0c — Suggested handoffs** | The model can offer a chip ("Hand off to Rubric Builder →") without stopping its turn; Start opens the same review sheet | `suggest_handoff` tool, `handoff_suggested` SSE event | In progress, opt-in: PR-0.5 backend built (§11) |
 | **Gate** | — | — | §7 |
 | **1 — Consult** | A mid-thread mention runs the Agent **in place** and its report comes back automatically | Hidden consult sessions, nested streaming, agent-resolution refactor | Only if the gate passes |
 | **Gate** | — | — | §7.1, independent of §7 |
@@ -618,6 +618,31 @@ brief isn't streamed for chips the user dismisses.
 **Chip UI.** The chip renders inline after the assistant message that produced it, with **Start** and
 **Dismiss**. Once started, it becomes that handoff's row (§4.3). Chips replay on reload with the rest of
 `handoffs`. Dismiss is `POST /sessions/{id}/handoffs/{handoffId}/dismiss`.
+
+*Backend built (2026-11-19, PR-0.5).* `apis/shared/handoff/suggestions.py` and
+`agents/builtin_tools/suggest_handoff_tool.py`. Where it differs from the text above:
+- **The SPA matches the Agent, not the server.** The pin list lives in app-api's Agent Designer, which the Runtime
+  may not import, and the SPA already holds exactly the set the text names (the Agents the user can `@`-mention).
+  So the row stores the model's `agentHint` unresolved, the event's `agentName` is that hint, and no `agentId` is
+  sent. The chip names the Agent the hint matched (exact name, then case-insensitive), or Start offers a picker.
+- **Start is its own route.** `POST /sessions/{id}/handoffs/{handoffId}/start {agentId}` writes the Agent and the
+  card onto the `open` row and answers exactly like the mention create, so the SPA opens the same sheet and sends
+  the same way, and acceptance needs no special case. The excerpt is rendered then, from the conversation as it is
+  at Start. The row is placed under the message holding the suggestion's `toolUseId` (falling back to the last
+  message), so the chip and the row it becomes sit in one place. A cancelled sheet leaves the row `open`, so the
+  chip can be started again; 409 once it was sent or dismissed.
+- **`toolUseId` places the chip.** It is on the event, the row and the replay. A suggestion has no
+  `sourceMessageIndex` until Start (`-1`): the turn that made it is not persisted while it streams.
+- **A suggestion never reads as abandoned.** Its chip stays for the user to start whenever they like; only a
+  mention's unsent review sheet ages out after `ABANDON_AFTER`.
+- **The replay leaves the prompt out too.** An open chip replays with `title`, `tldr`, `agentHint` and an empty
+  `request`; Start returns the prompt.
+- **Limits.** One a turn is a count in Strands' invocation state (new each invocation, so a cached agent starts
+  every turn at zero); three a conversation is counted from the `HANDOFF#` rows, dismissed chips included.
+- **Cost.** Marginal CountTokens on Haiku 4.5: **278 tokens**, in the cached `toolConfig` of a user who has the
+  tool. Agent-cache eligible: the closure is `(session, user)`. No system-prompt clause yet, as planned.
+- **Metrics.** `HandoffCreated` and `HandoffCancelled` (Dismiss) with `handoffKind: suggested`, plus
+  `HandoffSuggestionStarted` and `HandoffSuggestionLimited` (`turn` / `session`).
 
 ### 4.5 The context card: a brief from the source's cache, the excerpt as fallback
 
@@ -2228,6 +2253,9 @@ has started", and the only one that spends money while nobody is watching.
     `axe-core` installed.
 - **PR-0.5 — `suggest_handoff`.** Tool, `handoff_suggested` event, chip UI that opens the review sheet, replay,
   `CLAUDE.md` SSE table. Marginal CountTokens measured and recorded in the PR.
+  *Backend built (2026-11-19)*: the tool behind `HANDOFF_SUGGESTIONS_ENABLED` and the `suggest_handoff` catalog
+  row, the `handoff_suggested` event, the chip replay and the Start route (§4.4, *Backend built*). 278 tokens
+  measured. The chip UI is its own PR.
 - **Dev validation.**
   - A mid-thread mention with an edited card, previewed, sent, and finished while the user stays in the source.
   - A handoff that needs OAuth consent: *needs your input* on the row and in the bell, a browser notification with

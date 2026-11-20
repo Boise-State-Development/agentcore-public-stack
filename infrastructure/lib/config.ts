@@ -549,6 +549,15 @@ export interface HandoffsConfig {
    * so the default spends none of the V2 environment budget. No new resources.
    */
   briefEnabled: boolean;
+  /**
+   * Suggested handoffs: the model may offer a chip with `suggest_handoff` (spec §4.4).
+   * **Opt-in while in development**: off unless CDK_HANDOFF_SUGGESTIONS_ENABLED=true (or a
+   * `handoffs.suggestionsEnabled: true` cdk.json context). Sets HANDOFF_SUGGESTIONS_ENABLED on
+   * the **AgentCore Runtime** only, and only while both it and `enabled` are on, so the default
+   * spends none of the V2 environment budget. No new resources. Nobody gets the tool until a
+   * role grants the `suggest_handoff` catalog row (seeded `enabledByDefault: false`).
+   */
+  suggestionsEnabled: boolean;
 }
 
 /**
@@ -1913,6 +1922,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
       briefEnabled: process.env.CDK_HANDOFF_BRIEF_ENABLED
         ? process.env.CDK_HANDOFF_BRIEF_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('handoffs')?.briefEnabled ?? false,
+      suggestionsEnabled: process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED
+        ? process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('handoffs')?.suggestionsEnabled ?? false,
     },
     sessionRewind: {
       // Default ON with a kill switch, same parsing as projects above.

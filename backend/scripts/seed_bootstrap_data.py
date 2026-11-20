@@ -537,6 +537,23 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        # Suggested handoffs (docs/specs/agent-handoffs-and-consults.md §4.4).
+        # Context-bound: enabling it injects suggest_handoff at runtime, see
+        # SUGGEST_HANDOFF_TOOL_IDS and _build_suggest_handoff_tools in
+        # apis/inference_api/chat/routes.py. Also gated on
+        # HANDOFF_SUGGESTIONS_ENABLED. Off by default and not public until the
+        # feedback cohort has lived with it: a chip-happy model is worse than
+        # no chips.
+        "toolId": "suggest_handoff",
+        "displayName": "Suggested Handoffs",
+        "description": "Offer to move a separate piece of work into its own conversation with one of your Agents. You see a chip under the answer and decide whether to start it.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
         # Spreadsheet ANALYSIS (read an uploaded .xlsx/.csv and answer questions
         # about it via Code Interpreter) — distinct from the spreadsheet
         # *authoring* tool below. Both ids are context-bound: enabling them
