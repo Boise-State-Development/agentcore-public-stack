@@ -373,6 +373,24 @@ export interface SteeringAppliedEvent {
 }
 
 /**
+ * Suggested handoff — the model offered the user a separate conversation with
+ * `suggest_handoff` (docs/specs/agent-handoffs-and-consults.md §4.4). The turn
+ * did not stop: this is a chip, rendered under the message holding
+ * `toolUseId`. `agentName` is the model's text, unresolved; the SPA matches it
+ * against the Agents the user can mention. The prompt is never on the event:
+ * Start fetches it.
+ */
+export interface HandoffSuggestedEvent {
+  type: 'handoff_suggested';
+  sessionId: string;
+  handoffId: string;
+  toolUseId: string;
+  title: string;
+  tldr: string;
+  agentName?: string;
+}
+
+/**
  * Model retry event — emitted each time the backend retries a failed model
  * call instead of surfacing the failure. Turns an unexplained silence into a
  * visible "still working" state.
@@ -757,6 +775,7 @@ export type StreamEventType =
   | 'ui_tool_input_partial'
   | 'session_title'
   | 'steering_applied'
+  | 'handoff_suggested'
   | 'model_retry'
   | 'agent_notice'
   | 'agent_status'
