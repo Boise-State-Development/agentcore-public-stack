@@ -36,7 +36,6 @@ describe('WorkflowRunQueueService while the page unloads', () => {
   let sends: { step: HandoffLaunch; resolve: () => void; reject: (e: Error) => void }[];
 
   beforeEach(() => {
-    localStorage.clear();
     sends = [];
     TestBed.configureTestingModule({
       providers: [
@@ -53,10 +52,7 @@ describe('WorkflowRunQueueService while the page unloads', () => {
     queue = TestBed.inject(WorkflowRunQueueService);
   });
 
-  afterEach(() => {
-    TestBed.resetTestingModule();
-    localStorage.clear();
-  });
+  afterEach(() => TestBed.resetTestingModule());
 
   const started = (): string[] => sends.map((send) => send.step.handoffId);
 
@@ -77,9 +73,8 @@ describe('WorkflowRunQueueService while the page unloads', () => {
     await new Promise((resolve) => setTimeout(resolve));
 
     expect(started()).toEqual(['h1', 'h2', 'h3', 'h4']);
-    expect(queue.pendingCount('run1')).toBe(1);
-    // The run stays as it was, so a reload can still start its queued step.
-    expect(queue.storedEnvelope('run1')).toEqual(expect.objectContaining({ contextText: 'reviewed card' }));
+    // The queued step was never sent, so its row stays open and a reload offers it as "Not started".
+    expect(queue.isPending('run1', 'h5')).toBe(true);
   });
 
   it('carries on when the page comes back from the back/forward cache', async () => {
