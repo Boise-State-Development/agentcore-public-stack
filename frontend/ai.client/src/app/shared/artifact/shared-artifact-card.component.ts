@@ -19,6 +19,7 @@ import type { SharedConversationArtifact } from '../../session/services/share/sh
 import {
   CONTENT_CARD_ACTION_CLASS,
   ContentCardComponent,
+  OUTPUT_CARD_HOST_CLASS,
 } from '../../components/content-card/content-card.component';
 import {
   ArtifactThumbnailComponent,
@@ -119,9 +120,9 @@ export function artifactTypeStyle(contentType: string): TypeStyle {
       heroTableCells,
     }),
   ],
-  host: { class: 'block w-80 max-w-full' },
+  host: { class: OUTPUT_CARD_HOST_CLASS },
   template: `
-    <app-content-card [title]="title()" [label]="cardLabel()" [meta]="meta()">
+    <app-content-card size="lg" [title]="title()" [label]="cardLabel()" [meta]="meta()">
       <div contentCardChrome class="flex min-w-0 flex-1 items-center gap-1.5" aria-hidden="true">
         <span class="flex shrink-0" [class]="style().text">
           <ng-icon [name]="style().icon" size="13" />

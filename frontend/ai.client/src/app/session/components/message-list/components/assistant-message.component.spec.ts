@@ -35,6 +35,32 @@ function makeToolBlock(name: string, overrides: Record<string, unknown> = {}): C
   };
 }
 
+function makeFileCardToolBlock(
+  name: string,
+  filename = 'plan.docx',
+  uiType = 'file_download',
+): ContentBlock {
+  return {
+    type: 'toolUse',
+    toolUse: {
+      toolUseId: `tool-${name}`,
+      name,
+      input: {},
+      status: 'complete',
+      result: {
+        status: 'success',
+        content: [{
+          json: {
+            ui_type: uiType,
+            ui_display: 'inline',
+            payload: { filename, upload_id: `up-${name}`, size_kb: '13.0 KB' },
+          },
+        }],
+      },
+    },
+  };
+}
+
 function makePromotedVisualToolBlock(name: string): ContentBlock {
   return {
     type: 'toolUse',
@@ -300,6 +326,64 @@ describe('AssistantMessageComponent', () => {
       expect(blocks[2].type).toBe('promoted_visual');
       expect(blocks[3].type).toBe('tool_group');
       expect(blocks[3].group!.calls.length).toBe(2);
+    });
+  });
+
+  describe('generated-file cards fold into the rail', () => {
+    it('keeps the call in the rail and puts the file card under it', () => {
+      fixture.componentRef.setInput('messages', [makeMessage([
+        makeToolBlock('search'),
+        makeFileCardToolBlock('modify_word_document'),
+        makeTextBlock('I redlined the contract.'),
+      ])]);
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.map((b) => b.type)).toEqual(['tool_group', 'promoted_visual', 'text']);
+      expect(blocks[0].group!.calls.map((c) => c.toolName)).toEqual([
+        'search',
+        'modify_word_document',
+      ]);
+      expect(blocks[1].uiType).toBe('file_download');
+      expect(blocks[1].toolUseId).toBe('tool-modify_word_document');
+      expect(blocks.some((b) => b.type === 'tool_use_minimized')).toBe(false);
+    });
+
+    it('does not split the rail: later calls stay in it and the card follows the whole rail', () => {
+      fixture.componentRef.setInput('messages', [makeMessage([
+        makeToolBlock('search'),
+        makeFileCardToolBlock('create_word_document'),
+        makeToolBlock('read_word_document'),
+      ])]);
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.map((b) => b.type)).toEqual(['tool_group', 'promoted_visual']);
+      expect(blocks[0].group!.calls.length).toBe(3);
+    });
+
+    it('places each file card in call order under its rail', () => {
+      fixture.componentRef.setInput('messages', [makeMessage([
+        makeFileCardToolBlock('create_word_document', 'a.docx'),
+        makeFileCardToolBlock('create_excel_spreadsheet', 'b.xlsx'),
+      ])]);
+      fixture.detectChanges();
+
+      const blocks = component.displayBlocks();
+      expect(blocks.map((b) => b.type)).toEqual(['tool_group', 'promoted_visual', 'promoted_visual']);
+      expect(blocks.slice(1).map((b) => (b.payload as { filename: string }).filename)).toEqual([
+        'a.docx',
+        'b.xlsx',
+      ]);
+    });
+
+    it('folds a legacy word_document card the same way', () => {
+      fixture.componentRef.setInput('messages', [makeMessage([
+        makeFileCardToolBlock('create_word_document', 'plan.docx', 'word_document'),
+      ])]);
+      fixture.detectChanges();
+
+      expect(component.displayBlocks().map((b) => b.type)).toEqual(['tool_group', 'promoted_visual']);
     });
   });
 

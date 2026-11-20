@@ -118,6 +118,15 @@ const MOCK_TOOL_GROUP: ToolCallGroup = {
 // ──────────────────────────────────────────────────────────────
 
 /**
+ * Promoted visuals that are a file the agent made (a Word document, a
+ * spreadsheet, a deck, a workspace file). Their call folds into the rail like
+ * any other tool call, and the file's card goes under the rail: the call is
+ * one step of the agent's work, while the card is the thing the user came
+ * for. `word_document` is the alias cards persisted before `file_download`.
+ */
+const FILE_CARD_UI_TYPES: ReadonlySet<string> = new Set(['file_download', 'word_document']);
+
+/**
  * Display block types for rendering in the template.
  * Transforms content blocks into display-specific blocks that include
  * promoted visuals and grouped tool rails.
@@ -401,8 +410,10 @@ export class AssistantMessageComponent {
    *   inline rail via app-tool-rail.
    * - Reasoning with no tool call beside it (think, then answer) stays a
    *   standalone reasoning block.
-   * - Tool-use blocks with promoted visuals (ui_display: "inline") are kept separate
-   *   as minimized tool + promoted visual pairs.
+   * - A tool that made a file (ui_type "file_download") stays in the rail like
+   *   any other call, and its file card is placed under that rail.
+   * - Other tool-use blocks with promoted visuals (ui_display: "inline", e.g.
+   *   charts) are kept separate as minimized tool + promoted visual pairs.
    * - Text flushes any accumulated group and stands alone.
    */
   displayBlocks = computed<DisplayBlock[]>(() => {
@@ -441,6 +452,8 @@ export class AssistantMessageComponent {
       | { kind: 'thinking'; key: string; block: ContentBlock; streaming: boolean };
     let segment: SegmentEntry[] = [];
     let lastBrowserPage: BrowserPageSummary | null = null;
+    /** File cards for calls folded into the open segment, keyed by call id. */
+    const fileCards = new Map<string, { uiType: string; payload: unknown }>();
 
     // Read once per recomputation, not per call: these are signal reads, and
     // the computed must re-run when a late-arriving summary lands.
@@ -545,6 +558,19 @@ export class AssistantMessageComponent {
           ...(hasThinking ? { steps } : {}),
         },
       });
+      // A generated file's card goes straight under the rail that made it,
+      // in call order, so the download is never inside a collapsed rail.
+      for (const call of calls) {
+        const card = fileCards.get(call.id);
+        if (!card) continue;
+        fileCards.delete(call.id);
+        result.push({
+          type: 'promoted_visual',
+          uiType: card.uiType,
+          payload: card.payload,
+          toolUseId: call.id,
+        });
+      }
       // The page a rail's browse_web calls reached gets its own card under
       // the rail, so the user can see where the agent went without opening
       // the rail. Derived from the results, so it costs nothing on the turn
@@ -639,7 +665,13 @@ export class AssistantMessageComponent {
           toolUse.toolUseId,
         );
 
-        if (promotedVisual || hasMcpAppResource) {
+        const isFileCard =
+          !!promotedVisual && !hasMcpAppResource && FILE_CARD_UI_TYPES.has(promotedVisual.uiType);
+        if (isFileCard && promotedVisual) {
+          fileCards.set(toolUse.toolUseId, promotedVisual);
+        }
+
+        if ((promotedVisual && !isFileCard) || hasMcpAppResource) {
           // Promoted visuals and MCP Apps both need their own first-class
           // sibling block (the iframe is not "tool output", it's a primary
           // UI surface); break the tool group here.
