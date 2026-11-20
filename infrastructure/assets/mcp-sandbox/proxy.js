@@ -54,6 +54,60 @@
   var inner = null;
   var innerReady = false;
   var pendingToInner = []; // host->View messages queued until inner loads
+  var hostTheme = null; // 'light' | 'dark', mirrored onto the View's root
+
+  // --- host theme -> `dark` class on the View's root ----------------------
+  //
+  // The host tells an App its theme in `hostContext.theme`, but many App
+  // bundles switch palettes only on a `dark` class at the document root and
+  // never read it: Tailwind's `darkMode: 'class'`, and Atlassian's Rovo
+  // widgets (`html.dark { --bg-primary: #212121; ... }`, whose light
+  // defaults painted white cards in a dark-mode host). The proxy mirrors the
+  // host theme onto that class, from `sandbox-resource-ready` (before the App
+  // renders) and from the theme the host later sends the View
+  // (`ui/initialize` result, `host-context-changed`). It only reaches the
+  // default same-origin inner frame; a null-origin App (srcdoc fallback)
+  // keeps whatever it renders.
+
+  function themeOf(value) {
+    return value === 'dark' || value === 'light' ? value : null;
+  }
+
+  function applyTheme() {
+    if (!hostTheme || !inner) {
+      return;
+    }
+    var root = null;
+    try {
+      root = inner.contentDocument && inner.contentDocument.documentElement;
+    } catch (_) {
+      root = null; // cross-origin (null-origin App): not ours to touch
+    }
+    if (root && root.classList) {
+      root.classList.toggle('dark', hostTheme === 'dark');
+    }
+  }
+
+  function noteTheme(value) {
+    var theme = themeOf(value);
+    if (!theme || theme === hostTheme) {
+      return;
+    }
+    hostTheme = theme;
+    applyTheme();
+  }
+
+  // The theme a host->View message carries, if any: the `ui/initialize`
+  // response's `hostContext`, or a `host-context-changed` partial.
+  function themeInHostMessage(data) {
+    if (data.method === 'ui/notifications/host-context-changed') {
+      return data.params ? data.params.theme : null;
+    }
+    if (!data.method && data.result && data.result.hostContext) {
+      return data.result.hostContext.theme;
+    }
+    return null;
+  }
 
   // Establish a 100%-height chain on this shell so the inner View iframe
   // (height:100%, set in mountView) fills the OUTER iframe the host sized
@@ -235,6 +289,7 @@
       doc.open();
       doc.write(html);
       doc.close();
+      noteTheme(params.theme);
     } else {
       // Fallback path: the App opted into a stricter sandbox without
       // allow-same-origin, so contentDocument is cross-origin. srcdoc
@@ -320,6 +375,7 @@
     if (nonce && data.nonce !== nonce) {
       return;
     }
+    noteTheme(themeInHostMessage(data));
     if (innerReady) {
       postToInner(data);
     } else {

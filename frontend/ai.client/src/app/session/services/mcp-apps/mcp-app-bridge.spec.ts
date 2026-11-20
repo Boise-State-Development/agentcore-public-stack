@@ -148,6 +148,8 @@ describe('McpAppBridge', () => {
     expect(msg.params.csp).toEqual({ connectDomains: ['https://api.test'] });
     expect(msg.params.permissions).toEqual({ clipboardWrite: {} });
     expect(msg.params.sandbox).toBe('allow-scripts allow-same-origin allow-forms');
+    // The proxy mirrors it onto the App root's `dark` class before render.
+    expect(msg.params.theme).toBe('dark');
     // Strict targetOrigin — never '*'.
     expect(h.proxy.sent[0].targetOrigin).toBe(SANDBOX_ORIGIN);
   });
