@@ -23,6 +23,7 @@ from agents.main_agent.session.hooks import (
     OAuthConsentHook,
     MCPExternalApprovalHook,
     MCPSessionHealHook,
+    McpAppRenderedNoteHook,
     ContextAttributionHook,
     PrefixFingerprintHook,
     WebSearchDefaultsHook,
@@ -410,6 +411,13 @@ class BaseAgent(ABC):
         # failure. After the two gates so a call they stop is not reconnected
         # for nothing; a healthy call pays one session probe.
         hooks.append(MCPSessionHealHook())
+
+        # Tells the model a successful MCP App tool result is also on screen
+        # as the App, so it answers around the view instead of re-listing it
+        # (an Atlassian Jira search came back as the widget and a duplicate
+        # table). One constant sentence appended after the offloader runs;
+        # inert unless the host can frame Apps.
+        hooks.append(McpAppRenderedNoteHook())
 
         # AgentCore Web Search returns 10 results (~5.3k tokens) unless asked
         # for fewer; fill in maxResults=5 when the model leaves it out. Hands

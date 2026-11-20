@@ -146,6 +146,8 @@ export class ScheduleFormPage implements OnInit {
   });
   readonly mode = computed<'create' | 'edit'>(() => (this.scheduleId() ? 'edit' : 'create'));
   readonly saving = signal(false);
+  /** A Run now from this tab hasn't finished; the button waits for it. */
+  readonly runInFlight = this.runNowService.running;
   readonly loadError = signal<string | null>(null);
   readonly loadingSchedule = signal(false);
 
@@ -572,6 +574,9 @@ export class ScheduleFormPage implements OnInit {
    * where the result renders with full formatting. Only the prompt is required.
    */
   runNow(): void {
+    if (this.runInFlight()) {
+      return;
+    }
     const promptText = this.form.controls.promptText.value?.trim();
     if (!promptText) {
       this.form.controls.promptText.setErrors({ required: true });

@@ -1,6 +1,17 @@
 import { Message } from '../models/message.model';
 
 /**
+ * A tool result's MCP `_meta`, which Strands carries as `metadata`, when it is
+ * a non-empty plain object; otherwise undefined. An MCP App may render from
+ * it (Atlassian's widgets read their site and account context there), so it
+ * must reach the App with the result.
+ */
+export function toolResultMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return Object.keys(value).length > 0 ? (value as Record<string, unknown>) : undefined;
+}
+
+/**
  * Match tool results from user messages to their corresponding tool uses in assistant messages.
  * This reconstructs the tool state as it appears during streaming.
  *
@@ -17,7 +28,12 @@ export function matchToolResultsToToolUses(messages: Message[]): Message[] {
   // Create a map of toolUseId -> tool result for quick lookup
   const toolResultMap = new Map<
     string,
-    { content: any[]; status: 'success' | 'error'; structuredContent?: unknown }
+    {
+      content: any[];
+      status: 'success' | 'error';
+      structuredContent?: unknown;
+      metadata?: Record<string, unknown>;
+    }
   >();
 
   // First pass: collect all tool results from user messages
@@ -59,12 +75,14 @@ export function matchToolResultsToToolUses(messages: Message[]): Message[] {
               }
             }
 
+            const metadata = toolResultMetadata(toolResult.metadata);
             toolResultMap.set(toolUseId, {
               content: toolResult.content || [],
               status: status,
               ...(toolResult.structuredContent !== undefined
                 ? { structuredContent: toolResult.structuredContent }
                 : {}),
+              ...(metadata ? { metadata } : {}),
             });
           }
         }

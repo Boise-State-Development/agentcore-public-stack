@@ -5,6 +5,7 @@ from agents.main_agent.session.hooks.analyze_sandbox import AnalyzeSandboxHook
 from agents.main_agent.session.hooks.context_attribution import ContextAttributionHook
 from agents.main_agent.session.hooks.context_ledger import ContextLedgerHook
 from agents.main_agent.session.hooks.display_text import DisplayTextHook
+from agents.main_agent.session.hooks.mcp_app_rendered_note import McpAppRenderedNoteHook
 from agents.main_agent.session.hooks.mcp_session_heal import MCPSessionHealHook
 from agents.main_agent.session.hooks.oauth_consent import OAuthConsentHook
 from agents.main_agent.session.hooks.prefix_fingerprint import PrefixFingerprintHook
@@ -21,6 +22,7 @@ __all__ = [
     "ContextLedgerHook",
     "DisplayTextHook",
     "MCPSessionHealHook",
+    "McpAppRenderedNoteHook",
     "OAuthConsentHook",
     "PrefixFingerprintHook",
     "SteeringHook",

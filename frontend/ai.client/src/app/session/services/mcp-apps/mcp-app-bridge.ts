@@ -623,6 +623,7 @@ export class McpAppBridge {
         csp: this.d.resource.csp,
         permissions: this.d.resource.permissions,
         nonce: this.d.nonce,
+        theme: this.d.getHostContext().theme,
       },
     });
     // From here on every inbound message MUST carry the nonce.

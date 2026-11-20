@@ -294,6 +294,40 @@ quitting can't detach you from the container instead. Or set it once in
 { "detachKeys": "ctrl-@" }
 ```
 
+### Pipe mode
+
+`-p` (or `--print`) runs one turn without opening the app. The answer goes to
+stdout as it streams; tool progress, notes and errors go to stderr, so a
+redirect captures only the answer.
+
+```bash
+aps-tui -p "hi, what can you do?"
+cat error.log | aps-tui -p "why is this failing?"   # the prompt, then the piped text
+git diff | aps-tui -p "write a commit message" > msg.txt
+aps-tui --model <model-id> -p "..."                 # other flags go before -p, or after the prompt
+```
+
+Each run starts a new conversation, which then appears in `/conversations`
+and the web app. It uses the same credential as the app: signed in, it talks to
+the agent with your server tools; with only an API key, it gets the plain
+model with no tools.
+
+Pipe mode never waits for a person. It offers the agent no local tools
+(`--local-tools` is refused), and when the turn pauses for something only you can
+give (approving a server tool, connecting an account, answering a question), it
+exits with code 3 and prints the conversation id. Open that conversation from
+`/conversations` in the app to answer and finish it. If the credential file is
+locked, the passphrase is asked for on the terminal even while stdin is a pipe;
+with no terminal at all, use `AGENTCORE_API_KEY`.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Answered (a note on stderr says if it hit the token limit) |
+| `1` | The turn failed: a server or network error, or a quota block |
+| `2` | Nothing was sent: no prompt, a flag that does not apply, or not configured |
+| `3` | Paused, waiting for you in the app |
+| `130` / `141` | Stopped by Ctrl+C, or stdout closed early (`\| head`). Either way the turn is stopped on the server too |
+
 ## Configuration
 
 Settings resolve in this order, highest priority first:
@@ -667,7 +701,7 @@ uv run textual run --dev aps_tui.app:ChatApp    # in another
 tui/
 ├── pyproject.toml               # deps, pins, console script
 └── src/aps_tui/
-    ├── cli.py                   # argparse entrypoint: chat, login, logout, status
+    ├── cli.py                   # argparse entrypoint: chat, -p, login, logout, status
     ├── config.py                # config file + env + credential-store resolution
     ├── credentials.py           # which credential is held, and what it can reach
     ├── keyring_store.py         # credential access (OS keyring or encrypted file) + app identity
@@ -675,6 +709,7 @@ tui/
     ├── state.py                 # local bookkeeping the client writes (banner version)
     ├── conversation.py          # domain: Message + ConversationStore
     ├── turn.py                  # one in-flight turn, behind a TurnSink protocol
+    ├── pipe.py                  # pipe mode: one turn to stdout through a TurnSink, no app
     ├── usage.py                 # token counts, shared by wire/domain/view
     ├── errors.py                # typed errors, each with an actionable hint
     ├── app.py                   # quit binding, screen stack, startup

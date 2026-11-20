@@ -94,8 +94,48 @@
     -->
   </div>
 
-  <!-- Bottom: End Button -->
-  <div class="shrink-0 px-6 pb-8 pt-4">
+  <!-- Bottom: Interrupt level + End Button -->
+  <div class="shrink-0 px-6 pb-8 pt-4 flex flex-col items-center gap-6">
+    <!-- Interrupt level (#2019): how loud the user must be to talk over the agent -->
+    <div class="w-full max-w-sm">
+      <div class="flex items-baseline justify-between gap-4">
+        <label for="voice-interrupt-level" class="text-sm/6 font-medium text-gray-700 dark:text-white/80">
+          Interrupt level
+        </label>
+        <span class="text-xs/5 tabular-nums text-gray-500 dark:text-white/50" aria-hidden="true">
+          {{ interruptLevelDb() }} dB
+        </span>
+      </div>
+
+      <!-- Live mic level, with a marker at the interrupt level -->
+      <div class="relative mt-2 h-2 rounded-full bg-gray-200 dark:bg-white/10 overflow-hidden" aria-hidden="true">
+        <div
+          class="mic-meter-fill absolute inset-y-0 left-0 rounded-full bg-primary-500"
+          [style.width.%]="micLevelPercent()"
+        ></div>
+        <div
+          class="absolute inset-y-0 w-0.5 bg-gray-900 dark:bg-white"
+          [style.left.%]="interruptLevelPercent()"
+        ></div>
+      </div>
+
+      <input
+        id="voice-interrupt-level"
+        type="range"
+        [min]="minLevelDb"
+        [max]="maxLevelDb"
+        step="1"
+        [value]="interruptLevelDb()"
+        [attr.aria-valuetext]="interruptLevelDb() + ' decibels'"
+        aria-describedby="voice-interrupt-level-help"
+        (input)="setInterruptLevel($any($event.target).value)"
+        class="mt-2 w-full accent-primary-600"
+      />
+      <p id="voice-interrupt-level-help" class="text-xs/5 text-gray-500 dark:text-white/50">
+        Speak past the marker to interrupt. If the assistant answers its own voice, move the slider right.
+      </p>
+    </div>
+
     <!-- End session button -->
     <div class="flex justify-center">
       <button

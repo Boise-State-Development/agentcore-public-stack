@@ -207,3 +207,48 @@ def test_reimport_409s_then_confirm_reach_saves(reach_client):
     assert confirmed.status_code == 200, confirmed.text
 
 
+
+
+# =============================================================================
+# Reach on delete: a pin does not protect a binding from a delete
+# =============================================================================
+
+
+@pytest.mark.parametrize("binding", [SHARED_UNPINNED, PROJECT_UNPINNED, SHARED_PINNED])
+def test_delete_409s_naming_who_loses_the_skill(reach_client, binding):
+    sid = _new_skill(reach_client)
+    reach_client.reach["value"] = _reach(binding)
+    resp = reach_client.delete(f"/skills/mine/{sid}")
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == REACH_CONFIRMATION_CODE
+    assert binding.name in detail["reach"]
+    assert reach_client.get(f"/skills/mine/{sid}").status_code == 200
+
+
+def test_delete_with_confirm_reach_deletes_without_a_lookup(reach_client):
+    sid = _new_skill(reach_client)
+    reach_client.reach["value"] = _reach(PROJECT_UNPINNED)
+    assert reach_client.delete(f"/skills/mine/{sid}", params={"confirmReach": "true"}).status_code == 200
+    assert reach_client.reach_calls == []
+    assert reach_client.get(f"/skills/mine/{sid}").status_code == 404
+
+
+@pytest.mark.parametrize("bindings", [(), (PRIVATE_UNPINNED,)], ids=["bound-nowhere", "owner-only"])
+def test_delete_goes_ahead_when_no_one_else_uses_it(reach_client, bindings):
+    sid = _new_skill(reach_client)
+    reach_client.reach["value"] = _reach(*bindings)
+    assert reach_client.delete(f"/skills/mine/{sid}").status_code == 200
+
+
+def test_delete_of_a_skill_the_caller_does_not_own_404s_before_any_lookup(reach_client):
+    reach_client.reach["value"] = _reach(PROJECT_UNPINNED)
+    assert reach_client.delete("/skills/mine/someone_elses_skill").status_code == 404
+    assert reach_client.reach_calls == []
+
+
+def test_the_delete_summary_counts_pinned_bindings_too():
+    text = _reach(PROJECT_UNPINNED, SHARED_PINNED, PRIVATE_UNPINNED).delete_summary()
+    assert '1 project ("Legal")' in text and '1 shared agent ("Contracts Desk")' in text
+    assert "My Drafts" not in text
+    assert "pinned" in text

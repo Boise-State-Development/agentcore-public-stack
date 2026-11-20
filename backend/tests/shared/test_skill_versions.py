@@ -204,6 +204,47 @@ async def test_pin_status_reports_a_newer_version(repo):
     assert (await pinning.pin_status([("pdf_workflows", 1)]))["pdf_workflows"].update_available is True
 
 
+def _imported(sha: str):
+    from apis.shared.skills.models import SkillImportSource
+
+    return SkillImportSource(
+        type="github", bundle_hash="h", imported_at="2026-11-19T00:00:00Z",
+        owner="anthropics", repo="skills", ref="main", commit_sha=sha,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_version_records_the_commit_it_was_cut_from_and_keeps_it(repo):
+    """The project page names the commit a pin runs, not where the live skill now points."""
+    await _skill(repo, import_source=_imported("a" * 40))
+    first = await pinning.pin_current("pdf_workflows", pinned_by="u-1")
+    assert first.import_source["commitSha"] == "a" * 40
+
+    # A re-import moves the live row to a new commit with new content.
+    await repo.update_skill("pdf_workflows", {"import_source": _imported("b" * 40), "instructions": "v2"})
+    status = (await pinning.pin_status([("pdf_workflows", 1)]))["pdf_workflows"]
+    assert (status.update_available, status.import_source["commitSha"]) == (True, "a" * 40)
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_source_is_not_content(repo):
+    """Re-importing identical content keeps the pin current and reuses the version."""
+    await _skill(repo, import_source=_imported("a" * 40))
+    first = await pinning.pin_current("pdf_workflows", pinned_by="u-1")
+    await repo.update_skill("pdf_workflows", {"import_source": _imported("b" * 40)})
+    again = await pinning.pin_current("pdf_workflows", pinned_by="u-1")
+    assert again.version == first.version == 1
+    assert (await pinning.pin_status([("pdf_workflows", 1)]))["pdf_workflows"].update_available is False
+
+
+@pytest.mark.asyncio
+async def test_a_skill_never_imported_records_no_source(repo):
+    await _skill(repo)
+    version = await pinning.pin_current("pdf_workflows", pinned_by="u-1")
+    assert version.import_source is None
+    assert "importSource" not in version.to_dynamo_item()
+
+
 # --- Deleting a skill ---------------------------------------------------------------
 
 

@@ -180,6 +180,7 @@ async def run_agent_headless(
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     governance: Optional[GovernanceFloor] = None,
     on_event: Optional[OnEvent] = None,
+    audit_started: bool = False,
 ) -> RunResult:
     """Run one agent turn as ``user_id`` with no live session.
 
@@ -203,6 +204,11 @@ async def run_agent_headless(
     Returns a ``RunResult`` in all outcomes except audit-start failure and
     ``HeadlessAuthError`` (both raise: a run we cannot audit or authenticate
     must not execute).
+
+    ``audit_started=True`` means the caller already wrote the start audit
+    record for this ``run_id`` (via ``governance.on_run_start``) and the
+    runner must not write it again. "Run now" does this so an audit failure
+    is still returned to the caller before the turn moves to the background.
     """
     run_id = run_id or f"run-{uuid.uuid4().hex[:12]}"
     session_id = session_id or f"{HEADLESS_SESSION_PREFIX}{uuid.uuid4().hex[:16]}"
@@ -210,13 +216,14 @@ async def run_agent_headless(
     started_at = _now_iso()
 
     # F6a checkpoints 1 + 2 — before any token mint or model spend.
-    await governance.on_run_start(
-        run_id=run_id,
-        user_id=user_id,
-        session_id=session_id,
-        trigger=trigger,
-        prompt=prompt,
-    )
+    if not audit_started:
+        await governance.on_run_start(
+            run_id=run_id,
+            user_id=user_id,
+            session_id=session_id,
+            trigger=trigger,
+            prompt=prompt,
+        )
     await governance.check_input(prompt=prompt, user_id=user_id)
 
     result = RunResult(

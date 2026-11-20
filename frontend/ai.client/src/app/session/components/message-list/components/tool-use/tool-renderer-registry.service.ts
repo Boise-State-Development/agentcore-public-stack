@@ -15,6 +15,12 @@ export interface ToolResultData {
    * `awaiting_user_submission` marker (see `isAwaitingUserSubmission`).
    */
   structuredContent?: unknown;
+  /**
+   * The tool's MCP `_meta` (Strands' `metadata`), when it returned one.
+   * Forwarded to an MCP App with the result; Atlassian's widgets render from
+   * it.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /**

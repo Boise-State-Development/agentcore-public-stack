@@ -38,6 +38,22 @@ The chevron beside the button opens **Voice mode options**:
 Choices are fixed when a session connects, so the chevron is hidden while one
 is live.
 
+### Interrupting, and the assistant hearing itself
+
+With speakers instead of headphones, the microphone also picks up the
+assistant's voice. The browser's echo cancellation doesn't always remove it,
+and the assistant would then answer its own words. So while the assistant is
+speaking, and for a moment after, the panel sends silence in place of quiet
+microphone input. Speech louder than the **Interrupt level** stops the
+assistant and is sent as your turn.
+
+The **Interrupt level** slider in the Voice Mode panel sets that level. The
+bar above it shows your microphone level live, and the marker shows the
+setting. Speak past the marker to interrupt. If the assistant still answers
+its own voice, move the slider right. If it's hard to interrupt, move it left.
+The level applies at once, and it is stored per browser, like the microphone,
+because the right value depends on the mic, speakers and room.
+
 ### What the voice agent knows and can do
 
 - **Conversation history.** Voice runs inside the current conversation. It
