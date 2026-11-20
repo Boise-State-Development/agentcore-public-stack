@@ -113,6 +113,11 @@ export interface StoredComposerDraft {
   /** The Agent an `@`-mention bound to the next turn, by id (D11). */
   mentionAgentId?: string;
   /**
+   * Further Agents mentioned for the same handoff, in order, after `mentionAgentId`
+   * (workflow runs, `features.workflowRuns`). Absent for a single mention.
+   */
+  additionalMentionAgentIds?: string[];
+  /**
    * Follow-ups the user queued behind a streaming turn and that were never
    * confirmed as delivered. Text only — on restore they fold back into the
    * composer rather than re-arming, so nothing here carries a queue's promise.
@@ -190,7 +195,12 @@ export class ComposerDraftStorageService {
    */
   discardAttachments(key: string): void {
     const draft = this.read(key);
-    this.write(key, { text: draft.text, mentionAgentId: draft.mentionAgentId, queued: draft.queued });
+    this.write(key, {
+      text: draft.text,
+      mentionAgentId: draft.mentionAgentId,
+      additionalMentionAgentIds: draft.additionalMentionAgentIds,
+      queued: draft.queued,
+    });
     this._discarded.set({ key });
   }
 
@@ -330,6 +340,9 @@ export class ComposerDraftStorageService {
         updatedAt: value.updatedAt,
         mentionAgentId:
           typeof value.mentionAgentId === 'string' ? value.mentionAgentId : undefined,
+        additionalMentionAgentIds: Array.isArray(value.additionalMentionAgentIds)
+          ? value.additionalMentionAgentIds.filter((entry): entry is string => typeof entry === 'string')
+          : undefined,
         queued: Array.isArray(value.queued)
           ? value.queued.filter((entry): entry is string => typeof entry === 'string')
           : undefined,

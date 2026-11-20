@@ -172,6 +172,12 @@ export interface MessagesListResponse {
    */
   deliveries?: DeliveryView[];
   /**
+   * Workflow runs started from this conversation (workflow-runs spec §9), oldest first, each shaped
+   * like `GET /sessions/{id}/workflow-runs/{runId}`. Validated by `WorkflowRunStateService`. First
+   * page only; empty while the backend flag is off.
+   */
+  workflowRuns?: unknown[];
+  /**
    * True when Memory's events for this session have expired and these
    * messages are the conversation archive's text-only copy. The agent cannot
    * restore from the archive, and a new turn would overwrite the archived

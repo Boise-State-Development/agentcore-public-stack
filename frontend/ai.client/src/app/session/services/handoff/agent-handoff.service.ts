@@ -25,7 +25,9 @@ import {
   MAX_SHARED_FILES,
   SHARED_FILES_RECENT_TURNS,
   ShareableFile,
+  TurnsCovered,
 } from './handoff.models';
+import { FolderAttachmentData } from '../models/message.model';
 import { HandoffBriefService } from './handoff-brief.service';
 import { HandoffNotificationService, answeredInSource } from './handoff-notification.service';
 import { HandoffStateService } from './handoff-state.service';
@@ -332,53 +334,90 @@ export class AgentHandoffService {
     const request = review.request.trim();
     if (!request) return;
 
-    const targetSessionId = uuidv4();
-    const now = new Date().toISOString();
     this.state.updateReview(sourceSessionId, { phase: 'sending' });
-
-    // The row goes in first, so it is there the moment the sheet closes and its watcher sees the
-    // target start streaming.
-    this.state.upsertRow({
-      handoffId: created.handoffId,
-      sessionId: sourceSessionId,
-      kind: review.draft.suggestionId ? 'suggested' : 'mention',
-      status: 'running',
-      agentId: review.draft.agentId,
-      agentName: review.draft.agentName,
-      request,
-      sourceMessageIndex: created.sourceMessageIndex,
-      excerptTokens: created.excerptTokens,
-      turnsCovered: created.turnsCovered,
-      createdAt: now,
-      updatedAt: now,
-      targetSessionId,
-    });
-    this.state.setSpawnedFrom(targetSessionId, {
-      sessionId: sourceSessionId,
-      handoffId: created.handoffId,
-      sourceTitle: created.sourceTitle,
-      agentName: review.draft.agentName,
-    });
-    this.state.clearReview(sourceSessionId);
-
-    this.toast.info(`Handed off to ${review.draft.agentName}`, undefined, {
-      action: { label: 'Open', handler: () => this.openTarget(review.draft.agentId, targetSessionId) },
-    });
-
-    this.chatRequest
-      .submitHandoffRequest({
-        targetSessionId,
-        agentId: review.draft.agentId,
-        message: request,
+    const { targetSessionId, sent } = this.launch(
+      {
+        sourceSessionId,
+        kind: review.draft.suggestionId ? 'suggested' : 'mention',
         handoffId: created.handoffId,
+        agentId: review.draft.agentId,
+        agentName: review.draft.agentName,
+        request,
+        sourceMessageIndex: created.sourceMessageIndex,
+        excerptTokens: created.excerptTokens,
+        turnsCovered: created.turnsCovered,
+        sourceTitle: created.sourceTitle,
         contextText: review.cardRemoved ? undefined : review.card,
         sharedFileIds: review.fileIds,
         filesUnticked: Math.max(0, (review.files?.length ?? 0) - review.fileIds.length),
         fileUploadIds: review.draft.fileUploadIds,
         invokedSkillIds: review.draft.invokedSkillIds,
         folders: review.draft.folders,
-      })
-      .catch((error) => console.error('Handoff send failed:', error));
+      },
+      () => this.state.clearReview(sourceSessionId),
+    );
+
+    this.toast.info(`Handed off to ${review.draft.agentName}`, undefined, {
+      action: { label: 'Open', handler: () => this.openTarget(review.draft.agentId, targetSessionId) },
+    });
+
+    sent.catch((error) => console.error('Handoff send failed:', error));
+  }
+
+  /**
+   * Start one step of an approved workflow run (workflow-runs spec §6.1): the same background send
+   * as `send`, from the run's envelope rather than a review sheet. No navigation, no toast; the
+   * run says "Handed off to *N* Agents" once. Resolves or rejects when the step's stream ends.
+   */
+  startRunStep(step: HandoffLaunch): Promise<void> {
+    return this.launch(step).sent;
+  }
+
+  /**
+   * Add the handoff row and start the target's conversation in the background. The row goes in
+   * first, so it is there the moment the sheet closes and its watcher sees the target start
+   * streaming. `beforeSend` runs between the two, where `send` closes its sheet.
+   */
+  private launch(step: HandoffLaunch, beforeSend?: () => void): { targetSessionId: string; sent: Promise<void> } {
+    const targetSessionId = uuidv4();
+    const now = new Date().toISOString();
+    this.state.upsertRow({
+      handoffId: step.handoffId,
+      sessionId: step.sourceSessionId,
+      kind: step.kind ?? 'mention',
+      status: 'running',
+      agentId: step.agentId,
+      agentName: step.agentName,
+      request: step.request,
+      sourceMessageIndex: step.sourceMessageIndex,
+      excerptTokens: step.excerptTokens,
+      turnsCovered: step.turnsCovered,
+      createdAt: now,
+      updatedAt: now,
+      targetSessionId,
+      ...(step.runId ? { runId: step.runId, stepId: step.stepId } : {}),
+    });
+    this.state.setSpawnedFrom(targetSessionId, {
+      sessionId: step.sourceSessionId,
+      handoffId: step.handoffId,
+      sourceTitle: step.sourceTitle,
+      agentName: step.agentName,
+    });
+    beforeSend?.();
+
+    const sent = this.chatRequest.submitHandoffRequest({
+      targetSessionId,
+      agentId: step.agentId,
+      message: step.request,
+      handoffId: step.handoffId,
+      contextText: step.contextText,
+      sharedFileIds: step.sharedFileIds,
+      filesUnticked: step.filesUnticked,
+      fileUploadIds: step.fileUploadIds,
+      invokedSkillIds: step.invokedSkillIds,
+      folders: step.folders,
+    });
+    return { targetSessionId, sent };
   }
 
   /** Navigate to a handoff's target conversation, with its Agent binding on the URL. */
@@ -554,6 +593,31 @@ export class AgentHandoffService {
   private handoffsUrl(sourceSessionId: string): string {
     return `${this.config.appApiUrl()}/sessions/${encodeURIComponent(sourceSessionId)}/handoffs`;
   }
+}
+
+/** One background handoff send: a reviewed single handoff, or one step of an approved run. */
+export interface HandoffLaunch {
+  sourceSessionId: string;
+  /** The row's kind: a chip's Start sends a `suggested` handoff (§4.4). A run's steps are mentions. */
+  kind?: 'mention' | 'suggested';
+  handoffId: string;
+  agentId: string;
+  agentName: string;
+  request: string;
+  sourceMessageIndex: number;
+  excerptTokens: number;
+  turnsCovered?: TurnsCovered;
+  sourceTitle: string;
+  /** The card as reviewed; absent when the user removed it. */
+  contextText?: string;
+  sharedFileIds: string[];
+  filesUnticked: number;
+  fileUploadIds?: string[];
+  invokedSkillIds?: string[];
+  folders?: FolderAttachmentData[];
+  /** Set for a workflow run's step (workflow-runs spec §3.1). */
+  runId?: string;
+  stepId?: string;
 }
 
 function delay(ms: number): Promise<void> {

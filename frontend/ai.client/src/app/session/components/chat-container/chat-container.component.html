@@ -360,6 +360,11 @@
                only while one is open for this conversation. -->
           @if (sessionId(); as sid) {
             <app-handoff-review-sheet [sessionId]="sid" />
+            <!-- Several mentioned Agents' one review sheet, and an approved run's steps a reload
+                 left unstarted (workflow-runs spec §20.1, PR-W.4a). Render only with something
+                 to show. -->
+            <app-workflow-run-sheet [sessionId]="sid" />
+            <app-workflow-run-resume [sessionId]="sid" />
             <!-- Send to {title}'s review, in a conversation a handoff started (§4.3), and the
                  results waiting to ride this conversation's next send (§4.8). Each renders
                  only while it has something to show. -->
@@ -381,6 +386,7 @@
             (fileAttached)="onFileAttached($event)"
             [compact]="true"
             [project]="project()"
+            [offerMultipleMentions]="true"
           >
             <!-- Context meter (cost lives in its panel), beside the model
                  picker; unpinned so it follows the viewed session. -->

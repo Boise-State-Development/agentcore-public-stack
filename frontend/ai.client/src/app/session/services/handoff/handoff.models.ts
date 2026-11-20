@@ -72,6 +72,9 @@ export interface HandoffView {
   stoppedReason?: string;
   /** A `needs_input` handoff's prompts, read from its target. Never on any other status. */
   relayedPrompts?: RelayedPrompt[];
+  /** Set on a workflow run's step (workflow-runs spec §3.1). */
+  runId?: string;
+  stepId?: string;
   /** A suggestion's chip (`suggest_handoff`, §4.4): what the model offered. */
   title?: string;
   tldr?: string;

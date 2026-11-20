@@ -42,8 +42,9 @@ import { ConversationBindingService } from './services/session/conversation-bind
 import { AgentService } from '../agents/services/agent.service';
 import { AgentBindingLocksService } from '../agents/services/agent-binding-locks.service';
 import { AgentMentionService } from '../agents/services/agent-mention.service';
-import { routeMention, stripMention } from './services/chat/mention-routing';
+import { routeMention, runMentionTargets, stripMention, stripMentions } from './services/chat/mention-routing';
 import { AgentHandoffService } from './services/handoff/agent-handoff.service';
+import { WorkflowRunService } from './services/handoff/workflow-run.service';
 import { ToastService } from '../services/toast/toast.service';
 import { Agent, AgentRunnability } from '../agents/models/agent.model';
 import { ChatContainerComponent, ChatContainerConfig } from './components/chat-container/chat-container.component';
@@ -101,6 +102,7 @@ export class ConversationPage implements OnDestroy {
   private toast = inject(ToastService);
   private features = inject(FEATURES);
   private agentHandoff = inject(AgentHandoffService);
+  private workflowRuns = inject(WorkflowRunService);
   private projectApi = inject(ProjectApiService);
   /** Protected: the template hands the URL binding to the composer's voice control (#625). */
   protected readonly binding = inject(ConversationBindingService);
@@ -810,7 +812,7 @@ export class ConversationPage implements OnDestroy {
       });
   }
 
-  async onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, invokedSkillIds?: string[], folders?: FolderAttachmentData[], pastedChars?: number }) {
+  async onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, mentionAgentIds?: string[], invokedSkillIds?: string[], folders?: FolderAttachmentData[], pastedChars?: number }) {
     // Use the effective session ID (route sessionId or staged sessionId)
     const sessionIdToUse = this.effectiveSessionId();
 
@@ -833,6 +835,30 @@ export class ConversationPage implements OnDestroy {
       return;
     }
     const boundAssistantId = urlAgentId || this.assistant()?.assistantId || undefined;
+
+    // Workflow runs (docs/specs/workflow-runs.md §20.1): several Agents mentioned mid-thread open
+    // one review sheet for all of them. Nothing is sent yet; Start hands the work to each.
+    if (message.mentionAgentIds?.length && this.features.handoffs && this.features.workflowRuns) {
+      const targets = runMentionTargets(message.mentionAgentIds, boundAssistantId);
+      const names = message.mentionAgentIds.map((id) => this.mentionedAgentName(id));
+      if (targets.length >= 2 && sessionIdToUse && this.hasMessages()) {
+        void this.workflowRuns.open(sessionIdToUse, {
+          agents: targets.map((agentId) => this.runDraftAgent(agentId)),
+          request: stripMentions(message.content, names),
+          fileUploadIds: message.fileUploadIds,
+          invokedSkillIds: message.invokedSkillIds,
+          folders: message.folders,
+          sourceAssistantId: boundAssistantId,
+        });
+        return;
+      }
+      // One Agent left once the bound one is set aside: today's single handoff, with every
+      // mention's name taken out of the request.
+      if (targets.length === 1) {
+        const others = names.filter((_, i) => message.mentionAgentIds?.[i] !== targets[0]);
+        message = { ...message, mentionAgentId: targets[0], content: stripMentions(message.content, others) };
+      }
+    }
 
     // An `@`-mention means "talk to this Agent", and always yields a conversation the
     // Agent keeps its tools in — never the one-turn borrow that used to leave the *next*
@@ -950,6 +976,12 @@ export class ConversationPage implements OnDestroy {
       staged,
       this.userService.currentUser()?.user_id || 'anonymous',
     );
+  }
+
+  /** A mentioned Agent as the run sheet shows it: its name and icon from the mention list. */
+  private runDraftAgent(agentId: string): { agentId: string; agentName: string; emoji?: string; iconUrl?: string } {
+    const match = this.agentMentionService.mentionable().find((candidate) => candidate.agentId === agentId);
+    return { agentId, agentName: match?.name || 'this agent', emoji: match?.emoji, iconUrl: match?.iconUrl };
   }
 
   /**

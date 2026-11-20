@@ -504,6 +504,8 @@ export class ChatRequestService implements OnDestroy {
     handoffId: string;
     request: string;
     sourceAssistantId?: string;
+    /** A workflow run's one brief (workflow-runs spec §6.3, PR-W.3): written once for every step. */
+    runId?: string;
   }): Promise<Record<string, unknown>> {
     await this.awaitSelectionSources();
     const requestObject = this.buildChatRequestObject(
@@ -512,7 +514,9 @@ export class ChatRequestService implements OnDestroy {
       undefined,
       options.sourceAssistantId,
     );
-    requestObject['handoff_brief'] = { handoffId: options.handoffId };
+    requestObject['handoff_brief'] = options.runId
+      ? { handoffId: options.handoffId, runId: options.runId }
+      : { handoffId: options.handoffId };
     return requestObject;
   }
 

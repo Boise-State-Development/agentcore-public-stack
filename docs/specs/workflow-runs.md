@@ -629,6 +629,47 @@ changes a tool spec or the system prompt.
     as "Not started" with one Start button.
   - ⚠️ **Verify first:** five streams at once on one origin (the source and four steps) under HTTP/2 end to end.
     On HTTP/1.1 the browser's six-connection limit would stall the rest of the page.
+  - *Built (PR-W.4a).* Where it differs from the plan above:
+    - ⚠️ **Verified 2026-11-20: the browser leg is HTTP/3 or HTTP/2, never HTTP/1.1.** On dev, `nextHopProtocol` for
+      the page and every `/api` request (the stream is `POST /api/chat/stream`, same origin) read `h3`, with `h2`
+      where QUIC wasn't used; `curl --http2` against `dev.boisestate.ai` and `/api/health` negotiated `2`.
+      CloudFront multiplexes every request on one connection either way, so the six-connection limit doesn't apply
+      and the concurrency stays at the run's `limits.concurrency` (4). CloudFront's leg to the origin is separate
+      per request and isn't bounded by the browser.
+    - **The composer.** `mentionedAgent` stays the first mention, so every one-mention path is unchanged;
+      `additionalMentions` holds the second to eighth, only while `ChatInputComponent.multipleMentionsOffered`
+      (`features.handoffs`, `features.workflowRuns`, mentions offered, and the page's `offerMultipleMentions`,
+      which only the thread's full-page composer sets). Each mention is the existing highlighted `@Name` (the
+      composer has no chip beside the input since the D11 highlight), an Agent already mentioned isn't offered
+      again, and the menu stays shut with the caret inside a committed `@Name`. The send carries
+      `mentionAgentIds` only for two or more; drafts keep them as `additionalMentionAgentIds`.
+    - **Routing.** `session.page` opens the run sheet for two or more mentioned Agents in a thread with messages,
+      setting aside the conversation's own bound Agent (`runMentionTargets`); one left is today's single handoff.
+    - **The sheet** is its own component (`WorkflowRunSheetComponent`), so `HandoffReviewSheetComponent` is
+      untouched. Its Preview asks which step with a select and builds that step's prompt with the single sheet's
+      own `previewPrompt`, given the step's request and handoff id (so the file lines name that step's reference
+      rows). The last step left has no Remove.
+    - **The send path.** `AgentHandoffService.send` and a run's steps share one private `launch` (the row, then
+      `submitHandoffRequest`); a step goes through `startRunStep`, with no per-step toast and `runId`/`stepId` on
+      its row. `WorkflowRunQueueService` (root, keyed by run id) frees a slot when the step's row settles or its
+      stream's promise settles, whichever comes first, so a refused or undelivered send doesn't stall the run.
+    - **The estimate** prices card + request + ticked files per step at that step's model (the Agent's, else the
+      send's selected model), times the tokenizer factor (`TOKENIZER_FACTORS` in `workflow-run-estimate.ts`,
+      mirroring `tokenizer_costs.py`). `GET /files` gives one model-neutral count per file, so the factor is applied
+      to the whole of it, page images included: a slight over-estimate on the newer tokenizer. A missing rate, a
+      rate of 0 (the SPA's placeholder default model) or a file with no count says "Cost estimate unavailable".
+    - ⚠️ **After a reload, the card.** The run row keeps the approved `fileIds` but not the card as reviewed, and
+      `handoff_context.text` is absolute (absent means "removed"). So the queue writes the approved envelope to
+      local storage (`aps.workflowRun.<runId>`, 24 hours) until the last step has started, and "Not started" →
+      Start resumes from it. In a browser without that envelope the strip says the steps can be started only from
+      where they were approved. Storing the reviewed card (or its hash plus the brief) on the run row at approve
+      would remove that limit; it is a backend change, left for a later PR.
+    - "Not started" renders above the composer (`WorkflowRunResumeComponent`) until W.4b's run row exists to hold it.
+    - **Contrast, measured** in the running SPA (every text node against its composited background): lowest
+      4.53:1 dark and 7.56:1 light. Brand-text links take `dark:text-primary-accessible-dark` on the page and
+      `dark:text-primary-50` inside the card's raised `dark:bg-white/5` box, where `-accessible-dark` measured
+      3.98:1. ⚠️ The single review sheet's own links have no dark pair at all (1.67:1 measured on this sheet before
+      the fix); left as it is here so its code is unchanged, and worth its own small fix.
 - **PR-W.4b — The run in the source, and its result.** SPA. The design is §20.2 and §20.3.
   - The run's row in the source thread: **one card with a line per step** (decided 2026-11-20, over a single
     collapsed line). The header names the run and counts what needs the user; a segmented bar shows each step's

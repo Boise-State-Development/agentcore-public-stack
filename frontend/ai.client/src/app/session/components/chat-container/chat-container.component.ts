@@ -41,6 +41,8 @@ import { ExpiredSessionNoticeComponent } from '../expired-session-notice/expired
 import { HandoffReviewSheetComponent } from '../handoff/handoff-review-sheet.component';
 import { DeliveryCardsComponent } from '../handoff/delivery-cards.component';
 import { SendBackSheetComponent } from '../handoff/send-back-sheet.component';
+import { WorkflowRunResumeComponent } from '../handoff/workflow-run-resume.component';
+import { WorkflowRunSheetComponent } from '../handoff/workflow-run-sheet.component';
 
 /**
  * Configuration options for ChatContainerComponent.
@@ -89,6 +91,8 @@ export interface ChatContainerConfig {
     HandoffReviewSheetComponent,
     DeliveryCardsComponent,
     SendBackSheetComponent,
+    WorkflowRunSheetComponent,
+    WorkflowRunResumeComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './chat-container.component.html',
@@ -300,7 +304,7 @@ export class ChatContainerComponent {
   // `mentionAgentId` and `invokedSkillIds` ride through untouched: the container is a
   // layout shell, and dropping either field here would silently turn every `@`-mention
   // back into a plain turn, or every `/` skill command into ordinary prose.
-  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }>();
+  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; mentionAgentIds?: string[]; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }>();
   continueRequested = output<void>();
   /** "Try again" after a provider outage: resend the last message. */
   outageRetryRequested = output<void>();
@@ -474,7 +478,7 @@ export class ChatContainerComponent {
   }
 
   // Event handlers
-  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }) {
+  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; mentionAgentIds?: string[]; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }) {
     this.messageSubmitted.emit(event);
 
     // Wait for DOM to update (user message to be added) then scroll to it
