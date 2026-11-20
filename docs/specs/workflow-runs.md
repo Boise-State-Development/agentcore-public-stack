@@ -292,6 +292,11 @@ names a field set in the same skill.
 The editor is the field-set editor's shape: step cards in authored order, moved with Move up and Move down, with a
 markdown mode. A canvas is not needed until workflows branch, and `after` gives sequences without one.
 
+*2026-11-20:* `docs/specs/workflow-designer.md` proposes a designer in place of this editor: a canvas that arranges
+itself, with each step's stage derived from what it reads (so `after` becomes "reads"), beside a preview that is
+the approval sheet. The file decision above stands. It also found that a turn cannot run a chosen Agent version
+today, and proposes recording the version and saying when it has changed, with pinning as a later PR (§10 there).
+
 The worked example, as a workflow:
 
 | Step | Worker | Reads |
@@ -352,7 +357,7 @@ Each step is useful alone and stops if the one before shows no demand.
    concurrency queue in the SPA, one brief per run, the result as one delivery with parts, the run's row in the
    source. No authoring and no new step kinds. Enough to try with the worked example's four reviewers.
 2. **Saved workflows, and prompt and checklist steps.** The reference file and its parser, the editor, `after`,
-   the merge instruction and the merge that starts by itself.
+   the merge instruction and the merge that starts by itself. `workflow-designer.md` §14 proposes its PR plan.
 3. **Runs on the server.** The executor, the `handoff_context` passthrough, the two verify-firsts in §6.2.
 4. **Runs the model proposes**, by extending `suggest_handoff` from one step to several.
 
@@ -395,6 +400,8 @@ Counts only, on the rows and in EMF, as §4.7 of the handoffs spec does:
    *Answered for step 1, 2026-11-20:* code says `WFRUN#`, `/workflow-runs` and `WORKFLOW_RUNS_ENABLED`; what the
    user sees avoids "workflow" ("Hand off to 4 Agents", "Results from 4 Agents", "Stop run"). The user-facing name
    is decided in step 2, when saved workflows exist.
+   *Answered for step 2, 2026-11-20:* "Workflows", for the saved thing and its page (`workflow-designer.md` §8.1).
+   A run started by mentions keeps step 1's copy.
 2. **A hard cost ceiling per run.** Between steps it is simple: a queued step does not start once the run has
    spent past the ceiling. Inside a running step there is no per-turn spend cap to call on today. Is the estimate
    plus the user's quota enough for the first version?
@@ -414,7 +421,8 @@ Counts only, on the rows and in EMF, as §4.7 of the handoffs spec does:
 
 ## 18. Non-goals
 
-- A canvas or graph editor.
+- A free-form canvas or graph editor. (`workflow-designer.md` proposes a canvas that arranges itself, where
+  nothing is placed or drawn by hand.)
 - Steps that add steps, or runs that start runs without the user.
 - Agents messaging each other outside a run.
 - Sharing a run, or its steps' conversations, with another user.

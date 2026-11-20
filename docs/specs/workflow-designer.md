@@ -1,0 +1,539 @@
+# Workflow Designer: authoring a saved workflow on a canvas
+
+**Status:** Proposed 2026-11-20. Nothing here is built. It is the authoring half of step 2 in
+`docs/specs/workflow-runs.md` §14, and it replaces that spec's §10 editor (step cards in a list) with a canvas.
+**Targets branch:** `develop`
+**Mockup:** `docs/specs/mockups/workflow-designer-mockup.html` (standalone, clickable, drawn outside the SPA; this
+file is the source, not the picture)
+**Related:**
+- `docs/specs/workflow-runs.md`: steps, runs, the approval sheet and its envelope (§3, §4), results (§7), the
+  step-1 build and its UI (§19, §20). This proposal changes nothing about how a run executes
+- `docs/specs/field-set-authoring.md`: the pattern this copies for the file (the server owns the format in both
+  directions) and the lessons it keeps (declared order, a visible ceiling, keyboard first)
+- `docs/specs/structured-extraction.md` §4: why a named shape lives in a skill
+- `docs/specs/agent-designer.md` and `agents/agent-form/`: the page layout this borrows (a design surface beside
+  a live preview)
+- `docs/specs/multi-agent-patterns.md` §6.2 and §11: the long-term canvas, and the worked example used throughout
+
+---
+
+## 0. Summary
+
+A workflow is a saved run shape: its steps, what each reads, and how the result comes back. The runs spec planned
+to author it as a list of step cards. This proposal makes it a designer that looks like a CI run graph and is as
+easy as a form:
+
+- **The canvas arranges itself.** Steps sit in columns called stages. A user never places a card or draws a line.
+  Ticking "reads Generalist's result" on a step is what moves it to the stage after Generalist, and the connector
+  appears by itself.
+- **The preview is the approval sheet.** The panel beside the canvas shows exactly what a person starting the
+  workflow will see. Its Start button runs a real test, and the canvas becomes the live status view.
+- **One graph for designing and watching.** The same component draws the editable canvas and the running one.
+- **A top-level Workflows page**, beside Agents and Projects.
+- **Stored as a skill reference file**, `references/workflow.<name>.md`, written and read only by the server. The
+  designer edits structured JSON. The user sees a workflow and never has to think about the skill.
+
+The first build runs on step 1's engine as it is: Agent steps, in one stage, started from one sheet. Stages and
+the prompt and checklist step kinds are added afterwards without changing the designer.
+
+## 1. Why a designer, and what changed since the runs spec
+
+`workflow-runs.md` §10 said "a canvas is not needed until workflows branch", and listed a canvas as a non-goal
+(§18). Two things changed:
+
+- **The reference picture is a layout, not a drawing tool.** A CI run graph has columns of cards joined by
+  connectors, and nobody positions anything in it. That shape costs little more than a list to build, and it
+  shows the one thing a list hides: which steps wait for which.
+- **Authoring is where users meet this feature.** A run is something that happens in a thread. A workflow is
+  something a person makes, names and shares. The Agent Designer set the expectation for what making something
+  here feels like: a design surface, a live preview, and no file format in sight.
+
+What did **not** change: the platform runs the shape, a person approves every run, and the envelope is 8 steps,
+4 at once, depth 1. The designer must never offer a graph the envelope refuses.
+
+## 2. What already exists
+
+| Piece | Where | What the designer reuses |
+|---|---|---|
+| The approval sheet for several Agents | `workflow-runs.md` §20.1 (PR-W.4a) | The Preview panel is this sheet |
+| The run's row with a line per step, and the grouped result card | §20.2, §20.3 (PR-W.4b) | The test run's panel, and the list form of the graph |
+| `WFRUN#` rows, create, approve, stop, collect | `apis/shared/handoff/runs.py`, the handoff routes | A test run and a saved workflow's run are ordinary runs |
+| `WORKFLOW_RUN_MAX_STEPS = 8`, `WORKFLOW_RUN_CONCURRENCY = 4` | `runs.py` | The limits the canvas shows |
+| A skill's reference bundle, with ownership, versions, sharing, role grants and bindings | `apis/shared/skills/`, `/skills/mine/*` | Where a workflow is stored |
+| `parse_field_set` / `serialize_field_set`, the structured `PUT` with `?validate=true`, the check on every skill-file write | `apis/shared/extraction/field_sets.py`, `app_api/skills/routes.py` | The same pattern for `workflow.<name>.md` |
+| The Agent Designer's page: a scrolling editor beside a preview pane, `fixed inset-0` | `agents/agent-form/agent-form.page.html` | The page layout |
+| Agent version snapshots, the version list and the version diff | `apis/shared/assistants/version_resolution.py`, `AgentVersionSummary`, `AgentVersionDiffResponse` | "This Agent has changed" on a step (§10) |
+| The sidebar's entries, each with an optional feature flag | `components/sidenav/sidebar-items.ts` | One new entry |
+
+What does not exist: the file format, any route that reads or writes it, a way to start a run from a saved shape,
+a graph component, and a run that starts from a page other than a conversation with turns (§6.3).
+
+## 3. What the designer edits, and what is stored
+
+### 3.1 The parts of a workflow
+
+| Part | What it is | On the canvas |
+|---|---|---|
+| **Starts with** | What the person starting it is asked for: the files (none, exactly one, or any) and the request, with an optional default | A fixed card in the first column |
+| **Step** | One piece of delegated work, of a kind: `agent`, `prompt` or `checklist` (`workflow-runs.md` §3.1, §6.4) | A card in a stage |
+| **Reads** | What a step is given: the request, the run's files, and the results of other steps | Checkboxes on the step. They are the graph's edges |
+| **Result** | What comes back to the conversation that started it: which steps' results, as a card or as a merge with an instruction | A fixed card in the last column |
+
+The two fixed cards mean an empty workflow already has a shape: a start, an end, and one Add step between them.
+
+### 3.2 Decision D1: a structured model on the wire, a skill reference file at rest
+
+**The designer edits JSON. The server writes `references/workflow.<name>.md` in a skill. The SPA never parses or
+writes the file.** This is `field-set-authoring.md` D2 again, for the same reason: a format with two
+implementations has two answers.
+
+What each choice costs:
+
+| | Skill reference file (chosen) | A first-class `Workflow` entity |
+|---|---|---|
+| Storage | None new | New rows, and a way to list them per user, likely an index |
+| Access | The skill's visibility and role grants, already enforced | A new RBAC noun and its admin surface |
+| Sharing | The skill's | A second share model |
+| Versions | The skill's | Built again |
+| Bindings to Agents and projects | The skill's | Built again |
+| Marketplace | Whatever skills get | A second listing type and review path |
+| Field sets for checklist steps | In the same bundle, resolved by name | A reference across two entities |
+
+The entity would only win if a workflow needed something a skill cannot give. The one candidate found is sharing
+a workflow with people who cannot use one of its Agents, and §11 handles that on the sheet.
+
+**The file holds no coordinates**, because the canvas arranges itself (§4). It stays a table a person can read,
+and a diff of two versions is a diff of steps.
+
+**The carrying skill is invisible in the designer.** Creating a workflow creates a skill to hold it, named after
+it. A skill someone built by hand may also carry one or more workflow files, and each lists as a workflow.
+
+### 3.3 No markdown mode in the designer
+
+The field-set editor has an "Edit as markdown" mode because its format allows things the form cannot show. Here
+the canvas can show everything the format allows, so the designer has no second mode. Anything the format carries
+that the designer does not show (prose, an extra frontmatter line) rides through a structured save untouched, as
+`FieldSetLayout` does for field sets. The raw file is still viewable from the skill's Supporting files.
+
+## 4. The canvas
+
+### 4.1 Decision D2: a graph that arranges itself
+
+**Columns are stages. A step's stage is derived from what it reads, and is never stored or set by hand.**
+
+- A step that reads no other step is in stage 1.
+- A step that reads another step's result is in the stage after the latest one it reads.
+- The Result card is always last. The Starts with card is always first.
+- Connectors are drawn from each step to the steps that read it, and from Starts with to stage 1.
+- Within a stage, steps keep their authored order. **Move up** and **Move down** change it, and that order is the
+  order of the parts in the result.
+
+So there are two controls and each does one thing: Reads decides *when* a step runs, and Move up / Move down
+decides *where it is listed*. Neither needs a pointer.
+
+```
+ Starts with        Stage 1 · 4 at once        Stage 2            Result
+┌──────────────┐   ┌────────────────────┐   ┌────────────────┐   ┌──────────────┐
+│ The proposal │──▶│ Generalist         │──▶│ Review summary │──▶│ One report   │
+│ 1 PDF        │   │ Agent · Sonnet 5.5 │   │ Prompt         │   │ Back to chat │
+└──────────────┘   ├────────────────────┤   └────────────────┘   └──────────────┘
+                   │ Colleague          │──▶        ▲                    ▲
+                   │ Emotional outsider │──▶        │                    │
+                   │ Fiscal outsider    │──▶────────┘                    │
+                   │ Audit · Checklist  │────────────────────────────────┘
+                   │ + Add step         │
+                   └────────────────────┘
+```
+
+**Adding a step.** Each stage ends with **Add step**, which offers the three kinds with one line each on what
+they are for. A step added under stage 2 starts out reading every step in stage 1, which is what puts it there.
+The author unticks what it should not read.
+
+**What the canvas refuses, and how.** It never shows an error for a shape the user could not have meant:
+
+- A cycle cannot be made. On step A, the checkbox for a step that already reads A is disabled and says "reads
+  this step".
+- A ninth step cannot be added. The canvas shows "7 of 8 steps" from the start, and at 8 the Add step control
+  says "8 of 8 steps" (`field-set-authoring.md` §5.3: a cap that appears only on save wastes an afternoon).
+- A stage with more than four steps is allowed and labelled "4 at once", because the run queues the rest.
+- A step cannot add a step, and a workflow cannot contain a workflow. Neither has a control.
+
+**One cost, accepted.** "Runs after X but does not read X" cannot be expressed. Nobody has asked for it. If
+someone does, it is a second checkbox column ("waits for"), not a change of model.
+
+### 4.2 Moving around: scroll, drag the background, and Fit
+
+The envelope bounds the graph. The tallest case is 8 steps in one stage, about 500 px. The widest is 8 steps in a
+chain, 10 columns and about 2,300 px, which overflows most screens.
+
+- **Pan is native scrolling.** Trackpad, scrollbars and arrow keys work with no code. The scroll region is
+  focusable and labelled. A card scrolls into view when it takes focus. Dragging the empty grid also pans.
+- **Zoom has two states: actual size and Fit.** Fit scales the whole graph to the canvas. It never goes below
+  60 percent: under that a card cannot be read, so the canvas scrolls.
+- **No wheel zoom and no pinch zoom.** They take over page scrolling and the browser's own zoom, which people
+  with low vision rely on.
+
+Stepped zoom can be added later without touching the model, because no coordinates are stored.
+
+### 4.3 Drag is an extra
+
+Dragging a card up or down within its stage reorders it, as Move up and Move down do. Dragging between stages
+does nothing, because a stage is not a place a step can be put. Drag ships after the buttons, never instead of
+them (`field-set-authoring.md` D4).
+
+### 4.4 Accessibility
+
+- **The canvas is a list of stages, each a list of steps**, in DOM order. A stage is a labelled group. A card is
+  a button whose name carries what the picture shows: "Review summary, prompt step, stage 2, reads 4 results".
+- **Connectors are hidden from assistive technology.** Every edge is already stated in text on the card it ends
+  at and in that step's Reads.
+- **Focus stays with what moved.** Move up, Move down and a Reads checkbox keep focus on their control after the
+  graph redraws. A polite announcement says what changed: "Review summary moved to stage 2".
+- **Status is never colour alone.** A run-mode card shows a mark and a phrase, as the run's row does
+  (`workflow-runs.md` §20.2).
+- **Reduced motion** stops the running pulse and the connector transition.
+- **At phone width** the same DOM stacks: stages become headed sections one above another, connectors are not
+  drawn, and each card's own text carries the order.
+- Colours, focus rings and the Fit control are measured in both themes before merge, as PR-0.4a measured its
+  labels.
+
+## 5. The page
+
+The Agent Designer's layout: a full-screen page with a header (back, the workflow's name, saved state, Share,
+Save workflow), the canvas on the left taking the spare width, and a panel on the right with two tabs.
+
+**The Step tab** edits the selected card:
+
+| Card | Fields |
+|---|---|
+| Starts with | Files (none, exactly one, any), whether a request is required, a default request |
+| Agent step | Name, the Agent (picked from those the author can use, shown by name and icon), its model as read-only meta, the run's request or its own, Reads, Move up / Move down, Remove |
+| Prompt step | Name, the instruction (a textarea, the widest control, as `find` is on a field card), model, Reads, Move, Remove |
+| Checklist step | Name, the field sets it runs (from this workflow's skill), Reads, Move, Remove |
+| Result | A card on the composer or a merge that starts by itself, the merge instruction, which results it includes |
+
+**The Preview tab** is §6.
+
+**House style.** The canvas is the page's one bold surface: the graph-paper grid and two still blobs in the brand
+blue, with frosted cards on top. The panel is a dense form, so it stays plain. Tokens are
+`.claude/skills/tailwind-ui/references/app-conventions.md`'s: `rounded-2xl`, `text-sm/6` and `text-xs/5`,
+`primary-accessible` for the one solid button and for brand text, neutral fills for tiles and chips, `state-*`
+for status, and a `dark:` pair on everything.
+
+## 6. Preview and test run
+
+### 6.1 Decision D3: the preview is the approval sheet
+
+**The Preview tab shows the sheet a person starting this workflow will see**, built by the server from the
+current draft: the steps with their models, the file it asks for, the one brief, and the estimate.
+
+- **It is free.** Building the sheet makes no model call. It is one `PUT …?validate=true` with the draft, which
+  also returns anything wrong with it, in the parser's words.
+- **A sample file makes it concrete.** With one attached, the estimate is a real figure and each step's full
+  prompt can be opened, still with no model call. This is the "dry run", without a separate mode.
+- **It says what a person may change.** The sheet's Edit and Remove controls are shown as they will be, so the
+  author sees that a starter can drop a step.
+
+### 6.2 The test run is a real run
+
+**Start test run** on that sheet starts the workflow for real: the author's quota, real conversations, real
+results. Pressing it is the approval, so "a person approves every run" holds here too.
+
+- The canvas switches to run mode (§7). The panel shows W.4b's run row, with relayed prompts under the step that
+  raised them, and then W.4b's result card.
+- A step that pauses holds only itself, as in any run.
+- Everything it made can be opened afterwards. A note on the sheet says so, and says it spends quota.
+- **Try in a chat** is the lighter path: it opens a new conversation with the sheet already up.
+
+**Not chosen: a throwaway preview run**, like the Agent Designer's unpersisted `preview-` session. Step
+conversations have to be real for handoffs, relays and results to work, so a preview run would be a second
+execution path that could disagree with the real one.
+
+### 6.3 What a test run needs that step 1 does not have
+
+- ⚠️ **Verify first:** a run needs a source conversation, and W.1's create needs that session's row, which today
+  exists only once a conversation has turns (W.4a's review). A test run, Try in a chat, and Start on the
+  Workflows page all begin from a new conversation. D.2 has to make that work, and should say how the source is
+  titled ("Test: Proposal review").
+- ⚠️ **Verify first:** the tab runs the queue in step 1. Confirm the queue and its streams survive leaving the
+  designer route, since `ChatStateService` is app-wide and the designer is one more page in the same tab.
+- Test conversations collect in the sidebar under their source (W.4c). Whether they need their own grouping is
+  open question 8.
+
+## 7. Decision D4: one graph, two modes
+
+**One `WorkflowGraphComponent` draws both the designer's canvas and a run's status.** It takes the steps and
+their reads, and optionally a status per step.
+
+| Mode | Cards show | Connectors | Add step, Move, Reads |
+|---|---|---|---|
+| Design | Kind and model | Neutral | Shown |
+| Run | The status mark and phrase from the run's row, and elapsed time when finished | Drawn in the brand colour once the step they leave has finished | Hidden |
+
+**In the chat thread, W.4b's row stays.** It is the list form of the same data and it is dense enough for a
+thread. For a run that came from a workflow with more than one stage, the row gains **View as graph**, which
+opens the graph in run mode. A run of parallel Agents with no stages is one column, so the row alone is right for
+it, and step 1's UI is unchanged.
+
+**On the approval sheet** for a saved workflow, a small read-only graph sits above the step rows once stages
+exist (D.5), so the person approving sees what waits for what.
+
+## 8. Where it lives, and how one starts
+
+### 8.1 Decision D5: a top-level Workflows page
+
+**A sidebar entry, Workflows, beside Agents, Projects, Artifacts and Schedules.** Customize holds things a user
+attaches to something else (tools, skills, connectors). A workflow is something a user opens and runs.
+
+`field-set-authoring.md` D1 refused a top-level list for field sets because a set has no owner on screen and is
+never shared by itself. Neither is true of a workflow.
+
+Routes, all `canMatch` on the flag:
+
+```
+/workflows                         the list: yours, then shared with you
+/workflows/new                     the designer, empty or from a template
+/workflows/:skillId/:name          the designer
+```
+
+The sidebar entry is one line in `sidebar-items.ts` with `feature: 'workflows'`, visible by default where the
+flag is on, as Projects is.
+
+**The name.** "Workflows", in the sidebar and in copy. The runs spec left the user-facing name open until saved
+workflows existed (§17, question 1); this answers it. Step 1's copy ("Hand off to 4 Agents") is unchanged for a
+run started by mentions.
+
+### 8.2 Three ways in
+
+1. **Save as workflow**, on a finished run's row in a conversation. The user has already done it by hand with
+   mentions, and the designer opens with those steps filled in. This is the entry point to lead with, because the
+   run they just watched is the proof that it works.
+2. **From a template.** The worked example ships as the one sample: four reviewers and a result.
+3. **From blank.** Starts with, Result, and one Add step.
+
+### 8.3 Starting a saved workflow
+
+- From the Workflows page: **Start** opens a new conversation with the sheet up.
+- From a conversation: the composer's `+` menu lists the user's workflows.
+- Either way the same sheet opens, titled with the workflow's name, and it shows again on every start
+  (`workflow-runs.md` §4).
+
+## 9. The file and the API (sketch)
+
+### 9.1 The file
+
+Frontmatter for the workflow's own facts, one table whose rows are the steps in authored order, and a section for
+any instruction too long for a cell. D.1 fixes the exact grammar; this shows its shape.
+
+```markdown
+---
+title: Proposal review
+version: 3
+files: one
+request: Review this proposal against the solicitation
+result: merge
+---
+
+| step           | kind      | worker              | reads                                           |
+|----------------|-----------|---------------------|-------------------------------------------------|
+| generalist     | agent     | <agent id> @ 5      | request, files                                  |
+| colleague      | agent     | <agent id> @ 3      | request, files                                  |
+| emotional      | agent     | <agent id> @ 2      | request, files                                  |
+| fiscal         | agent     | <agent id> @ 2      | request, files                                  |
+| audit          | checklist | nsf-audit           | files                                           |
+| review_summary | prompt    | <model id>          | generalist, colleague, emotional, fiscal        |
+
+## Result
+
+Reads: review_summary, audit
+
+Write one report: the inline notes first, then the audit table.
+
+## Step: review_summary
+
+Merge the four reviews into inline notes. Keep each reviewer's strongest point and say where they disagree.
+```
+
+- Ids appear only in the file. The designer shows names and icons.
+- `reads` is the whole graph. There is no `after` column and no stage column.
+- The parser enforces the envelope: at most 8 steps, no cycle, a step reads only steps that exist, a checklist
+  names a field set in the same skill. A file that breaks one is refused with a message that says which.
+- **The check runs on every skill-file write, whether or not the flag is on**, as it does for field sets, so a
+  broken file cannot collect quietly until a deployment turns the feature on.
+
+### 9.2 Routes
+
+On app-api, under `/workflows`, behind `get_current_user_from_session`, with the flag checked after auth. Shared
+code in `apis/shared/workflows/`, a pure module beside the parser, as `field_sets.py` is.
+
+| Route | Does |
+|---|---|
+| `GET /workflows` | Lists workflows in skills the caller owns, and in skills they can use |
+| `POST /workflows` | Creates the carrying skill and the file. With `fromRun: {sessionId, runId}`, fills the steps from that run |
+| `GET /workflows/{skillId}/{name}` | The structured definition, each step with its display name, icon, model and what has changed (§10) |
+| `PUT /workflows/{skillId}/{name}` | Writes it. With `?validate=true`, writes nothing and returns the normalised definition and the sheet it would open. A save that changes nothing writes nothing and does not move `version` |
+| `DELETE /workflows/{skillId}/{name}` | Removes the file, and the carrying skill if the designer made it and it holds nothing else |
+| `POST /sessions/{id}/workflow-runs` | Gains an optional `workflow: {skillId, name}`. The server reads the file and builds the steps. The `WFRUN#` row records the workflow's name and a fingerprint of the definition (`workflow-runs.md` §9) |
+
+No new table, no new index, no new SSE event.
+
+## 10. Decision D6: record the Agent's version now, pin when a turn can
+
+`workflow-runs.md` §10 says an Agent step is pinned to a published version. **A turn cannot do that today.**
+`resolve_invocation_agent` serves the current published snapshot to everyone but the owner, and the owner's own
+draft to the owner. Neither a handoff nor a turn request carries a version.
+
+So this comes in two parts:
+
+- **From D.1, the file records the version** of each Agent when the step was added or last reviewed. The format
+  never has to change for pinning.
+- **From D.2, the designer and the sheet say when an Agent has moved on.** A step whose Agent has a newer
+  published version shows "This Agent has changed since you added it. A run uses its published version, now
+  version 4", with **See what changed** (the existing version diff) and **Mark as reviewed**. The sheet carries
+  the same line. That meets the reason for pinning, which is that an edit to a reviewer must not change a
+  workflow *silently*.
+- **True pinning is its own PR (D.8)**, because it is a turn-path change: an optional version on the step's
+  turn, read where the published snapshot is read now, and part of the agent cache key. It also needs a policy
+  answer first (open question 2): may a run use a snapshot that has been superseded, and what happens after a
+  takedown.
+
+An Agent's owner who puts their own Agent in a workflow runs their draft when they test, and others run the
+published version. The designer says so on that step.
+
+## 11. Access, sharing and what happens when a step is unavailable
+
+- **Who can start a workflow:** anyone who can use the skill that carries it. Nothing new is checked.
+- **Each Agent step is checked as the starter**, as a mention is. Sharing a workflow does not share its Agents.
+- **A step the starter cannot run** is shown on the sheet with the reason, and Start is off until they remove it
+  or get access. This is the Agent Designer's block-on-missing rule (D5 there), with the sheet's existing Remove
+  as the way forward. Whether a removed step's readers should still run is open question 4.
+- **The Share dialog** is the skill's. It should also say when the people being added cannot use one of the
+  steps' Agents. That needs a per-recipient check and is open question 3.
+- **Shared Projects:** a run cannot start in a project in step 1 (`workflow-runs.md` §19). The designer does not
+  change that.
+- **Export and import** travel with the skill. Agent ids do not survive a move to another deployment, so an
+  imported workflow opens with those steps marked "Choose an Agent".
+
+## 12. Cost, the prompt cache and TTFT
+
+- **Nothing here runs before a first token.** Designing, previewing and saving happen outside any turn. A
+  workflow's file is read when a run is created, which is a user action outside a turn.
+- **No tool spec and no system prompt changes.** The carrying skill's `SKILL.md` is written once and does not
+  list the steps, so editing a workflow does not move the prefix of an Agent that has the skill bound.
+  ⚠️ **Verify first:** that a reference file's name or count does not reach any prompt through the skill's
+  disclosure.
+- **The preview makes no model call.** A test run costs what a run costs, and the sheet says so before Start.
+- **Stages (D.5) append.** A later step receives earlier results in its first message, as a delivery's parts are
+  received today. Nothing cached is rewritten.
+- **The estimate** is the sheet's, unchanged, and applies the per-model tokenizer factor (W.1's review).
+
+## 13. Flags
+
+`WORKFLOWS_ENABLED` / `CDK_WORKFLOWS_ENABLED` on app-api, and `features.workflows`. In development: only `"true"`
+enables, and only with `WORKFLOW_RUNS_ENABLED`. Off by default. No Runtime variable.
+
+It exists because the work lands over several PRs. When it is finished, the recommendation is to **fold it into
+`WORKFLOW_RUNS_ENABLED`** instead of keeping a second permanent switch: a saved shape adds nothing the sheet and
+the envelope do not already bound (open question 5).
+
+## 14. Build order
+
+Each PR is useful alone. D.1 to D.4 need nothing new from the run engine or the Runtime.
+
+- **PR-D.0: land this spec.** Docs only. It also adds dated notes to `workflow-runs.md` and
+  `multi-agent-patterns.md` that point here (§19).
+- **PR-D.1: the format and its routes.** Backend. The parser and writer in `apis/shared/workflows/`, the check on
+  every skill-file write, the flag with its CDK, workflow variable and docs-site row, and the `/workflows` routes
+  including `?validate=true`. Agent steps only. Tests pin the format, the envelope refusals and the no-op save.
+- **PR-D.2: start a saved workflow.** Backend and a little SPA. `workflow` on run create, the name and
+  fingerprint on the `WFRUN#` row, a run from a new conversation (§6.3), the composer's `+` entry, and the
+  "this Agent has changed" line on the sheet. After this a hand-written workflow file runs.
+- **PR-D.3: the Workflows page and the designer.** SPA. The sidebar entry, the list, `WorkflowGraphComponent` in
+  design mode, the Step tab for Agent steps and the two fixed cards, the Preview tab as the sheet, Try in a chat,
+  Save as workflow on a run's row, the one template, Fit and background pan. Checked in the real app in both
+  themes and at 375 px.
+- **PR-D.4: the test run on the canvas.** SPA. Run mode on the graph, the run row and result card in the panel.
+- **PR-D.5: stages.** Run engine and SPA. Reads of other steps' results, a step that starts when what it reads
+  has settled, earlier results in a later step's first message, the merge that starts by itself and its
+  instruction, View as graph on the run's row, the small graph on the sheet.
+- **PR-D.6: prompt steps.** The side-call path for a run (`workflow-runs.md` §6.4), its `callKind`, and the kind
+  in Add step. ⚠️ **Measure first:** whether prompt steps can read the document from a shared cached prefix
+  (`multi-agent-patterns.md` §11.4, G3).
+- **PR-D.7: checklist steps.** The same path over field sets, with the field-set editor reached from the step.
+- **PR-D.8: true version pinning** (§10), after open question 2 is answered.
+
+After D.4 a user can design, preview, test, save, share and start a workflow of up to 8 Agents. Until D.5 the
+canvas is one column between Starts with and Result, which is plainer than the mockup.
+
+**Not chosen: stages first.** Building D.5 before D.3 would make the first designer people see the multi-column
+one. It was not chosen because the designer would ship later and on engine work nobody had yet used.
+
+## 15. How we'll know
+
+Counts only, on rows and in EMF:
+
+- workflows created, by way in (from a run, from the template, from blank);
+- workflows saved more than once, and steps per workflow;
+- previews opened, test runs started, and test runs per workflow before its first share;
+- runs started from a saved workflow, against runs started by mentions. This is the number that says whether
+  authoring earns its place;
+- sheets edited at start (a step removed, a request changed), per `workflow-runs.md` §15;
+- "this Agent has changed" lines shown, reviewed and ignored, which sizes D.8;
+- Fit pressed, and workflows with more than four steps, which says whether stepped zoom is ever needed.
+
+## 16. Alternatives considered
+
+- **A free-form canvas** (place cards anywhere, draw edges). It invites cycles, branches and a ninth step, so
+  most of the work would be error states. It needs stored coordinates, which ends the readable file. It is the
+  hardest surface to make keyboard and screen-reader usable. At 8 steps it is mostly empty space to tidy.
+- **Explicit stages the user drags steps between.** Closer to the picture, but it makes order and data two
+  things to keep in agreement: a step in stage 2 that reads nothing from stage 1, or reads something in stage 3.
+  Deriving the stage from Reads leaves one thing to get right.
+- **The list of step cards** from `workflow-runs.md` §10. Cheapest, and it is what the canvas becomes at phone
+  width and for a screen reader. As the only view it hides what waits for what once stages exist.
+- **A first-class `Workflow` entity.** §3.2.
+- **Under Customize, beside Skills,** or **inside the Agent Designer.** §8.1. A workflow holds Agents, not the
+  other way round.
+- **A throwaway preview run.** §6.2.
+- **Wheel and pinch zoom, or stepped zoom from the start.** §4.2.
+
+## 17. Open questions
+
+1. **Does the carrying skill show under Customize → Skills?** Recommended: yes, marked "Workflow" with a link to
+   the designer, because a checklist step's field sets live in that skill and their editor is reached from it.
+   Hidden is cleaner for users but leaves files nobody can see.
+2. **Pinning policy (D.8).** May a run use a superseded snapshot of an Agent? What does a takedown do to a
+   workflow that names the Agent?
+3. **Sharing.** Should Share warn when a recipient cannot use a step's Agent? Does an Agent's owner see that it
+   is used in someone's workflow (`workflow-runs.md` §17, question 4)?
+4. **A step the starter cannot run.** Block until it is removed (recommended), or drop it and run the rest as a
+   Shared Project harness does? Once stages exist: does a step that read a removed step still run?
+5. **The flag when finished.** Fold into `WORKFLOW_RUNS_ENABLED` (recommended), or keep as a feature switch.
+6. **Who writes the merge.** Always the source conversation's model, or may the Result card name an Agent
+   (`workflow-runs.md` §17, question 6)? The Result card is where that choice would sit.
+7. **Templates beyond the one sample.** Where they are kept, and whether workflows get a marketplace listing of
+   their own or ride the skill's.
+8. **Test conversations.** Nested under their source like any run, or grouped and cleared separately?
+9. **"Runs after but does not read."** Left out (§4.1). Revisit on the first request.
+
+## 18. Non-goals
+
+- Branches, conditions, loops, or a step that adds a step.
+- A workflow inside a workflow.
+- Runs on the server, and a schedule as a trigger (`workflow-runs.md` step 3 and §17, question 7).
+- Comparing variants of a workflow (models per step, wording), which the runs spec also sets aside.
+- The in-turn composition canvas in `multi-agent-patterns.md` §6.2. This is the canvas for the cross-conversation
+  layer only. If that one is built, it should reuse the graph component and the reads-decide-the-layout rule.
+
+## 19. What this changes in other specs
+
+PR-D.0 adds a dated note at each place below. The notes say what this proposal would change. The text they sit
+beside is rewritten when the first build PR lands, as each spec's own rule says.
+
+| Spec | Note |
+|---|---|
+| `workflow-runs.md` §10 | The list editor and "a canvas is not needed until workflows branch" are superseded by this proposal. The file decision stands. `after` becomes "reads". Pinning becomes record-then-pin (§10 here) |
+| `workflow-runs.md` §14, step 2 | Points at §14 here for the PR plan |
+| `workflow-runs.md` §17, question 1 | Answered for step 2: "Workflows" |
+| `workflow-runs.md` §18 | The non-goal is narrowed from "a canvas or graph editor" to "a free-form canvas" |
+| `multi-agent-patterns.md` §6.2 | The first canvas is this one, on the conversations layer |
