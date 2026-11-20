@@ -113,6 +113,14 @@ class WorkflowRun(BaseModel):
     brief_hash: Optional[str] = Field(
         None, alias="briefHash", description="The one brief written for every step (PR-W.3); empty until then"
     )
+    brief_tokens: Optional[int] = Field(None, alias="briefTokens", description="The run brief's output tokens")
+    brief_cache_status: Optional[str] = Field(
+        None, alias="briefCacheStatus", description="The run brief's call's cacheStatus on the source"
+    )
+
+    def kept_steps(self) -> List["WorkflowRunStep"]:
+        """The steps the run will start: every step not removed at the sheet, in order."""
+        return [step for step in self.steps if not step.removed]
 
     def effective_status(self, now: Optional[datetime] = None) -> EffectiveWorkflowRunStatus:
         """The status as read: an ``open`` run past ``ABANDON_AFTER`` is ``abandoned``, like its steps."""
@@ -291,6 +299,47 @@ class WorkflowRunStore:
             sets["edits"] = list(edits)
         return self._move(user_id, run_id, "approved", sets, now=approved_at)
 
+    def record_brief(
+        self,
+        user_id: str,
+        run_id: str,
+        *,
+        brief_hash: str,
+        brief_tokens: int,
+        brief_cache_status: Optional[str],
+    ) -> bool:
+        """Record the one brief written for an ``open`` run (spec §6.3). False if it is no longer open.
+
+        The same facts go on each kept step's ``HANDOFF#`` row (``HandoffStore.record_brief``), which
+        is what acceptance compares a step's card against; this row's copy is the run's own record.
+        A run already approved or dismissed is left alone, as a sent handoff's row is.
+        """
+        table = self._require_table()
+        names = {"#status": "status", "#updatedAt": "updatedAt"}
+        values: Dict[str, Any] = {
+            ":open": "open",
+            ":hash": brief_hash,
+            ":tokens": int(brief_tokens),
+            ":now": datetime.now(timezone.utc).isoformat(),
+        }
+        sets = ["briefHash = :hash", "briefTokens = :tokens", "#updatedAt = :now"]
+        if brief_cache_status:
+            values[":cache"] = brief_cache_status
+            sets.append("briefCacheStatus = :cache")
+        try:
+            table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{run_id}"},
+                UpdateExpression="SET " + ", ".join(sets),
+                ConditionExpression="attribute_exists(SK) AND #status = :open",
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+        except ClientError as exc:
+            if _is_conditional_failure(exc):
+                return False
+            raise
+        return True
+
     def transition(self, user_id: str, run_id: str, status: WorkflowRunStatus) -> Optional[WorkflowRun]:
         """Move a run to ``status`` (``dismissed`` or ``stopped``) if ``RUN_TRANSITIONS`` allows it.
 
@@ -409,6 +458,8 @@ def _from_item(item: Dict[str, Any]) -> WorkflowRun:
     data = {k: v for k, v in item.items() if k not in _KEY_ATTRS}
     if "sourceMessageIndex" in data:
         data["sourceMessageIndex"] = int(data["sourceMessageIndex"])
+    if "briefTokens" in data:
+        data["briefTokens"] = int(data["briefTokens"])
     limits = data.get("limits")
     if isinstance(limits, dict):
         data["limits"] = {k: int(v) for k, v in limits.items()}

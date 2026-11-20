@@ -697,6 +697,12 @@ for byte, up to a new final message.
 
   The instruction is a constant, versioned per deployment; only the request and the Agent's name and description
   vary. It names the sections and a length bound (about 800 words), and says to answer in text without tools.
+  *A workflow run's brief* (`workflow-runs.md` §6.3, PR-W.3): `handoff_brief: {handoffId, runId}` asks for one
+  brief shared by every step of an `open` run, so several Agents start from one brief rather than several that
+  disagree. Everything above is unchanged, the agent build included; the only difference is the appended message,
+  the run variant of the instruction (its own version, `BRIEF_RUN_INSTRUCTION_VERSION`), which names the shared
+  request and each kept step's Agent, description and own request, bounded at 18,000 chars in all. The brief is
+  recorded on the run row and on every kept step's `HANDOFF#` row, so each step's acceptance compares against it.
 - **Nothing reaches the source.** The copy is never assigned back, no `MessageAddedEvent` fires, no session-manager
   write happens, and hooks don't run. The source's next real turn has the same `historyHash` lineage it would have
   had. `apply_pending_compaction` is **not** run: the brief reads the history the cache holds, and a pending cut
@@ -868,7 +874,7 @@ EMF, under the existing PromptCache namespace so the cost dashboard can show it:
 - `HandoffBriefWritten` by `briefCacheStatus` (`hit`, `partial_miss`, `miss`), with `HandoffBriefMs` and
   `HandoffBriefTokens`; `HandoffBriefFallback` by reason (`flag_off`, `not_open`, `busy`, `preempted`, `quota`,
   `refused`, `timeout`, `error`, `tool_use_only`, `short_source`, `history_ends_on_user`). `not_open`: the handoff
-  is not this conversation's open one. `refused`: the turn path ended before the model (an Agent or model refusal,
+  is not this conversation's open one (for a run's brief, also: the run is not this conversation's `open` run keeping that step). Both counts carry `briefScope: "run"` and `runStepCount` on a workflow run's brief. `refused`: the turn path ended before the model (an Agent or model refusal,
   a retired model, an error building the turn), which the brief discards unstreamed so nothing persists. A high
   `miss` share decides §13's cold-cache question
 - `HandoffContextEdited` / `HandoffContextRemoved`

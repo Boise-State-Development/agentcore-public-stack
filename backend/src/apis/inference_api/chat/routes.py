@@ -199,6 +199,7 @@ from apis.shared.security.log_sanitize import scrub_log
 if TYPE_CHECKING:
     from apis.inference_api.chat.project_memory import ProjectMemoryTurn
     from apis.shared.handoff.models import Handoff
+    from apis.shared.handoff.runs import WorkflowRun
     from apis.shared.projects.models import Project
 
 logger = logging.getLogger(__name__)
@@ -5654,15 +5655,33 @@ class HandoffBriefResponse(StreamingResponse):
     """
 
 
-def _brief_fallback_response(handoff_id: str, kind: str, session_id: str, reason: str) -> HandoffBriefResponse:
-    """A brief that will not be written: one fallback frame and ``done``. The card stays the excerpt."""
+def _brief_fallback_response(
+    handoff_id: str,
+    kind: str,
+    session_id: str,
+    reason: str,
+    *,
+    run_id: Optional[str] = None,
+    run_step_count: int = 0,
+) -> HandoffBriefResponse:
+    """A brief that will not be written: one fallback frame and ``done``. The card stays the excerpt.
+
+    ``run_id`` marks a run brief's fallback (``runId`` on both frames, ``briefScope: "run"`` on the
+    metric, with ``run_step_count`` once the run has been read).
+    """
     from apis.shared.handoff.brief import brief_done_frame, brief_fallback_frame
     from apis.shared.handoff.metrics import emit_handoff_metric
 
     async def _frames() -> AsyncGenerator[str, None]:
-        emit_handoff_metric("HandoffBriefFallback", kind, session_id=session_id, detail=reason)
-        yield brief_fallback_frame(handoff_id, reason)
-        yield brief_done_frame(handoff_id, brief_hash=None, cache_status=None)
+        emit_handoff_metric(
+            "HandoffBriefFallback",
+            kind,
+            session_id=session_id,
+            detail=reason,
+            run_step_count=run_step_count if run_id else None,
+        )
+        yield brief_fallback_frame(handoff_id, reason, run_id=run_id)
+        yield brief_done_frame(handoff_id, brief_hash=None, cache_status=None, run_id=run_id)
 
     return HandoffBriefResponse(_frames(), media_type="text/event-stream", headers=_sse_headers(session_id))
 
@@ -5684,6 +5703,13 @@ async def _handoff_target_description(agent_id: str, current_user: User) -> Opti
     return getattr(agent, "description", None) if agent is not None else None
 
 
+async def _run_step_descriptions(run: "WorkflowRun", current_user: User) -> list[Optional[str]]:
+    """Each kept step's Agent description, read concurrently, in step order (workflow-runs.md §6.3)."""
+    return list(
+        await asyncio.gather(*(_handoff_target_description(step.agent_id, current_user) for step in run.kept_steps()))
+    )
+
+
 async def _handoff_brief_invocation(request: InvocationRequest, current_user: User):
     """A ``handoff_brief`` invocation (agent-handoffs-and-consults.md §4.5.1).
 
@@ -5697,28 +5723,65 @@ async def _handoff_brief_invocation(request: InvocationRequest, current_user: Us
     from apis.shared.handoff import get_handoff_store
 
     handoff_id = request.handoff_brief.handoff_id
+    run_id = request.handoff_brief.run_id
     if not handoff_brief_enabled():
-        return _brief_fallback_response(handoff_id, "mention", request.session_id, "flag_off")
-    try:
-        handoff = await asyncio.to_thread(get_handoff_store().get, current_user.user_id, handoff_id)
-    except Exception:
-        logger.warning("handoff brief: reading the handoff failed", exc_info=True)
-        handoff = None
+        return _brief_fallback_response(handoff_id, "mention", request.session_id, "flag_off", run_id=run_id)
+    reads = [asyncio.to_thread(get_handoff_store().get, current_user.user_id, handoff_id)]
+    if run_id:
+        # A run's brief (workflow-runs.md §6.3) also reads the run row, beside the handoff read.
+        # Only here: an ordinary turn and a single handoff's brief never reach this read.
+        from apis.shared.handoff.runs import get_workflow_run_store
+
+        reads.append(asyncio.to_thread(get_workflow_run_store().get, current_user.user_id, run_id))
+    handoff, run = None, None
+    results = await asyncio.gather(*reads, return_exceptions=True)
+    if isinstance(results[0], BaseException):
+        logger.warning("handoff brief: reading the handoff failed", exc_info=results[0])
+    else:
+        handoff = results[0]
+    if run_id:
+        if isinstance(results[1], BaseException):
+            logger.warning("handoff brief: reading the workflow run failed", exc_info=results[1])
+        else:
+            run = results[1]
+    steps = len(run.kept_steps()) if run is not None else 0
     if handoff is None or handoff.session_id != request.session_id or handoff.effective_status() != "open":
         kind = handoff.kind if handoff is not None else "mention"
-        return _brief_fallback_response(handoff_id, kind, request.session_id, "not_open")
+        return _brief_fallback_response(
+            handoff_id, kind, request.session_id, "not_open", run_id=run_id, run_step_count=steps
+        )
+    if run_id and not _is_open_run_step(run, handoff_id, request.session_id):
+        return _brief_fallback_response(
+            handoff_id, handoff.kind, request.session_id, "not_open", run_id=run_id, run_step_count=steps
+        )
 
     try:
-        response = await _run_invocation(request, current_user, brief=handoff)
+        response = await _run_invocation(request, current_user, brief=handoff, brief_run=run)
     except HTTPException as exc:
         reason = "busy" if exc.status_code == status.HTTP_409_CONFLICT else "refused"
-        return _brief_fallback_response(handoff_id, handoff.kind, request.session_id, reason)
+        return _brief_fallback_response(
+            handoff_id, handoff.kind, request.session_id, reason, run_id=run_id, run_step_count=steps
+        )
     if isinstance(response, HandoffBriefResponse):
         return response
     body = getattr(response, "body_iterator", None)
     if body is not None and hasattr(body, "aclose"):
         await body.aclose()
-    return _brief_fallback_response(handoff_id, handoff.kind, request.session_id, "refused")
+    return _brief_fallback_response(
+        handoff_id, handoff.kind, request.session_id, "refused", run_id=run_id, run_step_count=steps
+    )
+
+
+def _is_open_run_step(run: Optional["WorkflowRun"], handoff_id: str, session_id: str) -> bool:
+    """Whether ``run`` (already read under the caller's partition) can be briefed for ``handoff_id``.
+
+    It must start from this conversation, still be at its sheet (``open``), and keep ``handoff_id``
+    as one of its steps. Anything else is the ``not_open`` fallback, as a handoff that is not this
+    conversation's open one is.
+    """
+    if run is None or run.session_id != session_id or run.effective_status() != "open":
+        return False
+    return any(step.handoff_id == handoff_id for step in run.kept_steps())
 
 
 @router.post("/invocations")
@@ -5738,8 +5801,12 @@ async def _run_invocation(
     current_user: User,
     *,
     brief: Optional["Handoff"] = None,
+    brief_run: Optional["WorkflowRun"] = None,
 ):
     """One conversation turn, or with ``brief`` the agent build for a handoff brief.
+
+    ``brief_run`` makes that brief a workflow run's (``brief`` is one of its kept steps): the
+    agent build is the same, only the side call's final message differs.
 
     Runs the sequence docs/specs/turn-path-ttft.md maps, in this order. The
     marks are the `turn_prelude` stage names; everything up to `stream_setup`
@@ -6876,11 +6943,15 @@ async def _run_invocation(
                         build_agent=_build_main_agent,
                         release_lease=lambda: _release_turn_lease(None, session_lease),
                         lease=session_lease,
-                        agent_description=asyncio.create_task(
+                        agent_description=None if brief_run is not None else asyncio.create_task(
                             _handoff_target_description(brief.agent_id, current_user)
                         ),
                         turn_agent_id=input_data.rag_assistant_id,
                         turn_project_id=turn_project_id,
+                        run=brief_run,
+                        run_descriptions=None if brief_run is None else asyncio.create_task(
+                            _run_step_descriptions(brief_run, current_user)
+                        ),
                     ),
                     media_type="text/event-stream",
                     headers=_sse_headers(input_data.session_id),

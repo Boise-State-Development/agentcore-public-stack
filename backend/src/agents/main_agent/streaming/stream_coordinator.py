@@ -4642,6 +4642,7 @@ class StreamCoordinator:
         prefix_fingerprint: Optional[Dict[str, Any]] = None,
         turn_outcome: Optional[str] = None,
         empty_answer: bool = False,
+        call_attributes: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Store message-level metadata (token usage, latency, model info, citations)
@@ -4663,6 +4664,9 @@ class StreamCoordinator:
             call_kind: Set for a call that is not a turn (``"handoff_brief"``):
                 recorded as ``callKind``, and the row is written with no
                 ``messageId`` when ``message_id`` is None.
+            call_attributes: With ``call_kind`` only: ids and numbers recorded on
+                that call's row as they are (a brief's ``briefInstruction`` and
+                ``briefInstructionVersion``). Never content.
             prefix_fingerprint: This call's fingerprint, for a caller that ran no
                 hooks (the brief computes it over the request it sent).
             turn_outcome: How the turn this call belongs to ended, recorded as
@@ -4853,6 +4857,8 @@ class StreamCoordinator:
                     metadata_kwargs["prefixFingerprints"] = prefix_fingerprint
                 if call_kind:
                     metadata_kwargs["callKind"] = call_kind
+                    for key, value in (call_attributes or {}).items():
+                        metadata_kwargs.setdefault(key, value)
                 # How the turn ended (release-ledger spec §5.1): a closed
                 # vocabulary, no content. `emptyAnswer` is written only when
                 # true, so its absence is the normal case and costs nothing.
