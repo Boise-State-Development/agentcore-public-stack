@@ -6,7 +6,7 @@ For narrative release notes written for operators and product owners, see [RELEA
 
 ## [1.38.0] - 2026-11-19
 
-Skills follow the agentskills.io format end to end. A skill can be downloaded as a bundle, and imported from one (a `.zip` or a public GitHub path, in development). Skill files keep their folders. Word skill scripts run in a dedicated sandbox without network access and with a time limit. Skill changes are audited, and an edit that reaches other people's agents asks first. Knowledge-base citations name the document and link to the web page they came from, and can show the indexed text.
+Skills follow the agentskills.io format end to end. A skill can be downloaded as a bundle, and imported from one (a `.zip` or a public GitHub path, in development). Skill files keep their folders. Word skill scripts run in a dedicated sandbox without network access and with a time limit. Skill changes are audited, and an edit that reaches other people's agents asks first. Knowledge-base citations name the document and link to the web page they came from, and can show the indexed text. MCP Apps that render from structured results draw their content and follow dark mode, Run now runs in the background, and the terminal client gains pipe mode.
 
 ### 🚀 Added
 
@@ -19,6 +19,10 @@ Skills follow the agentskills.io format end to end. A skill can be downloaded as
 - **Imported skills are pinned when bound to an Agent**, and pickers show "Pinned to v*n*". Skill pages, pickers and the share dialog show where an imported skill came from (#2162)
 - **Knowledge-base citations link to the crawled web page** they came from, with an **Open page** link (#2130, #2132)
 - **View content** on a knowledge-base citation opens the text the knowledge base indexed for a web page or a markdown or plain-text document (`GET /assistants/{id}/documents/{documentId}/content`, read-only, bounded to 1 MB, only when the Agent shows citations and allows downloads) (#2142)
+- **The model is told when a tool result is on screen as an MCP App**, so it does not repeat the App's contents. One constant sentence is appended to successful App results (about 50 input tokens), only while the host can frame Apps (#2179)
+- **Voice mode interrupt level**: a slider with a live mic meter in the voice overlay, stored per browser (#2169)
+- **Terminal client pipe mode** (`aps-tui -p`): one turn, answer to stdout, progress to stderr, stdin appended to the prompt; a paused turn exits 3 (#2145)
+- Design spec for a coding-tool gateway for API keys, docs only (#2170)
 
 ### ✨ Improved
 
@@ -31,9 +35,14 @@ Skills follow the agentskills.io format end to end. A skill can be downloaded as
 - **Knowledge-base citations show the document's own name**, not the indexed file name (#2134), and their excerpts read as plain text instead of raw markdown (#2141)
 - **The clarifying-question picker takes up to 8 options** per question, up from 4 (#2144)
 - The Skill Creator's guidance tells the model to write an attached document by reference (#2128)
+- **Deleting a skill that a project or shared Agent uses asks first** (`DELETE /skills/mine/{id}` → `409 skill_reach_unconfirmed`, then `?confirmReach=true`; pinned bindings count). The import preview reports repaired problems as warnings, and the 50-file cap, branch-name and "No SKILL.md" messages are clearer (#2168)
 
 ### 🐛 Fixed
 
+- **Atlassian MCP App widgets render** instead of an empty white frame: the App receives `structuredContent` and `_meta` with the tool result (live, on reload, and on App-initiated calls), and the sandbox proxy sets the App's `dark` class in a dark-mode host (#2175)
+- **Run now no longer times out on long scheduled runs**: `POST /runs/now` returns `202` and runs in the background, and the SPA polls the new `GET /runs/{runId}` (#2171)
+- **Voice mode no longer answers its own voice** through speakers: the mic sends silence while the agent is audible, and speaking above the interrupt level opens it with a pre-roll (#2169)
+- **A pinned project's Skills page names the commit it runs**, not the latest re-import's; versions record their import source (#2168)
 - **The reach check also names projects the author added the skill to as an editor.** A skill its author bound, unpinned, into someone else's Shared Project now appears in the approval card and the `409 skill_reach_unconfirmed` summary; a pinned binding there is listed as pinned. Keyed reads only, on skill writes (#2165)
 - **An MCP App form no longer sits in a white frame in dark mode**, and a submitted form shows its result after a reload instead of an empty form marked "Waiting for you" (#2138)
 

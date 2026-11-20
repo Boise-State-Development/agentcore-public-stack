@@ -17,6 +17,8 @@ Word skill scripts now run in a dedicated sandbox, without network access and wi
 
 Knowledge-base citations now name the document, link to the web page they came from, and can open the text the knowledge base indexed.
 
+MCP Apps that render from structured results, such as Atlassian's Jira widgets, now draw their content and follow dark mode, and the model no longer repeats what an App already shows. **Run now** on a scheduled run starts in the background, so a long run no longer ends in a timeout. Voice mode keeps the agent's own voice from interrupting it. The terminal client gains a pipe mode for scripts.
+
 **Action required:** run the platform (CDK) deploy **before** the backend deploy. Two of the skill changes add infrastructure. After both deploys finish, there are two short post-deploy steps (see Manual steps). One flag is new, in development and off by default (`SKILL_BUNDLE_IMPORT_ENABLED`).
 
 ---
@@ -118,6 +120,14 @@ A prompt-cache pin test (`test_skills_prompt_cache_pin.py`) holds the `<availabl
 ## Smaller additions
 
 - **The clarifying-question picker lists up to 8 options** (#2144), so the agent can offer one of five playbooks in a single picker. The tool description still steers open questions to 2–4 options.
+- **The model is told when a tool result is on screen as an MCP App** (#2179), so it answers around the App instead of repeating its contents as a list or table. One constant sentence is appended to a successful App result before it enters history (about 50 input tokens, written once). It is skipped for errors, non-App tools and forms waiting for the user, and only added while the host can frame Apps. The model keeps the full result, so follow-up questions still work.
+- **Skill import and delete** (#2168):
+  - Deleting a skill that a project or shared Agent uses asks first and names them. Pinned bindings count here, because a pin cannot outlive the skill. `DELETE /skills/mine/{id}` returns `409 skill_reach_unconfirmed`, then deletes with `?confirmReach=true`.
+  - The import preview calls something an error only if the import refuses it. Problems the import repairs read as warnings saying what happens.
+  - Clearer messages for the 50-file cap (it names the folders holding most files), a tree URL whose branch name contains `/`, and "No SKILL.md at …" (it says how many more skills it found).
+- **Voice mode has an interrupt level** (#2169). A slider in the voice overlay, with a live mic meter, sets how loud you must speak to interrupt the agent. It applies at once and is remembered per browser.
+- **The terminal client has a pipe mode** (`aps-tui -p`, #2145). It runs one turn without the full-screen app: the answer goes to stdout, progress and errors to stderr, and piped stdin is appended to the prompt. Local tools are not offered. A turn that pauses for approval, sign-in or a question exits with code 3 and names the conversation to finish in the full client. Ctrl+C and a closed stdout cancel the turn on the server.
+- A design spec for a coding-tool gateway for API keys (`docs/specs/api-key-coding-tool-gateway.md`, #2170). Docs only; nothing ships.
 
 ---
 
@@ -126,6 +136,10 @@ A prompt-cache pin test (`test_skills_prompt_cache_pin.py`) holds the `<availabl
 - **An MCP App form sat in a white frame in dark mode, and showed an empty form after a reload** (#2138). Both iframes around an App painted white. They are now transparent, with a matching `color-scheme`. After a submit, a reload now hands the App its latest successful result for that tool, so the form shows "Issue created successfully" instead of "Waiting for you".
 - **A skill with non-string stored metadata could not be saved** (#2153), described above.
 - **The reach summary missed projects the author added the skill to as an editor** (#2165), described above.
+- **Atlassian MCP App widgets drew an empty white frame** (#2175). The App now receives a tool result's `structuredContent` and `_meta` along with its text, live and after a reload, and App-initiated tool calls return `_meta` too. Both go only to the App frame, never to the prompt. In a dark-mode host, the sandbox proxy sets the `dark` class on the App's root, which Apps that theme by class (Atlassian's, and Tailwind `darkMode: 'class'` Apps) need.
+- **Run now on a long scheduled run showed "Request Timeout"** (#2171), though the run finished and saved its conversation, so users retried and created duplicates. `POST /runs/now` now does its checks, returns `202 {runId, sessionId, status}` and runs the turn in the background. The SPA polls the new `GET /runs/{runId}` every 3 seconds and disables the button while its run is in flight.
+- **In voice mode with speakers, the agent could answer its own voice** (#2169), when the browser's echo cancellation let it through. While the agent is audible the microphone sends silence, and speaking above the interrupt level opens it again, with a short pre-roll so the start isn't clipped. The client stops playback itself on that interruption.
+- **A pinned project's Skills page named the commit of the latest re-import**, not the one it runs (#2168). A version now records the source it was cut from. A version cut before this shows the live commit only while its content still matches.
 
 ## 🔒 Security
 
@@ -140,6 +154,8 @@ A prompt-cache pin test (`test_skills_prompt_cache_pin.py`) holds the `<availabl
 None that need a migration. Two behaviour changes to know about:
 - Saving or re-importing a skill that is bound, unpinned, to a shared Agent or a project now needs a confirmation. A REST client that does not send `confirmReach` gets `409 skill_reach_unconfirmed` (#2162).
 - The backend now requires Python 3.12 or later. Every runtime image already is (#2125).
+- Deleting a skill that a project or shared Agent uses also needs a confirmation: `DELETE /skills/mine/{id}` returns `409 skill_reach_unconfirmed` without `confirmReach=true` (#2168).
+- `POST /runs/now` returns `202` with a run id as soon as the run starts, rather than the finished result. Poll `GET /runs/{runId}` for the outcome (#2171). Only the SPA calls it.
 
 ## 🏗️ Infrastructure
 
@@ -148,7 +164,7 @@ None that need a migration. Two behaviour changes to know about:
   - The existing interpreter is unchanged.
 - **The Runtime can append to the audit log** (#2162). It gets `dynamodb:PutItem` on the audit-log table, with no read, update, delete or index access. The table name is derived from the prefix (`DYNAMODB_AUDIT_LOG_TABLE_NAME` in `derived_environment.json`), so it adds nothing to the Runtime's V2 environment budget.
 - `CDK_SKILL_BUNDLE_IMPORT_ENABLED` is forwarded in `platform.yml`, to app-api only (#2127).
-- The MCP App sandbox proxy (`infrastructure/assets/mcp-sandbox/proxy.js`) ships through the platform deploy (#2138). The SPA half ships through the frontend deploy. Either can land first, and the white frame goes away once both are live.
+- The MCP App sandbox proxy (`infrastructure/assets/mcp-sandbox/proxy.js`) ships through the platform deploy (#2138). The SPA half ships through the frontend deploy. Either can land first, and the white frame goes away once both are live. The same file now also sets an App's `dark` class (#2175).
 
 ## 🔧 CI/CD
 
@@ -217,12 +233,13 @@ To offer it, set `CDK_SKILL_BUNDLE_IMPORT_ENABLED=true` on the GitHub environmen
   - Word skill scripts are refused with a clear message until the platform deploy finishes. `python_code`, the other Word tools and every other tool behave as before. The next script run after the platform deploy picks up the interpreter, with no restart.
   - Runtime audit writes for `my_skill_*` and script runs fail with AccessDenied and are only logged (`audit_write_failed`). The tools work, and app-api's audit writes are unaffected.
 - **Platform** adds two resources (the interpreter and its SSM parameter) and three statements on the Runtime role: the interpreter's session actions, the parameter read and the audit-log `PutItem`.
-- **Backend before frontend.** The SPA's **Download skill**, **View content** and the reach confirmation call new app-api routes or responses.
+- **Backend before frontend.** The SPA's **Download skill**, **View content**, the reach confirmation on save and delete, and **Run now**'s polling (`GET /runs/{runId}`) call new app-api routes or responses.
 - **Expected one-time prompt-cache rewrites** on the first turn after deploy:
   - turns with `ask_user_question` (on by default): `toolConfig` grows +32 tokens (678 → 710);
   - users granted skill authoring: the `my_skill_*` family grows +79 tokens (1,303 → 1,382).
 
   Both were measured with Bedrock CountTokens.
+- **Not a rewrite, but a small per-result cost:** a successful MCP App result carries one constant sentence (about 50 input tokens), appended to history once (#2179).
 - **Not rewrites:** the Word tool specs, the `skills` and `read_skill_file` specs and `<available_skills>` (all pinned). The compaction line and the **Bundled files** wording appear in new results only.
 - **Watch after deploy:** Word skill-script outcomes in the audit log (`skill.script_run`: `ok`, `error`, `timeout`) and `audit_write_failed` in the Runtime logs. Both should be quiet.
 
