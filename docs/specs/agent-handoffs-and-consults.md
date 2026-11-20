@@ -2291,6 +2291,15 @@ has started", and the only one that spends money while nobody is watching.
   *Backend built (2026-11-19)*: the tool behind `HANDOFF_SUGGESTIONS_ENABLED` and the `suggest_handoff` catalog
   row, the `handoff_suggested` event, the chip replay and the Start route (§4.4, *Backend built*). 278 tokens
   measured. The chip UI is its own PR.
+  *SPA built (2026-11-19)*: `HandoffSuggestionChipComponent`, placed by `toolUseId` under the message holding the
+  call (or at the tail when that message isn't in the loaded page). `matchSuggestedAgent` matches the hint against
+  `AgentMentionService.mentionable()`: an exact name, then a single case-insensitive one, never a partial name.
+  Otherwise the chip shows a labelled Agent select and Start waits for a pick; a user with no Agents at all is told
+  so, with a link to browse them, and offered only Dismiss. Start is
+  `AgentHandoffService.startSuggestion`, which opens the same review sheet through `POST …/start`. Cancel closes the
+  sheet and keeps the chip (no dismiss, nothing back in the composer). Dismiss hides the chip at once and posts
+  `/dismiss`. Send turns the chip into a `suggested` handoff row in the same place. No SPA flag of its own: chips
+  arrive only from a backend with suggestions on, and render under `features.handoffs`.
 - **Dev validation.**
   - A mid-thread mention with an edited card, previewed, sent, and finished while the user stays in the source.
   - A handoff that needs OAuth consent: *needs your input* on the row and in the bell, a browser notification with

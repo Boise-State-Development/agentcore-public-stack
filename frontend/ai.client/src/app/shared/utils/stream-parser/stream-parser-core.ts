@@ -58,6 +58,7 @@ import type {
   ToolInputPartialEvent,
   SessionTitleEvent,
   SteeringAppliedEvent,
+  HandoffSuggestedEvent,
   ModelRetryEvent,
   AgentNoticeEvent,
 } from './stream-parser-types';
@@ -152,6 +153,10 @@ export interface StreamParserCallbacks {
   // tool boundary and is now in history (see SteeringAppliedEvent). The SPA
   // drops the matching composer-queue entry and renders it in the thread.
   onSteeringApplied?: (data: SteeringAppliedEvent) => void;
+
+  // The model offered a handoff chip with `suggest_handoff` (see
+  // HandoffSuggestedEvent). The turn continues; the chip waits for Start.
+  onHandoffSuggested?: (data: HandoffSuggestedEvent) => void;
 
   // A failed model call is being retried rather than surfaced as an error.
   // Advisory only — the turn continues; this exists so the resulting silence
@@ -755,6 +760,34 @@ export function validateSteeringAppliedEvent(
 }
 
 /**
+ * Validate HandoffSuggestedEvent structure. The ids and the title are what
+ * place and label the chip, so an event missing one is dropped; `tldr` may be
+ * empty and `agentName` is optional.
+ */
+export function validateHandoffSuggestedEvent(
+  data: unknown,
+): data is HandoffSuggestedEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const event = data as Partial<HandoffSuggestedEvent>;
+
+  return (
+    event.type === 'handoff_suggested' &&
+    typeof event.sessionId === 'string' &&
+    event.sessionId.length > 0 &&
+    typeof event.handoffId === 'string' &&
+    event.handoffId.length > 0 &&
+    typeof event.toolUseId === 'string' &&
+    typeof event.title === 'string' &&
+    event.title.length > 0 &&
+    typeof event.tldr === 'string' &&
+    (event.agentName === undefined || typeof event.agentName === 'string')
+  );
+}
+
+/**
  * Validate ModelRetryEvent structure. `attempt` is 1-based; `delaySeconds`
  * may legitimately be 0 (an unparseable delay is reported as 0 rather than
  * dropped, so the retry still reaches the user).
@@ -1272,6 +1305,14 @@ export function processStreamEvent(
           callbacks.onSteeringApplied?.(data);
         } else {
           callbacks.onParseError?.('steering_applied: invalid data structure');
+        }
+        break;
+
+      case 'handoff_suggested':
+        if (validateHandoffSuggestedEvent(data)) {
+          callbacks.onHandoffSuggested?.(data);
+        } else {
+          callbacks.onParseError?.('handoff_suggested: invalid data structure');
         }
         break;
 
