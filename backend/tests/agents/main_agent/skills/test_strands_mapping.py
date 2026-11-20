@@ -107,16 +107,56 @@ def test_build_skills_plugin_none_when_no_active_records(monkeypatch):
     assert sm.build_skills_plugin(["gone"]) is None
 
 
-def test_instructions_gain_reference_file_listing():
+def test_instructions_gain_bundled_files_listing():
     rec = _record(resources=[_ref("forms.md"), _ref("run.py", kind="script")])
     skill = sm.record_to_strands_skill(rec)
-    assert "## Available reference files" in skill.instructions
+    assert skill.instructions.startswith("# PDF\nExtract and fill PDFs.\n\n## Bundled files\n")
     assert "references/forms.md" in skill.instructions
     assert "scripts/run.py" in skill.instructions
     # No listing when there are no resources.
-    assert "Available reference files" not in sm.record_to_strands_skill(
-        _record()
-    ).instructions
+    assert "Bundled files" not in sm.record_to_strands_skill(_record()).instructions
+
+
+def test_bundled_files_grouped_by_kind_in_fixed_order():
+    rec = _record(
+        resources=[
+            _ref("logo.png", kind="asset", content_type="image/png"),
+            _ref("run.py", kind="script"),
+            _ref("forms.md"),
+            _ref("fill.py", kind="script"),
+            _ref("guide.md"),
+        ]
+    )
+    assert sm._reference_files_section(rec) == (
+        "\n\n## Bundled files\n"
+        "Load any of these with the `read_skill_file` tool "
+        "(skill_name `pdf-workflows`, path = one of the entries below):\n\n"
+        "### References\n- references/forms.md\n- references/guide.md\n\n"
+        "### Scripts\n- scripts/run.py\n- scripts/fill.py\n\n"
+        "### Assets\n- assets/logo.png"
+    )
+
+
+def test_bundled_files_only_references():
+    rec = _record(resources=[_ref("forms.md")])
+    assert sm._reference_files_section(rec) == (
+        "\n\n## Bundled files\n"
+        "Load any of these with the `read_skill_file` tool "
+        "(skill_name `pdf-workflows`, path = one of the entries below):\n\n"
+        "### References\n- references/forms.md"
+    )
+
+
+def test_bundled_files_unknown_kind_listed_under_references():
+    odd = SimpleNamespace(filename="notes.md", kind="other", content_type="text/markdown", size=1, s3_key="k")
+    section = sm._reference_files_section(_record(resources=[odd]))
+    assert "### References\n- references/notes.md" in section
+    assert "### Scripts" not in section and "### Assets" not in section
+
+
+def test_bundled_files_nothing_for_a_skill_with_no_files():
+    assert sm._reference_files_section(_record()) == ""
+    assert sm._reference_files_section(_record(resources=None)) == ""
 
 
 class TestBuildSkillsRuntime:
@@ -169,6 +209,35 @@ class TestReadSkillFile:
             == "# Forms body"
         )
 
+    def test_an_imported_bundles_own_link_resolves_by_basename(self, monkeypatch):
+        """A bundle's SKILL.md keeps links like ``reference/eval.md`` while the
+        manifest is flat (skill-bundle-import.md §4); a unique basename names it."""
+        rec = _record(resources=[_ref("eval.md"), _ref("pack.py", kind="script")])
+        store = _FakeStore(
+            {
+                "skills/pdf_workflows/references/eval.md": b"# Eval",
+                "skills/pdf_workflows/scripts/pack.py": b"print(1)",
+            }
+        )
+        read = self._tool(monkeypatch, [rec], store)
+        assert read(skill_name="pdf-workflows", path="reference/eval.md") == "# Eval"
+        assert "print(1)" in read(skill_name="pdf-workflows", path="scripts/office/pack.py")
+
+    def test_a_traversing_path_never_falls_back(self, monkeypatch):
+        rec = _record(resources=[_ref("eval.md")])
+        read = self._tool(monkeypatch, [rec], _FakeStore({"skills/pdf_workflows/references/eval.md": b"x"}))
+        assert "No reference file" in read(skill_name="pdf-workflows", path="../other-skill/eval.md")
+
+    def test_script_execution_keeps_the_strict_lookup(self):
+        rec = _record(resources=[_ref("engine.py", kind="script")])
+        assert sm._resolve_resource(rec, "scripts/office/engine.py") is None
+        assert sm._resolve_readable_resource(rec, "scripts/office/engine.py") is not None
+
+    def test_an_ambiguous_basename_does_not_guess(self, monkeypatch):
+        rec = _record(resources=[_ref("a.md"), _ref("a.md", kind="asset")])
+        read = self._tool(monkeypatch, [rec], _FakeStore())
+        assert "No reference file" in read(skill_name="pdf-workflows", path="other/a.md")
+
     def test_script_is_inert_labeled(self, monkeypatch):
         rec = _record(resources=[_ref("run.py", kind="script", content_type="text/x-python")])
         store = _FakeStore({"skills/pdf_workflows/scripts/run.py": b"print('hi')"})
@@ -201,3 +270,67 @@ class TestReadSkillFile:
         read = self._tool(monkeypatch, [rec], _FakeStore(raises=True))
         out = read(skill_name="pdf-workflows", path="forms.md")
         assert "Could not read" in out
+
+
+def test_frontmatter_metadata_cannot_replace_the_true_id_or_name():
+    skill = sm.record_to_strands_skill(
+        _record(skill_metadata={"skill_id": "evil", "display_name": "x", "license": "MIT"})
+    )
+    assert skill.metadata["skill_id"] == "pdf_workflows"
+    assert skill.metadata["display_name"] == "PDF Workflows"
+    assert skill.metadata["license"] == "MIT"
+    assert skill.name == "pdf-workflows"
+
+
+# =============================================================================
+# license / compatibility → Strands Skill, and the activation text
+# =============================================================================
+
+
+def _activate(record):
+    import asyncio
+
+    plugin = AgentSkills(skills=[sm.record_to_strands_skill(record)])
+    skill = plugin.get_available_skills()[0]
+    return asyncio.run(plugin._format_skill_response(skill, None))
+
+
+def test_license_and_compatibility_reach_the_strands_skill():
+    skill = sm.record_to_strands_skill(
+        _record(skill_metadata={"license": "Apache-2.0", "compatibility": "Requires uv"})
+    )
+    assert skill.license == "Apache-2.0"
+    assert skill.compatibility == "Requires uv"
+
+
+@pytest.mark.parametrize("value", [None, "", 3, ["uv"], {"a": "b"}])
+def test_a_non_string_license_or_compatibility_is_left_out(value):
+    skill = sm.record_to_strands_skill(
+        _record(skill_metadata={"license": value, "compatibility": value})
+    )
+    assert skill.license is None and skill.compatibility is None
+
+
+def test_activation_shows_a_compatibility_line_for_a_skill_that_declares_one():
+    text = _activate(_record(skill_metadata={"compatibility": "Requires uv and network"}))
+    assert text == "# PDF\nExtract and fill PDFs.\n\n---\nCompatibility: Requires uv and network"
+
+
+def test_activation_without_compatibility_is_exactly_todays_text():
+    # A license (shown nowhere) and other metadata change nothing either.
+    assert _activate(_record()) == "# PDF\nExtract and fill PDFs."
+    assert (
+        _activate(_record(skill_metadata={"license": "MIT", "version": "1"}))
+        == "# PDF\nExtract and fill PDFs."
+    )
+    assert (
+        _activate(_record(allowed_tools=["Read"]))
+        == "# PDF\nExtract and fill PDFs.\n\n---\nAllowed tools: Read"
+    )
+
+
+def test_a_skill_with_both_lists_tools_then_compatibility():
+    text = _activate(
+        _record(allowed_tools=["Read"], skill_metadata={"compatibility": "Needs git"})
+    )
+    assert text.endswith("\n---\nAllowed tools: Read\nCompatibility: Needs git")

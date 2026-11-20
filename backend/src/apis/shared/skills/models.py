@@ -19,7 +19,13 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from apis.shared.skills.skill_md import (
+    ALLOWED_TOOLS_MAX_NAMES,
+    skill_metadata_problem,
+    unsafe_character_problem,
+)
 from apis.shared.timestamps import from_iso, to_iso
 
 
@@ -32,6 +38,10 @@ SKILL_ID_PATTERN = r"^[a-z][a-z0-9_]{2,49}$"
 # the Level-1 catalog line injected into the cacheable system prompt for every
 # enabled skill, on every turn.
 SKILL_DESCRIPTION_MAX_LENGTH = 1024
+
+# Max size of a skill's ``instructions`` (the SKILL.md body), in UTF-8 bytes, on
+# every write path. The body shares a 400 KB DynamoDB item with the manifest.
+SKILL_INSTRUCTIONS_MAX_BYTES = 200 * 1024
 
 # ``owner_id`` of an admin-catalog skill. Anything else is a user-authored
 # skill (Skills v2 PR-3): governed by ownership, not by RBAC ``granted_skills``.
@@ -94,7 +104,7 @@ class SkillResourceRef(BaseModel):
         ...,
         alias="s3Key",
         description="Object key in the skill-resources bucket, in the standard "
-        "agentskills.io layout (skills/{skill_id}/{references|scripts|assets}/{filename})",
+        "agentskills.io layout (skills/{skill_id}/{references|scripts|assets}/{path})",
     )
     # Skills v2: which agentskills.io bundle directory the file belongs to.
     # ``script`` files are accept-and-inert (stored + listed, never executed).
@@ -103,8 +113,113 @@ class SkillResourceRef(BaseModel):
         default="reference",
         description="Bundle directory: reference | script | asset",
     )
+    # Where the file sits below its kind directory, '/'-separated, at most 4
+    # segments (``resource_paths``): ``forms.md`` or ``legal/nda.md``. Rows
+    # written before nested paths have none stored and read back with
+    # ``path == filename``, so they need no migration; ``filename`` stays the
+    # basename. Unique within a manifest across kinds.
+    path: str = Field(
+        default="",
+        description="Path below the kind directory, e.g. 'legal/nda.md'",
+    )
 
     model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _default_path(self) -> "SkillResourceRef":
+        if not self.path:
+            self.path = self.filename
+        elif not self.filename:
+            self.filename = self.path.rsplit("/", 1)[-1]
+        return self
+
+    def to_item(self) -> Dict:
+        """The manifest entry as stored on a row (camelCase).
+
+        ``path`` is written only when it differs from ``filename``, so an entry
+        at the top of its directory is stored exactly as it was before nested
+        paths existed.
+        """
+        item = {
+            "filename": self.filename,
+            "contentHash": self.content_hash,
+            "size": self.size,
+            "contentType": self.content_type,
+            "s3Key": self.s3_key,
+            "kind": self.kind,
+        }
+        if self.path != self.filename:
+            item["path"] = self.path
+        return item
+
+    @classmethod
+    def from_item(cls, item: Dict) -> "SkillResourceRef":
+        """Inverse of :meth:`to_item`; a stored entry with no ``path`` is a top-level file."""
+        return cls(
+            filename=item.get("filename", ""),
+            content_hash=item.get("contentHash", ""),
+            # DynamoDB returns numbers as Decimal — coerce to int.
+            size=int(item.get("size", 0)),
+            content_type=item.get("contentType", ""),
+            s3_key=item.get("s3Key", ""),
+            # Old rows predate kind → default to reference.
+            kind=item.get("kind", "reference"),
+            path=item.get("path") or "",
+        )
+
+
+class SkillImportSource(BaseModel):
+    """Where a user skill was last imported from (docs/specs/skill-bundle-import.md §3).
+
+    Display and refresh metadata on the live row only. It is deliberately not a
+    version snapshot field (``versions.SNAPSHOT_FIELDS``), so re-importing never
+    changes what a pin froze or the content hash a pin compares (spec D5).
+    """
+
+    type: str = Field(..., description="zip | github")
+    path: str = Field(default="", description="Bundle directory inside the archive")
+    bundle_hash: str = Field(..., alias="bundleHash")
+    imported_at: str = Field(..., alias="importedAt")
+    url: Optional[str] = None
+    owner: Optional[str] = None
+    repo: Optional[str] = None
+    ref: Optional[str] = None
+    commit_sha: Optional[str] = Field(None, alias="commitSha")
+    filename: Optional[str] = None
+    # The frontmatter ``name`` as the bundle wrote it. The stored activation
+    # name is derived from ``skill_id`` and can differ (a suffix on collision).
+    original_name: Optional[str] = Field(None, alias="originalName")
+
+    model_config = {"populate_by_name": True}
+
+    def to_item(self) -> dict:
+        return {k: v for k, v in self.model_dump(by_alias=True).items() if v is not None}
+
+    def provenance(self) -> dict:
+        """Where it came from, for display and audit: no URL, path or hash.
+
+        ``{"type": "github", "owner", "repo", "ref", "commitSha"}`` or
+        ``{"type": "zip"}``. The SPA renders "Imported from owner/repo @ sha7" or
+        "Imported from a zip file" from it, as text.
+        """
+        fields = {
+            "type": self.type,
+            "owner": self.owner,
+            "repo": self.repo,
+            "ref": self.ref,
+            "commitSha": self.commit_sha,
+        }
+        return {k: v for k, v in fields.items() if v}
+
+
+def skill_provenance(skill: object) -> Optional[dict]:
+    """``SkillImportSource.provenance()`` for an imported skill, else None.
+
+    Takes any object with an ``import_source`` (or none), so a response builder
+    can call it on whatever record shape it holds.
+    """
+    source = getattr(skill, "import_source", None)
+    return source.provenance() if source is not None else None
 
 
 class SkillDefinition(BaseModel):
@@ -166,6 +281,10 @@ class SkillDefinition(BaseModel):
         description="Manifest of S3-backed supporting reference files",
     )
 
+    # Last bundle import (user skills only). Not a snapshot field, so a re-import
+    # never moves a pinned version (skill-bundle-import.md D5).
+    import_source: Optional[SkillImportSource] = Field(default=None)
+
     # Lifecycle / grouping
     status: SkillStatus = Field(default=SkillStatus.ACTIVE)
     category: Optional[str] = Field(
@@ -220,17 +339,7 @@ class SkillDefinition(BaseModel):
             "skillMetadata": dict(self.skill_metadata),
             # Reference-file manifest (camelCase maps, mirroring the row's
             # convention). The bytes live in S3; this is just pointers.
-            "resources": [
-                {
-                    "filename": r.filename,
-                    "contentHash": r.content_hash,
-                    "size": r.size,
-                    "contentType": r.content_type,
-                    "s3Key": r.s3_key,
-                    "kind": r.kind,
-                }
-                for r in self.resources
-            ],
+            "resources": [r.to_item() for r in self.resources],
             "status": self.status
             if isinstance(self.status, str)
             else self.status.value,
@@ -243,6 +352,11 @@ class SkillDefinition(BaseModel):
             "updatedAt": to_iso(self.updated_at) if self.updated_at else None,
             "createdBy": self.created_by,
             "updatedBy": self.updated_by,
+            **(
+                {"importSource": self.import_source.to_item()}
+                if self.import_source
+                else {}
+            ),
         }
 
     @classmethod
@@ -259,17 +373,7 @@ class SkillDefinition(BaseModel):
             allowed_tools=list(item.get("allowedTools") or []),
             skill_metadata=dict(item.get("skillMetadata") or {}),
             resources=[
-                SkillResourceRef(
-                    filename=r.get("filename", ""),
-                    content_hash=r.get("contentHash", ""),
-                    # DynamoDB returns numbers as Decimal — coerce to int.
-                    size=int(r.get("size", 0)),
-                    content_type=r.get("contentType", ""),
-                    s3_key=r.get("s3Key", ""),
-                    # Old rows predate kind → default to reference.
-                    kind=r.get("kind", "reference"),
-                )
-                for r in (item.get("resources") or [])
+                SkillResourceRef.from_item(r) for r in (item.get("resources") or [])
             ],
             status=item.get("status", SkillStatus.ACTIVE),
             category=item.get("category"),
@@ -283,7 +387,79 @@ class SkillDefinition(BaseModel):
             else datetime.now(timezone.utc),
             created_by=item.get("createdBy"),
             updated_by=item.get("updatedBy"),
+            import_source=SkillImportSource.model_validate(item["importSource"])
+            if item.get("importSource")
+            else None,
         )
+
+
+# =============================================================================
+# Field checks shared by every write path
+# =============================================================================
+
+
+def instructions_size_problem(instructions: Optional[str]) -> Optional[str]:
+    """A sentence saying ``instructions`` is over the size cap, or None."""
+    if instructions is None:
+        return None
+    size = len(instructions.encode("utf-8"))
+    if size <= SKILL_INSTRUCTIONS_MAX_BYTES:
+        return None
+    return (
+        f"the instructions are {size:,} bytes; the limit is "
+        f"{SKILL_INSTRUCTIONS_MAX_BYTES // 1024} KiB. Move long detail into reference files"
+    )
+
+
+def check_text_field(label: str, value: Optional[str]) -> Optional[str]:
+    """Pydantic-validator body: refuse unsafe characters in a display field."""
+    problem = unsafe_character_problem(label, value)
+    if problem:
+        raise ValueError(problem)
+    return value
+
+
+def check_instructions(value: Optional[str]) -> Optional[str]:
+    """Pydantic-validator body: refuse instructions over the size cap."""
+    problem = instructions_size_problem(value)
+    if problem:
+        raise ValueError(problem[0].upper() + problem[1:])
+    return value
+
+
+def check_skill_metadata(value: Optional[dict]) -> Optional[dict]:
+    """Pydantic-validator body: refuse ``skillMetadata`` the lenient validator rejects.
+
+    Errors refuse (a non-string ``license``, a ``compatibility`` over 500
+    characters, a non-string ``metadata`` value); warnings pass, because an
+    unknown key is kept and written under ``metadata`` in the projection.
+    """
+    problem = skill_metadata_problem(value)
+    if problem:
+        raise ValueError(f"skillMetadata: {problem}")
+    return value
+
+
+def check_allowed_tools(value: Optional[List[str]]) -> Optional[List[str]]:
+    """Pydantic-validator body: refuse an ``allowedTools`` list over the specification's cap."""
+    if value is None:
+        return None
+    names = [name for item in value for name in item.split()]
+    if len(names) > ALLOWED_TOOLS_MAX_NAMES:
+        raise ValueError(
+            f"allowedTools names {len(names)} tools; the limit is {ALLOWED_TOOLS_MAX_NAMES}"
+        )
+    return names
+
+
+def check_description_not_blank(value: Optional[str]) -> Optional[str]:
+    """Pydantic-validator body: refuse a blank description when one is given."""
+    if value is not None and not value.strip():
+        raise ValueError(
+            "The description cannot be blank; it is the line the agent reads when "
+            "deciding whether to use the skill"
+        )
+    return value
 
 
 # =============================================================================
@@ -299,14 +475,44 @@ class SkillCreateRequest(BaseModel):
         ..., min_length=1, max_length=100, alias="displayName"
     )
     description: str = Field(..., max_length=SKILL_DESCRIPTION_MAX_LENGTH)
-    # SKILL.md body — uncapped (instructions can be long); empty is allowed so
+    # SKILL.md body, capped at SKILL_INSTRUCTIONS_MAX_BYTES; empty is allowed so
     # an admin can save a draft and fill it in later.
     instructions: str = Field(default="")
     compose: List[str] = Field(default_factory=list)
+    # Advisory only (D4); written to SKILL.md as one space-separated string.
+    allowed_tools: List[str] = Field(default_factory=list, alias="allowedTools")
+    # license, compatibility, metadata and any other frontmatter fields.
+    skill_metadata: Dict = Field(default_factory=dict, alias="skillMetadata")
     status: SkillStatus = Field(default=SkillStatus.ACTIVE)
     category: Optional[str] = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("allowed_tools")
+    @classmethod
+    def _allowed_tools_valid(cls, value: List[str]) -> List[str]:
+        return check_allowed_tools(value)
+
+    @field_validator("skill_metadata")
+    @classmethod
+    def _skill_metadata_valid(cls, value: Dict) -> Dict:
+        return check_skill_metadata(value)
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_safe(cls, value: str) -> str:
+        return check_text_field("The name", value)
+
+    @field_validator("description")
+    @classmethod
+    def _description_valid(cls, value: str) -> str:
+        check_description_not_blank(value)
+        return check_text_field("The description", value)
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions_size(cls, value: str) -> str:
+        return check_instructions(value)
 
 
 class SkillUpdateRequest(BaseModel):
@@ -320,10 +526,38 @@ class SkillUpdateRequest(BaseModel):
     )
     instructions: Optional[str] = None
     compose: Optional[List[str]] = None
+    allowed_tools: Optional[List[str]] = Field(None, alias="allowedTools")
+    skill_metadata: Optional[Dict] = Field(None, alias="skillMetadata")
     status: Optional[SkillStatus] = None
     category: Optional[str] = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("allowed_tools")
+    @classmethod
+    def _allowed_tools_valid(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        return check_allowed_tools(value)
+
+    @field_validator("skill_metadata")
+    @classmethod
+    def _skill_metadata_valid(cls, value: Optional[Dict]) -> Optional[Dict]:
+        return check_skill_metadata(value)
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_safe(cls, value: Optional[str]) -> Optional[str]:
+        return check_text_field("The name", value)
+
+    @field_validator("description")
+    @classmethod
+    def _description_valid(cls, value: Optional[str]) -> Optional[str]:
+        check_description_not_blank(value)
+        return check_text_field("The description", value)
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions_size(cls, value: Optional[str]) -> Optional[str]:
+        return check_instructions(value)
 
 
 class SkillRoleAssignment(BaseModel):
@@ -378,6 +612,8 @@ class AdminSkillResponse(BaseModel):
     description: str
     instructions: str
     compose: List[str] = Field(default_factory=list)
+    allowed_tools: List[str] = Field(default_factory=list, alias="allowedTools")
+    skill_metadata: Dict = Field(default_factory=dict, alias="skillMetadata")
     resources: List[SkillResourceRef] = Field(default_factory=list)
     status: SkillStatus
     category: Optional[str] = None
@@ -404,6 +640,8 @@ class AdminSkillResponse(BaseModel):
             description=skill.description,
             instructions=skill.instructions,
             compose=list(skill.compose),
+            allowed_tools=list(skill.allowed_tools),
+            skill_metadata=dict(skill.skill_metadata),
             resources=list(skill.resources),
             status=skill.status,
             category=skill.category,

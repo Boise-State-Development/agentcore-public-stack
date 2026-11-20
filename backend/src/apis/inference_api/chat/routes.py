@@ -5077,22 +5077,31 @@ def _build_citations(assistant, context_chunks, rag_assistant_id: Optional[str])
     citations_for_storage = []
     if context_chunks and show_citations:
         for chunk in context_chunks:
-            citations_for_storage.append(
-                {
-                    "assistantId": rag_assistant_id,
-                    "documentId": chunk.get("metadata", {}).get("document_id", ""),
-                    # Managed KBs carry the filename under ``filename`` (set at ingest,
-                    # managed_backend.py); legacy S3-Vectors used ``source``. Read
-                    # managed first, fall back to legacy, then the placeholder — before
-                    # this, every managed-KB citation rendered "Unknown Source".
-                    "fileName": (
-                        chunk.get("metadata", {}).get("filename")
-                        or chunk.get("metadata", {}).get("source")
-                        or "Unknown Source"
-                    ),
-                    "text": chunk.get("text", "")[:500],  # Limit excerpt length
-                }
-            )
+            metadata = chunk.get("metadata", {})
+            citation = {
+                "assistantId": rag_assistant_id,
+                "documentId": metadata.get("document_id", ""),
+                # The document's own name from its row (rag_service.row_display_metadata),
+                # e.g. "Home - DRED at Boise State University.md". The index's names are
+                # fallbacks: managed carries ``filename`` (the sanitized form in the S3
+                # key), legacy S3-Vectors ``source``. Before either, every managed-KB
+                # citation rendered "Unknown Source".
+                "fileName": (
+                    metadata.get("display_name")
+                    or metadata.get("filename")
+                    or metadata.get("source")
+                    or "Unknown Source"
+                ),
+                "text": chunk.get("text", "")[:500],  # Limit excerpt length
+            }
+            # A crawled web page: the address it came from, read off the
+            # document's row by the status filter (rag_service.web_source_url).
+            # Display metadata on the SSE frame and the stored message only;
+            # the model's excerpts are built from ``text`` and never carry it.
+            source_url = metadata.get("source_url")
+            if source_url:
+                citation["sourceUrl"] = source_url
+            citations_for_storage.append(citation)
     return citations_for_storage
 
 

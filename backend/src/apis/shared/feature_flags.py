@@ -1495,6 +1495,30 @@ def field_set_authoring_enabled() -> bool:
     return os.environ.get("FIELD_SET_AUTHORING_ENABLED", "").strip().lower() == "true"
 
 
+def skill_bundle_import_enabled() -> bool:
+    """Whether a user can import a whole skill bundle into My Skills, from a
+    ``.zip`` or a public GitHub path, and refresh it later
+    (``docs/specs/skill-bundle-import.md``, D7).
+
+    On, app-api serves ``POST /skills/mine/import/preview``,
+    ``POST /skills/mine/import`` and ``POST /skills/mine/{skill_id}/import``,
+    which 404 after authentication while off. The SPA's matching switch is
+    ``features.skillBundleImport``.
+
+    **app-api only.** The Runtime gets no variable: an imported skill is stored
+    exactly like a hand-built one, so a turn reads it the same way.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on app-api from ``config.skillBundleImport.enabled``.
+
+    A **feature switch**, not a rollout switch, and therefore permanent: it
+    widens what users can do (app-api fetches from GitHub on a user's behalf),
+    which a deployment may reasonably not want.
+    """
+    return os.environ.get("SKILL_BUNDLE_IMPORT_ENABLED", "").strip().lower() == "true"
+
+
 def release_ledger_enabled() -> bool:
     """Whether each model call's cost row also bumps the version-keyed ledger
     rollups (``docs/specs/release-ledger.md`` §5.2, D3, D8).

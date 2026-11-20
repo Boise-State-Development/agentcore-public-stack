@@ -42,9 +42,16 @@ logger = logging.getLogger(__name__)
 # Bounds mirror the rendered UI: the SPA paginates questions ("1 of 4") and
 # lays options out vertically. Beyond these the picker stops being a quick
 # choice and the model should just ask in prose instead.
+#
+# Options go to 8, not 4, because "pick one exact item from a known set" (one
+# playbook of five, one template of six) is a real use, and grouping it into
+# two rounds of four is exactly the interrogation the tool tells the model to
+# avoid. 8 keeps the SPA card about one screen tall, and stays under the
+# terminal client's single-digit pick keys (1-9). The tool description still
+# steers an open question to 2-4.
 MAX_QUESTIONS = 4
 MIN_OPTIONS = 2
-MAX_OPTIONS = 4
+MAX_OPTIONS = 8
 MAX_HEADER_CHARS = 12
 MAX_QUESTION_CHARS = 200
 MAX_LABEL_CHARS = 80
@@ -109,7 +116,7 @@ class UserQuestion(BaseModel):
         alias="multiSelect",
         description="Whether more than one option may be chosen",
     )
-    options: List[QuestionOption] = Field(..., description="2-4 choices")
+    options: List[QuestionOption] = Field(..., description="2-8 choices")
 
 
 class UserQuestionAnswer(BaseModel):

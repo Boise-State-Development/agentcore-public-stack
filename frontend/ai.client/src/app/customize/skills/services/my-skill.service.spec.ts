@@ -65,6 +65,64 @@ describe('MySkillService', () => {
     expect(service.error$()).toBeNull();
   });
 
+  describe('bundle import', () => {
+    it('previews a GitHub URL as multipart, with the target skill and no path unless chosen', async () => {
+      const promise = service.previewImport({ url: ' https://github.com/a/b ' }, 'grant_writing');
+      const req = httpMock.expectOne(`${BASE}/import/preview`);
+      expect(req.request.method).toBe('POST');
+      const body = req.request.body as FormData;
+      expect(body.get('url')).toBe('https://github.com/a/b');
+      expect(body.get('skillId')).toBe('grant_writing');
+      expect(body.has('path')).toBe(false);
+      expect(body.has('file')).toBe(false);
+      req.flush({ candidates: [], files: [] });
+      await promise;
+    });
+
+    it("sends a chosen path even when it is the archive's top level", async () => {
+      const zip = new File(['PK'], 'bundle.zip', { type: 'application/zip' });
+      const promise = service.previewImport({ file: zip, path: '' });
+      const req = httpMock.expectOne(`${BASE}/import/preview`);
+      const body = req.request.body as FormData;
+      expect((body.get('file') as File).name).toBe('bundle.zip');
+      expect(body.get('path')).toBe('');
+      expect(body.has('url')).toBe(false);
+      req.flush({ candidates: [], files: [] });
+      await promise;
+    });
+
+    it('creates from a bundle with the preview hash and adds the skill to local state', async () => {
+      const promise = service.importSkill(
+        { url: 'https://github.com/a/b', path: 'skills/x' },
+        { displayName: 'X', expectedBundleHash: 'h1' },
+      );
+      const req = httpMock.expectOne(`${BASE}/import`);
+      const body = req.request.body as FormData;
+      expect(body.get('path')).toBe('skills/x');
+      expect(body.get('displayName')).toBe('X');
+      expect(body.get('expectedBundleHash')).toBe('h1');
+      req.flush({ skill: stubSkill(), files: [] });
+      await promise;
+      expect(service.skills$().map((s) => s.skillId)).toEqual(['grant_writing']);
+      expect(invalidateBindable).toHaveBeenCalledWith('skill');
+    });
+
+    it('re-imports into the skill with the preview hash and updatedAt', async () => {
+      const promise = service.reimportSkill(
+        'grant_writing',
+        { url: 'https://github.com/a/b' },
+        { expectedBundleHash: 'h1', expectedUpdatedAt: '2026-11-18T00:00:00+00:00' },
+      );
+      const req = httpMock.expectOne(`${BASE}/grant_writing/import`);
+      const body = req.request.body as FormData;
+      expect(body.get('expectedBundleHash')).toBe('h1');
+      expect(body.get('expectedUpdatedAt')).toBe('2026-11-18T00:00:00+00:00');
+      req.flush({ skill: stubSkill(), files: [] });
+      await promise;
+      expect(invalidateBindable).toHaveBeenCalledWith('skill');
+    });
+  });
+
   it('treats a 404 as the kill switch, not an error', async () => {
     const promise = service.loadSkills();
 
@@ -139,6 +197,25 @@ describe('MySkillService', () => {
     expect(service.skills$()).toEqual([]);
   });
 
+  it('hands a delete reach 409 back to the caller without the error banner', async () => {
+    // A project or shared agent uses the skill: the page asks with the server's
+    // summary, so a banner saying "Failed to delete" would be wrong.
+    const first = service.deleteSkill('grant_writing');
+    httpMock.expectOne(`${BASE}/grant_writing`).flush(
+      { detail: { code: 'skill_reach_unconfirmed', message: 'm', reach: 'Used by 1 project ("Legal").' } },
+      { status: 409, statusText: 'Conflict' },
+    );
+    await expect(first).rejects.toBeDefined();
+    expect(service.error$()).toBeNull();
+
+    const confirmed = service.deleteSkill('grant_writing', { confirmReach: true });
+    const req = httpMock.expectOne((r) => r.url === `${BASE}/grant_writing`);
+    expect(req.request.method).toBe('DELETE');
+    expect(req.request.params.get('confirmReach')).toBe('true');
+    req.flush({ message: 'ok' });
+    await confirmed;
+  });
+
   it('drops the bindable skill palette after every write, not after a failed one', async () => {
     // A project's Skills page memoises the palette for the whole tab; an authored
     // skill is part of the accessible set, so each write must make it re-fetch.
@@ -195,6 +272,16 @@ describe('MySkillService', () => {
 
     void service.deleteResource('grant_writing', 'my notes.md');
     const del = httpMock.expectOne(`${BASE}/grant_writing/resources/my%20notes.md`);
+    expect(del.request.method).toBe('DELETE');
+    del.flush({ skillId: 'grant_writing', resources: [] });
+  });
+
+  it('keeps the slashes of a nested file path and encodes each segment', async () => {
+    void service.readResource('grant_writing', 'legal/v1 notes/nda.md');
+    httpMock.expectOne(`${BASE}/grant_writing/resources/legal/v1%20notes/nda.md`).flush('body');
+
+    void service.deleteResource('grant_writing', 'legal/nda.md');
+    const del = httpMock.expectOne(`${BASE}/grant_writing/resources/legal/nda.md`);
     expect(del.request.method).toBe('DELETE');
     del.flush({ skillId: 'grant_writing', resources: [] });
   });

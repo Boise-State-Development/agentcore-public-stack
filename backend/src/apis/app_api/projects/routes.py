@@ -40,6 +40,7 @@ from apis.shared.projects.service import (
 )
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.sessions.metadata import list_project_sessions
+from apis.shared.skills.pinning import PinStatus
 from apis.shared.skills.pins import public_skill_config
 from apis.shared.skills.resource_store import SkillResourceStoreError
 from apis.shared.skills.resource_types import resource_download_headers, safe_download_content_type
@@ -383,9 +384,25 @@ async def _skills(view: HarnessView, user: User) -> SkillBindingsResponse:
                 available=label is not None,
                 display_name=label[0] if label else None,
                 description=label[1] if label else None,
+                import_source=_pinned_import_source(pin, label[2]) if label else None,
             )
         )
     return SkillBindingsResponse(bindings=bindings, version=view.version, can_edit=view.can_edit)
+
+
+def _pinned_import_source(pin: Optional[PinStatus], live: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """Where the content this binding runs came from, never where the live skill now points.
+
+    A re-import moves the live row's commit while a pinned project keeps running the
+    version it pinned, so the live provenance would name a commit the project isn't on.
+    A version cut before versions recorded their source shows the live one only while
+    the content still matches; once it differs, it says nothing rather than guess.
+    """
+    if pin is None or not pin.version:
+        return live
+    if pin.import_source is not None:
+        return pin.import_source
+    return None if pin.update_available else live
 
 
 @router.get("/{project_id}/skills", response_model=SkillBindingsResponse, response_model_by_alias=True)
@@ -456,14 +473,16 @@ async def get_project_skill(
         compose=list(record.compose),
         allowed_tools=list(record.allowed_tools),
         files=[
-            ProjectSkillFile(filename=r.filename, kind=r.kind, size=r.size, content_type=r.content_type)
+            ProjectSkillFile(
+                filename=r.filename, kind=r.kind, size=r.size, content_type=r.content_type, path=r.path
+            )
             for r in record.resources
         ],
         is_owned=record.owner_id == user.user_id,
     )
 
 
-@router.get("/{project_id}/skills/{skill_id}/files/{filename}")
+@router.get("/{project_id}/skills/{skill_id}/files/{filename:path}")
 async def read_project_skill_file(
     project_id: str, skill_id: str, filename: str, user: User = Depends(require_projects_user)
 ) -> Response:

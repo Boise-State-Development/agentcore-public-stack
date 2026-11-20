@@ -1,8 +1,10 @@
 """Tests for the skill-bundle backfill script (Skills v2 PR-3 follow-up).
 
-The script's job is to make a v1 skill's S3 prefix a valid agentskills.io
-bundle: a ``SKILL.md`` projection plus resources in the standard directory
-layout, with the manifest pointing at the new keys.
+The script's job is to bring a v1 skill's S3 prefix to the agentskills.io
+layout: a ``SKILL.md`` projection plus resources in the standard directory
+layout, with the manifest pointing at the new keys. ``--projections-only``
+regenerates every projection and reports shared activation names and rows
+whose projection fails strict validation.
 """
 
 import os
@@ -255,3 +257,77 @@ def test_scan_ignores_non_skill_rows(table):
 
 def test_scan_returns_empty_for_a_missing_skill(table):
     assert scan_skills(table, "nope") == []
+
+
+# =============================================================================
+# --projections-only: regenerate, idempotently, and report
+# =============================================================================
+
+
+def test_projection_is_written_once_then_unchanged(s3):
+    from backfill_skill_bundles import (
+        PROJECTION_UNCHANGED,
+        PROJECTION_WOULD_WRITE,
+        PROJECTION_WRITTEN,
+    )
+
+    row = _legacy_row()
+    assert write_projection(s3, BUCKET, row, apply=False) == PROJECTION_WOULD_WRITE
+    assert write_projection(s3, BUCKET, row, apply=True) == PROJECTION_WRITTEN
+    assert write_projection(s3, BUCKET, row, apply=True) == PROJECTION_UNCHANGED
+    assert write_projection(s3, BUCKET, row, apply=False) == PROJECTION_UNCHANGED
+
+
+def test_an_old_projection_is_rewritten_to_the_conformant_form(s3):
+    row = _legacy_row()
+    row["allowedTools"] = ["fetch_url_content", "web_search"]
+    row["skillMetadata"] = {"license": "MIT", "version": "1.0"}
+    s3.put_object(
+        Bucket=BUCKET,
+        Key="skills/web_research/SKILL.md",
+        Body=b"---\nname: web-research\nversion: '1.0'\nallowed-tools:\n- fetch_url_content\n---\n",
+    )
+    assert write_projection(s3, BUCKET, row, apply=True) == "written"
+    body = s3.get_object(Bucket=BUCKET, Key="skills/web_research/SKILL.md")["Body"].read().decode()
+    assert "allowed-tools: fetch_url_content web_search\n" in body
+    assert "metadata:\n  version: '1.0'\n" in body
+
+
+def test_report_names_shared_activation_names_and_invalid_rows_by_id():
+    from backfill_skill_bundles import invalid_projections, shared_slugs
+
+    rows = [
+        {"skillId": "pdf_tools", "description": "d"},
+        {"skillId": "pdf-tools", "description": "d"},
+        {"skillId": "web_research", "description": ""},
+        {"skillId": "fine_skill", "description": "d", "skillMetadata": {"x": "y"}},
+        {"skillId": "too_much", "description": "d", "skillMetadata": {f"k{i}": "v" for i in range(51)}},
+    ]
+    assert shared_slugs(rows) == {"pdf-tools": ["pdf-tools", "pdf_tools"]}
+    assert invalid_projections(rows) == ["too_much", "web_research"]
+
+
+def test_projections_only_dry_run_changes_nothing_and_prints_counts(table, s3, monkeypatch, capsys):
+    import backfill_skill_bundles as backfill
+
+    table.put_item(Item=_legacy_row())
+    table.put_item(Item={**_legacy_row(), "PK": "SKILL#web-research", "skillId": "web-research"})
+    before = table.scan()["Items"]
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["backfill", "--table", TABLE, "--bucket", BUCKET, "--projections-only", "--sleep", "0"],
+    )
+    dynamodb = boto3.resource("dynamodb", region_name=REGION)
+    monkeypatch.setattr(backfill.boto3, "resource", lambda *_a, **_k: dynamodb)
+    monkeypatch.setattr(backfill.boto3, "client", lambda *_a, **_k: s3)
+
+    assert backfill.main() == 0
+
+    out = capsys.readouterr().out
+    assert "DRY-RUN complete: 2 skill(s)" in out
+    assert "2 would change" in out
+    assert "1 shared activation name(s)" in out
+    assert "0 projection(s) failing strict validation" in out
+    assert s3.list_objects_v2(Bucket=BUCKET).get("Contents", []) == []
+    assert table.scan()["Items"] == before

@@ -24,7 +24,10 @@ import { McpAppMessageService } from '../../../../../services/mcp-apps/mcp-app-m
 import { McpAppConsentService } from '../../../../../services/mcp-apps/mcp-app-consent.service';
 import { McpAppTeardownService } from '../../../../../services/mcp-apps/mcp-app-teardown.service';
 import { buildProxyUrl } from '../../../../../services/mcp-apps/proxy-url';
-import { isAwaitingUserSubmission } from '../../../../../services/mcp-apps/awaiting-submission';
+import {
+  findSubmittedCall,
+  isAwaitingUserSubmission,
+} from '../../../../../services/mcp-apps/awaiting-submission';
 import { McpAppConsentPromptComponent } from '../../mcp-app-consent-prompt/mcp-app-consent-prompt.component';
 import { McpAppActionsComponent } from '../../mcp-app-actions/mcp-app-actions.component';
 import { McpAppCardStateService } from '../../../../../services/mcp-apps/mcp-app-card-state.service';
@@ -579,13 +582,25 @@ export class McpAppFrameComponent implements ToolResultRenderer {
    * error on purpose so the agent stops, but nothing has failed. Shown as a
    * neutral "Waiting for you" in place of "Failed".
    */
-  protected readonly isAwaitingUser = computed(() =>
-    isAwaitingUserSubmission(this.result()),
+  protected readonly isAwaitingUser = computed(
+    () => isAwaitingUserSubmission(this.result()) && !this.submittedCall(),
+  );
+
+  /**
+   * The App's own call that completed this tool's waiting form, from the
+   * persisted cards (so only after a reload). Handed to the App as the tool
+   * result in place of the stored "waiting" one, or it redraws the empty
+   * form over the issue the user already created (see `findSubmittedCall`).
+   */
+  private readonly submittedCall = computed(() =>
+    findSubmittedCall(this.result(), this.displayToolName(), this.appActions()),
   );
 
   /** The tool failed (drives the header's "Failed" badge). */
   protected readonly isError = computed(
-    () => this.result()?.status === 'error' && !this.isAwaitingUser(),
+    () =>
+      this.result()?.status === 'error' &&
+      !isAwaitingUserSubmission(this.result()),
   );
 
   /**
@@ -803,8 +818,11 @@ export class McpAppFrameComponent implements ToolResultRenderer {
     });
     // On finality, send the complete `tool-input` (once) then (re-)push the
     // tool result if it's landed/changed after the App initialized.
+    // A submitted form's card hydrates after the App may already have
+    // initialized, so it re-pushes the result too.
     effect(() => {
       this.result();
+      this.submittedCall();
       if (this.inputFinal()) this.bridge?.sendToolInputFinal();
       this.bridge?.refreshToolResult();
     });
@@ -833,7 +851,15 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       // Width/height/position are driven entirely by the style effect below
       // (so fullscreen can absolute-fill the iframe within its host without a
       // `w-full` class fighting the inset sizing).
-      iframe.className = 'block border-0 bg-white';
+      // Transparent so the card's own surface (white, or gray-900 in dark
+      // mode) shows wherever the App leaves its background unpainted, as
+      // the ext-apps reference host does. `color-scheme: normal` is what
+      // makes that work in dark mode: the SPA's root is `color-scheme: dark`
+      // and the proxy page declares none, and when an iframe's scheme and its
+      // document's differ the browser paints an opaque WHITE canvas behind
+      // the document, whatever the iframe's background says.
+      iframe.className = 'block border-0 bg-transparent';
+      iframe.style.colorScheme = 'normal';
       iframe.style.width = '100%';
       iframe.style.height = `${this.frameHeight()}px`;
       // Append BEFORE setting src so contentWindow exists, then start the
@@ -1018,6 +1044,8 @@ export class McpAppFrameComponent implements ToolResultRenderer {
 
   /** Map the renderer's `ToolResultData` to an MCP `CallToolResult`. */
   private toCallToolResult(): unknown | null {
+    const submitted = this.submittedCall();
+    if (submitted) return { content: submitted.content, isError: false };
     const r = this.result();
     if (!r) return null;
     const content = (r.content ?? []).map((item) => {
@@ -1033,6 +1061,17 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       }
       return { type: 'text', text: item.text ?? '' };
     });
-    return { content, isError: r.status === 'error' };
+    // `structuredContent` and `_meta` travel with the result: an App may
+    // render from either and ignore the text (Atlassian's widgets render
+    // blank without them).
+    const structured = r.structuredContent;
+    return {
+      content,
+      isError: r.status === 'error',
+      ...(structured && typeof structured === 'object' && !Array.isArray(structured)
+        ? { structuredContent: structured }
+        : {}),
+      ...(r.metadata ? { _meta: r.metadata } : {}),
+    };
   }
 }

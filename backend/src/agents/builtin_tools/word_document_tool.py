@@ -30,6 +30,11 @@ Design notes
   toolset and lives in ``builtin_tools.office._storage``; this module keeps
   only the python-docx specifics (preamble, generate/modify/extract) and the
   four tool factories.
+* A skill script (``skill_name`` + ``path``, ``WORD_SKILL_SCRIPTS_ENABLED``)
+  runs in a separate interpreter with no public network, resolved by
+  ``resolve_skill_script_interpreter_id``, and under
+  ``SKILL_SCRIPT_TIMEOUT_SECONDS``. It never falls back to the interpreter
+  model-written ``python_code`` uses.
 * Identity (``user_id`` / ``session_id``) is captured by closure via the
   ``make_*`` factories — the same pattern used by the artifacts and
   spreadsheet_analysis tools (the Strands runtime here does NOT populate
@@ -42,10 +47,16 @@ Design notes
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from strands import tool
+
+from apis.shared.audit.models import TARGET_SKILL, AuditAction
+from apis.shared.audit.service import get_audit_service
+from apis.shared.auth.models import User
 
 from agents.builtin_tools.office.docx_compare import DEFAULT_AUTHOR, NoDifferences, compare
 from agents.builtin_tools.office.docx_redline import (
@@ -57,12 +68,14 @@ from agents.builtin_tools.office.docx_redline import (
     redline,
 )
 from agents.main_agent.skills.skill_scripts import (
+    SKILL_SCRIPT_TIMEOUT_SECONDS,
     SkillScript,
     SkillScriptError,
     TurnSkillRecords,
     attach_turn_skill_records,
     load_skill_script,
     parse_script_params,
+    resolve_skill_script_interpreter_id,
 )
 from agents.builtin_tools.office._storage import (
     _DocGenError,
@@ -92,6 +105,12 @@ _DOCX_MIME = (
 
 # Sandbox path used to stage a source document loaded from S3.
 _SANDBOX_SOURCE = "_source.docx"
+
+_NO_SKILL_SANDBOX_MESSAGE = (
+    "❌ Skill scripts cannot run in this deployment right now: the isolated "
+    "sandbox they run in was not found, so nothing was run. Tell the user that "
+    "an administrator needs to deploy the platform update that creates it."
+)
 
 _NO_STORAGE_MESSAGE = (
     "❌ Word document storage is not configured "
@@ -171,24 +190,71 @@ def _skill_script_entry(label: str, input_path: Optional[str], output_path: str)
     )
 
 
+# The skill-script session's own server-side timeout runs this far past
+# ``SKILL_SCRIPT_TIMEOUT_SECONDS``: a backstop that ends the session even if
+# the stop call after a timeout fails.
+_SKILL_SESSION_TIMEOUT_MARGIN_SECONDS = 30
+
+
+class _SkillScriptTimeoutError(Exception):
+    """A skill script outlived its time limit; its session has been stopped."""
+
+
+class _SkillSessionGuard:
+    """One skill-script sandbox session that a timeout can end at any point.
+
+    ``start`` and ``stop`` take one lock. A stop that lands before the worker
+    thread has started the session marks it abandoned, and the start then
+    refuses; a stop that lands during a start waits for it and then ends the
+    session. Either way no session outlives a timed-out run. ``stop`` is safe
+    to call twice (the timeout path and the worker's ``finally`` both do).
+    """
+
+    def __init__(self, client: Any) -> None:
+        self.client = client
+        self._lock = threading.Lock()
+        self._abandoned = False
+        self._started = False
+
+    def start(self, identifier: str, session_timeout_seconds: int) -> None:
+        with self._lock:
+            if self._abandoned:
+                raise _DocGenError("The skill script was stopped before its sandbox started.")
+            self.client.start(
+                identifier=identifier, session_timeout_seconds=session_timeout_seconds
+            )
+            self._started = True
+
+    def stop(self) -> None:
+        with self._lock:
+            self._abandoned = True
+            if not self._started:
+                return
+            self._started = False
+            try:
+                self.client.stop()
+            except Exception as exc:  # noqa: BLE001 - the server-side timeout backstops it
+                logger.warning("skill script sandbox stop failed: %s", exc)
+
+
 def _run_docx_skill_script(
+    guard: _SkillSessionGuard,
     code_interpreter_id: str,
     script: Any,
     params_json: str,
     filename: str,
     source_bytes: Optional[bytes] = None,
+    session_timeout_seconds: int = SKILL_SCRIPT_TIMEOUT_SECONDS,
 ) -> Tuple[bytes, str]:
     """Run a skill script on a new (``source_bytes`` None) or loaded document.
 
     The script's bytes and ``params`` are written into the sandbox as files and
     executed there only; the Runtime host never imports or compiles them.
     Returns the document bytes and the script's bounded output. Blocking —
-    call via ``asyncio.to_thread``.
+    run it through :func:`_run_skill_script_bounded`, which owns the timeout.
     """
-    from bedrock_agentcore.tools.code_interpreter_client import CodeInterpreter
-
-    code_interpreter = CodeInterpreter(_region())
-    code_interpreter.start(identifier=code_interpreter_id)
+    code_interpreter = guard.client
+    guard.start(code_interpreter_id, session_timeout_seconds)
     try:
         input_path: Optional[str] = None
         if source_bytes is not None:
@@ -209,10 +275,112 @@ def _run_docx_skill_script(
             output = output[:_MAX_SCRIPT_OUTPUT_CHARS] + " … (output truncated)"
         return data, output
     finally:
-        try:
-            code_interpreter.stop()
-        except Exception:  # pragma: no cover - cleanup best-effort
-            pass
+        guard.stop()
+
+
+async def _run_skill_script_bounded(
+    code_interpreter_id: str,
+    script: Any,
+    params_json: str,
+    filename: str,
+    source_bytes: Optional[bytes] = None,
+    timeout_seconds: Optional[float] = None,
+    *,
+    actor_user_id: Optional[str] = None,
+) -> Tuple[bytes, str]:
+    """:func:`_run_skill_script_timed`, then one ``skill.script_run`` audit record.
+
+    The record names the skill, the script path, the script's sha256 and the
+    outcome (``ok``, ``error``, ``timeout`` or ``cancelled``), and is written after
+    the run, in a worker thread, so it adds nothing before the run and a failed
+    write never fails the tool (agentskills-conformance §6.5).
+    """
+    outcome = "error"
+    try:
+        result = await _run_skill_script_timed(
+            code_interpreter_id, script, params_json, filename, source_bytes, timeout_seconds
+        )
+        outcome = "ok"
+        return result
+    except _SkillScriptTimeoutError:
+        outcome = "timeout"
+        raise
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        if actor_user_id:
+            # Not awaited: a cancelled task must not block on bookkeeping.
+            asyncio.get_running_loop().run_in_executor(
+                None, _record_script_run, actor_user_id, script, outcome
+            )
+        raise
+    finally:
+        if actor_user_id and outcome != "cancelled":
+            await asyncio.to_thread(_record_script_run, actor_user_id, script, outcome)
+
+
+def _record_script_run(actor_user_id: str, script: Any, outcome: str) -> None:
+    """Write the ``skill.script_run`` record. Blocking; never raises."""
+    try:
+        source = getattr(script, "source", b"") or b""
+        get_audit_service().record(
+            action=AuditAction.SKILL_SCRIPT_RUN,
+            actor=User(email="", user_id=actor_user_id, name="", roles=[]),
+            target_id=getattr(script, "skill_id", "") or getattr(script, "skill_name", ""),
+            target_type=TARGET_SKILL,
+            changes=["scriptRun"],
+            after={
+                "scriptPath": getattr(script, "path", ""),
+                "scriptSha256": hashlib.sha256(source).hexdigest(),
+                "outcome": outcome,
+            },
+        )
+    except Exception:  # noqa: BLE001 - an audit gap never fails the tool
+        logger.exception("skill.script_run audit record could not be written")
+
+
+async def _run_skill_script_timed(
+    code_interpreter_id: str,
+    script: Any,
+    params_json: str,
+    filename: str,
+    source_bytes: Optional[bytes] = None,
+    timeout_seconds: Optional[float] = None,
+) -> Tuple[bytes, str]:
+    """:func:`_run_docx_skill_script` in a worker thread, under a time limit.
+
+    ``timeout_seconds`` defaults to ``SKILL_SCRIPT_TIMEOUT_SECONDS``. On
+    expiry the session is stopped (see :class:`_SkillSessionGuard`) and
+    :class:`_SkillScriptTimeoutError` is raised; a cancelled turn stops it too.
+    The abandoned worker thread ends on its own once its session is gone.
+    """
+    from bedrock_agentcore.tools.code_interpreter_client import CodeInterpreter
+
+    limit = SKILL_SCRIPT_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    guard = _SkillSessionGuard(CodeInterpreter(_region()))
+    session_timeout = int(limit) + _SKILL_SESSION_TIMEOUT_MARGIN_SECONDS
+    try:
+        async with asyncio.timeout(limit) as deadline:
+            return await asyncio.to_thread(
+                _run_docx_skill_script,
+                guard,
+                code_interpreter_id,
+                script,
+                params_json,
+                filename,
+                source_bytes,
+                session_timeout,
+            )
+    except TimeoutError:
+        if not deadline.expired():
+            raise
+        await asyncio.to_thread(guard.stop)
+        raise _SkillScriptTimeoutError(
+            f"Skill script {script.label} did not finish within {limit:g} seconds, "
+            "so its sandbox was stopped and no document was saved."
+        ) from None
+    except asyncio.CancelledError:
+        asyncio.get_running_loop().run_in_executor(None, guard.stop)
+        raise
 
 
 def _generate_docx_bytes(
@@ -369,6 +537,18 @@ async def _find_word_document(
 # ---------------------------------------------------------------------------
 
 
+async def _interpreter_for(wants_script: bool) -> Optional[str]:
+    """The interpreter id for this call, or ``None``.
+
+    A skill script gets the no-network skill-script interpreter (an SSM read
+    on first use, so off the event loop); ``python_code`` gets the existing
+    one. There is no fallback from the first to the second.
+    """
+    if wants_script:
+        return await asyncio.to_thread(resolve_skill_script_interpreter_id)
+    return _get_code_interpreter_id()
+
+
 def _script_call_problem(
     python_code: Optional[str],
     skill_name: Optional[str],
@@ -438,15 +618,16 @@ async def _create_word_document(
         )
 
     filename = f"{document_name}.docx"
-    code_interpreter_id = _get_code_interpreter_id()
+    wants_script = skill_records is not None and bool(skill_name or path)
+    code_interpreter_id = await _interpreter_for(wants_script)
     if not code_interpreter_id:
-        return _error(_NO_CI_MESSAGE)
+        return _error(_NO_SKILL_SANDBOX_MESSAGE if wants_script else _NO_CI_MESSAGE)
     if not _storage_configured():
         return _error(_NO_STORAGE_MESSAGE)
 
     script: Optional[SkillScript] = None
     params_json = "{}"
-    if skill_records is not None and (skill_name or path):
+    if wants_script:
         script, params_json, problem = await _load_script(
             skill_records, skill_name or "", path or "", params
         )
@@ -460,9 +641,11 @@ async def _create_word_document(
                 _generate_docx_bytes, code_interpreter_id, python_code or "", filename
             )
         else:
-            file_bytes, output = await asyncio.to_thread(
-                _run_docx_skill_script, code_interpreter_id, script, params_json, filename
+            file_bytes, output = await _run_skill_script_bounded(
+                code_interpreter_id, script, params_json, filename, actor_user_id=user_id
             )
+    except _SkillScriptTimeoutError as exc:
+        return _error(f"❌ Failed to create '{filename}': {exc}")
     except _DocGenError as exc:
         hint = (
             "Check the python-docx code for errors."
@@ -501,9 +684,10 @@ async def _modify_word_document(
     params: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """``modify_word_document``'s body, from python-docx code or a skill script."""
-    code_interpreter_id = _get_code_interpreter_id()
+    wants_script = skill_records is not None and bool(skill_name or path)
+    code_interpreter_id = await _interpreter_for(wants_script)
     if not code_interpreter_id:
-        return _error(_NO_CI_MESSAGE)
+        return _error(_NO_SKILL_SANDBOX_MESSAGE if wants_script else _NO_CI_MESSAGE)
     if not _storage_configured():
         return _error(_NO_STORAGE_MESSAGE)
 
@@ -519,7 +703,7 @@ async def _modify_word_document(
 
     script: Optional[SkillScript] = None
     params_json = "{}"
-    if skill_records is not None and (skill_name or path):
+    if wants_script:
         script, params_json, problem = await _load_script(
             skill_records, skill_name or "", path or "", params
         )
@@ -540,14 +724,16 @@ async def _modify_word_document(
                 output_filename,
             )
         else:
-            file_bytes, output = await asyncio.to_thread(
-                _run_docx_skill_script,
+            file_bytes, output = await _run_skill_script_bounded(
                 code_interpreter_id,
                 script,
                 params_json,
                 output_filename,
                 source_bytes,
+                actor_user_id=user_id,
             )
+    except _SkillScriptTimeoutError as exc:
+        return _error(f"❌ Failed to modify '{source.filename}': {exc}")
     except _DocGenError as exc:
         hint = (
             "Check the python-docx code for errors."

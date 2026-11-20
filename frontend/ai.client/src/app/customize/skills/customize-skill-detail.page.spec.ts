@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
@@ -107,6 +107,25 @@ describe('CustomizeSkillDetailPage', () => {
     expect(text(fixture)).toContain('web_research');
   });
 
+  it('says where an imported skill came from, as text', async () => {
+    const fixture = await create(
+      'contract_redline',
+      detail({
+        skillId: 'contract_redline',
+        displayName: 'Contract Redline',
+        importSource: { type: 'github', owner: 'acme', repo: '<b>skills</b>', commitSha: '0123456789abcdef' },
+      }),
+    );
+    const line = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="skill-provenance"]')!;
+    expect(line.textContent?.trim()).toBe('Imported from acme/<b>skills</b> @ 0123456');
+    expect(line.querySelector('b')).toBeNull();
+  });
+
+  it('shows no provenance line for a hand-written skill', async () => {
+    const fixture = await create('web_research', detail({ skillId: 'web_research', displayName: 'Web Research' }));
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="skill-provenance"]')).toBeNull();
+  });
+
   it('renders the SKILL.md body expanded, with no click needed', async () => {
     const fixture = await create(
       'web_research',
@@ -197,6 +216,74 @@ describe('CustomizeSkillDetailPage', () => {
     expect(
       fixture.nativeElement.querySelector('a[href$="/edit"]'),
     ).toBeNull();
+  });
+
+  const downloadButton = (fixture: ComponentFixture<CustomizeSkillDetailPage>) =>
+    Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>('button'),
+    ).find(b => b.textContent?.includes('Download skill'));
+
+  it('offers Download skill for a skill the user wrote', async () => {
+    const mine = await create(
+      'my_skill',
+      detail({ skillId: 'my_skill', displayName: 'My Skill', isOwned: true }),
+    );
+    expect(downloadButton(mine)).toBeTruthy();
+  });
+
+  it('offers no download for a skill the user can only use', async () => {
+    const fixture = await create(
+      'web_research',
+      detail({ skillId: 'web_research', displayName: 'Web Research', isOwned: false }),
+    );
+    expect(downloadButton(fixture)).toBeUndefined();
+  });
+
+  it('downloads through the owner export route and saves the zip', async () => {
+    const original = { create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+    URL.createObjectURL = vi.fn(() => 'blob:skill');
+    URL.revokeObjectURL = vi.fn();
+    const clicked: string[] = [];
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clicked.push(this.download);
+      });
+    try {
+      const mine = await create(
+        'my_skill',
+        detail({ skillId: 'my_skill', displayName: 'My Skill', isOwned: true }),
+      );
+      downloadButton(mine)!.click();
+      const req = http.expectOne('/api/skills/mine/my_skill/export');
+      expect(req.request.method).toBe('GET');
+      expect(req.request.responseType).toBe('blob');
+      expect(req.request.withCredentials).toBe(true);
+      req.flush(new Blob(['zip'], { type: 'application/zip' }));
+      await mine.whenStable();
+      await settle();
+      expect(clicked).toEqual(['my-skill.zip']);
+    } finally {
+      click.mockRestore();
+      URL.createObjectURL = original.create;
+      URL.revokeObjectURL = original.revoke;
+    }
+  });
+
+  it('names the unreadable file when the export is refused', async () => {
+    const mine = await create(
+      'my_skill',
+      detail({ skillId: 'my_skill', displayName: 'My Skill', isOwned: true }),
+    );
+    downloadButton(mine)!.click();
+    http.expectOne('/api/skills/mine/my_skill/export').flush(
+      new Blob([JSON.stringify({ detail: "The skill's file 'engine.py' could not be read" })]),
+      { status: 409, statusText: 'Conflict' },
+    );
+    await mine.whenStable();
+    await settle();
+    mine.detectChanges();
+    expect(text(mine)).toContain("'engine.py' could not be read");
   });
 
   it('distinguishes a missing skill from a failed read', async () => {

@@ -130,6 +130,12 @@ export interface SandboxResourceReadyParams {
   permissions?: McpUiPermissions;
   /** Per-frame nonce the proxy must echo on every later message. */
   nonce: string;
+  /**
+   * Host theme at mount. The proxy mirrors it onto a `dark` class at the
+   * App document's root before the App renders, for App bundles that theme
+   * on that class rather than `hostContext.theme`.
+   */
+  theme?: 'light' | 'dark';
 }
 
 export interface SizeChangedParams {

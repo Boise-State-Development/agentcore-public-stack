@@ -1,11 +1,11 @@
-"""Backfill: bring v1 skill rows up to the agentskills.io bundle layout (Skills v2).
+"""Backfill: bring skill rows up to the agentskills.io bundle layout (Skills v2).
 
 Skills authored before Skills v2 PR-2 predate two things:
 
 1. **The ``SKILL.md`` write-through projection.** Their S3 prefix holds only
-   resource bytes, so the prefix is not a valid, portable agentskills.io
-   bundle — it cannot be handed to a managed Harness (``{"s3": {"uri": ...}}``)
-   or exported as-is.
+   resource bytes. (Even with it the prefix is storage, not a conformant
+   bundle: its directory is the ``skill_id``, which can differ from the
+   projected ``name``. An export is the conformant artifact.)
 2. **The standard bundle layout.** v1 stored resources content-addressed
    (``skills/{id}/{sha256}``) with no ``kind``; v2 stores them at
    ``skills/{id}/{references|scripts|assets}/{filename}``.
@@ -29,6 +29,19 @@ SAFETY
 * **Throttled.** ``--sleep`` between skills (default 50ms).
 * **Scoped.** ``--skill`` limits the run to one skill id.
 
+PROJECTIONS ONLY
+----------------
+``--projections-only`` skips the resource layout and regenerates every skill's
+``SKILL.md`` from its row, writing only the ones whose bytes differ from what
+is stored (so a second run writes nothing). Use it after a change to
+``generate_skill_md``. Every run, in either mode, also reports, by skill id
+only and without changing anything:
+
+* skill ids whose ``slugify_skill_name`` is shared with another skill's
+  (``pdf_tools`` and ``pdf-tools`` both activate as ``pdf-tools``);
+* rows whose regenerated frontmatter fails strict agentskills.io validation
+  (a legacy empty description, metadata over its limits).
+
 Run against dev first, then prod::
 
     AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_skill_bundles.py \\
@@ -37,6 +50,9 @@ Run against dev first, then prod::
     AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_skill_bundles.py \\
         --table dev-boisestateai-v2-app-roles \\
         --bucket dev-boisestateai-v2-skill-resources --apply
+    AWS_PROFILE=dev-ai backend/.venv/bin/python backend/scripts/backfill_skill_bundles.py \\
+        --table dev-boisestateai-v2-app-roles \\
+        --bucket dev-boisestateai-v2-skill-resources --projections-only   # dry-run
 """
 
 from __future__ import annotations
@@ -46,6 +62,7 @@ import logging
 import os
 import sys
 import time
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
@@ -55,7 +72,12 @@ from botocore.exceptions import ClientError
 # backfilled bundle is byte-identical to one the app would write today.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from apis.shared.skills.bundle import generate_skill_md  # noqa: E402
+from apis.shared.skills.bundle import (  # noqa: E402
+    generate_skill_md,
+    skill_md_frontmatter,
+    slugify_skill_name,
+)
+from apis.shared.skills.skill_md import validate_frontmatter  # noqa: E402
 from apis.shared.skills.resource_store import (  # noqa: E402
     resource_key,
     skill_md_key,
@@ -185,32 +207,101 @@ def migrate_resources(
     return migrated, moved
 
 
-def write_projection(
-    s3, bucket: str, row: Dict[str, Any], *, apply: bool
-) -> None:
-    """Write the row's ``SKILL.md`` projection into the bundle prefix."""
-    skill_id = row["skillId"]
-    content = generate_skill_md(
-        skill_id=skill_id,
+def _projection(row: Dict[str, Any]) -> str:
+    return generate_skill_md(
+        skill_id=row["skillId"],
         description=row.get("description") or "",
         instructions=row.get("instructions") or "",
         allowed_tools=[str(t) for t in (row.get("allowedTools") or [])],
         skill_metadata=dict(row.get("skillMetadata") or {}),
     )
+
+
+def read_object(s3, bucket: str, key: str) -> Optional[bytes]:
+    """The object's bytes, or None when it does not exist."""
+    try:
+        return s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+    except ClientError as e:
+        if e.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise
+
+
+PROJECTION_UNCHANGED = "unchanged"
+PROJECTION_WRITTEN = "written"
+PROJECTION_WOULD_WRITE = "would_write"
+
+
+def write_projection(
+    s3, bucket: str, row: Dict[str, Any], *, apply: bool
+) -> str:
+    """Write the row's ``SKILL.md`` projection into the bundle prefix if it changed.
+
+    Returns ``"unchanged"`` when the stored object already has these bytes,
+    ``"would_write"`` on a dry run that would change it, and ``"written"``.
+    """
+    skill_id = row["skillId"]
+    content = _projection(row).encode("utf-8")
     key = skill_md_key(skill_id)
 
+    if read_object(s3, bucket, key) == content:
+        logger.info("  %s unchanged", key)
+        return PROJECTION_UNCHANGED
+
     if not apply:
-        logger.info("  [dry-run] write %s (%d bytes)", key, len(content.encode()))
-        return
+        logger.info("  [dry-run] write %s (%d bytes)", key, len(content))
+        return PROJECTION_WOULD_WRITE
 
     s3.put_object(
         Bucket=bucket,
         Key=key,
-        Body=content.encode("utf-8"),
+        Body=content,
         ContentType="text/markdown",
         ServerSideEncryption="AES256",
     )
     logger.info("  wrote %s", key)
+    return PROJECTION_WRITTEN
+
+
+def shared_slugs(rows: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Each activation name two or more skill ids slugify to, with those ids (sorted)."""
+    by_slug: Dict[str, List[str]] = defaultdict(list)
+    for row in rows:
+        skill_id = row.get("skillId")
+        if skill_id:
+            by_slug[slugify_skill_name(skill_id)].append(skill_id)
+    return {
+        slug: sorted(ids) for slug, ids in sorted(by_slug.items()) if len(ids) > 1
+    }
+
+
+def invalid_projections(rows: List[Dict[str, Any]]) -> List[str]:
+    """Skill ids whose regenerated frontmatter fails strict validation (sorted)."""
+    invalid = []
+    for row in rows:
+        skill_id = row.get("skillId")
+        if not skill_id:
+            continue
+        frontmatter = skill_md_frontmatter(
+            skill_id=skill_id,
+            description=row.get("description") or "",
+            allowed_tools=[str(t) for t in (row.get("allowedTools") or [])],
+            skill_metadata=dict(row.get("skillMetadata") or {}),
+        )
+        if any(d.is_error for d in validate_frontmatter(frontmatter, strict=True)):
+            invalid.append(skill_id)
+    return sorted(invalid)
+
+
+def report(rows: List[Dict[str, Any]]) -> Tuple[Dict[str, List[str]], List[str]]:
+    """Log the shared-slug and invalid-projection findings; change nothing."""
+    collisions = shared_slugs(rows)
+    invalid = invalid_projections(rows)
+    for slug, ids in collisions.items():
+        logger.warning("REPORT shared activation name %s: %s", slug, ", ".join(ids))
+    for skill_id in invalid:
+        logger.warning("REPORT projection fails strict validation: %s", skill_id)
+    return collisions, invalid
 
 
 def main() -> int:
@@ -225,6 +316,11 @@ def main() -> int:
         "--delete-legacy",
         action="store_true",
         help="Delete the old content-hash objects after a verified copy",
+    )
+    parser.add_argument(
+        "--projections-only",
+        action="store_true",
+        help="Only regenerate SKILL.md projections; leave the resource layout alone",
     )
     parser.add_argument("--sleep", type=float, default=0.05)
     args = parser.parse_args()
@@ -241,7 +337,7 @@ def main() -> int:
     mode = "APPLY" if args.apply else "DRY-RUN"
     logger.info("%s: %d skill(s) to inspect", mode, len(rows))
 
-    projections = 0
+    projections: Dict[str, int] = defaultdict(int)
     moves = 0
 
     for row in rows:
@@ -251,6 +347,11 @@ def main() -> int:
             continue
 
         logger.info("skill %s", skill_id)
+        if args.projections_only:
+            projections[write_projection(s3, args.bucket, row, apply=args.apply)] += 1
+            time.sleep(args.sleep)
+            continue
+
         resources = [dict(r) for r in (row.get("resources") or [])]
 
         migrated, moved = migrate_resources(
@@ -272,17 +373,22 @@ def main() -> int:
             )
             logger.info("  manifest rewritten (%d entr(y|ies))", moved)
 
-        write_projection(s3, args.bucket, row, apply=args.apply)
-        projections += 1
+        projections[write_projection(s3, args.bucket, row, apply=args.apply)] += 1
 
         time.sleep(args.sleep)
 
-    logger.info(
-        "%s complete: %d projection(s), %d resource(s) relocated",
-        mode,
-        projections,
-        moves,
+    collisions, invalid = report([r for r in rows if r.get("skillId")])
+    summary = (
+        f"{mode} complete: {sum(projections.values())} skill(s); projections "
+        f"{projections[PROJECTION_WRITTEN]} written, "
+        f"{projections[PROJECTION_WOULD_WRITE]} would change, "
+        f"{projections[PROJECTION_UNCHANGED]} unchanged; "
+        f"{moves} resource(s) relocated; "
+        f"{len(collisions)} shared activation name(s); "
+        f"{len(invalid)} projection(s) failing strict validation"
     )
+    logger.info(summary)
+    print(summary)
     if not args.apply:
         logger.info("Re-run with --apply to write.")
     return 0

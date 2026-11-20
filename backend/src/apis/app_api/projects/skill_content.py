@@ -30,10 +30,11 @@ from apis.shared.assistants.models import AgentBinding, Assistant
 from apis.shared.auth.models import User
 from apis.shared.feature_flags import skills_enabled
 from apis.shared.skills.access import resolve_invocable_skill_ids
-from apis.shared.skills.models import SkillDefinition, SkillResourceRef, SkillStatus
+from apis.shared.skills.models import SkillDefinition, SkillResourceRef, SkillStatus, skill_provenance
 from apis.shared.skills.pinning import load_skill_records
 from apis.shared.skills.pins import base_skill_id, binding_pin, pinned_ref, project_skill_adders
 from apis.shared.skills.repository import get_skill_catalog_repository
+from apis.shared.skills.resource_paths import lookup_resource
 from apis.shared.skills.resource_store import get_skill_resource_store
 
 SKILL = "skill"
@@ -72,8 +73,12 @@ async def available_skill_ids(harness: Assistant, user: User, skill_ids: List[st
     return {sid for sid in skill_ids if sid in invocable}
 
 
-async def bound_skill_labels(harness: Assistant, user: User) -> Dict[str, Tuple[str, str]]:
-    """``{skill id: (display name, description)}`` for the bound skills ``user`` can run.
+async def bound_skill_labels(
+    harness: Assistant, user: User
+) -> Dict[str, Tuple[str, str, Optional[Dict[str, str]]]]:
+    """``{skill id: (display name, description, provenance)}`` for the bound skills ``user`` can run.
+
+    ``provenance`` is ``SkillImportSource.provenance()`` for an imported skill, else None.
 
     Lets the settings list name a skill someone else added (the caller's own palette
     doesn't have it) instead of showing its raw id. Skills the caller can't run stay
@@ -85,7 +90,11 @@ async def bound_skill_labels(harness: Assistant, user: User) -> Dict[str, Tuple[
         return {}
     records = await get_skill_catalog_repository().batch_get_skills([r for r in refs if r in available])
     return {
-        r.skill_id: (r.display_name, r.description)
+        r.skill_id: (
+            r.display_name,
+            r.description,
+            skill_provenance(r),
+        )
         for r in records
         if _status(r) == SkillStatus.ACTIVE.value
     }
@@ -115,9 +124,13 @@ async def read_bound_skill(harness: Assistant, user: User, skill_id: str) -> Tup
 async def read_bound_skill_file(
     harness: Assistant, user: User, skill_id: str, filename: str
 ) -> Tuple[SkillResourceRef, bytes]:
-    """One bundle file of the bound version, by the same rules as ``read_bound_skill``."""
+    """One bundle file of the bound version, by the same rules as ``read_bound_skill``.
+
+    ``filename`` is the file's path below its kind directory, or a bare filename
+    only one file has.
+    """
     record, _ = await read_bound_skill(harness, user, skill_id)
-    ref = next((r for r in record.resources if r.filename == filename), None)
+    ref = lookup_resource(record.resources, filename or "").ref
     if ref is None:
         raise SkillNotBoundError(f"The skill has no file '{filename}'.")
     content = await asyncio.to_thread(get_skill_resource_store().get, ref.s3_key)

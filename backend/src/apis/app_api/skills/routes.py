@@ -37,22 +37,38 @@ way to fix it in-product.
 import logging
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from apis.shared.audit.models import AuditAction
 from apis.shared.auth import User, get_current_user_from_session
+from apis.shared.blocking_io import run_blocking
 from apis.shared.extraction.field_sets import FieldSetError, require_field_set_name
 from apis.shared.feature_flags import field_set_authoring_enabled
 from apis.shared.skills.access import resolve_accessible_skill_ids
+from apis.shared.skills.audit import record_skill_event
 from apis.shared.skills.bundle import slugify_skill_name
+from apis.shared.skills.bundle_export import (
+    SkillExportFileError,
+    SkillExportVersionNotFoundError,
+    build_skill_zip,
+    export_response_headers,
+    load_export_record,
+)
 from apis.shared.skills.models import (
     SKILL_DESCRIPTION_MAX_LENGTH,
     SkillDefinition,
+    SkillImportSource,
     SkillResourceRef,
     SkillResourcesResponse,
     SkillStatus,
+    check_instructions,
+    check_skill_metadata,
+    check_text_field,
+    skill_provenance,
 )
+from apis.shared.skills.reach import lookup_skill_reach
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.skills.resource_store import compute_content_hash
 from apis.shared.skills.resource_types import (
@@ -70,7 +86,10 @@ from .field_sets import (
     markdown_for,
 )
 from .service import get_skill_catalog_service
+from .skill_md_parse import parse_uploaded_skill_md
+from apis.shared.skills.skill_md_import import SkillMdParseResponse
 from apis.shared.skills.user_service import (
+    UserSkillConflictError,
     UserSkillError,
     UserSkillLimitError,
     UserSkillNotFoundError,
@@ -205,6 +224,8 @@ class MySkillResponse(BaseModel):
     category: Optional[str] = None
     created_at: Optional[str] = Field(None, alias="createdAt")
     updated_at: Optional[str] = Field(None, alias="updatedAt")
+    # Set once the skill was imported from a bundle (skill-bundle-import.md §3).
+    import_source: Optional[SkillImportSource] = Field(None, alias="importSource")
 
     model_config = {"populate_by_name": True}
 
@@ -222,6 +243,7 @@ class MySkillResponse(BaseModel):
             category=skill.category,
             created_at=skill.created_at.isoformat() if skill.created_at else None,
             updated_at=skill.updated_at.isoformat() if skill.updated_at else None,
+            import_source=skill.import_source,
         )
 
 
@@ -252,6 +274,26 @@ class CreateMySkillRequest(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_safe(cls, value: str) -> str:
+        return check_text_field("The name", value)
+
+    @field_validator("description")
+    @classmethod
+    def _description_safe(cls, value: str) -> str:
+        return check_text_field("The description", value)
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions_size(cls, value: str) -> str:
+        return check_instructions(value)
+
+    @field_validator("skill_metadata")
+    @classmethod
+    def _skill_metadata_valid(cls, value: Dict) -> Dict:
+        return check_skill_metadata(value)
+
 
 class UpdateMySkillRequest(BaseModel):
     """Request body for PUT /skills/mine/{skill_id}.
@@ -270,15 +312,53 @@ class UpdateMySkillRequest(BaseModel):
     skill_metadata: Optional[Dict] = Field(None, alias="skillMetadata")
     category: Optional[str] = None
     status: Optional[SkillStatus] = None
+    # Sent once the user has seen the reach summary of a 409 and confirmed the
+    # edit should reach the shared Agents and projects that run it unpinned.
+    confirm_reach: bool = Field(False, alias="confirmReach")
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("display_name")
+    @classmethod
+    def _display_name_safe(cls, value: Optional[str]) -> Optional[str]:
+        return check_text_field("The name", value)
+
+    @field_validator("description")
+    @classmethod
+    def _description_safe(cls, value: Optional[str]) -> Optional[str]:
+        return check_text_field("The description", value)
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions_size(cls, value: Optional[str]) -> Optional[str]:
+        return check_instructions(value)
+
+    @field_validator("skill_metadata")
+    @classmethod
+    def _skill_metadata_valid(cls, value: Optional[Dict]) -> Optional[Dict]:
+        return check_skill_metadata(value)
+
+
+async def require_reach_confirmed(skill_id: str, user: User) -> None:
+    """409 with the reach summary when an edit would reach others' unpinned bindings.
+
+    The caller's skill runs for anyone else only through the caller's own Agents
+    and projects, or a project the caller added it to as an editor
+    (``apis/shared/skills/reach.py``), so the lookup reads only those and names
+    nothing the caller cannot already see. It is blocking boto3, so it runs
+    in a worker thread. A lookup that fails does not block the save, the same
+    as the approval card, whose summary then says it could not check.
+    """
+    reach = await run_blocking(lookup_skill_reach, skill_id, user.user_id)
+    if reach.reaches_others_unpinned:
+        raise HTTPException(status_code=409, detail=reach.conflict_detail())
 
 
 def _user_skill_error(e: UserSkillError) -> HTTPException:
     """Map a user-tier service error to its HTTP status."""
     if isinstance(e, UserSkillNotFoundError):
         return HTTPException(status_code=404, detail=str(e))
-    if isinstance(e, UserSkillLimitError):
+    if isinstance(e, (UserSkillLimitError, UserSkillConflictError)):
         return HTTPException(status_code=409, detail=str(e))
     return HTTPException(status_code=400, detail=str(e))
 
@@ -327,6 +407,17 @@ async def create_my_skill(
     return MySkillResponse.from_skill(skill)
 
 
+# Registered before every ``/mine/{skill_id}`` route so ``import`` is never read
+# as an id. Not behind SKILL_BUNDLE_IMPORT_ENABLED: single-file import predates it.
+@router.post("/mine/import/parse", response_model=SkillMdParseResponse)
+async def parse_my_skill_md(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user_from_session),
+) -> SkillMdParseResponse:
+    """Read one SKILL.md into the form's fields and diagnostics. Writes nothing."""
+    return await parse_uploaded_skill_md(file)
+
+
 @router.get("/mine/{skill_id}", response_model=MySkillResponse)
 async def get_my_skill(
     skill_id: str,
@@ -351,6 +442,9 @@ async def update_my_skill(
     logger.info(f"User {user.name} updating an authored skill")
 
     updates = request.model_dump(exclude_unset=True, exclude_none=True)
+    updates.pop("confirm_reach", None)
+    if not request.confirm_reach:
+        await require_reach_confirmed(skill_id, user)
     try:
         skill = await get_user_skill_service().update_my_skill(skill_id, updates, user)
     except UserSkillError as e:
@@ -362,13 +456,26 @@ async def update_my_skill(
 @router.delete("/mine/{skill_id}")
 async def delete_my_skill(
     skill_id: str,
+    confirm_reach: bool = Query(False, alias="confirmReach"),
     user: User = Depends(get_current_user_from_session),
 ):
-    """Delete one of the current user's authored skills and its bundle files."""
+    """Delete one of the current user's authored skills and its bundle files.
+
+    409 with the reach summary (``skill_reach_unconfirmed``) while a project or
+    shared Agent uses the skill and ``confirmReach`` was not sent. Pinned
+    bindings count too: a delete removes the skill from every binding.
+    """
     logger.info(f"User {user.name} deleting an authored skill")
 
+    service = get_user_skill_service()
     try:
-        await get_user_skill_service().delete_my_skill(skill_id, user)
+        if not confirm_reach:
+            # Ownership first, so a skill the caller doesn't own 404s before any lookup.
+            await service.require_owned(skill_id, user)
+            reach = await run_blocking(lookup_skill_reach, skill_id, user.user_id)
+            if reach.delete_reaches_others:
+                raise HTTPException(status_code=409, detail=reach.delete_conflict_detail())
+        await service.delete_my_skill(skill_id, user)
     except UserSkillError as e:
         raise _user_skill_error(e)
 
@@ -399,6 +506,7 @@ async def upload_my_skill_resource(
     skill_id: str,
     file: UploadFile = File(...),
     kind: str = Form("reference"),
+    path: Optional[str] = Form(None),
     user: User = Depends(get_current_user_from_session),
 ):
     """Upload (or replace) one supporting file on an owned skill.
@@ -406,6 +514,10 @@ async def upload_my_skill_resource(
     Bytes land in the standard agentskills.io bundle layout (``references/`` |
     ``scripts/`` | ``assets/`` per ``kind``). ``script`` files are stored inert
     — listed and readable, never executed (spec D5).
+
+    ``path`` (optional form field) places the file below its kind directory,
+    e.g. ``legal/nda.md``: at most 4 folders, each segment by the filename rule.
+    Without it the file sits at the top of the directory under its filename.
     """
     logger.info(f"User {user.name} uploading a skill bundle file")
 
@@ -418,6 +530,7 @@ async def upload_my_skill_resource(
             content_type=file.content_type or "",
             user=user,
             kind=kind,
+            path=path,
         )
     except UserSkillError as e:
         raise _user_skill_error(e)
@@ -427,7 +540,7 @@ async def upload_my_skill_resource(
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
 
 
-@router.get("/mine/{skill_id}/resources/{filename}")
+@router.get("/mine/{skill_id}/resources/{filename:path}")
 async def read_my_skill_resource(
     skill_id: str,
     filename: str,
@@ -457,7 +570,7 @@ async def read_my_skill_resource(
 
 
 @router.delete(
-    "/mine/{skill_id}/resources/{filename}", response_model=SkillResourcesResponse
+    "/mine/{skill_id}/resources/{filename:path}", response_model=SkillResourcesResponse
 )
 async def delete_my_skill_resource(
     skill_id: str,
@@ -477,6 +590,54 @@ async def delete_my_skill_resource(
         raise _resource_value_error(e)
 
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
+
+
+@router.get("/mine/{skill_id}/export")
+async def export_my_skill(
+    skill_id: str,
+    version: Optional[int] = Query(None, ge=1, description="Export this frozen version"),
+    user: User = Depends(get_current_user_from_session),
+):
+    """Download an owned skill as an agentskills.io bundle (``{slug}.zip``).
+
+    Owner only: a skill the caller can merely *use* (through a shared Agent or a
+    role grant) is 404, exactly like one that does not exist, because use is
+    shared and content is not. Not behind ``SKILL_BUNDLE_IMPORT_ENABLED``: it
+    returns nothing an owner cannot already read file by file. ``?version=n``
+    exports that frozen version's content and files. A file the manifest names
+    that cannot be read is 409, naming it; there is never a partial zip. The
+    archive is built in a worker thread, off the event loop.
+    """
+    service = get_user_skill_service()
+    try:
+        skill = await service.require_owned(skill_id, user)
+        record = await load_export_record(skill, version, service.repository)
+    except UserSkillError as e:
+        raise _user_skill_error(e)
+    except SkillExportVersionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    try:
+        data = await run_blocking(
+            build_skill_zip, record, service.bundle_files.resource_store.get
+        )
+    except SkillExportFileError as e:
+        logger.warning(
+            "Skill export refused: a manifest file could not be read",
+            extra={"skill_id": scrub_log(skill_id)},
+        )
+        raise HTTPException(status_code=409, detail=str(e))
+    await record_skill_event(
+        AuditAction.SKILL_EXPORTED,
+        user,
+        skill_id,
+        after=record,
+        extra_after={"exportedVersion": version} if version else None,
+    )
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers=export_response_headers(skill_id),
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -548,7 +709,9 @@ async def read_my_field_set(
         raise _user_skill_error(e)
     except ValueError:
         raise HTTPException(status_code=404, detail=f"Field set '{name}' not found")
-    if ref.kind != "reference":
+    # Only a top-level reference is a field set; a bare name that matched a
+    # nested file of the same name is not one.
+    if ref.kind != "reference" or ref.path != ref.filename:
         raise HTTPException(status_code=404, detail=f"Field set '{name}' not found")
 
     try:
@@ -599,7 +762,7 @@ async def write_my_field_set(
 
     filename = field_set_filename(name)
     content = markdown.encode("utf-8")
-    stored = next((r for r in skill.resources if r.filename == filename), None)
+    stored = next((r for r in skill.resources if r.path == filename), None)
     if stored is not None and stored.kind != "reference":
         raise HTTPException(
             status_code=409,
@@ -674,6 +837,9 @@ class SkillDetailResponse(BaseModel):
     is_owned: bool = Field(..., alias="isOwned")
     created_at: Optional[str] = Field(None, alias="createdAt")
     updated_at: Optional[str] = Field(None, alias="updatedAt")
+    #: Where an imported skill came from (``SkillImportSource.provenance``: type,
+    #: owner, repo, ref, commit SHA; no URL or bundle hash). None when hand-written.
+    import_source: Optional[Dict[str, str]] = Field(None, alias="importSource")
 
     model_config = {"populate_by_name": True}
 
@@ -738,12 +904,13 @@ async def get_accessible_skill(
         # the two must agree or the page would contradict the list it came from.
         is_enabled=preferences.get(skill.skill_id, False),
         is_owned=skill.owner_id == user.user_id,
+        import_source=skill_provenance(skill),
         created_at=skill.created_at.isoformat() if skill.created_at else None,
         updated_at=skill.updated_at.isoformat() if skill.updated_at else None,
     )
 
 
-@router.get("/{skill_id}/resources/{filename}")
+@router.get("/{skill_id}/resources/{filename:path}")
 async def read_accessible_skill_resource(
     skill_id: str,
     filename: str,

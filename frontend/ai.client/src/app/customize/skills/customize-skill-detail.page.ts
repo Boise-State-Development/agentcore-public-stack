@@ -1,3 +1,4 @@
+import { provenanceLine } from '../../shared/skills/skill-provenance';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -10,6 +11,7 @@ import {
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
+  heroArrowDownTray,
   heroArrowLeft,
   heroDocumentText,
   heroPencilSquare,
@@ -23,6 +25,13 @@ import {
 } from '../../services/skill-detail/skill-detail.service';
 import { monogramFor } from '../../shared/utils/monogram';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
+import {
+  saveBlob,
+  skillExportErrorMessage,
+  skillExportFilename,
+} from '../../shared/skills/skill-export';
+import { MySkillService } from './services/my-skill.service';
+import { skillFilePath } from '../../shared/utils/skill-resource-path';
 
 /** Bundle-directory labels, in the order agentskills.io lists them. */
 const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 };
@@ -67,7 +76,7 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [NgIcon, RouterLink, SpinnerComponent, MarkdownComponent],
   providers: [
-    provideIcons({ heroArrowLeft, heroDocumentText, heroPencilSquare }),
+    provideIcons({ heroArrowDownTray, heroArrowLeft, heroDocumentText, heroPencilSquare }),
   ],
   template: `
     <div class="min-h-dvh">
@@ -108,18 +117,35 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                  path. This is a read surface; it links there rather than
                  growing a second editor. -->
             @if (s.isOwned) {
-              <a
-                [routerLink]="['/customize/skills', s.skillId, 'edit']"
-                class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-gray-200 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white"
-              >
-                Edit
-                <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
-              </a>
+              <div class="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  (click)="onDownload()"
+                  [disabled]="downloading()"
+                  [attr.aria-busy]="downloading()"
+                  class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-gray-200 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white"
+                >
+                  {{ downloading() ? 'Downloading…' : 'Download skill' }}
+                  <ng-icon name="heroArrowDownTray" class="size-4" aria-hidden="true" />
+                </button>
+                <a
+                  [routerLink]="['/customize/skills', s.skillId, 'edit']"
+                  class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-gray-200 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white"
+                >
+                  Edit
+                  <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
+                </a>
+              </div>
             }
           </div>
 
           @if (s.description) {
             <p class="mt-4 text-sm/6 text-gray-600 dark:text-gray-300">{{ s.description }}</p>
+          }
+          @if (provenance(); as source) {
+            <p class="mt-2 text-xs/5 text-gray-500 dark:text-gray-400" data-testid="skill-provenance">
+              {{ source }}
+            </p>
           }
 
           <!-- Master switch -->
@@ -154,6 +180,15 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
               ></span>
             </button>
           </div>
+
+          @if (downloadError()) {
+            <div
+              role="alert"
+              class="mt-4 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-900 dark:bg-state-danger-900/20 dark:text-state-danger-300"
+            >
+              {{ downloadError() }}
+            </div>
+          }
 
           @if (saveError()) {
             <div
@@ -200,7 +235,7 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                 Reference material the assistant can open on demand — not loaded up front.
               </p>
               <ul class="mt-3 flex flex-col gap-2">
-                @for (file of files(); track file.filename) {
+                @for (file of files(); track filePath(file)) {
                   <li
                     class="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 px-4 py-3 dark:border-white/10"
                   >
@@ -213,7 +248,7 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                       <span class="min-w-0">
                         <span
                           class="block truncate font-mono text-sm/6 font-medium text-gray-900 dark:text-white"
-                          >{{ file.filename }}</span
+                          >{{ filePath(file) }}</span
                         >
                         <span class="block text-xs/5 text-gray-500 capitalize dark:text-gray-400">
                           {{ file.kind }} · {{ sizeLabel(file.size) }}
@@ -226,7 +261,7 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                          Opened in a new tab with rel=noopener so a download
                          never navigates the SPA away from this page. -->
                     <a
-                      [href]="resourceUrl(s.skillId, file.filename)"
+                      [href]="resourceUrl(s.skillId, filePath(file))"
                       target="_blank"
                       rel="noopener"
                       class="shrink-0 text-sm/6 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
@@ -337,14 +372,20 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
   `,
 })
 export class CustomizeSkillDetailPage {
+  /** A skill file's path below its kind directory (its filename at the top). */
+  protected readonly filePath = skillFilePath;
+
   protected readonly skillService = inject(SkillService);
   protected readonly detailService = inject(SkillDetailService);
+  private readonly mySkills = inject(MySkillService);
 
   /** Bound from the `:skillId` route param by `withComponentInputBinding()`. */
   readonly skillId = input.required<string>();
 
   protected readonly saving = signal(false);
   protected readonly saveError = signal<string | null>(null);
+  protected readonly downloading = signal(false);
+  protected readonly downloadError = signal<string | null>(null);
 
   constructor() {
     // The toggle writes through SkillService, which silently no-ops on a skill
@@ -360,6 +401,9 @@ export class CustomizeSkillDetailPage {
   protected readonly skill = computed<SkillDetail | null>(() =>
     this.detailService.detailFor(this.skillId()),
   );
+
+  /** "Imported from owner/repo @ sha7" for an imported skill, as text. */
+  protected readonly provenance = computed(() => provenanceLine(this.skill()?.importSource));
 
   /** The detail read has settled, whatever the answer. */
   protected readonly resolved = computed(
@@ -399,7 +443,7 @@ export class CustomizeSkillDetailPage {
     [...(this.skill()?.resources ?? [])].sort(
       (a, b) =>
         (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9) ||
-        a.filename.localeCompare(b.filename),
+        skillFilePath(a).localeCompare(skillFilePath(b)),
     ),
   );
 
@@ -458,6 +502,26 @@ export class CustomizeSkillDetailPage {
       );
     } finally {
       this.saving.set(false);
+    }
+  }
+
+  /**
+   * Download the skill as an agentskills.io bundle. Offered only for a skill
+   * the user wrote, the one case the owner-only export route serves.
+   */
+  protected async onDownload(): Promise<void> {
+    const s = this.skill();
+    if (!s?.isOwned || this.downloading()) return;
+
+    this.downloading.set(true);
+    this.downloadError.set(null);
+    try {
+      const blob = await this.mySkills.exportSkill(s.skillId);
+      saveBlob(blob, skillExportFilename(s.skillId));
+    } catch (err) {
+      this.downloadError.set(await skillExportErrorMessage(err));
+    } finally {
+      this.downloading.set(false);
     }
   }
 }

@@ -27,7 +27,7 @@ from apis.shared.extraction.field_sets import (
     FieldSetError,
     FieldSetLayout,
     default_field_title,
-    field_set_name_for,
+    field_set_name_of_ref,
     read_field_set_file,
     serialize_field_set,
 )
@@ -178,8 +178,8 @@ def list_field_sets(resources: List[SkillResourceRef]) -> List[FieldSetSummary]:
     """
     summaries = []
     for ref in resources:
-        name = field_set_name_for(ref.filename)
-        if name is None or ref.kind != "reference":
+        name = field_set_name_of_ref(ref)
+        if name is None:
             continue
         summaries.append(
             FieldSetSummary(

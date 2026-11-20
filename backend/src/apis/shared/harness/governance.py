@@ -79,21 +79,23 @@ class RunAuditRecorder:
         session_id: str,
         trigger: str,
         prompt: str,
+        title: Optional[str] = None,
     ) -> None:
-        self._table().put_item(
-            Item={
-                "PK": f"USER#{user_id}",
-                "SK": f"RUN#{run_id}",
-                "runId": run_id,
-                "userId": user_id,
-                "sessionId": session_id,
-                "trigger": trigger,
-                "promptSha256": hashlib.sha256(prompt.encode()).hexdigest(),
-                "promptChars": len(prompt),
-                "status": "started",
-                "startedAt": _now_iso(),
-            }
-        )
+        item: dict[str, Any] = {
+            "PK": f"USER#{user_id}",
+            "SK": f"RUN#{run_id}",
+            "runId": run_id,
+            "userId": user_id,
+            "sessionId": session_id,
+            "trigger": trigger,
+            "promptSha256": hashlib.sha256(prompt.encode()).hexdigest(),
+            "promptChars": len(prompt),
+            "status": "started",
+            "startedAt": _now_iso(),
+        }
+        if title:
+            item["title"] = title
+        self._table().put_item(Item=item)
 
     def record_end(self, *, result: RunResult) -> None:
         self._table().update_item(
@@ -101,7 +103,7 @@ class RunAuditRecorder:
             UpdateExpression=(
                 "SET #s = :s, stopReason = :sr, errorDetail = :e, "
                 "toolNames = :t, #u = :u, finishedAt = :f, "
-                "finalMessageChars = :c"
+                "finalMessageChars = :c, title = :ti"
             ),
             ExpressionAttributeNames={"#s": "status", "#u": "usage"},
             ExpressionAttributeValues={
@@ -114,8 +116,20 @@ class RunAuditRecorder:
                 ":u": _dynamo_safe(result.usage),
                 ":f": _now_iso(),
                 ":c": len(result.final_message),
+                ":ti": result.title or "",
             },
         )
+
+    def get(self, *, user_id: str, run_id: str) -> Optional[dict[str, Any]]:
+        """The caller's own run record, or ``None``.
+
+        Keyed on ``USER#{user_id}``, so another user's ``run_id`` reads as
+        missing rather than needing a separate ownership check.
+        """
+        response = self._table().get_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"RUN#{run_id}"}
+        )
+        return response.get("Item")
 
 
 def _dynamo_safe(value: Any) -> Any:
@@ -142,6 +156,7 @@ class GovernanceFloor:
         session_id: str,
         trigger: str,
         prompt: str,
+        title: Optional[str] = None,
     ) -> None:
         """AUDIT — implemented. Failure here fails the run (a run that can't
         be audited must not execute unattended)."""
@@ -151,6 +166,7 @@ class GovernanceFloor:
             session_id=session_id,
             trigger=trigger,
             prompt=prompt,
+            title=title,
         )
 
     async def check_input(self, *, prompt: str, user_id: str) -> None:

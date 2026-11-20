@@ -19,6 +19,7 @@ export interface ToolCallDisplay {
     status: string;
     content: ToolResultContent[];
     structuredContent?: unknown;
+    metadata?: Record<string, unknown>;
   };
 
   /** Execution status (from toolUseData.status, defaults to 'pending').

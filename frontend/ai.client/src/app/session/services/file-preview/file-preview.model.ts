@@ -7,6 +7,39 @@ export interface OpenFilePreviewRef {
 }
 
 /**
+ * A knowledge-base document a citation named, opened to show the text it was
+ * indexed from. Not an upload: it belongs to an agent, not to the user, and is
+ * read through `/assistants/{id}/documents/{docId}/content` (bounded text),
+ * never through a presigned URL, so the pane offers no download for it.
+ */
+export interface KbDocumentPreviewRef {
+  kind: 'kb-document';
+  assistantId: string;
+  documentId: string;
+  /** What the citation card calls it: a web page's title, else the filename. */
+  filename: string;
+  /** The page a crawled document came from, for the header's "Open page". */
+  sourceUrl?: string | null;
+}
+
+/** Anything the docked preview pane can show. */
+export type FilePreviewRef = OpenFilePreviewRef | KbDocumentPreviewRef;
+
+export function isKbDocumentRef(ref: FilePreviewRef | null): ref is KbDocumentPreviewRef {
+  return !!ref && 'kind' in ref && ref.kind === 'kb-document';
+}
+
+/**
+ * Whether a cited document's indexed text can be shown: a crawled web page
+ * (always staged as markdown) or a markdown/plain-text filename. The server
+ * decides on the stored type and answers 415 otherwise; this only keeps the
+ * action off cards that would certainly be refused.
+ */
+export function isViewableCitationDocument(fileName: string, isWebPage: boolean): boolean {
+  return isWebPage || /\.(md|markdown|txt)$/i.test(fileName.trim());
+}
+
+/**
  * MIME type of a Word document (OOXML). Matches
  * `apis.shared.files.ALLOWED_MIME_TYPES` and the `_DOCX_MIME` constant in
  * `agents/builtin_tools/word_document_tool.py`.

@@ -29,6 +29,8 @@ export const environment = {
         documentExtract: true,
         // The `development` GitHub environment sets CDK_FIELD_SET_AUTHORING_ENABLED=true.
         fieldSetAuthoring: true,
+        // Needs CDK_SKILL_BUNDLE_IMPORT_ENABLED=true in the `development` GitHub environment.
+        skillBundleImport: true,
         // The `development` GitHub environment sets CDK_HANDOFFS_ENABLED=true.
         handoffs: true,
         // The `development` GitHub environment sets CDK_HANDOFF_BRIEF_ENABLED=true.

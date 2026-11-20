@@ -20,7 +20,17 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
+from apis.shared.audit.models import AuditAction
 from apis.shared.auth import User, require_admin_scope
+from apis.shared.blocking_io import run_blocking
+from apis.shared.skills.audit import record_skill_event
+from apis.shared.skills.bundle_export import (
+    SkillExportFileError,
+    SkillExportVersionNotFoundError,
+    build_skill_zip,
+    export_response_headers,
+    load_export_record,
+)
 from apis.shared.skills.models import (
     AddRemoveSkillRolesRequest,
     AdminSkillListResponse,
@@ -36,7 +46,9 @@ from apis.shared.skills.resource_types import (
     resource_download_headers,
     safe_download_content_type,
 )
-from apis.app_api.skills.service import get_skill_catalog_service
+from apis.app_api.skills.service import SkillNameConflictError, get_skill_catalog_service
+from apis.app_api.skills.skill_md_parse import parse_uploaded_skill_md
+from apis.shared.skills.skill_md_import import SkillMdParseResponse
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +88,16 @@ async def admin_list_all_skills(
         skills=[AdminSkillResponse.from_skill_definition(s) for s in skills],
         total=len(skills),
     )
+
+
+# Registered before every ``/{skill_id}`` route so ``import`` is never read as an id.
+@router.post("/import/parse", response_model=SkillMdParseResponse)
+async def admin_parse_skill_md(
+    file: UploadFile = File(...),
+    admin: User = Depends(require_skills_admin),
+) -> SkillMdParseResponse:
+    """Read one SKILL.md into the create form's fields and diagnostics. Writes nothing."""
+    return await parse_uploaded_skill_md(file)
 
 
 @router.get("/{skill_id}", response_model=AdminSkillResponse)
@@ -122,10 +144,14 @@ async def admin_create_skill(
             description=request.description,
             instructions=request.instructions,
             compose=request.compose,
+            allowed_tools=request.allowed_tools,
+            skill_metadata=request.skill_metadata,
             status=request.status,
             category=request.category,
         )
         created = await service.create_skill(skill, admin)
+    except SkillNameConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -295,6 +321,7 @@ async def upload_skill_resource(
     skill_id: str,
     file: UploadFile = File(...),
     kind: str = Form("reference"),
+    path: Optional[str] = Form(None),
     admin: User = Depends(require_skills_admin),
 ):
     """Upload (or replace) one supporting file for a catalog skill.
@@ -304,6 +331,10 @@ async def upload_skill_resource(
     row's manifest is updated atomically. Re-uploading the same filename
     replaces it. ``script`` files are stored inert (never executed). Returns the
     skill's updated manifest.
+
+    ``path`` (optional form field) places the file below its kind directory,
+    e.g. ``legal/nda.md``: at most 4 folders, each segment by the filename rule.
+    Without it the file sits at the top of the directory under its filename.
     """
     logger.info("Admin uploading skill reference file")
 
@@ -318,6 +349,7 @@ async def upload_skill_resource(
             content_type=file.content_type or "",
             admin=admin,
             kind=kind,
+            path=path,
         )
     except ValueError as e:
         raise _skill_value_error(e)
@@ -329,7 +361,7 @@ async def upload_skill_resource(
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
 
 
-@router.get("/{skill_id}/resources/{filename}")
+@router.get("/{skill_id}/resources/{filename:path}")
 async def read_skill_resource(
     skill_id: str,
     filename: str,
@@ -361,7 +393,48 @@ async def read_skill_resource(
     )
 
 
-@router.delete("/{skill_id}/resources/{filename}", response_model=SkillResourcesResponse)
+@router.get("/{skill_id}/export")
+async def export_skill(
+    skill_id: str,
+    version: Optional[int] = Query(None, ge=1, description="Export this frozen version"),
+    admin: User = Depends(require_skills_admin),
+):
+    """Download a catalog skill as an agentskills.io bundle (``{slug}.zip``).
+
+    Catalog-scoped: a user-authored skill is 404, exactly as it is absent from
+    ``GET /admin/skills/``. ``?version=n`` exports that frozen version. A file
+    the manifest names that cannot be read is 409, naming it; there is never a
+    partial zip. The archive is built in a worker thread, off the event loop.
+    """
+    service = get_skill_catalog_service()
+    skill = await service.get_catalog_skill(skill_id)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+    try:
+        record = await load_export_record(skill, version, service.repository)
+    except SkillExportVersionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    try:
+        data = await run_blocking(build_skill_zip, record, service.resource_store.get)
+    except SkillExportFileError as e:
+        logger.warning("Admin skill export refused: a manifest file could not be read")
+        raise HTTPException(status_code=409, detail=str(e))
+    logger.info("Admin exported catalog skill")
+    await record_skill_event(
+        AuditAction.SKILL_EXPORTED,
+        admin,
+        skill_id,
+        after=record,
+        extra_after={"exportedVersion": version} if version else None,
+    )
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers=export_response_headers(skill_id),
+    )
+
+
+@router.delete("/{skill_id}/resources/{filename:path}", response_model=SkillResourcesResponse)
 async def delete_skill_resource(
     skill_id: str,
     filename: str,

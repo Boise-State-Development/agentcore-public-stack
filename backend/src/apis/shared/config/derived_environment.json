@@ -20,6 +20,7 @@
     {"name": "DYNAMODB_AUTH_PROVIDERS_TABLE_NAME", "suffix": "auth-providers"},
     {"name": "DYNAMODB_MEMORY_SPACES_TABLE_NAME", "suffix": "memory-spaces"},
     {"name": "DYNAMODB_PROJECTS_TABLE_NAME", "suffix": "projects"},
+    {"name": "DYNAMODB_AUDIT_LOG_TABLE_NAME", "suffix": "audit-log"},
     {"name": "S3_USER_FILES_BUCKET_NAME", "suffix": "user-file-uploads", "accountScoped": true},
     {"name": "S3_ASSISTANTS_DOCUMENTS_BUCKET_NAME", "suffix": "rag-documents", "accountScoped": true},
     {"name": "S3_ASSISTANTS_VECTOR_STORE_BUCKET_NAME", "suffix": "rag-vector-store-v1", "accountScoped": true},

@@ -1,3 +1,4 @@
+import { Dialog } from '@angular/cdk/dialog';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -11,8 +12,13 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { FEATURES } from '../../services/features';
 import { FieldSetsSectionComponent } from './components/field-sets-section.component';
+import { SkillBundleImportComponent } from './components/skill-bundle-import.component';
 import { fieldSetNameFor } from './models/field-set.model';
-import { parseSkillMarkdown } from '../../admin/skills/models/skill-import.util';
+import {
+  SkillMdDiagnostic,
+  skillMdParseErrorMessage,
+} from '../../shared/skills/skill-md-parse';
+import { SkillMdDiagnosticsComponent } from '../../shared/skills/skill-md-diagnostics.component';
 import {
   DISALLOWED_RESOURCE_MESSAGE,
   RESOURCE_ACCEPT_ATTR,
@@ -22,11 +28,17 @@ import { SKILL_DESCRIPTION_MAX_LENGTH } from '../../shared/skills/skill-field-li
 import {
   MAX_RESOURCE_BYTES,
   MAX_RESOURCES_PER_SKILL,
+  MySkill,
   MySkillResourceRef,
   RESOURCE_KINDS,
+  SkillImportSource,
   SkillResourceKind,
+  UpdateMySkillRequest,
 } from './models/my-skill.model';
 import { MySkillService } from './services/my-skill.service';
+import { confirmSkillReach } from '../../shared/skills/confirm-skill-reach';
+import { reachConfirmationFrom } from '../../shared/skills/skill-provenance';
+import { isNestedSkillFile, skillFilePath } from '../../shared/utils/skill-resource-path';
 
 /**
  * Create / edit one user-authored skill (Skills v2 PR-3).
@@ -42,7 +54,14 @@ import { MySkillService } from './services/my-skill.service';
  */
 @Component({
   selector: 'app-skill-form',
-  imports: [ReactiveFormsModule, RouterLink, NgIcon, FieldSetsSectionComponent],
+  imports: [
+    ReactiveFormsModule,
+    RouterLink,
+    NgIcon,
+    FieldSetsSectionComponent,
+    SkillBundleImportComponent,
+    SkillMdDiagnosticsComponent,
+  ],
   templateUrl: './skill-form.page.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
   viewProviders: [
@@ -50,10 +69,14 @@ import { MySkillService } from './services/my-skill.service';
   ],
 })
 export class SkillFormPage {
+  /** A skill file's path below its kind directory (its filename at the top). */
+  protected readonly filePath = skillFilePath;
+
   private fb = inject(FormBuilder);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private skillService = inject(MySkillService);
+  private dialog = inject(Dialog);
   protected readonly features = inject(FEATURES);
 
   protected readonly resourceKinds = RESOURCE_KINDS;
@@ -66,6 +89,9 @@ export class SkillFormPage {
   protected readonly saving = signal(false);
   protected readonly error = signal<string | null>(null);
   protected readonly importNotice = signal<string | null>(null);
+  protected readonly importing = signal(false);
+  /** The server's notes on the last imported SKILL.md (rendered as text only). */
+  protected readonly importDiagnostics = signal<SkillMdDiagnostic[]>([]);
   /** Arrived via `Add → Upload skill` rather than `Add → Create a skill`. */
   protected readonly importMode = signal(false);
 
@@ -85,6 +111,8 @@ export class SkillFormPage {
    * round-trips (D2); `allowedTools` is advisory display metadata (D4).
    */
   protected readonly allowedTools = signal<string[]>([]);
+  /** The skill's last bundle import (skill-bundle-import.md), shown on edit. */
+  protected readonly importSource = signal<SkillImportSource | null>(null);
   private readonly skillMetadata = signal<Record<string, unknown>>({});
 
   protected readonly form = this.fb.nonNullable.group({
@@ -121,18 +149,38 @@ export class SkillFormPage {
 
   private async loadSkill(id: string): Promise<void> {
     try {
-      const skill = await this.skillService.getSkill(id);
-      this.form.patchValue({
-        displayName: skill.displayName,
-        description: skill.description,
-        instructions: skill.instructions,
-      });
-      this.resources.set(skill.resources);
-      this.allowedTools.set(skill.allowedTools ?? []);
-      this.skillMetadata.set(skill.skillMetadata ?? {});
+      this.applySkill(await this.skillService.getSkill(id));
     } catch {
       this.error.set("We couldn't load that skill. It may have been deleted.");
     }
+  }
+
+  private applySkill(skill: MySkill): void {
+    this.form.patchValue({
+      displayName: skill.displayName,
+      description: skill.description,
+      instructions: skill.instructions,
+    });
+    this.resources.set(skill.resources);
+    this.allowedTools.set(skill.allowedTools ?? []);
+    this.skillMetadata.set(skill.skillMetadata ?? {});
+    this.importSource.set(skill.importSource ?? null);
+  }
+
+  // ---- bundle import -----------------------------------------------------
+
+  /**
+   * A bundle import already wrote the skill server-side. A new one opens its
+   * edit page; a re-import refreshes this form from what was written, so a
+   * later Save cannot put the old instructions back.
+   */
+  protected async onBundleImported(skill: MySkill): Promise<void> {
+    if (!this.isEdit()) {
+      await this.router.navigate(['/customize/skills', skill.skillId, 'edit']);
+      return;
+    }
+    this.applySkill(skill);
+    this.form.markAsPristine();
   }
 
   // ---- SKILL.md import ---------------------------------------------------
@@ -140,29 +188,37 @@ export class SkillFormPage {
   protected async onImportSelected(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
+    // Let the same file be re-picked if the user wants to redo the import.
+    input.value = '';
     if (!file) {
       return;
     }
 
-    const text = await file.text();
-    const parsed = parseSkillMarkdown(text);
-
-    this.form.patchValue({
-      displayName: parsed.name || this.form.controls.displayName.value,
-      description: parsed.description || this.form.controls.description.value,
-      instructions: parsed.instructions,
-    });
-    // Everything the form has no control for still round-trips (D2/D4).
-    this.allowedTools.set(parsed.allowedTools);
-    this.skillMetadata.set(parsed.metadata);
-    this.importNotice.set(
-      parsed.name || parsed.description
-        ? `Prefilled from ${file.name}. Review the name and description before saving.`
-        : `${file.name} had no frontmatter, so its whole body became the instructions.`,
-    );
-
-    // Let the same file be re-picked if the user wants to redo the import.
-    input.value = '';
+    this.importing.set(true);
+    this.error.set(null);
+    this.importNotice.set(null);
+    try {
+      const parsed = await this.skillService.parseSkillMd(file);
+      this.form.patchValue({
+        displayName: parsed.displayName || this.form.controls.displayName.value,
+        description: parsed.description || this.form.controls.description.value,
+        instructions: parsed.instructions,
+      });
+      // Everything the form has no control for still round-trips (D2/D4).
+      this.allowedTools.set(parsed.allowedTools);
+      this.skillMetadata.set(parsed.skillMetadata);
+      this.importDiagnostics.set(parsed.diagnostics);
+      this.importNotice.set(
+        parsed.name || parsed.description
+          ? `Prefilled from ${file.name}. Review the name and description before saving.`
+          : `${file.name} had no frontmatter, so its whole body became the instructions.`,
+      );
+    } catch (err: unknown) {
+      this.importDiagnostics.set([]);
+      this.error.set(skillMdParseErrorMessage(err));
+    } finally {
+      this.importing.set(false);
+    }
   }
 
   // ---- bundle files ------------------------------------------------------
@@ -277,7 +333,9 @@ export class SkillFormPage {
    * file it is, and gains an Edit link (field-set-authoring §3).
    */
   protected editableFieldSet(resource: MySkillResourceRef): string | null {
-    if (!this.features.fieldSetAuthoring || resource.kind !== 'reference') {
+    // Only a top-level reference is a field set; a same-named file in a
+    // subfolder is an ordinary file.
+    if (!this.features.fieldSetAuthoring || resource.kind !== 'reference' || isNestedSkillFile(resource)) {
       return null;
     }
     return fieldSetNameFor(resource.filename);
@@ -306,7 +364,7 @@ export class SkillFormPage {
     try {
       const id = this.skillId();
       if (id) {
-        await this.skillService.updateSkill(id, value);
+        if (!(await this.updateConfirmingReach(id, value))) return;
       } else {
         const created = await this.skillService.createSkill(value);
         // Uploads need a skill id, so staged files go up now.
@@ -319,6 +377,24 @@ export class SkillFormPage {
       this.error.set(this.skillService.error$() ?? 'Failed to save the skill.');
     } finally {
       this.saving.set(false);
+    }
+  }
+
+  /**
+   * Save an edit, asking first when the server reports it would reach other
+   * people's agents or projects (a 409 with the reach summary). Resolves false
+   * when the user chose to keep editing, so nothing navigates away.
+   */
+  private async updateConfirmingReach(id: string, value: UpdateMySkillRequest): Promise<boolean> {
+    try {
+      await this.skillService.updateSkill(id, value);
+      return true;
+    } catch (err) {
+      const reach = reachConfirmationFrom(err);
+      if (reach === null) throw err;
+      if (!(await confirmSkillReach(this.dialog, reach))) return false;
+      await this.skillService.updateSkill(id, { ...value, confirmReach: true });
+      return true;
     }
   }
 }

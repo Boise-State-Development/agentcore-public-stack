@@ -61,3 +61,16 @@ describe('formatValue', () => {
     expect(formatValue('Analyst')).toBe('Analyst');
   });
 });
+
+describe('skill audit records', () => {
+  it('labels the skill actions', () => {
+    expect(actionLabel('skill.updated')).toBe('Skill updated');
+    expect(actionLabel('skill.script_run')).toBe('Skill script run');
+  });
+
+  it('renders a map of file hashes as name: value pairs, not [object Object]', () => {
+    expect(formatValue({ 'notes.md': 'abc', 'x.md': 'def' })).toBe('notes.md: abc, x.md: def');
+    expect(formatValue({})).toBe('(none)');
+    expect(fieldLabel('contentHash')).toBe('Content hash');
+  });
+});

@@ -182,3 +182,94 @@ def test_resource_upload_rejects_a_traversal_filename(client):
     )
 
     assert resp.status_code == 400
+
+
+# -- Hardening: unsafe characters and the instructions cap --------------------
+
+
+def test_create_and_update_refuse_a_bidi_override_in_the_description(client):
+    resp = client.post(
+        "/skills/mine", json={"displayName": "Notes", "description": "Takes ‮notes."}
+    )
+    assert resp.status_code == 422
+    assert "U+202E" in resp.text
+    client.post("/skills/mine", json={"displayName": "Notes", "description": "Old."})
+    resp = client.put("/skills/mine/notes", json={"description": "Takes ‮notes."})
+    assert resp.status_code == 422
+
+
+def test_create_and_update_refuse_unsafe_characters_in_the_name(client):
+    resp = client.post(
+        "/skills/mine", json={"displayName": "No​tes", "description": "Takes notes."}
+    )
+    assert resp.status_code == 422
+    assert "U+200B" in resp.text
+
+
+def test_create_and_update_cap_the_instructions(client):
+    from apis.shared.skills.models import SKILL_INSTRUCTIONS_MAX_BYTES
+
+    over = "x" * (SKILL_INSTRUCTIONS_MAX_BYTES + 1)
+    resp = client.post(
+        "/skills/mine",
+        json={"displayName": "Notes", "description": "Takes notes.", "instructions": over},
+    )
+    assert resp.status_code == 422
+    client.post("/skills/mine", json={"displayName": "Notes", "description": "Takes notes."})
+    assert client.put("/skills/mine/notes", json={"instructions": over}).status_code == 422
+    at_cap = "x" * SKILL_INSTRUCTIONS_MAX_BYTES
+    assert client.put("/skills/mine/notes", json={"instructions": at_cap}).status_code == 200
+
+
+def test_skill_metadata_errors_refuse_and_warnings_pass(client):
+    body = {"displayName": "Meta", "description": "Has frontmatter."}
+    refused = client.post(
+        "/skills/mine", json={**body, "skillMetadata": {"compatibility": "c" * 501}}
+    )
+    assert refused.status_code == 422
+    assert "compatibility" in refused.text
+
+    # An unknown key is only a warning: it is kept, and written under metadata.
+    accepted = client.post(
+        "/skills/mine",
+        json={**body, "skillMetadata": {"license": "MIT", "version": 2}},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["skillMetadata"] == {"license": "MIT", "version": 2}
+
+    refused_update = client.put(
+        "/skills/mine/meta", json={"skillMetadata": {"metadata": "flat"}}
+    )
+    assert refused_update.status_code == 422
+    assert client.get("/skills/mine/meta").json()["skillMetadata"]["license"] == "MIT"
+
+
+@pytest.mark.parametrize("version", [2, "decimal"])
+@pytest.mark.asyncio
+async def test_a_stored_non_string_metadata_value_does_not_block_an_edit(
+    client, user_skill_service, version
+):
+    """Bundle import keeps YAML ints, and the edit form sends skillMetadata back unchanged."""
+    from decimal import Decimal
+
+    from apis.shared.skills.resource_store import skill_md_key
+    from apis.shared.skills.skill_md import parse_skill_md, validate_frontmatter
+
+    client.post("/skills/mine", json={"displayName": "Stored", "description": "Old."})
+    stored = Decimal("2") if version == "decimal" else version
+    await user_skill_service.repository.update_skill(
+        "stored", {"skill_metadata": {"metadata": {"version": stored}, "license": "MIT"}}
+    )
+    sent_back = {"metadata": {"version": 2}, "license": "MIT"}
+
+    resp = client.put(
+        "/skills/mine/stored", json={"description": "New.", "skillMetadata": sent_back}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["description"] == "New."
+
+    raw = user_skill_service.bundle_files.resource_store.get(skill_md_key("stored"))
+    frontmatter = parse_skill_md(raw.decode("utf-8")).frontmatter
+    assert validate_frontmatter(frontmatter, strict=True) == []
+    assert frontmatter["metadata"] == {"version": "2"}
+    assert frontmatter["license"] == "MIT"

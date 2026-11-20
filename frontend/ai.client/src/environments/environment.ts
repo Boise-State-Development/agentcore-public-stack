@@ -25,6 +25,7 @@ export const environment = {
         attachmentPlan: false,
         documentExtract: false,
         fieldSetAuthoring: false,
+        skillBundleImport: false,
         handoffs: false,
         handoffBrief: false,
         sessionRewind: true,

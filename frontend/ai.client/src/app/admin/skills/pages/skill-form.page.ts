@@ -10,6 +10,7 @@ import { RouterLink, Router, ActivatedRoute } from '@angular/router';
 import { FormBuilder, FormGroup, Validators, ReactiveFormsModule } from '@angular/forms';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
+  heroArrowDownTray,
   heroArrowLeft,
   heroPlus,
   heroTrash,
@@ -25,25 +26,34 @@ import {
   SKILL_STATUSES,
   SKILL_CATEGORIES,
   SKILL_ID_PATTERN,
+  slugifySkillId,
 } from '../models/admin-skill.model';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
+import {
+  saveBlob,
+  skillExportErrorMessage,
+  skillExportFilename,
+} from '../../../shared/skills/skill-export';
 import { SKILL_DESCRIPTION_MAX_LENGTH } from '../../../shared/skills/skill-field-limits';
 import {
-  parseSkillMarkdown,
-  slugifySkillId,
-} from '../models/skill-import.util';
+  SkillMdDiagnostic,
+  skillMdParseErrorMessage,
+} from '../../../shared/skills/skill-md-parse';
+import { SkillMdDiagnosticsComponent } from '../../../shared/skills/skill-md-diagnostics.component';
 import {
   DISALLOWED_RESOURCE_MESSAGE,
   RESOURCE_ACCEPT_ATTR,
   isAllowedResourceFilename,
 } from '../../../shared/skills/skill-resource-types';
+import { skillFilePath } from '../../../shared/utils/skill-resource-path';
 
 @Component({
   selector: 'app-skill-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, ReactiveFormsModule, NgIcon, SpinnerComponent],
+  imports: [RouterLink, ReactiveFormsModule, NgIcon, SpinnerComponent, SkillMdDiagnosticsComponent],
   providers: [
     provideIcons({
+      heroArrowDownTray,
       heroArrowLeft,
       heroPlus,
       heroTrash,
@@ -76,6 +86,21 @@ import {
             </p>
           </div>
 
+          @if (catalogLoaded()) {
+            <div>
+              <button
+                type="button"
+                (click)="downloadSkill()"
+                [disabled]="downloading()"
+                [attr.aria-busy]="downloading()"
+                class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-200 bg-white px-3.5 py-1.5 text-sm/6 font-medium text-gray-700 transition-colors hover:border-gray-300 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white"
+              >
+                {{ downloading() ? 'Downloading…' : 'Download skill' }}
+                <ng-icon name="heroArrowDownTray" class="size-4" aria-hidden="true" />
+              </button>
+            </div>
+          }
+
           @if (!isEditMode()) {
             <div>
               <label
@@ -83,18 +108,26 @@ import {
                 class="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
               >
                 <ng-icon name="heroArrowUpTray" class="size-4" aria-hidden="true" />
-                Import SKILL.md
+                {{ importing() ? 'Reading…' : 'Import SKILL.md' }}
               </label>
               <input
                 id="skillImport"
                 type="file"
                 accept=".md,.markdown,text/markdown,text/plain"
                 class="sr-only"
+                [disabled]="importing()"
                 (change)="onImportSelected($event)"
               />
             </div>
           }
         </div>
+        @if (!isEditMode()) {
+          <app-skill-md-diagnostics
+            class="mb-6 block"
+            headingId="admin-skill-md-diagnostics"
+            [diagnostics]="importDiagnostics()"
+          />
+        }
 
         @if (loading()) {
           <div class="flex h-64 items-center justify-center">
@@ -296,17 +329,17 @@ import {
               @if (isEditMode()) {
                 @if (resources().length > 0) {
                   <ul class="divide-y divide-gray-200 overflow-hidden rounded-lg border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
-                    @for (res of resources(); track res.filename) {
+                    @for (res of resources(); track filePath(res)) {
                       <li class="flex items-center gap-3 px-3 py-2">
                         <ng-icon name="heroDocumentText" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
                         <div class="min-w-0 flex-1">
-                          <span class="block truncate font-mono text-sm/6 text-gray-900 dark:text-white">{{ res.filename }}</span>
+                          <span class="block truncate font-mono text-sm/6 text-gray-900 dark:text-white">{{ filePath(res) }}</span>
                           <span class="text-xs/5 text-gray-500 dark:text-gray-400">{{ formatSize(res.size) }} · {{ res.contentType }}</span>
                         </div>
                         <button
                           type="button"
                           (click)="viewResource(res)"
-                          [attr.aria-label]="'View ' + res.filename"
+                          [attr.aria-label]="'View ' + filePath(res)"
                           class="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
                         >
                           <ng-icon name="heroEye" class="size-4" aria-hidden="true" />
@@ -315,7 +348,7 @@ import {
                           type="button"
                           (click)="deleteResource(res)"
                           [disabled]="resourceBusy()"
-                          [attr.aria-label]="'Delete ' + res.filename"
+                          [attr.aria-label]="'Delete ' + filePath(res)"
                           class="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-state-danger-50 hover:text-state-danger-600 disabled:opacity-50 dark:text-gray-500 dark:hover:bg-state-danger-900/20 dark:hover:text-state-danger-400"
                         >
                           <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
@@ -394,6 +427,9 @@ import {
   `,
 })
 export class SkillFormPage implements OnInit {
+  /** A skill file's path below its kind directory (its filename at the top). */
+  protected readonly filePath = skillFilePath;
+
   private fb = inject(FormBuilder);
   private router = inject(Router);
   private route = inject(ActivatedRoute);
@@ -406,9 +442,24 @@ export class SkillFormPage implements OnInit {
   saving = signal(false);
   error = signal<string | null>(null);
   importNotice = signal<string | null>(null);
+  readonly importing = signal(false);
+  /** The server's notes on the last imported SKILL.md (rendered as text only). */
+  readonly importDiagnostics = signal<SkillMdDiagnostic[]>([]);
+  /**
+   * Frontmatter from an imported SKILL.md with no form control of its own,
+   * sent on create so the skill keeps it (advisory tools, license, metadata, ...).
+   */
+  readonly importedAllowedTools = signal<string[]>([]);
+  readonly importedSkillMetadata = signal<Record<string, unknown>>({});
   skillId = signal<string | null>(null);
 
   readonly isEditMode = computed(() => !!this.skillId());
+  /**
+   * The edited skill loaded from the admin route, which serves catalog skills
+   * only, so the export route will serve it too. Gates Download skill.
+   */
+  readonly catalogLoaded = signal(false);
+  readonly downloading = signal(false);
 
   // Reference files: live manifest in edit mode, staged Files in create mode.
   readonly resources = signal<SkillResourceRef[]>([]);
@@ -460,10 +511,27 @@ export class SkillFormPage implements OnInit {
         category: skill.category ?? '',
       });
       this.resources.set([...skill.resources]);
+      this.catalogLoaded.set(true);
     } catch (err: unknown) {
       this.error.set(err instanceof Error ? err.message : 'Failed to load skill.');
     } finally {
       this.loading.set(false);
+    }
+  }
+
+  /** Download the catalog skill as an agentskills.io bundle (`{slug}.zip`). */
+  async downloadSkill(): Promise<void> {
+    const id = this.skillId();
+    if (!id || !this.catalogLoaded() || this.downloading()) return;
+    this.downloading.set(true);
+    this.error.set(null);
+    try {
+      const blob = await this.adminSkillService.exportSkill(id);
+      saveBlob(blob, skillExportFilename(id));
+    } catch (err: unknown) {
+      this.error.set(await skillExportErrorMessage(err));
+    } finally {
+      this.downloading.set(false);
     }
   }
 
@@ -487,11 +555,13 @@ export class SkillFormPage implements OnInit {
     input.value = ''; // allow re-importing the same file
     if (!file) return;
 
+    this.importing.set(true);
+    this.error.set(null);
+    this.importNotice.set(null);
     try {
-      const text = await file.text();
-      const parsed = parseSkillMarkdown(text);
+      const parsed = await this.adminSkillService.parseSkillMd(file);
       const patch: Record<string, string> = {
-        displayName: parsed.name || this.form.get('displayName')?.value || '',
+        displayName: parsed.displayName || this.form.get('displayName')?.value || '',
         description: parsed.description || this.form.get('description')?.value || '',
         instructions: parsed.instructions || this.form.get('instructions')?.value || '',
       };
@@ -499,11 +569,17 @@ export class SkillFormPage implements OnInit {
         patch['skillId'] = slugifySkillId(parsed.name);
       }
       this.form.patchValue(patch);
+      this.importedAllowedTools.set(parsed.allowedTools);
+      this.importedSkillMetadata.set(parsed.skillMetadata);
+      this.importDiagnostics.set(parsed.diagnostics);
       this.importNotice.set(
         'Imported from SKILL.md. Review the Skill ID, then add reference files.'
       );
-    } catch {
-      this.error.set('Could not read the selected SKILL.md file.');
+    } catch (err: unknown) {
+      this.importDiagnostics.set([]);
+      this.error.set(skillMdParseErrorMessage(err));
+    } finally {
+      this.importing.set(false);
     }
   }
 
@@ -587,8 +663,8 @@ export class SkillFormPage implements OnInit {
     if (!id) return;
     this.resourceBusy.set(true);
     try {
-      const content = await this.adminSkillService.readResource(id, res.filename);
-      this.viewing.set({ filename: res.filename, content });
+      const content = await this.adminSkillService.readResource(id, skillFilePath(res));
+      this.viewing.set({ filename: skillFilePath(res), content });
     } catch (err: unknown) {
       this.error.set(err instanceof Error ? err.message : 'Failed to read reference file.');
     } finally {
@@ -599,13 +675,13 @@ export class SkillFormPage implements OnInit {
   async deleteResource(res: SkillResourceRef): Promise<void> {
     const id = this.skillId();
     if (!id) return;
-    if (!confirm(`Delete reference file "${res.filename}"?`)) return;
+    if (!confirm(`Delete reference file "${skillFilePath(res)}"?`)) return;
     this.resourceBusy.set(true);
     this.error.set(null);
     try {
-      const manifest = await this.adminSkillService.deleteResource(id, res.filename);
+      const manifest = await this.adminSkillService.deleteResource(id, skillFilePath(res));
       this.resources.set(manifest);
-      if (this.viewing()?.filename === res.filename) {
+      if (this.viewing()?.filename === skillFilePath(res)) {
         this.viewing.set(null);
       }
     } catch (err: unknown) {
@@ -641,6 +717,8 @@ export class SkillFormPage implements OnInit {
           instructions: v.instructions,
           status: v.status,
           category,
+          allowedTools: this.importedAllowedTools(),
+          skillMetadata: this.importedSkillMetadata(),
         });
         // Upload any staged reference files now that the skill exists.
         for (const file of this.pendingFiles()) {

@@ -124,6 +124,21 @@ class AuditAction:
     # increase history joins on it.
     AWS_LIMIT_INCREASE_REQUESTED = "aws_limit.increase_requested"
 
+    # Skills (docs/specs/agentskills-conformance.md §6.5), target ``skill`` keyed
+    # by the skill id, written for both tiers: a user's own skill can run in other
+    # people's sessions through a shared Agent or project, so its author's edits
+    # are as worth answering "who changed this?" for as an admin's. ``imported``
+    # creates a skill from a bundle and ``refreshed`` re-imports into one. The
+    # Runtime writes the ``my_skill_*`` tool edits and ``script_run``. Ids and
+    # hashes only (``apis/shared/skills/audit.py``), never instruction text.
+    SKILL_CREATED = "skill.created"
+    SKILL_UPDATED = "skill.updated"
+    SKILL_IMPORTED = "skill.imported"
+    SKILL_REFRESHED = "skill.refreshed"
+    SKILL_DELETED = "skill.deleted"
+    SKILL_EXPORTED = "skill.exported"
+    SKILL_SCRIPT_RUN = "skill.script_run"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -142,6 +157,7 @@ TARGET_QUOTA_REQUEST = "quota_request"
 TARGET_QUOTA_EXTENSION = "quota_extension"
 TARGET_QUOTA_PERIOD = "quota_period"
 TARGET_AWS_LIMIT_REQUEST = "aws_limit_request"
+TARGET_SKILL = "skill"
 
 
 @dataclass

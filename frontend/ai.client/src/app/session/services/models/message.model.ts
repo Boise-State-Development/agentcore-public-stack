@@ -76,6 +76,12 @@ export interface Citation {
   fileName: string;
   /** Relevant text excerpt from the document */
   text: string;
+  /**
+   * The web page a crawled knowledge-base document was fetched from. Present
+   * only for pages added with "Add web content"; read off the document's row
+   * on the server, never from the index.
+   */
+  sourceUrl?: string;
 }
 
 /**
@@ -91,6 +97,12 @@ export interface ToolUseData {
     status: 'success' | 'error';
     /** The tool's MCP `structuredContent`, when it returned one. */
     structuredContent?: unknown;
+    /**
+     * The tool's MCP `_meta`, when it returned one (Strands names it
+     * `metadata`). An MCP App may render from it, e.g. Atlassian's widget
+     * context.
+     */
+    metadata?: Record<string, unknown>;
   };
   /** Tool execution status */
   status?: 'pending' | 'complete' | 'error';

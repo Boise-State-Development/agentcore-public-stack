@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-11-13",
+  "measuredAt": "2026-11-18",
   "modelId": "anthropic.claude-haiku-4-5-20251001-v1:0",
   "region": "us-west-2",
   "method": "Bedrock CountTokens, marginal beside one anchor tool (the fixed tool-use preamble is in the baseline); flags in MEASURE_ENV forced on",
@@ -14,12 +14,12 @@
       "specHash": "445f032a07bd6494"
     },
     "ask_user_question": {
-      "tokens": 678,
+      "tokens": 710,
       "tools": {
-        "ask_user_question": 678
+        "ask_user_question": 710
       },
-      "chars": 2429,
-      "specHash": "b3d7f9970911be40"
+      "chars": 2552,
+      "specHash": "970143b59f7a7417"
     },
     "browse_web": {
       "tokens": 535,
@@ -149,7 +149,7 @@
       "specHash": "24da327217607c57"
     },
     "my_skill_create": {
-      "tokens": 1303,
+      "tokens": 1382,
       "tools": {
         "my_skill_create": 276,
         "my_skill_delete_file": 134,
@@ -157,10 +157,10 @@
         "my_skill_read": 126,
         "my_skill_read_file": 159,
         "my_skill_update": 296,
-        "my_skill_write_file": 230
+        "my_skill_write_file": 309
       },
-      "chars": 4383,
-      "specHash": "135599b74825a05d"
+      "chars": 4670,
+      "specHash": "120689fc806f4661"
     },
     "request_user_login": {
       "tokens": 400,

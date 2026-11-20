@@ -1,6 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 import { createAudioContext } from './audio-context';
-import { float32ToPcm16, pcm16ToBase64, resampleLinear } from './pcm-utils';
+import { float32ToPcm16, resampleLinear } from './pcm-utils';
 import { VOICE_SAMPLE_RATE, SAMPLES_PER_CHUNK } from './voice.config';
 
 /** A microphone the browser will let us capture from. */
@@ -46,11 +46,16 @@ export class AudioRecorderService {
   private workletNode: AudioWorkletNode | null = null;
   private sampleBuffer: Float32Array = new Float32Array(0);
 
-  /** Callback invoked with each base64 PCM chunk */
-  onAudioChunk: ((base64Pcm: string, sampleRate: number) => void) | null = null;
+  /**
+   * Voice mode's chunk callback. Voice mode measures and gates each chunk
+   * before sending it (#2019), so it receives raw PCM16 and encodes it itself.
+   * It is a separate slot from `onPcmChunk` so voice mode and dictation never
+   * clear each other's handler.
+   */
+  onAudioChunk: ((pcm: Int16Array, sampleRate: number) => void) | null = null;
 
   /**
-   * Callback invoked with each raw PCM16 chunk (same cadence as `onAudioChunk`).
+   * Dictation's chunk callback (same cadence as `onAudioChunk`).
    * Dictation sends binary WebSocket frames, so it skips the base64 step.
    */
   onPcmChunk: ((pcm: Int16Array) => void) | null = null;
@@ -217,9 +222,7 @@ export class AudioRecorderService {
 
   private emit(pcm: Int16Array): void {
     this.onPcmChunk?.(pcm);
-    if (this.onAudioChunk) {
-      this.onAudioChunk(pcm16ToBase64(pcm), VOICE_SAMPLE_RATE);
-    }
+    this.onAudioChunk?.(pcm, VOICE_SAMPLE_RATE);
   }
 
   private cleanup(): void {

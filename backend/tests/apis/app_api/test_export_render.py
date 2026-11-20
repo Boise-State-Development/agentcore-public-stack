@@ -144,6 +144,25 @@ class TestIncludeFlags:
         ).content.decode()
         assert "handbook.pdf" not in off
 
+    def test_web_citation_rendered_with_its_url(self):
+        msg = MessageResponse(
+            id="m1",
+            role="assistant",
+            content=[MessageContent(type="text", text="answer")],
+            createdAt="",
+            citations=[
+                Citation(
+                    assistantId="a1",
+                    documentId="d1",
+                    fileName="Research Centers.md",
+                    text="x",
+                    sourceUrl="https://www.example.edu/research/centers",
+                )
+            ],
+        )
+        out = render_transcript("t", [msg], ExportFormat.MARKDOWN).content.decode()
+        assert "- Research Centers.md — https://www.example.edu/research/centers" in out
+
 
 class TestGoogleDocHtml:
     def test_markdown_maps_to_html_styling(self):

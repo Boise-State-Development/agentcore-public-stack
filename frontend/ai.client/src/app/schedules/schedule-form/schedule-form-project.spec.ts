@@ -69,7 +69,7 @@ describe('ScheduleFormPage — project mode', () => {
   const agents = { agents$: signal([]), loadAgents: vi.fn() };
   const tools = { tools: signal([]), initialized: signal(false), loadTools: vi.fn() };
   const toast = { success: vi.fn(), error: vi.fn(), info: vi.fn() };
-  const runNow = { run: vi.fn() };
+  const runNow = { run: vi.fn(), running: signal(false) };
 
   async function mount(scheduleId: string | null = null, project: Project = PROJECT, loaded = schedule()): Promise<void> {
     TestBed.resetTestingModule();

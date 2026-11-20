@@ -165,7 +165,7 @@ describe('ProjectBindingsPage', () => {
       const { el } = await openSkills({
         pdf: { ref: 'pdf', version: 2, pinnedAt: '2026-10-01T12:00:00Z', updateAvailable: false },
       });
-      expect(rowText(el, 'PDF Workflows')).toContain('Version 2 · since Oct 1, 2026.');
+      expect(rowText(el, 'PDF Workflows')).toContain('Pinned to v2 · since Oct 1, 2026.');
       expect(rowFor(el, 'PDF Workflows').querySelector('button')).toBeNull();
       expect(rowText(el, 'Memo Style')).not.toContain('Version');
     });
@@ -186,7 +186,7 @@ describe('ProjectBindingsPage', () => {
       await settlePage(harness);
 
       expect(api.pinSkill).toHaveBeenCalledWith('prj_1', 'pdf');
-      expect(rowText(el, 'PDF Workflows')).toContain('Version 3 · since Oct 8, 2026.');
+      expect(rowText(el, 'PDF Workflows')).toContain('Pinned to v3 · since Oct 8, 2026.');
       expect(rowFor(el, 'PDF Workflows').querySelector('button')).toBeNull();
       expect(toast.success).toHaveBeenCalledWith('PDF Workflows updated');
       // Updating doesn't toggle the row, so Save stays off.
@@ -221,7 +221,7 @@ describe('ProjectBindingsPage', () => {
       rowFor(el, 'PDF Workflows').querySelector('button')!.click();
       await settlePage(harness);
       expect(el.querySelector('[role=alert]')?.textContent).toContain('The skill changed while it was being pinned');
-      expect(rowText(el, 'PDF Workflows')).toContain('Version 2');
+      expect(rowText(el, 'PDF Workflows')).toContain('Pinned to v2');
     });
   });
 
@@ -295,6 +295,30 @@ describe('ProjectBindingsPage', () => {
       await settlePage(harness);
       const memo = [...chips.querySelectorAll('li')].find(li => li.textContent!.trim() === 'Memo Style')!;
       expect(memo.querySelector('button')).toBeNull();
+    });
+
+    it('says where an imported skill came from, beside its pin, from the palette or the bound row', async () => {
+      agents.loadBindable.mockImplementation((kind: string) =>
+        Promise.resolve(
+          kind === 'tool'
+            ? TOOLS
+            : [
+                { ...bindable('pdf', 'PDF Workflows', 'Fills PDFs'), meta: { importSource: { type: 'zip' } } },
+                bindable('memo', 'Memo Style', 'Writes memos'),
+              ],
+        ),
+      );
+      const { el } = await openSkills({
+        pdf: { ref: 'pdf', version: 2, pinnedAt: null, updateAvailable: false },
+        eds_redline: {
+          ref: 'eds_redline', version: 1, pinnedAt: null, updateAvailable: false,
+          available: true, displayName: 'Contract redline', description: 'Redlines.',
+          importSource: { type: 'github', owner: 'acme', repo: 'skills', commitSha: 'feedface00' },
+        },
+      });
+      expect(rowText(el, 'PDF Workflows')).toContain('Pinned to v2. Imported from a zip file.');
+      expect(rowText(el, 'Contract redline')).toContain('Pinned to v1. Imported from acme/skills @ feedfac.');
+      expect(rowText(el, 'Memo Style')).not.toContain('Imported');
     });
 
     it('names a private skill someone else added, and lets the member read it', async () => {

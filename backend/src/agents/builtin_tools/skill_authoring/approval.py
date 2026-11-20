@@ -21,15 +21,25 @@ the arguments it shows. Long text fields are cut to a preview: the card is a
 place to read, and the arguments are also persisted on the session row as the
 ``PendingInterrupt`` breadcrumb, where a 1 MiB file body would not fit in a
 DynamoDB item. The full text still reaches the tool unchanged.
+
+A ``my_skill_write_file`` from an attachment has no text in its arguments, so its
+card describes the text instead (:func:`_attachment_card`): the source file, the
+size and SHA-256 of exactly what will be written, and the change against the
+skill's current file as lines added and removed plus a unified diff cut to the
+preview length. It reads the attachment and the current file in a worker thread,
+when the hook pauses, never before the first token.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, Dict, Optional
 
 from agents.main_agent.session.hooks.tool_approval import ApprovalDetails
 from apis.shared.skills.reach import lookup_skill_reach
+
+logger = logging.getLogger(__name__)
 
 CREATE = "my_skill_create"
 UPDATE = "my_skill_update"
@@ -66,8 +76,76 @@ def _shown_input(tool_input: Any) -> Dict[str, Any]:
     return {key: _preview(value) for key, value in tool_input.items()}
 
 
+def _attachment_card(
+    owner_id: str, session_id: str, tool_input: Dict[str, Any]
+) -> Dict[str, Any]:
+    """What a write from an attachment will store, for the card. Blocking."""
+    from apis.shared.skills.bundle_files import MAX_RESOURCE_BYTES
+    from apis.shared.skills.user_service import UserSkillError
+
+    from .attachment_source import AttachmentSourceError, line_change, resolve_attachment_text
+    from . import tools as _tools
+    from .tools import _run, _user
+
+    filename = str(tool_input.get("filename") or "")
+    ref = str(tool_input.get("from_attachment") or "").strip()
+    try:
+        source = resolve_attachment_text(owner_id, session_id, ref, max_bytes=MAX_RESOURCE_BYTES)
+    except AttachmentSourceError as exc:
+        return {"source": ref, "problem": f"{exc} The write will fail if approved."}
+    except Exception:  # noqa: BLE001 - the card must still render
+        logger.warning("skill authoring card: reading the attachment failed", exc_info=True)
+        return {"source": ref, "problem": "The attachment could not be read just now."}
+
+    card: Dict[str, Any] = {
+        "source": {
+            "attachment": source.filename,
+            "upload_id": source.upload_id,
+            "size_bytes": source.source_bytes,
+            **({"converted": "from Word to Markdown"} if source.converted else {"copied": "unchanged"}),
+        },
+        "written": {
+            "bytes": source.size,
+            "lines": len(source.text.splitlines()),
+            "sha256": source.sha256,
+        },
+    }
+    current: Optional[str] = None
+    skill_id = str(tool_input.get("skill_id") or "")
+    try:
+        _, raw = _run(
+            _tools.get_user_skill_service().read_resource(
+                skill_id, filename, _user(owner_id, None)
+            )
+        )
+        current = raw.decode("utf-8", errors="replace")
+    except (ValueError, UserSkillError):
+        current = None  # no such file on the skill (or no such skill): a new file
+    except Exception:  # noqa: BLE001 - the card must still render
+        logger.warning("skill authoring card: reading the current file failed", exc_info=True)
+        card["change"] = "unknown: the current file could not be read to compare"
+        card["preview"] = _preview(source.text)
+        return card
+    if current is None:
+        card["change"] = "new file"
+        card["preview"] = _preview(source.text)
+    elif current == source.text:
+        card["change"] = "no change: the file already has exactly this text"
+    else:
+        change = line_change(current, source.text, filename=filename)
+        card["change"] = {
+            "lines_added": change.added,
+            "lines_removed": change.removed,
+            "diff": _preview(change.diff),
+        }
+    return card
+
+
 async def describe_for_approval(
-    owner_id: Optional[str], tool_name: str, tool_input: Any
+    owner_id: Optional[str],
+    tool_name: str,
+    tool_input: Any,
+    session_id: Optional[str] = None,
 ) -> Optional[ApprovalDetails]:
     """The card for one paused skill-authoring write, or None for any other tool."""
     if tool_name not in APPROVAL_TOOL_NAMES:
@@ -77,7 +155,22 @@ async def describe_for_approval(
         return ApprovalDetails(tool_input=shown, message=_CREATE_MESSAGE)
 
     skill_id = str(shown.get("skill_id") or "")
-    reach = await asyncio.to_thread(lookup_skill_reach, skill_id, owner_id or "")
+    reach_task = asyncio.to_thread(lookup_skill_reach, skill_id, owner_id or "")
+    if (
+        tool_name == WRITE_FILE
+        and isinstance(tool_input, dict)
+        and str(tool_input.get("from_attachment") or "").strip()
+    ):
+        reach, card = await asyncio.gather(
+            reach_task,
+            asyncio.to_thread(_attachment_card, owner_id or "", session_id or "", tool_input),
+        )
+        shown = {
+            k: v for k, v in shown.items() if k not in ("content", "from_attachment")
+        }
+        shown.update(card)
+    else:
+        reach = await reach_task
     summary = reach.summary()
     return ApprovalDetails(
         tool_input={"reach": summary, **shown},

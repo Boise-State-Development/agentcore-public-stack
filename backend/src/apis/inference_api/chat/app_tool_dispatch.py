@@ -148,6 +148,16 @@ def _structured_content(result: Any) -> Any:
     return getattr(result, "structured_content", None)
 
 
+def _result_meta(result: Any) -> Optional[Dict[str, Any]]:
+    """The tool's MCP `_meta` (Strands' `metadata`), or None when it returned none.
+
+    An App may render from it — Atlassian's widgets read their site and
+    account context there — so it goes back to the App with the result.
+    """
+    meta = result.get("metadata") if isinstance(result, dict) else getattr(result, "meta", None)
+    return meta if isinstance(meta, dict) and meta else None
+
+
 def _is_error(result: Any) -> bool:
     """Whether the tool call failed.
 
@@ -701,4 +711,7 @@ async def dispatch_app_tool_call(
     structured = _structured_content(result)
     if structured is not None:
         app_result["structuredContent"] = structured
+    meta = _result_meta(result)
+    if meta is not None:
+        app_result["_meta"] = meta
     return {"toolUseId": tool_use_id, "result": app_result}

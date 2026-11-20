@@ -7,13 +7,20 @@ the whole file into ``modify_word_document.python_code`` on every run, which is
 a 20K-token silent generation before the tool even starts. With it, the model
 names the file and the tool loads it into the sandbox by reference.
 
-**Where it runs.** Only inside AWS Bedrock Code Interpreter, the sandbox the
-Word tools already run model-written python-docx code in. Nothing here imports,
-``exec``s or ``compile``s the script on the Runtime host: this module reads its
-bytes from the skill-resources store and hands them to the sandbox as a file.
-That is why a skill script stays inert everywhere else (``read_skill_file``
-still returns it as text with a notice): the only path that runs one is a path
-that already runs arbitrary model code, in the same isolation.
+**Where it runs.** Only inside AWS Bedrock Code Interpreter, and in a
+dedicated interpreter, not the one model-written python-docx code uses: the
+skill-script interpreter is created with ``networkMode: SANDBOX`` (no public
+internet), and a run is bounded by :data:`SKILL_SCRIPT_TIMEOUT_SECONDS`. Its id
+is service-generated, so it is not in the Runtime's environment (the V2
+budget); :func:`resolve_skill_script_interpreter_id` reads it from the SSM
+parameter ``/<PROJECT_PREFIX>/agentcore/skill-script-interpreter-id`` on the
+first run and keeps it for the process. If it cannot be resolved the tool
+refuses: a skill script never falls back to the public interpreter.
+
+Nothing here imports, ``exec``s or ``compile``s the script on the Runtime host:
+this module reads its bytes from the skill-resources store and hands them to
+the sandbox as a file. That is why a skill script stays inert everywhere else
+(``read_skill_file`` still returns it as text with a notice).
 
 **What can be run.** A resource of kind ``script`` with a ``.py`` filename,
 from a skill bound to this turn. Not a ``reference``, whatever its text says:
@@ -48,6 +55,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional
 
@@ -67,6 +75,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "MAX_PARAMS_BYTES",
+    "SKILL_SCRIPT_INTERPRETER_ENV",
+    "SKILL_SCRIPT_INTERPRETER_SSM_SUFFIX",
+    "SKILL_SCRIPT_TIMEOUT_SECONDS",
     "SkillScript",
     "SkillScriptError",
     "TurnSkillRecords",
@@ -75,6 +86,8 @@ __all__ = [
     "load_skill_script",
     "parse_script_params",
     "resolve_skill_script",
+    "resolve_skill_script_interpreter_id",
+    "skill_script_interpreter_parameter_name",
 ]
 
 # ``params`` is written into the sandbox as a JSON file, and it is prompt text
@@ -83,6 +96,22 @@ __all__ = [
 # target, replacement and note, the redline's substance, which the model has to
 # write whichever tool applies it); a whole playbook belongs in the skill.
 MAX_PARAMS_BYTES = 65_536
+
+# How long one skill-script run may take, from starting its sandbox session to
+# reading the document back. On expiry the session is stopped and the tool
+# returns an error; the session is also started with a server-side timeout a
+# little past this, so it ends even if the stop call fails.
+SKILL_SCRIPT_TIMEOUT_SECONDS = 120
+
+# The skill-script interpreter's id. ``SKILL_SCRIPT_INTERPRETER_ENV`` is a
+# local-development override only; deployed Runtimes read the SSM parameter,
+# whose name is derived from PROJECT_PREFIX (CDK: SKILL_SCRIPT_INTERPRETER_SSM_SUFFIX
+# in code-interpreter-construct.ts; the two must match).
+SKILL_SCRIPT_INTERPRETER_ENV = "AGENTCORE_SKILL_SCRIPT_INTERPRETER_ID"
+SKILL_SCRIPT_INTERPRETER_SSM_SUFFIX = "agentcore/skill-script-interpreter-id"
+
+_interpreter_id_lock = threading.Lock()
+_resolved_interpreter_id: Optional[str] = None
 
 # Attribute a script-capable tool carries so ``ChatAgent`` can find its holder.
 _HOLDER_ATTR = "_turn_skill_records"
@@ -99,6 +128,8 @@ class SkillScript:
     skill_name: str
     path: str
     source: bytes
+    # The catalog id of the skill the script came from, for the audit record.
+    skill_id: str = ""
 
     @property
     def label(self) -> str:
@@ -158,7 +189,10 @@ def resolve_skill_script(records: Iterable[Any], skill_name: str, path: str) -> 
             f"Available skills: {available}"
         )
 
-    ref = _resolve_resource(record, path)
+    # Strict: the full manifest path, or the bare name of a top-level file. A
+    # bare name never reaches into a subfolder (``scripts/x.py`` is not
+    # ``scripts/tools/x.py``), because what runs must be exactly what was named.
+    ref = _resolve_resource(record, path, nested_bare_names=False)
     if ref is None:
         listing = ", ".join(_manifest_paths(record)) or "(no files)"
         raise SkillScriptError(
@@ -208,7 +242,22 @@ def load_skill_script(records: Iterable[Any], skill_name: str, path: str) -> Ski
         source.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise SkillScriptError(f"'{shown}' is not UTF-8 text.") from exc
-    return SkillScript(skill_name=skill_name.strip(), path=shown, source=source)
+    return SkillScript(
+        skill_name=skill_name.strip(),
+        path=shown,
+        source=source,
+        skill_id=_record_skill_id(records, skill_name),
+    )
+
+
+def _record_skill_id(records: Iterable[Any], skill_name: str) -> str:
+    """The catalog id of the bound skill ``skill_name`` activates (already resolved)."""
+    wanted = (skill_name or "").strip()
+    for record in records or []:
+        skill_id = getattr(record, "skill_id", "")
+        if slugify_skill_name(skill_id) == wanted:
+            return skill_id
+    return ""
 
 
 def parse_script_params(params: Any) -> str:
@@ -231,3 +280,61 @@ def parse_script_params(params: Any) -> str:
             "Put large data in the skill and pass a selector instead."
         )
     return text
+
+
+def skill_script_interpreter_parameter_name() -> Optional[str]:
+    """``/<PROJECT_PREFIX>/agentcore/skill-script-interpreter-id``, or ``None`` without a prefix."""
+    prefix = (os.getenv("PROJECT_PREFIX") or "").strip()
+    if not prefix:
+        return None
+    return f"/{prefix}/{SKILL_SCRIPT_INTERPRETER_SSM_SUFFIX}"
+
+
+def _read_interpreter_id_parameter(name: str) -> str:
+    """The parameter's value. Blocking (SSM); raises on any failure."""
+    import boto3
+
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    client = boto3.client("ssm", region_name=region) if region else boto3.client("ssm")
+    return client.get_parameter(Name=name)["Parameter"]["Value"]
+
+
+def resolve_skill_script_interpreter_id() -> Optional[str]:
+    """The no-network interpreter's id, or ``None`` when it cannot be found.
+
+    Env override first (local development), then SSM, read once per process
+    and kept. A failed read is not cached, so a parameter created after this
+    process started (a backend deploy that ran before the platform deploy) is
+    picked up on a later call. Blocking: call via ``asyncio.to_thread``. Runs
+    inside the tool call, never before the first token.
+    """
+    global _resolved_interpreter_id
+    override = (os.getenv(SKILL_SCRIPT_INTERPRETER_ENV) or "").strip()
+    if override:
+        return override
+    if _resolved_interpreter_id:
+        return _resolved_interpreter_id
+    with _interpreter_id_lock:
+        if _resolved_interpreter_id:
+            return _resolved_interpreter_id
+        name = skill_script_interpreter_parameter_name()
+        if name is None:
+            logger.warning("skill-script interpreter: PROJECT_PREFIX is not set")
+            return None
+        try:
+            value = (_read_interpreter_id_parameter(name) or "").strip()
+        except Exception as exc:  # noqa: BLE001 - any failure means "refuse"
+            logger.warning("skill-script interpreter id not readable from %s: %s", name, exc)
+            return None
+        if not value:
+            logger.warning("skill-script interpreter id parameter %s is empty", name)
+            return None
+        _resolved_interpreter_id = value
+        return value
+
+
+def _reset_interpreter_id_cache() -> None:
+    """Forget the cached id (tests)."""
+    global _resolved_interpreter_id
+    with _interpreter_id_lock:
+        _resolved_interpreter_id = None

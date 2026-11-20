@@ -38,14 +38,24 @@ from typing import Any, Coroutine, Dict, List, Optional, TypeVar
 from strands import tool
 
 from apis.shared.auth.models import User
-from apis.shared.extraction.field_sets import FieldSetError, field_set_name_for, parse_field_set
+from apis.shared.extraction.field_sets import (
+    FieldSetError,
+    field_set_name_for,
+    field_set_name_of_ref,
+    parse_field_set,
+)
 from apis.shared.feature_flags import document_extract_enabled
 from apis.shared.skills.bundle_files import (
     MAX_RESOURCE_BYTES,
     MAX_RESOURCES_PER_SKILL,
     VALID_RESOURCE_KINDS,
 )
-from apis.shared.skills.models import SKILL_DESCRIPTION_MAX_LENGTH, SkillStatus
+from apis.shared.skills.models import (
+    SKILL_DESCRIPTION_MAX_LENGTH,
+    SkillStatus,
+    instructions_size_problem,
+)
+from apis.shared.skills.skill_md import skill_metadata_problem, unsafe_character_problem
 from apis.shared.skills.resource_types import is_text_content_type
 from apis.shared.skills.user_service import (
     MAX_SKILLS_PER_USER,
@@ -54,6 +64,8 @@ from apis.shared.skills.user_service import (
     UserSkillNotFoundError,
     get_user_skill_service,
 )
+
+from .attachment_source import AttachmentSourceError, resolve_attachment_text
 
 logger = logging.getLogger(__name__)
 
@@ -129,12 +141,26 @@ def _blank(value: Optional[str]) -> bool:
     return value is not None and not value.strip()
 
 
-def _field_problems(display_name: Optional[str], description: Optional[str]) -> List[str]:
+def _metadata_problems(skill_metadata: Any) -> List[str]:
+    """The lenient agentskills.io check of ``skill_metadata``: errors refuse, warnings pass."""
+    problem = skill_metadata_problem(skill_metadata)
+    return [f"skill_metadata: {problem}"] if problem else []
+
+
+def _field_problems(
+    display_name: Optional[str],
+    description: Optional[str],
+    instructions: Optional[str] = None,
+) -> List[str]:
     problems = []
     if _blank(display_name):
         problems.append("the name cannot be blank")
     elif display_name is not None and len(display_name) > MAX_DISPLAY_NAME_CHARS:
         problems.append(f"the name is over {MAX_DISPLAY_NAME_CHARS} characters")
+    else:
+        unsafe = unsafe_character_problem("the name", display_name)
+        if unsafe:
+            problems.append(unsafe)
     if _blank(description):
         problems.append(
             "the description cannot be blank (it is the line the agent reads when "
@@ -145,6 +171,13 @@ def _field_problems(display_name: Optional[str], description: Optional[str]) -> 
             f"the description is {len(description)} characters; the limit is "
             f"{SKILL_DESCRIPTION_MAX_LENGTH}"
         )
+    else:
+        unsafe = unsafe_character_problem("the description", description)
+        if unsafe:
+            problems.append(unsafe)
+    too_large = instructions_size_problem(instructions)
+    if too_large:
+        problems.append(too_large)
     return problems
 
 
@@ -162,15 +195,6 @@ def _log_applied(tool_name: str, skill_id: str, session_id: str) -> None:
         skill_id,
         extra={"event": "skill_authoring_write", "tool": tool_name, "session_id": session_id},
     )
-
-
-def _field_set_of(filename: str, kind: Optional[str]) -> Optional[str]:
-    """The field-set name a bundle file declares, or None.
-
-    Only ``references/`` is read for field sets (``declared_field_sets``), so a
-    same-named script or asset is not one.
-    """
-    return field_set_name_for(filename) if kind == "reference" else None
 
 
 def _field_set_note(filename: str, kind: str, content: str) -> str:
@@ -274,14 +298,17 @@ def make_my_skill_read_tool(session_id: str, user_id: str, user_email: Optional[
                 "instructions": skill.instructions,
                 "files": [
                     {
-                        "filename": r.filename,
+                        # The path below the kind directory: a top-level
+                        # file's filename, as always; a nested file's
+                        # ``legal/nda.md``, which my_skill_read_file accepts.
+                        "filename": r.path,
                         "kind": r.kind,
                         "size": r.size,
                         "content_type": r.content_type,
                         # Only on a field set, so other files cost nothing more.
                         **(
                             {"field_set": name}
-                            if (name := _field_set_of(r.filename, r.kind))
+                            if (name := field_set_name_of_ref(r))
                             else {}
                         ),
                     }
@@ -354,7 +381,8 @@ def make_my_skill_create_tool(session_id: str, user_id: str, user_email: Optiona
             category: Optional grouping label.
             skill_metadata: Optional extra frontmatter fields, e.g. {"version": "1.0"}.
         """
-        problems = _field_problems(display_name or "", description or "")
+        problems = _field_problems(display_name or "", description or "", instructions)
+        problems += _metadata_problems(skill_metadata)
         if problems:
             return _error("Could not create the skill: " + "; ".join(problems) + ".")
         try:
@@ -429,7 +457,8 @@ def make_my_skill_update_tool(session_id: str, user_id: str, user_email: Optiona
                     f"Could not update the skill: status must be one of {', '.join(_STATUSES)}."
                 )
             updates["status"] = SkillStatus(status)
-        problems = _field_problems(display_name, description)
+        problems = _field_problems(display_name, description, instructions)
+        problems += _metadata_problems(skill_metadata)
         if problems:
             return _error("Could not update the skill: " + "; ".join(problems) + ".")
         if not updates:
@@ -455,8 +484,9 @@ def make_my_skill_write_file_tool(session_id: str, user_id: str, user_email: Opt
     def my_skill_write_file(
         skill_id: str,
         filename: str,
-        content: str,
+        content: Optional[str] = None,
         kind: str = "reference",
+        from_attachment: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create or replace one text file in one of the user's own skills. The user
         approves it first.
@@ -467,13 +497,36 @@ def make_my_skill_write_file_tool(session_id: str, user_id: str, user_email: Opt
         Args:
             skill_id: The skill's id, from my_skill_list.
             filename: A flat name with an extension, e.g. "forms.md" (no folders).
-            content: The file's full text.
+            content: The file's full text. Omit when using from_attachment.
             kind: "reference" (default), "script" or "asset".
+            from_attachment: Instead of content, the upload id or filename of a file
+                attached to this conversation: .md/.txt copied as is, .docx converted
+                to Markdown. Use it for a document the user attached.
         """
         if kind not in VALID_RESOURCE_KINDS:
             return _error(
                 f"Could not write '{filename}': kind must be one of "
                 f"{', '.join(VALID_RESOURCE_KINDS)}."
+            )
+        source = None
+        if from_attachment and from_attachment.strip():
+            if content:
+                return _error(
+                    f"Could not write '{filename}': pass content or from_attachment, not both."
+                )
+            try:
+                source = resolve_attachment_text(
+                    user_id, session_id, from_attachment, max_bytes=MAX_RESOURCE_BYTES
+                )
+            except AttachmentSourceError as exc:
+                return _error(f"Could not write '{filename}': {exc}")
+            except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
+                return _failure(f"read the attachment '{from_attachment}'", exc)
+            content = source.text
+        elif content is None:
+            return _error(
+                f"Could not write '{filename}': pass the file's text as content, or name "
+                "an attached file with from_attachment."
             )
         size = len((content or "").encode("utf-8"))
         if size > MAX_RESOURCE_BYTES:
@@ -490,10 +543,16 @@ def make_my_skill_write_file_tool(session_id: str, user_id: str, user_email: Opt
         except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
             return _failure(f"write '{filename}'", exc, skill_id)
         _log_applied("my_skill_write_file", skill_id, session_id)
+        origin = ""
+        if source is not None:
+            how = "converted from Word to Markdown" if source.converted else "copied unchanged"
+            origin = (
+                f" from the attachment '{source.filename}' ({how}; sha256 {source.sha256})"
+            )
         return _ok(
-            f"Saved '{filename}' ({kind}, {size:,} bytes) to skill '{skill_id}', which now "
-            f"has {len(refs)} of {MAX_RESOURCES_PER_SKILL} files. If this file was read "
-            "earlier in this conversation, that copy is out of date."
+            f"Saved '{filename}' ({kind}, {size:,} bytes){origin} to skill '{skill_id}', "
+            f"which now has {len(refs)} of {MAX_RESOURCES_PER_SKILL} files. If this file "
+            "was read earlier in this conversation, that copy is out of date."
             + _field_set_note(filename, kind, content or "")
         )
 
@@ -511,7 +570,7 @@ def make_my_skill_delete_file_tool(session_id: str, user_id: str, user_email: Op
             skill_id: The skill's id, from my_skill_list.
             filename: The file's name as listed by my_skill_read.
         """
-        name = field_set_name_for(filename)
+        name = field_set_name_for(filename) if "/" not in (filename or "") else None
         try:
             refs = _run(
                 get_user_skill_service().delete_resource(

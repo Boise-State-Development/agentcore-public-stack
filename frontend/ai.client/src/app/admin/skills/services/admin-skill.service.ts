@@ -12,6 +12,8 @@ import {
   SkillResourceRef,
   SkillResourcesResponse,
 } from '../models/admin-skill.model';
+import { SkillMdParseResult } from '../../../shared/skills/skill-md-parse';
+import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
 
 /**
  * Service for admin skill management.
@@ -68,6 +70,18 @@ export class AdminSkillService {
       url += `?status=${status}`;
     }
     return firstValueFrom(this.http.get<AdminSkillListResponse>(url));
+  }
+
+  /**
+   * Read one SKILL.md into create-form fields and diagnostics. Writes nothing;
+   * the server owns the format (one parser for every ingest path).
+   */
+  async parseSkillMd(file: File): Promise<SkillMdParseResult> {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return firstValueFrom(
+      this.http.post<SkillMdParseResult>(`${this.baseUrl()}/import/parse`, form),
+    );
   }
 
   /**
@@ -170,6 +184,20 @@ export class AdminSkillService {
   // ===========================================================================
 
   /**
+   * A catalog skill as an agentskills.io bundle (`{slug}.zip`), optionally a
+   * frozen version. A user-authored skill is a 404 on this route.
+   */
+  async exportSkill(skillId: string, version?: number): Promise<Blob> {
+    const params: Record<string, string> = version ? { version: String(version) } : {};
+    return firstValueFrom(
+      this.http.get(`${this.baseUrl()}/${encodeURIComponent(skillId)}/export`, {
+        params,
+        responseType: 'blob',
+      }),
+    );
+  }
+
+  /**
    * List a skill's reference-file manifest.
    */
   async listResources(skillId: string): Promise<SkillResourceRef[]> {
@@ -201,7 +229,7 @@ export class AdminSkillService {
   async readResource(skillId: string, filename: string): Promise<string> {
     return firstValueFrom(
       this.http.get(
-        `${this.baseUrl()}/${skillId}/resources/${encodeURIComponent(filename)}`,
+        `${this.baseUrl()}/${skillId}/resources/${encodeSkillFilePath(filename)}`,
         { responseType: 'text' }
       )
     );
@@ -213,7 +241,7 @@ export class AdminSkillService {
   async deleteResource(skillId: string, filename: string): Promise<SkillResourceRef[]> {
     const response = await firstValueFrom(
       this.http.delete<SkillResourcesResponse>(
-        `${this.baseUrl()}/${skillId}/resources/${encodeURIComponent(filename)}`
+        `${this.baseUrl()}/${skillId}/resources/${encodeSkillFilePath(filename)}`
       )
     );
     this.skillsResource.reload();

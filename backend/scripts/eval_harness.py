@@ -169,7 +169,6 @@ RATES: Dict[str, Tuple[float, float]] = {
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": (1.10, 5.50),
     "us.anthropic.claude-haiku-5-5": (0.11, 0.55),
     "us.anthropic.claude-sonnet-4-6": (3.30, 16.50),
-    "us.anthropic.claude-sonnet-5": (2.20, 11.00),
     "us.anthropic.claude-sonnet-5-5": (2.20, 11.00),
     # Regional (CRIS) list price, from curated-models.ts.
     "us.anthropic.claude-opus-5-5": (4.40, 22.00),

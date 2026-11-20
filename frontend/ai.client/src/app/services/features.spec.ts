@@ -20,6 +20,7 @@ describe('FEATURES', () => {
     expect(environment.features.sourceProvenance).toBe(false);
     expect(environment.features.documentExtract).toBe(false);
     expect(environment.features.fieldSetAuthoring).toBe(false);
+    expect(environment.features.skillBundleImport).toBe(false);
     expect(environment.features.quotaRequests).toBe(false);
     expect(environment.features.projectFileReadiness).toBe(false);
     expect(environment.features.awsLimits).toBe(false);

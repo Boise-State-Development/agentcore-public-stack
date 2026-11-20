@@ -1165,13 +1165,14 @@ def _write_skill_md(
     region: str,
     metadata: Optional[dict[str, str]] = None,
 ) -> None:
-    """Write the skill's ``SKILL.md`` projection so the prefix is a real bundle.
+    """Write the skill's ``SKILL.md`` projection beside its resource files.
 
     Mirrors ``apis/shared/skills/bundle.py::generate_skill_md`` for the subset
-    the seed uses (no advisory tools, no frontmatter passthrough). Without this
-    the seeded prefix holds only resource bytes and is not a valid
-    agentskills.io bundle — it could not be handed to a managed Harness or
-    exported as-is. Best-effort, like the reference upload.
+    the seed uses (no advisory tools; ``metadata`` here is the seed bundle's
+    own frontmatter, which is only ``license``). Without this the seeded
+    prefix holds only resource bytes. The prefix is storage named by the
+    ``skill_id``, not a conformant bundle; an export is that. Best-effort,
+    like the reference upload.
     """
     bucket = os.environ.get("S3_SKILL_RESOURCES_BUCKET_NAME", "")
     if not bucket:
@@ -1513,6 +1514,12 @@ def load_seed_skill_bundle(directory: Path) -> SeedSkillBundle:
     The frontmatter is read as flat ``key: value`` lines (the subset the SPA's
     importer also reads), so this standalone script needs no YAML dependency.
     A double-quoted value is decoded as JSON.
+
+    This is deliberately separate from ``apis.shared.skills.skill_md``: the
+    bootstrap environment installs only boto3 and httpx (no PyYAML, no
+    pydantic), and it reads only our own checked-in bundles.
+    ``tests/test_seed_skill_md_parity.py`` pins the two parsers to the same
+    result for every bundle under ``seed_skills/``.
     """
     text = (directory / "SKILL.md").read_text(encoding="utf-8")
     match = re.match(r"\A---\n(.*?)\n---\n(.*)\Z", text, re.S)

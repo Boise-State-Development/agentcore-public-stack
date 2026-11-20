@@ -1,7 +1,8 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { CitationDisplayComponent } from './citation-display.component';
+import { CitationDisplayComponent, citationPage } from './citation-display.component';
 import { Citation } from '../../services/models/message.model';
+import { FilePreviewStateService } from '../../services/file-preview/file-preview-state.service';
 
 describe('CitationDisplayComponent', () => {
   let component: CitationDisplayComponent;
@@ -351,6 +352,172 @@ describe('CitationDisplayComponent', () => {
       expect(text).not.toContain('Download source');
       // The citation itself still renders — only the download affordance is withheld.
       expect(text).toContain('test.pdf');
+    });
+  });
+  describe('Web page citations', () => {
+    const web: Citation = {
+      assistantId: 'a1',
+      documentId: 'd1',
+      fileName: 'Research Centers.md',
+      text: 'excerpt',
+      sourceUrl: 'https://www.example.edu/research/centers/',
+    };
+    const upload: Citation = { assistantId: 'a1', documentId: 'd2', fileName: 'handbook.pdf', text: 'excerpt' };
+
+    function render(citations: Citation[], allowDownload = true): HTMLElement {
+      fixture.componentRef.setInput('citations', citations);
+      fixture.componentRef.setInput('allowDownload', allowDownload);
+      component.isExpanded.set(true);
+      fixture.detectChanges();
+      return fixture.nativeElement as HTMLElement;
+    }
+
+    it('shows the page title and address and links to the page in a new tab', () => {
+      const el = render([web]);
+      const link = el.querySelector<HTMLAnchorElement>('a[href]');
+      expect(link?.href).toBe('https://www.example.edu/research/centers/');
+      expect(link?.target).toBe('_blank');
+      expect(link?.rel).toBe('noopener noreferrer');
+      expect(link?.textContent).toContain('Open page');
+      expect(el.querySelector('[data-testid="citation-page-address"]')?.textContent?.trim()).toBe(
+        'www.example.edu/research/centers',
+      );
+      expect(el.textContent).toContain('Research Centers');
+      expect(el.textContent).not.toContain('Research Centers.md');
+      expect(el.textContent).not.toContain('Download source');
+    });
+
+    it('still links to the page when downloads are disabled', () => {
+      const el = render([web], false);
+      expect(el.querySelector('a[href]')).not.toBeNull();
+    });
+
+    it('leaves an uploaded file as it was', () => {
+      const el = render([upload]);
+      expect(el.querySelector('a[href]')).toBeNull();
+      expect(el.querySelector('[data-testid="citation-page-address"]')).toBeNull();
+      expect(el.textContent).toContain('handbook.pdf');
+      expect(el.textContent).toContain('Download source');
+    });
+
+    it('never links to a non-web address', () => {
+      expect(citationPage('javascript:alert(1)')).toBeNull();
+      expect(citationPage('ftp://example.edu/x')).toBeNull();
+      expect(citationPage('not a url')).toBeNull();
+      expect(citationPage(undefined)).toBeNull();
+      const el = render([{ ...web, sourceUrl: 'javascript:alert(1)' }]);
+      expect(el.querySelector('a[href]')).toBeNull();
+      expect(el.textContent).toContain('Research Centers.md');
+    });
+
+    it('labels a site root by its host', () => {
+      expect(citationPage('https://www.example.edu/')?.label).toBe('www.example.edu');
+    });
+  });
+  describe('Excerpt as plain text', () => {
+    function excerptOf(citation: Citation): string {
+      fixture.componentRef.setInput('citations', [citation]);
+      component.isExpanded.set(true);
+      fixture.detectChanges();
+      return component.items()[0].excerpt;
+    }
+
+    it("drops markdown syntax and a heading that repeats the page's title", () => {
+      const excerpt = excerptOf({
+        assistantId: 'a1',
+        documentId: 'd1',
+        fileName: 'Home - DRED at Boise State University.md',
+        text: '# Home - DRED at Boise State University\n\n## Supporting research\n\n**The Division** leads [this](https://x.edu) effort.',
+        sourceUrl: 'https://www.example.edu/research/',
+      });
+      expect(excerpt).toBe('Supporting research · The Division leads this effort.');
+      const shown = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(shown).not.toContain('##');
+      expect(shown).not.toContain('**');
+    });
+
+    it('keeps a leading heading that is not the title', () => {
+      expect(
+        excerptOf({ assistantId: 'a1', documentId: 'd2', fileName: 'handbook.pdf', text: '# Grading\n\nLate work loses 10%.' }),
+      ).toBe('Grading · Late work loses 10%.');
+    });
+
+    it('keeps the only block even when it matches the title', () => {
+      expect(excerptOf({ assistantId: 'a1', documentId: 'd3', fileName: 'Notes.md', text: '# Notes' })).toBe('Notes');
+    });
+
+    it('passes plain text through', () => {
+      expect(
+        excerptOf({ assistantId: 'a1', documentId: 'd4', fileName: 'h.pdf', text: 'A plain sentence from a PDF.' }),
+      ).toBe('A plain sentence from a PDF.');
+    });
+  });
+
+  describe('View content', () => {
+    const web: Citation = {
+      assistantId: 'a1',
+      documentId: 'd1',
+      fileName: 'Research Centers.md',
+      text: '# Research Centers',
+      sourceUrl: 'https://www.example.edu/research/centers/',
+    };
+
+    function render(citations: Citation[], allowDownload = true): HTMLElement {
+      fixture.componentRef.setInput('citations', citations);
+      fixture.componentRef.setInput('allowDownload', allowDownload);
+      component.isExpanded.set(true);
+      fixture.detectChanges();
+      return fixture.nativeElement as HTMLElement;
+    }
+
+    const viewButton = (el: HTMLElement) =>
+      el.querySelector<HTMLButtonElement>('[data-testid="citation-view-content"]');
+
+    it('opens a web page citation in the preview pane as a knowledge-base document', () => {
+      const state = TestBed.inject(FilePreviewStateService);
+      const open = vi.spyOn(state, 'open');
+      const el = render([web]);
+
+      const button = viewButton(el);
+      expect(button?.textContent).toContain('View content');
+      button!.click();
+
+      expect(open).toHaveBeenCalledWith({
+        kind: 'kb-document',
+        assistantId: 'a1',
+        documentId: 'd1',
+        filename: 'Research Centers',
+        sourceUrl: 'https://www.example.edu/research/centers/',
+      });
+      expect(component.isExpanded()).toBe(false);
+      // Open page stays beside it.
+      expect(el.querySelector('a[href]')?.textContent).toContain('Open page');
+      open.mockRestore();
+    });
+
+    it('is offered for markdown and text uploads, beside Download source', () => {
+      const el = render([
+        { assistantId: 'a1', documentId: 'd2', fileName: 'notes.MD', text: 'x' },
+        { assistantId: 'a1', documentId: 'd3', fileName: 'readme.txt', text: 'x' },
+      ]);
+      expect(el.querySelectorAll('[data-testid="citation-view-content"]').length).toBe(2);
+      expect(el.textContent).toContain('Download source');
+    });
+
+    it('is not offered for a type the server cannot show', () => {
+      const el = render([{ assistantId: 'a1', documentId: 'd4', fileName: 'handbook.pdf', text: 'x' }]);
+      expect(viewButton(el)).toBeNull();
+    });
+
+    it('is withheld with downloads (#111), while Open page stays', () => {
+      const el = render([web], false);
+      expect(viewButton(el)).toBeNull();
+      expect(el.querySelector('a[href]')).not.toBeNull();
+    });
+
+    it('needs the ids to read the document', () => {
+      const el = render([{ ...web, assistantId: '', documentId: '' }]);
+      expect(viewButton(el)).toBeNull();
     });
   });
 });

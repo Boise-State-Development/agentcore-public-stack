@@ -120,13 +120,32 @@ export interface RunNowRequest {
   enabledTools?: string[] | null;
 }
 
-/** Response from POST /runs/now. The run also lands as a session. */
-export interface RunNowResponse {
+/**
+ * `202` body of POST /runs/now. The turn runs in the background: poll
+ * GET /runs/{runId} for its outcome. The answer lands as session `sessionId`.
+ */
+export interface RunStartedResponse {
   runId: string;
   sessionId: string;
-  status: string;
-  finalMessage: string;
-  stopReason?: string | null;
-  error?: string | null;
+  status: 'started';
+}
+
+/** Statuses a run ends in (`RunStatus` on the backend). */
+export const TERMINAL_RUN_STATUSES = [
+  'completed',
+  'error',
+  'timeout',
+  'oauth_required',
+  'client_tool_call',
+] as const;
+
+/** Response from GET /runs/{runId}: `started` until the run ends. */
+export interface RunStatusResponse {
+  runId: string;
+  sessionId: string;
+  status: 'started' | (typeof TERMINAL_RUN_STATUSES)[number];
   title?: string | null;
+  error?: string | null;
+  startedAt: string;
+  finishedAt?: string | null;
 }

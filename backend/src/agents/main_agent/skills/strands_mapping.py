@@ -22,6 +22,7 @@ from strands import AgentSkills, Skill, tool
 # Single source of truth for the slug rule (shared with the app-api SKILL.md
 # write-through projection — the import-boundary forbids app_api importing here).
 from apis.shared.skills.bundle import KIND_DIRS, slugify_skill_name
+from apis.shared.skills.resource_paths import PathLookup, lookup_resource, manifest_path
 from apis.shared.skills.resource_store import (
     SkillResourceStoreError,
     get_skill_resource_store,
@@ -68,9 +69,14 @@ def _script_notice() -> str:
 
 
 def _manifest_path(ref: Any) -> str:
-    """Standard bundle path for a manifest entry, e.g. ``references/forms.md``."""
-    subdir = KIND_DIRS.get(getattr(ref, "kind", "reference"), "references")
-    return f"{subdir}/{ref.filename}"
+    """Standard bundle path for a manifest entry, e.g. ``references/forms.md``.
+
+    ``{kind_dir}/{path}``: for a file at the top of its directory (every row
+    written before nested paths) the path is its filename, so the listing an
+    activation shows is byte-identical; a nested file lists as
+    ``references/legal/nda.md``.
+    """
+    return manifest_path(ref)
 
 
 def _manifest_paths(record: Any) -> List[str]:
@@ -78,23 +84,44 @@ def _manifest_paths(record: Any) -> List[str]:
     return [_manifest_path(r) for r in getattr(record, "resources", None) or []]
 
 
+#: The listing's groups, in the order they appear: (manifest kind, heading).
+#: A kind outside these is listed under References, the directory
+#: ``_manifest_path`` already reads it from.
+_BUNDLED_FILE_GROUPS = (("reference", "References"), ("script", "Scripts"), ("asset", "Assets"))
+
+
+def _bundled_group(ref: Any) -> str:
+    """The listing group a manifest entry belongs to: its kind, or ``reference`` for any other."""
+    kind = getattr(ref, "kind", "reference")
+    return kind if kind in KIND_DIRS else "reference"
+
+
 def _reference_files_section(record: Any) -> str:
-    """A generated 'Available reference files' block for a skill's instructions.
+    """A generated 'Bundled files' block for a skill's instructions.
 
     Programmatic ``Skill`` instances carry no filesystem, so the plugin cannot
     list resources on activation. We append this listing to the instructions so
     the model knows what it can pull with ``read_skill_file`` (spec §5, L3).
+    Files are grouped as References, Scripts and Assets, in manifest order
+    within a group, and a group the skill has no files of is left out. Only new
+    activation results carry this wording; history already written keeps the
+    listing it was written with.
     """
-    paths = _manifest_paths(record)
-    if not paths:
+    refs = list(getattr(record, "resources", None) or [])
+    if not refs:
         return ""
-    lines = "\n".join(f"- {p}" for p in paths)
+    groups = []
+    for kind, heading in _BUNDLED_FILE_GROUPS:
+        members = [r for r in refs if _bundled_group(r) == kind]
+        if members:
+            lines = "\n".join(f"- {_manifest_path(r)}" for r in members)
+            groups.append(f"### {heading}\n{lines}")
     return (
-        "\n\n## Available reference files\n"
+        "\n\n## Bundled files\n"
         "Load any of these with the `read_skill_file` tool "
         f"(skill_name `{slugify_skill_name(getattr(record, 'skill_id', ''))}`, "
-        "path = one of the entries below):\n"
-        f"{lines}"
+        "path = one of the entries below):\n\n"
+        + "\n\n".join(groups)
     )
 
 
@@ -106,24 +133,39 @@ def record_to_strands_skill(record: Any) -> Skill:
     passthrough, so downstream code (access checks, ``read_skill_file``) can
     recover the catalog id from an activated skill. The instructions gain a
     generated reference-file listing (L3 disclosure) when the skill has any.
+    ``license`` and ``compatibility`` come from ``skill_metadata`` when they
+    are strings.
     """
     skill_id = getattr(record, "skill_id", "")
+    # Frontmatter passthrough first, so a ``skill_id`` / ``display_name`` key in
+    # it can never stand in for the record's own.
     metadata = {
+        **(getattr(record, "skill_metadata", None) or {}),
         "skill_id": skill_id,
         "display_name": getattr(record, "display_name", "") or skill_id,
-        **(getattr(record, "skill_metadata", None) or {}),
     }
     allowed_tools = list(getattr(record, "allowed_tools", None) or [])
     instructions = (getattr(record, "instructions", "") or "") + _reference_files_section(
         record
     )
+    stored = getattr(record, "skill_metadata", None) or {}
     return Skill(
         name=slugify_skill_name(skill_id),
         description=getattr(record, "description", "") or "",
         instructions=instructions,
         allowed_tools=allowed_tools or None,
         metadata=metadata,
+        # The plugin adds a "Compatibility:" line to the activation result for a
+        # skill that declares one; license is carried but shown nowhere. Neither
+        # reaches <available_skills>, so the cached prefix is unchanged.
+        license=_string_or_none(stored.get("license")),
+        compatibility=_string_or_none(stored.get("compatibility")),
     )
+
+
+def _string_or_none(value: Any) -> Optional[str]:
+    """A non-empty string as is; anything else (absent, blank, not a string) as None."""
+    return value if isinstance(value, str) and value else None
 
 
 def _is_active_status(status: Any) -> bool:
@@ -170,18 +212,56 @@ def fetch_active_skill_records(skill_ids: List[str]) -> List[Any]:
         return []
 
 
-def _resolve_resource(record: Any, path: str) -> Optional[Any]:
+def _lookup(record: Any, path: str, *, nested_bare_names: bool = True) -> PathLookup:
+    wanted = (path or "").strip().lstrip("/")
+    return lookup_resource(
+        getattr(record, "resources", None) or [],
+        wanted,
+        accept_manifest_path=True,
+        nested_bare_names=nested_bare_names,
+    )
+
+
+def _resolve_resource(
+    record: Any, path: str, *, nested_bare_names: bool = True
+) -> Optional[Any]:
     """Resolve ``path`` against a skill's manifest (no filesystem, no traversal).
 
-    Accepts either the bare filename (``forms.md``) or the standard bundle path
-    (``references/forms.md``). Pure manifest lookup — the returned ref's stored
-    ``s3_key`` is the only thing ever read.
+    Accepts the standard bundle path (``references/legal/nda.md``), the path
+    below the kind directory (``legal/nda.md``; for a top-level file that is
+    its filename), or a bare filename when exactly one file has it. Pure
+    manifest lookup — the returned ref's stored ``s3_key`` is the only thing
+    ever read. ``nested_bare_names=False`` (script resolution) stops a bare
+    name reaching into a subfolder.
     """
+    return _lookup(record, path, nested_bare_names=nested_bare_names).ref
+
+
+def _resolve_readable_resource(record: Any, path: str) -> Optional[Any]:
+    """:func:`_resolve_resource`, plus a basename fallback for reading only.
+
+    An imported bundle keeps its SKILL.md's own links (``reference/eval.md``)
+    while the manifest is flat (skill-bundle-import.md §4), so on a miss a
+    path's basename names the file when exactly one file has it. Only
+    ``read_skill_file`` uses this: script execution keeps the strict lookup,
+    where a path outside the manifest must be refused, not reinterpreted. A
+    path with a ``..`` segment never falls back. A lookup inside the tool call:
+    nothing here reaches the prompt.
+    """
+    ref = _resolve_resource(record, path)
+    if ref is not None:
+        return ref
     wanted = (path or "").strip().lstrip("/")
-    for ref in getattr(record, "resources", None) or []:
-        if wanted == ref.filename or wanted == _manifest_path(ref):
-            return ref
-    return None
+    segments = wanted.split("/")
+    if len(segments) < 2 or ".." in segments or "\\" in wanted:
+        return None
+    matches = [r for r in getattr(record, "resources", None) or [] if r.filename == segments[-1]]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _ambiguous_paths(record: Any, path: str) -> List[str]:
+    """The manifest paths a bare ``path`` could mean, when more than one file has that name."""
+    return [_manifest_path(r) for r in _lookup(record, path).ambiguous]
 
 
 class SkillsRuntime(NamedTuple):
@@ -244,8 +324,14 @@ def make_read_skill_file_tool(records: List[Any]):
                 f"Available skills: {available}"
             )
 
-        ref = _resolve_resource(record, path)
+        ref = _resolve_readable_resource(record, path)
         if ref is None:
+            ambiguous = _ambiguous_paths(record, path)
+            if ambiguous:
+                return (
+                    f"More than one file in skill '{skill_name}' is named '{path}': "
+                    f"{', '.join(ambiguous)}. Read it by one of those paths."
+                )
             listing = ", ".join(_manifest_paths(record)) or "(no reference files)"
             return (
                 f"No reference file '{path}' in skill '{skill_name}'. "

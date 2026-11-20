@@ -50,6 +50,13 @@ const ACTION_LABELS: Record<string, string> = {
   'app_role.deleted': 'Role deleted',
   'app_role.synced': 'Permissions synced',
   'app_role.mutation_denied': 'Change denied',
+  'skill.created': 'Skill created',
+  'skill.updated': 'Skill updated',
+  'skill.imported': 'Skill imported',
+  'skill.refreshed': 'Skill re-imported',
+  'skill.deleted': 'Skill deleted',
+  'skill.exported': 'Skill exported',
+  'skill.script_run': 'Skill script run',
 };
 
 export function actionLabel(action: string): string {
@@ -68,6 +75,15 @@ const FIELD_LABELS: Record<string, string> = {
   granted_admin_scopes: 'Admin access',
   priority: 'Priority',
   enabled: 'Enabled',
+  // Skill records (ids and hashes only).
+  contentHash: 'Content hash',
+  files: 'Files',
+  importSource: 'Imported from',
+  ownerId: 'Owner',
+  tier: 'Tier',
+  scriptPath: 'Script',
+  scriptSha256: 'Script SHA-256',
+  outcome: 'Outcome',
 };
 
 export function fieldLabel(field: string): string {
@@ -80,5 +96,9 @@ export function formatValue(value: unknown): string {
   if (Array.isArray(value)) return value.length ? value.join(', ') : '(none)';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (value === '') return '(empty)';
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return entries.length ? entries.map(([k, v]) => `${k}: ${formatValue(v)}`).join(', ') : '(none)';
+  }
   return String(value);
 }

@@ -1,0 +1,44 @@
+{
+  "available_skills_xml": "<available_skills>\n<skill>\n<name>files-skill</name>\n<description>Carries reference files and a script.</description>\n</skill>\n<skill>\n<name>licensed-skill</name>\n<description>Declares a license and no compatibility.</description>\n</skill>\n<skill>\n<name>plain-skill</name>\n<description>A skill with nothing but a description &amp; &lt;markup&gt;.</description>\n</skill>\n<skill>\n<name>tooled-skill</name>\n<description>Names the tools it expects.</description>\n</skill>\n</available_skills>",
+  "skills_tool_spec": {
+    "name": "skills",
+    "description": "Activate a skill to load its full instructions.\n\nUse this tool to load the complete instructions for a skill listed in\nthe available_skills section of your system prompt.",
+    "inputSchema": {
+      "json": {
+        "properties": {
+          "skill_name": {
+            "description": "Name of the skill to activate.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "skill_name"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "read_skill_file_tool_spec": {
+    "name": "read_skill_file",
+    "description": "Read one of an active skill's reference files.\n\nUse this to load a reference file listed in a skill's \"Available\nreference files\" section (after you have activated the skill).",
+    "inputSchema": {
+      "json": {
+        "properties": {
+          "skill_name": {
+            "description": "The skill's name (as shown in ``<available_skills>``).",
+            "type": "string"
+          },
+          "path": {
+            "description": "A path from the skill's reference-file listing, e.g.\n``references/forms.md``.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "skill_name",
+          "path"
+        ],
+        "type": "object"
+      }
+    }
+  }
+}

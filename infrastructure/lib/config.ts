@@ -115,6 +115,7 @@ export interface AppConfig {
   releaseLedger: ReleaseLedgerConfig;
   documentExtract: DocumentExtractConfig;
   fieldSetAuthoring: FieldSetAuthoringConfig;
+  skillBundleImport: SkillBundleImportConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
   concurrentToolExecution: ConcurrentToolExecutionConfig;
   wordSkillScripts: WordSkillScriptsConfig;
@@ -1132,6 +1133,21 @@ export interface FieldSetAuthoringConfig {
 }
 
 /**
+ * Skill bundle import (docs/specs/skill-bundle-import.md): a user imports a whole
+ * agentskills.io bundle into My Skills from a `.zip` or a public GitHub path,
+ * and refreshes it later. **Opt-in while in development**: off unless
+ * CDK_SKILL_BUNDLE_IMPORT_ENABLED=true (or a `skillBundleImport.enabled: true`
+ * cdk.json context). A feature switch, and therefore permanent: app-api fetches
+ * from codeload.github.com on a user's behalf, which a deployment may not want.
+ *
+ * Sets SKILL_BUNDLE_IMPORT_ENABLED on **app-api only**: an imported skill is
+ * stored like a hand-built one, so the Runtime gets no variable. No resources.
+ */
+export interface SkillBundleImportConfig {
+  enabled: boolean;
+}
+
+/**
  * Agent Designer feature flag. Default ON with a kill switch — the governed
  * `/agents/*` surface ships everywhere now that the Designer is complete; only
  * CDK_AGENTS_API_ENABLED=false (or an `agents.enabled: false` cdk.json context)
@@ -2131,6 +2147,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_FIELD_SET_AUTHORING_ENABLED
         ? process.env.CDK_FIELD_SET_AUTHORING_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('fieldSetAuthoring')?.enabled ?? false,
+    },
+    skillBundleImport: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED
+        ? process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('skillBundleImport')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

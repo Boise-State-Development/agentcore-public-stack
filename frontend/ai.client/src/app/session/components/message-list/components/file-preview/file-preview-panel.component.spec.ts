@@ -10,6 +10,7 @@ import {
 import { DOCX_MIME } from '../../../../services/file-preview/file-preview.model';
 import { DockedPaneService } from '../../../../services/docked-pane/docked-pane.service';
 import { ConfigService } from '../../../../../services/config.service';
+import { DocumentService } from '../../../../../assistants/services/document.service';
 
 /** Stands in for docx-preview's render step, painting into `host`. */
 const renderAsync = vi.fn();
@@ -203,3 +204,92 @@ describe('FilePreviewPanelComponent', () => {
     expect(rail.owner()).toBe('artifact');
   });
 });
+
+describe('FilePreviewPanelComponent — knowledge-base document', () => {
+  let fixture: ComponentFixture<FilePreviewPanelComponent>;
+  let state: FilePreviewStateService;
+  let fetchDocument: ReturnType<typeof vi.fn>;
+  let getDocumentContent: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    fetchDocument = vi.fn();
+    getDocumentContent = vi.fn().mockResolvedValue({
+      filename: 'Home - Example.md',
+      sourceUrl: 'https://www.example.edu/',
+      contentType: 'text/markdown',
+      text: '# Home - Example',
+      truncated: false,
+    });
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
+      imports: [FilePreviewPanelComponent],
+      providers: [
+        { provide: FilePreviewHttpService, useValue: { fetchDocument } },
+        { provide: DocumentService, useValue: { getDocumentContent } },
+      ],
+    }).compileComponents();
+    TestBed.inject(ConfigService).appApiUrl.set('/api');
+    state = TestBed.inject(FilePreviewStateService);
+    fixture = TestBed.createComponent(FilePreviewPanelComponent);
+    fixture.detectChanges();
+  });
+
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    fixture.detectChanges();
+  }
+
+  async function openDocument(sourceUrl: string | null = 'https://www.example.edu/'): Promise<HTMLElement> {
+    state.open({ kind: 'kb-document', assistantId: 'a1', documentId: 'd1', filename: 'Home - Example', sourceUrl });
+    fixture.detectChanges();
+    await settle();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('reads the text from app-api, never the upload byte path', async () => {
+    const el = await openDocument();
+    expect(getDocumentContent).toHaveBeenCalledWith('a1', 'd1');
+    expect(fetchDocument).not.toHaveBeenCalled();
+    expect(el.querySelector('aside h1')?.textContent).toBe('Home - Example');
+    expect(el.textContent).toContain('Web page, as indexed');
+    expect(el.textContent).not.toContain('Loading document');
+  });
+
+  it('offers Open page for a crawled page and no download', async () => {
+    const el = await openDocument();
+    const open = el.querySelector<HTMLAnchorElement>('[data-testid="kb-open-page"]');
+    expect(open?.href).toBe('https://www.example.edu/');
+    expect(open?.target).toBe('_blank');
+    expect(el.querySelector('a[download]')).toBeNull();
+  });
+
+  it('labels an uploaded document and has no header link', async () => {
+    const el = await openDocument(null);
+    expect(el.textContent).toContain('Knowledge base document, as indexed');
+    expect(el.querySelector('[data-testid="kb-open-page"]')).toBeNull();
+    expect(el.querySelector('a[download]')).toBeNull();
+  });
+
+  it("shows the server's refusal and offers no retry for it", async () => {
+    const { DocumentUploadError } = await import('../../../../../assistants/services/document.service');
+    getDocumentContent.mockRejectedValue(
+      new DocumentUploadError('Viewing source documents is turned off for this agent.', 'HTTP_403', { status: 403 }),
+    );
+    const el = await openDocument();
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('turned off for this agent');
+    expect(el.textContent).not.toContain('Try again');
+  });
+
+  it('retries a transient failure by reading again', async () => {
+    getDocumentContent.mockRejectedValueOnce(new Error('network'));
+    const el = await openDocument();
+    const retry = Array.from(el.querySelectorAll('button')).find((b) => b.textContent?.includes('Try again'));
+    expect(retry).toBeDefined();
+    retry!.click();
+    fixture.detectChanges();
+    await settle();
+    expect(getDocumentContent).toHaveBeenCalledTimes(2);
+    expect(el.querySelector('aside h1')?.textContent).toBe('Home - Example');
+  });
+});
+

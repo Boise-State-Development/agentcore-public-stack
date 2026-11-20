@@ -18,12 +18,16 @@ import logging
 import re
 from typing import Dict, List, Optional, Tuple
 
+from apis.shared.audit.models import AuditAction
 from apis.shared.auth.models import User
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.bundle_files import SkillBundleFiles, get_skill_bundle_files
+from apis.shared.skills.audit import is_no_op, record_skill_event
+from apis.shared.skills.bundle_import import ParsedBundle
 from apis.shared.skills.models import (
     SKILL_ID_PATTERN,
     SkillDefinition,
+    SkillImportSource,
     SkillResourceRef,
     SkillStatus,
     SkillVisibility,
@@ -36,6 +40,7 @@ from apis.shared.skills.resource_types import (
     is_text_content_type,
     resolve_upload_content_type,
 )
+from apis.shared.skills.skill_md import validate_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +67,10 @@ class UserSkillLimitError(UserSkillError):
     """The caller is at their authored-skill cap (409)."""
 
 
+class UserSkillConflictError(UserSkillError):
+    """An import's source or target moved since its preview (409)."""
+
+
 def slugify_skill_id(display_name: str) -> str:
     """Derive a ``skill_id`` stem from a human display name.
 
@@ -79,6 +88,30 @@ def slugify_skill_id(display_name: str) -> str:
     while len(stem) < 3:
         stem = f"{stem}_x" if stem else _FALLBACK_STEM
     return stem
+
+
+def skill_id_from_frontmatter_name(name: object) -> Optional[str]:
+    """The ``skill_id`` stem an imported ``name`` maps to, or None if it cannot be one.
+
+    ``mcp-builder`` → ``mcp_builder``. The name must pass the agentskills.io
+    name rule, and the converted form must fit ``SKILL_ID_PATTERN`` (so ``ab``,
+    a name starting with a digit, and one over 50 characters fall back to the
+    display name). Allocating from the name is what lets an import export back
+    under the same ``name`` (it reverses a detail of skill-bundle-import.md §4,
+    by decision).
+    """
+    if not isinstance(name, str):
+        return None
+    if any(d.field == "name" for d in validate_frontmatter({"name": name}, strict=False)):
+        return None
+    candidate = name.replace("-", "_")
+    return candidate if _SKILL_ID_RE.match(candidate) else None
+
+
+def bundle_original_name(bundle: ParsedBundle) -> Optional[str]:
+    """The frontmatter ``name`` exactly as the bundle wrote it, if it wrote one."""
+    name = bundle.frontmatter.get("name")
+    return name if isinstance(name, str) and name else None
 
 
 class UserSkillService:
@@ -182,6 +215,7 @@ class UserSkillService:
         created = await self.repository.create_skill(skill)
         self.bundle_files.write_skill_md(created)
         self._invalidate(skill_id)
+        await record_skill_event(AuditAction.SKILL_CREATED, user, skill_id, after=created)
 
         logger.info(
             f"User {scrub_log(user.email)} created skill: {scrub_log(skill_id)}",
@@ -202,7 +236,7 @@ class UserSkillService:
         route DTO — ``owner_id``, ``visibility`` and audit fields are never
         routed through here.
         """
-        await self.require_owned(skill_id, user)
+        before = await self.require_owned(skill_id, user)
 
         updated = await self.repository.update_skill(
             skill_id, updates, admin_user_id=user.user_id
@@ -212,6 +246,10 @@ class UserSkillService:
 
         self.bundle_files.write_skill_md(updated)
         self._invalidate(skill_id)
+        if not is_no_op(before, updated):
+            await record_skill_event(
+                AuditAction.SKILL_UPDATED, user, skill_id, before=before, after=updated
+            )
 
         logger.info(
             f"User {scrub_log(user.email)} updated skill: {scrub_log(skill_id)}",
@@ -242,6 +280,7 @@ class UserSkillService:
         await self.repository.delete_skill(skill_id)
         await self.bundle_files.delete_versions(skill_id)
         self._invalidate(skill_id)
+        await record_skill_event(AuditAction.SKILL_DELETED, user, skill_id, before=skill)
 
         logger.info(
             f"User {scrub_log(user.email)} deleted skill: {scrub_log(skill_id)}",
@@ -270,12 +309,14 @@ class UserSkillService:
         content_type: str,
         user: User,
         kind: str = "reference",
+        path: Optional[str] = None,
     ) -> List[SkillResourceRef]:
-        await self.require_owned(skill_id, user)
+        before = await self.require_owned(skill_id, user)
         refs = await self.bundle_files.add_resource(
-            skill_id, filename, content, content_type, user, kind=kind
+            skill_id, filename, content, content_type, user, kind=kind, path=path
         )
         self._invalidate(skill_id)
+        await self._record_files_changed(user, before, refs)
         return refs
 
     async def read_resource(
@@ -287,10 +328,22 @@ class UserSkillService:
     async def delete_resource(
         self, skill_id: str, filename: str, user: User
     ) -> List[SkillResourceRef]:
-        await self.require_owned(skill_id, user)
+        before = await self.require_owned(skill_id, user)
         refs = await self.bundle_files.delete_resource(skill_id, filename, user)
         self._invalidate(skill_id)
+        await self._record_files_changed(user, before, refs)
         return refs
+
+    @staticmethod
+    async def _record_files_changed(
+        user: User, before: SkillDefinition, refs: List[SkillResourceRef]
+    ) -> None:
+        """One ``skill.updated`` for a file write, none when the bytes were the same."""
+        after = before.model_copy(update={"resources": list(refs)})
+        if not is_no_op(before, after):
+            await record_skill_event(
+                AuditAction.SKILL_UPDATED, user, before.skill_id, before=before, after=after
+            )
 
     async def write_text_file(
         self,
@@ -335,23 +388,184 @@ class UserSkillService:
         )
 
     # =========================================================================
+    # Bundle import (docs/specs/skill-bundle-import.md)
+    # =========================================================================
+
+    async def import_bundle(
+        self,
+        user: User,
+        bundle: ParsedBundle,
+        *,
+        source: SkillImportSource,
+        skill_id: Optional[str] = None,
+        display_name: Optional[str] = None,
+        expected_bundle_hash: Optional[str] = None,
+        expected_updated_at: Optional[str] = None,
+    ) -> SkillDefinition:
+        """Create a skill from ``bundle``, or re-import it into an owned skill.
+
+        A re-import replaces the description, instructions, advisory tools and
+        frontmatter, writes added and changed files, and drops files the bundle
+        no longer has (spec D4). The display name stays the user's. It writes the
+        **live row only**: no version is cut, so a project pinned to a version
+        keeps it until someone clicks Update (D5).
+
+        Raises:
+            UserSkillConflictError: ``expected_bundle_hash`` or
+                ``expected_updated_at`` no longer match (D3).
+            UserSkillNotFoundError: ``skill_id`` is not the caller's.
+            UserSkillLimitError: Creating would pass ``MAX_SKILLS_PER_USER``.
+            ValueError: A file breaks a bundle rule.
+        """
+        if expected_bundle_hash and expected_bundle_hash != bundle.bundle_hash:
+            raise UserSkillConflictError(
+                "The source changed since you previewed it. Review the import again."
+            )
+        source = source.model_copy(update={"original_name": bundle_original_name(bundle)})
+        if skill_id is None:
+            return await self._create_from_bundle(user, bundle, source, display_name)
+
+        skill = await self.require_owned(skill_id, user)
+        if expected_updated_at and skill.updated_at.isoformat() != expected_updated_at:
+            raise UserSkillConflictError(
+                "This skill changed since you previewed the import. Review it again."
+            )
+
+        old_refs = list(skill.resources)
+        new_refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, old_refs)
+        updated = await self.repository.update_skill(
+            skill_id,
+            {
+                "description": bundle.description,
+                "instructions": bundle.instructions,
+                "allowed_tools": list(bundle.allowed_tools),
+                "skill_metadata": dict(bundle.skill_metadata),
+                "resources": new_refs,
+                "import_source": source,
+            },
+            admin_user_id=user.user_id,
+        )
+        if updated is None:
+            raise UserSkillNotFoundError(f"Skill '{skill_id}' not found")
+        self.bundle_files.write_skill_md(updated)
+        self._invalidate(skill_id)
+        await self.bundle_files.gc_orphaned(old_refs, new_refs)
+        if not is_no_op(skill, updated):
+            await record_skill_event(
+                AuditAction.SKILL_REFRESHED, user, skill_id, before=skill, after=updated
+            )
+        self._log_import(user, skill_id, source, old_refs, new_refs, created=False)
+        return updated
+
+    async def _create_from_bundle(
+        self,
+        user: User,
+        bundle: ParsedBundle,
+        source: SkillImportSource,
+        display_name: Optional[str],
+    ) -> SkillDefinition:
+        name = (display_name or "").strip() or bundle.display_name
+        existing = await self.repository.list_skills_by_owner(user.user_id)
+        if len(existing) >= MAX_SKILLS_PER_USER:
+            raise UserSkillLimitError(
+                f"You already have the maximum of {MAX_SKILLS_PER_USER} skills. "
+                "Delete one before importing another."
+            )
+
+        skill_id = await self.plan_import_skill_id(bundle, display_name)
+        refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, [])
+        skill = SkillDefinition(
+            skill_id=skill_id,
+            display_name=name,
+            description=bundle.description,
+            instructions=bundle.instructions,
+            allowed_tools=list(bundle.allowed_tools),
+            skill_metadata=dict(bundle.skill_metadata),
+            resources=refs,
+            status=SkillStatus.ACTIVE,
+            owner_id=user.user_id,
+            visibility=SkillVisibility.PRIVATE,
+            created_by=user.user_id,
+            updated_by=user.user_id,
+            import_source=source,
+        )
+        try:
+            created = await self.repository.create_skill(skill)
+        except Exception:
+            # The row never existed, so nothing names these objects.
+            await self.bundle_files.gc_orphaned(refs, [])
+            raise
+        self.bundle_files.write_skill_md(created)
+        self._invalidate(skill_id)
+        await record_skill_event(AuditAction.SKILL_IMPORTED, user, skill_id, after=created)
+        self._log_import(user, skill_id, source, [], refs, created=True)
+        return created
+
+    async def plan_import_skill_id(
+        self, bundle: ParsedBundle, display_name: Optional[str] = None
+    ) -> str:
+        """The ``skill_id`` creating a skill from ``bundle`` would get now.
+
+        From the frontmatter ``name`` when it can be an id
+        (:func:`skill_id_from_frontmatter_name`), else from the display name as
+        before; suffixed on collision either way. The preview calls this to say
+        what the skill's name will be; nothing is reserved, so a skill created in
+        between can move it on by a suffix.
+        """
+        stem = skill_id_from_frontmatter_name(bundle_original_name(bundle))
+        if stem is not None:
+            return await self._allocate_skill_id(stem, stem=stem)
+        name = (display_name or "").strip() or bundle.display_name
+        return await self._allocate_skill_id(name)
+
+    @staticmethod
+    def _log_import(
+        user: User,
+        skill_id: str,
+        source: SkillImportSource,
+        old_refs: List[SkillResourceRef],
+        new_refs: List[SkillResourceRef],
+        *,
+        created: bool,
+    ) -> None:
+        old = {r.path: r.content_hash for r in old_refs}
+        new = {r.path: r.content_hash for r in new_refs}
+        logger.info(
+            f"User {scrub_log(user.email)} imported a skill bundle into {scrub_log(skill_id)}",
+            extra={
+                "event": "user_skill_imported",
+                "skill_id": scrub_log(skill_id),
+                "owner_user_id": user.user_id,
+                # NB: not "created" — reserved on LogRecord, like "filename".
+                "new_skill": created,
+                "source_type": source.type,
+                "files_added": len(set(new) - set(old)),
+                "files_changed": sum(1 for k in set(new) & set(old) if new[k] != old[k]),
+                "files_removed": len(set(old) - set(new)),
+            },
+        )
+
+    # =========================================================================
     # Internals
     # =========================================================================
 
-    async def _allocate_skill_id(self, display_name: str) -> str:
-        """Pick a globally-unique ``skill_id`` from a display-name stem.
+    async def _allocate_skill_id(self, display_name: str, *, stem: Optional[str] = None) -> str:
+        """Pick a globally-unique ``skill_id`` from a display-name stem (or ``stem``).
 
         Collisions are resolved by suffixing rather than rejected, so a user
         naming their skill "docx" when the catalog already has one succeeds
         (as ``docx_2``) instead of hitting a 409 that would also disclose the
-        existence of a skill they cannot see.
+        existence of a skill they cannot see. A ``stem`` already shaped like an
+        id (an imported name) is used as is, and cut short only to make room
+        for a suffix.
         """
-        stem = slugify_skill_id(display_name)
+        stem = stem or slugify_skill_id(display_name)
         candidate = stem
         for suffix in range(2, 100):
             if not await self.repository.skill_exists(candidate):
                 return candidate
-            candidate = f"{stem}_{suffix}"
+            tail = f"_{suffix}"
+            candidate = f"{stem[: 50 - len(tail)].rstrip('_')}{tail}"
 
         # Astronomically unlikely; fall back to a random tail rather than loop.
         import uuid

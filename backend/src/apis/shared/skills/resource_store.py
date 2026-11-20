@@ -6,9 +6,10 @@ progressive disclosure) are too large to inline in the DynamoDB
 ``skill-resources`` S3 bucket and the row carries only a lightweight
 ``SkillResourceRef`` manifest.
 
-Skills v2 stores objects in the **standard agentskills.io bundle layout** so a
-skill's S3 prefix is a valid bundle (attachable to the managed-Harness lane,
-exportable as-is):
+Skills v2 stores objects in the **agentskills.io bundle layout**. The prefix is
+storage, not a conformant bundle: its directory is the ``skill_id``, which can
+differ from the ``name`` the projected ``SKILL.md`` declares, and the
+specification requires the two to match. An export is the conformant artifact.
 
   - ``skills/{skill_id}/SKILL.md`` — write-through projection of the row.
   - ``skills/{skill_id}/{references|scripts|assets}/{filename}`` — supporting
@@ -70,15 +71,18 @@ class SkillResourceChangedError(SkillResourceStoreError):
 KIND_DIRS: dict = {"reference": "references", "script": "scripts", "asset": "assets"}
 
 
-def resource_key(skill_id: str, kind: str, filename: str) -> str:
+def resource_key(skill_id: str, kind: str, path: str) -> str:
     """Return the standard bundle object key for one of a skill's files.
 
-    ``skills/{skill_id}/{references|scripts|assets}/{filename}``. An unknown
+    ``skills/{skill_id}/{references|scripts|assets}/{path}``, where ``path`` is
+    the file's place below its kind directory (``nda.md``, ``legal/nda.md``). For
+    a file at the top of its directory the path is its filename, so the key is
+    the one every row written before nested paths already has. An unknown
     ``kind`` falls back to ``references`` (defensive; callers pass a validated
-    kind).
+    kind and a path that passed ``resource_paths.validate_resource_path``).
     """
     subdir = KIND_DIRS.get(kind, "references")
-    return f"skills/{skill_id}/{subdir}/{filename}"
+    return f"skills/{skill_id}/{subdir}/{path}"
 
 
 def version_blob_key(skill_id: str, content_hash: str) -> str:
@@ -147,15 +151,16 @@ class SkillResourceStore:
         content: bytes,
         content_type: str,
         kind: str = "reference",
+        path: Optional[str] = None,
     ) -> str:
         """Persist a supporting file into the standard bundle layout; return the key.
 
-        The key is ``skills/{skill_id}/{references|scripts|assets}/{filename}``
-        (not content-addressed). Re-uploading the same ``(kind, filename)``
-        overwrites the object in place — the manifest, keyed by filename, stays
-        a single entry.
+        The key is ``skills/{skill_id}/{references|scripts|assets}/{path}``
+        (not content-addressed), ``path`` defaulting to ``filename``. Re-uploading
+        the same ``(kind, path)`` overwrites the object in place — the manifest,
+        keyed by path, stays a single entry.
         """
-        key = resource_key(skill_id, kind, filename)
+        key = resource_key(skill_id, kind, path or filename)
         return self._put_bytes(
             skill_id=skill_id, key=key, content=content, content_type=content_type
         )

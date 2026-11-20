@@ -56,6 +56,21 @@ export function base64ToPcm16(b64: string): Int16Array {
 }
 
 /**
+ * RMS level of a PCM16 chunk in dBFS (0 = full scale). Digital silence
+ * returns -Infinity.
+ */
+export function pcm16LevelDb(pcm: Int16Array): number {
+  if (pcm.length === 0) return -Infinity;
+  let sumSquares = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    const s = pcm[i] / 0x8000;
+    sumSquares += s * s;
+  }
+  const rms = Math.sqrt(sumSquares / pcm.length);
+  return rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+}
+
+/**
  * Linear interpolation resampling.
  * Used when browser's native sample rate differs from target (16kHz).
  */

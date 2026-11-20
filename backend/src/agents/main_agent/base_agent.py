@@ -23,6 +23,7 @@ from agents.main_agent.session.hooks import (
     OAuthConsentHook,
     MCPExternalApprovalHook,
     MCPSessionHealHook,
+    McpAppRenderedNoteHook,
     ContextAttributionHook,
     PrefixFingerprintHook,
     WebSearchDefaultsHook,
@@ -411,6 +412,13 @@ class BaseAgent(ABC):
         # for nothing; a healthy call pays one session probe.
         hooks.append(MCPSessionHealHook())
 
+        # Tells the model a successful MCP App tool result is also on screen
+        # as the App, so it answers around the view instead of re-listing it
+        # (an Atlassian Jira search came back as the widget and a duplicate
+        # table). One constant sentence appended after the offloader runs;
+        # inert unless the host can frame Apps.
+        hooks.append(McpAppRenderedNoteHook())
+
         # AgentCore Web Search returns 10 results (~5.3k tokens) unless asked
         # for fewer; fill in maxResults=5 when the model leaves it out. Hands
         # Strands a copy of the tool use, so the model's request in history is
@@ -521,9 +529,10 @@ class BaseAgent(ABC):
             return set()
 
         owner_id = self.user_id
+        session_id = getattr(self, "session_id", None)
 
         async def approval_details_lookup(tool_name: str, tool_input: object):
-            return await describe_for_approval(owner_id, tool_name, tool_input)
+            return await describe_for_approval(owner_id, tool_name, tool_input, session_id)
 
         return MCPExternalApprovalHook(
             approval_names_lookup=approval_names_lookup,

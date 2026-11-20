@@ -11,6 +11,7 @@ import { SpinnerComponent } from '../../../components/spinner/spinner.component'
 import { ProjectSkillContent, ProjectSkillFile } from '../../models/project.model';
 import { ProjectApiService } from '../../services/project-api.service';
 import { projectErrorMessage } from '../../services/projects.service';
+import { skillFilePath } from '../../../shared/utils/skill-resource-path';
 
 export interface ProjectSkillDialogData {
   projectId: string;
@@ -120,13 +121,13 @@ let nextInstance = 0;
                 {{ group.heading }} <span class="font-mono normal-case">({{ group.kind }}s/)</span>
               </h4>
               <ul class="mt-1 divide-y divide-gray-200 rounded-2xl border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
-                @for (file of group.files; track file.filename) {
+                @for (file of group.files; track filePath(file)) {
                   <li>
                     <div class="flex items-center justify-between gap-3 px-4 py-2.5">
                       <span class="flex min-w-0 items-center gap-2">
                         <ng-icon [name]="group.icon" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
                         <span class="min-w-0">
-                          <span class="block truncate font-mono text-sm/6 text-gray-900 dark:text-white">{{ file.filename }}</span>
+                          <span class="block truncate font-mono text-sm/6 text-gray-900 dark:text-white">{{ filePath(file) }}</span>
                           <span class="block text-xs/5 text-gray-600 dark:text-gray-400">{{ sizeLabel(file.size) }}</span>
                         </span>
                       </span>
@@ -136,7 +137,7 @@ let nextInstance = 0;
                           (click)="toggleFile(file)"
                           [attr.aria-expanded]="isOpen(file)"
                           [attr.aria-controls]="fileRegionId(file)"
-                          [attr.aria-label]="(isOpen(file) ? 'Hide ' : 'Read ') + file.filename"
+                          [attr.aria-label]="(isOpen(file) ? 'Hide ' : 'Read ') + filePath(file)"
                           class="inline-flex shrink-0 items-center gap-1 rounded-2xl px-2.5 py-1 text-xs/5 font-semibold text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:hover:bg-gray-700"
                         >
                           {{ isOpen(file) ? 'Hide' : 'Read' }}
@@ -150,7 +151,7 @@ let nextInstance = 0;
                       <div
                         [id]="fileRegionId(file)"
                         role="region"
-                        [attr.aria-label]="file.filename"
+                        [attr.aria-label]="filePath(file)"
                         class="border-t border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-900/40"
                       >
                         @switch (fileState(file)?.status) {
@@ -168,7 +169,7 @@ let nextInstance = 0;
                           }
                           @default {
                             <p class="flex items-center gap-2 text-sm/6 text-gray-600 dark:text-gray-400">
-                              <app-spinner size="sm" [label]="'Loading ' + file.filename" /> Loading…
+                              <app-spinner size="sm" [label]="'Loading ' + filePath(file)" /> Loading…
                             </p>
                           }
                         }
@@ -228,6 +229,9 @@ let nextInstance = 0;
   `,
 })
 export class ProjectSkillDialogComponent {
+  /** A skill file's path below its kind directory (its filename at the top). */
+  protected readonly filePath = skillFilePath;
+
   private dialogRef = inject<DialogRef<ProjectSkillDialogResult>>(DialogRef);
   private data = inject<ProjectSkillDialogData>(DIALOG_DATA);
   private api = inject(ProjectApiService);
@@ -250,7 +254,7 @@ export class ProjectSkillDialogComponent {
         kind,
         heading: KIND_HEADING[kind] ?? kind,
         icon: KIND_ICON[kind] ?? 'heroDocumentText',
-        files: files.filter(f => f.kind === kind).sort((a, b) => a.filename.localeCompare(b.filename)),
+        files: files.filter(f => f.kind === kind).sort((a, b) => skillFilePath(a).localeCompare(skillFilePath(b))),
       }))
       .filter(group => group.files.length);
   });
@@ -287,15 +291,15 @@ export class ProjectSkillDialogComponent {
   }
 
   protected markdown(file: ProjectSkillFile): boolean {
-    return isMarkdown(file.filename);
+    return isMarkdown(skillFilePath(file));
   }
 
   protected isOpen(file: ProjectSkillFile): boolean {
-    return this.open().has(file.filename);
+    return this.open().has(skillFilePath(file));
   }
 
   protected fileState(file: ProjectSkillFile): FileState | undefined {
-    return this.files()[file.filename];
+    return this.files()[skillFilePath(file)];
   }
 
   protected fileText(file: ProjectSkillFile): string {
@@ -309,13 +313,13 @@ export class ProjectSkillDialogComponent {
   }
 
   protected fileRegionId(file: ProjectSkillFile): string {
-    const index = this.skill()?.files.findIndex(f => f.filename === file.filename) ?? 0;
+    const index = this.skill()?.files.findIndex(f => skillFilePath(f) === skillFilePath(file)) ?? 0;
     return `${this.uid}-file-${index}`;
   }
 
   /** Open or close a file; the first open fetches it, and a failed fetch is retried on the next. */
   protected toggleFile(file: ProjectSkillFile): void {
-    const name = file.filename;
+    const name = skillFilePath(file);
     const next = new Set(this.open());
     if (next.has(name)) {
       next.delete(name);

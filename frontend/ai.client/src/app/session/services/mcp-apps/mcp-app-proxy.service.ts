@@ -16,6 +16,8 @@ export interface ProxyToolCallResult {
   isError: boolean;
   /** Present only when the tool returned structured output. */
   structuredContent?: unknown;
+  /** The tool's MCP `_meta`, present only when it returned one. */
+  _meta?: Record<string, unknown>;
 }
 
 /**

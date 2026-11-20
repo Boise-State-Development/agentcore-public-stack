@@ -38,8 +38,10 @@ from apis.shared.auth.models import User
 from apis.shared.feature_flags import skills_enabled
 from apis.shared.models.managed_models import list_all_managed_models
 from apis.shared.skills.access import resolve_accessible_skill_ids
+from apis.shared.skills.pinning import SkillPinError, pin_imported_skill_bindings
 from apis.shared.skills.pins import PIN_CONFIG_KEY, binding_pin
 from apis.shared.skills.repository import get_skill_catalog_repository
+from apis.shared.skills.resource_store import SkillResourceChangedError, SkillResourceStoreError
 from apis.shared.tools.scoped_ids import SCOPE_DELIMITER, parse_scoped_tool_id
 
 from apis.app_api.admin.services.model_access import ModelAccessService
@@ -317,3 +319,32 @@ async def _validate_skill_pins(bindings: List[AgentBinding]) -> None:
             raise BindingValidationError(
                 f"Version {number} of skill '{ref}' does not exist.", status_code=400
             )
+
+
+async def pin_imported_skills(
+    user: User,
+    bindings: Optional[List[AgentBinding]],
+    existing_bindings: Optional[List[AgentBinding]] = None,
+) -> Optional[List[AgentBinding]]:
+    """The bindings to store, with each newly bound imported skill pinned (D-7).
+
+    ``pin_imported_skill_bindings`` decides which; this maps its failures onto the
+    route's ``BindingValidationError`` so a skill that vanished, or whose files
+    could not be frozen, refuses the save rather than storing a live binding.
+    """
+    try:
+        return await pin_imported_skill_bindings(
+            bindings, existing_bindings, pinned_by=user.user_id
+        )
+    except SkillPinError as e:
+        raise BindingValidationError(str(e), status_code=400) from e
+    except SkillResourceChangedError as e:
+        raise BindingValidationError(
+            "A skill changed while it was being pinned. Try again.", status_code=409
+        ) from e
+    except SkillResourceStoreError as e:
+        logger.error("Could not freeze an imported skill's files for its pin: %s", e)
+        raise BindingValidationError(
+            "An imported skill's files couldn't be saved for its pinned version.",
+            status_code=503,
+        ) from e

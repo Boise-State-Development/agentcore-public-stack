@@ -100,7 +100,7 @@ class TestComposition:
             "agents.main_agent.integrations.external_mcp_client.get_external_mcp_integration",
             lambda: integration,
         )
-        return base_agent.BaseAgent._build_mcp_external_approval_hook(SimpleNamespace(user_id="u1"))
+        return base_agent.BaseAgent._build_mcp_external_approval_hook(SimpleNamespace(user_id="u1", session_id="sess-1"))
 
     def test_the_four_writes_are_gated_and_the_reads_are_not(self, monkeypatch):
         hook = self._hook(monkeypatch)
@@ -198,7 +198,7 @@ class TestRealInterrupt:
         )
         from agents.main_agent import base_agent
 
-        hook = base_agent.BaseAgent._build_mcp_external_approval_hook(SimpleNamespace(user_id="u1"))
+        hook = base_agent.BaseAgent._build_mcp_external_approval_hook(SimpleNamespace(user_id="u1", session_id="sess-1"))
         model = _ScriptedModel()
         agent = Agent(
             model=model,

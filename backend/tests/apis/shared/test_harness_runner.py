@@ -138,6 +138,33 @@ async def test_auth_failure_still_writes_the_end_audit_record(monkeypatch, deliv
     assert "auth" in (end.error or "")
 
 
+@pytest.mark.asyncio
+async def test_audit_started_skips_the_start_write_but_still_ends_the_run(monkeypatch, delivery_spy):
+    """"Run now" writes the start row itself before returning its 202."""
+    _mock_http(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_HAPPY_STREAM
+        ),
+    )
+    audit = RecordingAudit()
+
+    result = await run_agent_headless(
+        user_id="user-1",
+        prompt="ping",
+        auth=SpyBearerAuth(),
+        run_id="run-0123456789ab",
+        invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=audit),
+        audit_started=True,
+    )
+
+    assert audit.starts == []
+    (end,) = audit.ends
+    assert end.run_id == "run-0123456789ab"
+    assert result.status == "completed"
+
+
 # ---------------------------------------------------------------------------
 # Outcomes
 # ---------------------------------------------------------------------------

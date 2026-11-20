@@ -288,9 +288,17 @@ class TestDecode:
             assert partial.strip()  # but something (letters + noise) is drawn
             whole = str(screen._wordmark_text(resolved=WORDMARK_WIDTH))
             assert "|____/" in whole
-            # The test harness crosses in well under a second, so by now the
-            # sweep has finished and the real widget shows every letter.
-            await pilot.pause(CROSS_DURATION + 0.3)
+            # Wait for the sweep to finish rather than sleeping a fixed time:
+            # the screen dismisses itself HOLD seconds after the crossing ends,
+            # so a fixed sleep longer than that races the dismissal whenever
+            # the crossing runs fast. Once decoding stops, the real widget
+            # shows every letter and the screen is still up for HOLD seconds.
+            for _ in range(int((CROSS_DURATION + 1.0) / 0.05)):
+                if screen._decode_timer is None:
+                    break
+                await pilot.pause(0.05)
+            assert screen._decode_timer is None
+            assert app.screen is screen
             assert "|____/" in str(screen.query_one("#splash-wordmark").render())
             assert screen._decode_timer is None
             await pilot.press("space")
