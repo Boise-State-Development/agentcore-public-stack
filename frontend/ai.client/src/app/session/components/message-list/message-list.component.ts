@@ -1,6 +1,6 @@
 import { Component, computed, effect, input, output, inject, signal, untracked, PLATFORM_ID, ChangeDetectionStrategy } from '@angular/core';
 import { isPlatformBrowser, NgTemplateOutlet } from '@angular/common';
-import { Message, ToolUseData } from '../../services/models/message.model';
+import { Message, ToolUseData, isToolUseContentBlock } from '../../services/models/message.model';
 import type { Artifact } from '../../services/artifacts/artifact.model';
 import { UserMessageComponent } from './components/user-message.component';
 import { AssistantMessageComponent } from './components/assistant-message.component';
@@ -16,8 +16,9 @@ import { BrowserPanelComponent } from './components/browser-panel/browser-panel.
 import { CompactionSummaryComponent } from './components/compaction-summary/compaction-summary.component';
 import { ArtifactCardComponent } from './components/artifact/artifact-card.component';
 import { HandoffRowComponent } from '../handoff/handoff-row.component';
+import { HandoffSuggestionChipComponent } from '../handoff/handoff-suggestion-chip.component';
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
-import { HandoffView } from '../../services/handoff/handoff.models';
+import { HandoffView, isSuggestionChip } from '../../services/handoff/handoff.models';
 import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
 import { FilePreviewPanelComponent } from './components/file-preview/file-preview-panel.component';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
@@ -149,6 +150,7 @@ function segmentTurn(messages: readonly Message[]): TurnSegment[] {
     McpAppActionsComponent,
     AgentFeedbackLinkComponent,
     HandoffRowComponent,
+    HandoffSuggestionChipComponent,
   ],
   templateUrl: './message-list.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -866,8 +868,45 @@ export class MessageListComponent {
   // ----------------------------------------------------------------
 
   private readonly handoffRows = computed<readonly HandoffView[]>(() =>
-    this.handoffState.rowsFor(this.sessionId()),
+    this.handoffState.rowsFor(this.sessionId()).filter((row) => !isSuggestionChip(row)),
   );
+
+  // Suggestion chips (handoffs spec §4.4): an offer nobody has sent yet, placed under the message
+  // holding its `suggest_handoff` call. Matched on the tool use id rather than a message index,
+  // because the answer that made it is still streaming, and unsaved, when the chip arrives.
+  private readonly suggestionChips = computed<readonly HandoffView[]>(() =>
+    this.handoffState
+      .rowsFor(this.sessionId())
+      .filter((row) => isSuggestionChip(row) && row.status === 'open'),
+  );
+
+  private readonly suggestionChipsByMessageId = computed<ReadonlyMap<string, HandoffView[]>>(() => {
+    const chips = this.suggestionChips();
+    const map = new Map<string, HandoffView[]>();
+    if (chips.length === 0) return map;
+    const byToolUse = new Map(chips.filter((chip) => chip.toolUseId).map((chip) => [chip.toolUseId!, chip]));
+    for (const message of this.messages()) {
+      for (const block of message.content ?? []) {
+        if (!isToolUseContentBlock(block)) continue;
+        const chip = byToolUse.get(String(block.toolUse['toolUseId'] ?? ''));
+        if (!chip) continue;
+        const list = map.get(message.id);
+        if (list) list.push(chip);
+        else map.set(message.id, [chip]);
+      }
+    }
+    return map;
+  });
+
+  /** Chips whose suggestion isn't in the loaded page, at the tail. */
+  protected readonly unanchoredSuggestionChips = computed<readonly HandoffView[]>(() => {
+    const placed = new Set([...this.suggestionChipsByMessageId().values()].flat().map((chip) => chip.handoffId));
+    return this.suggestionChips().filter((chip) => !placed.has(chip.handoffId));
+  });
+
+  protected suggestionChipsForMessageId(id: string): readonly HandoffView[] {
+    return this.suggestionChipsByMessageId().get(id) ?? [];
+  }
 
   private readonly handoffRowsByMessageIndex = computed<ReadonlyMap<number, HandoffView[]>>(() => {
     const loaded = this.loadedMessageIndices();

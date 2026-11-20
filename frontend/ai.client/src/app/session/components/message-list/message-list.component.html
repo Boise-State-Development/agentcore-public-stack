@@ -109,6 +109,16 @@
       </section>
     }
 
+    <!-- Handoffs the model suggested in this answer (handoffs spec §4.4). -->
+    @let messageSuggestions = suggestionChipsForMessageId(message.id);
+    @if (messageSuggestions.length > 0) {
+      <div class="flex flex-col gap-2">
+        @for (chip of messageSuggestions; track chip.handoffId) {
+          <app-handoff-suggestion-chip [chip]="chip" />
+        }
+      </div>
+    }
+
     <!-- Handoffs sent from this point in the thread (handoffs spec §4.3). -->
     @let messageHandoffs = handoffRowsForMessageId(message.id);
     @if (messageHandoffs.length > 0) {
@@ -151,6 +161,13 @@
        message: legacy rows written before linkage existed, or an index
        pointing outside the currently paginated page. Anchored artifacts
        render inline after their producing message (see the @for above). -->
+  @if (unanchoredSuggestionChips().length > 0) {
+    <div class="mt-3 flex flex-col gap-2">
+      @for (chip of unanchoredSuggestionChips(); track chip.handoffId) {
+        <app-handoff-suggestion-chip [chip]="chip" />
+      }
+    </div>
+  }
   @if (unanchoredHandoffRows().length > 0) {
     <section class="mt-3 flex flex-col gap-2" aria-label="Handed off from this conversation">
       @for (row of unanchoredHandoffRows(); track row.handoffId) {
