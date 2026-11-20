@@ -341,6 +341,49 @@ class WorkflowRunStore:
             raise
         return _from_item(resp["Attributes"])
 
+    def claim_result(self, user_id: str, run_id: str, delivery_id: str) -> Optional[WorkflowRun]:
+        """Name ``delivery_id`` as the run's one result, exactly once (PR-W.2).
+
+        Conditioned on the run being ``approved`` or ``stopped`` and ``resultDeliveryId`` unset, so
+        two collects can't both write a card. ``None`` when another got there first, or the run was
+        never approved. The caller writes the ``DELIVERY#`` row after this, under the same id.
+        """
+        table = self._require_table()
+        try:
+            resp = table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{run_id}"},
+                UpdateExpression="SET resultDeliveryId = :id, updatedAt = :now",
+                ConditionExpression=(
+                    "attribute_exists(SK) AND #status IN (:approved, :stopped) "
+                    "AND attribute_not_exists(resultDeliveryId)"
+                ),
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":id": delivery_id,
+                    ":approved": "approved",
+                    ":stopped": "stopped",
+                    ":now": datetime.now(timezone.utc).isoformat(),
+                },
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if _is_conditional_failure(exc):
+                return None
+            raise
+        return _from_item(resp["Attributes"])
+
+    def release_result(self, user_id: str, run_id: str, delivery_id: str) -> None:
+        """Undo ``claim_result`` after its delivery failed to write, so a retry can collect. Best-effort."""
+        try:
+            self._require_table().update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{run_id}"},
+                UpdateExpression="REMOVE resultDeliveryId",
+                ConditionExpression="resultDeliveryId = :id",
+                ExpressionAttributeValues={":id": delivery_id},
+            )
+        except ClientError:
+            logger.warning("workflow run store: releasing a result claim failed", exc_info=True)
+
     def delete_for_session(self, user_id: str, session_id: str) -> int:
         """Delete this user's runs from a source conversation. Best-effort; returns the count."""
         if self._table is None:

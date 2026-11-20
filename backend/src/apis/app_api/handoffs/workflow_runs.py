@@ -5,6 +5,7 @@
     POST /sessions/{session_id}/workflow-runs/{run_id}/approve   fix the envelope, once
     POST /sessions/{session_id}/workflow-runs/{run_id}/stop      no queued step starts after this
     POST /sessions/{session_id}/workflow-runs/{run_id}/dismiss   cancel the sheet
+    POST /sessions/{session_id}/workflow-runs/{run_id}/collect   the run's one result, once (PR-W.2)
 
 All 404 to a signed-in user while ``WORKFLOW_RUNS_ENABLED`` (or ``HANDOFFS_ENABLED``) is off, and
 401 unauthenticated regardless: the flag is checked after authentication.
@@ -13,7 +14,9 @@ A step is an ordinary ``mention`` handoff row with a ``runId`` and ``stepId``, w
 helper the single mention create uses, so the target's first turn accepts it through the unchanged
 ``HandoffTurn``. Creating a run sends nothing and creates no session. In step 1 the SPA starts the
 approved steps itself, up to ``limits.concurrency`` at once, with the call it already makes for one
-handoff. Nothing here runs on a turn.
+handoff. Nothing here runs on a turn. The run's result is one ``DELIVERY#`` row with a part per
+kept step (``collect``), made by ``create_delivery``'s own checks and attached by the unchanged
+``DeliveryTurn`` on the source's next send.
 """
 
 from __future__ import annotations
@@ -21,6 +24,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -31,6 +36,14 @@ from apis.shared.feature_flags import workflow_runs_enabled
 from apis.shared.files.linked_files import HANDOFF_MAX_FILES
 from apis.shared.handoff import HandoffStore, HandoffStoreUnavailable, TurnsCovered, get_handoff_store
 from apis.shared.handoff.context import build_handoff_message
+from apis.shared.files.linked_files import DELIVERY_MAX_FILES
+from apis.shared.handoff.delivery import (
+    RUN_RESULT_MAX_FILES,
+    DeliveryPartStatus,
+    DeliveryStore,
+    DeliveryView,
+    get_delivery_store,
+)
 from apis.shared.handoff.metrics import emit_workflow_run_metric
 from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, Handoff, HandoffView
 from apis.shared.handoff.relay import load_relayed_prompts
@@ -44,7 +57,16 @@ from apis.shared.handoff.runs import (
     WorkflowRunView,
     get_workflow_run_store,
 )
-from apis.shared.handoff.send_back import DeliveryRefused
+from apis.shared.handoff.send_back import (
+    DeliveryPartRequest,
+    DeliveryRefused,
+    answer_message,
+    offered_artifacts,
+    offered_files,
+    prepare_delivery,
+    render_return_excerpt,
+    write_delivery,
+)
 from apis.shared.models.retirement import resolve_effective_model
 from apis.shared.timestamps import utc_now_iso
 
@@ -473,6 +495,201 @@ async def dismiss_workflow_run(
     )
     emit_workflow_run_metric("WorkflowRunCancelled", session_id=session_id, run_id=run_id, step_count=len(run.steps))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Collect the result ---------------------------------------------------------------------------
+
+
+class CollectWorkflowRunResponse(BaseModel):
+    """The run's one result: its ``DELIVERY#`` card, now waiting on the source's composer.
+
+    ``created`` is false when an earlier collect made it; ``status`` is the card's own (``pending``
+    until a send attaches it), so a second tab can tell a result already sent from one waiting.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    delivery_id: str = Field(..., alias="deliveryId")
+    created: bool
+    status: str
+    delivery: Optional[DeliveryView] = Field(None, description="The card; absent only if its row is gone")
+
+
+@router.post(
+    "/{session_id}/workflow-runs/{run_id}/collect",
+    response_model=CollectWorkflowRunResponse,
+    response_model_by_alias=True,
+    response_model_exclude_none=True,
+)
+async def collect_workflow_run(
+    session_id: str,
+    run_id: str,
+    user: User = Depends(require_workflow_runs_user),
+    store: HandoffStore = Depends(get_handoff_store),
+    runs: WorkflowRunStore = Depends(get_workflow_run_store),
+    deliveries: DeliveryStore = Depends(get_delivery_store),
+) -> CollectWorkflowRunResponse:
+    """Bring back the run's results as one card on this conversation's composer, exactly once.
+
+    One part per kept step, in step order. A finished step's part is its answer as it stood when the
+    step first finished, through the send-back renderer, with the artifacts that answer made and
+    the step conversation's own files, as Bring back result picks them (at most
+    ``DELIVERY_MAX_FILES`` a part and ``RUN_RESULT_MAX_FILES`` a run). A step that stopped, still
+    waits on the user, or is still running is a part with that status and no text.
+
+    The result is fixed when it is collected: "Bring back *k* results now" while steps still run
+    makes the run's one result then, and a step that finishes later comes back the ordinary way,
+    with its own Bring back result. Called again, it returns the card already made. 409 for a run
+    never approved; 422 when no step has anything to bring back yet.
+    """
+    run = await _owned_run(runs, user, session_id, run_id)
+    if run.status not in ("approved", "stopped"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This run was never started")
+    if run.result_delivery_id:
+        return await _collected(deliveries, user, run.result_delivery_id, created=False)
+
+    kept = [step for step in run.steps if not step.removed]
+    rows = await asyncio.gather(*(asyncio.to_thread(store.get, user.user_id, step.handoff_id) for step in kept))
+    parts = list(await asyncio.gather(*(_part_for(user, run, step, row) for step, row in zip(kept, rows))))
+    parts = _within_run_file_cap(parts)
+
+    delivery_id = str(uuid.uuid4())
+    try:
+        delivery = await prepare_delivery(
+            user_id=user.user_id, to_session_id=session_id, parts=parts, run_id=run_id, delivery_id=delivery_id
+        )
+    except DeliveryRefused as exc:
+        if exc.reason == "empty":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="No Agent has a result to bring back yet"
+            )
+        raise handoff_routes._refused(exc)
+
+    claimed = await asyncio.to_thread(runs.claim_result, user.user_id, run_id, delivery_id)
+    if claimed is None:
+        # Another collect won the slot between our read and our claim: hand back its card.
+        current = await asyncio.to_thread(runs.get, user.user_id, run_id)
+        if current is not None and current.result_delivery_id:
+            return await _collected(deliveries, user, current.result_delivery_id, created=False)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This run was never started")
+    try:
+        await write_delivery(delivery, store=deliveries)
+    except Exception:
+        await asyncio.to_thread(runs.release_result, user.user_id, run_id, delivery_id)
+        logger.warning("Workflow run: writing the result failed; the claim was released", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Handoffs are unavailable")
+
+    finished = sum(1 for part in delivery.parts if part.status == "done")
+    emit_workflow_run_metric(
+        "WorkflowRunCollected",
+        session_id=session_id,
+        run_id=run_id,
+        step_count=finished,
+        detail="complete" if finished == len(delivery.parts) else "partial",
+    )
+    return CollectWorkflowRunResponse(
+        delivery_id=delivery_id, created=True, status=delivery.status, delivery=DeliveryView.from_row(delivery)
+    )
+
+
+#: A step row's status as its part reads it. ``open`` depends on the run (see ``_part_status``).
+_PART_STATUS: Dict[str, DeliveryPartStatus] = {
+    "done": "done",
+    "stopped": "stopped",
+    "needs_input": "needs_input",
+    "running": "running",
+    "dismissed": "stopped",
+    "abandoned": "stopped",
+}
+
+
+def _part_status(run: WorkflowRun, row: Optional[Handoff]) -> DeliveryPartStatus:
+    """What a kept step's part says. A step that never started is still to come in an approved run
+    (the tab's queue), and will never start in a stopped one."""
+    if row is None or row.run_id != run.run_id:
+        return "stopped"
+    effective = row.effective_status()
+    if effective == "open":
+        return "running" if run.status == "approved" else "stopped"
+    if effective == "done" and not row.target_session_id:
+        return "stopped"
+    return _PART_STATUS.get(effective, "stopped")
+
+
+async def _part_for(
+    user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff]
+) -> DeliveryPartRequest:
+    """One kept step as its part, before ``create_delivery``'s checks. Reads the step's answer only when done."""
+    part_status = _part_status(run, row)
+    target = (row.target_session_id or "") if row is not None and row.run_id == run.run_id else ""
+    if part_status != "done":
+        return DeliveryPartRequest(
+            step_id=step.step_id, agent_name=step.agent_name, status=part_status, from_session_id=target
+        )
+    assert row is not None
+    finished_at = _finished_by(row.updated_at)
+    found, files = await asyncio.gather(
+        answer_message(target, user.user_id, at_or_before=finished_at),
+        asyncio.to_thread(offered_files, user.user_id, target, created_before=finished_at),
+    )
+    text, artifact_ids = "", []
+    if found is not None:
+        message, index = found
+        text = render_return_excerpt(message)
+        artifacts = await asyncio.to_thread(offered_artifacts, user.user_id, target, index)
+        artifact_ids = [a.artifact_id for a in artifacts]
+    return DeliveryPartRequest(
+        step_id=step.step_id,
+        agent_name=step.agent_name,
+        status="done",
+        from_session_id=target,
+        text=text,
+        artifact_ids=artifact_ids,
+        file_ids=[f.upload_id for f in files[:DELIVERY_MAX_FILES]],
+    )
+
+
+#: How long after a step's ``done`` write its own answer may still be stamped. Memory may stamp the
+#: turn's events when it flushes them, just after the status write; the user's next turn in that
+#: conversation is human-paced, far later than this.
+_SETTLE_SLACK = timedelta(seconds=60)
+
+
+def _finished_by(updated_at: str) -> str:
+    """The cutoff for "the answer as it stood when the step first finished" (spec §8)."""
+    try:
+        at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+    except ValueError:
+        return updated_at
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return (at + _SETTLE_SLACK).isoformat()
+
+
+def _within_run_file_cap(parts: List[DeliveryPartRequest]) -> List[DeliveryPartRequest]:
+    """Keep ``RUN_RESULT_MAX_FILES`` across the run, in step order, each part's newest first."""
+    room = RUN_RESULT_MAX_FILES
+    kept: List[DeliveryPartRequest] = []
+    for part in parts:
+        files = list(part.file_ids)[: max(room, 0)]
+        room -= len(files)
+        kept.append(part if len(files) == len(part.file_ids) else replace(part, file_ids=files))
+    return kept
+
+
+async def _collected(
+    deliveries: DeliveryStore, user: User, delivery_id: str, *, created: bool
+) -> CollectWorkflowRunResponse:
+    try:
+        row = await asyncio.to_thread(deliveries.get, user.user_id, delivery_id)
+    except HandoffStoreUnavailable:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Handoffs are unavailable")
+    return CollectWorkflowRunResponse(
+        delivery_id=delivery_id,
+        created=created,
+        status=row.status if row is not None else "dismissed",
+        delivery=DeliveryView.from_row(row) if row is not None else None,
+    )
 
 
 # --- Helpers --------------------------------------------------------------------------------------

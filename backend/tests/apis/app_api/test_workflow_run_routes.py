@@ -432,3 +432,268 @@ def test_unauthenticated_is_401_while_off(monkeypatch, stores):
     app.include_router(workflow_runs.router)
     resp = TestClient(app).get("/sessions/src/workflow-runs/r1")
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------- collect (PR-W.2)
+
+
+class _Steps:
+    """The step conversations a collect reads: their META rows, answers, artifacts and own files."""
+
+    def __init__(self) -> None:
+        self.meta: Dict[tuple, Dict[str, Any]] = {("src", "alice"): {"title": "Proposal review"}}
+        self.messages: Dict[str, List[MessageResponse]] = {}
+        self.heads: Dict[tuple, List[Dict[str, Any]]] = {}
+        self.files: Dict[str, List[Any]] = {}
+
+    def target(self, session_id: str, handoff_id: str, title: str, answers: List[tuple]) -> None:
+        self.meta[(session_id, "alice")] = {"title": title, "spawnedFrom": {"sessionId": "src", "handoffId": handoff_id}}
+        self.messages[session_id] = [
+            MessageResponse(
+                id=f"msg-{session_id}-{index}", role="assistant", content=[{"type": "text", "text": text}], created_at=at
+            )
+            for index, text, at in answers
+        ]
+
+
+@pytest.fixture()
+def steps(monkeypatch, world) -> _Steps:
+    from apis.shared.handoff import send_back
+
+    s = _Steps()
+
+    async def load_session_meta(session_id: str, user_id: str):
+        return SimpleNamespace(row=s.meta.get((session_id, user_id)), owned_by_other=False)
+
+    async def get_messages(session_id: str, user_id: str, limit=None, next_token=None):
+        if session_id == "src":
+            return MessagesListResponse(messages=world.messages)
+        return MessagesListResponse(messages=s.messages.get(session_id, []) if user_id == "alice" else [])
+
+    repo = SimpleNamespace(
+        list_session_files_sync=lambda session_id, status=None: list(s.files.get(session_id, [])),
+        batch_get_files_sync=lambda user, ids: {
+            f.upload_id: f for rows in s.files.values() for f in rows if f.upload_id in ids and f.user_id == user
+        },
+    )
+    monkeypatch.setattr("apis.shared.sessions.metadata.load_session_meta", load_session_meta)
+    monkeypatch.setattr("apis.shared.sessions.messages.get_messages", get_messages)
+    monkeypatch.setattr("apis.shared.files.repository.get_file_upload_repository", lambda: repo)
+    monkeypatch.setattr(send_back, "_artifact_heads", lambda user, session: s.heads.get((user, session), []))
+    return s
+
+
+@pytest.fixture()
+def collect_client(make_client, table, monkeypatch):
+    from apis.shared.handoff.delivery import DeliveryStore
+
+    deliveries = DeliveryStore(table=table)
+    monkeypatch.setattr("apis.shared.handoff.send_back.get_delivery_store", lambda: deliveries)
+
+    def build(user: User = ALICE) -> TestClient:
+        client = make_client(user)
+        client.app.dependency_overrides[workflow_runs.get_delivery_store] = lambda: deliveries
+        return client
+
+    build.deliveries = deliveries  # type: ignore[attr-defined]
+    return build
+
+
+def _file(upload_id: str, session_id: str, created_at: str) -> Any:
+    from apis.shared.files.models import FileMetadata, FileStatus
+
+    return FileMetadata(
+        upload_id=upload_id, user_id="alice", session_id=session_id, filename=f"{upload_id}.pdf",
+        mime_type="application/pdf", size_bytes=2048, s3_key=f"user_files/alice/{session_id}/{upload_id}.pdf",
+        s3_bucket="bucket", status=FileStatus.READY, created_at=created_at, updated_at=created_at,
+    )
+
+
+def _run_with_steps(client: TestClient, stores, steps: _Steps, agents=("generalist", "colleague", "outsider", "fiscal")):
+    """An approved run whose steps finished, stopped, wait, and never started, in that order."""
+    handoffs, _runs = stores
+    created = _create(client, agents=agents).json()
+    run_id = created["run"]["runId"]
+    assert _approve(client, run_id).status_code == 200
+    rows = created["steps"]
+    for index, step in enumerate(rows[:3]):
+        target = f"t{index}"
+        handoffs.accept("alice", step["handoffId"], target_session_id=target, context_edited=False, context_removed=False)
+        steps.target(target, step["handoffId"], "Review of the proposal", [])
+    finished = handoffs.transition("alice", rows[0]["handoffId"], "done")
+    steps.target(
+        "t0", rows[0]["handoffId"], "Review of the proposal",
+        [(1, "Strong aims; the budget is thin.", "2026-01-01T00:00:00Z"), (3, "Later work in this chat.", "2999-01-01T00:00:00Z")],
+    )
+    steps.heads[("alice", "t0")] = [
+        {"artifact_id": "memo", "version": 2, "title": "Memo", "content_type": "text/markdown", "produced_by_message_index": 1},
+        {"artifact_id": "later", "version": 1, "title": "Later", "content_type": "text/html", "produced_by_message_index": 3},
+    ]
+    steps.files["t0"] = [_file("own-1", "t0", "2026-01-01T00:00:00Z"), _file("after", "t0", "2999-01-01T00:00:00Z")]
+    handoffs.transition("alice", rows[1]["handoffId"], "stopped", stoppedReason="user_stopped")
+    handoffs.transition("alice", rows[2]["handoffId"], "needs_input")
+    return run_id, rows, finished
+
+
+def _collect_run(client: TestClient, run_id: str):
+    return client.post(f"/sessions/src/workflow-runs/{run_id}/collect")
+
+
+def test_collect_makes_one_card_with_a_part_per_kept_step(collect_client, stores, steps, metrics):
+    client = collect_client()
+    run_id, rows, _ = _run_with_steps(client, stores, steps)
+
+    resp = _collect_run(client, run_id)
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert (data["created"], data["status"]) == (True, "pending")
+    parts = data["delivery"]["parts"]
+    assert [p["stepId"] for p in parts] == [r["stepId"] for r in rows]
+    assert [(p["agentName"], p["status"]) for p in parts] == [
+        ("Generalist", "done"), ("Colleague", "stopped"), ("Emotional outsider", "needs_input"), ("Fiscal outsider", "running"),
+    ]
+    done = parts[0]
+    # The answer as it stood when the step finished, with what that answer made and the files made by then.
+    assert done["text"] == "Strong aims; the budget is thin."
+    assert [a["artifactId"] for a in done["artifacts"]] == ["memo"]
+    assert [f["uploadId"] for f in done["files"]] == ["own-1"]
+    assert (done["fromSessionId"], done["fromTitle"]) == ("t0", "Review of the proposal")
+    assert all(p["text"] == "" and p["artifacts"] == [] and p["files"] == [] for p in parts[1:])
+
+    run = stores[1].get("alice", run_id)
+    assert run.result_delivery_id == data["deliveryId"]
+    assert collect_client.deliveries.get("alice", data["deliveryId"]).run_id == run_id
+    assert ("WorkflowRunCollected", {"session_id": "src", "run_id": run_id, "step_count": 1, "detail": "partial"}) in metrics
+
+
+def test_collect_is_exactly_once_and_returns_the_card_again(collect_client, stores, steps):
+    client = collect_client()
+    run_id, _rows, _ = _run_with_steps(client, stores, steps)
+
+    first = _collect_run(client, run_id).json()
+    again = _collect_run(client, run_id).json()
+
+    assert again["deliveryId"] == first["deliveryId"] and again["created"] is False
+    assert len(collect_client.deliveries.list_pending("alice", "src")) == 1
+    # Fixed when collected: a step that finishes later doesn't change the card.
+    stores[0].transition("alice", _rows[2]["handoffId"], "done")
+    assert _collect_run(client, run_id).json()["delivery"]["parts"][2]["status"] == "needs_input"
+
+
+def test_a_lost_race_for_the_result_hands_back_the_winners_card(collect_client, stores, steps, monkeypatch):
+    client = collect_client()
+    run_id, _rows, _ = _run_with_steps(client, stores, steps)
+    runs = stores[1]
+    real = runs.claim_result
+
+    def another_collect_won(user_id, rid, delivery_id):
+        real(user_id, rid, "winner")  # the other request's claim lands first
+        return real(user_id, rid, delivery_id)
+
+    monkeypatch.setattr(runs, "claim_result", another_collect_won)
+
+    data = _collect_run(client, run_id).json()
+
+    assert (data["deliveryId"], data["created"]) == ("winner", False)
+    assert collect_client.deliveries.list_pending("alice", "src") == []  # the loser wrote nothing
+
+
+def test_a_failed_write_releases_the_claim_so_collect_can_be_retried(collect_client, stores, steps, monkeypatch):
+    client = collect_client()
+    run_id, _rows, _ = _run_with_steps(client, stores, steps)
+
+    async def boom(row, *, store=None):
+        raise RuntimeError("throttled")
+
+    monkeypatch.setattr(workflow_runs, "write_delivery", boom)
+    assert _collect_run(client, run_id).status_code == 503
+    assert stores[1].get("alice", run_id).result_delivery_id is None
+
+
+def test_a_stopped_run_is_collectable_and_its_unstarted_step_reads_stopped(collect_client, stores, steps):
+    client = collect_client()
+    run_id, _rows, _ = _run_with_steps(client, stores, steps)
+    assert client.post(f"/sessions/src/workflow-runs/{run_id}/stop").status_code == 204
+
+    parts = _collect_run(client, run_id).json()["delivery"]["parts"]
+
+    assert parts[3]["status"] == "stopped"
+
+
+def test_a_removed_step_has_no_part(collect_client, stores, steps):
+    client = collect_client()
+    handoffs, _ = stores
+    created = _create(client, agents=("generalist", "colleague")).json()
+    run_id = created["run"]["runId"]
+    first, second = created["steps"]
+    _approve(client, run_id, steps=[{"stepId": second["stepId"], "removed": True}])
+    handoffs.accept("alice", first["handoffId"], target_session_id="t0", context_edited=False, context_removed=False)
+    handoffs.transition("alice", first["handoffId"], "done")
+    steps.target("t0", first["handoffId"], "Review", [(1, "Fine.", "2026-01-01T00:00:00Z")])
+
+    parts = _collect_run(client, run_id).json()["delivery"]["parts"]
+
+    assert [p["stepId"] for p in parts] == [first["stepId"]]
+
+
+@pytest.mark.parametrize("state", ["open", "dismissed"])
+def test_a_run_never_approved_cant_be_collected(collect_client, stores, steps, state):
+    client = collect_client()
+    run_id = _create(client).json()["run"]["runId"]
+    if state == "dismissed":
+        client.post(f"/sessions/src/workflow-runs/{run_id}/dismiss")
+
+    assert _collect_run(client, run_id).status_code == 409
+
+
+def test_nothing_finished_yet_is_422_and_claims_nothing(collect_client, stores, steps):
+    client = collect_client()
+    run_id = _create(client).json()["run"]["runId"]
+    _approve(client, run_id)
+
+    resp = _collect_run(client, run_id)
+
+    assert resp.status_code == 422
+    assert stores[1].get("alice", run_id).result_delivery_id is None
+
+
+def test_the_run_wide_file_cap_keeps_the_earliest_steps_files(collect_client, stores, steps):
+    client = collect_client()
+    handoffs, _ = stores
+    created = _create(client, agents=("generalist", "colleague", "outsider")).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    for index, step in enumerate(created["steps"]):
+        target = f"t{index}"
+        handoffs.accept("alice", step["handoffId"], target_session_id=target, context_edited=False, context_removed=False)
+        handoffs.transition("alice", step["handoffId"], "done")
+        steps.target(target, step["handoffId"], "Review", [(1, f"answer {index}", "2026-01-01T00:00:00Z")])
+        steps.files[target] = [_file(f"{target}-f{i}", target, f"2026-01-01T00:00:0{i}Z") for i in range(7)]
+
+    parts = _collect_run(client, run_id).json()["delivery"]["parts"]
+
+    assert [len(p["files"]) for p in parts] == [5, 5, 0]
+
+
+def test_collect_is_scoped_to_the_runs_owner_and_conversation(collect_client, stores, steps):
+    run_id, _rows, _ = _run_with_steps(collect_client(), stores, steps)
+
+    assert _collect_run(collect_client(BOB), run_id).status_code == 404
+    assert collect_client().post(f"/sessions/other/workflow-runs/{run_id}/collect").status_code == 404
+
+
+def test_collect_is_404_with_the_flag_off(collect_client, stores, steps, monkeypatch):
+    client = collect_client()
+    run_id, _rows, _ = _run_with_steps(client, stores, steps)
+    monkeypatch.setenv("WORKFLOW_RUNS_ENABLED", "false")
+
+    assert _collect_run(client, run_id).status_code == 404
+
+
+def test_an_answer_stamped_just_after_the_done_write_still_counts_as_the_steps_result():
+    """Memory may stamp a turn's events when it flushes them, just after the row's ``done`` write."""
+    cutoff = workflow_runs._finished_by("2026-11-20T10:00:00+00:00")
+
+    assert cutoff == "2026-11-20T10:01:00+00:00"
+    assert workflow_runs._finished_by("not a time") == "not a time"
