@@ -18,6 +18,7 @@ import {
   validateToolInputPartialEvent,
   validateSessionTitleEvent,
   validateSteeringAppliedEvent,
+  validateHandoffSuggestedEvent,
   validateOAuthRequiredEvent,
   validateAgentNoticeEvent,
   processStreamEvent,
@@ -564,6 +565,37 @@ describe('stream-parser-core', () => {
       expect(validateToolInputPartialEvent({ ...valid, arguments: [] })).toBe(false);
       expect(validateToolInputPartialEvent({ ...valid, arguments: null })).toBe(false);
       expect(validateToolInputPartialEvent({ ...valid, arguments: 'x' })).toBe(false);
+    });
+  });
+
+  describe('validateHandoffSuggestedEvent', () => {
+    const valid = {
+      type: 'handoff_suggested',
+      sessionId: 'sess-1',
+      handoffId: 'h-1',
+      toolUseId: 'tu-1',
+      title: 'Draft the BIO 101 rubric',
+      tldr: 'The rubric is its own deliverable.',
+      agentName: 'Rubric Builder',
+    };
+
+    it('accepts a valid event, with or without agentName', () => {
+      expect(validateHandoffSuggestedEvent(valid)).toBe(true);
+      const { agentName: _omitted, ...withoutAgent } = valid;
+      expect(validateHandoffSuggestedEvent(withoutAgent)).toBe(true);
+    });
+
+    it('accepts an empty tldr but not a missing title or handoffId', () => {
+      expect(validateHandoffSuggestedEvent({ ...valid, tldr: '' })).toBe(true);
+      expect(validateHandoffSuggestedEvent({ ...valid, title: '' })).toBe(false);
+      expect(validateHandoffSuggestedEvent({ ...valid, handoffId: '' })).toBe(false);
+      expect(validateHandoffSuggestedEvent({ ...valid, sessionId: '' })).toBe(false);
+    });
+
+    it('rejects the wrong type, nulls and a non-string agentName', () => {
+      expect(validateHandoffSuggestedEvent(null)).toBe(false);
+      expect(validateHandoffSuggestedEvent({ ...valid, type: 'steering_applied' })).toBe(false);
+      expect(validateHandoffSuggestedEvent({ ...valid, agentName: 3 })).toBe(false);
     });
   });
 
