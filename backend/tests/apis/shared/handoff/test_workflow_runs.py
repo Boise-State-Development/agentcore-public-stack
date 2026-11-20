@@ -179,17 +179,22 @@ def test_a_step_row_is_accepted_on_its_first_turn_by_the_unchanged_handoff_turn(
         assert turn is not None
         turn.start()
         block = await turn.context_block()
+        # PR-W.4c: the link (now with runId) is written in the background after acceptance. The
+        # context block, which the first token waits on, is back before that write has run.
+        written_before_block_returned = list(spawned)
         pending = list(turn_module._background)
         if pending:
             await asyncio.gather(*pending)
-        return block
+        return block, written_before_block_returned, len(pending)
 
-    block = asyncio.run(run())
+    block, before, pending = asyncio.run(run())
 
     assert block == wrap_handoff_context(EXCERPT, "Proposal")
     row = handoffs.get("alice", "h1")
     assert (row.status, row.target_session_id, row.run_id, row.step_id) == ("running", "tgt", "r1", "s1")
-    assert spawned == [("tgt", "alice", "src", "h1")]
+    assert (before, pending) == ([], 1)
+    # The step's spawnedFrom gains runId, in the same SET as before (workflow-runs spec §19 PR-W.4c).
+    assert spawned == [("tgt", "alice", "src", "h1", "r1")]
 
 
 # ---------------------------------------------------------------- the run store
