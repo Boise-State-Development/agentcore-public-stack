@@ -788,6 +788,33 @@ changes a tool spec or the system prompt.
       its own steps alone. A source that is a project task hosts nothing either (project tasks are grouped under
       the project), and a pinned source is out of its bucket, so its steps list alone.
     - **The expanded rows** are in the run's step order where the run is known, else the list's order.
+- **Step titles name their Agent** (after W.4c, settled with the developer on 2026-11-20). Every step gets the
+  same request and card as its first message, so every step's generated title read the same ("Proposal Review
+  Request" four times). The title reaches every surface (the sidebar, the top nav, search, the bell,
+  notifications, and the "From …" card that Send to *{title}* makes), so the fix is in the title, not in one view.
+  - *Built.*
+    - **Only a run step.** The title task (`generate_conversation_title`, Nova Micro, already concurrent with the
+      stream) takes an optional `agent_name_for_title`. The route passes `HandoffTurn.run_step_agent_name` only
+      when the turn carries a `handoff_context`; that waits for the acceptance the stream's head starts beside the
+      agent build, never starts it, and reads nothing, then gives the accepted row's `agentName` only when the row
+      has a `runId`. A single handoff, an ordinary conversation and a later turn get exactly today's title (pinned
+      by tests). `HandoffTurn.for_turn` is decided just before the title task now, instead of after the quota
+      check; it is pure, so nothing moves onto the first-token path. A turn refused before its stream starts gives
+      up the wait after 30 s and keeps the plain title.
+    - **Format.** `"{Agent} · {generated}"` (`run_step_title`, `apis/shared/handoff/context.py`). The 50-character
+      cap covers the whole title and the generated part is the one shortened (`...`), so the Agent's name is never
+      cut. **A name too long to leave 15 characters of the generated title (over 32 characters) keeps the title as
+      generated:** naming the Agent would mean cutting its name, and the run result's labels still name it in
+      full. A failed generation keeps "New Conversation", never prefixed.
+    - **No doubled name.** `delivery_part_label` writes the title alone when it already starts with
+      "{Agent} · ", so a part reads "Budget reader · Proposal review" once. `deliveryPartLabel` matches it, pinned
+      by the parity fixture's "run result whose titles already name their Agent" case, and `groupRunResults`
+      still recognises the blocks (its "{Agent} · " prefix rule is unchanged). The composer's result card shows the
+      Agent in bold and the rest of the title after it (`partTitleAfterAgent`), so it shows the name once too.
+    - **What the model reads.** Titles reach the source's prompt only through a run result's part labels. Those
+      change for runs started after this ships, in the new user message the result is attached to; no stored
+      history changes, so the source's cached prefix is untouched. Nothing reaches the system prompt or
+      `toolConfig`, and the step's own prompt never sees its title.
 - **Dev validation** (each PR's own session, after merge): the worked example's four reviewers on one proposal, with
   one step needing a tool approval answered from the source, one stopped mid-run, a partial result brought back,
   and the full result sent. The source's `C#` rows show no prefix change beyond the appended block, and the
@@ -939,6 +966,7 @@ The look of `DeliveryCardsComponent`: the same container and footer, with one ro
 | Toast when all settle | "*k* Agents finished · Open" (scrolls to the row; *k* is the steps that finished) |
 | Not started (after a reload) | "Not started", "Start *k* Agents"; a stopped run's: "Didn't start" |
 | Sidebar | "*N* Agents · *k* of *N* finished" |
+| A step conversation's title | "*Agent* · *generated title*", e.g. "Budget reader · Proposal review" (§19, step titles) |
 
 No user-facing "workflow" or "run" in a noun phrase except "Stop run" (§17, question 1). Sentence case, no
 exclamation marks, no "successfully".

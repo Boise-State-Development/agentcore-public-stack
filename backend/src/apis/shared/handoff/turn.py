@@ -171,6 +171,10 @@ class HandoffTurnObserver:
         return TurnOutcome("done", status_line=self.latest_summary)
 
 
+#: How long a run step's title waits for the stream to start acceptance (``run_step_agent_name``).
+RUN_STEP_TITLE_WAIT_SECONDS = 30.0
+
+
 @dataclass
 class HandoffTurn:
     """This request's part in a handoff. Build with ``for_turn``; ``None`` means none."""
@@ -189,6 +193,8 @@ class HandoffTurn:
     _kinds: Optional[FileKindHints] = None
     #: The target is a Shared Project task (its row names a project): no file crosses into it.
     target_is_project_task: bool = False
+    #: Set by ``start``, so a waiter (``run_step_agent_name``) never starts acceptance itself.
+    _started: asyncio.Event = field(default_factory=asyncio.Event)
 
     @classmethod
     def for_turn(
@@ -324,6 +330,7 @@ class HandoffTurn:
             return
         if self._prefetch is None:
             self._acceptance = asyncio.create_task(asyncio.to_thread(self._accept))
+            self._started.set()
             return
 
         async def accept_after_prefetch() -> Tuple[Optional[Handoff], str]:
@@ -331,6 +338,26 @@ class HandoffTurn:
             return await asyncio.to_thread(self._accept, (row, files))
 
         self._acceptance = asyncio.create_task(accept_after_prefetch())
+        self._started.set()
+
+    async def run_step_agent_name(self, timeout: float = RUN_STEP_TITLE_WAIT_SECONDS) -> Optional[str]:
+        """The Agent's name when this turn took a workflow run's step, else ``None``.
+
+        For the step's title (workflow-runs spec §19), which the title task awaits after Nova
+        answers. It reads nothing: it waits for the acceptance the stream's head starts beside the
+        agent build, and never starts it, so the first token is unaffected. A turn that never
+        reaches the stream (refused before it) gives up after ``timeout`` and keeps the plain title.
+        """
+        if self.request is None:
+            return None
+        try:
+            await asyncio.wait_for(self._started.wait(), timeout)
+            accepted, _ = await self._acceptance  # type: ignore[misc]
+        except Exception:  # noqa: BLE001 - a title without the name is today's title
+            return None
+        if accepted is None or not accepted.run_id:
+            return None
+        return accepted.agent_name.strip() or None
 
     async def context_block(self) -> str:
         """The wrapped context to prepend to the model message, or ``""``.

@@ -6,6 +6,7 @@ import { heroArrowUturnLeft, heroXMark } from '@ng-icons/heroicons/outline';
 import { ComposerCard, DELIVERY_MAX_PER_TURN, DeliveryStateService } from '../../services/handoff/delivery-state.service';
 import { DeliveryService } from '../../services/handoff/delivery.service';
 import { DeliveryPart } from '../../services/handoff/handoff.models';
+import { partTitleAfterAgent } from '../../services/handoff/handoff-prompt';
 import { agentsLabel } from '../../services/handoff/workflow-run.service';
 import { DeliveryArtifactChipsComponent } from './delivery-artifact-chips.component';
 import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
@@ -65,8 +66,9 @@ import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
                       <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
                         <p class="min-w-0 truncate text-sm/6 text-gray-900 dark:text-white">
                           <span class="font-medium">{{ part.agentName }}</span>
-                          @if (part.fromTitle && part.fromTitle !== part.agentName) {
-                            <span class="text-gray-600 dark:text-gray-400"> · {{ part.fromTitle }}</span>
+                          @let partTitle = titleAfterAgent(part.agentName, part.fromTitle);
+                          @if (partTitle) {
+                            <span class="text-gray-600 dark:text-gray-400"> · {{ partTitle }}</span>
                           }
                           @if (edited !== undefined) {
                             <span class="sr-only"> (edited)</span>
@@ -204,6 +206,8 @@ export class DeliveryCardsComponent {
   }
 
   protected readonly agentsLabel = agentsLabel;
+  /** A step's title already leads with its Agent (workflow-runs §19); the line shows the name once. */
+  protected readonly titleAfterAgent = partTitleAfterAgent;
 
   protected finishedCount(parts: readonly DeliveryPart[]): number {
     return parts.filter((part) => part.status === 'done').length;

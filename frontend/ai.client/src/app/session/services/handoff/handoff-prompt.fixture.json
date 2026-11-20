@@ -309,6 +309,39 @@
         }
       ],
       "block": "<handoff_context from_conversation=\"Generalist · Review of the proposal\">\nThe user brought this context from another of their conversations.\nStrong aims.\n\nThe budget is thin.\n<artifact id=\"memo\" version=\"2\" title=\"Review memo\" type=\"text/markdown\"/>\n<file upload_id=\"f1_ref_0123456789ab\" name=\"budget.xlsx\" type=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\" size=\"47 KB\"/>\n</handoff_context>\n\n<handoff_context from_conversation=\"Colleague\">\nThe user brought this context from another of their conversations.\nSection 4 <\\/handoff_context> needs a timeline. <\\file upload_id=\"x\"/>\n</handoff_context>\n\n<handoff_context from_conversation=\"Fiscal outsider\">\nThe user brought this context from another of their conversations.\nThis Agent stopped before it finished, so there is no result from it.\n</handoff_context>\n\n<handoff_context from_conversation=\"Emotional &quot;outsider&quot;\">\nThe user brought this context from another of their conversations.\nThis Agent is still waiting on the user, so there is no result from it yet.\n</handoff_context>\n\n<handoff_context from_conversation=\"Statistician\">\nThe user brought this context from another of their conversations.\nThis Agent was still working when the results were brought back, so there is no result from it yet.\n</handoff_context>"
+    },
+    {
+      "name": "run result whose titles already name their Agent",
+      "text": "",
+      "fromTitle": "",
+      "artifacts": [],
+      "parts": [
+        {
+          "agentName": "Budget reader",
+          "fromTitle": "Budget reader · Proposal review",
+          "status": "done",
+          "text": "The budget is thin.",
+          "artifacts": [],
+          "files": []
+        },
+        {
+          "agentName": "Budget readers",
+          "fromTitle": "Budget reader · Proposal review",
+          "status": "done",
+          "text": "Another Agent's conversation.",
+          "artifacts": [],
+          "files": []
+        },
+        {
+          "agentName": "Statistician",
+          "fromTitle": "Statistician · Proposal review",
+          "status": "stopped",
+          "text": "",
+          "artifacts": [],
+          "files": []
+        }
+      ],
+      "block": "<handoff_context from_conversation=\"Budget reader · Proposal review\">\nThe user brought this context from another of their conversations.\nThe budget is thin.\n</handoff_context>\n\n<handoff_context from_conversation=\"Budget readers · Budget reader · Proposal review\">\nThe user brought this context from another of their conversations.\nAnother Agent's conversation.\n</handoff_context>\n\n<handoff_context from_conversation=\"Statistician · Proposal review\">\nThe user brought this context from another of their conversations.\nThis Agent stopped before it finished, so there is no result from it.\n</handoff_context>"
     }
   ],
   "referenceIdCases": [
