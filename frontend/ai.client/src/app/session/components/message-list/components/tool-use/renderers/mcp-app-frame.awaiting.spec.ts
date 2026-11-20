@@ -178,4 +178,35 @@ describe('McpAppFrameComponent: an App form waiting for the user', () => {
     expect(state.isAwaitingUser()).toBe(true);
     expect((state.toCallToolResult() as { isError: boolean }).isError).toBe(true);
   });
+
+  /**
+   * Atlassian's Jira widget renders from `structuredContent` and its
+   * `_meta` widget context; sent only the text, it drew a blank frame in
+   * prod (2026-11-19).
+   */
+  it('hands the App structuredContent and _meta with the result', () => {
+    const widgetContext = { 'atlassian.com/jira-widget-context': { cloudId: 'c-1' } };
+    const state = render({
+      status: 'success',
+      content: [{ text: '{"issues": {"nodes": []}}' }],
+      structuredContent: { issues: { nodes: [] } },
+      metadata: widgetContext,
+    });
+
+    expect(state.toCallToolResult()).toEqual({
+      content: [{ type: 'text', text: '{"issues": {"nodes": []}}' }],
+      isError: false,
+      structuredContent: { issues: { nodes: [] } },
+      _meta: widgetContext,
+    });
+  });
+
+  it('adds neither key when the tool returned neither', () => {
+    const state = render({ status: 'success', content: [{ text: 'ok' }] });
+
+    expect(state.toCallToolResult()).toEqual({
+      content: [{ type: 'text', text: 'ok' }],
+      isError: false,
+    });
+  });
 });

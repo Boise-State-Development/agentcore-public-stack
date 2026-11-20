@@ -50,4 +50,28 @@ describe('matchToolResultsToToolUses', () => {
 
     expect(resultOf(merged)).toEqual({ status: 'success', content: [{ text: 'ok' }] });
   });
+
+  it("keeps the tool's _meta (Strands' metadata) for an MCP App to render from", () => {
+    const widgetContext = { 'atlassian.com/jira-widget-context': { cloudId: 'c-1' } };
+    const merged = matchToolResultsToToolUses(
+      conversation({
+        status: 'success',
+        content: [{ text: '{"issues": []}' }],
+        structuredContent: { issues: { nodes: [] } },
+        metadata: widgetContext,
+      }),
+    );
+
+    expect(resultOf(merged)?.['metadata']).toEqual(widgetContext);
+  });
+
+  it('adds no metadata key for an empty or non-object metadata', () => {
+    for (const metadata of [{}, null, 'x', ['a']]) {
+      const merged = matchToolResultsToToolUses(
+        conversation({ status: 'success', content: [{ text: 'ok' }], metadata }),
+      );
+
+      expect(resultOf(merged)).not.toHaveProperty('metadata');
+    }
+  });
 });

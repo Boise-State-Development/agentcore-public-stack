@@ -303,6 +303,31 @@ async def test_no_structured_content_key_when_the_tool_returned_none(monkeypatch
     payload = await _call(session_id="disp-nostruct")
 
     assert "structuredContent" not in payload["result"]
+    assert "_meta" not in payload["result"]
+
+
+@pytest.mark.asyncio
+async def test_tool_meta_reaches_the_app_as_underscore_meta(monkeypatch):
+    """Strands carries MCP `_meta` as `metadata`; the App gets it back as `_meta`.
+
+    Atlassian's widgets read their site and account context from `_meta`
+    and render blank without it.
+    """
+    widget_context = {"atlassian.com/jira-widget-context": {"cloudId": "c-1"}}
+    client = _FakeClient(
+        {
+            "status": "success",
+            "content": [{"text": "ok"}],
+            "structuredContent": {"issues": []},
+            "metadata": widget_context,
+        }
+    )
+    _patch(monkeypatch, enabled=True, meta=_ui(["model", "app"]), client=client)
+
+    payload = await _call(session_id="disp-meta")
+
+    assert payload["result"]["_meta"] == widget_context
+    assert payload["result"]["structuredContent"] == {"issues": []}
 
 
 @pytest.mark.asyncio
