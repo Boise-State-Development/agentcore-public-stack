@@ -296,6 +296,42 @@ def test_an_unedited_approval_counts_no_edit(make_client, metrics):
     assert [name for name, _ in metrics] == ["WorkflowRunApproved"]
 
 
+def test_approve_keeps_the_card_as_reviewed_and_get_returns_it(make_client, stores):
+    client = make_client()
+    run_id = _create(client).json()["run"]["runId"]
+    resp = _approve(client, run_id, card={"text": "  the card\r\nas edited  "})
+    assert resp.status_code == 200
+    # Normalized as the Runtime normalizes a card, so a step started from it reads the same.
+    assert resp.json()["card"] == {"text": "the card\nas edited", "removed": False}
+    assert client.get(f"/sessions/src/workflow-runs/{run_id}").json()["card"] == {
+        "text": "the card\nas edited", "removed": False,
+    }
+
+
+@pytest.mark.parametrize("card", [{"removed": True}, {"text": "   "}, {"text": "kept", "removed": True}])
+def test_a_removed_or_blank_card_is_kept_as_removed(make_client, stores, card):
+    client = make_client()
+    run_id = _create(client).json()["run"]["runId"]
+    assert _approve(client, run_id, card=card).json()["card"] == {"removed": True}
+    assert stores[1].get("alice", run_id).card.text is None
+
+
+def test_the_card_is_capped_as_a_card_is_and_bounded_as_a_field(make_client, stores):
+    from apis.shared.handoff.turn import HANDOFF_CONTEXT_MAX_CHARS
+
+    client = make_client()
+    run_id = _create(client).json()["run"]["runId"]
+    assert _approve(client, run_id, card={"text": "x" * 200_001}).status_code == 422
+    stored = _approve(client, run_id, card={"text": "y" * (HANDOFF_CONTEXT_MAX_CHARS * 2)}).json()["card"]["text"]
+    assert len(stored) <= HANDOFF_CONTEXT_MAX_CHARS
+
+
+def test_an_approval_without_a_card_stores_none(make_client):
+    client = make_client()
+    run_id = _create(client).json()["run"]["runId"]
+    assert "card" not in _approve(client, run_id).json()
+
+
 def test_approve_happens_once(make_client):
     client = make_client()
     run_id = _create(client).json()["run"]["runId"]

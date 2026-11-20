@@ -16,8 +16,12 @@ import { BrowserPanelComponent } from './components/browser-panel/browser-panel.
 import { CompactionSummaryComponent } from './components/compaction-summary/compaction-summary.component';
 import { ArtifactCardComponent } from './components/artifact/artifact-card.component';
 import { HandoffRowComponent } from '../handoff/handoff-row.component';
+import { WorkflowRunRowComponent } from '../handoff/workflow-run-row.component';
 import { HandoffSuggestionChipComponent } from '../handoff/handoff-suggestion-chip.component';
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
+import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
+import { showsInThread } from '../../services/handoff/workflow-run-progress';
+import { WorkflowRunView } from '../../services/handoff/workflow-run.models';
 import { HandoffView, isSuggestionChip } from '../../services/handoff/handoff.models';
 import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
 import { FilePreviewPanelComponent } from './components/file-preview/file-preview-panel.component';
@@ -150,6 +154,7 @@ function segmentTurn(messages: readonly Message[]): TurnSegment[] {
     McpAppActionsComponent,
     AgentFeedbackLinkComponent,
     HandoffRowComponent,
+    WorkflowRunRowComponent,
     HandoffSuggestionChipComponent,
   ],
   templateUrl: './message-list.component.html',
@@ -262,6 +267,7 @@ export class MessageListComponent {
 
   private consentService = inject(OAuthConsentService);
   private handoffState = inject(HandoffStateService);
+  private workflowRunState = inject(WorkflowRunStateService);
   private toolApprovalService = inject(ToolApprovalService);
   private userQuestionService = inject(UserQuestionService);
   private browserLoginService = inject(BrowserLoginService);
@@ -867,9 +873,47 @@ export class MessageListComponent {
   // message that was last when the handoff was sent.
   // ----------------------------------------------------------------
 
-  private readonly handoffRows = computed<readonly HandoffView[]>(() =>
-    this.handoffState.rowsFor(this.sessionId()).filter((row) => !isSuggestionChip(row)),
+  private readonly handoffRows = computed<readonly HandoffView[]>(() => {
+    // A workflow run's steps are lines in the run's own row, never rows of their own (§20.2).
+    const inRuns = this.runStepIds();
+    return this.handoffState
+      .rowsFor(this.sessionId())
+      .filter((row) => !isSuggestionChip(row) && !inRuns.has(row.handoffId));
+  });
+
+  // Workflow runs (workflow-runs spec §20.2): one row per approved run, anchored like a handoff row
+  // after the message that was last when it was approved. Replayed from `workflowRuns`.
+  private readonly threadRuns = computed<readonly WorkflowRunView[]>(() =>
+    this.workflowRunState.runsFor(this.sessionId()).filter(showsInThread),
   );
+
+  private readonly runStepIds = computed<ReadonlySet<string>>(
+    () => new Set(this.threadRuns().flatMap((run) => run.steps.map((step) => step.handoffId))),
+  );
+
+  private readonly runRowsByMessageIndex = computed<ReadonlyMap<number, WorkflowRunView[]>>(() => {
+    const loaded = this.loadedMessageIndices();
+    const map = new Map<number, WorkflowRunView[]>();
+    for (const run of this.threadRuns()) {
+      if (!loaded.has(run.sourceMessageIndex)) continue;
+      const list = map.get(run.sourceMessageIndex);
+      if (list) list.push(run);
+      else map.set(run.sourceMessageIndex, [run]);
+    }
+    return map;
+  });
+
+  /** Runs whose anchor isn't in the loaded page, at the tail. */
+  protected readonly unanchoredRunRows = computed<readonly WorkflowRunView[]>(() => {
+    const loaded = this.loadedMessageIndices();
+    return this.threadRuns().filter((run) => !loaded.has(run.sourceMessageIndex));
+  });
+
+  protected runRowsForMessageId(id: string): readonly WorkflowRunView[] {
+    const n = this.parseMessageIndex(id);
+    if (n === null) return [];
+    return this.runRowsByMessageIndex().get(n) ?? [];
+  }
 
   // Suggestion chips (handoffs spec §4.4): an offer nobody has sent yet, placed under the message
   // holding its `suggest_handoff` call. Matched on the tool use id rather than a message index,

@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflow Designer mockup</title>
+<style>
+:root{
+  --bg:#f9fafb;--surface:#ffffff;--glass:rgba(255,255,255,.8);--border:#e5e7eb;--border-strong:#d1d5db;
+  --text:#111827;--text-2:#4b5563;--text-3:#6b7280;--primary:#0033a0;--primary-text:#0033a0;--tile:#f3f4f6;
+  --ok:#15803d;--warn:#b45309;--warn-bg:#fffbeb;--warn-border:#fde68a;--grid:rgba(0,51,160,.07);
+  --wire:#9ca3af;--wire-on:#0033a0;--blob-a:rgba(0,51,160,.16);--blob-b:rgba(0,144,255,.14);--seg:#e5e7eb;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#111827;--surface:#1f2937;--glass:rgba(31,41,55,.74);--border:#374151;--border-strong:#4b5563;
+    --text:#f9fafb;--text-2:#d1d5db;--text-3:#9ca3af;--primary:#0033a0;--primary-text:#9cc7ff;--tile:#374151;
+    --ok:#4ade80;--warn:#fbbf24;--warn-bg:rgba(120,53,15,.25);--warn-border:rgba(146,64,14,.6);--grid:rgba(118,179,255,.07);
+    --wire:#6b7280;--wire-on:#76b3ff;--blob-a:rgba(0,82,255,.24);--blob-b:rgba(0,144,255,.14);--seg:#374151;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#111827;--surface:#1f2937;--glass:rgba(31,41,55,.74);--border:#374151;--border-strong:#4b5563;
+  --text:#f9fafb;--text-2:#d1d5db;--text-3:#9ca3af;--primary:#0033a0;--primary-text:#9cc7ff;--tile:#374151;
+  --ok:#4ade80;--warn:#fbbf24;--warn-bg:rgba(120,53,15,.25);--warn-border:rgba(146,64,14,.6);--grid:rgba(118,179,255,.07);
+  --wire:#6b7280;--wire-on:#76b3ff;--blob-a:rgba(0,82,255,.24);--blob-b:rgba(0,144,255,.14);--seg:#374151;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.7 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--wire-on);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 24px;border-bottom:1px solid var(--border);background:var(--glass);backdrop-filter:blur(8px)}
+header h1{font-size:16px;line-height:28px;font-weight:600;margin:0}
+.hl{display:flex;align-items:center;gap:12px;min-width:0}
+.hr{display:flex;align-items:center;gap:8px}
+.meta{font-size:12px;line-height:20px;color:var(--text-3)}
+.btn{border:1px solid var(--border-strong);background:var(--surface);border-radius:16px;padding:6px 12px;font-weight:500}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--text-2)}
+.btn.primary{border-color:transparent;background:var(--primary);color:#fff;font-weight:600;padding:6px 16px}
+.btn.sm{font-size:12px;line-height:20px;padding:3px 10px}
+.link{border:0;background:none;padding:0;color:var(--primary-text);font-weight:500;font-size:12px;line-height:20px}
+main{flex:1;min-height:0;display:flex}
+.canvas{position:relative;flex:1;min-width:0;overflow:hidden;background:var(--bg)}
+.scroller{position:absolute;inset:0;overflow:auto;cursor:grab;background:
+  linear-gradient(var(--grid) 1px,transparent 1px) 0 0/24px 24px local,
+  linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/24px 24px local}
+.scroller.drag{cursor:grabbing;user-select:none}
+.zoom{position:absolute;right:16px;bottom:16px;display:flex;gap:6px}
+.blob{position:absolute;border-radius:42% 58% 61% 39%/46% 41% 59% 54%;filter:blur(60px);pointer-events:none}
+.blob.a{width:420px;height:340px;left:8%;top:10%;background:var(--blob-a)}
+.blob.b{width:360px;height:320px;right:6%;bottom:6%;background:var(--blob-b)}
+.bar{position:absolute;left:0;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:16px 24px 0}
+.chip{border:1px solid var(--border-strong);background:var(--surface);border-radius:999px;padding:2px 10px;font-size:12px;line-height:20px;color:var(--text-2)}
+.chip.live{color:var(--primary-text);font-weight:500}
+.graphwrap{position:relative;padding:64px 24px 64px;min-width:860px}
+#wires{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+#wires path{fill:none;stroke:var(--wire);stroke-width:1.5;transition:stroke .4s}
+#wires path.on{stroke:var(--wire-on);stroke-width:2}
+.graph{position:relative;display:flex;align-items:center;gap:56px}
+.stage{flex:1 1 0;min-width:170px;max-width:240px;display:flex;flex-direction:column;gap:10px}
+.stage h2{margin:0 0 2px;font-size:12px;line-height:20px;font-weight:500;color:var(--text-3)}
+.card{position:relative;display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:var(--glass);backdrop-filter:blur(10px) saturate(150%);border:1px solid var(--border);border-radius:16px;padding:10px 12px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.card:hover{border-color:var(--border-strong)}
+.card[aria-pressed="true"]{border-color:var(--wire-on);box-shadow:0 0 0 1px var(--wire-on),0 8px 24px -12px rgba(0,51,160,.35)}
+.tile{flex:none;width:32px;height:32px;border-radius:8px;background:var(--tile);color:var(--primary-text);display:grid;place-items:center;font-size:16px}
+.tile svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.ct{min-width:0;display:flex;flex-direction:column}
+.cn{font-weight:500;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cm{font-size:12px;line-height:20px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:5px}
+.cm svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.cm.ok{color:var(--ok)}.cm.warn{color:var(--warn)}.cm.run{color:var(--primary-text)}
+.dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex:none;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35;transform:scale(.8)}}
+@media (prefers-reduced-motion: reduce){.dot{animation:none}#wires path{transition:none}}
+.add{border:1px dashed var(--border-strong);background:transparent;border-radius:16px;padding:7px 12px;font-size:12px;line-height:20px;color:var(--text-2);width:100%}
+.add:hover{background:var(--glass)}
+.menu{border:1px solid var(--border);background:var(--surface);border-radius:16px;padding:6px;box-shadow:0 12px 32px -12px rgba(0,0,0,.25);display:flex;flex-direction:column;gap:2px}
+.menu button{border:0;background:none;border-radius:10px;padding:6px 10px;text-align:left;display:flex;flex-direction:column}
+.menu button:hover{background:var(--tile)}
+.menu b{font-weight:500}
+aside{width:440px;flex:none;border-left:1px solid var(--border);background:var(--bg);display:flex;flex-direction:column;min-height:0}
+.tabs{display:flex;gap:4px;padding:12px 16px;border-bottom:1px solid var(--border)}
+.tabs button{border:0;background:none;border-radius:999px;padding:4px 14px;font-weight:500;color:var(--text-2)}
+.tabs button[aria-selected="true"]{background:var(--tile);color:var(--primary-text)}
+.pane{flex:1;overflow:auto;padding:16px}
+.sheet{border:1px solid var(--border);background:var(--surface);border-radius:16px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.sheet h3{margin:0;font-size:14px;line-height:24px;font-weight:600}
+.rows{margin:12px 0;border-top:1px solid var(--border)}
+.row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)}
+.row .grow{flex:1;min-width:0}
+.row .tile{width:28px;height:28px;font-size:14px}
+label.f{display:block;font-weight:500;color:var(--text-2);margin:14px 0 4px}
+label.f:first-child{margin-top:0}
+input[type=text],textarea,select{width:100%;border:1px solid var(--border-strong);background:var(--surface);border-radius:16px;padding:7px 12px}
+textarea{resize:vertical;min-height:76px;border-radius:12px}
+.check{display:flex;align-items:center;gap:8px;padding:3px 0}
+.check input{width:16px;height:16px;accent-color:var(--primary)}
+.check.off{color:var(--text-3)}
+.help{font-size:12px;line-height:20px;color:var(--text-3);margin:4px 0 0}
+.segs{display:flex;gap:4px;margin:10px 0 6px}
+.segs i{flex:1;height:4px;border-radius:2px;background:var(--seg)}
+.segs i.done{background:var(--ok)}.segs i.running{background:var(--wire-on)}.segs i.needs{background:var(--warn)}
+.relay{margin:2px 0 8px 38px;border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:12px;padding:8px 12px}
+.foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:14px}
+.err{color:var(--warn);font-size:12px;line-height:20px;margin:6px 0 0}
+.note{border:1px solid var(--border);border-radius:12px;padding:8px 12px;margin-top:12px;color:var(--text-2);font-size:12px;line-height:20px}
+@media (max-width: 960px){main{flex-direction:column;overflow:auto}.canvas{flex:none;height:460px}aside{flex:none;width:auto;border-left:0;border-top:1px solid var(--border);min-height:420px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="hl">
+    <button class="btn ghost" aria-label="Back to workflows">←</button>
+    <h1>Proposal review</h1>
+    <span class="meta" id="saved">Saved · version 3</span>
+  </div>
+  <div class="hr">
+    <button class="btn ghost" id="theme" aria-label="Switch between light and dark">Theme</button>
+    <button class="btn">Share</button>
+    <button class="btn primary">Save workflow</button>
+  </div>
+</header>
+<main>
+  <section class="canvas" aria-label="Workflow steps">
+    <div class="blob a"></div><div class="blob b"></div>
+    <div class="bar" id="bar"></div>
+    <div class="scroller" id="scroller" tabindex="0" role="group" aria-label="Workflow graph. Scroll or drag the background to move around.">
+      <div class="graphwrap" id="wrap">
+        <svg id="wires" aria-hidden="true"></svg>
+        <div class="graph" id="graph"></div>
+      </div>
+    </div>
+    <div class="zoom"><button class="btn sm" id="fit" aria-pressed="false">Fit to screen</button></div>
+  </section>
+  <aside aria-label="Step settings and preview">
+    <div class="tabs" role="tablist">
+      <button role="tab" id="t-step" aria-selected="true">Step</button>
+      <button role="tab" id="t-prev" aria-selected="false">Preview</button>
+    </div>
+    <div class="pane" id="pane"></div>
+  </aside>
+</main>
+<script>
+const IC={
+  file:'<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4"/></svg>',
+  prompt:'<svg viewBox="0 0 24 24"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-6l-4 4v-4H6a2 2 0 0 1-2-2z"/></svg>',
+  checklist:'<svg viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10M4 6l1.2 1.2L7.5 5M4 12l1.2 1.2L7.5 11M4 18l1.2 1.2L7.5 17"/></svg>',
+  result:'<svg viewBox="0 0 24 24"><path d="M3 6h5l6 6h7M3 18h5l6-6M18 9l3 3-3 3"/></svg>',
+  ok:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5.5"/></svg>',
+  warn:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.2v.1"/></svg>',
+  clock:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5h4"/></svg>'
+};
+let S=[
+  {id:'in',kind:'input',name:'The proposal',meta:'1 PDF · a request',reads:[]},
+  {id:'gen',kind:'agent',emoji:'🧭',name:'Generalist',model:'Sonnet 5.5',ver:5,reads:['req','file']},
+  {id:'col',kind:'agent',emoji:'🎓',name:'Colleague',model:'Sonnet 5.5',ver:3,newer:4,reads:['req','file']},
+  {id:'emo',kind:'agent',emoji:'💛',name:'Emotional outsider',model:'Haiku 5.5',ver:2,reads:['req','file']},
+  {id:'fis',kind:'agent',emoji:'💰',name:'Fiscal outsider',model:'Haiku 5.5',ver:2,reads:['req','file']},
+  {id:'aud',kind:'checklist',name:'Audit',sets:15,reads:['file']},
+  {id:'sum',kind:'prompt',name:'Review summary',model:'Sonnet 5.5',reads:['gen','col','emo','fis'],text:"Merge the four reviews into inline notes. Keep each reviewer's strongest point and say where they disagree."},
+  {id:'res',kind:'result',name:'One report',meta:'Back to the chat',reads:['sum','aud'],text:'Write one report: the inline notes first, then the audit table.'}
+];
+const MAX=8;
+let sel='col',tab='step',run=null,menuAt=null,sample=false,sheetErr=false,seq=1,fit=false,z=1;
+const $=id=>document.getElementById(id);
+const by=id=>S.find(s=>s.id===id);
+const work=()=>S.filter(s=>s.kind!=='input'&&s.kind!=='result');
+const stepReads=s=>s.reads.filter(r=>by(r)&&by(r).kind!=='input');
+function stage(s){
+  if(s.kind==='input')return 0;
+  if(s.kind==='result')return Math.max(1,...work().map(stage))+1;
+  const d=stepReads(s);return d.length?Math.max(...d.map(r=>stage(by(r))))+1:1;
+}
+function dependsOn(a,b){return stepReads(a).some(r=>r===b.id||dependsOn(by(r),b));}
+function kindLabel(s){
+  if(s.kind==='agent')return 'Agent · '+s.model;
+  if(s.kind==='prompt')return 'Prompt · '+s.model;
+  if(s.kind==='checklist')return 'Checklist · '+s.sets+' field sets';
+  return s.meta;
+}
+function tile(s){return '<span class="tile" aria-hidden="true">'+(s.kind==='agent'?s.emoji:IC[s.kind==='input'?'file':s.kind])+'</span>';}
+function statusLine(s){
+  const st=run.st[s.id];
+  if(st.s==='done')return '<span class="cm ok">'+IC.ok+st.t+'</span>';
+  if(st.s==='needs')return '<span class="cm warn">'+IC.warn+st.t+'</span>';
+  if(st.s==='running')return '<span class="cm run"><span class="dot"></span>'+st.t+'</span>';
+  return '<span class="cm">'+IC.clock+st.t+'</span>';
+}
+function renderCanvas(){
+  const n=work().length,last=stage(by('res'));
+  $('bar').innerHTML=run
+    ?'<span class="chip live">Test run</span><span class="chip">'+doneCount()+' of '+n+' finished</span>'
+    :'<span class="chip">'+n+' of '+MAX+' steps</span><span class="chip">Up to 4 at once</span>';
+  let h='';
+  for(let c=0;c<=last;c++){
+    const items=S.filter(s=>stage(s)===c);
+    const title=c===0?'Starts with':c===last?'Result':'Stage '+c+(items.length>4?' · 4 at once':'');
+    h+='<div class="stage" role="group" aria-label="'+title+'"><h2>'+title+'</h2>';
+    items.forEach(s=>{
+      h+='<button class="card" data-id="'+s.id+'" aria-pressed="'+(s.id===sel)+'">'+tile(s)+'<span class="ct"><span class="cn">'+s.name+'</span>'+(run?statusLine(s):'<span class="cm">'+kindLabel(s)+'</span>')+'</span></button>';
+    });
+    if(!run&&c>0&&c<last){
+      h+=menuAt===c
+        ?'<div class="menu" role="menu"><button role="menuitem" data-add="agent"><b>Agent</b><span class="meta">A conversation you can open and continue</span></button><button role="menuitem" data-add="prompt"><b>Prompt</b><span class="meta">One instruction, no conversation</span></button><button role="menuitem" data-add="checklist"><b>Checklist</b><span class="meta">A field set, returned as a table</span></button></div>'
+        :'<button class="add" data-menu="'+c+'">'+(n>=MAX?'8 of 8 steps':'+ Add step')+'</button>';
+    }
+    h+='</div>';
+  }
+  $('graph').innerHTML=h;
+  requestAnimationFrame(layout);
+}
+function applyFit(){
+  const w=$('wrap'),sc=$('scroller');w.style.zoom=1;z=1;
+  if(fit)z=Math.max(.6,Math.min(1,sc.clientWidth/w.scrollWidth,sc.clientHeight/w.scrollHeight));
+  w.style.zoom=z;$('fit').textContent=fit?'Actual size':'Fit to screen';$('fit').setAttribute('aria-pressed',fit);
+}
+function layout(){applyFit();wires();}
+function wires(){
+  const b=$('wrap').getBoundingClientRect();let h='';
+  const edge=(a,c)=>{
+    const ea=document.querySelector('[data-id="'+a+'"]'),ec=document.querySelector('[data-id="'+c+'"]');if(!ea||!ec)return;
+    const ra=ea.getBoundingClientRect(),rc=ec.getBoundingClientRect();
+    const x1=(ra.right-b.left)/z,y1=(ra.top+ra.height/2-b.top)/z,x2=(rc.left-b.left)/z,y2=(rc.top+rc.height/2-b.top)/z,m=(x1+x2)/2;
+    const on=run&&run.st[a].s==='done'&&run.st[c].s!=='waiting'&&run.st[c].s!=='queued';
+    h+='<path'+(on?' class="on"':'')+' d="M'+x1+' '+y1+' C'+m+' '+y1+','+m+' '+y2+','+x2+' '+y2+'"/>';
+  };
+  S.forEach(s=>{if(stage(s)===1)edge('in',s.id);stepReads(s).forEach(r=>edge(r,s.id));});
+  $('wires').innerHTML=h;
+}
+function readsEditor(s){
+  let h='<label class="f">Reads</label>';
+  if(s.kind!=='result'){
+    h+='<label class="check"><input type="checkbox" data-read="req" '+(s.reads.includes('req')?'checked':'')+'>The request</label>';
+    h+='<label class="check"><input type="checkbox" data-read="file" '+(s.reads.includes('file')?'checked':'')+'>The files shared with the run</label>';
+  }
+  work().filter(o=>o.id!==s.id).forEach(o=>{
+    const loop=s.kind!=='result'&&dependsOn(o,s);
+    h+='<label class="check'+(loop?' off':'')+'"><input type="checkbox" data-read="'+o.id+'" '+(s.reads.includes(o.id)?'checked':'')+(loop?' disabled':'')+'>'+o.name+"'s result"+(loop?' <span class="meta">· reads this step</span>':'')+'</label>';
+  });
+  h+='<p class="help">'+(s.kind==='result'?'What comes back to the conversation that started the workflow.':'Ticking another step’s result moves this step to the stage after it.')+'</p>';
+  return h;
+}
+function stepPane(){
+  const s=by(sel);let h='<div class="sheet">';
+  if(s.kind==='input'){
+    h+='<h3>Starts with</h3><p class="help">What the person starting this workflow is asked for.</p><label class="f">Files</label><select><option>Exactly one PDF</option><option>One or more files</option><option>No file needed</option></select><label class="f">Request</label><select><option>Optional, with a default</option><option>Required</option></select><label class="f">Default request</label><input type="text" value="Review this proposal against the solicitation">';
+    return h+'</div>';
+  }
+  h+='<label class="f">Name</label><input type="text" id="nm" value="'+s.name+'">';
+  if(s.kind==='agent'){
+    h+='<label class="f">Agent</label><div class="row" style="border:0;padding:0">'+tile(s)+'<span class="grow"><b style="font-weight:500">'+s.name+'</b><br><span class="meta">'+s.model+' · added at version '+s.ver+'</span></span><button class="btn sm">Change</button></div>';
+    if(s.newer)h+='<div class="note">This Agent has changed since you added it. A run uses its published version, now version '+s.newer+'. <button class="link">See what changed</button> · <button class="link">Mark as reviewed</button></div>';
+    h+='<label class="f">Request</label><select><option>The run’s request</option><option>Its own request</option></select>';
+  }
+  if(s.kind==='prompt')h+='<label class="f">Instruction</label><textarea>'+s.text+'</textarea><label class="f">Model</label><select><option>Sonnet 5.5</option><option>Haiku 5.5</option><option>Opus 5.5</option></select>';
+  if(s.kind==='checklist')h+='<label class="f">Field sets</label><div class="row" style="border:0;padding:0"><span class="grow">'+s.sets+' field sets from this workflow</span><button class="btn sm">Choose</button></div>';
+  if(s.kind==='result')h+='<label class="f">How it comes back</label><select><option>Start the merge when every step has finished</option><option>A card on the composer, sent by the person</option></select><label class="f">Merge instruction</label><textarea>'+s.text+'</textarea>';
+  h+=readsEditor(s);
+  if(s.kind!=='result')h+='<div class="foot" style="justify-content:space-between"><span><button class="btn sm" data-mv="-1">Move up</button> <button class="btn sm" data-mv="1">Move down</button></span><button class="btn sm ghost" data-rm="1">Remove step</button></div>';
+  return h+'</div>';
+}
+function sheetPane(){
+  const w=work(),agents=w.filter(s=>s.kind==='agent').length;
+  let h='<p class="help" style="margin:0 0 8px">What people see when they start this workflow.</p><div class="sheet"><h3>Start Proposal review</h3><label class="f" style="margin-top:8px">Request</label><input type="text" value="Review this proposal against the solicitation"><div class="rows">';
+  w.forEach(s=>{h+='<div class="row">'+tile(s)+'<span class="grow">'+s.name+'</span><span class="meta">'+kindLabel(s).replace('Agent · ','')+'</span></div>';});
+  h+='</div>';
+  h+='<div class="meta">One brief for all '+agents+' Agents · written when you start</div>';
+  h+=sample
+    ?'<label class="check" style="margin-top:8px"><input type="checkbox" checked>proposal.pdf · 41 pages</label><div class="meta" style="margin-top:6px">About $1.40 to start, before any follow-up (estimate)</div>'
+    :'<button class="add" id="addfile" style="margin-top:10px">+ Add a sample file</button>';
+  if(sheetErr&&!sample)h+='<p class="err" role="alert">Add a sample file first. This workflow starts with one PDF.</p>';
+  h+='<div class="foot"><button class="btn ghost" id="trychat">Try in a chat</button><button class="btn primary" id="start">Start test run</button></div></div>';
+  h+='<div class="note">A test run is a real run. It uses your quota and creates conversations you can open afterwards.</div>';
+  return h;
+}
+function doneCount(){return work().filter(s=>run.st[s.id].s==='done').length;}
+function runPane(){
+  const w=work(),needs=w.filter(s=>run.st[s.id].s==='needs').length,fin=run.st.res.s==='done';
+  let h='<div class="sheet"><div style="display:flex;justify-content:space-between;gap:8px"><h3>Proposal review · test run</h3><span class="meta" style="color:'+(needs?'var(--warn)':'var(--text-3)')+'">'+(needs?needs+' needs you':doneCount()+' of '+w.length+' finished')+'</span></div><div class="segs" aria-hidden="true">';
+  w.forEach(s=>{h+='<i class="'+run.st[s.id].s+'"></i>';});
+  h+='</div><div class="rows" style="margin-bottom:0">';
+  w.forEach(s=>{
+    h+='<div class="row" style="border-bottom:0">'+tile(s)+'<span class="grow"><span style="font-weight:500">'+s.name+'</span> '+statusLine(s).replace('class="cm','style="display:inline-flex" class="cm')+'</span><span class="meta">'+(s.kind==='agent'&&run.st[s.id].s!=='queued'?'Open ›':'')+'</span></div>';
+    if(run.st[s.id].s==='needs')h+='<div class="relay"><div>Run <b style="font-weight:500">budget_check</b> on the proposal’s budget table?</div><div class="foot" style="margin-top:6px;justify-content:flex-start"><button class="btn sm primary" id="approve">Approve</button><button class="btn sm">Deny</button></div></div>';
+  });
+  h+='</div></div>';
+  if(fin){
+    h+='<div class="sheet" style="margin-top:12px"><div style="display:flex;justify-content:space-between"><h3>One report</h3><span class="meta">'+w.length+' of '+w.length+' finished</span></div><p style="margin:8px 0 0;color:var(--text-2)">The proposal makes a clear case for the method, but two reviewers found the budget justification thin, and the audit marks 9 of 114 criteria as not met…</p><div class="foot"><button class="btn sm">Open the conversation</button></div></div>';
+  }else{
+    h+='<div class="foot" style="justify-content:flex-start"><button class="link" id="stop">Stop run</button></div>';
+  }
+  h+='<div class="foot" style="justify-content:flex-start"><button class="link" id="back">Back to design</button></div>';
+  return h;
+}
+function renderPane(){
+  $('t-step').setAttribute('aria-selected',tab==='step');$('t-prev').setAttribute('aria-selected',tab==='prev');
+  $('t-prev').textContent=run?'Test run':'Preview';
+  $('pane').innerHTML=tab==='step'?stepPane():run?runPane():sheetPane();
+}
+function render(){renderCanvas();renderPane();}
+function set(id,s,t){run.st[id]={s,t};}
+function later(ms,fn){run.timers.push(setTimeout(()=>{if(run){fn();advance();render();}},ms));}
+function advance(){
+  const st=run.st,d=id=>st[id]&&st[id].s==='done';
+  S.forEach(s=>{
+    if(s.kind==='prompt'&&st[s.id].s==='waiting'&&stepReads(s).every(d)){set(s.id,'running','Writing the summary');later(2200,()=>set(s.id,'done','Finished · 18s'));}
+  });
+  if(st.res.s==='waiting'&&work().every(s=>d(s.id))){set('res','running','Writing the report');later(1800,()=>set('res','done','Ready'));}
+}
+function startRun(){
+  run={st:{},timers:[]};
+  S.forEach(s=>set(s.id,'waiting','Waiting'));
+  set('in','done','Ready');
+  const first=work().filter(s=>stage(s)===1);
+  first.forEach((s,i)=>set(s.id,i<4?'running':'queued',i<4?'Reading the proposal':'Queued'));
+  const t=['42s','51s','1m 04s','1m 31s','1m 12s','58s','47s','39s'];
+  first.forEach((s,i)=>{
+    if(s.id==='fis'){later(3600,()=>set('fis','needs','Needs you'));return;}
+    const at=1800+i*1000+(i>=4?1400:0);
+    later(at,()=>{set(s.id,'done','Finished · '+t[i]);const q=first.find(x=>run.st[x.id].s==='queued');if(q)set(q.id,'running',q.kind==='checklist'?'Checking 114 criteria':'Reading the proposal');});
+  });
+  work().filter(s=>stage(s)>1&&s.kind!=='prompt').forEach(s=>later(7000,()=>set(s.id,'done','Finished · 44s')));
+  tab='prev';render();
+}
+function stopRun(){if(run){run.timers.forEach(clearTimeout);run=null;}}
+document.addEventListener('click',e=>{
+  const t=e.target.closest('button');if(!t)return;
+  if(t.dataset.id){sel=t.dataset.id;if(!run)tab='step';menuAt=null;render();return;}
+  if(t.dataset.menu){if(work().length<MAX){menuAt=+t.dataset.menu;renderCanvas();}return;}
+  if(t.dataset.add){
+    const k=t.dataset.add,prev=S.filter(s=>stage(s)===menuAt-1&&s.kind!=='input').map(s=>s.id);
+    const s={id:'n'+(seq++),kind:k,name:k==='agent'?'New Agent step':k==='prompt'?'New prompt':'New checklist',emoji:'✨',model:'Sonnet 5.5',ver:1,sets:1,text:'',reads:prev.length?prev:['req','file']};
+    S.splice(S.length-1,0,s);sel=s.id;menuAt=null;tab='step';render();return;
+  }
+  if(t.dataset.mv){
+    const s=by(sel),peers=S.filter(x=>stage(x)===stage(s)),i=peers.indexOf(s),o=peers[i+(+t.dataset.mv)];
+    if(o){const a=S.indexOf(s),b=S.indexOf(o);S[a]=o;S[b]=s;render();document.querySelector('[data-mv="'+t.dataset.mv+'"]').focus();}
+    return;
+  }
+  if(t.dataset.rm){S=S.filter(x=>x.id!==sel);S.forEach(x=>x.reads=x.reads.filter(r=>r!==sel));sel='res';render();return;}
+  if(t.id==='t-step'){tab='step';renderPane();return;}
+  if(t.id==='t-prev'){tab='prev';renderPane();return;}
+  if(t.id==='addfile'){sample=true;sheetErr=false;renderPane();return;}
+  if(t.id==='start'){if(!sample){sheetErr=true;renderPane();return;}startRun();return;}
+  if(t.id==='approve'){set('fis','running','Checking the budget');later(1600,()=>set('fis','done','Finished · 1m 31s'));render();return;}
+  if(t.id==='stop'||t.id==='back'){stopRun();tab='prev';render();return;}
+  if(t.id==='fit'){fit=!fit;layout();return;}
+  if(t.id==='theme'){const r=document.documentElement,dark=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches;r.dataset.theme=dark?'light':'dark';return;}
+});
+document.addEventListener('change',e=>{
+  const r=e.target.dataset.read;if(!r)return;
+  const s=by(sel);s.reads=e.target.checked?[...s.reads,r]:s.reads.filter(x=>x!==r);
+  render();const box=document.querySelector('[data-read="'+r+'"]');if(box)box.focus();
+});
+document.addEventListener('input',e=>{if(e.target.id==='nm'){by(sel).name=e.target.value;renderCanvas();}});
+const sc=$('scroller');let pan=null;
+sc.addEventListener('pointerdown',e=>{
+  if(e.button!==0||e.target.closest('button,input,textarea,select,.menu'))return;
+  pan={x:e.clientX,y:e.clientY,l:sc.scrollLeft,t:sc.scrollTop};sc.setPointerCapture(e.pointerId);sc.classList.add('drag');
+});
+sc.addEventListener('pointermove',e=>{if(!pan)return;sc.scrollLeft=pan.l-(e.clientX-pan.x);sc.scrollTop=pan.t-(e.clientY-pan.y);});
+['pointerup','pointercancel'].forEach(n=>sc.addEventListener(n,()=>{pan=null;sc.classList.remove('drag');}));
+window.addEventListener('resize',layout);
+render();setTimeout(layout,200);
+</script>
+</body>
+</html>

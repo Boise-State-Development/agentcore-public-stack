@@ -1,6 +1,6 @@
 # Workflow runs: several steps under one approval
 
-**Status:** Accepted for step 1, 2026-11-20 (§19 is its delivery plan). Proposed 2026-11-19. PR-W.1 (the run row, its routes and the flag) built 2026-11-20. It asks one design question of the handoffs work: should the
+**Status:** Accepted for step 1, 2026-11-20 (§19 is its delivery plan). Proposed 2026-11-19. PR-W.1 (the run row, its routes and the flag) built 2026-11-20. PR-W.4b (the run in the thread and its result) built 2026-11-20. It asks one design question of the handoffs work: should the
 user's review sit on each hop, as it does today, or on the whole piece of delegated work? Everything else follows
 from the answer.
 **Author:** Phil Merrell (drafted with Claude)
@@ -292,6 +292,11 @@ names a field set in the same skill.
 The editor is the field-set editor's shape: step cards in authored order, moved with Move up and Move down, with a
 markdown mode. A canvas is not needed until workflows branch, and `after` gives sequences without one.
 
+*2026-11-20:* `docs/specs/workflow-designer.md` proposes a designer in place of this editor: a canvas that arranges
+itself, with each step's stage derived from what it reads (so `after` becomes "reads"), beside a preview that is
+the approval sheet. The file decision above stands. It also found that a turn cannot run a chosen Agent version
+today, and proposes recording the version and saying when it has changed, with pinning as a later PR (§10 there).
+
 The worked example, as a workflow:
 
 | Step | Worker | Reads |
@@ -352,7 +357,7 @@ Each step is useful alone and stops if the one before shows no demand.
    concurrency queue in the SPA, one brief per run, the result as one delivery with parts, the run's row in the
    source. No authoring and no new step kinds. Enough to try with the worked example's four reviewers.
 2. **Saved workflows, and prompt and checklist steps.** The reference file and its parser, the editor, `after`,
-   the merge instruction and the merge that starts by itself.
+   the merge instruction and the merge that starts by itself. `workflow-designer.md` §14 proposes its PR plan.
 3. **Runs on the server.** The executor, the `handoff_context` passthrough, the two verify-firsts in §6.2.
 4. **Runs the model proposes**, by extending `suggest_handoff` from one step to several.
 
@@ -395,6 +400,8 @@ Counts only, on the rows and in EMF, as §4.7 of the handoffs spec does:
    *Answered for step 1, 2026-11-20:* code says `WFRUN#`, `/workflow-runs` and `WORKFLOW_RUNS_ENABLED`; what the
    user sees avoids "workflow" ("Hand off to 4 Agents", "Results from 4 Agents", "Stop run"). The user-facing name
    is decided in step 2, when saved workflows exist.
+   *Answered for step 2, 2026-11-20:* "Workflows", for the saved thing and its page (`workflow-designer.md` §8.1).
+   A run started by mentions keeps step 1's copy.
 2. **A hard cost ceiling per run.** Between steps it is simple: a queued step does not start once the run has
    spent past the ceiling. Inside a running step there is no per-turn spend cap to call on today. Is the estimate
    plus the user's quota enough for the first version?
@@ -414,7 +421,8 @@ Counts only, on the rows and in EMF, as §4.7 of the handoffs spec does:
 
 ## 18. Non-goals
 
-- A canvas or graph editor.
+- A free-form canvas or graph editor. (`workflow-designer.md` proposes a canvas that arranges itself, where
+  nothing is placed or drawn by hand.)
 - Steps that add steps, or runs that start runs without the user.
 - Agents messaging each other outside a run.
 - Sharing a run, or its steps' conversations, with another user.
@@ -545,7 +553,8 @@ changes a tool spec or the system prompt.
       started reads `running` while the run is approved (it is queued in the tab) and `stopped` once the run is
       stopped; a dismissed, abandoned or missing row reads `stopped`. A removed step has no part.
     - **"Bring back *k* results now"** fixes the run's one result at that moment. A step that finishes later is not
-      added: it comes back the ordinary way, with its own Bring back result (it is a handoff like any other).
+      added: it comes back from its own conversation with Send to *{title}* (§8). The run's steps are not drawn
+      as handoff rows, so there is no Bring back result under them.
     - **What the model reads.** One block per part (`render_delivery_parts`), joined like separate cards, each 0a's
       wrapper. Not planned: the block names the **Agent** and then the step conversation's title (`Generalist ·
       Review of the proposal`, `delivery_part_label`), because every step starts from the same card and usually the
@@ -679,6 +688,76 @@ changes a tool spec or the system prompt.
   - The grouped card on the composer, Preview and Edit per part, attached by default; the sent bubble rebuilds it
     from its own text.
   - The bell gets one entry for the run, plus one per step that needs input.
+  - *Built (PR-W.4b).* Where it differs from the plan above, or settles what it left open:
+    - **The row** is `WorkflowRunRowComponent`, placed by the message list after the message at the run's
+      `sourceMessageIndex` (or at the tail when that message isn't on the loaded page), for every run that is
+      `approved` or `stopped`, live from approve and replayed from `workflowRuns`. Those runs' steps are taken
+      out of the handoff rows, so a step is never drawn twice; a step of a run the SPA doesn't know (the flag
+      off) stays an ordinary row. Each step's state comes from one pure function (`workflow-run-progress.ts`):
+      this tab's live handoff row first, then the run's replayed copy, with a step streaming in this tab
+      `running` whatever its row says. The status line is the handoff row's own, moved into a shared
+      `handoffStatusLine` so the two cannot word a state differently.
+    - **States the plan didn't name.** A step a reload left unstarted reads **"Not started"** (pause mark, no
+      link) and the row offers **Start *k* Agents** under the card; a step queued in this tab reads "Queued". A
+      stopped run's never-started step reads "Didn't start". The header's title is "*source title* · *N*
+      Agents", or "Handed off to *N* Agents" before the conversation has a title.
+    - **The reviewed card is on the run row.** `…/approve` takes `card: {text?, removed}`. The text is capped as
+      the Runtime caps a card (`cap_context_text`, ~16k characters) and the field is bounded at 200k; a removed
+      or blank card is kept as `{removed: true}`, exactly as a blank `handoff_context.text` reads. It comes back
+      on `GET …/{runId}`, the approve response and the `workflowRuns` replay, so Start resumes the steps left in
+      **any** browser from the row's own card and files. The `aps.workflowRun.<runId>` local-storage envelope is
+      gone, with **no fallback read**: the flag is on only in dev and the envelope lived a day, so the only runs
+      it could have helped are dev runs approved in the hour before the deploy. A run approved before this PR
+      offers no Start and says "These weren't started. Mention the Agents again to start them."
+    - ⚠️ **What a resumed step does not carry.** The mention message's own attachments, invoked skills and
+      folders (`fileUploadIds`, `invokedSkillIds`, `folders`) ride only the steps the approving tab started; the
+      row keeps the approved shared files and the card, not those. `filesUnticked` is sent as 0 on a resumed
+      step, so `HandoffFilesUnticked` undercounts there. Both are small; storing them is a follow-up if a run's
+      steps are ever routinely resumed.
+    - **Stop run** posts `…/stop`, closes this tab's queue (no pending step starts) and calls each step's own
+      cooperative cancel (`ChatHttpService.cancelChatRequest`) for every step streaming in this tab, exactly as
+      Stop in that conversation would. A step close to its end can still finish (its row goes to `done`, not
+      `stopped`), so Stop run promises no running step stops. A step running in another tab stops only from there.
+      No confirmation. A 409 (never approved) is ignored; any other failure says the steps here were stopped and
+      to try again.
+    - **When the result comes back.** A run started or resumed in this tab is watched (`WorkflowRunResultService`)
+      until every kept step is `done` or `stopped`. Then it toasts "*k* Agents finished · Open", where *k* is the
+      steps that **finished** (a run with a failed step does not claim all *N*), Open scrolls to the run's row (the
+      single row's focus request, pointed at the first step), and it collects quietly. Not after Stop run: a run
+      the user stopped is collected only from its row's Bring back results. A run nobody watched here (a reload)
+      is never collected on its own. A step's own "finished" and "stopped" toasts are dropped for a run's steps;
+      "needs your input" stays.
+    - **Bring back.** "Bring back *k* results now" while some step is still queued, running or waiting on the
+      user; "Bring back results" once all have settled; both disappear once the run has its `resultDeliveryId`,
+      and "Added to your next message" shows while the card waits on the composer. A collect answering
+      `created: false` puts the card back only while it is still `pending`; an `attached` one says "These results
+      were already sent". The row offers no per-step Bring back for a step that finishes after the result was
+      fixed: it comes back from its own conversation with Send to *{title}* (§8).
+    - **The card** is `DeliveryCardsComponent` with a parts branch: one card in one of the three per-send
+      slots, a `divide-y` row per part, Preview (the same `pre`) and Edit for a finished part, and a muted row with
+      no actions for the others. `DeliveryStateService.editPart` keeps edits per step (an edit back to the part's
+      own text is no edit, and edits survive a reload of the list); the send carries
+      `deliveries: [{deliveryId, parts: [{stepId, text}]}]` for edited parts only, and the live bubble is
+      `renderDeliveryParts` over the edited parts, so it reads as the reloaded one does.
+    - **The sent bubble** is rebuilt from the message's own text: `extractDeliveryBlocks`, then
+      `groupRunResults`. The stored text carries no run marker and nothing may be added to it here, so a run's
+      blocks are recognised by what `renderDeliveryParts` writes: consecutive blocks each labelled for the next
+      of one run's step Agents, in step order (an emptied part gave no block, so steps can be skipped, never
+      reordered). The Agents come from the conversation's `workflowRuns`, so a run off the replayed page shows as
+      separate cards, as before. A lone block is grouped only for a run of one. Pinned by the fixture's parts
+      case (`handoff-prompt.spec.ts`).
+    - **The bell (gap, follow-up).** One bell entry for the run needs a write that neither side makes today:
+      the per-step `handoff_*` entries are written by inference-api after each step's status write
+      (`apis/shared/handoff/notify.py`), and a run entry would be a Runtime change or a new app-api write at
+      collect. Neither is in this PR; each step keeps its own entries, unchanged. Follow-up: a
+      `workflow_run_done` entry, written once when the last step settles, deduped by run id.
+    - **Contrast, measured** in the running SPA, every text node of the row, the card and the bubble against
+      its composited background: lowest **4.84:1 light** and **5.13:1 dark**. The bar's fills (non-text, 3:1):
+      light done 3.22, running 10.6, needs input 3.19, stopped 4.84; dark 7.98, 3.99, 8.27, 3.67. Two changes
+      from §20.2's list made that true: the queued segment is a `gray-500` **outline**, not a `gray-200` fill (no
+      pale gray clears 3:1 on white), and stopped is `gray-500` (`gray-400` measured 2.6:1 on white); dark running
+      is `primary-300` (`primary-400` measured 2.59:1). The relayed prompt inside the row is
+      `HandoffRelayComponent` unchanged, measured with it as the single handoff row measures it.
 - **PR-W.4c — Step conversations nested in the sidebar** (open question 3). Backend and SPA, after W.1. The design
   is §20.4.
   - The step's `spawnedFrom` gains `runId`, written by the background `SET` after acceptance that already writes
@@ -765,29 +844,38 @@ it is the link.
 - **Header:** the title (`text-sm/6 font-medium`). On the right, a count of what needs the user ("1 needs you", in
   `text-state-warning-700 dark:text-state-warning-400`), or "2 of 4 finished" in gray once nothing does.
 - **The progress bar** has one segment per step, `aria-hidden`, because the header and each line already say
-  everything it shows in text. Fills, all non-text (3:1): done `bg-state-success-600`, running `bg-primary-500`,
-  needs input `bg-state-warning-600`, stopped `bg-gray-400`, queued `bg-gray-200`, each with a dark pair. W.4b
-  measures them in both themes, as PR-0.4a measured its labels.
+  everything it shows in text. Fills, all non-text (3:1), as built and measured (§19 PR-W.4b): done
+  `bg-state-success-600` / dark `-500`, running `bg-primary-500` / dark `primary-300`, needs input
+  `bg-state-warning-600` / dark `-500`, stopped `bg-gray-500`, and queued or not started a `ring-gray-500`
+  outline (a `bg-gray-200` fill is about 1.2:1 on white).
 - **A step line** is the handoff row's link in small: the same status marks (the pulsing dot with
   `motion-reduce:animate-none`, `heroExclamationCircle`, `heroCheckCircle`, `heroMinusCircle`), the Agent's name,
   the same status line from the same sources, and a chevron. Each line is one tab stop, and its accessible name is
-  the row's. A queued step reads "Queued" and links nowhere until it starts.
+  the row's. A queued step reads "Queued" and links nowhere until it starts. A step a reload left unstarted reads
+  "Not started", and the row offers "Start *k* Agents" under the card; a stopped run's never-started step reads
+  "Didn't start".
 - **The relayed prompt** is `<app-handoff-relay>` under its own line, open, never behind a click.
-- **Below the card,** as siblings and never inside a link, in the row's `text-xs/5` link-button style: "Bring
-  back *N* results now" while some are still running, "Bring back results" once all have settled, and "Stop run".
-  Stop run asks no confirmation: the steps stopped so far keep their results, and each has Continue.
+- **Below the card,** as siblings and never inside a link, in the row's `text-xs/5` link-button style: "Start
+  *k* Agents" (steps a reload left unstarted), "Bring back *N* results now" while some are still running or
+  waiting on the user, "Bring back results" once all have settled, and "Stop run" until they have. Once the
+  result is made: "Added to your next message" while it waits on the composer. Stop run asks no confirmation: the
+  steps stopped so far keep their results, and each has Continue. A step close to its end can still finish.
 - **Not a live region,** as the row isn't. The toasts announce changes.
 
 ### 20.3 The result card (W.4b)
 
 The look of `DeliveryCardsComponent`: the same container and footer, with one row per part.
 
-- **Header:** "Results from 4 Agents" and, in meta, "3 of 4 finished".
-- **Parts:** a row each, with the Agent's name and that card's Preview (the same `pre`) and Edit. A part that
-  stopped or still waits is a muted row with no actions: "Fiscal outsider · Stopped, not included".
-- **Footer:** "Goes with your next message" and Remove, as today. The card takes one of the three per-send slots.
+- **Header:** "Results from 4 Agents" and, in meta, "3 of 4 finished". Remove is the header's ×, as on a single
+  card ("Remove the results from 4 Agents").
+- **Parts:** a row each, with the Agent's name, its conversation's title in meta, and that card's Preview (the
+  same `pre`) and Edit. A part that stopped or still waits is a muted row with no actions: "Fiscal outsider ·
+  Stopped, not included", "Emotional outsider · Still waiting, not included" (a part still running reads the
+  same).
+- **Footer:** "Goes with your next message", as today. The card takes one of the three per-send slots.
 - **The sent bubble** shows "From 4 Agents" with Show results, rebuilt from the message's own text like the
-  single card (`extractDeliveryBlocks`).
+  single card (`extractDeliveryBlocks`, then `groupRunResults`, §19 PR-W.4b). Shown, it lists each part:
+  "Agent · title" over its text, or the muted "not included" line.
 
 ### 20.4 The sidebar (W.4c)
 
@@ -810,7 +898,8 @@ The look of `DeliveryCardsComponent`: the same container and footer, with one ro
 | Queued line | "Queued" |
 | Actions | "Bring back *k* results now", "Bring back results", "Stop run" |
 | Result card | "Results from *N* Agents", "*k* of *N* finished", "Stopped, not included", "Still waiting, not included" |
-| Toast when all settle | "*N* Agents finished · Open" (scrolls to the row) |
+| Toast when all settle | "*k* Agents finished · Open" (scrolls to the row; *k* is the steps that finished) |
+| Not started (after a reload) | "Not started", "Start *k* Agents"; a stopped run's: "Didn't start" |
 | Sidebar | "*N* Agents · *k* of *N* finished" |
 
 No user-facing "workflow" or "run" in a noun phrase except "Stop run" (§17, question 1). Sentence case, no

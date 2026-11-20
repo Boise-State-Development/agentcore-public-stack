@@ -228,6 +228,10 @@ Drag-and-drop is the authoring UI for this record, not the record itself. Follow
 consumption first; the Designer follows"), the first version can be a form, "Add an agent as a tool", long before
 a canvas exists.
 
+*2026-11-20:* the first canvas proposed is for the cross-conversation layer, not this record:
+`docs/specs/workflow-designer.md`. Its graph arranges itself from what each step reads. If this record gets a
+canvas, it should reuse that component and that rule.
+
 ### 6.3 Engine: the runner, plus the rules a composition must keep
 
 - **Pin versions.** A composed agent references published version snapshots of its nodes, never live drafts. An

@@ -271,3 +271,80 @@ function restoreDefusedTags(text: string): string {
   }
   return out;
 }
+
+/** A run's step Agents, in step order: what tells a run result's blocks from separate cards. */
+export interface RunResultAgents {
+  runId: string;
+  agentNames: readonly string[];
+}
+
+/** One part of a run result read back for a sent bubble. */
+export interface RunResultPartBlock {
+  agentName: string;
+  /** `done` for an answer; else the status whose note the block holds (it was not included). */
+  status: DeliveryPartStatus;
+  block: DeliveryBlock;
+}
+
+/** What a sent bubble shows for its delivery blocks: separate cards, and any run result as one. */
+export type BubbleDelivery = { kind: 'card'; block: DeliveryBlock } | { kind: 'run'; runId: string; parts: RunResultPartBlock[] };
+
+/**
+ * Group a message's delivery blocks (`extractDeliveryBlocks`) for its bubble (workflow-runs spec
+ * §20.3): a run result's blocks, which the model reads one per part, show as one "From *N* Agents".
+ *
+ * The stored text carries no run marker, so a run's blocks are recognised by what
+ * `renderDeliveryParts` writes: consecutive blocks each labelled for the next of one run's step
+ * Agents in step order (`deliveryPartLabel`: the Agent, or "Agent · title"). A finished part the
+ * user emptied gave no block, so steps may be skipped, never reordered. A lone block is grouped
+ * only for a run of one, so an ordinary card from a conversation named like an Agent stays a card.
+ * Anything not matched is a card, as before.
+ */
+export function groupRunResults(blocks: readonly DeliveryBlock[], runs: readonly RunResultAgents[]): BubbleDelivery[] {
+  const out: BubbleDelivery[] = [];
+  let i = 0;
+  while (i < blocks.length) {
+    let best: { runId: string; parts: RunResultPartBlock[] } | null = null;
+    for (const run of runs) {
+      const parts = matchRun(blocks, i, run.agentNames);
+      const minimum = Math.min(2, run.agentNames.length);
+      if (parts.length >= minimum && parts.length > (best?.parts.length ?? 0)) best = { runId: run.runId, parts };
+    }
+    if (best) {
+      out.push({ kind: 'run', runId: best.runId, parts: best.parts });
+      i += best.parts.length;
+    } else {
+      out.push({ kind: 'card', block: blocks[i] });
+      i += 1;
+    }
+  }
+  return out;
+}
+
+function matchRun(blocks: readonly DeliveryBlock[], start: number, agentNames: readonly string[]): RunResultPartBlock[] {
+  const parts: RunResultPartBlock[] = [];
+  let step = 0;
+  for (let j = start; j < blocks.length && step < agentNames.length; j++) {
+    const label = blocks[j].fromTitle;
+    let found = -1;
+    for (let k = step; k < agentNames.length; k++) {
+      const agent = agentNames[k].trim();
+      if (agent && (label === agent || label.startsWith(`${agent} · `))) {
+        found = k;
+        break;
+      }
+    }
+    if (found < 0) break;
+    parts.push({ agentName: agentNames[found], status: partStatusOf(blocks[j]), block: blocks[j] });
+    step = found + 1;
+  }
+  return parts;
+}
+
+function partStatusOf(block: DeliveryBlock): DeliveryPartStatus {
+  if (block.artifacts.length || block.files.length) return 'done';
+  for (const [status, note] of Object.entries(DELIVERY_PART_STATUS_NOTES)) {
+    if (block.text === note) return status as DeliveryPartStatus;
+  }
+  return 'done';
+}

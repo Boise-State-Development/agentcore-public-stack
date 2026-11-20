@@ -16,8 +16,10 @@ import { ArtifactAvailabilityService } from '../../services/handoff/artifact-ava
 import { DeliveryStateService } from '../../services/handoff/delivery-state.service';
 import { DeliveryService } from '../../services/handoff/delivery.service';
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
-import { joinDeliveryBlocks, renderDeliveryBlock } from '../../services/handoff/handoff-prompt';
-import { DeliveryView } from '../../services/handoff/handoff.models';
+import { joinDeliveryBlocks, renderDeliveryBlock, renderDeliveryParts } from '../../services/handoff/handoff-prompt';
+import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
+import { WorkflowRunView } from '../../services/handoff/workflow-run.models';
+import { DeliveryPart, DeliveryView } from '../../services/handoff/handoff.models';
 import { Message } from '../../services/models/message.model';
 import { MessageActionsComponent } from '../message-list/components/message-actions.component';
 import { UserMessageComponent } from '../message-list/components/user-message.component';
@@ -37,6 +39,30 @@ function card(id: string, minute: number, overrides: Partial<DeliveryView> = {})
     createdAt: `2026-11-12T00:0${minute}:00Z`,
     ...overrides,
   };
+}
+
+function part(stepId: string, agentName: string, status: DeliveryPart['status'], text = ''): DeliveryPart {
+  return {
+    stepId,
+    agentName,
+    fromSessionId: status === 'done' ? `t-${stepId}` : '',
+    fromTitle: status === 'done' ? `Review by ${agentName}` : '',
+    status,
+    text,
+    artifacts: [],
+    files: [],
+  };
+}
+
+const RUN_PARTS = [
+  part('s1', 'Generalist', 'done', 'Strong aims; thin budget.'),
+  part('s2', 'Colleague', 'done', 'Section 4 needs a timeline.'),
+  part('s3', 'Emotional outsider', 'needs_input'),
+  part('s4', 'Fiscal outsider', 'stopped'),
+];
+
+function runResult(): DeliveryView {
+  return { ...card('r', 5, { text: '', fromTitle: 'Review by Generalist' }), runId: 'run1', parts: RUN_PARTS };
 }
 
 describe('delivery UI', () => {
@@ -164,6 +190,66 @@ describe('delivery UI', () => {
     it('renders nothing when no card is waiting', () => {
       expect(render().querySelector('section')).toBeNull();
     });
+
+    it('shows a run’s result as one card: a row per part, muted rows for parts with no result', () => {
+      TestBed.inject(DeliveryStateService).hydrate('src', [runResult()]);
+      const el = render();
+
+      const cards = el.querySelectorAll('section > div');
+      expect(cards).toHaveLength(1);
+      const t = text(cards[0] as HTMLElement);
+      expect(t).toContain('Results from 4 Agents');
+      expect(t).toContain('2 of 4 finished');
+      expect(t).toContain('Emotional outsider · Still waiting, not included');
+      expect(t).toContain('Fiscal outsider · Stopped, not included');
+      expect(t).toContain('Goes with your next message');
+      const items = Array.from(el.querySelectorAll('li'));
+      expect(items).toHaveLength(4);
+      // Only a finished part has Preview and Edit.
+      expect(items.map((li) => li.querySelectorAll('button').length)).toEqual([2, 2, 0, 0]);
+    });
+
+    it('Preview shows one part, Edit changes only that part, and the send carries the edited part alone', () => {
+      const state = TestBed.inject(DeliveryStateService);
+      state.hydrate('src', [runResult()]);
+      const fixture = TestBed.createComponent(DeliveryCardsComponent);
+      fixture.componentRef.setInput('sessionId', 'src');
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+
+      button(el, 'Preview Colleague’s result').click();
+      fixture.detectChanges();
+      expect(el.querySelector('[aria-label="Result from Colleague"]')?.textContent).toBe('Section 4 needs a timeline.');
+
+      button(el, 'Edit Generalist’s result').click();
+      fixture.detectChanges();
+      const editor = el.querySelector('textarea') as HTMLTextAreaElement;
+      editor.value = 'Thin budget.';
+      editor.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+      expect(state.cardsFor('src')[0].editedParts).toEqual({ s1: 'Thin budget.' });
+      expect(text(el)).toContain('Edited');
+
+      expect(state.takeForSend('src').attach).toEqual([{ deliveryId: 'r', parts: [{ stepId: 's1', text: 'Thin budget.' }] }]);
+    });
+
+    it('an edit put back to the part’s own text is no edit, and an unedited result sends no parts', () => {
+      const state = TestBed.inject(DeliveryStateService);
+      state.hydrate('src', [runResult()]);
+      state.editPart('src', 'r', 's1', 'changed');
+      state.editPart('src', 'r', 's1', RUN_PARTS[0].text);
+      state.editPart('src', 'r', 's4', 'a stopped part has nothing to edit');
+      expect(state.cardsFor('src')[0].editedParts).toBeUndefined();
+      expect(state.takeForSend('src').attach).toEqual([{ deliveryId: 'r' }]);
+    });
+
+    it('keeps a part’s edit when the list reloads', () => {
+      const state = TestBed.inject(DeliveryStateService);
+      state.hydrate('src', [runResult()]);
+      state.editPart('src', 'r', 's2', 'kept');
+      state.hydrate('src', [runResult()]);
+      expect(state.cardsFor('src')[0].editedParts).toEqual({ s2: 'kept' });
+    });
   });
 
   describe('the sent bubble', () => {
@@ -225,6 +311,46 @@ describe('delivery UI', () => {
       const chip = el.querySelector('a[aria-label="Download rubric.docx, 2 KB"]');
       expect(chip).not.toBeNull();
       expect(chip?.getAttribute('href')).toContain('/files/f1_ref_abc/download');
+    });
+
+    function runOf(names: string[]): WorkflowRunView {
+      return {
+        runId: 'run1',
+        sessionId: 'src',
+        status: 'approved',
+        request: 'r',
+        steps: names.map((agentName, i) => ({ stepId: `s${i + 1}`, handoffId: `h${i + 1}`, agentId: `a${i + 1}`, agentName, request: 'r', removed: false })),
+        fileIds: [],
+        limits: { maxSteps: 8, concurrency: 4 },
+        sourceMessageIndex: 1,
+        createdAt: '',
+        updatedAt: '',
+      };
+    }
+
+    it('shows a run’s result as one “From N Agents”, rebuilt from the message’s own text', () => {
+      TestBed.inject(WorkflowRunStateService).hydrate('src', [runOf(RUN_PARTS.map((p) => p.agentName))]);
+      const blocks = renderDeliveryParts(RUN_PARTS);
+      const fixture = TestBed.createComponent(UserMessageComponent);
+      fixture.componentRef.setInput('message', {
+        id: 'msg-src-8',
+        role: 'user',
+        content: [{ type: 'text', text: joinDeliveryBlocks([blocks, renderDeliveryBlock('Blue.', 'Colour')], 'Merge these.') }],
+        metadata: { displayText: 'Merge these.' },
+      } as Message);
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+
+      expect(text(el)).toContain('From 4 Agents');
+      expect(text(el)).toContain('From Colour');
+      expect(text(el)).not.toContain('From Generalist');
+      button(el, 'Show results').click();
+      fixture.detectChanges();
+      const list = el.querySelector('[aria-label="Results from 4 Agents"]') as HTMLElement;
+      expect(text(list)).toContain('Generalist · Review by Generalist');
+      expect(el.querySelector('[aria-label="Result from Colleague"]')?.textContent).toBe('Section 4 needs a timeline.');
+      expect(text(list)).toContain('Emotional outsider · Still waiting, not included');
+      expect(text(list)).toContain('Fiscal outsider · Stopped, not included');
     });
 
     it('never reads a card out of a message the user typed', () => {

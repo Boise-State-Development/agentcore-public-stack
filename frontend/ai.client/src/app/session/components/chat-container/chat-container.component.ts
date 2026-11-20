@@ -41,7 +41,6 @@ import { ExpiredSessionNoticeComponent } from '../expired-session-notice/expired
 import { HandoffReviewSheetComponent } from '../handoff/handoff-review-sheet.component';
 import { DeliveryCardsComponent } from '../handoff/delivery-cards.component';
 import { SendBackSheetComponent } from '../handoff/send-back-sheet.component';
-import { WorkflowRunResumeComponent } from '../handoff/workflow-run-resume.component';
 import { WorkflowRunSheetComponent } from '../handoff/workflow-run-sheet.component';
 
 /**
@@ -92,7 +91,6 @@ export interface ChatContainerConfig {
     DeliveryCardsComponent,
     SendBackSheetComponent,
     WorkflowRunSheetComponent,
-    WorkflowRunResumeComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './chat-container.component.html',
