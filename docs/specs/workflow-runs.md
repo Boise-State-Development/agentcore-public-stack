@@ -487,7 +487,7 @@ changes a tool spec or the system prompt.
     and on each step row, so acceptance compares each step's card against it unchanged.
   - The final message is the only thing that differs from a single-handoff brief, so the cache reading is the
     same: a route test sends one body as a turn and as a run brief and asserts identical `get_agent` arguments.
-- **PR-W.4a — Start a run.** SPA.
+- **PR-W.4a — Start a run.** SPA. The design is §20.1.
   - Several `@`-mentions in one message, up to 8, each a chip in the composer.
   - The run sheet (§4), one brief streamed into one shared card, a request per step that defaults to the shared
     one, the files as checkboxes.
@@ -496,7 +496,7 @@ changes a tool spec or the system prompt.
     as "Not started" with one Start button.
   - ⚠️ **Verify first:** five streams at once on one origin (the source and four steps) under HTTP/2 end to end.
     On HTTP/1.1 the browser's six-connection limit would stall the rest of the page.
-- **PR-W.4b — The run in the source, and its result.** SPA.
+- **PR-W.4b — The run in the source, and its result.** SPA. The design is §20.2 and §20.3.
   - The run's row in the source thread: **one card with a line per step** (decided 2026-11-20, over a single
     collapsed line). The header names the run and counts what needs the user; a segmented bar shows each step's
     state; each line is the step's handoff row in small (status mark, Agent, live status line, a link to its
@@ -505,7 +505,8 @@ changes a tool spec or the system prompt.
   - The grouped card on the composer, Preview and Edit per part, attached by default; the sent bubble rebuilds it
     from its own text.
   - The bell gets one entry for the run, plus one per step that needs input.
-- **PR-W.4c — Step conversations nested in the sidebar** (open question 3). Backend and SPA, after W.1.
+- **PR-W.4c — Step conversations nested in the sidebar** (open question 3). Backend and SPA, after W.1. The design
+  is §20.4.
   - The step's `spawnedFrom` gains `runId`, written by the background `SET` after acceptance that already writes
     it (`HandoffTurn`), so nothing moves onto the first-token path.
   - ⚠️ **Verify first:** whether the session list already returns `spawnedFrom`; if not, add it, additive.
@@ -518,3 +519,125 @@ changes a tool spec or the system prompt.
 
 Settled with the developer on 2026-11-20: the run's row (W.4b), the sidebar (W.4c), the wording and the cost
 rule (§17, questions 0 to 3).
+
+## 20. What the user sees, step 1
+
+*Added 2026-11-20, from a mockup the developer reviewed and liked.* The mockup was drawn outside the SPA, so this
+section is the source, not the picture. **Every surface is an existing component's look, widened.** A run should
+read as "a handoff to several Agents", not as a new feature with a new style. Tokens are
+`.claude/skills/tailwind-ui/references/app-conventions.md`'s: `rounded-2xl`, `text-sm/6` body and `text-xs/5`
+meta, `primary-accessible` for the one solid button and for brand text, `state-*` for status, a `dark:` pair on
+every class. These are dense surfaces inside the thread, so the house style's glass, blobs and grid stay off them.
+Dense lists are rows divided by `divide-y`, never cards inside a card.
+
+### 20.1 The approval sheet (W.4a)
+
+The look of `HandoffReviewSheetComponent`, as a second component or a mode of it, whichever keeps the
+single-Agent sheet's code unchanged.
+
+```
+┌ Hand off to 4 Agents ──────────────────────────────────────────── × ┐
+│ review this proposal against the solicitation              Edit     │
+│ ─────────────────────────────────────────────────────────────────── │
+│ Generalist            Sonnet 5.5                     Edit   ⊖       │
+│ Colleague             Sonnet 5.5                     Edit   ⊖       │
+│ Emotional outsider    Haiku 5.5                      Edit   ⊖       │
+│ Fiscal outsider       Haiku 5.5                      Edit   ⊖       │
+│ ─────────────────────────────────────────────────────────────────── │
+│ ▸ One brief for all 4 · ~2k tokens      Preview · Edit · Remove     │
+│ ☑ proposal.pdf · 41 pages                                           │
+│ About $0.90 to start, before any follow-up (estimate)               │
+│                                        Cancel   [ Start 4 Agents ]  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+- **Container:** the sheet's own classes (`rounded-2xl border border-gray-200 bg-white p-4 shadow-sm`,
+  `dark:border-gray-700 dark:bg-gray-900`), `role="region"`, `aria-label="Hand off to 4 Agents"`. Esc cancels, as
+  today.
+- **The shared request** on top, editable as today. It is every step's request until a step's own Edit is used,
+  which opens an inline textarea under that step's row and marks it "Own request".
+- **The steps** are rows: the Agent's icon and name (`text-sm/6 font-medium`), its model as meta, Edit, and
+  Remove as an icon button labelled "Remove *{Agent}*". Removing the second-to-last step leaves a run of one,
+  which still starts.
+- **The card, the files and Preview full prompt** are the single sheet's controls, unchanged. Preview asks which
+  step's prompt to show, because the requests may differ.
+- **The estimate** is a `text-xs/5 text-gray-600 dark:text-gray-400` line that says "estimate" and "before any
+  follow-up". It updates as files are ticked.
+- **One primary button**, "Start *N* Agents" (`bg-primary-accessible`), disabled while the brief writes, as Send
+  is today. Cancel is the ghost button.
+- **The composer:** each mentioned Agent is the existing mention chip, repeated. A ninth mention is refused with a
+  helper line: "Up to 8 Agents in one handoff".
+
+### 20.2 The run's row in the source (W.4b)
+
+The look of `HandoffRowComponent`, with one difference: the card is a `<section>`, not a link. Each step line inside
+it is the link.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ Proposal review · 4 Agents                           1 needs you     │
+│ ▬▬▬▬▬▬▬▬▬ ▬▬▬▬▬▬▬▬▬ ▬▬▬▬▬▬▬▬▬ ▬▬▬▬▬▬▬▬▬                               │
+│ ✓  Generalist · Finished                                          ›  │
+│ ✓  Colleague · Finished                                           ›  │
+│ ●  Emotional outsider · Reading section 4                         ›  │
+│ !  Fiscal outsider · Waiting for your approval to run budget_check ›  │
+│      [relayed prompt: Approve / Deny]                                │
+└──────────────────────────────────────────────────────────────────────┘
+   Bring back 2 results now · Stop run
+```
+
+- **Container:** the row's card classes (`rounded-2xl border border-gray-200 bg-white px-4 py-3`, dark pair) on a
+  `<section aria-labelledby>` whose heading is the source title and the count.
+- **Header:** the title (`text-sm/6 font-medium`). On the right, a count of what needs the user ("1 needs you", in
+  `text-state-warning-700 dark:text-state-warning-400`), or "2 of 4 finished" in gray once nothing does.
+- **The progress bar** has one segment per step, `aria-hidden`, because the header and each line already say
+  everything it shows in text. Fills, all non-text (3:1): done `bg-state-success-600`, running `bg-primary-500`,
+  needs input `bg-state-warning-600`, stopped `bg-gray-400`, queued `bg-gray-200`, each with a dark pair. W.4b
+  measures them in both themes, as PR-0.4a measured its labels.
+- **A step line** is the handoff row's link in small: the same status marks (the pulsing dot with
+  `motion-reduce:animate-none`, `heroExclamationCircle`, `heroCheckCircle`, `heroMinusCircle`), the Agent's name,
+  the same status line from the same sources, and a chevron. Each line is one tab stop, and its accessible name is
+  the row's. A queued step reads "Queued" and links nowhere until it starts.
+- **The relayed prompt** is `<app-handoff-relay>` under its own line, open, never behind a click.
+- **Below the card,** as siblings and never inside a link, in the row's `text-xs/5` link-button style: "Bring
+  back *N* results now" while some are still running, "Bring back results" once all have settled, and "Stop run".
+  Stop run asks no confirmation: the steps stopped so far keep their results, and each has Continue.
+- **Not a live region,** as the row isn't. The toasts announce changes.
+
+### 20.3 The result card (W.4b)
+
+The look of `DeliveryCardsComponent`: the same container and footer, with one row per part.
+
+- **Header:** "Results from 4 Agents" and, in meta, "3 of 4 finished".
+- **Parts:** a row each, with the Agent's name and that card's Preview (the same `pre`) and Edit. A part that
+  stopped or still waits is a muted row with no actions: "Fiscal outsider · Stopped, not included".
+- **Footer:** "Goes with your next message" and Remove, as today. The card takes one of the three per-send slots.
+- **The sent bubble** shows "From 4 Agents" with Show results, rebuilt from the message's own text like the
+  single card (`extractDeliveryBlocks`).
+
+### 20.4 The sidebar (W.4c)
+
+- Under the source's session row, one line in `text-xs/5 text-gray-600 dark:text-gray-400`, indented to the
+  title: "4 Agents · 2 of 4 finished". It is a disclosure button (`aria-expanded`) and is collapsed by default.
+- Expanded, the step conversations are the ordinary `sessionRow` template, indented one step, with their own
+  streaming, awaiting-input and unread indicators unchanged.
+- Collapsed, the line shows the strongest state among its steps: the awaiting-input mark if any step waits,
+  else the streaming dot if any runs. A waiting step is never hidden by the fold.
+- Pinning, dragging and the date buckets treat a step conversation as today. It nests only when its source is in
+  the same bucket on the loaded page; otherwise it is listed alone, as now.
+
+### 20.5 Copy
+
+| Where | Text |
+|---|---|
+| Sheet title, button | "Hand off to *N* Agents", "Start *N* Agents" |
+| Toast on start | "Handed off to *N* Agents" |
+| Row count | "*k* needs you", "*k* of *N* finished" |
+| Queued line | "Queued" |
+| Actions | "Bring back *k* results now", "Bring back results", "Stop run" |
+| Result card | "Results from *N* Agents", "*k* of *N* finished", "Stopped, not included", "Still waiting, not included" |
+| Toast when all settle | "*N* Agents finished · Open" (scrolls to the row) |
+| Sidebar | "*N* Agents · *k* of *N* finished" |
+
+No user-facing "workflow" or "run" in a noun phrase except "Stop run" (§17, question 1). Sentence case, no
+exclamation marks, no "successfully".
