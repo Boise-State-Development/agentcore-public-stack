@@ -5,6 +5,108 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 ## Open
 <!-- Newest at top. -->
 
+### [2026-11-20] Lift the 365-day Memory expiry clamp to AgentCore's new 10-year limit, then re-scope the 90-day-cliff chores
+- **Source**: research/2026-11-20.md ▸ Top 5 #1; https://aws.amazon.com/about-aws/whats-new/2026/11/amazon-bedrock-agentcore-memory-10-year-retention/
+- **Surface**: infrastructure (`config.ts:1374-1375` `AGENTCORE_MEMORY_EVENT_EXPIRY_MAX_DAYS`, `:2543`, `:3011`; `memory-construct.ts:82`) + ops (the [2026-10-07] archive-backfill and cliff-prune chores)
+- **Effort × Impact**: M × H
+- **Subtracts**: yes: the clamp, and the class of "Memory forgot what the archive kept" incidents for events written after the deploy; possibly the daily pruner
+- **Unlocks**:
+  - one retention number across Memory, the conversation archive and session rows, chosen per deployment
+- **Notes**: the announcement names no field, so confirm the new maximum in the `AWS::BedrockAgentCore::Memory` schema first. Expiry is read when each event is written, so existing events keep their old expiry and the archive backfill still matters for them. Check storage cost before raising prod.
+- **Status**: open
+
+### [2026-11-20] Re-measure the V2 Runtime environment limit on dev (release notes say 4 KB) and update the guard
+- **Source**: research/2026-11-20.md ▸ Top 5 #2; https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/release-notes.html (October entry)
+- **Surface**: infrastructure (`runtime-environment-payload-guard.ts:33`, `RUNTIME_ENV_PAYLOAD_LIMIT_V2_BYTES = 2560`, "verified 2026-10-09"), CLAUDE.md Key Conventions, `docs/specs/agentcore-runtime-v2.md` §7
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: about 1.5 KB of design pressure on every new Runtime flag. The derived-names manifest and the "written only while on" rule for in-development flags stay.
+- **Notes**: one `UpdateAgentRuntime` on a throwaway V2 runtime with a ~3.5 KB environment settles it. The 2,560 figure came from AWS's own error message on 10-09, so the change may have landed after that.
+- **Status**: open
+
+### [2026-11-20] Move the hosted FastMCP servers to 4.2.x, and drop the tolerant multi-select branch we'd otherwise write
+- **Source**: research/2026-11-20.md ▸ Top 5 #3; https://github.com/PrefectHQ/fastmcp/releases/tag/v4.2.0 (#6361), /v4.2.1 (security), /v4.2.3
+- **Surface**: external MCP server repos; in this repo, a note in `docs/specs/mcp-elicitation.md` beside `apis/shared/mcp_elicitation/forms.py`
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: a normaliser branch never written; closes the [2026-11-13] FastMCP ≤4.1.x risk
+- **Unlocks**:
+  - servers publishing skills next to their tools (`skills/list`, digest-checked `read_skill`)
+- **Notes**: 4.2 needs Python ≥ 3.11. Diff an OpenAPI-built server's error responses (4.2.3 turns a missing path argument from a 500 into a validation error).
+- **Status**: open
+
+### [2026-11-20] Test that an approval dies when a workflow-run step is edited after review
+- **Source**: research/2026-11-20.md ▸ Top 5 #4; https://github.com/assistant-ui/assistant-ui/pull/10710; Pydantic AI `DeferredToolRequests.validated_args` (v2.71.0)
+- **Surface**: backend (`app_api/handoffs/workflow_runs.py`, `apis/shared/handoff/runs.py`) + SPA (`handoff-review-sheet.component.ts`)
+- **Effort × Impact**: L × M
+- **Subtracts**: no: addition, justified because workflow runs is the first surface where a user edits a proposal before approving it (`workflow-runs.md:367`, `:593`), and W.4b/W.4c are still open
+- **Notes**: propose → approve → edit a step → accept with the original approval must be refused and write nothing. Add the mirror SPA spec: an edit clears the approved state.
+- **Status**: open
+
+### [2026-11-20] Design note: cache-stable tool search, modelled on Pydantic AI's `ToolBridge`
+- **Source**: research/2026-11-20.md ▸ Top 5 #5; https://github.com/pydantic/pydantic-ai/releases/tag/v2.71.0
+- **Surface**: docs (`docs/specs/tool-search-token-bloat-strategy.md`), later backend tool registration
+- **Effort × Impact**: M × M–H
+- **Subtracts**: yes, if adopted: a per-user `toolConfig` that grows with every connected MCP server, and the prefix rewrite whenever a connection changes
+- **Unlocks**:
+  - dozens of connectors per user without paying for every schema on every call
+- **Notes**: cover what stays constant in `toolConfig`, where discovered schemas land (history, append-only), how RBAC filters `tool_search`, and how `readOnlyHint` survives for concurrency. Size the prize with `scripts/measure_tool_spec_tokens.py` on a heavy-MCP user.
+- **Status**: open
+
+### [2026-11-20] Spec sync: agent-handoffs-and-consults.md §2 phase table, row 0c (PR-0.5 SPA built)
+- **Source**: research/2026-11-20.md ▸ Spec sync row 1; `dbd59f633`, `b498058e6` (#2180)
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "In progress, opt-in: PR-0.5 backend built (§11)" → "Built, opt-in (`HANDOFF_SUGGESTIONS_ENABLED` + the `suggest_handoff` catalog row): PR-0.5 backend and SPA (§11); dev validation not yet recorded". Last week's S2 (rows 0a/0b) is fixed in `919ce5009`; close it.
+- **Status**: open
+
+### [2026-11-20] Spec sync: agent-handoffs-and-consults.md §4.4 (no SPA note for PR-0.5)
+- **Source**: research/2026-11-20.md ▸ Spec sync row 2; `dbd59f633`
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: after "*Backend built (2026-11-19, PR-0.5).*", append "*SPA built (2026-11-19).* `HandoffSuggestionChipComponent`; see §11 PR-0.5."
+- **Status**: open
+
+### [2026-11-20] Spec sync: multi-agent-patterns.md §11.5 (workflow-runs spec accepted, step 1 built)
+- **Source**: research/2026-11-20.md ▸ Spec sync row 3; #2189, #2195, #2193, #2194
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "`docs/specs/workflow-runs.md` (proposal, 2026-11-19)" → "(accepted for step 1 on 2026-11-20; PR-W.1 to W.4a built behind `WORKFLOW_RUNS_ENABLED`, off)"
+- **Status**: open
+
+### [2026-11-20] Spec sync: multi-agent-patterns.md §3 table, Workflow row (no longer "Not proposed")
+- **Source**: research/2026-11-20.md ▸ Spec sync row 4; `apis/shared/handoff/runs.py:1`, `feature_flags.py:880`
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: change the cross-conversation cell to "Workflow runs (`workflow-runs.md`, step 1 built, off): several Agents as steps under one approval, returned as one delivery with parts"
+- **Status**: open
+
+### [2026-11-20] Spec sync: multi-agent-patterns.md §10 staleness table (add a workflow-runs row)
+- **Source**: research/2026-11-20.md ▸ Spec sync row 5
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: new row "Workflow runs: step 1 built, flag off; no saved workflows, prompt steps or server runs | §3, §11.5 | A W.4b/W.4c or step 2 PR merges, or the flag defaults on"
+- **Status**: open
+
+### [2026-11-20] Spec sync: multi-agent-patterns.md §4.2 (the default builder passes no hooks or plugins)
+- **Source**: research/2026-11-20.md ▸ Spec sync row 6; https://github.com/strands-agents/harness-sdk/pull/6281
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "without one, a child inherits the parent's model and tools" → "…the parent's model and tools (including a plugin-added tool), but not its hooks or plugins (#6281), so our async builder must register our own hooks"
+- **Status**: open
+
+### [2026-11-20] Spec sync: workflow-runs.md §0 Status (W.2–W.4a built too)
+- **Source**: research/2026-11-20.md ▸ Spec sync row 7
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "PR-W.1 (the run row, its routes and the flag) built 2026-11-20." → "PR-W.1 to W.4a built 2026-11-20 (#2189, #2195, #2193, #2194); W.4b and W.4c open."
+- **Status**: open
+
+### [2026-11-20] Spec sync: workflow-runs.md §12 (the handoffs spec is edited per step)
+- **Source**: research/2026-11-20.md ▸ Spec sync row 8; `c5a964d74`, `9c996b3ec`, `20bc03ae6`
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Notes**: "The handoffs spec is not edited by this proposal." → "Accepted for step 1. Each built step updates the handoffs spec in the same PR: W.1 run steps (§4.3), W.2 parts (§4.8), W.3 run brief (§4.5)."
+- **Status**: open
+
 ### [2026-11-14] Spike concurrent tool execution, serializing only the tools that can't run in parallel
 - **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #1; public middleware (harness-sdk#4976, 1.62)
 - **Surface**: backend (`agents/main_agent/core/agent_factory.py:372-385`, a new `ExecuteToolStage` middleware beside `integrations/mcp_elicitation.py`)
