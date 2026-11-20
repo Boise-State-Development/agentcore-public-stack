@@ -9,6 +9,9 @@ Two things, both UI only and neither ever part of a model's history:
   ``title``, ``tldr`` and the model's ``agentHint``.
   A ``needs_input`` handoff also carries ``relayedPrompts``: what its target is waiting on, so the
   source can answer it under the row (PR-0.3c, ``apis.shared.handoff.relay``).
+- **``workflowRuns``** on a *source* conversation: its workflow runs (``docs/specs/workflow-runs.md``
+  §9), each with its steps' handoff views, including steps not sent yet. Only while
+  ``WORKFLOW_RUNS_ENABLED`` is on.
 - **``spawnedFrom``** on a *target* conversation: where it came from, so its first user bubble can say
   "Context from *{title}*" and link back. The title is the one the context was wrapped with.
 
@@ -21,10 +24,11 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from apis.shared.feature_flags import handoffs_enabled
+from apis.shared.feature_flags import handoffs_enabled, workflow_runs_enabled
 from apis.shared.handoff.delivery import DeliveryStore, DeliveryView, get_delivery_store
 from apis.shared.handoff.models import Handoff, HandoffView
 from apis.shared.handoff.relay import MetaLoader, load_relayed_prompts
+from apis.shared.handoff.runs import WorkflowRunStore, WorkflowRunView, get_workflow_run_store
 from apis.shared.handoff.store import HandoffStore, get_handoff_store
 
 logger = logging.getLogger(__name__)
@@ -82,6 +86,37 @@ async def load_delivery_replay(
     return [DeliveryView.from_row(row).model_dump(by_alias=True, exclude_none=True) for row in rows]
 
 
+async def load_workflow_run_replay(
+    session_id: str,
+    user_id: str,
+    run_store: Optional[WorkflowRunStore] = None,
+    handoff_store: Optional[HandoffStore] = None,
+) -> List[Dict[str, Any]]:
+    """This conversation's workflow runs, oldest first, each with its steps' rows (spec §9). Never raises.
+
+    Every run, whatever its status: the SPA decides what an open, dismissed or abandoned run shows.
+    A conversation with no runs costs one query; only one with runs reads its handoff rows too, for
+    the steps' current views. Those views carry no ``relayedPrompts``: a step that was sent is in
+    ``handoffs`` as well, with them. Nothing while ``WORKFLOW_RUNS_ENABLED`` is off.
+    """
+    if not workflow_runs_enabled():
+        return []
+    run_store = run_store or get_workflow_run_store()
+    handoff_store = handoff_store or get_handoff_store()
+    try:
+        runs = await asyncio.to_thread(run_store.list_for_session, user_id, session_id)
+        if not runs:
+            return []
+        rows = await asyncio.to_thread(handoff_store.list_for_session, user_id, session_id)
+    except Exception:  # noqa: BLE001 - a replay that fails costs only the runs, never the thread
+        logger.warning("Workflow run replay failed", exc_info=True)
+        return []
+    views = {row.handoff_id: HandoffView.from_row(row) for row in rows if row.run_id}
+    return [
+        WorkflowRunView.from_row(run, views).model_dump(by_alias=True, exclude_none=True) for run in runs
+    ]
+
+
 def _replayed(row: Handoff) -> bool:
     """A handoff that was sent (its row), or a suggestion still waiting on the user (its chip)."""
     if row.kind == "send_back":
@@ -110,4 +145,4 @@ def _spawned_from(
     }
 
 
-__all__ = ["load_delivery_replay", "load_handoff_replay"]
+__all__ = ["load_delivery_replay", "load_handoff_replay", "load_workflow_run_replay"]

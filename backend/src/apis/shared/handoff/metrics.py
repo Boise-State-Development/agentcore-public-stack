@@ -42,4 +42,35 @@ def emit_handoff_metric(
     )
 
 
-__all__ = ["emit_handoff_metric"]
+def emit_workflow_run_metric(
+    name: str,
+    *,
+    session_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    step_count: Optional[int] = None,
+    detail: Optional[str] = None,
+    count: int = 1,
+) -> None:
+    """One count of a workflow run's ``name`` (``docs/specs/workflow-runs.md`` §15).
+
+    ``WorkflowRunCreated`` carries the run's ``stepCount`` and its ``runSource`` (``user`` in step
+    1; saved workflows and model proposals come later). ``WorkflowRunApproved`` carries the steps
+    left, ``WorkflowRunEdited`` what the approval changed as ``runDetail`` (``request``,
+    ``step_removed``, ``file_unticked``; one count each), ``WorkflowRunCancelled`` a run dismissed
+    at its sheet, and ``WorkflowRunStopped`` an approved run stopped. Properties, not dimensions.
+    Best-effort: never raises.
+    """
+    properties: dict = {"sessionId": session_id, "runId": run_id, "runSource": "user"}
+    if step_count is not None:
+        properties["stepCount"] = step_count
+    if detail is not None:
+        properties["runDetail"] = detail
+    emit_emf_metrics(
+        _NAMESPACE,
+        metrics={name: count},
+        properties=properties,
+        units={name: "Count"},
+    )
+
+
+__all__ = ["emit_handoff_metric", "emit_workflow_run_metric"]

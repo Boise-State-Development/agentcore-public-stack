@@ -332,6 +332,46 @@ class HandoffStore:
             raise
         return _from_item(resp["Attributes"])
 
+    def approve_run_step(
+        self,
+        user_id: str,
+        handoff_id: str,
+        *,
+        run_id: str,
+        approved_at: str,
+        request: Optional[str] = None,
+    ) -> Optional[Handoff]:
+        """Mark an ``open`` step row of ``run_id`` approved, and set its request if it was edited.
+
+        The row stays ``open``: the tab's queue sends it, and the target's first turn accepts it
+        exactly as it accepts any mention. ``runApprovedAt`` is what keeps it from reading as
+        ``abandoned`` while it waits (``Handoff.effective_status``). The run id is part of the
+        condition, so a handoff of its own can't be marked this way. ``None`` when the row isn't
+        the caller's, isn't a step of this run, or was already sent or dismissed.
+        """
+        table = self._require_table()
+        names = {"#status": "status", "#updatedAt": "updatedAt", "#runId": "runId"}
+        values: Dict[str, Any] = {":open": "open", ":run": run_id, ":approved": approved_at, ":now": approved_at}
+        sets = ["runApprovedAt = :approved", "#updatedAt = :now"]
+        if request is not None:
+            names["#request"] = "request"
+            values[":request"] = request
+            sets.append("#request = :request")
+        try:
+            resp = table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{handoff_id}"},
+                UpdateExpression="SET " + ", ".join(sets),
+                ConditionExpression="attribute_exists(SK) AND #status = :open AND #runId = :run",
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if _is_conditional_failure(exc):
+                return None
+            raise
+        return _from_item(resp["Attributes"])
+
     def record_brief(
         self,
         user_id: str,

@@ -9,7 +9,9 @@ A handoff lives on its **source** session. Its states::
           └─▶ dismissed
 
 ``abandoned`` is never stored: an ``open`` row older than ``ABANDON_AFTER`` reads as abandoned,
-so no sweep job is needed.
+so no sweep job is needed. Two kinds of ``open`` row never do: a suggestion's chip, and a step of
+an approved workflow run (``runApprovedAt``), which waits on the tab's queue rather than on a
+review sheet (``docs/specs/workflow-runs.md`` §19, PR-W.1).
 
 Status writes after acceptance happen after the target's ``done`` block (PR-0.2), which is why a
 ``needs_input`` row can go straight to ``done`` or ``stopped``: the intermediate ``running`` is
@@ -168,15 +170,26 @@ class Handoff(BaseModel):
     tool_use_id: Optional[str] = Field(
         None, alias="toolUseId", description="The suggest_handoff call, which places the chip under its message"
     )
+    # A step of a workflow run (docs/specs/workflow-runs.md §3.1, §9). A row with no ``runId`` is
+    # a handoff of its own, exactly as before; a step row is a ``mention`` accepted the same way.
+    run_id: Optional[str] = Field(None, alias="runId", description="The WFRUN# run this row is a step of")
+    step_id: Optional[str] = Field(None, alias="stepId", description="The step's id within its run")
+    run_approved_at: Optional[str] = Field(
+        None,
+        alias="runApprovedAt",
+        description="When the step's run was approved; an approved step not yet started never reads as abandoned",
+    )
 
     def effective_status(self, now: Optional[datetime] = None) -> EffectiveHandoffStatus:
         """The status as read: an ``open`` row past ``ABANDON_AFTER`` is ``abandoned``.
 
         Except a suggestion: its chip stays in the thread for the user to start whenever they
         like, so an old one is still ``open``. A mention's ``open`` row is a review sheet nobody
-        sent, and a day later it is noise.
+        sent, and a day later it is noise. A step of an approved run is not: the user approved
+        it, and it is waiting on the tab's queue (or a Start after a reload), so it stays ``open``.
+        A step of a run still at its sheet ages like any other mention.
         """
-        if self.status != "open" or self.kind == "suggested":
+        if self.status != "open" or self.kind == "suggested" or self.run_approved_at:
             return self.status
         try:
             created = datetime.fromisoformat(self.created_at)
@@ -223,6 +236,8 @@ class HandoffView(BaseModel):
     tldr: Optional[str] = None
     agent_hint: Optional[str] = Field(None, alias="agentHint")
     tool_use_id: Optional[str] = Field(None, alias="toolUseId")
+    run_id: Optional[str] = Field(None, alias="runId")
+    step_id: Optional[str] = Field(None, alias="stepId")
 
     @classmethod
     def from_row(cls, row: Handoff) -> "HandoffView":
@@ -247,6 +262,8 @@ class HandoffView(BaseModel):
             tldr=row.tldr,
             agent_hint=row.agent_hint,
             tool_use_id=row.tool_use_id,
+            run_id=row.run_id,
+            step_id=row.step_id,
         )
 
 
