@@ -4,6 +4,68 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.38.0] - 2026-11-19
+
+Skills follow the agentskills.io format end to end. A skill can be downloaded as a bundle, and imported from one (a `.zip` or a public GitHub path, in development). Skill files keep their folders. Word skill scripts run in a dedicated sandbox without network access and with a time limit. Skill changes are audited, and an edit that reaches other people's agents asks first. Knowledge-base citations name the document and link to the web page they came from, and can show the indexed text. MCP Apps that render from structured results draw their content and follow dark mode, Run now runs in the background, and the terminal client gains pipe mode.
+
+### 🚀 Added
+
+- **Download a skill as an agentskills.io bundle.** The owner gets **Download skill** on the skill's page (`GET /skills/mine/{id}/export`), and an admin gets it on a catalog skill (`GET /admin/skills/{id}/export`). The bundle is `{slug}.zip` with `SKILL.md`, `references/`, `scripts/` and `assets/`, and an unchanged skill exports to identical bytes. Optional `?version=n` (#2155)
+- **Import a whole skill bundle from a `.zip` or a public GitHub path, in development** (`SKILL_BUNDLE_IMPORT_ENABLED` / `CDK_SKILL_BUNDLE_IMPORT_ENABLED` / `features.skillBundleImport`, app-api only, off by default). A preview lists what the import adds, updates, deletes and skips. A re-import refreshes the live skill and never cuts a version, so a pinned project keeps its version (#2127)
+- **Skill files keep their folders.** A bundle's `references/legal/nda.md` stays at that path through import, export, `read_skill_file`, the REST file routes and the SPA file lists. A bare filename still works when only one file has it. Existing rows read exactly as before, with no migration (#2163)
+- **`my_skill_write_file` can write a skill file from an attachment** (`from_attachment`). A `.md` or `.txt` file is copied byte for byte, and a `.docx` is converted to Markdown, so a long document is no longer retyped by the model. The approval card shows the source, the SHA-256 of what will be written and a diff against the current file (#2128)
+- **Skill changes are audited.** Every create, update, import, refresh, delete, export and Word skill-script run writes one audit record, with ids and hashes only, and a no-op save records nothing. The Runtime writes the `my_skill_*` and script-run records (#2162)
+- **An edit that reaches other people asks first.** Saving or re-importing a skill that is bound, unpinned, to a shared Agent or a project returns `409 skill_reach_unconfirmed` with who it reaches; the SPA asks and resubmits with `confirmReach` (#2162)
+- **Imported skills are pinned when bound to an Agent**, and pickers show "Pinned to v*n*". Skill pages, pickers and the share dialog show where an imported skill came from (#2162)
+- **Knowledge-base citations link to the crawled web page** they came from, with an **Open page** link (#2130, #2132)
+- **View content** on a knowledge-base citation opens the text the knowledge base indexed for a web page or a markdown or plain-text document (`GET /assistants/{id}/documents/{documentId}/content`, read-only, bounded to 1 MB, only when the Agent shows citations and allows downloads) (#2142)
+- **The model is told when a tool result is on screen as an MCP App**, so it does not repeat the App's contents. One constant sentence is appended to successful App results (about 50 input tokens), only while the host can frame Apps (#2179)
+- **Voice mode interrupt level**: a slider with a live mic meter in the voice overlay, stored per browser (#2169)
+- **Terminal client pipe mode** (`aps-tui -p`): one turn, answer to stdout, progress to stderr, stdin appended to the prompt; a paused turn exits 3 (#2145)
+- Design spec for a coding-tool gateway for API keys, docs only (#2170)
+
+### ✨ Improved
+
+- **Word skill scripts run in a dedicated sandbox without network access and with a 120-second time limit.** A second Code Interpreter (`networkMode: SANDBOX`) runs skill scripts only; model-written `python_code` keeps the existing interpreter. Its id is read from `/<prefix>/agentcore/skill-script-interpreter-id` inside the tool call (#2149)
+- **One bounded `SKILL.md` parser on every read and write path**, with size, node and depth limits, no YAML anchors or aliases, and a 200 KiB instructions cap. Skill names and descriptions refuse invisible and control characters. Admin create refuses an id that would activate under another skill's name (#2147)
+- **The projected `SKILL.md` passes agentskills.io validation in strict mode.** Admin create and update accept and return `allowedTools` and `skillMetadata`. A skill that declares `compatibility` shows it when activated. `backfill_skill_bundles.py --projections-only` regenerates stored projections (#2151)
+- **A skill whose stored metadata holds non-string values can be edited again.** Such values, and a non-string `license`, are warnings on input rather than errors (#2153)
+- **One ingest path for `SKILL.md`.** Both **Import SKILL.md** buttons use the server parser and list its errors and warnings. The admin form keeps `allowed-tools` and metadata. A `description: Use when: …` slip imports with a warning. Bundle import takes the skill's id from its frontmatter `name`, and a refresh preview shows a diff (#2157)
+- **Compaction names the skills it retires.** When a cut removes the turn that activated a skill, the summary says which skills were active and to activate them again. The activation result's file listing is now **Bundled files**, grouped as References, Scripts and Assets (#2159)
+- **Knowledge-base citations show the document's own name**, not the indexed file name (#2134), and their excerpts read as plain text instead of raw markdown (#2141)
+- **The clarifying-question picker takes up to 8 options** per question, up from 4 (#2144)
+- The Skill Creator's guidance tells the model to write an attached document by reference (#2128)
+- **Deleting a skill that a project or shared Agent uses asks first** (`DELETE /skills/mine/{id}` → `409 skill_reach_unconfirmed`, then `?confirmReach=true`; pinned bindings count). The import preview reports repaired problems as warnings, and the 50-file cap, branch-name and "No SKILL.md" messages are clearer (#2168)
+
+### 🐛 Fixed
+
+- **Atlassian MCP App widgets render** instead of an empty white frame: the App receives `structuredContent` and `_meta` with the tool result (live, on reload, and on App-initiated calls), and the sandbox proxy sets the App's `dark` class in a dark-mode host (#2175)
+- **Run now no longer times out on long scheduled runs**: `POST /runs/now` returns `202` and runs in the background, and the SPA polls the new `GET /runs/{runId}` (#2171)
+- **Voice mode no longer answers its own voice** through speakers: the mic sends silence while the agent is audible, and speaking above the interrupt level opens it with a pre-roll (#2169)
+- **A pinned project's Skills page names the commit it runs**, not the latest re-import's; versions record their import source (#2168)
+- **The reach check also names projects the author added the skill to as an editor.** A skill its author bound, unpinned, into someone else's Shared Project now appears in the approval card and the `409 skill_reach_unconfirmed` summary; a pinned binding there is listed as pinned. Keyed reads only, on skill writes (#2165)
+- **An MCP App form no longer sits in a white frame in dark mode**, and a submitted form shows its result after a reload instead of an empty form marked "Waiting for you" (#2138)
+
+### 🔒 Security
+
+- Dependabot alerts patched: `soupsieve` 2.9 → 4.1.1, `opentelemetry-api` 1.45.1 → 1.45.2, docs-site `astro` 7.3.3 → 7.4.12 (#2125)
+
+### 🏗️ Infrastructure
+
+- New Code Interpreter for skill scripts (`CfnCodeInterpreterCustom`, `networkMode: SANDBOX`) and its SSM parameter, with Runtime grants on that interpreter and parameter only (#2149)
+- Runtime role gains `dynamodb:PutItem` on the audit-log table only; `DYNAMODB_AUDIT_LOG_TABLE_NAME` joins `derived_environment.json` (#2162)
+- `CDK_SKILL_BUNDLE_IMPORT_ENABLED` forwarded in `platform.yml` (#2127)
+- The MCP App sandbox proxy frames Apps transparently (`proxy.js`, ships with the platform deploy) (#2138)
+
+### 📦 Dependencies
+
+- Backend `requires-python` is now `>=3.12` (every runtime image is 3.12 or 3.13), for `soupsieve` 4.x (#2125)
+
+### 🔧 CI/CD
+
+- The delete-burst event-loop test keeps garbage-collector pauses out of its lag probe (#2131)
+- The eval set benchmarks Sonnet 5.5 instead of Sonnet 5 (#2136)
+
 ## [1.37.0] - 2026-11-17
 
 Voice mode runs in Shared Projects. An Agent's knowledge base can import a whole Drive folder and keep it in sync, and the agent composer's settings become folding cards. Word and PowerPoint charts reach the model as their plotted numbers. The SPA moves to Angular 22 with an OnPush chat shell and `FetchBackend`, and `strands-agents` moves to 1.65.0. Stop now reaches an in-flight tool call. A web crawl stays in its section of the site, keeps one document per page, and no longer requests a non-public address. Images stay reachable after compaction. Under the token profile, a turn's attachments are held to the request budget instead of 7 MB. A bulk document delete no longer blocks app-api's event loop; that is the 2026-11-16 prod alarm. Conversation rewind and fork are now on by default, and a rewind says that memories already saved from those messages stay. New flag: `CONCURRENT_TOOL_EXECUTION_ENABLED` (in development, default off). Retired: four default-on rollout switches. No GSI changes, no backfills; one optional re-seed for the Skill Creator's new reference file.

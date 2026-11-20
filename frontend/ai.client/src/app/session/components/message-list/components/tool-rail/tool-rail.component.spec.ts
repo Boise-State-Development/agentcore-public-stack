@@ -758,4 +758,61 @@ describe('ToolRailComponent', () => {
       expect(component.isThinkingOpen(step.thinking)).toBe(true);
     });
   });
+
+  describe('memory writes', () => {
+    const memorySave = (overrides: Partial<ToolCallDisplay> = {}) =>
+      makeCall({
+        id: 'mem-1',
+        toolName: 'memory_save',
+        input: {
+          scope: 'mine',
+          slug: 'status-replies',
+          text: '- Reply with STATUS-OK: <!-- e:a1 -->',
+          description: 'Status checks: reply STATUS-OK:',
+        },
+        ...overrides,
+      });
+
+    it('names a lone save in the headline without repeating it beside it', () => {
+      render(makeGroup({ calls: [memorySave({ input: { slug: 'x', text: '- new' } })] }));
+      expect(component.headline()).toBe('Saved a memory');
+      expect(component.memoryLabel()).toBeNull();
+    });
+
+    it('reads the save out beside a headline about something else', () => {
+      render(makeGroup({ calls: [makeCall({ id: 'c1', toolName: 'list_projects' }), memorySave()] }));
+      expect(component.headline()).toBe('Listed projects, then 1 more step');
+      expect(component.memoryLabel()).toBe('updated a memory');
+    });
+
+    it('reads the save out when a model summary is the headline', () => {
+      const save = memorySave();
+      render(
+        makeGroup({
+          calls: [save],
+          batches: [{ key: 'b1', summary: 'Kept your status-check preference', calls: [save] }],
+        }),
+      );
+      expect(component.headline()).toBe('Kept your status-check preference');
+      expect(component.memoryLabel()).toBe('updated a memory');
+    });
+
+    it('counts only finished saves that succeeded', () => {
+      render(
+        makeGroup({
+          calls: [
+            makeCall({ id: 'c1', toolName: 'memory_read' }),
+            memorySave({ id: 'm1', status: 'pending' }),
+            memorySave({ id: 'm2', status: 'error' }),
+          ],
+        }),
+      );
+      expect(component.memoryLabel()).toBeNull();
+    });
+
+    it("gives a save's items as prose and nothing for other calls", () => {
+      expect(component.memoryDetail(memorySave())?.items).toEqual(['Reply with STATUS-OK:']);
+      expect(component.memoryDetail(makeCall())).toBeNull();
+    });
+  });
 });
