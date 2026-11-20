@@ -51,6 +51,7 @@ from apis.shared.handoff.runs import (
     WORKFLOW_RUN_MAX_STEPS,
     WORKFLOW_RUN_MIN_STEPS,
     WorkflowRun,
+    WorkflowRunCard,
     WorkflowRunEdit,
     WorkflowRunStep,
     WorkflowRunStore,
@@ -67,6 +68,7 @@ from apis.shared.handoff.send_back import (
     render_return_excerpt,
     write_delivery,
 )
+from apis.shared.handoff.turn import cap_context_text
 from apis.shared.models.retirement import resolve_effective_model
 from apis.shared.timestamps import utc_now_iso
 
@@ -334,6 +336,26 @@ class ApproveRunStep(BaseModel):
     removed: bool = False
 
 
+#: Bounds the reviewed card's field, as ``handoff_context.text`` is bounded, well above the cap the
+#: row stores it at, so an oversized body is a 422 rather than a multi-megabyte string.
+_RUN_CARD_FIELD_MAX_CHARS = 200_000
+
+
+class ApproveRunCard(BaseModel):
+    """The card as the user reviewed it: the text every step is sent with, or removed (PR-W.4b)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    text: Optional[str] = Field(None, max_length=_RUN_CARD_FIELD_MAX_CHARS)
+    removed: bool = False
+
+    def stored(self) -> WorkflowRunCard:
+        """As the row keeps it: capped as the Runtime caps a card; blank text reads as removed,
+        exactly as a blank ``handoff_context.text`` does."""
+        text = "" if self.removed else cap_context_text(self.text or "")
+        return WorkflowRunCard(text=text) if text else WorkflowRunCard(removed=True)
+
+
 class ApproveWorkflowRunRequest(BaseModel):
     """What the user approved on the sheet. A step not listed is kept as it was created."""
 
@@ -344,6 +366,10 @@ class ApproveWorkflowRunRequest(BaseModel):
     file_ids: List[str] = Field(default_factory=list, alias="fileIds", max_length=HANDOFF_MAX_FILES)
     files_unticked: int = Field(
         0, alias="filesUnticked", ge=0, le=1000, description="Files the sheet listed and the user left unticked"
+    )
+    card: Optional[ApproveRunCard] = Field(
+        None,
+        description="The card as reviewed, kept on the run so its unstarted steps can start from any browser",
     )
 
 
@@ -415,6 +441,7 @@ async def approve_workflow_run(
         file_ids=list(dict.fromkeys(f for f in body.file_ids if f)),
         edits=edits,
         approved_at=approved_at,
+        card=body.card.stored() if body.card is not None else None,
     )
     if updated is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This run was already started or cancelled")

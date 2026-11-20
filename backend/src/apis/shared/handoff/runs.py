@@ -87,6 +87,21 @@ class WorkflowRunStep(BaseModel):
     removed: bool = False
 
 
+class WorkflowRunCard(BaseModel):
+    """The context card every step is sent with, as the user reviewed it on the sheet (PR-W.4b).
+
+    Stored at approval so the steps a tab never started can be started from any browser with the
+    same card: a step's ``handoff_context.text`` is absolute (absent means "removed"), so the files
+    alone are not enough. ``text`` is already capped as the Runtime caps a card
+    (``cap_context_text``); ``removed`` means every step is sent without one.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    text: Optional[str] = None
+    removed: bool = False
+
+
 class WorkflowRun(BaseModel):
     """One ``WFRUN#<runId>`` row, keyed under its owner (``PK=USER#<userId>``)."""
 
@@ -107,6 +122,9 @@ class WorkflowRun(BaseModel):
     updated_at: str = Field(..., alias="updatedAt")
     approved_at: Optional[str] = Field(None, alias="approvedAt")
     edits: Optional[List[WorkflowRunEdit]] = Field(None, description="What the approval changed at the sheet")
+    card: Optional[WorkflowRunCard] = Field(
+        None, description="The card as reviewed, written at approval (PR-W.4b); absent on rows approved before it"
+    )
     result_delivery_id: Optional[str] = Field(
         None, alias="resultDeliveryId", description="The grouped result's DELIVERY# row (PR-W.2); empty until then"
     )
@@ -172,6 +190,7 @@ class WorkflowRunView(BaseModel):
     updated_at: str = Field(..., alias="updatedAt")
     approved_at: Optional[str] = Field(None, alias="approvedAt")
     result_delivery_id: Optional[str] = Field(None, alias="resultDeliveryId")
+    card: Optional[WorkflowRunCard] = Field(None, description="The card as reviewed; absent until approved")
 
     @classmethod
     def from_row(cls, run: WorkflowRun, handoffs: Optional[Dict[str, HandoffView]] = None) -> "WorkflowRunView":
@@ -201,6 +220,7 @@ class WorkflowRunView(BaseModel):
             updated_at=run.updated_at,
             approved_at=run.approved_at,
             result_delivery_id=run.result_delivery_id,
+            card=run.card,
         )
 
 
@@ -283,6 +303,7 @@ class WorkflowRunStore:
         file_ids: List[str],
         edits: List[WorkflowRunEdit],
         approved_at: str,
+        card: Optional[WorkflowRunCard] = None,
     ) -> Optional[WorkflowRun]:
         """Fix the envelope: ``open`` → ``approved``, exactly once, with the steps as approved.
 
@@ -297,6 +318,8 @@ class WorkflowRunStore:
         }
         if edits:
             sets["edits"] = list(edits)
+        if card is not None:
+            sets["card"] = card.model_dump(exclude_none=True)
         return self._move(user_id, run_id, "approved", sets, now=approved_at)
 
     def record_brief(
@@ -488,6 +511,7 @@ __all__ = [
     "WORKFLOW_RUN_MAX_STEPS",
     "WORKFLOW_RUN_MIN_STEPS",
     "WorkflowRun",
+    "WorkflowRunCard",
     "WorkflowRunEdit",
     "WorkflowRunLimits",
     "WorkflowRunStatus",
