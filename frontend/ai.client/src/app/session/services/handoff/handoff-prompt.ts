@@ -140,6 +140,54 @@ export function renderDeliveryBlock(
   return `<${HANDOFF_CONTEXT_TAG} from_conversation="${title}">\n${CONTEXT_NOTE}\n${inner}\n</${HANDOFF_CONTEXT_TAG}>`;
 }
 
+/** A run result part's step, as the server stores it (workflow-runs spec §7). Only `done` carries a result. */
+export type DeliveryPartStatus = 'done' | 'stopped' | 'needs_input' | 'running';
+
+/**
+ * What a part with no result says, inside its block (`DELIVERY_PART_STATUS_NOTES` in `context.py`).
+ * Exported so a sent bubble can tell such a part from an answer.
+ */
+export const DELIVERY_PART_STATUS_NOTES: Readonly<Record<Exclude<DeliveryPartStatus, 'done'>, string>> = {
+  stopped: 'This Agent stopped before it finished, so there is no result from it.',
+  needs_input: 'This Agent is still waiting on the user, so there is no result from it yet.',
+  running: 'This Agent was still working when the results were brought back, so there is no result from it yet.',
+};
+
+/** One part of a run result as its block is rendered (`DeliveryPartBlock` in `context.py`). */
+export interface DeliveryPartBlockInput {
+  text: string;
+  agentName: string;
+  fromTitle: string;
+  status: DeliveryPartStatus;
+  artifacts?: readonly DeliveryArtifact[];
+  files?: readonly FileLine[];
+}
+
+/** What a part's block names: the Agent, then its conversation's title (`delivery_part_label`). */
+export function deliveryPartLabel(agentName: string, fromTitle: string): string {
+  const agent = agentName.trim();
+  const title = fromTitle.trim();
+  if (agent && title && agent !== title) return `${agent} · ${title}`;
+  return agent || title;
+}
+
+/**
+ * A run result as the receiving model reads it (`render_delivery_parts` in `context.py`): one
+ * delivery block per part, in step order, joined by a blank line. A part with no result is named
+ * with its status note; a finished part the user emptied gives no block. Pinned by the fixture.
+ */
+export function renderDeliveryParts(parts: readonly DeliveryPartBlockInput[]): string {
+  return parts
+    .map((part) => {
+      const label = deliveryPartLabel(part.agentName, part.fromTitle);
+      return part.status === 'done'
+        ? renderDeliveryBlock(part.text, label, part.artifacts ?? [], part.files ?? [])
+        : renderDeliveryBlock(DELIVERY_PART_STATUS_NOTES[part.status] ?? '', label);
+    })
+    .filter((block) => block)
+    .join('\n\n');
+}
+
 /** The user message with the cards before it, each followed by a blank line (`join_delivery_blocks`). */
 export function joinDeliveryBlocks(blocks: readonly string[], message: string): string {
   const head = blocks.filter((b) => b).join('\n\n');
