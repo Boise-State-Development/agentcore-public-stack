@@ -102,6 +102,27 @@ describe('Topnav', () => {
     });
   });
 
+  describe('title beside the Agent chip', () => {
+    it('shows the full title when no chip is beside it', async () => {
+      mockSessionService.currentSession.set({ sessionId: 'sess-1', title: 'Timeline checker · Proposal review' });
+      const component = await createComponent();
+      expect((component as any).visibleTitle()).toBe('Timeline checker · Proposal review');
+    });
+
+    it('drops the leading Agent name the chip already shows (a workflow run step)', async () => {
+      const { titleBesideCrumb } = await import('./topnav');
+      expect(titleBesideCrumb('Timeline checker · Proposal review', 'Timeline checker')).toBe('Proposal review');
+    });
+
+    it('leaves any other title whole', async () => {
+      const { titleBesideCrumb } = await import('./topnav');
+      expect(titleBesideCrumb('Proposal review', 'Timeline checker')).toBe('Proposal review');
+      expect(titleBesideCrumb('Timeline checkers · x', 'Timeline checker')).toBe('Timeline checkers · x');
+      expect(titleBesideCrumb('Timeline checker', 'Timeline checker')).toBe('Timeline checker');
+      expect(titleBesideCrumb('Timeline checker · Proposal review', null)).toBe('Timeline checker · Proposal review');
+    });
+  });
+
   describe('mark as read/unread toggle', () => {
     it('marks a read session unread and surfaces the sidebar dot optimistically', async () => {
       mockSessionService.currentSession.set({ sessionId: 'sess-1', title: 'T', unread: false });
