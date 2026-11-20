@@ -456,6 +456,10 @@ changes a tool spec or the system prompt.
     `…/{runId}/approve` `{steps: [{stepId, request?, removed?}], fileIds}` fixes the envelope, conditioned on
     `open`; `GET …/{runId}`; `…/{runId}/stop` (marks the run stopped so no queued step starts; the running steps
     are stopped by the SPA's existing cancel); `…/{runId}/dismiss` (dismisses every `open` step).
+  - The estimate (§4, §11): the create response carries what the sheet needs to price a run's first turns
+    without another call: each step's model id and its catalog input rate, and the card's tokens. The SPA adds
+    the ticked files' tokens. ⚠️ **Verify first:** whether `GET /files` gives a file's token count; if not, add
+    it there, read from the row's facts (`tokens.text`, pages), never by reading the file.
   - Replay: `workflowRuns` on `GET /messages` beside `handoffs`, first page only, nothing while the flag is off.
     Run rows go with the session delete cascade.
   - Metrics (§15): `WorkflowRunCreated` by step count, `WorkflowRunApproved`, `WorkflowRunCancelled`,
