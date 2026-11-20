@@ -1,5 +1,7 @@
 # Agent Skills conformance: decisions and per-PR briefs
 
+> **Historical.** These briefs were written 2026-11-18, before the work shipped, and describe the state at that time. Every PR they describe is merged and released in 1.38.0; see section 10 of `agentskills-conformance.md` for the outcome.
+
 Companion to `agentskills-conformance.md` (the audit and design). All eight PRs are merged; see that file's section 10. This file is what an
 implementing session is handed: the decisions it must not re-open, the rules every PR
 follows, and one brief per PR with acceptance criteria.

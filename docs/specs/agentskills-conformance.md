@@ -1,6 +1,6 @@
 # Agent Skills (agentskills.io) conformance and hardening
 
-**Status:** implemented on `develop` (2026-11-19); not yet released to production. Audit taken 2026-11-18 against `develop` at `5336f41cc`. Section 10 records what shipped.
+**Status:** implemented and released in 1.38.0 (2026-11-20). Audit taken 2026-11-18 against `develop` at `5336f41cc`. Section 10 records what shipped.
 **Extends:** `skills-as-agent-primitive.md` (D1, D2, D4, D5), `skill-bundle-import.md`,
 `skill-creator.md`. Where this document disagrees with them, it says so and says why.
 
@@ -22,10 +22,11 @@ Three things to know before reading the detail:
    shell, run by the person who installed the skill. We are a hosted, multi-tenant
    service where the author of a skill and the person whose session runs it are often
    different people. Section 5 is therefore our own threat model, not a checklist.
-3. **Two findings are live, not hypothetical.** YAML aliases in an imported `SKILL.md`
-   expand exponentially in the metadata sanitiser (S1), and bundle import is on in dev.
-   Skill scripts run in a sandbox with open internet egress (S2), and
-   `WORD_SKILL_SCRIPTS_ENABLED` is on in dev and in production.
+3. **Two findings were live, not hypothetical, when the audit was taken.** YAML aliases
+   in an imported `SKILL.md` expanded exponentially in the metadata sanitiser (S1), and
+   bundle import was on in dev. Skill scripts ran in a sandbox with open internet egress
+   (S2), and `WORD_SKILL_SCRIPTS_ENABLED` was on in dev and in production. Both are
+   closed in 1.38.0 (section 10).
 
 The plan (§7) is eight PRs. The decisions they depend on and a brief for each are in
 `agentskills-conformance-briefs.md`.
@@ -356,9 +357,9 @@ pinning imported skills by default when they are bound (D-7).
 > dependency installation. Skills are disclosed to the model as a catalog in the system
 > prompt and loaded on demand through a tool.
 
-## 10. Outcome (2026-11-19)
+## 10. Outcome (2026-11-19; released 2026-11-20)
 
-All eight PRs merged into `develop` and passed their dev checks, each recorded as a comment on its pull request.
+All eight PRs merged into `develop` and passed their dev checks, each recorded as a comment on its pull request. They shipped together in release 1.38.0.
 
 | PR | Pull request | Closed |
 |---|---|---|
@@ -371,12 +372,13 @@ All eight PRs merged into `develop` and passed their dev checks, each recorded a
 | 7. Nested paths | 2163 | F10. Uniqueness is by path across kinds, not `(kind, path)`, which keeps re-upload under a new kind a move |
 | 8. Context management | 2159 | C1, C3 |
 
-Dev data: the projection backfill (`backfill_skill_bundles.py --projections-only`) ran on dev after PR 3: 18 skills, 4 projections rewritten, no shared activation names, none failing strict validation.
+Backfill: the projection backfill (`backfill_skill_bundles.py --projections-only`) ran on dev after PR 3 (18 skills, 4 projections rewritten) and on production after the 1.38.0 deploy (41 skills, 3 rewritten). Neither found a shared activation name or a projection failing strict validation.
+
+Production check after the 1.38.0 deploy: a Word skill script (the Contract Redline engine) ran in the `SANDBOX` interpreter, applied all its revisions with validation passing, and wrote one `skill.script_run` audit record with outcome `ok`.
 
 Still open:
 
-- **Production.** None of this is released. S2 is live in production until it is: `WORD_SKILL_SCRIPTS_ENABLED` is on there and scripts still run in the public interpreter. After the release, run the projection backfill against the production tables (dry-run first).
-- **Reach gap.** `lookup_skill_reach` misses a skill a project editor bound into someone else's project (the `addedBy` clause), so neither the approval card nor the 409 mentions it. A separate fix is in progress.
+- **Reach gap, mostly closed.** `lookup_skill_reach` missed a skill a project editor bound into someone else's project (the `addedBy` clause). Pull request 2165 (also in 1.38.0) reads the author's project memberships, so the approval card and the 409 now name those projects. Still missed: a project the author has since left, because nothing indexes a binding by who added it. Covering that needs a new index.
 - **Legacy admin ids** that slug to the same name as a newer user-tier id are not prevented at user allocation; the backfill found none on dev.
 - **Emoji joiners in names.** PR 1 refuses U+200D in names, which also blocks compound emoji and some scripts. Undecided.
 - **Eval.** The compaction case passes on Haiku 5.5 with and without the summary line, because its prompt names the skill's subject; a case that isolates the line is a follow-up.
