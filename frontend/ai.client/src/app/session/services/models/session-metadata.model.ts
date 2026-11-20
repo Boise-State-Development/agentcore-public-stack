@@ -53,6 +53,9 @@ export interface SessionMetadata {
   rootSessionId?: string;
   /** Set on a fork: where it was cut from its parent. */
   forkedFrom?: { sessionId: string; messageIndex: number; cut: number };
+  /** Set on a handoff's target: the source it came from. `runId` is set on a workflow run's
+   *  step, which the sidebar nests under its source (workflow-runs spec §20.4). */
+  spawnedFrom?: { sessionId: string; handoffId?: string; runId?: string };
   /** Running USD cost across all turns in this session. Denormalized on the
    *  session row by the backend's _bump_session_aggregates; legacy sessions
    *  are lazily backfilled on first read. */

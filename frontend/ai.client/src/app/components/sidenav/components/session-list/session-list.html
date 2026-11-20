@@ -126,6 +126,68 @@
                                     >
                                         <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: entry.session }" />
                                     </li>
+                                    <!-- A workflow run's step conversations, under their source
+                                         (workflow-runs spec §20.4): one disclosure line per run,
+                                         collapsed by default. Inline rather than in a template so
+                                         each step's cdkDrag finds the drop list through DI, as the
+                                         rows above do: a step drags and pins as any row. -->
+                                    @for (run of entry.runs ?? []; track run.runId) {
+                                        @let line = runLine(run);
+                                        <li>
+                                            <button
+                                                type="button"
+                                                data-run-line
+                                                (click)="toggleRun(run)"
+                                                [attr.aria-expanded]="line.expanded"
+                                                [attr.aria-controls]="line.expanded ? runListId(run.runId) : null"
+                                                class="relative flex min-h-7 w-full items-center gap-1 rounded-md px-2 py-1 pr-10 text-left text-xs/5 text-gray-600 hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                                            >
+                                                <ng-icon
+                                                    name="heroChevronRight"
+                                                    class="size-3.5 shrink-0 transition-transform motion-reduce:transition-none"
+                                                    [class.rotate-90]="line.expanded"
+                                                    aria-hidden="true"
+                                                />
+                                                <span class="min-w-0 truncate">{{ line.label }}</span>
+                                                @switch (line.indicator) {
+                                                    @case ('streaming') {
+                                                        <span class="sr-only"> (response in progress)</span>
+                                                        <span class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-secondary-500 animate-pulse motion-reduce:animate-none" aria-hidden="true"></span>
+                                                    }
+                                                    @case ('awaiting-input') {
+                                                        <span class="sr-only"> (needs your input)</span>
+                                                        <span class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-state-warning-700 dark:bg-state-warning-400" aria-hidden="true"></span>
+                                                    }
+                                                    @case ('unread') {
+                                                        <span class="sr-only"> (unread)</span>
+                                                        <span class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-primary-500 dark:bg-primary-400" aria-hidden="true"></span>
+                                                    }
+                                                }
+                                            </button>
+                                            @if (line.expanded) {
+                                                <ul
+                                                    role="list"
+                                                    [id]="runListId(run.runId)"
+                                                    class="ml-3.5 flex flex-col gap-y-0.5 border-l border-gray-200 pl-1 dark:border-white/10"
+                                                >
+                                                    @for (step of run.steps; track step.sessionId) {
+                                                        <li
+                                                            cdkDrag
+                                                            [cdkDragData]="step"
+                                                            [cdkDragStartDelay]="dragStartDelay"
+                                                            [cdkDragDisabled]="renamingSessionId() === step.sessionId"
+                                                            [cdkDragPreviewClass]="dragPreviewClass"
+                                                            (cdkDragStarted)="onDragStarted()"
+                                                            (cdkDragEnded)="onDragEnded()"
+                                                            class="group relative"
+                                                        >
+                                                            <ng-container *ngTemplateOutlet="sessionRow; context: { $implicit: step }" />
+                                                        </li>
+                                                    }
+                                                </ul>
+                                            }
+                                        </li>
+                                    }
                                 } @else {
                                     <!-- A project's tasks in this bucket, under the project's name. -->
                                     <li>

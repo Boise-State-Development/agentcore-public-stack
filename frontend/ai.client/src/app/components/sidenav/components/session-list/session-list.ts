@@ -7,7 +7,7 @@ import { ConnectedPosition } from '@angular/cdk/overlay';
 import { CdkDrag, CdkDragDrop, CdkDropList } from '@angular/cdk/drag-drop';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, heroChevronRight } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { ChatStateService } from '../../../../session/services/chat/chat-state.service';
@@ -29,6 +29,8 @@ import { IncognitoChatService, incognitoIcon } from '../../../../session/service
 import { AgentPinService } from '../../../../agents/services/agent-pin.service';
 import { AgentIconComponent } from '../../../../agents/components/agent-icon.component';
 import { PinnedAgent } from '../../../../agents/models/store.model';
+import { WorkflowRunSidebarService } from '../../../../session/services/handoff/workflow-run-sidebar.service';
+import { SessionRunGroup, nestRunSteps } from './run-nesting';
 
 /** Numbers each SessionList so its drop-list ids are unique on the page. */
 let nextSessionListId = 0;
@@ -46,11 +48,25 @@ function isPinnedAgent(data: DragData): data is PinnedAgent {
  * buckets and their order stay exactly as they were (shared-projects §6).
  */
 export type SessionListEntry =
-  | { kind: 'session'; session: SessionMetadata }
+  | { kind: 'session'; session: SessionMetadata; runs?: SessionRunGroup[] }
   | { kind: 'project'; projectId: string; name: string; sessions: SessionMetadata[] };
 
 /** The status dot a conversation row shows, if any (see `rowIndicator`). */
 export type SessionRowIndicator = 'streaming' | 'awaiting-input' | 'unread' | null;
+
+/** The disclosure line for one run's step conversations under their source (workflow-runs §20.4). */
+export interface RunLineView {
+  /** "4 Agents · 2 of 4 finished", or "4 Agents" until the run itself has been read. */
+  label: string;
+  expanded: boolean;
+  /** The strongest state among the steps, shown only while the line is collapsed. */
+  indicator: SessionRowIndicator;
+}
+
+/** "1 Agent", "4 Agents". */
+function agentCount(n: number): string {
+  return `${n} ${n === 1 ? 'Agent' : 'Agents'}`;
+}
 
 /** Where a project's group sits: where its most recent task in the bucket would. */
 export function groupProjectSessions(
@@ -79,7 +95,7 @@ export function groupProjectSessions(
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, CdkDrag, CdkDropList, InViewDirective, AgentIconComponent],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, appPin, appPinOff, incognitoIcon })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, heroChevronRight, appPin, appPinOff, incognitoIcon })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -99,6 +115,17 @@ export class SessionList {
   private agentPinService = inject(AgentPinService);
   /** With Projects off in this build, project tasks list as plain rows (no heading to a dead link). */
   private readonly projectsOn = inject(FEATURES).projects;
+  /**
+   * A workflow run's step conversations nest under their source (workflow-runs spec §20.4).
+   * Injected only while the flag is on, so a build without it never constructs the run services.
+   */
+  private readonly runSidebar = (() => {
+    const features = inject(FEATURES);
+    return features.handoffs && features.workflowRuns ? inject(WorkflowRunSidebarService) : null;
+  })();
+
+  /** The runs whose line the user opened or closed; any other is open only while one of its steps is the current conversation. */
+  private readonly runExpansion = signal<ReadonlyMap<string, boolean>>(new Map());
 
   /** Project names for the group headings; a project not in the list reads "Project". */
   private readonly projectNames = computed(
@@ -195,13 +222,109 @@ export class SessionList {
     const names = this.projectNames();
     return groups
       .filter(g => g.sessions.length > 0)
-      .map(g => ({
-        ...g,
-        entries: (this.projectsOn
-          ? groupProjectSessions(g.sessions, names)
-          : g.sessions.map(session => ({ kind: 'session' as const, session }))) as SessionListEntry[],
-      }));
+      .map(g => {
+        const { sessions: listed, runsBySource } = this.nestRuns(g.sessions);
+        const entries = (this.projectsOn
+          ? groupProjectSessions(listed, names)
+          : listed.map(session => ({ kind: 'session' as const, session }))) as SessionListEntry[];
+        for (const entry of entries) {
+          if (entry.kind === 'session') {
+            const runs = runsBySource.get(entry.session.sessionId);
+            if (runs) entry.runs = runs;
+          }
+        }
+        return { ...g, sessions: listed, entries };
+      });
   });
+
+  /**
+   * A bucket's step conversations taken out and grouped under their source, in each run's step
+   * order where the run is known. With the flag off, the bucket as it is.
+   */
+  private nestRuns(sessions: SessionMetadata[]): { sessions: SessionMetadata[]; runsBySource: ReadonlyMap<string, SessionRunGroup[]> } {
+    const sidebar = this.runSidebar;
+    if (!sidebar) return { sessions, runsBySource: new Map() };
+    const nested = nestRunSteps(
+      sessions,
+      session => sidebar.linkOf(session),
+      source => !(this.projectsOn && source.preferences?.projectId),
+    );
+    for (const groups of nested.runsBySource.values()) {
+      for (const group of groups) {
+        const run = sidebar.runFor(group);
+        if (!run) continue;
+        const order = (session: SessionMetadata): number => {
+          const index = sidebar.stepIndex(run, session.sessionId);
+          return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+        };
+        group.steps = [...group.steps].sort((a, b) => order(a) - order(b));
+      }
+    }
+    return nested;
+  }
+
+  /**
+   * Read the runs this tab doesn't hold, once per change in their step conversations' rows, so
+   * the line can count steps the way the run's row does. The sidebar's read, off the turn path.
+   */
+  private readonly runReadEffect = effect(() => {
+    const sidebar = this.runSidebar;
+    if (!sidebar) return;
+    for (const group of this.timeGroups()) {
+      for (const entry of group.entries) {
+        if (entry.kind !== 'session' || !entry.runs) continue;
+        for (const run of entry.runs) {
+          const listState = run.steps
+            .map(step => `${step.sessionId}:${step.lastMessageAt}:${step.awaitingInput ?? ''}`)
+            .sort()
+            .join('|');
+          untracked(() => sidebar.ensure(run, listState));
+        }
+      }
+    }
+  });
+
+  /** The line under a source for one of its runs: its count, whether it is open, and its mark. */
+  protected runLine(group: SessionRunGroup): RunLineView {
+    const sidebar = this.runSidebar;
+    const run = sidebar?.runFor(group) ?? null;
+    const progress = run && sidebar ? sidebar.progressFor(run) : null;
+    const label = progress && progress.total > 0
+      ? `${agentCount(progress.total)} · ${progress.done} of ${progress.total} finished`
+      : agentCount(group.steps.length);
+    const expanded = this.isRunExpanded(group);
+    return { label, expanded, indicator: expanded ? null : this.runIndicator(group, progress?.needsInput ?? 0) };
+  }
+
+  protected runListId(runId: string): string {
+    return `session-list-${this.instanceId}-run-${runId}`;
+  }
+
+  protected toggleRun(group: SessionRunGroup): void {
+    const open = !this.isRunExpanded(group);
+    this.runExpansion.update(map => new Map(map).set(group.runId, open));
+  }
+
+  /** Collapsed by default; open when the user opened it, or while one of its steps is the current conversation. */
+  private isRunExpanded(group: SessionRunGroup): boolean {
+    const chosen = this.runExpansion().get(group.runId);
+    if (chosen !== undefined) return chosen;
+    const current = this.sessionService.currentSession?.()?.sessionId;
+    return !!current && group.steps.some(step => step.sessionId === current);
+  }
+
+  /**
+   * The strongest state among a run's steps, for the collapsed line: a step waiting on the user
+   * first (its own row's mark, or the run's count, which reads a relayed prompt the list may not
+   * have yet), then a response streaming, then unread. A waiting step is never hidden by the fold.
+   */
+  private runIndicator(group: SessionRunGroup, needsInput: number): SessionRowIndicator {
+    const marks = group.steps.map(step => this.rowIndicator(step));
+    if (needsInput > 0 || group.steps.some(step => this.isAwaitingInput(step))) return 'awaiting-input';
+    if (marks.includes('streaming')) return 'streaming';
+    if (marks.includes('unread')) return 'unread';
+    return null;
+  }
 
   /** The user's pinned conversations, most recently pinned first. */
   readonly pinnedSessions = this.sessionService.pinnedSessions;
