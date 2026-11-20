@@ -9,7 +9,7 @@ This module contains all session-related data models including:
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from apis.shared.scheduled_prompts.models import is_headless_session
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
@@ -740,6 +740,20 @@ def derive_awaiting_input(
     return next((kind for kind in _AWAITING_INPUT_ORDER if kind in kinds), None)
 
 
+class SessionSpawnedFromLink(BaseModel):
+    """Where a handoff's target conversation came from, as the session list carries it.
+
+    Read from ``spawnedFrom`` on the row the list already loaded (handoffs spec §4.2), so it costs
+    no read. ``runId`` is set on a workflow run's step (workflow-runs spec §19 PR-W.4c), which the
+    sidebar nests under its source. The row's own bookkeeping (``settled``) stays off the wire.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+    session_id: str = Field(..., alias="sessionId", description="The source conversation")
+    handoff_id: Optional[str] = Field(None, alias="handoffId", description="The source's HANDOFF# row")
+    run_id: Optional[str] = Field(None, alias="runId", description="Set on a workflow run's step")
+
+
 class SessionMetadataResponse(BaseModel):
     """Response containing session metadata"""
 
@@ -824,6 +838,19 @@ class SessionMetadataResponse(BaseModel):
         alias="awaitingInput",
         description="Which prompt this conversation's paused turn is waiting on (OAuth consent, tool approval, a clarifying question, a browser sign-in), only while the pause can still be answered; drives the amber 'needs your input' dot in the session list. Derived from pendingInterrupts + pausedTurn, which are never returned here",
     )
+    spawned_from: Optional[SessionSpawnedFromLink] = Field(
+        default=None,
+        alias="spawnedFrom",
+        description="Set on a handoff's target conversation: {sessionId, handoffId, runId?}, from the row already loaded. A workflow run's step carries runId, and the sidebar nests it under its source (workflow-runs spec §20.4)",
+    )
+
+    @field_validator("spawned_from", mode="before")
+    @classmethod
+    def _readable_spawned_from(cls, value: Any) -> Any:
+        """A malformed link on one row drops the link, never the whole list."""
+        if not isinstance(value, dict) or not isinstance(value.get("sessionId"), str):
+            return None
+        return {key: value[key] for key in ("sessionId", "handoffId", "runId") if isinstance(value.get(key), str)}
 
     @model_validator(mode="before")
     @classmethod

@@ -2595,7 +2595,13 @@ async def _backfill_session_aggregates(
         logger.warning("backfill_session_aggregates failed for %s: %s", session_id, e)
 
 
-def set_session_spawned_from(session_id: str, user_id: str, source_session_id: str, handoff_id: str) -> bool:
+def set_session_spawned_from(
+    session_id: str,
+    user_id: str,
+    source_session_id: str,
+    handoff_id: str,
+    run_id: Optional[str] = None,
+) -> bool:
     """Record on a handoff's target conversation where it came from (handoffs spec §4.2).
 
     ``spawnedFrom: {sessionId, handoffId}`` on the target's ``META`` row. It is how every later
@@ -2603,18 +2609,24 @@ def set_session_spawned_from(session_id: str, user_id: str, source_session_id: s
     B1 snapshot, with no extra read. A field-level ``SET`` on the static SK, so the full-row
     writes elsewhere (which only ``SET`` their own fields) never remove it. Synchronous: callers
     run it in a worker thread, after the first token. Returns False when the row is missing.
+
+    A workflow run's step also gets ``runId`` (workflow-runs spec §19 PR-W.4c), in this same
+    write, so the session list can nest the step under its source with no read of its own.
     """
     from botocore.exceptions import ClientError
 
     table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
     if not table_name:
         return False
+    spawned: Dict[str, str] = {"sessionId": source_session_id, "handoffId": handoff_id}
+    if run_id:
+        spawned["runId"] = run_id
     try:
         get_dynamodb_table(table_name).update_item(
             Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
             UpdateExpression="SET spawnedFrom = :sf",
             ConditionExpression="attribute_exists(PK)",
-            ExpressionAttributeValues={":sf": {"sessionId": source_session_id, "handoffId": handoff_id}},
+            ExpressionAttributeValues={":sf": spawned},
         )
         return True
     except ClientError as e:

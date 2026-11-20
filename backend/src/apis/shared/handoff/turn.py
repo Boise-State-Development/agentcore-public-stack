@@ -432,7 +432,12 @@ class HandoffTurn:
     def _link_target(self, accepted: Handoff) -> None:
         from apis.shared.sessions.metadata import set_session_spawned_from
 
-        set_session_spawned_from(self.session_id, self.user_id, accepted.session_id, accepted.handoff_id)
+        args = [self.session_id, self.user_id, accepted.session_id, accepted.handoff_id]
+        if accepted.run_id:
+            # A run's step (workflow-runs spec §19 PR-W.4c): the sidebar nests it under its source.
+            # Same background write, after acceptance, so nothing moves onto the first-token path.
+            args.append(accepted.run_id)
+        set_session_spawned_from(*args)
 
     async def _write_status(self, outcome: TurnOutcome) -> None:
         handoff_id = self.handoff_id
