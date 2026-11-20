@@ -39,7 +39,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { HandoffRelayService, ResumeOutcome } from '../handoff/handoff-relay.service';
 import { RelayedPromptKind } from '../handoff/handoff.models';
 import { ComposerCard, DeliveryAttach, DeliveryStateService } from '../handoff/delivery-state.service';
-import { fileLineFor, joinDeliveryBlocks, renderDeliveryBlock } from '../handoff/handoff-prompt';
+import { fileLineFor, joinDeliveryBlocks, renderDeliveryBlock, renderDeliveryParts } from '../handoff/handoff-prompt';
 import { FEATURES } from '../../../services/features';
 
 /**
@@ -205,14 +205,7 @@ export class ChatRequestService implements OnDestroy {
       : this.deliveryState.takeForSend(sessionId);
     const modelText = cards.cards.length
       ? joinDeliveryBlocks(
-          cards.cards.map((c) =>
-            renderDeliveryBlock(
-              c.editedText ?? c.text,
-              c.fromTitle,
-              c.artifacts,
-              (c.files ?? []).map((f) => fileLineFor(f, sessionId, c.deliveryId)),
-            ),
-          ),
+          cards.cards.map((c) => renderComposerCard(c, sessionId)),
           userInput,
         )
       : undefined;
@@ -1046,4 +1039,29 @@ export class ChatRequestService implements OnDestroy {
 
     return attachments.length > 0 ? attachments : undefined;
   }
+}
+
+/**
+ * One composer card as the receiving model reads it, so the live bubble matches the reloaded one:
+ * a plain card is one block, a run result one block per part with the user's edits (PR-W.4b).
+ */
+function renderComposerCard(card: ComposerCard, sessionId: string): string {
+  if (card.parts) {
+    return renderDeliveryParts(
+      card.parts.map((part) => ({
+        agentName: part.agentName,
+        fromTitle: part.fromTitle,
+        status: part.status,
+        text: card.editedParts?.[part.stepId] ?? part.text,
+        artifacts: part.artifacts,
+        files: part.files.map((f) => fileLineFor(f, sessionId, card.deliveryId)),
+      })),
+    );
+  }
+  return renderDeliveryBlock(
+    card.editedText ?? card.text,
+    card.fromTitle,
+    card.artifacts,
+    (card.files ?? []).map((f) => fileLineFor(f, sessionId, card.deliveryId)),
+  );
 }

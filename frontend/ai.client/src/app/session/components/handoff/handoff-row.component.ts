@@ -26,13 +26,11 @@ import { HandoffNotificationService } from '../../services/handoff/handoff-notif
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
 import { DeliveryService } from '../../services/handoff/delivery.service';
 import { HandoffTargetFilesService } from '../../services/handoff/handoff-target-files.service';
-import { DeliveryFile, HandoffStatus, HandoffView, WaitingOn } from '../../services/handoff/handoff.models';
+import { DeliveryFile, HandoffView } from '../../services/handoff/handoff.models';
 import { SessionService } from '../../services/session/session.service';
 import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
 import { HandoffRelayComponent } from './handoff-relay.component';
-
-/** The row's state as the user sees it: live while the target streams in this tab, persisted otherwise. */
-type RowState = Extract<HandoffStatus, 'running' | 'needs_input' | 'done' | 'stopped'>;
+import { HandoffRowState as RowState, bringIntoView, handoffStatusLine, truncate } from './handoff-status-line';
 
 /**
  * The handoff row (handoffs spec §4.3): a card in the source thread that is itself the link to the
@@ -226,29 +224,9 @@ export class HandoffRowComponent {
     return truncate(this.row().request, 80);
   });
 
-  protected readonly statusLine = computed(() => {
-    const row = this.row();
-    switch (this.state()) {
-      case 'running': {
-        const summary = this.insight.latestSummary(this.target());
-        if (summary) return summary;
-        const status = this.insight.status(this.target());
-        if (status?.phase === 'tool_start' && status.toolName) return `Using ${status.toolName}`;
-        if (status?.phase === 'thinking') return 'Thinking';
-        return `Working on “${truncate(row.request, 60)}”`;
-      }
-      case 'needs_input':
-        return waitingLine(row.waitingOn, (providerId) => this.connectors.displayNameFor(providerId));
-      case 'done': {
-        const summary = this.insight.latestSummary(this.target()) ?? row.statusLine;
-        return summary ? `Finished · ${summary}` : 'Finished';
-      }
-      default:
-        if (row.stoppedReason === 'connection_lost') return 'Stopped · connection lost';
-        if (row.stoppedReason === 'not_started') return 'Didn’t start · open it to see why';
-        return 'Stopped';
-    }
-  });
+  protected readonly statusLine = computed(() =>
+    handoffStatusLine(this.row(), this.state(), this.insight, (providerId) => this.connectors.displayNameFor(providerId)),
+  );
 
   /** A finished handoff can send its answer back here (the target is the user's own by now). */
   protected readonly offerBringBack = computed(
@@ -278,30 +256,4 @@ export class HandoffRowComponent {
   protected readonly accessibleName = computed(
     () => `${this.title()}, ${this.row().agentName}, ${this.statusLine()}`,
   );
-}
-
-/** Scroll the card to the middle of the thread and focus it without a second jump. */
-function bringIntoView(card: HTMLElement): void {
-  if (typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  card.focus({ preventScroll: true });
-}
-
-function waitingLine(waiting: WaitingOn | undefined, providerName: (providerId: string) => string): string {
-  switch (waiting?.kind) {
-    case 'oauth_consent':
-      return waiting.name ? `Waiting for you to connect ${providerName(waiting.name)}` : 'Waiting for you to connect an account';
-    case 'tool_approval':
-      return waiting.name ? `Waiting for your approval to run ${waiting.name}` : 'Waiting for your approval';
-    case 'user_question':
-      return waiting.name || 'Waiting for your answer';
-    case 'browser_login':
-      return 'Waiting for you to sign in';
-    default:
-      return 'Needs your input';
-  }
-}
-
-function truncate(value: string, max: number): string {
-  const text = value.trim();
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }

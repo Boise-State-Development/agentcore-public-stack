@@ -8,22 +8,12 @@ import { DEFAULT_RUN_CONCURRENCY, RunEnvelope, RunStepLaunch, WorkflowRunView } 
 /** A step stops holding a slot once its row reads one of these (spec §19 PR-W.4a). */
 const SETTLED: ReadonlySet<HandoffStatus> = new Set(['done', 'needs_input', 'stopped', 'dismissed', 'abandoned']);
 
-/** Local-storage key prefix for an approved run's envelope, kept until every step has started. */
-const STORAGE_PREFIX = 'aps.workflowRun.';
-/** An approved run's unsent steps stay startable for as long as their rows do (`ABANDON_AFTER`). */
-const STORAGE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-
 interface QueuedRun {
   envelope: RunEnvelope;
   /** Steps not started yet, in step order. */
   pending: readonly RunStepLaunch[];
   /** Handoff ids of the steps holding a slot. */
   running: readonly string[];
-}
-
-interface StoredEnvelope {
-  envelope: RunEnvelope;
-  savedAt: number;
 }
 
 /**
@@ -39,9 +29,10 @@ interface StoredEnvelope {
  * guard asks before closing a tab with queued or running steps.
  *
  * Every step is sent with the run's envelope as approved: exactly its `fileIds`, and the card as
- * reviewed. The envelope is also written to local storage until the last step has started, so a
- * reload can start the steps it never started with the same card (the run row stores the files,
- * not the card).
+ * reviewed. Both are on the run row (the card since PR-W.4b), so a reload in any browser can start
+ * the steps this tab never started (`WorkflowRunService.resume`).
+ *
+ * `stop` closes a run's queue (Stop run): no pending step starts after it.
  */
 @Injectable({ providedIn: 'root' })
 export class WorkflowRunQueueService {
@@ -88,6 +79,19 @@ export class WorkflowRunQueueService {
     return this.runs().get(runId)?.pending.length ?? 0;
   }
 
+  /** This step is queued in this tab, waiting for a slot. */
+  isPending(runId: string, handoffId: string): boolean {
+    return this.runs().get(runId)?.pending.some((step) => step.handoffId === handoffId) ?? false;
+  }
+
+  /**
+   * Stop run: close this run's queue, so no pending step starts. The running steps are stopped by
+   * the caller, each with its own cancel; their slots no longer matter.
+   */
+  stop(runId: string): void {
+    this.finish(runId);
+  }
+
   /**
    * Queue an approved run's steps and start the first `concurrency` of them. A step already
    * queued or running for this run is not queued twice.
@@ -103,12 +107,6 @@ export class WorkflowRunQueueService {
       running: current?.running ?? [],
     });
     this.pump(envelope.runId);
-  }
-
-  /** The envelope this browser saved for an approved run, if it has one and it is still fresh. */
-  storedEnvelope(runId: string): RunEnvelope | null {
-    const stored = readStored(runId);
-    return stored?.envelope ?? null;
   }
 
   /**
@@ -207,44 +205,5 @@ export class WorkflowRunQueueService {
 
   private setRun(runId: string, run: QueuedRun): void {
     this.runs.update((map) => new Map(map).set(runId, run));
-    if (run.pending.length > 0) writeStored(run.envelope);
-    else removeStored(runId);
-  }
-}
-
-function storageKey(runId: string): string {
-  return `${STORAGE_PREFIX}${runId}`;
-}
-
-function readStored(runId: string): StoredEnvelope | null {
-  try {
-    const raw = localStorage.getItem(storageKey(runId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredEnvelope;
-    if (!parsed?.envelope || parsed.envelope.runId !== runId || !Array.isArray(parsed.envelope.fileIds)) return null;
-    if (typeof parsed.savedAt !== 'number' || Date.now() - parsed.savedAt > STORAGE_MAX_AGE_MS) {
-      localStorage.removeItem(storageKey(runId));
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writeStored(envelope: RunEnvelope): void {
-  try {
-    const stored: StoredEnvelope = { envelope, savedAt: readStored(envelope.runId)?.savedAt ?? Date.now() };
-    localStorage.setItem(storageKey(envelope.runId), JSON.stringify(stored));
-  } catch {
-    // Private mode or a full quota: the run still starts; only a reload loses the card.
-  }
-}
-
-function removeStored(runId: string): void {
-  try {
-    localStorage.removeItem(storageKey(runId));
-  } catch {
-    // Nothing to clean up.
   }
 }

@@ -8,7 +8,6 @@ import { WorkflowRunQueueService } from '../../services/handoff/workflow-run-que
 import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
 import { RunReview, WorkflowRunView } from '../../services/handoff/workflow-run.models';
 import { WorkflowRunService } from '../../services/handoff/workflow-run.service';
-import { WorkflowRunResumeComponent } from './workflow-run-resume.component';
 import { WorkflowRunSheetComponent } from './workflow-run-sheet.component';
 
 const NAMES = ['Generalist', 'Colleague', 'Emotional outsider', 'Fiscal outsider'];
@@ -145,86 +144,5 @@ describe('WorkflowRunSheetComponent', () => {
     const picker = el().querySelector('select') as HTMLSelectElement;
     expect([...picker.options].map((o) => o.textContent?.trim())).toEqual(NAMES);
     expect(runs.previewPrompt).toHaveBeenCalledWith(expect.anything(), 's1');
-  });
-});
-
-describe('WorkflowRunResumeComponent', () => {
-  afterEach(() => {
-    TestBed.resetTestingModule();
-    localStorage.clear();
-  });
-
-  function approvedRun(): WorkflowRunView {
-    return {
-      runId: 'run1',
-      sessionId: 'src',
-      status: 'approved',
-      request: 'r',
-      steps: NAMES.slice(0, 2).map((n, i) => ({
-        stepId: `s${i + 1}`,
-        handoffId: `h${i + 1}`,
-        agentId: `a${i + 1}`,
-        agentName: n,
-        request: 'r',
-        removed: false,
-        handoff: {
-          handoffId: `h${i + 1}`,
-          sessionId: 'src',
-          kind: 'mention',
-          status: 'open',
-          agentId: `a${i + 1}`,
-          agentName: n,
-          request: 'r',
-          sourceMessageIndex: 1,
-          excerptTokens: 1,
-          createdAt: '',
-          updatedAt: '',
-        },
-      })),
-      fileIds: [],
-      limits: { maxSteps: 8, concurrency: 4 },
-      sourceMessageIndex: 1,
-      createdAt: '',
-      updatedAt: '',
-    };
-  }
-
-  async function render(saved: boolean): Promise<{ fixture: ComponentFixture<WorkflowRunResumeComponent>; resume: ReturnType<typeof vi.fn> }> {
-    const resume = vi.fn();
-    const queue = {
-      unstartedSteps: (run: WorkflowRunView) =>
-        run.steps.map((s) => ({ stepId: s.stepId, handoffId: s.handoffId, agentId: s.agentId, agentName: s.agentName, request: s.request })),
-      storedEnvelope: () => (saved ? ({ runId: 'run1' } as never) : null),
-    };
-    await TestBed.configureTestingModule({
-      imports: [WorkflowRunResumeComponent],
-      providers: [
-        { provide: WorkflowRunService, useValue: { resume } },
-        { provide: WorkflowRunQueueService, useValue: queue },
-        HandoffStateService,
-      ],
-    }).compileComponents();
-    TestBed.inject(WorkflowRunStateService).hydrate('src', [approvedRun()]);
-    const fixture = TestBed.createComponent(WorkflowRunResumeComponent);
-    fixture.componentRef.setInput('sessionId', 'src');
-    fixture.detectChanges();
-    return { fixture, resume };
-  }
-
-  it('shows the unstarted steps as Not started, with one Start', async () => {
-    const { fixture, resume } = await render(true);
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('Generalist · Not started');
-    expect(text).toContain('Colleague · Not started');
-    const start = [...(fixture.nativeElement as HTMLElement).querySelectorAll('button')];
-    expect(start.map((b) => b.textContent?.trim())).toEqual(['Start 2 Agents']);
-    start[0].click();
-    expect(resume).toHaveBeenCalled();
-  });
-
-  it('offers no Start without the envelope this browser saved', async () => {
-    const { fixture } = await render(false);
-    expect((fixture.nativeElement as HTMLElement).querySelectorAll('button').length).toBe(0);
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain('approved in another browser');
   });
 });

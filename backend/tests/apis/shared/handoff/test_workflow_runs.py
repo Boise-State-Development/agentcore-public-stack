@@ -17,6 +17,7 @@ from apis.shared.handoff.models import Handoff
 from apis.shared.handoff.replay import load_handoff_replay, load_workflow_run_replay
 from apis.shared.handoff.runs import (
     WorkflowRun,
+    WorkflowRunCard,
     WorkflowRunStep,
     WorkflowRunStore,
     WorkflowRunView,
@@ -229,6 +230,22 @@ class TestRunStore:
         )
         assert runs.approve("alice", "r1", request="r", steps=steps, file_ids=[], edits=[], approved_at=_iso()) is None
 
+    def test_approve_keeps_the_card_as_reviewed(self, runs, table):
+        runs.create(_run())
+        approved = runs.approve(
+            "alice", "r1", request="r", steps=_run().steps, file_ids=[], edits=[], approved_at=_iso(),
+            card=WorkflowRunCard(text="the card as reviewed"),
+        )
+        assert approved.card == WorkflowRunCard(text="the card as reviewed")
+        item = table.get_item(Key={"PK": "USER#alice", "SK": "WFRUN#r1"})["Item"]
+        assert item["card"] == {"text": "the card as reviewed", "removed": False}
+        assert runs.get("alice", "r1").card.text == "the card as reviewed"
+
+    def test_a_run_approved_without_a_card_has_none(self, runs):
+        runs.create(_run())
+        runs.approve("alice", "r1", request="r", steps=_run().steps, file_ids=[], edits=[], approved_at=_iso())
+        assert runs.get("alice", "r1").card is None
+
     @pytest.mark.parametrize(
         "first, then, allowed",
         [
@@ -279,6 +296,15 @@ class TestReplay:
         assert [(s["stepId"], s["handoff"]["status"]) for s in steps] == [("s1", "running"), ("s2", "open")]
         assert steps[0]["handoff"]["runId"] == "r1" and "relayedPrompts" not in steps[0]["handoff"]
         assert [(h["handoffId"], h["runId"], h["stepId"]) for h in sent] == [("h1", "r1", "s1")]
+
+    def test_the_card_as_reviewed_replays_with_the_run(self, runs, handoffs):
+        runs.create(_run())
+        runs.approve(
+            "alice", "r1", request="r", steps=_run().steps, file_ids=[], edits=[], approved_at=_iso(),
+            card=WorkflowRunCard(removed=True),
+        )
+        replayed = asyncio.run(load_workflow_run_replay("src", "alice", run_store=runs, handoff_store=handoffs))
+        assert replayed[0]["card"] == {"removed": True}
 
     def test_nothing_while_the_flag_is_off(self, runs, handoffs, monkeypatch):
         runs.create(_run())

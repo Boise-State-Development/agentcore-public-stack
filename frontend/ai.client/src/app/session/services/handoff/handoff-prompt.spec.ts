@@ -19,6 +19,8 @@ import {
   renderDeliveryBlock,
   renderDeliveryParts,
   wrapHandoffContext,
+  groupRunResults,
+  BubbleDelivery,
 } from './handoff-prompt';
 
 interface FixtureCase {
@@ -103,6 +105,40 @@ describe('delivery blocks', () => {
     expect(blocks[0].artifacts.map((a) => a.artifactId)).toEqual(['memo']);
     expect(blocks[0].files.map((f) => f.filename)).toEqual(['budget.xlsx']);
     expect(blocks[2].text).toBe(DELIVERY_PART_STATUS_NOTES.stopped);
+  });
+
+  it('groups a sent run result back into one, from the fixture’s own text (the sent bubble)', () => {
+    const run = fixture.deliveryCases.find((c) => c.parts)!;
+    const plain = renderDeliveryBlock('Blue.', 'Colour');
+    const { blocks } = extractDeliveryBlocks(joinDeliveryBlocks([plain, run.block, plain], 'Merge these.'));
+    const agents = run.parts!.map((p) => p.agentName);
+
+    const grouped = groupRunResults(blocks, [{ runId: 'run1', agentNames: agents }]);
+
+    expect(grouped.map((g) => g.kind)).toEqual(['card', 'run', 'card']);
+    const result = grouped[1] as Extract<BubbleDelivery, { kind: 'run' }>;
+    expect(result.runId).toBe('run1');
+    // The emptied Editor part gave no block, so five of six steps come back, in step order.
+    expect(result.parts.map((p) => [p.agentName, p.status])).toEqual([
+      ['Generalist', 'done'],
+      ['Colleague', 'done'],
+      ['Fiscal outsider', 'stopped'],
+      ['Emotional "outsider"', 'needs_input'],
+      ['Statistician', 'running'],
+    ]);
+  });
+
+  it('leaves ordinary cards alone, and a lone block grouped only for a run of one', () => {
+    const one = renderDeliveryBlock('A result.', 'Colleague · Review');
+    const { blocks } = extractDeliveryBlocks(joinDeliveryBlocks([one], 'x'));
+    expect(groupRunResults(blocks, []).map((g) => g.kind)).toEqual(['card']);
+    expect(groupRunResults(blocks, [{ runId: 'r', agentNames: ['Generalist', 'Colleague'] }]).map((g) => g.kind)).toEqual(['card']);
+    expect(groupRunResults(blocks, [{ runId: 'r', agentNames: ['Colleague'] }]).map((g) => g.kind)).toEqual(['run']);
+    // A label that only starts with an Agent's name is not that Agent's part.
+    const near = extractDeliveryBlocks(
+      joinDeliveryBlocks([renderDeliveryBlock('x', 'Colleagues'), renderDeliveryBlock('y', 'Generalist')], ''),
+    ).blocks;
+    expect(groupRunResults(near, [{ runId: 'r', agentNames: ['Colleague', 'Generalist'] }]).map((g) => g.kind)).toEqual(['card', 'card']);
   });
 
   it('names a part by its Agent, then its conversation, once when they match', () => {

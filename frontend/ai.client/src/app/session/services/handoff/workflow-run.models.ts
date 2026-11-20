@@ -47,6 +47,17 @@ export interface WorkflowRunView {
   updatedAt: string;
   approvedAt?: string;
   resultDeliveryId?: string;
+  /** The card as the user reviewed it, kept at approval (PR-W.4b); absent on runs approved before. */
+  card?: WorkflowRunCard;
+}
+
+/**
+ * The context card every step of a run is sent with, as reviewed: its text (normalized and capped
+ * as the Runtime caps a card), or removed. On `…/approve`, and on the run row from then on.
+ */
+export interface WorkflowRunCard {
+  text?: string;
+  removed: boolean;
 }
 
 /** One step of `POST /sessions/{id}/workflow-runs`, with what pricing its first turn needs. */
@@ -135,8 +146,8 @@ export interface RunShareableFile extends ShareableFile {
 }
 
 /**
- * What every step of an approved run is sent with, held by the queue (and in local storage, so a
- * reload can start the steps it never started with the card exactly as reviewed).
+ * What every step of an approved run is sent with, held by the queue. A reload rebuilds it from
+ * the run row (its files and its card as reviewed), so any browser can start the steps left.
  */
 export interface RunEnvelope {
   runId: string;
