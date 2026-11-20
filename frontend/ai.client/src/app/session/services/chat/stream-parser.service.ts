@@ -31,6 +31,7 @@ import { isPreviewableFilename } from '../file-preview/file-preview.model';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { ToolInsightService } from './tool-insight.service';
 import { SessionService } from '../session/session.service';
+import { toolResultMetadata } from '../session/tool-results';
 import { AgentNoticeService } from '../agent-notice/agent-notice.service';
 import { QuotaStatusService } from '../../../services/quota/quota-status.service';
 import type {
@@ -1048,6 +1049,7 @@ export class StreamParserService {
     const content = data.tool_result.content || [];
     const status = data.tool_result.status || 'success';
     const structuredContent = data.tool_result.structuredContent;
+    const metadata = toolResultMetadata(data.tool_result.metadata);
 
     const currentBuilder = state.currentMessageBuilder();
     if (!currentBuilder) {
@@ -1092,6 +1094,8 @@ export class StreamParserService {
           // Kept so an MCP App's "waiting for you" result is not read as a
           // failure (`isAwaitingUserSubmission`).
           ...(structuredContent !== undefined ? { structuredContent } : {}),
+          // An MCP App may render from `_meta` (Atlassian's widget context).
+          ...(metadata ? { metadata } : {}),
         },
         status: status === 'error' ? 'error' : 'complete',
       };

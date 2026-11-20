@@ -1061,6 +1061,17 @@ export class McpAppFrameComponent implements ToolResultRenderer {
       }
       return { type: 'text', text: item.text ?? '' };
     });
-    return { content, isError: r.status === 'error' };
+    // `structuredContent` and `_meta` travel with the result: an App may
+    // render from either and ignore the text (Atlassian's widgets render
+    // blank without them).
+    const structured = r.structuredContent;
+    return {
+      content,
+      isError: r.status === 'error',
+      ...(structured && typeof structured === 'object' && !Array.isArray(structured)
+        ? { structuredContent: structured }
+        : {}),
+      ...(r.metadata ? { _meta: r.metadata } : {}),
+    };
   }
 }

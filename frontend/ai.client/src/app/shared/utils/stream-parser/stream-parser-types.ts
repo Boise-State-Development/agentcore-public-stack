@@ -724,6 +724,8 @@ export interface ToolResultEventData {
     status?: 'success' | 'error';
     /** The tool's MCP `structuredContent`, when it returned one. */
     structuredContent?: unknown;
+    /** The tool's MCP `_meta`, when it returned one (Strands' `metadata`). */
+    metadata?: Record<string, unknown>;
   };
 }
 
@@ -836,6 +838,7 @@ export interface ContentBlockBuilder {
     content: ToolResultContent[];
     status: 'success' | 'error';
     structuredContent?: unknown;
+    metadata?: Record<string, unknown>;
   };
   status?: 'pending' | 'complete' | 'error';
   isComplete: boolean;

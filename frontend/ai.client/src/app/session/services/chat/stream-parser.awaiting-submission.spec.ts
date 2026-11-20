@@ -65,4 +65,21 @@ describe('StreamParserService: a tool result with structuredContent', () => {
 
     expect(toolUse()?.result).toEqual({ status: 'success', content: [{ text: 'ok' }] });
   });
+
+  it("keeps the tool's _meta (Strands' metadata) for an MCP App to render from", () => {
+    const widgetContext = { 'atlassian.com/jira-widget-context': { cloudId: 'c-1' } };
+    streamToolResult({
+      status: 'success',
+      content: [{ text: 'Found 0 issues' }],
+      structuredContent: { issues: { nodes: [] } },
+      metadata: widgetContext,
+    });
+
+    expect(toolUse()?.result).toEqual({
+      status: 'success',
+      content: [{ text: 'Found 0 issues' }],
+      structuredContent: { issues: { nodes: [] } },
+      metadata: widgetContext,
+    });
+  });
 });
