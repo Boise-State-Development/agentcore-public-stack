@@ -293,6 +293,12 @@ jobs:
       # development; set `CDK_HANDOFF_BRIEF_ENABLED` to "true" to turn it on.
       # AgentCore Runtime only, and only while handoffs are on too.
       CDK_HANDOFF_BRIEF_ENABLED: ${{ vars.CDK_HANDOFF_BRIEF_ENABLED }}
+      # Suggested handoffs: the model may offer a chip with `suggest_handoff`
+      # (agent-handoffs-and-consults.md §4.4). Opt-in while in development; set
+      # `CDK_HANDOFF_SUGGESTIONS_ENABLED` to "true" to turn it on. AgentCore
+      # Runtime only, and only while handoffs are on too. Nobody gets the tool
+      # until a role is granted the `suggest_handoff` catalog row.
+      CDK_HANDOFF_SUGGESTIONS_ENABLED: ${{ vars.CDK_HANDOFF_SUGGESTIONS_ENABLED }}
       # Conversation rewind: "Rewind to here" on a user message
       # (docs/specs/conversation-rewind-and-fork.md §4). Default ON with a kill
       # switch: set `CDK_SESSION_REWIND_ENABLED` to "false" in an environment to

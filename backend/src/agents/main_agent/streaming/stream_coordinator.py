@@ -1054,6 +1054,11 @@ class StreamCoordinator:
                         session_id, user_id
                     ):
                         yield extraction_sse
+                    # And for a handoff chip offered in the final batch.
+                    for suggestion_sse in self._drain_handoff_suggestions(
+                        session_id, user_id
+                    ):
+                        yield suggestion_sse
                     await self._persist_paused_turn_snapshot(
                         agent,
                         session_id=session_id,
@@ -1624,6 +1629,16 @@ class StreamCoordinator:
                 sse_event = self._format_sse_event(event)
                 yield sse_event
 
+                # Suggested handoffs: `suggest_handoff` parked its chip on its
+                # broker (a tool has no route to the stream). Drained after the
+                # event, so the chip follows the `tool_result` that made it
+                # (handoffs spec §4.4). The row is already written, so a dropped
+                # connection costs only the live chip; a reload replays it.
+                for suggestion_sse in self._drain_handoff_suggestions(
+                    session_id, user_id
+                ):
+                    yield suggestion_sse
+
                 # MCP Apps PR #5: interleave any app-initiated tool events
                 # (a `tools/call` proxied from an embedded App, dispatched
                 # out-of-band on /mcp-apps/proxy-call) into the live thread.
@@ -2118,6 +2133,14 @@ class StreamCoordinator:
                 discard_provenance(user_id, session_id)
             except Exception:  # noqa: BLE001
                 logger.debug("source provenance discard failed", exc_info=True)
+
+            # Same for handoff chips: the `HANDOFF#` row is what a reload reads.
+            try:
+                from apis.shared.handoff.suggestions import discard_suggestions
+
+                discard_suggestions(user_id, session_id)
+            except Exception:  # noqa: BLE001
+                logger.debug("handoff suggestion discard failed", exc_info=True)
 
             # Stop the turn's analyze_spreadsheet sandbox (#259). The agent's
             # AfterInvocationEvent normally does this; a dropped client can
@@ -3865,6 +3888,26 @@ class StreamCoordinator:
         except Exception:  # noqa: BLE001 - a summary is never worth an error
             logger.debug("Tool batch summary task failed", exc_info=True)
             return None
+
+    @staticmethod
+    def _drain_handoff_suggestions(session_id: str, user_id: str) -> List[str]:
+        """Harvest `suggest_handoff` chips into `handoff_suggested` SSEs (handoffs spec §4.4).
+
+        The rows are already written by the tool, so this is the live view only. Keyed on
+        `(user_id, session_id)`, because a chip carries the user's own conversation's words.
+        Nothing is queued unless the tool ran, so a turn without it pays one dict lookup.
+        """
+        try:
+            from apis.shared.handoff.suggestions import take_suggestions
+
+            payloads = take_suggestions(user_id, session_id)
+        except Exception:  # noqa: BLE001 - never worth breaking the stream
+            logger.debug("handoff suggestion drain failed", exc_info=True)
+            return []
+        return [
+            f"event: handoff_suggested\ndata: {json.dumps({'type': 'handoff_suggested', **payload})}\n\n"
+            for payload in payloads
+        ]
 
     @staticmethod
     async def _drain_source_provenance_events(session_id: str, user_id: str) -> List[str]:

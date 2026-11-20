@@ -506,6 +506,7 @@ export class InferenceAgentCoreConstruct extends Construct {
         // context card from its prompt cache. Meaningless without handoffs, so
         // written only while both are ON; the default costs nothing.
         ...(config.handoffs.enabled && config.handoffs.briefEnabled ? { HANDOFF_BRIEF_ENABLED: 'true' } : {}),
+        ...(config.handoffs.enabled && config.handoffs.suggestionsEnabled ? { HANDOFF_SUGGESTIONS_ENABLED: 'true' } : {}),
         // Conversation rewind (default on): the Runtime filters rewound
         // messages at restore and cuts a warm agent's list in place. Spread in
         // only while OFF: the code reads unset as on, so the default costs

@@ -858,6 +858,25 @@ def handoff_brief_enabled() -> bool:
     return handoffs_enabled() and os.environ.get("HANDOFF_BRIEF_ENABLED", "").strip().lower() == "true"
 
 
+def handoff_suggestions_enabled() -> bool:
+    """Whether the model may offer a handoff chip with ``suggest_handoff``.
+
+    ``docs/specs/agent-handoffs-and-consults.md`` §4.4 (Phase 0c). While on, a
+    turn whose tools include the ``suggest_handoff`` catalog id gets the tool,
+    which writes a ``suggested`` ``HANDOFF#`` row and queues a
+    ``handoff_suggested`` event; the turn continues. While off the tool is never
+    built, so ``toolConfig`` is unchanged. Meaningless without
+    ``HANDOFFS_ENABLED``, so both must be on. The catalog row is seeded
+    ``enabledByDefault: false``, so nobody gets the tool until a role grants it
+    and the user turns it on. **Opt-in while in development**: only ``"true"``
+    enables it. AgentCore Runtime only, written there only while on.
+
+    A **feature switch** once finished: a chip-happy model is worse than none,
+    so whether to offer suggestions is a deployment's product choice.
+    """
+    return handoffs_enabled() and os.environ.get("HANDOFF_SUGGESTIONS_ENABLED", "").strip().lower() == "true"
+
+
 def session_rewind_enabled() -> bool:
     """Whether a user can rewind a conversation to one of their earlier messages.
 

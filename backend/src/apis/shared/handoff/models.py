@@ -36,6 +36,12 @@ ABANDON_AFTER = timedelta(hours=24)
 HANDOFF_REQUEST_MAX_CHARS = 20_000
 #: Display-only text on the row (titles, the live status line on replay).
 HANDOFF_DISPLAY_MAX_CHARS = 240
+#: A suggestion's chip (``suggest_handoff``, §4.4): its title, its one-line reason, and the
+#: Agent name the model gave, before the SPA matches it against the user's Agents.
+SUGGESTION_TITLE_MAX_CHARS = 60
+SUGGESTION_TLDR_MAX_CHARS = 200
+SUGGESTION_PROMPT_MAX_CHARS = 4_000
+SUGGESTION_AGENT_HINT_MAX_CHARS = 120
 
 #: Allowed moves, by the status being left. ``needs_input`` and ``stopped`` may rewrite
 #: themselves (a second pause with a new ``waitingOn``); ``running`` may not, because the move
@@ -153,10 +159,24 @@ class Handoff(BaseModel):
     status_line: Optional[str] = Field(None, alias="statusLine")
     waiting_on: Optional[WaitingOn] = Field(None, alias="waitingOn")
     stopped_reason: Optional[str] = Field(None, alias="stoppedReason")
+    # A suggestion's chip (§4.4). Set by ``suggest_handoff``; a mention never has them.
+    title: Optional[str] = None
+    tldr: Optional[str] = None
+    agent_hint: Optional[str] = Field(
+        None, alias="agentHint", description="The Agent name the model gave, unresolved; the SPA matches it"
+    )
+    tool_use_id: Optional[str] = Field(
+        None, alias="toolUseId", description="The suggest_handoff call, which places the chip under its message"
+    )
 
     def effective_status(self, now: Optional[datetime] = None) -> EffectiveHandoffStatus:
-        """The status as read: an ``open`` row past ``ABANDON_AFTER`` is ``abandoned``."""
-        if self.status != "open":
+        """The status as read: an ``open`` row past ``ABANDON_AFTER`` is ``abandoned``.
+
+        Except a suggestion: its chip stays in the thread for the user to start whenever they
+        like, so an old one is still ``open``. A mention's ``open`` row is a review sheet nobody
+        sent, and a day later it is noise.
+        """
+        if self.status != "open" or self.kind == "suggested":
             return self.status
         try:
             created = datetime.fromisoformat(self.created_at)
@@ -199,6 +219,10 @@ class HandoffView(BaseModel):
         alias="relayedPrompts",
         description="A needs_input handoff's prompts, read from its target's breadcrumbs (apis.shared.handoff.relay)",
     )
+    title: Optional[str] = None
+    tldr: Optional[str] = None
+    agent_hint: Optional[str] = Field(None, alias="agentHint")
+    tool_use_id: Optional[str] = Field(None, alias="toolUseId")
 
     @classmethod
     def from_row(cls, row: Handoff) -> "HandoffView":
@@ -219,6 +243,10 @@ class HandoffView(BaseModel):
             status_line=row.status_line,
             waiting_on=row.waiting_on,
             stopped_reason=row.stopped_reason,
+            title=row.title,
+            tldr=row.tldr,
+            agent_hint=row.agent_hint,
+            tool_use_id=row.tool_use_id,
         )
 
 
@@ -232,6 +260,10 @@ __all__ = [
     "HandoffKind",
     "HandoffStatus",
     "RelayedPrompt",
+    "SUGGESTION_AGENT_HINT_MAX_CHARS",
+    "SUGGESTION_PROMPT_MAX_CHARS",
+    "SUGGESTION_TITLE_MAX_CHARS",
+    "SUGGESTION_TLDR_MAX_CHARS",
     "TRANSITIONS",
     "TurnsCovered",
     "WaitingKind",

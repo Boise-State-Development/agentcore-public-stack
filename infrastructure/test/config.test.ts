@@ -1221,6 +1221,27 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Handoff suggestions feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_HANDOFF_SUGGESTIONS_ENABLED is unset', () => {
+      delete process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED;
+      expect(loadConfig(app).handoffs.suggestionsEnabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED = '';
+      expect(loadConfig(app).handoffs.suggestionsEnabled).toBe(false);
+    });
+
+    test('CDK_HANDOFF_SUGGESTIONS_ENABLED="true" turns it on', () => {
+      process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).handoffs.suggestionsEnabled).toBe(true);
+    });
+  });
+
   describe('Session fork feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_SESSION_FORK_ENABLED;

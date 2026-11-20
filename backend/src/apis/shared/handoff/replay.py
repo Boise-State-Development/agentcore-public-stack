@@ -4,7 +4,9 @@ Two things, both UI only and neither ever part of a model's history:
 
 - **``handoffs``** on a *source* conversation: one view per handoff it sent, for the handoff rows the
   thread shows after ``sourceMessageIndex``. Only handoffs that were sent (they have a target); an
-  open, dismissed or abandoned one has no row to show.
+  open, dismissed or abandoned one has no row to show. The exception is a **suggestion** still
+  ``open`` (§4.4, PR-0.5): its chip, placed under the message holding its ``toolUseId``, with
+  ``title``, ``tldr`` and the model's ``agentHint``.
   A ``needs_input`` handoff also carries ``relayedPrompts``: what its target is waiting on, so the
   source can answer it under the row (PR-0.3c, ``apis.shared.handoff.relay``).
 - **``spawnedFrom``** on a *target* conversation: where it came from, so its first user bubble can say
@@ -21,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from apis.shared.feature_flags import handoffs_enabled
 from apis.shared.handoff.delivery import DeliveryStore, DeliveryView, get_delivery_store
-from apis.shared.handoff.models import HandoffView
+from apis.shared.handoff.models import Handoff, HandoffView
 from apis.shared.handoff.relay import MetaLoader, load_relayed_prompts
 from apis.shared.handoff.store import HandoffStore, get_handoff_store
 
@@ -51,7 +53,12 @@ async def load_handoff_replay(
     except Exception:  # noqa: BLE001 - a replay that fails costs only the rows, never the thread
         logger.warning("Handoff replay failed", exc_info=True)
         return [], None
-    views = [HandoffView.from_row(row) for row in rows if row.target_session_id and row.kind != "send_back"]
+    views = [HandoffView.from_row(row) for row in rows if _replayed(row)]
+    for view in views:
+        if view.kind == "suggested" and not view.target_session_id:
+            # A chip's prompt comes with Start (POST .../start), never with the thread: most chips
+            # are dismissed or ignored, and the prompt can be 4,000 characters.
+            view.request = ""
     await load_relayed_prompts(views, user_id, meta_loader=meta_loader)
     return [view.model_dump(by_alias=True, exclude_none=True) for view in views], spawned
 
@@ -73,6 +80,15 @@ async def load_delivery_replay(
         logger.warning("Delivery replay failed", exc_info=True)
         return []
     return [DeliveryView.from_row(row).model_dump(by_alias=True, exclude_none=True) for row in rows]
+
+
+def _replayed(row: Handoff) -> bool:
+    """A handoff that was sent (its row), or a suggestion still waiting on the user (its chip)."""
+    if row.kind == "send_back":
+        return False
+    if row.target_session_id:
+        return True
+    return row.kind == "suggested" and row.status == "open"
 
 
 def _spawned_from(

@@ -55,7 +55,7 @@ describe('AgentCore Runtime environment variable ceiling', () => {
         enabled: true,
         defaultQuotaHours: 0,
       },
-      handoffs: { enabled: true, briefEnabled: true },
+      handoffs: { enabled: true, briefEnabled: true, suggestionsEnabled: true },
       // Rewind and fork are default on and write their Runtime variable only
       // while OFF, so the worst case is off (the mock config's default).
       sessionRewind: { enabled: false },

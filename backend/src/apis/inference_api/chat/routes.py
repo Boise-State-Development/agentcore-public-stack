@@ -157,6 +157,7 @@ from apis.shared.tools.injected import (
     MEETING_TASKS_TOOL_IDS,
     POWERPOINT_PRESENTATION_TOOL_IDS,
     SKILL_AUTHORING_TOOL_IDS,
+    SUGGEST_HANDOFF_TOOL_IDS,
     SPREADSHEET_TOOL_IDS,
     WORD_DOCUMENT_TOOL_IDS,
     WORKSPACE_TOOL_IDS,
@@ -1150,6 +1151,33 @@ def _build_skill_authoring_tools(
     tools = build_skill_authoring_tools(session_id, user_id, user_email)
     logger.info(f"Created {len(tools)} skill authoring tools")
     return tools
+
+
+def _build_suggest_handoff_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create the context-bound ``suggest_handoff`` tool if enabled (handoffs spec §4.4).
+
+    Gated on the ``suggest_handoff`` catalog id in the turn's tools (seeded
+    ``enabledByDefault: false``) and on ``HANDOFF_SUGGESTIONS_ENABLED``, which
+    needs ``HANDOFFS_ENABLED`` too. No IO. Closes over ``(session_id,
+    user_id)`` only, which is why the id is in
+    ``KEY_DESCRIBED_INJECTED_TOOL_IDS``. Built last among the catalog-gated
+    families, so turning it on appends to the existing specs.
+    """
+    if not enabled_tools or not SUGGEST_HANDOFF_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    from apis.shared.feature_flags import handoff_suggestions_enabled
+
+    if not handoff_suggestions_enabled():
+        return []
+
+    from agents.builtin_tools.suggest_handoff_tool import make_suggest_handoff_tool
+
+    return [make_suggest_handoff_tool(session_id, user_id)]
 
 
 # ============================================================
@@ -4680,6 +4708,10 @@ async def _build_turn_tools(
     # carries one of the ids — and a set intersection on every other turn.
     extra_tools = extra_tools + await _build_meeting_tools(
         enabled_tools=effective_enabled_tools,
+        user_id=user_id,
+    ) + _build_suggest_handoff_tools(
+        enabled_tools=effective_enabled_tools,
+        session_id=input_data.session_id,
         user_id=user_id,
     )
 

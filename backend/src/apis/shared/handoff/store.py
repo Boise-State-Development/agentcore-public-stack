@@ -266,6 +266,72 @@ class HandoffStore:
             raise
         return _from_item(resp["Attributes"])
 
+    def start_suggested(
+        self,
+        user_id: str,
+        handoff_id: str,
+        *,
+        agent_id: str,
+        agent_name: str,
+        source_title: str,
+        source_message_index: int,
+        excerpt_hash: str,
+        excerpt_tokens: int,
+        turns_covered: Optional[Dict[str, int]],
+        source_project_id: Optional[str],
+    ) -> Optional[Handoff]:
+        """A suggestion's Start: give the ``open`` row its Agent and the card it is reviewed with (§4.4).
+
+        The row stays ``open``: Start opens the review sheet, and the target's first turn accepts it
+        exactly as it accepts a mention, against the Agent written here. Start can run again after a
+        cancelled sheet (the card is re-rendered from the conversation as it is then). ``None`` when
+        the row isn't the caller's, isn't a suggestion, or was already sent or dismissed.
+        """
+        table = self._require_table()
+        names = {"#status": "status", "#updatedAt": "updatedAt", "#kind": "kind"}
+        values: Dict[str, Any] = {
+            ":open": "open",
+            ":suggested": "suggested",
+            ":agentId": agent_id,
+            ":agentName": agent_name[:HANDOFF_DISPLAY_MAX_CHARS],
+            ":sourceTitle": source_title,
+            ":sourceMessageIndex": int(source_message_index),
+            ":excerptHash": excerpt_hash,
+            ":excerptTokens": int(excerpt_tokens),
+            ":now": datetime.now(timezone.utc).isoformat(),
+        }
+        sets = [
+            "agentId = :agentId",
+            "agentName = :agentName",
+            "sourceTitle = :sourceTitle",
+            "sourceMessageIndex = :sourceMessageIndex",
+            "excerptHash = :excerptHash",
+            "excerptTokens = :excerptTokens",
+            "#updatedAt = :now",
+        ]
+        removes = []
+        for attr, value in (("turnsCovered", turns_covered), ("sourceProjectId", source_project_id)):
+            if value is None:
+                removes.append(attr)
+            else:
+                values[f":{attr}"] = value
+                sets.append(f"{attr} = :{attr}")
+        update = "SET " + ", ".join(sets) + (" REMOVE " + ", ".join(removes) if removes else "")
+        try:
+            resp = table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{handoff_id}"},
+                UpdateExpression=update,
+                ConditionExpression="attribute_exists(SK) AND #status = :open AND #kind = :suggested",
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if _is_conditional_failure(exc):
+                return None
+            raise
+        return _from_item(resp["Attributes"])
+
     def record_brief(
         self,
         user_id: str,
