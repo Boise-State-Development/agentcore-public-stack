@@ -276,6 +276,13 @@ export interface FileMetadata {
   linkedFrom?: LinkedFrom | null;
   /** For a shared file: whether its original still exists. Absent for every other file. */
   originalAvailable?: boolean | null;
+  /**
+   * What a prepared document weighs to a model, model-neutral (`facts_tokens` with no model).
+   * `null` until prepared, for a non-document and for a reference row. For estimates only.
+   */
+  estimatedTokens?: number | null;
+  /** A document's page count, when known. */
+  pages?: number | null;
 }
 
 /** The original a shared file points at (`linkedFrom` on the row). */

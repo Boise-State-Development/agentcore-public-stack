@@ -121,6 +121,7 @@ import {
   StoredFolder,
 } from '../../services/session/composer-draft-storage.service';
 import { ComposerHandoffService } from './composer-handoff.service';
+import { MAX_RUN_STEPS } from '../../services/handoff/workflow-run.models';
 import { IncognitoToggleComponent } from './incognito-toggle.component';
 import { IncognitoChatService } from '../../services/incognito';
 import { ComposerSegment, findHighlightRanges, toSegments } from './composer-highlights';
@@ -218,6 +219,12 @@ interface Message {
    */
   mentionAgentId?: string;
   /**
+   * Every Agent mentioned, in order, when there are two or more (workflow runs,
+   * `features.workflowRuns`): one handoff to several Agents from one review sheet.
+   * `mentionAgentId` is the first of them. Absent for a single mention.
+   */
+  mentionAgentIds?: string[];
+  /**
    * Skills the user invoked with a `/` slash command in this message. Derived from the
    * message text, so it is always exactly what the thread will show.
    */
@@ -260,6 +267,7 @@ interface QueuedMessage {
   folders?: FolderAttachmentData[];
   storedFolders?: StoredFolder[];
   mentionAgentId?: string;
+  mentionAgentIds?: string[];
   invokedSkillIds?: string[];
   /** Characters of `content` that were pasted, counted when it was queued. */
   pastedChars?: number;
@@ -443,6 +451,14 @@ export class ChatInputComponent {
   // running the Agent being edited.
   readonly showAgentMentions = input<boolean>(true);
 
+  /**
+   * Whether one message may mention several Agents, to hand work to all of them from one
+   * review sheet (workflow runs, docs/specs/workflow-runs.md §20.1). Only where a mention is a
+   * mid-thread handoff, and only with `features.handoffs` and `features.workflowRuns`; off,
+   * the composer keeps one mention per turn.
+   */
+  readonly offerMultipleMentions = input<boolean>(false);
+
   // Input: offer the `/` skill-command menu (defaults to true). Off in the embedded
   // previews for the same reason as `@`-mentions — those panes exercise one Agent whose
   // skills the Agent itself dictates, so a menu built from the *user's* enabled skills
@@ -535,6 +551,15 @@ export class ChatInputComponent {
     () => this.showAgentMentions() && this.project() === null,
   );
 
+  /** Several `@`-mentions in one message (workflow runs). Never without `agentMentionsOffered`. */
+  protected readonly multipleMentionsOffered = computed(
+    () =>
+      this.agentMentionsOffered() &&
+      this.offerMultipleMentions() &&
+      this.features.handoffs &&
+      this.features.workflowRuns,
+  );
+
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
   private readonly fileInput = viewChild<ElementRef<HTMLInputElement>>('fileInput');
   private readonly shell = viewChild<ElementRef<HTMLElement>>('shell');
@@ -588,6 +613,9 @@ export class ChatInputComponent {
    * removed.
    */
   private readonly pendingMentionAgentId = signal<string | null>(null);
+
+  /** Further mentions restored from a draft, re-bound as `pendingMentionAgentId` is. */
+  private readonly pendingAdditionalMentionIds = signal<readonly string[]>([]);
 
   // Output events
   fileAttached = output<File>();
@@ -1222,6 +1250,18 @@ export class ChatInputComponent {
   /** The Agent this turn will be handed to, once picked. Cleared on submit. */
   readonly mentionedAgent = signal<MentionableAgent | null>(null);
 
+  /**
+   * The second to eighth Agents, when one message mentions several (workflow runs). Empty
+   * unless `multipleMentionsOffered`, and cleared with `mentionedAgent`.
+   */
+  readonly additionalMentions = signal<readonly MentionableAgent[]>([]);
+
+  /** Every Agent this message is handed to, in the order they were mentioned. */
+  readonly mentionedAgents = computed<readonly MentionableAgent[]>(() => {
+    const first = this.mentionedAgent();
+    return first ? [first, ...this.additionalMentions()] : [];
+  });
+
   /** The `@…` token under the caret, or null when the caret is not in one. */
   private readonly mentionToken = signal<MentionToken | null>(null);
 
@@ -1229,8 +1269,35 @@ export class ChatInputComponent {
 
   readonly mentionResults = computed(() => {
     const token = this.mentionToken();
-    return token ? this.mentionService.search(token.query) : [];
+    if (!token) return [];
+    // An Agent already mentioned is not offered twice.
+    const taken = new Set(this.mentionedAgents().map((agent) => agent.agentId));
+    const results = this.mentionService.search(token.query);
+    return taken.size ? results.filter((agent) => !taken.has(agent.agentId)) : results;
   });
+
+  /**
+   * The caret is inside a `@Name` already committed. Names contain spaces, so without this a
+   * click back into one would re-open the menu on its first word.
+   */
+  private readonly tokenOnCommittedMention = computed(() => {
+    const token = this.mentionToken();
+    if (!token) return false;
+    const text = this.userInput();
+    return this.mentionedAgents().some((agent) => text.startsWith(`@${agent.name}`, token.start));
+  });
+
+  /**
+   * With several mentions offered, a ninth is refused: the menu gives way to a helper line
+   * (§20.5, "Up to 8 Agents in one handoff").
+   */
+  readonly mentionLimitReached = computed(
+    () =>
+      this.multipleMentionsOffered() &&
+      this.mentionToken() !== null &&
+      this.mentionedAgents().length >= MAX_RUN_STEPS &&
+      !this.tokenOnCommittedMention(),
+  );
 
   /**
    * The menu opens only when there is something to offer, and only when the turn is not
@@ -1251,7 +1318,11 @@ export class ChatInputComponent {
     () =>
       this.agentMentionsOffered() &&
       this.mentionToken() !== null &&
-      this.mentionedAgent() === null &&
+      (this.mentionedAgent() === null ||
+        // Workflow runs: further Agents for the same handoff, up to the run's limit.
+        (this.multipleMentionsOffered() &&
+          this.mentionedAgents().length < MAX_RUN_STEPS &&
+          !this.tokenOnCommittedMention())) &&
       this.mentionService.mentionable().length > 0,
   );
 
@@ -1355,7 +1426,7 @@ export class ChatInputComponent {
     const text = this.userInput();
     const ranges = findHighlightRanges(
       text,
-      this.mentionedAgent()?.name ?? null,
+      this.mentionedAgents().map((agent) => agent.name),
       this.invokedSkills().map((command) => command.slug),
     );
     return toSegments(text, ranges);
@@ -1487,7 +1558,9 @@ export class ChatInputComponent {
       if (this.agentMentionsOffered()) return;
       untracked(() => {
         this.mentionedAgent.set(null);
+        this.additionalMentions.set([]);
         this.pendingMentionAgentId.set(null);
+        this.pendingAdditionalMentionIds.set([]);
         this.mentionToken.set(null);
       });
     });
@@ -1508,6 +1581,18 @@ export class ChatInputComponent {
       untracked(() => {
         this.pendingMentionAgentId.set(null);
         if (match) this.mentionedAgent.set(match);
+        // A draft's further mentions come back only with the first, and only where several
+        // are still offered; each resolves or drops as the first does.
+        const more = this.pendingAdditionalMentionIds();
+        this.pendingAdditionalMentionIds.set([]);
+        if (match && more.length && this.multipleMentionsOffered()) {
+          this.additionalMentions.set(
+            more
+              .map(id => candidates.find(agent => agent.agentId === id))
+              .filter((agent): agent is MentionableAgent => !!agent && agent.agentId !== match.agentId)
+              .slice(0, MAX_RUN_STEPS - 1),
+          );
+        }
       });
     });
 
@@ -1626,6 +1711,7 @@ export class ChatInputComponent {
         fileUploadIds: next.fileUploadIds,
         folders: next.folders,
         mentionAgentId: next.mentionAgentId,
+        mentionAgentIds: next.mentionAgentIds,
         invokedSkillIds: next.invokedSkillIds,
         pastedChars: next.pastedChars,
       });
@@ -1722,6 +1808,7 @@ export class ChatInputComponent {
     return {
       text: this.userInput(),
       mentionAgentId: this.mentionedAgent()?.agentId ?? this.pendingMentionAgentId() ?? undefined,
+      additionalMentionAgentIds: this.additionalMentionDraft(),
       queued: queuedEntries.map(entry => entry.content).filter(content => !!content),
       attachments: dedupeAttachments(attachments),
       folders: dedupeFolders(folders),
@@ -1809,7 +1896,9 @@ export class ChatInputComponent {
 
     this.userInput.set(text);
     this.mentionedAgent.set(null);
+    this.additionalMentions.set([]);
     this.pendingMentionAgentId.set(draft.mentionAgentId ?? null);
+    this.pendingAdditionalMentionIds.set(draft.additionalMentionAgentIds ?? []);
     if (draft.mentionAgentId) void this.mentionService.load();
     this.closeMentionMenu();
     this.closeSkillMenu();
@@ -1929,6 +2018,7 @@ export class ChatInputComponent {
       folders: folders.length > 0 ? folders : undefined,
       storedFolders: folders.length > 0 ? this.folderDraft() : undefined,
       mentionAgentId: this.mentionedAgent()?.agentId,
+      mentionAgentIds: this.mentionAgentIdsForSend(),
       invokedSkillIds: this.invokedSkillIds(),
       pastedChars: this.takePastedChars(content),
     };
@@ -1945,6 +2035,7 @@ export class ChatInputComponent {
     // its own files.
     this.userInput.set('');
     this.mentionedAgent.set(null);
+    this.additionalMentions.set([]);
     this.closeMentionMenu();
     this.closeSkillMenu();
     this.resetTextareaHeight();
@@ -2026,9 +2117,10 @@ export class ChatInputComponent {
     }
 
     if (!this.mentionedAgent() && !this.pendingMentionAgentId()) {
-      const mentionAgentId = entries.find(entry => entry.mentionAgentId)?.mentionAgentId;
-      if (mentionAgentId) {
-        this.pendingMentionAgentId.set(mentionAgentId);
+      const mentioned = entries.find(entry => entry.mentionAgentId);
+      if (mentioned?.mentionAgentId) {
+        this.pendingMentionAgentId.set(mentioned.mentionAgentId);
+        this.pendingAdditionalMentionIds.set((mentioned.mentionAgentIds ?? []).slice(1));
         void this.mentionService.load();
       }
     }
@@ -2093,6 +2185,7 @@ export class ChatInputComponent {
       fileUploadIds: fileUploadIds.length > 0 ? fileUploadIds : undefined,
       folders: folders.length > 0 ? folders : undefined,
       mentionAgentId: this.mentionedAgent()?.agentId,
+      mentionAgentIds: this.mentionAgentIdsForSend(),
       invokedSkillIds: this.invokedSkillIds(),
       pastedChars: this.takePastedChars(content),
     });
@@ -2102,6 +2195,7 @@ export class ChatInputComponent {
     // — they are derived from the text, so emptying the text un-invokes them.
     this.userInput.set('');
     this.mentionedAgent.set(null);
+    this.additionalMentions.set([]);
     this.closeMentionMenu();
     this.closeSkillMenu();
     this.resetTextareaHeight();
@@ -2505,6 +2599,30 @@ export class ChatInputComponent {
     if (agent && !text.includes(`@${agent.name}`)) {
       this.mentionedAgent.set(null);
     }
+    // Several mentions: each one stays only while its `@Name` does, and the first one left
+    // becomes the turn's mention.
+    const more = this.additionalMentions();
+    if (more.length === 0) return;
+    const kept = more.filter(candidate => text.includes(`@${candidate.name}`));
+    if (!this.mentionedAgent() && kept.length > 0) {
+      this.mentionedAgent.set(kept[0]);
+      this.additionalMentions.set(kept.slice(1));
+    } else if (kept.length !== more.length) {
+      this.additionalMentions.set(kept);
+    }
+  }
+
+  /** Every mentioned Agent's id for the send, only when there are two or more. */
+  private mentionAgentIdsForSend(): string[] | undefined {
+    const agents = this.mentionedAgents();
+    return agents.length > 1 ? agents.map(agent => agent.agentId) : undefined;
+  }
+
+  /** The further mentions a draft keeps: the bound ones, or those still waiting to re-bind. */
+  private additionalMentionDraft(): string[] | undefined {
+    const bound = this.additionalMentions().map(agent => agent.agentId);
+    const ids = bound.length ? bound : [...this.pendingAdditionalMentionIds()];
+    return ids.length ? ids : undefined;
   }
 
   /** The mirror behind the textarea has to scroll with it, or the tint slides off its token. */
@@ -2578,7 +2696,15 @@ export class ChatInputComponent {
       textarea.value.slice(0, token.start) + replacement + textarea.value.slice(caret);
 
     this.userInput.set(next);
-    this.mentionedAgent.set(agent);
+    if (this.mentionedAgent() === null) {
+      this.mentionedAgent.set(agent);
+    } else if (
+      this.multipleMentionsOffered() &&
+      !this.mentionedAgents().some(candidate => candidate.agentId === agent.agentId)
+    ) {
+      // A further Agent for the same handoff (workflow runs).
+      this.additionalMentions.update(more => [...more, agent]);
+    }
     this.mentionToken.set(null);
 
     // Write through to the element and restore the caret: the textarea is not bound to

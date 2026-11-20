@@ -13,6 +13,7 @@ import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { ToolInsightService } from '../chat/tool-insight.service';
 import { DeliveryStateService } from '../handoff/delivery-state.service';
 import { HandoffStateService } from '../handoff/handoff-state.service';
+import { WorkflowRunStateService } from '../handoff/workflow-run-state.service';
 import { normalizeSteeringMessages } from '../chat/steering';
 import { matchToolResultsToToolUses } from './tool-results';
 import { ChatStateService } from '../chat/chat-state.service';
@@ -103,6 +104,7 @@ export class MessageMapService {
   private mcpAppState = inject(McpAppStateService);
   private toolInsight = inject(ToolInsightService);
   private handoffState = inject(HandoffStateService);
+  private workflowRunState = inject(WorkflowRunStateService);
   private deliveryState = inject(DeliveryStateService);
   private injector = inject(Injector);
   private chatStateService = inject(ChatStateService);
@@ -615,6 +617,9 @@ export class MessageMapService {
       );
       // Cards sent back into this conversation (spec §4.8), for its composer.
       this.deliveryState.hydrate(sessionId, messagesResponse.deliveries);
+      // Workflow runs (workflow-runs spec §9): an approved run's unstarted steps can be started
+      // again from here after a reload.
+      this.workflowRunState.hydrate(sessionId, messagesResponse.workflowRuns);
     } finally {
       if (showLoading) {
         this._isLoadingSession.set(null);
