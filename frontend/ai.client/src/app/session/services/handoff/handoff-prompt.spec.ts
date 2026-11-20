@@ -11,6 +11,7 @@ import {
   DeliveryPartBlockInput,
   buildHandoffMessage,
   deliveryPartLabel,
+  partTitleAfterAgent,
   extractDeliveryBlocks,
   extractHandoffContext,
   formatFileSize,
@@ -145,6 +146,31 @@ describe('delivery blocks', () => {
     expect(deliveryPartLabel('Generalist', 'Review')).toBe('Generalist · Review');
     expect(deliveryPartLabel('Colleague', 'Colleague')).toBe('Colleague');
     expect(deliveryPartLabel('Fiscal outsider', '  ')).toBe('Fiscal outsider');
+    // A run step's title already names its Agent: once, never "Agent · Agent · …".
+    expect(deliveryPartLabel('Budget reader', 'Budget reader · Proposal review')).toBe('Budget reader · Proposal review');
+    expect(deliveryPartLabel('Budget reader', 'Budget readers · x')).toBe('Budget reader · Budget readers · x');
+  });
+
+  it('drops the Agent from a part title shown beside the Agent', () => {
+    expect(partTitleAfterAgent('Budget reader', 'Budget reader · Proposal review')).toBe('Proposal review');
+    expect(partTitleAfterAgent('Generalist', 'Review')).toBe('Review');
+    expect(partTitleAfterAgent('Colleague', 'Colleague')).toBe('');
+    expect(partTitleAfterAgent('Colleague', '  ')).toBe('');
+    expect(partTitleAfterAgent('Budget reader', 'Budget readers · x')).toBe('Budget readers · x');
+  });
+
+  it('still groups a run result whose step titles already name their Agent', () => {
+    const named = fixture.deliveryCases.find((c) => c.name === 'run result whose titles already name their Agent');
+    expect(named).toBeDefined();
+    const { blocks } = extractDeliveryBlocks(named!.block);
+    const groups = groupRunResults(blocks, [{ runId: 'r', agentNames: ['Budget reader', 'Budget readers', 'Statistician'] }]);
+    expect(groups.map((g) => g.kind)).toEqual(['run']);
+    const run = groups[0] as Extract<BubbleDelivery, { kind: 'run' }>;
+    expect(run.parts.map((p) => [p.agentName, p.status])).toEqual([
+      ['Budget reader', 'done'],
+      ['Budget readers', 'done'],
+      ['Statistician', 'stopped'],
+    ]);
   });
 
   it('reads every card back out of a stored message, in order, and leaves what the user typed', () => {

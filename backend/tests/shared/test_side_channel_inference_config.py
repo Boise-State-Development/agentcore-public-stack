@@ -152,3 +152,53 @@ async def test_conversation_title_reuses_one_bedrock_client(monkeypatch):
 
     assert factory.call_count == 1
     assert client.converse.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_a_run_steps_title_names_its_agent(monkeypatch):
+    """Workflow-runs §19: every step gets the same request, so the title leads with the Agent."""
+    client = _client("Proposal review")
+    monkeypatch.setattr(chat_service.boto3, "client", MagicMock(return_value=client))
+    update = AsyncMock()
+    monkeypatch.setattr(chat_service, "update_session_title", update)
+
+    title = await chat_service.generate_conversation_title(
+        session_id="s", user_id="u", user_input="hi", agent_name_for_title=AsyncMock(return_value="Budget reader")
+    )
+    await _drain_title_writes()
+
+    assert title == "Budget reader · Proposal review"
+    assert update.await_args.kwargs["title"] == "Budget reader · Proposal review"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_is_no_run_step_keeps_todays_title(monkeypatch):
+    """A single handoff and an ordinary conversation: byte-identical to the title Nova gave."""
+    client = _client("Proposal Review Request")
+    monkeypatch.setattr(chat_service.boto3, "client", MagicMock(return_value=client))
+    monkeypatch.setattr(chat_service, "update_session_title", AsyncMock())
+
+    plain = await chat_service.generate_conversation_title(session_id="s", user_id="u", user_input="hi")
+    single = await chat_service.generate_conversation_title(
+        session_id="s", user_id="u", user_input="hi", agent_name_for_title=AsyncMock(return_value=None)
+    )
+    await _drain_title_writes()
+
+    assert plain == single == "Proposal Review Request"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_title_is_never_prefixed(monkeypatch):
+    client = _client("Sorry.", stop_reason="guardrail_intervened")
+    monkeypatch.setattr(chat_service.boto3, "client", MagicMock(return_value=client))
+    update = AsyncMock()
+    monkeypatch.setattr(chat_service, "update_session_title", update)
+    name = AsyncMock(return_value="Budget reader")
+
+    title = await chat_service.generate_conversation_title(
+        session_id="s", user_id="u", user_input="hi", agent_name_for_title=name
+    )
+
+    assert title == "New Conversation"
+    name.assert_not_awaited()
+    update.assert_not_awaited()

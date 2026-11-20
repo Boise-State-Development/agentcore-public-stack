@@ -167,8 +167,22 @@ export interface DeliveryPartBlockInput {
 export function deliveryPartLabel(agentName: string, fromTitle: string): string {
   const agent = agentName.trim();
   const title = fromTitle.trim();
-  if (agent && title && agent !== title) return `${agent} · ${title}`;
-  return agent || title;
+  if (!agent || !title) return agent || title;
+  // A run step's title already leads with its Agent (`run_step_title`), so the name is written once.
+  if (agent === title || title.startsWith(`${agent} · `)) return title;
+  return `${agent} · ${title}`;
+}
+
+/**
+ * A part's conversation title without its Agent's name in front, for a line that already shows the
+ * Agent (the composer's result card). Empty when the title says nothing more than the name.
+ */
+export function partTitleAfterAgent(agentName: string, fromTitle: string): string {
+  const agent = agentName.trim();
+  const title = fromTitle.trim();
+  if (!title || title === agent) return '';
+  const prefix = `${agent} · `;
+  return agent && title.startsWith(prefix) ? title.slice(prefix.length) : title;
 }
 
 /**

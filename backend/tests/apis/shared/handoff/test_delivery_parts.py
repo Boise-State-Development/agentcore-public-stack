@@ -546,3 +546,58 @@ def test_message_times_parse_with_or_without_an_offset():
     assert send_back._parse_time("2026-11-20T10:00:00Z") == datetime(2026, 11, 20, 10, tzinfo=timezone.utc)
     assert send_back._parse_time("2026-11-20T10:00:00") == datetime(2026, 11, 20, 10, tzinfo=timezone.utc)
     assert send_back._parse_time("not a time") is None
+
+
+# ---------------------------------------------------------------- a run step's title (workflow-runs §19)
+
+
+def test_a_part_whose_title_already_names_its_agent_is_named_once():
+    from apis.shared.handoff.context import run_step_title
+
+    title = run_step_title("Budget reader", "Proposal review")
+
+    assert title == "Budget reader · Proposal review"
+    assert delivery_part_label("Budget reader", title) == "Budget reader · Proposal review"
+    assert render_delivery_parts([DeliveryPartBlock("Thin.", "Budget reader", title, "done")]) == render_delivery_block(
+        "Thin.", "Budget reader · Proposal review"
+    )
+    # A title that only starts with the name is someone else's: the prefix is still added.
+    assert delivery_part_label("Budget reader", "Budget readers · x") == "Budget reader · Budget readers · x"
+    assert delivery_part_label("Budget reader", "Budget reader review") == "Budget reader · Budget reader review"
+    assert delivery_part_label("", "Proposal review") == "Proposal review"
+
+
+class TestRunStepTitle:
+    def test_the_generated_part_is_shortened_and_the_agent_name_is_never_cut(self):
+        from apis.shared.handoff.context import CONVERSATION_TITLE_MAX_CHARS, run_step_title
+
+        title = run_step_title("Budget reader", "A" * 50)
+
+        assert len(title) == CONVERSATION_TITLE_MAX_CHARS
+        assert title.startswith("Budget reader · ")
+        assert title.endswith("...")
+
+    def test_a_title_that_fits_is_kept_whole(self):
+        from apis.shared.handoff.context import run_step_title
+
+        generated = "B" * (50 - len("Budget reader · "))
+        assert run_step_title("Budget reader", generated) == f"Budget reader · {generated}"
+
+    def test_a_name_too_long_to_leave_room_keeps_the_generated_title(self):
+        from apis.shared.handoff.context import RUN_STEP_TITLE_MIN_GENERATED_CHARS, run_step_title
+
+        fits = "N" * (50 - 3 - RUN_STEP_TITLE_MIN_GENERATED_CHARS)
+        assert run_step_title(fits, "Proposal review").startswith(f"{fits} · ")
+        assert run_step_title(fits + "N", "Proposal review") == "Proposal review"
+
+    @pytest.mark.parametrize("generated", ["New Conversation", "", "   "])
+    def test_the_placeholder_and_an_empty_title_are_never_prefixed(self, generated):
+        from apis.shared.handoff.context import run_step_title
+
+        assert run_step_title("Budget reader", generated) == generated
+
+    def test_an_empty_name_or_a_title_that_already_names_the_agent_is_unchanged(self):
+        from apis.shared.handoff.context import run_step_title
+
+        assert run_step_title("  ", "Proposal review") == "Proposal review"
+        assert run_step_title("Budget reader", "Budget reader · Proposal review") == "Budget reader · Proposal review"

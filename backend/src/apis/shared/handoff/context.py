@@ -182,16 +182,53 @@ class DeliveryPartBlock:
     files: Sequence[FileLine] = ()
 
 
+#: Between an Agent's name and the rest, in a run step's title and in a run result's part label.
+AGENT_TITLE_SEPARATOR = " · "
+
+#: A conversation title's cap, the whole title included (``generate_conversation_title``).
+CONVERSATION_TITLE_MAX_CHARS = 50
+
+#: The least of a generated title a run step's title keeps beside its Agent's name. A longer name
+#: leaves the title as generated, since naming the Agent would mean cutting the name.
+RUN_STEP_TITLE_MIN_GENERATED_CHARS = 15
+
+#: The title a conversation keeps when generation fails. Never prefixed.
+PLACEHOLDER_TITLE = "New Conversation"
+
+
+def run_step_title(agent_name: str, generated: str) -> str:
+    """A workflow run step's title: ``"{Agent} · {generated}"`` (workflow-runs spec §19).
+
+    Every step of a run gets the same request and card, so a generated title alone reads the same
+    for every step. The cap covers the whole title, and the generated part is the one shortened,
+    so the Agent's name is never cut. A name too long to leave ``RUN_STEP_TITLE_MIN_GENERATED_CHARS``
+    of the generated title, an empty name and the placeholder all keep the title as generated; the
+    run result's part label still names the Agent then (``delivery_part_label``).
+    """
+    agent, title = agent_name.strip(), generated.strip()
+    if not agent or not title or title == PLACEHOLDER_TITLE or title.startswith(f"{agent}{AGENT_TITLE_SEPARATOR}"):
+        return generated
+    room = CONVERSATION_TITLE_MAX_CHARS - len(agent) - len(AGENT_TITLE_SEPARATOR)
+    if room < RUN_STEP_TITLE_MIN_GENERATED_CHARS:
+        return generated
+    if len(title) > room:
+        title = title[: room - 3].rstrip() + "..."
+    return f"{agent}{AGENT_TITLE_SEPARATOR}{title}"
+
+
 def delivery_part_label(agent_name: str, from_title: str) -> str:
     """What a part's block names as ``from_conversation``: the Agent, then its conversation's title.
 
     Every step of a run starts from the same card and usually the same request, so their titles
-    read alike; the Agent's name is what tells the model whose answer is whose.
+    read alike; the Agent's name is what tells the model whose answer is whose. A step's title
+    already starts with its Agent's name (``run_step_title``), so the name is written once.
     """
     agent, title = agent_name.strip(), from_title.strip()
-    if agent and title and agent != title:
-        return f"{agent} · {title}"
-    return agent or title
+    if not agent or not title:
+        return agent or title
+    if agent == title or title.startswith(f"{agent}{AGENT_TITLE_SEPARATOR}"):
+        return title
+    return f"{agent}{AGENT_TITLE_SEPARATOR}{title}"
 
 
 def render_delivery_parts(parts: Sequence[DeliveryPartBlock]) -> str:

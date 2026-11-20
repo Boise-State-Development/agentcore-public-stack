@@ -177,8 +177,10 @@ class TestSessionTitleEvent:
         mock_agent.stream_async = fake_stream
         return mock_agent
 
-    def _post_first_turn(self, authed_client, title_result, is_new_session=True):
+    def _post_first_turn(self, authed_client, title_result, is_new_session=True, title_calls=None):
         async def fake_title(**kwargs):
+            if title_calls is not None:
+                title_calls.append(kwargs)
             return title_result
 
         async def fake_ensure(*args, **kwargs):
@@ -216,6 +218,15 @@ class TestSessionTitleEvent:
         # Interleaved into the stream, not appended after the fact: it must
         # appear before the terminal `done` frame the agent emitted last.
         assert body.index("event: session_title") < body.rindex("event: done")
+
+    def test_an_ordinary_first_turn_asks_for_no_agent_name(self, authed_app, authed_client):
+        """Workflow-runs §19: only a run step's title names its Agent; this one is as before."""
+        calls: list = []
+        resp = self._post_first_turn(authed_client, "SSE Streaming Explained", title_calls=calls)
+
+        assert resp.status_code == 200
+        assert len(calls) == 1
+        assert calls[0]["agent_name_for_title"] is None
 
     def test_placeholder_title_is_not_emitted(self, authed_app, authed_client):
         """Generation failure returns the placeholder — nothing is pushed;

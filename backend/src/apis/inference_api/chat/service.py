@@ -10,13 +10,14 @@ import logging
 import hashlib
 import os
 import threading
-from typing import Any, Callable, Dict, Optional, List, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, Optional, List, Tuple, Union
 
 import boto3
 
 # from agentcore.agent.agent import ChatbotAgent
 from agents.main_agent.agent_types import create_agent
 from agents.main_agent.base_agent import BaseAgent
+from apis.shared.handoff.context import run_step_title
 from apis.shared.sessions.metadata import update_session_title
 
 from apis.shared.security.log_sanitize import scrub_log
@@ -924,7 +925,8 @@ def _schedule_title_write(session_id: str, user_id: str, title: str, first_promp
 async def generate_conversation_title(
     session_id: str,
     user_id: str,
-    user_input: str
+    user_input: str,
+    agent_name_for_title: Optional[Callable[[], Awaitable[Optional[str]]]] = None,
 ) -> str:
     """
     Generate a conversation title using AWS Bedrock Nova Micro model.
@@ -939,6 +941,8 @@ async def generate_conversation_title(
         session_id: Session identifier
         user_id: User identifier (from JWT)
         user_input: User's first message (will be truncated if needed)
+        agent_name_for_title: A workflow run step's Agent name, awaited after Nova answers. A
+            name prefixes the title (``run_step_title``); ``None`` keeps it as generated.
 
     Returns:
         str: Generated conversation title (max 50 chars) or "New Conversation" on error
@@ -999,6 +1003,11 @@ async def generate_conversation_title(
         if len(title) > 50:
             title = title[:47] + "..."
             logger.warning("Title exceeded 50 chars, truncated")
+
+        if agent_name_for_title is not None:
+            agent_name = await agent_name_for_title()
+            if agent_name:
+                title = run_step_title(agent_name, title)
 
         logger.info("✅ Generated title successfully")
 

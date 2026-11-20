@@ -6170,6 +6170,23 @@ async def _run_invocation(
     # the post-stream _update_session_metadata write. The task handle is
     # kept so stream_with_quota_warning can push the finished title to the
     # client mid-stream as a `session_title` SSE event.
+    # Handoffs (docs/specs/agent-handoffs-and-consults.md §4.2): decided here with no IO, from
+    # the request and the B1 snapshot. Acceptance starts at the head of the stream, beside the
+    # agent build, and is awaited only where the message is assembled. Decided before the title
+    # task so a workflow run step's title can name its Agent (workflow-runs spec §19): the task
+    # waits on that same acceptance after Nova answers, and reads nothing of its own.
+    handoff_turn = HandoffTurn.for_turn(
+        user_id=user_id,
+        session_id=input_data.session_id,
+        agent_id=input_data.rag_assistant_id,
+        handoff_context=input_data.handoff_context,
+        session_row=session_meta.row,
+        is_resume=is_resume,
+        is_continuation=is_continuation,
+        is_preview=is_preview_session(input_data.session_id),
+        user_email=current_user.email,
+    )
+
     title_task: Optional["asyncio.Task[str]"] = None
     if is_new_session and input_data.message:
         title_task = asyncio.create_task(
@@ -6177,6 +6194,11 @@ async def _run_invocation(
                 session_id=input_data.session_id,
                 user_id=user_id,
                 user_input=input_data.message,
+                agent_name_for_title=(
+                    handoff_turn.run_step_agent_name
+                    if handoff_turn is not None and handoff_turn.request is not None
+                    else None
+                ),
             )
         )
 
@@ -6571,20 +6593,6 @@ async def _run_invocation(
     # already ended, so they take the lease with force=True (never blocked, but
     # still install it so a fresh duplicate during them is rejected). Preview
     # sessions and the local no-DynamoDB path (lease None) skip the guard.
-    # Handoffs (docs/specs/agent-handoffs-and-consults.md §4.2): decided here with no IO, from
-    # the request and the B1 snapshot. Acceptance starts at the head of the stream, beside the
-    # agent build, and is awaited only where the message is assembled.
-    handoff_turn = HandoffTurn.for_turn(
-        user_id=user_id,
-        session_id=input_data.session_id,
-        agent_id=input_data.rag_assistant_id,
-        handoff_context=input_data.handoff_context,
-        session_row=session_meta.row,
-        is_resume=is_resume,
-        is_continuation=is_continuation,
-        is_preview=is_preview_session(input_data.session_id),
-        user_email=current_user.email,
-    )
     # Deliveries (§4.8): the composer cards this send carries. Decided with no IO; the attaches
     # start beside the agent build and are awaited only where the message is assembled.
     delivery_turn = DeliveryTurn.for_turn(
