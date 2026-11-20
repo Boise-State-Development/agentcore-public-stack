@@ -622,7 +622,7 @@
     "family": "document_qa",
     "turns": [
       {
-        "prompt": "Three parts of the records archive handbook are attached. What retention code do records under this policy carry? Reply with just the code."
+        "prompt": "Five parts of the records archive handbook are attached. What retention code do records under this policy carry? Reply with just the code."
       }
     ],
     "run": {
@@ -642,9 +642,11 @@
     "files": [
       "overflow_part_a.pdf",
       "overflow_part_b.pdf",
-      "overflow_part_c.pdf"
+      "overflow_part_c.pdf",
+      "overflow_part_d.pdf",
+      "overflow_part_e.pdf"
     ],
-    "notes": "Each part is about 2.45 MB of padding (a noise image, not text), so parts A and B fill the 7 MB inline budget and part C, which holds the code, goes by reference and is read with document_read (#1912). Before #1912 it was dropped with a footnote the model relayed (the DRED review's 4 MB PDF).",
+    "notes": "Each part is about 3.6 MB of padding (a noise image, not text), under the 4 MiB upload limit. The token profile holds a turn's native blocks to the request's 16 MiB (less what a warm history re-sends, nothing on a first turn), so parts A to D go native and part E, which holds the code, goes by reference and is read with document_read (#1912). Resized from three 2.45 MB parts after #2106 replaced the 7 MB combined budget with the request budget and all three went native. Under the legacy profile parts B to E go by reference and the case asks the same thing. Before #1912 the overflow was dropped with a footnote the model relayed (the DRED review's 4 MB PDF).",
     "judge": {
       "evaluators": [
         "grounded"

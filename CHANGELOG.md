@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [Unreleased]
+
+### 🧪 Tests
+
+- **Two golden-set cases test what their notes say again, and project memory answers from an index line.** `document_qa.inline_budget_overflow_by_reference` sent all three of its 2.45 MB parts native once #2106 held the token profile to the request's 16 MiB, so the model answered without `document_read`. It now attaches five 3.6 MB parts (each under the 4 MiB upload limit), so four fit and the fifth, which holds the code, goes by reference. A fixture test runs the planner on them under both profiles. `project_memory.memory_index_answers_without_a_read` failed because the project memory block said only "read one with `memory_read`". Most models read the file an index line already answered, and Opus 5.5 went from 3/3 to 0/3 when `memory_save`'s spec grew a sentence on 11-13. The block now says to answer from a line that already answers, and to read the file when more than the line is needed: +31 tokens per project-harness turn (CountTokens, Haiku 4.5), one memory-block rewrite per live project session at deploy.
+
 ## [1.37.0] - 2026-11-17
 
 Voice mode runs in Shared Projects. An Agent's knowledge base can import a whole Drive folder and keep it in sync, and the agent composer's settings become folding cards. Word and PowerPoint charts reach the model as their plotted numbers. The SPA moves to Angular 22 with an OnPush chat shell and `FetchBackend`, and `strands-agents` moves to 1.65.0. Stop now reaches an in-flight tool call. A web crawl stays in its section of the site, keeps one document per page, and no longer requests a non-public address. Images stay reachable after compaction. Under the token profile, a turn's attachments are held to the request budget instead of 7 MB. A bulk document delete no longer blocks app-api's event loop; that is the 2026-11-16 prod alarm. Conversation rewind and fork are now on by default, and a rewind says that memories already saved from those messages stay. New flag: `CONCURRENT_TOOL_EXECUTION_ENABLED` (in development, default off). Retired: four default-on rollout switches. No GSI changes, no backfills; one optional re-seed for the Skill Creator's new reference file.

@@ -157,9 +157,16 @@ _SCOPE_INTROS = {
         "Your persistent memory for this agent. Fetch more with `memory_read`; list entries "
         "with `memory_list`."
     ),
+    # Says a line can be the answer. `memory_save` writes each line to be "often
+    # all a later [conversation] reads", but an intro that only said "read one
+    # with memory_read" had most models read the file a line already answered
+    # (the memory_index_answers_without_a_read eval, 2026-11): a second model
+    # call for nothing. A line that only points at the answer still gets a read.
     "project": (
-        "Memory shared by everyone in this project. List its files with "
-        '`memory_list(scope="project")` and read one with `memory_read`.'
+        "Memory shared by everyone in this project. Each line below sums up one file: "
+        "when a line already answers the request, answer from it, and read the file with "
+        "`memory_read` when you need more than its line says. List the files with "
+        '`memory_list(scope="project")`.'
     ),
     # Names the member rather than "you": told "your memory", the model reads it as its
     # own (the 2026-10 team simulation, G17/G18). Its lines are the member's preferences,
