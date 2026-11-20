@@ -299,6 +299,12 @@ jobs:
       # Runtime only, and only while handoffs are on too. Nobody gets the tool
       # until a role is granted the `suggest_handoff` catalog row.
       CDK_HANDOFF_SUGGESTIONS_ENABLED: ${{ vars.CDK_HANDOFF_SUGGESTIONS_ENABLED }}
+      # Workflow runs: several Agents handed work from one review sheet, approved
+      # once (docs/specs/workflow-runs.md). Opt-in while in development; set
+      # `CDK_WORKFLOW_RUNS_ENABLED` to "true" to turn it on. app-api only, and
+      # only while handoffs are on too. The SPA's matching switch is
+      # `features.workflowRuns`.
+      CDK_WORKFLOW_RUNS_ENABLED: ${{ vars.CDK_WORKFLOW_RUNS_ENABLED }}
       # Conversation rewind: "Rewind to here" on a user message
       # (docs/specs/conversation-rewind-and-fork.md §4). Default ON with a kill
       # switch: set `CDK_SESSION_REWIND_ENABLED` to "false" in an environment to

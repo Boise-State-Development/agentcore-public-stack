@@ -1,6 +1,6 @@
 # Workflow runs: several steps under one approval
 
-**Status:** Accepted for step 1, 2026-11-20 (§19 is its delivery plan). Proposed 2026-11-19. Nothing built yet. It asks one design question of the handoffs work: should the
+**Status:** Accepted for step 1, 2026-11-20 (§19 is its delivery plan). Proposed 2026-11-19. PR-W.1 (the run row, its routes and the flag) built 2026-11-20. It asks one design question of the handoffs work: should the
 user's review sit on each hop, as it does today, or on the whole piece of delegated work? Everything else follows
 from the answer.
 **Author:** Phil Merrell (drafted with Claude)
@@ -467,6 +467,42 @@ changes a tool spec or the system prompt.
   - Acceptance: 2 to 8 steps, distinct Agents, else 422; a project task refused; a step row with a `runId` is
     accepted on its first turn by the unchanged `HandoffTurn` (a test drives it); an approved run's unstarted
     steps never read as `abandoned`; with the flag off every route is 404 after auth.
+  - *Built (PR-W.1, #2189).* Where it differs from the plan above. Later PRs read these shapes, not §9's sketch.
+    - **Flag.** CDK holds it as its own `workflowRuns.enabled`, not under `handoffs`. App-api gets
+      `WORKFLOW_RUNS_ENABLED=true` only while both are on, and `workflow_runs_enabled()` checks `handoffs_enabled()`
+      as well.
+    - **The run row** (`apis/shared/handoff/runs.py`) has two fields §9 does not list. `sourceMessageIndex` lets
+      W.4b place the run's card before any step has been sent; `edits` records what the approval changed.
+      `resultDeliveryId` and `briefHash` exist and stay empty. An `open` run a day old reads `abandoned`, as its
+      unsent steps do.
+    - **Step rows** carry `runId`, `stepId` and, once approved, `runApprovedAt`. That field is the smallest change
+      that keeps an approved step from reading `abandoned`. Ordinary mentions, and steps of a run still at its
+      sheet, age out as before. `runId` and `stepId` are on `HandoffView`; `runApprovedAt` is not.
+    - **Create** takes `{request, steps: [{agentId, request?}]}` and answers `{run, excerpt, excerptHash,
+      excerptTokens, turnsCovered, contextBlock, sourceMessageIndex, sourceTitle, steps: [{stepId, handoffId,
+      agentId, agentName, request, prompt, modelId?, inputPricePerMillionTokens?}]}`. The card is rendered once, and
+      every step row is written by `_open_mention`, the helper the single mention create now uses too. A Shared
+      Project task gets a 409 with the deliveries' `project_task` error.
+    - **The estimate's inputs.** `modelId` is the Agent's own `modelConfig` model after retirement redirects, and
+      the rate is that row's catalog input rate. An Agent with no model gets neither: the step runs on the model
+      the send names, which the SPA already prices from `GET /models` (it carries `inputPricePerMillionTokens`).
+      ⚠️ **Verified:** `GET /files` gave no token count. It now carries `estimatedTokens` and `pages`, from the row
+      only (`document_estimate.facts_tokens` with no model: `tokens.text`, plus `tokens.native` for a PDF sent
+      natively). Both are `null` until a file is prepared, and for a reference row.
+    - **Approve** also takes an optional `request` (the edited shared request, which every step still on the shared
+      one follows) and `filesUnticked`, a count like `handoff_context.filesUnticked`, which is what
+      `WorkflowRunEdited{file_unticked}` reads. A step the body doesn't list is kept as created. At most
+      `HANDOFF_MAX_FILES` (5) file ids.
+    - **Stop** is a 409 for a run never approved, and idempotent once stopped. **Dismiss** is a 409 once approved.
+    - **Metrics** add `WorkflowRunStopped`. `WorkflowRunCreated` carries `stepCount` and `runSource: "user"` as
+      properties, and `WorkflowRunEdited` counts once per kind of change.
+    - **Replay.** `workflowRuns` lists every run whatever its status, each step with its row's `HandoffView`, without
+      `relayedPrompts` (a sent step is in `handoffs` with them). A conversation with no runs costs one query.
+    - **For W.4a, from review.** Nothing on the server checks a step's `handoff_context.fileIds` against the run's
+      approved `fileIds` in step 1: acceptance keeps any file that is the caller's, ready and in the source, as it
+      does for a single handoff. So W.4a must send each step exactly the approved list. `estimatedTokens` is
+      model-neutral: it does not apply the per-model tokenizer factor (0.95× on Haiku 4.5 and Sonnet 4.6, 1.40×
+      otherwise, `tokenizer_costs`). The sheet's estimate must apply that factor per step, or say it doesn't.
 - **PR-W.2 — The grouped result.** Backend, on the turn path.
   - `parts: [{stepId, agentName, fromSessionId, fromTitle, status, text, textHash, artifacts, files}]` on
     `Delivery`, additive; each part bounded at `SEND_BACK_MAX_TOKENS`.

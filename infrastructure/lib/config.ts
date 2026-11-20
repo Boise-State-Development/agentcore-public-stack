@@ -88,6 +88,7 @@ export interface AppConfig {
   userGrants: UserGrantsConfig;
   sessionPrewarm: SessionPrewarmConfig;
   handoffs: HandoffsConfig;
+  workflowRuns: WorkflowRunsConfig;
   sessionRewind: SessionRewindConfig;
   sessionFork: SessionForkConfig;
   quotaRequests: QuotaRequestsConfig;
@@ -526,6 +527,20 @@ export interface QuotaRequestsConfig {
  * submissions are audited in the existing audit-log table.
  */
 export interface AwsLimitsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Workflow runs, step 1 (docs/specs/workflow-runs.md §13): several Agents handed
+ * work from one review sheet, approved once. **Opt-in while the feature is in
+ * development**: off unless CDK_WORKFLOW_RUNS_ENABLED=true (or a
+ * `workflowRuns.enabled: true` cdk.json context), and it needs `handoffs.enabled`
+ * too. Sets WORKFLOW_RUNS_ENABLED on **app-api only**, which serves
+ * `/sessions/{id}/workflow-runs`; a step is an ordinary handoff turn, so the
+ * Runtime needs no copy. No new resources: `WFRUN#` rows live in
+ * sessions-metadata on the existing SessionLookupIndex.
+ */
+export interface WorkflowRunsConfig {
   enabled: boolean;
 }
 
@@ -1925,6 +1940,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       suggestionsEnabled: process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED
         ? process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('handoffs')?.suggestionsEnabled ?? false,
+    },
+    workflowRuns: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_WORKFLOW_RUNS_ENABLED
+        ? process.env.CDK_WORKFLOW_RUNS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('workflowRuns')?.enabled ?? false,
     },
     sessionRewind: {
       // Default ON with a kill switch, same parsing as projects above.

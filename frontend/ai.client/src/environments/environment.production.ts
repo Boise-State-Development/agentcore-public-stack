@@ -39,6 +39,7 @@ export const environment = {
         skillBundleImport: false,
         handoffs: false,
         handoffBrief: false,
+        workflowRuns: false,
         sessionRewind: true,
         sessionFork: true,
         quotaRequests: false,

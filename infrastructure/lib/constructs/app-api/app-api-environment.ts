@@ -398,6 +398,10 @@ export function buildAppApiEnvironment(
     AWS_LIMITS_ENABLED: config.awsLimits.enabled ? 'true' : 'false',
     // Handoffs (opt-in while in development): gates /sessions/{id}/handoffs.
     HANDOFFS_ENABLED: config.handoffs.enabled ? 'true' : 'false',
+    // Workflow runs (opt-in while in development): gates
+    // /sessions/{id}/workflow-runs, and only while handoffs are on too.
+    // app-api only; a step is an ordinary handoff turn on the Runtime.
+    WORKFLOW_RUNS_ENABLED: config.handoffs.enabled && config.workflowRuns.enabled ? 'true' : 'false',
     // Conversation rewind (default on): gates
     // POST /sessions/{id}/rewind and GET /messages' hiding of rewound turns.
     SESSION_REWIND_ENABLED: config.sessionRewind.enabled ? 'true' : 'false',

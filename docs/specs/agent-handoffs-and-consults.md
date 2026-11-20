@@ -303,6 +303,14 @@ If the user navigates away with the sheet open, the handoff stays `open`, and on
 `abandoned` (derived when read, so no sweep job is needed). A removed context card still sends the handoff;
 `contextRemoved` records the choice.
 
+> *Amended 2026-11-20 (workflow runs, PR-W.1).* A handoff row may be a **step of a workflow run**
+> (`docs/specs/workflow-runs.md`): an ordinary `mention` row that also carries `runId` and `stepId`, written by the
+> same helper as a single mention and accepted by the same `HandoffTurn`, so nothing in this section changes for it.
+> A row with no `runId` is a handoff of its own, exactly as before. One exception to the 24-hour rule: once the
+> user approves the run, each kept step's row gets `runApprovedAt`, and an approved step that has not been sent yet
+> stays `open` however old it is, because it waits on the tab's queue, not on a sheet. A step of a run still at its
+> sheet ages out like any other mention. `runId` and `stepId` are on the replayed view too; `runApprovedAt` is not.
+
 **Inside a Shared Project.** A mention in a project task hands off to an ordinary conversation with the Agent. It
 does not inherit `projectId` and doesn't appear in the project's Tasks list; the handoff row in the project task
 links to it.
@@ -1220,6 +1228,7 @@ on demand and bounded by the readers' existing caps.
 | `HANDOFFS_ENABLED` / `FEATURES.handoffs` | backend / SPA | off | yes; off = today's immediate handoff |
 | `HANDOFF_SUGGESTIONS_ENABLED` | backend | off | yes; off = `suggest_handoff` never registered |
 | `HANDOFF_BRIEF_ENABLED` | backend (Runtime) | off | yes; off = the card is the excerpt. A **feature switch**: it spends model tokens per handoff, a choice a deployment may decline |
+| `WORKFLOW_RUNS_ENABLED` / `FEATURES.workflowRuns` | backend (app-api) / SPA | off | yes; off = one Agent per handoff. Needs `HANDOFFS_ENABLED`. A **feature switch** (`docs/specs/workflow-runs.md` §13) |
 | `AGENT_CONSULT_ENABLED` / `FEATURES.agentConsult` | backend / SPA | off | yes; off = Phase 0 behaviour |
 | `CONVERSATION_MESSAGES_ENABLED` / `FEATURES.conversationMessages` | backend / SPA | off | yes; off = `send_to_conversation` never registered, agent-sent cards hidden |
 | `CONVERSATION_MESSAGE_STEER_ENABLED` | backend | off | yes; off = a message to a streaming conversation stays pending (2a) |

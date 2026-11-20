@@ -762,12 +762,25 @@ class FileResponse(BaseModel):
     linked_from: Optional[LinkedFrom] = Field(None, alias="linkedFrom")
     # For a reference: whether its original still exists. ``None`` for every other file.
     original_available: Optional[bool] = Field(None, alias="originalAvailable")
+    # What the document weighs to a model, from the row's own facts
+    # (``document_estimate.facts_tokens`` with no model: ``tokens.text``, plus
+    # ``tokens.native`` for a PDF sent natively), never by reading the file.
+    # For an estimate shown to the user (workflow-runs spec §4, §11). ``None``
+    # until the file is prepared, for a non-document, and for a reference row
+    # (its facts are on the original).
+    estimated_tokens: Optional[int] = Field(None, alias="estimatedTokens")
+    # A document's pages: the facts' ``pages``, else the PDF page count read at
+    # admission. ``None`` when neither is known.
+    pages: Optional[int] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
     @classmethod
     def from_metadata(cls, meta: FileMetadata) -> "FileResponse":
         """Create from FileMetadata."""
+        from apis.shared.files.document_estimate import facts_tokens, token_facts
+
+        facts = token_facts(meta)
         return cls(
             upload_id=meta.upload_id,
             filename=meta.filename,
@@ -777,6 +790,8 @@ class FileResponse(BaseModel):
             status=meta.status if isinstance(meta.status, str) else meta.status.value,
             created_at=to_iso(meta.created_at),
             linked_from=meta.linked_from,
+            estimated_tokens=facts_tokens(facts) if facts is not None else None,
+            pages=(facts.pages if facts is not None and facts.pages else None) or meta.page_count,
         )
 
 

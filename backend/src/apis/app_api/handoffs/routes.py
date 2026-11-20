@@ -150,48 +150,74 @@ async def create_handoff(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     card = await _render_source_card(session_id, user)
-    excerpt, turns = card.excerpt, card.turns
-    source_title = source.title or ""
-    context_block = wrap_handoff_context(excerpt.text, source_title)
-    request = body.request.strip()
+    row = await _open_mention(
+        store, user, session_id, source, card, agent_id=body.agent_id, agent_name=agent.name or "", request=body.request
+    )
+    emit_handoff_metric("HandoffCreated", body.kind, session_id=session_id)
+    return _card_response(row, card)
 
+
+async def _open_mention(
+    store: HandoffStore,
+    user: User,
+    session_id: str,
+    source: Any,
+    card: "_SourceCard",
+    *,
+    agent_id: str,
+    agent_name: str,
+    request: str,
+    run_id: Optional[str] = None,
+    step_id: Optional[str] = None,
+) -> Handoff:
+    """Write one ``open`` ``mention`` row for ``card``: a handoff of its own, or a workflow run's step.
+
+    The one place a mention row is built, so a run's step is accepted by ``HandoffTurn`` exactly as
+    a single mention is. 503 when the store isn't configured.
+    """
     now = utc_now_iso()
     row = Handoff(
         handoff_id=str(uuid.uuid4()),
         user_id=user.user_id,
         session_id=session_id,
-        kind=body.kind,
+        kind="mention",
         status="open",
-        agent_id=body.agent_id,
-        agent_name=agent.name or "",
-        request=request,
-        source_title=source_title,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        request=request.strip(),
+        source_title=source.title or "",
         source_message_index=card.last_index,
-        excerpt_hash=context_hash(excerpt.text),
-        excerpt_tokens=excerpt.estimated_tokens,
-        turns_covered=turns,
+        excerpt_hash=context_hash(card.excerpt.text),
+        excerpt_tokens=card.excerpt.estimated_tokens,
+        turns_covered=card.turns,
         source_project_id=_source_project_id(source),
         created_at=now,
         updated_at=now,
+        run_id=run_id,
+        step_id=step_id,
     )
     try:
         await asyncio.to_thread(store.create, row)
     except HandoffStoreUnavailable:
         logger.error("Handoff store is not configured")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Handoffs are unavailable")
+    return row
 
-    emit_handoff_metric("HandoffCreated", body.kind, session_id=session_id)
+
+def _card_response(row: Handoff, card: "_SourceCard") -> CreateHandoffResponse:
+    """The review sheet's answer for a mention row: the card and the exact prompt the Agent receives."""
+    context_block = wrap_handoff_context(card.excerpt.text, row.source_title)
     return CreateHandoffResponse(
         handoff_id=row.handoff_id,
-        excerpt=excerpt.text,
+        excerpt=card.excerpt.text,
         excerpt_hash=row.excerpt_hash or "",
-        excerpt_tokens=excerpt.estimated_tokens,
-        turns_covered=turns,
+        excerpt_tokens=card.excerpt.estimated_tokens,
+        turns_covered=card.turns,
         context_block=context_block,
-        prompt=build_handoff_message(context_block, request),
-        request=request,
+        prompt=build_handoff_message(context_block, row.request),
+        request=row.request,
         source_message_index=row.source_message_index,
-        source_title=source_title,
+        source_title=row.source_title,
     )
 
 

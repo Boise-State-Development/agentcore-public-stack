@@ -197,6 +197,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       briefEnabled: false,
       suggestionsEnabled: false,
     },
+    workflowRuns: {
+      enabled: false,
+    },
     sessionRewind: {
       enabled: false,
     },

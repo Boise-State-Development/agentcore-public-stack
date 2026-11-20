@@ -877,6 +877,24 @@ def handoff_suggestions_enabled() -> bool:
     return handoffs_enabled() and os.environ.get("HANDOFF_SUGGESTIONS_ENABLED", "").strip().lower() == "true"
 
 
+def workflow_runs_enabled() -> bool:
+    """Whether several Agents can be handed work from one review sheet, approved once.
+
+    ``docs/specs/workflow-runs.md`` §13 (step 1). Gates app-api's
+    ``/sessions/{id}/workflow-runs`` routes (404 after authentication while
+    off) and the ``workflowRuns`` replay on ``GET /messages``. A step is an
+    ordinary handoff turn, so the Runtime needs no copy. Meaningless without
+    ``HANDOFFS_ENABLED``, so both must be on. **Opt-in while in development**:
+    only ``"true"`` enables it; an unset GitHub variable arrives as ``""`` and
+    is off. CDK sets it on app-api from ``config.workflowRuns.enabled``. The
+    SPA's matching switch is ``features.workflowRuns``.
+
+    A **feature switch** once finished: it multiplies what one click can
+    spend, which a deployment may decline.
+    """
+    return handoffs_enabled() and os.environ.get("WORKFLOW_RUNS_ENABLED", "").strip().lower() == "true"
+
+
 def session_rewind_enabled() -> bool:
     """Whether a user can rewind a conversation to one of their earlier messages.
 

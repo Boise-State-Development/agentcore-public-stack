@@ -160,6 +160,16 @@ export interface FeatureFlags {
   handoffBrief: boolean;
 
   /**
+   * Workflow runs, step 1 (docs/specs/workflow-runs.md): several Agents
+   * mentioned in one message are handed work from one review sheet, approved
+   * once, and their results come back as one card. Only meaningful with
+   * `handoffs`. Backend: WORKFLOW_RUNS_ENABLED (app-api serves
+   * `/sessions/{id}/workflow-runs`). In development, so `false` unless the
+   * environment has turned the backend on.
+   */
+  workflowRuns: boolean;
+
+  /**
    * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
    * user message offers "Rewind to here", which hides it and everything after
    * it and puts its text back in the composer to edit and resend. Backend:

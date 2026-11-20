@@ -1170,6 +1170,11 @@ class MessagesListResponse(BaseModel):
         default_factory=list,
         description="Pending deliveries into this conversation (handoffs spec §4.8), oldest first: {deliveryId, fromSessionId, fromTitle, handoffId, origin, text, artifacts: [{artifactId, version, title, contentType}], createdAt}. The SPA shows each as a card on the composer, labelled \"From {fromTitle}\", and the next send carries it as `deliveries: [{deliveryId, text?}]`. An attached card is not listed: its block is in the user message it was sent with. Empty while HANDOFFS_ENABLED is off. Returned only on the first page.",
     )
+    workflow_runs: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="workflowRuns",
+        description="Workflow runs started from this conversation (workflow-runs spec §9), oldest first, each shaped like `GET /sessions/{id}/workflow-runs/{runId}` ({runId, status, request, steps: [{stepId, handoffId, agentId, agentName, request, removed, handoff}], fileIds, limits, sourceMessageIndex, approvedAt, ...}). `status` is the run's own (`open`, `approved`, `dismissed`, `stopped`, or `abandoned` for an open run a day old); each step's `handoff` is its row's view, without `relayedPrompts` (a sent step is in `handoffs` too, with them). UI only. Empty while WORKFLOW_RUNS_ENABLED is off. Returned only on the first page.",
+    )
     from_archive: bool = Field(
         False,
         alias="fromArchive",
