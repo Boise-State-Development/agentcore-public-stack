@@ -266,7 +266,10 @@ export class WorkflowRunRowComponent {
   protected readonly collecting = computed(() => this.results.isCollecting(this.run().runId));
   protected readonly onComposer = computed(() => this.results.isOnComposer(this.run()));
 
-  /** Offered until the run has its one result: once it does, a later step comes back on its own. */
+  /**
+   * Offered until the run has its one result. The server fixes that result exactly once, so a step that
+   * finishes later is not added: it comes back from its own conversation with Send to *{title}*.
+   */
   protected readonly offerBringBack = computed(() => this.progress().done > 0 && !this.run().resultDeliveryId);
 
   protected readonly bringBackLabel = computed(() => {

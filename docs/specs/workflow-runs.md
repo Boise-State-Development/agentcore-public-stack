@@ -545,7 +545,8 @@ changes a tool spec or the system prompt.
       started reads `running` while the run is approved (it is queued in the tab) and `stopped` once the run is
       stopped; a dismissed, abandoned or missing row reads `stopped`. A removed step has no part.
     - **"Bring back *k* results now"** fixes the run's one result at that moment. A step that finishes later is not
-      added: it comes back the ordinary way, with its own Bring back result (it is a handoff like any other).
+      added: it comes back from its own conversation with Send to *{title}* (§8). The run's steps are not drawn
+      as handoff rows, so there is no Bring back result under them.
     - **What the model reads.** One block per part (`render_delivery_parts`), joined like separate cards, each 0a's
       wrapper. Not planned: the block names the **Agent** and then the step conversation's title (`Generalist ·
       Review of the proposal`, `delivery_part_label`), because every step starts from the same card and usually the
@@ -707,8 +708,10 @@ changes a tool spec or the system prompt.
       steps are ever routinely resumed.
     - **Stop run** posts `…/stop`, closes this tab's queue (no pending step starts) and calls each step's own
       cooperative cancel (`ChatHttpService.cancelChatRequest`) for every step streaming in this tab, exactly as
-      Stop in that conversation would. A step running in another tab stops only from there. No confirmation. A
-      409 (never approved) is ignored; any other failure says the steps here were stopped and to try again.
+      Stop in that conversation would. A step close to its end can still finish (its row goes to `done`, not
+      `stopped`), so Stop run promises no running step stops. A step running in another tab stops only from there.
+      No confirmation. A 409 (never approved) is ignored; any other failure says the steps here were stopped and
+      to try again.
     - **When the result comes back.** A run started or resumed in this tab is watched (`WorkflowRunResultService`)
       until every kept step is `done` or `stopped`. Then it toasts "*k* Agents finished · Open", where *k* is the
       steps that **finished** (a run with a failed step does not claim all *N*), Open scrolls to the run's row (the
@@ -848,7 +851,7 @@ it is the link.
   *k* Agents" (steps a reload left unstarted), "Bring back *N* results now" while some are still running or
   waiting on the user, "Bring back results" once all have settled, and "Stop run" until they have. Once the
   result is made: "Added to your next message" while it waits on the composer. Stop run asks no confirmation: the
-  steps stopped so far keep their results, and each has Continue.
+  steps stopped so far keep their results, and each has Continue. A step close to its end can still finish.
 - **Not a live region,** as the row isn't. The toasts announce changes.
 
 ### 20.3 The result card (W.4b)
