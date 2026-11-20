@@ -50,6 +50,14 @@ export class WorkflowRunQueueService {
 
   private readonly runs = signal<ReadonlyMap<string, QueuedRun>>(new Map());
 
+  /**
+   * The page is going away (`pagehide`). Unloading aborts the running steps' streams, and each
+   * aborted promise settles its slot; without this the queue would start the next step inside
+   * the dying page, a send that may or may not reach the server. Starting nothing leaves those
+   * steps `open`, so a reload shows them "Not started" with Start.
+   */
+  private unloading = false;
+
   /** True while any run in this tab has a step queued or running. */
   readonly hasActiveRun = computed(() => [...this.runs().values()].some((run) => run.pending.length + run.running.length > 0));
 
@@ -73,8 +81,23 @@ export class WorkflowRunQueueService {
         // Older browsers need a returnValue to show the prompt.
         event.returnValue = '';
       };
+      const hide = () => {
+        this.unloading = true;
+      };
+      // A page restored from the back/forward cache is alive again: carry on where it stopped.
+      const show = (event: PageTransitionEvent) => {
+        if (!event.persisted || !this.unloading) return;
+        this.unloading = false;
+        for (const runId of this.runs().keys()) this.pump(runId);
+      };
       window.addEventListener('beforeunload', guard);
-      inject(DestroyRef).onDestroy(() => window.removeEventListener('beforeunload', guard));
+      window.addEventListener('pagehide', hide);
+      window.addEventListener('pageshow', show);
+      inject(DestroyRef).onDestroy(() => {
+        window.removeEventListener('beforeunload', guard);
+        window.removeEventListener('pagehide', hide);
+        window.removeEventListener('pageshow', show);
+      });
     }
   }
 
@@ -136,6 +159,8 @@ export class WorkflowRunQueueService {
   }
 
   private pump(runId: string): void {
+    // Nothing starts while the page unloads, and the run stays as it is (envelope included).
+    if (this.unloading) return;
     const run = this.runs().get(runId);
     if (!run) return;
     const limit = Math.max(1, run.envelope.concurrency || DEFAULT_RUN_CONCURRENCY);
