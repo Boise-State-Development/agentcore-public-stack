@@ -191,7 +191,7 @@
                                             [routerLink]="['/projects', entry.projectId]"
                                             [id]="'session-group-' + gi + '-' + entry.projectId"
                                             (click)="onProjectHeadingClick()"
-                                            class="flex min-h-7 items-center gap-1.5 rounded-md px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                                            class="flex min-h-7 items-center gap-1.5 rounded-md px-2 py-1 text-xs/5 font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-300 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
                                         >
                                             <ng-icon name="heroRectangleStack" class="size-3.5 shrink-0" aria-hidden="true" />
                                             <span class="min-w-0 truncate">{{ entry.name }}</span>
@@ -275,7 +275,7 @@
                 type="button"
                 [cdkMenuTriggerFor]="agentMenu"
                 [cdkMenuPosition]="menuPositions"
-                class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-300 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
                 [attr.aria-label]="'Options for agent: ' + agent.name"
                 aria-haspopup="menu"
             >
@@ -416,7 +416,7 @@
                         [cdkMenuTriggerFor]="sessionMenu"
                         [cdkMenuPosition]="menuPositions"
                         [disabled]="deletingSessionId() === session.sessionId"
-                        class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
+                        class="session-menu-trigger absolute right-1 top-1/2 -translate-y-1/2 flex size-7 items-center justify-center rounded-md text-gray-500 opacity-0 transition-opacity duration-150 ease-in hover:bg-gray-200 hover:text-gray-700 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-300 group-hover:opacity-100 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
                         [attr.aria-label]="'Options for conversation: ' + getSessionTitle(session)"
                         aria-haspopup="menu"
                     >

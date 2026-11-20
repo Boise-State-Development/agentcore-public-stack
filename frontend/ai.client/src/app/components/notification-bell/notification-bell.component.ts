@@ -197,7 +197,7 @@ export function relativeTime(iso: string, now = Date.now()): string {
       [appTooltip]="'Notifications'"
       appTooltipPosition="top"
       [attr.aria-label]="buttonLabel()"
-      class="relative flex size-9 items-center justify-center rounded-2xl text-gray-500 transition-colors hover:bg-gray-200/60 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+      class="relative flex size-9 items-center justify-center rounded-2xl text-gray-500 transition-colors hover:bg-gray-200/60 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-300 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
     >
       <ng-icon name="heroBell" class="size-5" aria-hidden="true" />
       @if (unreadCount() > 0) {

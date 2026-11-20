@@ -72,7 +72,7 @@ export interface User {
         type="button"
         [cdkMenuTriggerFor]="userMenu"
         [cdkMenuPosition]="menuPositionsComputed()"
-        class="relative flex w-full items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-gray-200/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:hover:bg-white/5"
+        class="relative flex w-full items-center gap-3 rounded-md px-2 py-1.5 transition-colors hover:bg-gray-200/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-300 dark:hover:bg-white/5"
         aria-label="User menu"
       >
         <span class="sr-only">Open user menu</span>
