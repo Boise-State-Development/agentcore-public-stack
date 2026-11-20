@@ -1,6 +1,6 @@
 # Workflow runs: several steps under one approval
 
-**Status:** Accepted for step 1, 2026-11-20 (§19 is its delivery plan). Proposed 2026-11-19. PR-W.1 (the run row, its routes and the flag) built 2026-11-20. PR-W.4b (the run in the thread and its result) built 2026-11-20. It asks one design question of the handoffs work: should the
+**Status:** Step 1 built and dev-validated, 2026-11-20, behind `WORKFLOW_RUNS_ENABLED` (on in `development` only). §19 is its delivery plan and §19.1 what it showed. Steps 2 to 4 are proposed. Proposed 2026-11-19. It asks one design question of the handoffs work: should the
 user's review sit on each hop, as it does today, or on the whole piece of delegated work? Everything else follows
 from the answer.
 **Author:** Phil Merrell (drafted with Claude)
@@ -822,6 +822,48 @@ changes a tool spec or the system prompt.
 
 Settled with the developer on 2026-11-20: the run's row (W.4b), the sidebar (W.4c), the wording and the cost
 rule (§17, questions 0 to 3).
+
+### 19.1 Step 1 outcome (2026-11-20)
+
+Every step-1 PR is merged and passed its dev check: W.1 (#2189), W.2 (#2195), W.3 (#2193), W.4a (#2194), W.4b
+(#2199), W.4c (#2208), the step titles (#2214, then #2216 so the top nav names the Agent once), and two fixes the
+checks found. #2203 stops the queue starting a step inside an unloading page. #2212 fixes Send to *{title}*
+returning 404 until a reload: every tool round left the SPA's live message ids one behind the server's, because
+the stream has no frame for the stored tool-result message. That also misfiled feedback and rewind targets on
+tool-using answers. Feedback rows from before the fix are not backfilled.
+
+**Measured on dev:**
+
+- **The source's prompt cache.** A run result is appended blocks only. On the source's `C#` rows every
+  result-carrying call was a `hit` that read the whole previous prefix, with `toolConfigHash` and
+  `systemPromptHash` unchanged and nothing wasted. The run brief (W.3) read the source's cache in full (14,284
+  tokens, exactly the prior turn's read plus write), and the next real turn read the same 14,284 with its
+  `historyHash` lineage intact, so the brief reached nothing in the history.
+- **TTFT.** The run result's attach waited **0.3–0.4 ms** in region (`delivery_attach.waitMs`). That is in line
+  with a single card (0.1–0.2 ms) and under three separate cards (4.3–4.5 ms). The write itself (27–42 ms) runs
+  behind the agent build.
+- **Start.** Approve answered in 254 ms. Three steps started within 1 ms of each other and finished in 12–17 s.
+  With five Agents, four ran and the fifth queued (`concurrency: 4`).
+- **The estimate.** The sheet said about $0.02. A hand recomputation from the catalog rates, the file's tokens
+  and the tokenizer factors gave $0.016.
+
+**Open after step 1.** None blocks using it on dev.
+
+- **One result per run.** After "Bring back *k* results now", a step that finishes later comes back only through
+  Send to *{title}* in its own conversation. A second collect, or parts appended while the card is pending, is a
+  step-2 candidate.
+- **Stop run** stops the queue and the steps streaming in this tab. It can't reach a step running server-side
+  after a reload, and a short step can finish before the Stop lands (the handoff Stop path reacts after the fact).
+- **No bell entry for a finished run** (`workflow_run_done`). It needs an app-api or Runtime write.
+- **A step started from "Not started"** carries the card and the request, but not the mention's attachments,
+  skills or folders.
+- **A run needs a source with turns.** The multi-mention composer only appears in a thread with messages, and
+  create needs the session row.
+- **Display leftovers.** A partial card keeps "Still waiting" for steps that finished later. "Answered ·
+  *X* resumed" stays under a finished step's line. A step line that was running at a reload reads "Working on"
+  until the next reload.
+- **Dark-mode focus rings** are missing (1.67:1) on the single review sheet's links, the project heading and the
+  sidebar row menus. All three predate this work, and one small fix covers them.
 
 ## 20. What the user sees, step 1
 
