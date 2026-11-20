@@ -176,6 +176,15 @@ describe('SessionList: a run\'s step conversations', () => {
     expect(text(line(fixture.nativeElement))).toBe('2 Agents · 1 of 2 finished (response in progress)');
   });
 
+  it('leaves an unread step to its own row: the collapsed line shows no mark for it', () => {
+    TestBed.inject(WorkflowRunStateService).hydrate('src', [run(['done', 'done'])]);
+    sessions.set({ sessions: [session('src'), step(0, { unread: true }), step(1)], nextToken: null });
+    const fixture = render();
+    const button = line(fixture.nativeElement)!;
+    expect(text(button)).toBe('2 Agents · 2 of 2 finished');
+    expect(button.querySelector('.rounded-full')).toBeNull();
+  });
+
   it('opens on its own while a step is the current conversation', () => {
     TestBed.inject(WorkflowRunStateService).hydrate('src', [run(['done', 'running'])]);
     sessions.set({ sessions: [session('src'), step(0), step(1)], nextToken: null });

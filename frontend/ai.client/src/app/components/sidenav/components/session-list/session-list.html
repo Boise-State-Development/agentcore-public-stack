@@ -140,7 +140,7 @@
                                                 (click)="toggleRun(run)"
                                                 [attr.aria-expanded]="line.expanded"
                                                 [attr.aria-controls]="line.expanded ? runListId(run.runId) : null"
-                                                class="relative flex min-h-7 w-full items-center gap-1 rounded-md px-2 py-1 pr-10 text-left text-xs/5 text-gray-600 hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white"
+                                                class="relative flex min-h-7 w-full items-center gap-1 rounded-md px-2 py-1 pr-10 text-left text-xs/5 text-gray-600 hover:bg-gray-50 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-white dark:focus-visible:outline-primary-300"
                                             >
                                                 <ng-icon
                                                     name="heroChevronRight"
@@ -157,10 +157,6 @@
                                                     @case ('awaiting-input') {
                                                         <span class="sr-only"> (needs your input)</span>
                                                         <span class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-state-warning-700 dark:bg-state-warning-400" aria-hidden="true"></span>
-                                                    }
-                                                    @case ('unread') {
-                                                        <span class="sr-only"> (unread)</span>
-                                                        <span class="pointer-events-none absolute right-3 top-1/2 size-2 -translate-y-1/2 rounded-full bg-primary-500 dark:bg-primary-400" aria-hidden="true"></span>
                                                     }
                                                 }
                                             </button>

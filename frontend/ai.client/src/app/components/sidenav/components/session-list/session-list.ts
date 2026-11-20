@@ -60,7 +60,7 @@ export interface RunLineView {
   label: string;
   expanded: boolean;
   /** The strongest state among the steps, shown only while the line is collapsed. */
-  indicator: SessionRowIndicator;
+  indicator: 'streaming' | 'awaiting-input' | null;
 }
 
 /** "1 Agent", "4 Agents". */
@@ -314,15 +314,14 @@ export class SessionList {
   }
 
   /**
-   * The strongest state among a run's steps, for the collapsed line: a step waiting on the user
-   * first (its own row's mark, or the run's count, which reads a relayed prompt the list may not
-   * have yet), then a response streaming, then unread. A waiting step is never hidden by the fold.
+   * The strongest state among a run's steps, for the collapsed line (§20.4): a step waiting on the
+   * user first (its own row's mark, or the run's count, which reads a relayed prompt the list may
+   * not have yet), then a response streaming. A waiting step is never hidden by the fold. Unread is
+   * left to the steps' own rows: the run's toast already says when its steps finish.
    */
-  private runIndicator(group: SessionRunGroup, needsInput: number): SessionRowIndicator {
-    const marks = group.steps.map(step => this.rowIndicator(step));
+  private runIndicator(group: SessionRunGroup, needsInput: number): 'streaming' | 'awaiting-input' | null {
     if (needsInput > 0 || group.steps.some(step => this.isAwaitingInput(step))) return 'awaiting-input';
-    if (marks.includes('streaming')) return 'streaming';
-    if (marks.includes('unread')) return 'unread';
+    if (group.steps.some(step => this.isSessionStreaming(step.sessionId))) return 'streaming';
     return null;
   }
 
