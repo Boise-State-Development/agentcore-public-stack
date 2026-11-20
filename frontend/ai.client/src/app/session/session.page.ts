@@ -978,18 +978,18 @@ export class ConversationPage implements OnDestroy {
     );
   }
 
-  /**
-   * Display name for a mentioned Agent, for the hand-off notice.
-   *
-   * Falls back to a generic noun rather than an id: the toast explains what just happened
-   * to the user's message, and a raw `ast-…` in that sentence is worse than no name.
-   */
   /** A mentioned Agent as the run sheet shows it: its name and icon from the mention list. */
   private runDraftAgent(agentId: string): { agentId: string; agentName: string; emoji?: string; iconUrl?: string } {
     const match = this.agentMentionService.mentionable().find((candidate) => candidate.agentId === agentId);
     return { agentId, agentName: match?.name || 'this agent', emoji: match?.emoji, iconUrl: match?.iconUrl };
   }
 
+  /**
+   * Display name for a mentioned Agent, for the hand-off notice.
+   *
+   * Falls back to a generic noun rather than an id: the toast explains what just happened
+   * to the user's message, and a raw `ast-…` in that sentence is worse than no name.
+   */
   private mentionedAgentName(agentId: string): string {
     const match = this.agentMentionService
       .mentionable()

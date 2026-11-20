@@ -33,6 +33,7 @@ import { ToolInsightService } from './tool-insight.service';
 import { SessionService } from '../session/session.service';
 import { toolResultMetadata } from '../session/tool-results';
 import { AgentNoticeService } from '../agent-notice/agent-notice.service';
+import { HandoffStateService } from '../handoff/handoff-state.service';
 import { QuotaStatusService } from '../../../services/quota/quota-status.service';
 import type {
   OAuthRequiredEvent,
@@ -57,6 +58,7 @@ import {
   type ContentBlockBuilder,
   type MessageBuilder,
   type SteeringAppliedEvent,
+  type HandoffSuggestedEvent,
   type ContentBlockDeltaEvent,
   type ContentBlockStartEvent,
   type ToolResultEventData,
@@ -198,6 +200,7 @@ export class StreamParserService {
   private sessionService = inject(SessionService);
   private toolInsight = inject(ToolInsightService);
   private agentNotice = inject(AgentNoticeService);
+  private handoffState = inject(HandoffStateService);
   private injector = inject(Injector);
 
   // =========================================================================
@@ -691,6 +694,31 @@ export class StreamParserService {
         //  2. It renders as a user message inside the still-streaming turn.
         this.steering.recordApplied(data);
         this.appendSteeringMessage(state, data);
+      },
+
+      onHandoffSuggested: (data: HandoffSuggestedEvent) => {
+        // A chip for the conversation that made it, keyed by its own session
+        // id like the rest of handoff state, so a background stream's chip
+        // waits in its own thread. It renders under the message holding
+        // `toolUseId`; Start fetches the prompt (handoffs spec §4.4).
+        const now = new Date().toISOString();
+        this.handoffState.upsertRow({
+          handoffId: data.handoffId,
+          sessionId: data.sessionId,
+          kind: 'suggested',
+          status: 'open',
+          agentId: '',
+          agentName: '',
+          request: '',
+          sourceMessageIndex: -1,
+          excerptTokens: 0,
+          createdAt: now,
+          updatedAt: now,
+          title: data.title,
+          tldr: data.tldr,
+          agentHint: data.agentName,
+          toolUseId: data.toolUseId,
+        });
       },
 
       onCompaction: (data: CompactionEvent) => {

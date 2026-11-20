@@ -75,6 +75,21 @@ export interface HandoffView {
   /** Set on a workflow run's step (workflow-runs spec §3.1). */
   runId?: string;
   stepId?: string;
+  /** A suggestion's chip (`suggest_handoff`, §4.4): what the model offered. */
+  title?: string;
+  tldr?: string;
+  /** The Agent name as the model wrote it, unresolved; matched by `matchSuggestedAgent`. */
+  agentHint?: string;
+  /** The `suggest_handoff` call, which places the chip under the message holding it. */
+  toolUseId?: string;
+}
+
+/**
+ * A suggestion the user hasn't sent yet: rendered as a chip under its message, not as a row.
+ * Once sent it has a target and becomes an ordinary handoff row.
+ */
+export function isSuggestionChip(row: HandoffView): boolean {
+  return row.kind === 'suggested' && !row.targetSessionId;
 }
 
 /** `POST /sessions/{id}/handoffs`: the card to review and the exact prompt it makes. */
@@ -113,6 +128,11 @@ export interface HandoffDraft {
    * there would carry, so the Runtime builds the same agent and reads the source's prompt cache.
    */
   sourceAssistantId?: string;
+  /**
+   * Set when the sheet was opened from a suggestion chip's Start (§4.4): the suggested row to
+   * start, instead of opening a new mention. Cancel then leaves the chip in place.
+   */
+  suggestionId?: string;
 }
 
 /** Why no brief was written (`handoff_brief_fallback`); the card keeps the excerpt. */
