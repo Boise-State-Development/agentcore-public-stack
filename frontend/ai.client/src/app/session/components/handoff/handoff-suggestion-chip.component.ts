@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowTopRightOnSquare } from '@ng-icons/heroicons/outline';
 
@@ -17,7 +18,7 @@ let nextId = 0;
  * - **Start** opens the same review sheet a mid-thread `@`-mention does, with the model's prompt
  *   as the request. The Agent is the one the model named, matched against the Agents the user can
  *   mention (`matchSuggestedAgent`). When the model named none, or nothing matched, the chip asks
- *   the user to pick one first.
+ *   the user to pick one first, and a user with no Agents at all is told so and sent to browse them.
  * - **Dismiss** removes the chip, here and on reload.
  * - While its sheet is open, the chip says so instead of offering Start again. Once sent, the
  *   chip is replaced by the handoff's row, in the same place.
@@ -25,7 +26,7 @@ let nextId = 0;
 @Component({
   selector: 'app-handoff-suggestion-chip',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [NgIcon, RouterLink],
   providers: [provideIcons({ heroArrowTopRightOnSquare })],
   template: `
     <section
@@ -47,6 +48,24 @@ let nextId = 0;
 
           @if (inReview()) {
             <p class="mt-2 text-xs/5 text-gray-600 dark:text-gray-400" role="status">Reviewing it below.</p>
+          } @else if (agents().length === 0) {
+            <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <p class="text-xs/5 text-gray-600 dark:text-gray-400">
+                You don’t have an Agent to hand this to yet.
+                <a
+                  routerLink="/agents"
+                  class="rounded-sm font-medium text-primary-accessible underline hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50"
+                  >Browse Agents</a
+                >
+              </p>
+              <button
+                type="button"
+                (click)="dismiss()"
+                class="rounded-2xl px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-white/10"
+              >
+                Dismiss
+              </button>
+            </div>
           } @else {
             <div class="mt-2 flex flex-wrap items-end gap-2">
               @if (!matched()) {

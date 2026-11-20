@@ -1,4 +1,5 @@
 import { signal } from '@angular/core';
+import { provideRouter } from '@angular/router';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -36,6 +37,7 @@ describe('HandoffSuggestionChipComponent', () => {
   const startSuggestion = vi.fn().mockResolvedValue(undefined);
   const dismissSuggestion = vi.fn().mockResolvedValue(undefined);
   const load = vi.fn().mockResolvedValue(undefined);
+  const mentionable = signal<MentionableAgent[]>(AGENTS);
 
   function render(chip: HandoffView): HTMLElement {
     fixture = TestBed.createComponent(HandoffSuggestionChipComponent);
@@ -49,11 +51,13 @@ describe('HandoffSuggestionChipComponent', () => {
   beforeEach(() => {
     startSuggestion.mockClear();
     dismissSuggestion.mockClear();
+    mentionable.set(AGENTS);
     TestBed.configureTestingModule({
       imports: [HandoffSuggestionChipComponent],
       providers: [
         { provide: AgentHandoffService, useValue: { startSuggestion, dismissSuggestion } },
-        { provide: AgentMentionService, useValue: { mentionable: signal(AGENTS), load } },
+        { provide: AgentMentionService, useValue: { mentionable, load } },
+        provideRouter([]),
       ],
     });
   });
@@ -95,6 +99,16 @@ describe('HandoffSuggestionChipComponent', () => {
     const el = render({ ...CHIP, agentHint: undefined });
 
     expect(el.querySelector('label')?.textContent?.trim()).toBe('Pick an Agent');
+  });
+
+  it('says so when the user has no Agents, offering only Dismiss', () => {
+    mentionable.set([]);
+    const el = render(CHIP);
+
+    expect(el.textContent).toContain('You don’t have an Agent to hand this to yet.');
+    expect(el.querySelector('a')?.getAttribute('href')).toBe('/agents');
+    expect(el.querySelector('select')).toBeNull();
+    expect(buttons(el).map((b) => b.textContent?.trim())).toEqual(['Dismiss']);
   });
 
   it('Dismiss dismisses', () => {
