@@ -194,13 +194,21 @@ def rows_for(
     ]
 
 
+#: ``BatchWriteItem``'s limit. A handoff or a card (five files) is one batch; a run result is at
+#: most ``RUN_RESULT_MAX_FILES`` (10), so also one, but the writer never relies on that.
+REFERENCE_ROWS_PER_BATCH = 25
+
+
 def write_reference_rows(rows: Sequence[FileMetadata], repository=None) -> None:
-    """One ``BatchWriteItem`` for every reference row of a handoff or a delivery. No quota change."""
+    """Every reference row of a handoff or a delivery, in ``BatchWriteItem``s of 25. No quota change."""
     if not rows:
         return
     from apis.shared.files.repository import get_file_upload_repository
 
-    (repository or get_file_upload_repository()).batch_put_files_sync(list(rows))
+    repo = repository or get_file_upload_repository()
+    rows = list(rows)
+    for start in range(0, len(rows), REFERENCE_ROWS_PER_BATCH):
+        repo.batch_put_files_sync(rows[start : start + REFERENCE_ROWS_PER_BATCH])
 
 
 async def resolve_linked_file(meta: Optional[FileMetadata], repository=None) -> Optional[FileMetadata]:

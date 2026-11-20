@@ -7,13 +7,17 @@ import { readFileSync } from 'node:fs';
 import { fromProjectRoot } from '../../../../testing/project-root';
 import { DeliveryArtifact, FileLine } from './handoff.models';
 import {
+  DELIVERY_PART_STATUS_NOTES,
+  DeliveryPartBlockInput,
   buildHandoffMessage,
+  deliveryPartLabel,
   extractDeliveryBlocks,
   extractHandoffContext,
   formatFileSize,
   joinDeliveryBlocks,
   referenceUploadId,
   renderDeliveryBlock,
+  renderDeliveryParts,
   wrapHandoffContext,
 } from './handoff-prompt';
 
@@ -42,6 +46,7 @@ interface DeliveryCase {
   fromTitle: string;
   artifacts: DeliveryArtifact[];
   files?: FileLine[];
+  parts?: DeliveryPartBlockInput[];
   block: string;
 }
 
@@ -74,9 +79,37 @@ describe('extractHandoffContext', () => {
 describe('delivery blocks', () => {
   for (const c of fixture.deliveryCases) {
     it(`renders byte for byte with the server: ${c.name}`, () => {
-      expect(renderDeliveryBlock(c.text, c.fromTitle, c.artifacts, c.files ?? [])).toBe(c.block);
+      const rendered = c.parts
+        ? renderDeliveryParts(c.parts)
+        : renderDeliveryBlock(c.text, c.fromTitle, c.artifacts, c.files ?? []);
+      expect(rendered).toBe(c.block);
     });
   }
+
+  it('pins a run result with every part status, one block per part', () => {
+    const run = fixture.deliveryCases.find((c) => c.parts)!;
+    expect(new Set(run.parts!.map((p) => p.status))).toEqual(new Set(['done', 'stopped', 'needs_input', 'running']));
+
+    // Read back as the sent bubble reads any cards: one block per part with a block, in step order.
+    const { blocks, rest } = extractDeliveryBlocks(joinDeliveryBlocks([run.block], 'Merge these.'));
+    expect(rest).toBe('Merge these.');
+    expect(blocks.map((b) => b.fromTitle)).toEqual([
+      'Generalist · Review of the proposal',
+      'Colleague',
+      'Fiscal outsider',
+      'Emotional "outsider"',
+      'Statistician',
+    ]);
+    expect(blocks[0].artifacts.map((a) => a.artifactId)).toEqual(['memo']);
+    expect(blocks[0].files.map((f) => f.filename)).toEqual(['budget.xlsx']);
+    expect(blocks[2].text).toBe(DELIVERY_PART_STATUS_NOTES.stopped);
+  });
+
+  it('names a part by its Agent, then its conversation, once when they match', () => {
+    expect(deliveryPartLabel('Generalist', 'Review')).toBe('Generalist · Review');
+    expect(deliveryPartLabel('Colleague', 'Colleague')).toBe('Colleague');
+    expect(deliveryPartLabel('Fiscal outsider', '  ')).toBe('Fiscal outsider');
+  });
 
   it('reads every card back out of a stored message, in order, and leaves what the user typed', () => {
     const [plain, withArtifacts] = fixture.deliveryCases;
