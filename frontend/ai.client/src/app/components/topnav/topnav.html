@@ -64,7 +64,7 @@
             [attr.aria-label]="'Options for conversation: ' + displayTitle()"
             aria-haspopup="menu"
           >
-            @for (title of [displayTitle()]; track title) {
+            @for (title of [visibleTitle()]; track title) {
               <span class="session-title-enter truncate text-base/7 font-semibold">{{ title }}</span>
             }
             <ng-icon

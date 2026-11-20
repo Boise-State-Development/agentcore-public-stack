@@ -6,7 +6,7 @@
     class="chat-topnav-wrapper"
     [class.sidenav-expanded]="!isSidenavCollapsed()"
     [class.artifact-pane-open]="artifactPanelOpen()">
-    <app-topnav>
+    <app-topnav [crumbName]="hasMessages() && !isLoadingAssistant() && assistant() ? indicatorName() : null">
       <!-- The bound agent, as a breadcrumb before the conversation title: the
            conversation lives inside the agent. Only once there are messages —
            the empty state already introduces the agent with its launch card. -->
