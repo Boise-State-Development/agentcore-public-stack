@@ -552,6 +552,9 @@ export class AgentHandoffService {
     this.withdrawWaitingToast(row.handoffId);
     const target = row.targetSessionId;
     if (!target || this.chatState.viewedSessionId() === target) return;
+    // A workflow run's step says only that it needs the user: its finishing and stopping are the
+    // run's to announce, once, when every step has settled (workflow-runs spec §20.5).
+    if (row.runId && row.status !== 'needs_input') return;
     const action = answeredInSource(row)
       ? { label: 'Answer', handler: () => this.notifications.openSource({ handoffId: row.handoffId, sourceSessionId: row.sessionId }) }
       : { label: 'Open', handler: () => this.openTarget(row.agentId, target) };

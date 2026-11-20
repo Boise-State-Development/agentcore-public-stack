@@ -6,14 +6,19 @@ import { ConfigService } from '../../../services/config.service';
 import { FileUploadService } from '../../../services/file-upload/file-upload.service';
 import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
+import { ChatHttpService } from '../chat/chat-http.service';
 import { ChatRequestService } from '../chat/chat-request.service';
+import { ChatStateService } from '../chat/chat-state.service';
 import { Message } from '../models/message.model';
 import { ComposerDraftService } from '../session/composer-draft.service';
 import { MessageMapService } from '../session/message-map.service';
+import { SessionService } from '../session/session.service';
 import { AgentHandoffService } from './agent-handoff.service';
 import { HandoffBriefService } from './handoff-brief.service';
+import { HandoffStateService } from './handoff-state.service';
 import { BriefFallbackReason, HandoffReview, MAX_SHARED_FILES, SHARED_FILES_RECENT_TURNS } from './handoff.models';
 import { WorkflowRunQueueService } from './workflow-run-queue.service';
+import { WorkflowRunResultService } from './workflow-run-result.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
 import {
   CreateWorkflowRunResponse,
@@ -24,6 +29,7 @@ import {
   RunReviewStep,
   RunShareableFile,
   RunStepLaunch,
+  WorkflowRunCard,
   WorkflowRunView,
 } from './workflow-run.models';
 
@@ -39,6 +45,9 @@ import {
  *
  * The single sheet's path (`AgentHandoffService.open`/`send`) is untouched: a run only adds this
  * service beside it, and its steps go through the single handoff's own send.
+ *
+ * After Start (PR-W.4b): `resume` starts the steps a reload left unstarted from the run row's own
+ * envelope (its files and its card as reviewed), in any browser; `stop` is Stop run.
  */
 @Injectable({ providedIn: 'root' })
 export class WorkflowRunService {
@@ -54,6 +63,11 @@ export class WorkflowRunService {
   private readonly messageMap = inject(MessageMapService);
   private readonly toast = inject(ToastService);
   private readonly features = inject(FEATURES);
+  private readonly results = inject(WorkflowRunResultService);
+  private readonly handoffState = inject(HandoffStateService);
+  private readonly chatState = inject(ChatStateService);
+  private readonly chatHttp = inject(ChatHttpService);
+  private readonly sessions = inject(SessionService);
 
   /** Open the run sheet for a message that mentioned several Agents. Nothing is sent. */
   async open(sourceSessionId: string, draft: RunDraft): Promise<void> {
@@ -206,6 +220,9 @@ export class WorkflowRunService {
 
     const shared = review.request.trim();
     const filesUnticked = Math.max(0, (review.files?.length ?? 0) - review.fileIds.length);
+    // The card as reviewed goes on the run row, so a reload in any browser starts the steps left
+    // with exactly this card (PR-W.4b).
+    const card: WorkflowRunCard = review.cardRemoved ? { removed: true } : { text: review.card, removed: false };
     let approved: WorkflowRunView;
     try {
       approved = await firstValueFrom(
@@ -220,6 +237,7 @@ export class WorkflowRunService {
           ),
           fileIds: review.fileIds,
           filesUnticked,
+          card,
         }),
       );
     } catch (error) {
@@ -256,21 +274,67 @@ export class WorkflowRunService {
     this.state.upsertRun(approved);
     this.state.clearReview(sourceSessionId);
     this.queue.enqueue(envelope, steps);
+    this.results.watch(approved);
     this.toast.info(`Handed off to ${agentsLabel(steps.length)}`);
   }
 
   /**
-   * Start an approved run's steps that were never started (after a reload, §19 PR-W.4a). Needs
-   * the envelope this browser saved at approval, since the run row keeps the files, not the card.
-   * Returns false when there is none.
+   * Start an approved run's steps that were never started (after a reload, §19 PR-W.4a), from the
+   * run row's own envelope: its approved files and its card as reviewed. Works in any browser.
+   * False when the row has no card (approved before PR-W.4b) or nothing is left to start.
+   *
+   * What the row doesn't keep: the mention message's own attachments, skills and folders, which
+   * only the steps the approving tab started carried, and the unticked-file count (a metric).
    */
   resume(run: WorkflowRunView): boolean {
-    const envelope = this.queue.storedEnvelope(run.runId);
     const steps = this.queue.unstartedSteps(run);
-    if (!envelope || steps.length === 0) return false;
-    this.queue.enqueue({ ...envelope, fileIds: run.fileIds ?? envelope.fileIds }, steps);
+    if (!canResume(run) || steps.length === 0) return false;
+    const listed = steps
+      .map((step) => run.steps.find((s) => s.handoffId === step.handoffId)?.handoff)
+      .find((row) => !!row);
+    const envelope: RunEnvelope = {
+      runId: run.runId,
+      sourceSessionId: run.sessionId,
+      sourceTitle: this.sourceTitle(run.sessionId),
+      sourceMessageIndex: run.sourceMessageIndex,
+      excerptTokens: listed?.excerptTokens ?? 0,
+      turnsCovered: listed?.turnsCovered,
+      contextText: run.card?.removed ? undefined : run.card?.text,
+      fileIds: [...(run.fileIds ?? [])],
+      filesUnticked: 0,
+      concurrency: run.limits?.concurrency ?? DEFAULT_RUN_CONCURRENCY,
+    };
+    this.queue.enqueue(envelope, steps);
+    this.results.watch(run);
     this.toast.info(`Handed off to ${agentsLabel(steps.length)}`);
     return true;
+  }
+
+  /**
+   * Stop run (§8, §20.2): close the run on the server so no queued step starts anywhere, close
+   * this tab's queue, then stop each running step with its own cooperative cancel, as Stop in its
+   * conversation would. No confirmation: finished steps keep their results, and a stopped step has
+   * Continue in its conversation.
+   */
+  async stop(run: WorkflowRunView): Promise<void> {
+    this.queue.stop(run.runId);
+    try {
+      await firstValueFrom(this.http.post<void>(`${this.runsUrl(run.sessionId)}/${encodeURIComponent(run.runId)}/stop`, {}));
+    } catch (error) {
+      // 409: never approved. Anything else: the queue here is closed either way; say so.
+      if (!(error instanceof HttpErrorResponse && error.status === 409)) {
+        this.toast.error('The run couldn’t be stopped everywhere', 'Steps already running here were stopped. Try again.');
+      }
+    }
+    const current = this.state.runsFor(run.sessionId).find((r) => r.runId === run.runId) ?? run;
+    this.state.upsertRun({ ...current, status: 'stopped' });
+    // Every step streaming in this tab: the ones holding a queue slot, and any resumed from its
+    // own conversation since. A step running in another tab stops when that tab's Stop is pressed.
+    const rows = this.handoffState.rowsFor(run.sessionId);
+    for (const step of run.steps) {
+      const target = (rows.find((row) => row.handoffId === step.handoffId) ?? step.handoff)?.targetSessionId;
+      if (target && this.chatState.isSessionLoading(target)) this.chatHttp.cancelChatRequest(target);
+    }
   }
 
   private discard(sourceSessionId: string, review: RunReview): void {
@@ -392,6 +456,13 @@ export class WorkflowRunService {
     }
   }
 
+  /** The source's title as the sidenav lists it, for a resumed step's "Context from" link. */
+  private sourceTitle(sourceSessionId: string): string {
+    const listed = this.sessions.mergedSessionsResource().sessions.find((s) => s.sessionId === sourceSessionId);
+    const title = listed?.title?.trim();
+    return title && title !== 'New Conversation' ? title : '';
+  }
+
   private runsUrl(sourceSessionId: string): string {
     return `${this.config.appApiUrl()}/sessions/${encodeURIComponent(sourceSessionId)}/workflow-runs`;
   }
@@ -412,6 +483,11 @@ export function canStart(review: RunReview): boolean {
   if (review.phase !== 'ready' || review.brief?.status === 'writing') return false;
   const kept = keptSteps(review);
   return kept.length > 0 && kept.every((step) => stepRequest(review, step).length > 0);
+}
+
+/** The run row keeps the card as reviewed (PR-W.4b), so its unstarted steps can start anywhere. */
+export function canResume(run: WorkflowRunView): boolean {
+  return run.status === 'approved' && !!run.card;
 }
 
 /** "4 Agents", "1 Agent". */

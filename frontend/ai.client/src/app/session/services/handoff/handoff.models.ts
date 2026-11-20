@@ -4,6 +4,7 @@
  */
 
 import { FolderAttachmentData } from '../models/message.model';
+import type { DeliveryPartStatus } from './handoff-prompt';
 
 export type HandoffStatus =
   | 'open'
@@ -241,6 +242,26 @@ export interface DeliveryView {
   /** Files the card shares by reference (§4.9). Absent from rows written before PR-0.4a. */
   files?: DeliveryFile[];
   createdAt: string;
+  /** Set on a workflow run's one result (workflow-runs spec §7, PR-W.2). */
+  runId?: string;
+  /**
+   * A run result's parts, one per kept step in step order. The row's own `text`, `artifacts` and
+   * `files` are empty then. Absent (not empty) on a plain card.
+   */
+  parts?: DeliveryPart[];
+}
+
+/** One step's part of a run result. Only a `done` part carries text, artifacts and files. */
+export interface DeliveryPart {
+  stepId: string;
+  agentName: string;
+  fromSessionId: string;
+  /** The step conversation's title; empty on a part with no result. */
+  fromTitle: string;
+  status: DeliveryPartStatus;
+  text: string;
+  artifacts: DeliveryArtifact[];
+  files: DeliveryFile[];
 }
 
 /** `POST /sessions/{targetId}/handoffs/send-back`: a target's answer, offered back to its source. */

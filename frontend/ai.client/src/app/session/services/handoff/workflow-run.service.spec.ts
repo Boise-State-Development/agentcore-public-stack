@@ -9,12 +9,14 @@ import { ConfigService } from '../../../services/config.service';
 import { FileMetadata, FileUploadService } from '../../../services/file-upload/file-upload.service';
 import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
+import { ChatHttpService } from '../chat/chat-http.service';
 import { ChatRequestService } from '../chat/chat-request.service';
 import { ChatStateService } from '../chat/chat-state.service';
 import { Message } from '../models/message.model';
 import { ComposerDraftService } from '../session/composer-draft.service';
 import { ConversationBindingService } from '../session/conversation-binding.service';
 import { MessageMapService } from '../session/message-map.service';
+import { SessionService } from '../session/session.service';
 import { HandoffBriefHandlers, HandoffBriefService } from './handoff-brief.service';
 import { HandoffNotificationService } from './handoff-notification.service';
 import { buildHandoffMessage, referenceUploadId, wrapHandoffContext } from './handoff-prompt';
@@ -94,6 +96,8 @@ describe('WorkflowRunService', () => {
   let features: { handoffBrief: boolean; handoffs: boolean; workflowRuns: boolean };
   let sends: { options: Record<string, unknown>; resolve: () => void }[];
   const draftRequest = vi.fn();
+  const cancelChatRequest = vi.fn();
+  const loading = new Set<string>();
   const toastInfo = vi.fn();
   const buildHandoffBriefRequest = vi.fn().mockResolvedValue({ message: 'x' });
   let briefHandlers: HandoffBriefHandlers | undefined;
@@ -101,8 +105,9 @@ describe('WorkflowRunService', () => {
   let sourceMessages: Message[] = [];
 
   beforeEach(() => {
-    localStorage.clear();
     draftRequest.mockClear();
+    cancelChatRequest.mockClear();
+    loading.clear();
     toastInfo.mockClear();
     buildHandoffBriefRequest.mockClear();
     briefHandlers = undefined;
@@ -126,7 +131,9 @@ describe('WorkflowRunService', () => {
               new Promise<void>((resolve) => sends.push({ options, resolve })),
           },
         },
-        { provide: ChatStateService, useValue: { isSessionLoading: () => false, viewedSessionId: () => 'src' } },
+        { provide: ChatStateService, useValue: { isSessionLoading: (id: string) => loading.has(id), viewedSessionId: () => 'src' } },
+        { provide: ChatHttpService, useValue: { cancelChatRequest } },
+        { provide: SessionService, useValue: { mergedSessionsResource: () => ({ sessions: [{ sessionId: 'src', title: 'Proposal' }] }) } },
         { provide: ComposerDraftService, useValue: { request: draftRequest } },
         { provide: ConversationBindingService, useValue: { queryParamsFor: (id: string) => ({ agent: id }) } },
         { provide: Router, useValue: { navigate: vi.fn() } },
@@ -153,7 +160,6 @@ describe('WorkflowRunService', () => {
 
   afterEach(() => {
     http.verify();
-    localStorage.clear();
   });
 
   async function openReady(count = AGENTS.length): Promise<void> {
@@ -264,6 +270,7 @@ describe('WorkflowRunService', () => {
       ],
       fileIds: ['f1'],
       filesUnticked: 1,
+      card: { text: CARD, removed: false },
     });
   });
 
@@ -322,39 +329,18 @@ describe('WorkflowRunService', () => {
     expect(sends).toEqual([]);
   });
 
-  it('saves the envelope while steps wait, so a reload can start them with the reviewed card', async () => {
-    await openReady();
+  it('sends the card as reviewed with the approval, or that it was removed', async () => {
+    await openReady(2);
     service.setCard('src', 'reviewed card');
-    await approve({ fileIds: ['f1'] });
-    expect(sends).toHaveLength(4);
-    expect(queue.storedEnvelope('run1')).toEqual(expect.objectContaining({ contextText: 'reviewed card', fileIds: ['f1'] }));
+    expect((await approve({ steps: runView().steps.slice(0, 2) }))['card']).toEqual({ text: 'reviewed card', removed: false });
 
-    // Once the last step has started there is nothing left to resume.
-    sends[0].resolve();
-    sends[1].resolve();
-    await vi.waitFor(() => expect(sends).toHaveLength(6));
-    expect(queue.storedEnvelope('run1')).toBeNull();
+    await openReady(2);
+    service.setCardRemoved('src', true);
+    expect((await approve({ steps: runView().steps.slice(0, 2) }))['card']).toEqual({ removed: true });
   });
 
-  it('resumes only open, unstarted steps', async () => {
-    localStorage.setItem(
-      'aps.workflowRun.run1',
-      JSON.stringify({
-        savedAt: Date.now(),
-        envelope: {
-          runId: 'run1',
-          sourceSessionId: 'src',
-          sourceTitle: 'Proposal',
-          sourceMessageIndex: 3,
-          excerptTokens: 20,
-          contextText: 'reviewed card',
-          fileIds: ['f1'],
-          filesUnticked: 0,
-          concurrency: 4,
-        },
-      }),
-    );
-    const base = runView({ status: 'approved', fileIds: ['f1'] });
+  it('resumes only open, unstarted steps, from the run row’s own card and files (any browser)', () => {
+    const base = runView({ status: 'approved', fileIds: ['f1'], card: { text: 'reviewed card', removed: false } });
     const started = (i: number) => ({
       handoffId: `h${i}`,
       sessionId: 'src',
@@ -380,12 +366,42 @@ describe('WorkflowRunService', () => {
       ['h5', 'reviewed card', ['f1']],
       ['h6', 'reviewed card', ['f1']],
     ]);
+    expect(toastInfo).toHaveBeenCalledWith('Handed off to 2 Agents');
   });
 
-  it('cannot resume without a saved envelope (the card as reviewed is unknown)', () => {
+  it('resumes a removed card as no card', () => {
+    const run = runView({ status: 'approved', card: { removed: true } });
+    run.steps = run.steps.slice(0, 1).map((step) => ({
+      ...step,
+      handoff: { handoffId: step.handoffId, sessionId: 'src', kind: 'mention', status: 'open', agentId: step.agentId, agentName: step.agentName, request: 'r', sourceMessageIndex: 3, excerptTokens: 20, createdAt: '', updatedAt: '' },
+    }));
+    expect(service.resume(run)).toBe(true);
+    expect(sends.map((s) => s.options['contextText'])).toEqual([undefined]);
+  });
+
+  it('cannot resume a run approved before its card was kept on the row', () => {
     const run = runView({ status: 'approved' });
     expect(service.resume(run)).toBe(false);
     expect(sends).toEqual([]);
+  });
+
+  it('Stop run closes the run, starts no queued step and cancels each running step', async () => {
+    await openReady();
+    await approve();
+    expect(sends).toHaveLength(4);
+    for (const row of handoffs.rowsFor('src')) loading.add(row.targetSessionId!);
+
+    const stopped = service.stop(state.runsFor('src')[0]);
+    http.expectOne(`${RUNS}/run1/stop`).flush(null, { status: 204, statusText: 'No Content' });
+    await stopped;
+
+    expect(state.runsFor('src')[0].status).toBe('stopped');
+    expect(cancelChatRequest).toHaveBeenCalledTimes(4);
+    expect(queue.isQueued('run1')).toBe(false);
+    sends[0].resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sends).toHaveLength(4);
   });
 });
 

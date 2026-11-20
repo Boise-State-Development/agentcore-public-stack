@@ -360,11 +360,10 @@
                only while one is open for this conversation. -->
           @if (sessionId(); as sid) {
             <app-handoff-review-sheet [sessionId]="sid" />
-            <!-- Several mentioned Agents' one review sheet, and an approved run's steps a reload
-                 left unstarted (workflow-runs spec §20.1, PR-W.4a). Render only with something
-                 to show. -->
+            <!-- Several mentioned Agents' one review sheet (workflow-runs spec §20.1). Renders only
+                 while one is open. An approved run's unstarted steps are started from its row in
+                 the thread (§20.2). -->
             <app-workflow-run-sheet [sessionId]="sid" />
-            <app-workflow-run-resume [sessionId]="sid" />
             <!-- Send to {title}'s review, in a conversation a handoff started (§4.3), and the
                  results waiting to ride this conversation's next send (§4.8). Each renders
                  only while it has something to show. -->

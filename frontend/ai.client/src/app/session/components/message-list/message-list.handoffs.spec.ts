@@ -11,6 +11,8 @@ import { OAuthConsentService } from '../../../services/oauth-consent/oauth-conse
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
 import type { HandoffView } from '../../services/handoff/handoff.models';
 import { HandoffNotificationService } from '../../services/handoff/handoff-notification.service';
+import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
+import type { WorkflowRunView } from '../../services/handoff/workflow-run.models';
 
 /**
  * Handoffs in the message list (handoffs spec §4.3).
@@ -56,6 +58,8 @@ describe('MessageListComponent — handoffs', () => {
       unanchoredInterrupts: () => { providerId: string }[];
       unanchoredHandoffRows: () => HandoffView[];
       handoffRowsForMessageId: (id: string) => readonly HandoffView[];
+      runRowsForMessageId: (id: string) => readonly WorkflowRunView[];
+      unanchoredRunRows: () => WorkflowRunView[];
     };
   }
 
@@ -172,6 +176,58 @@ describe('MessageListComponent — handoffs', () => {
 
       expect(api().handoffRowsForMessageId('msg-src-1')).toEqual([]);
       expect(fixture.nativeElement.querySelector('app-handoff-row')).toBeNull();
+    });
+  });
+
+  describe('workflow run rows (workflow-runs spec §20.2)', () => {
+    function step(i: number, status: HandoffView['status']): HandoffView {
+      return handoff({ handoffId: `s${i}`, agentName: `Agent ${i}`, status, runId: 'run1', stepId: `st${i}`, targetSessionId: `t${i}` });
+    }
+
+    function run(overrides: Partial<WorkflowRunView> = {}): WorkflowRunView {
+      return {
+        runId: 'run1',
+        sessionId: 'src',
+        status: 'approved',
+        request: 'r',
+        steps: [1, 2].map((i) => ({ stepId: `st${i}`, handoffId: `s${i}`, agentId: 'a', agentName: `Agent ${i}`, request: 'r', removed: false, handoff: step(i, 'done') })),
+        fileIds: [],
+        limits: { maxSteps: 8, concurrency: 4 },
+        sourceMessageIndex: 1,
+        createdAt: '',
+        updatedAt: '',
+        ...overrides,
+      };
+    }
+
+    it('anchors one run row at its message, and its steps are lines in it, never rows of their own', () => {
+      TestBed.inject(HandoffStateService).upsertRow(step(1, 'done'));
+      TestBed.inject(HandoffStateService).upsertRow(step(2, 'running'));
+      TestBed.inject(HandoffStateService).upsertRow(handoff({ handoffId: 'single' }));
+      TestBed.inject(WorkflowRunStateService).hydrate('src', [run()]);
+
+      render([message('src', 0), message('src', 1), message('src', 2)], 'src');
+
+      expect(api().runRowsForMessageId('msg-src-1').map((r) => r.runId)).toEqual(['run1']);
+      expect(api().handoffRowsForMessageId('msg-src-1').map((r) => r.handoffId)).toEqual(['single']);
+      expect(fixture.nativeElement.querySelectorAll('app-workflow-run-row')).toHaveLength(1);
+      expect(fixture.nativeElement.querySelectorAll('app-handoff-row')).toHaveLength(1);
+    });
+
+    it('shows a run once approved or stopped, never at its sheet or dismissed', () => {
+      TestBed.inject(WorkflowRunStateService).hydrate('src', [
+        run({ runId: 'open', status: 'open' }),
+        run({ runId: 'gone', status: 'dismissed' }),
+        run({ runId: 'stopped', status: 'stopped' }),
+      ]);
+      render([message('src', 0), message('src', 1)], 'src');
+      expect(api().runRowsForMessageId('msg-src-1').map((r) => r.runId)).toEqual(['stopped']);
+    });
+
+    it("renders a run whose message isn't loaded at the tail", () => {
+      TestBed.inject(WorkflowRunStateService).hydrate('src', [run({ sourceMessageIndex: 40 })]);
+      render([message('src', 0)], 'src');
+      expect(api().unanchoredRunRows().map((r) => r.runId)).toEqual(['run1']);
     });
   });
 });

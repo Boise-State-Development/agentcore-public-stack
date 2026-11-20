@@ -28,7 +28,9 @@ import { ConversationForkService } from '../../../services/session/conversation-
 import { TooltipDirective } from '../../../../components/tooltip';
 import { parseIso } from '../../../../utils/date';
 import { HandoffStateService } from '../../../services/handoff/handoff-state.service';
-import { extractDeliveryBlocks, extractHandoffContext } from '../../../services/handoff/handoff-prompt';
+import { BubbleDelivery, extractDeliveryBlocks, extractHandoffContext, groupRunResults } from '../../../services/handoff/handoff-prompt';
+import { WorkflowRunStateService } from '../../../services/handoff/workflow-run-state.service';
+import { agentsLabel } from '../../../services/handoff/workflow-run.service';
 import { DeliveryBlock } from '../../../services/handoff/handoff.models';
 import { DeliveryArtifactChipsComponent } from '../../handoff/delivery-artifact-chips.component';
 import { DeliveryFileChipsComponent } from '../../handoff/delivery-file-chips.component';
@@ -92,13 +94,55 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
           </div>
         }
 
-        <!-- Results this message carried from other conversations (handoffs spec §4.8). -->
-        @for (block of deliveryBlocks(); track $index; let i = $index) {
+        <!-- Results this message carried from other conversations (handoffs spec §4.8). A workflow
+             run's one result shows as one line for all its Agents (workflow-runs spec §20.3). -->
+        @for (item of bubbleDeliveries(); track $index; let i = $index) {
+          @if (item.kind === 'run') {
+            <div class="flex max-w-[80%] flex-col items-end gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
+              <span class="flex items-center gap-1">
+                <ng-icon name="heroArrowUturnLeft" class="size-3.5" aria-hidden="true" />
+                From <span class="font-medium text-gray-700 dark:text-gray-300">{{ agentsLabel(item.parts.length) }}</span>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  class="font-medium text-gray-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300"
+                  [attr.aria-expanded]="openDelivery() === i"
+                  (click)="toggleDelivery(i)"
+                >
+                  {{ openDelivery() === i ? 'Hide results' : 'Show results' }}
+                </button>
+              </span>
+              @if (openDelivery() === i) {
+                <ul role="list" [attr.aria-label]="'Results from ' + agentsLabel(item.parts.length)" class="w-full divide-y divide-gray-200 rounded-lg bg-gray-100 text-left dark:divide-white/10 dark:bg-white/5">
+                  @for (part of item.parts; track $index) {
+                    <li class="p-2">
+                      @if (part.status === 'done') {
+                        <p class="font-medium text-gray-800 dark:text-gray-200">{{ part.block.fromTitle }}</p>
+                        @if (part.block.text) {
+                          <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + part.agentName" class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-200">{{ part.block.text }}</pre>
+                        }
+                        @if (part.block.artifacts.length > 0) {
+                          <div class="mt-1"><app-delivery-artifact-chips [artifacts]="part.block.artifacts" [label]="'Artifacts from ' + part.agentName" /></div>
+                        }
+                        @if (part.block.files.length > 0) {
+                          <div class="mt-1"><app-delivery-file-chips [files]="part.block.files" [label]="'Files from ' + part.agentName" /></div>
+                        }
+                      } @else {
+                        <p class="text-gray-600 dark:text-gray-400">
+                          {{ part.agentName }} · {{ part.status === 'stopped' ? 'Stopped, not included' : 'Still waiting, not included' }}
+                        </p>
+                      }
+                    </li>
+                  }
+                </ul>
+              }
+            </div>
+          } @else {
           <div class="flex max-w-[80%] flex-col items-end gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
             <span class="flex items-center gap-1">
               <ng-icon name="heroArrowUturnLeft" class="size-3.5" aria-hidden="true" />
-              From <span class="font-medium text-gray-700 dark:text-gray-300">{{ block.fromTitle }}</span>
-              @if (block.text) {
+              From <span class="font-medium text-gray-700 dark:text-gray-300">{{ item.block.fromTitle }}</span>
+              @if (item.block.text) {
                 <span aria-hidden="true">·</span>
                 <button
                   type="button"
@@ -111,15 +155,16 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
               }
             </span>
             @if (openDelivery() === i) {
-              <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + block.fromTitle" class="max-h-64 w-full overflow-auto whitespace-pre-wrap rounded-lg bg-gray-100 p-2 text-left text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200">{{ block.text }}</pre>
+              <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + item.block.fromTitle" class="max-h-64 w-full overflow-auto whitespace-pre-wrap rounded-lg bg-gray-100 p-2 text-left text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200">{{ item.block.text }}</pre>
             }
-            @if (block.artifacts.length > 0) {
-              <app-delivery-artifact-chips [artifacts]="block.artifacts" [label]="'Artifacts from ' + block.fromTitle" />
+            @if (item.block.artifacts.length > 0) {
+              <app-delivery-artifact-chips [artifacts]="item.block.artifacts" [label]="'Artifacts from ' + item.block.fromTitle" />
             }
-            @if (block.files.length > 0) {
-              <app-delivery-file-chips [files]="block.files" [label]="'Files from ' + block.fromTitle" />
+            @if (item.block.files.length > 0) {
+              <app-delivery-file-chips [files]="item.block.files" [label]="'Files from ' + item.block.fromTitle" />
             }
           </div>
+          }
         }
 
         @if (message().steering) {
@@ -362,6 +407,26 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
     if (this.handoffOrigin() || !this.message().metadata?.['displayText']) return [];
     const text = this.message().content.find((block) => block.type === 'text' && block.text)?.text;
     return text ? extractDeliveryBlocks(text).blocks : [];
+  });
+
+  private readonly workflowRuns = inject(WorkflowRunStateService);
+  protected readonly agentsLabel = agentsLabel;
+
+  /**
+   * The delivery blocks as the bubble shows them: a workflow run's result (one block per part) as
+   * one "From *N* Agents", told apart by this conversation's runs' step Agents (§20.3).
+   */
+  protected readonly bubbleDeliveries = computed((): BubbleDelivery[] => {
+    const blocks = this.deliveryBlocks();
+    if (blocks.length === 0) return [];
+    const id = this.message().id;
+    const dash = id.lastIndexOf('-');
+    const sessionId = id.startsWith('msg-') && dash > 4 ? id.slice(4, dash) : '';
+    const runs = this.workflowRuns.runsFor(sessionId).map((run) => ({
+      runId: run.runId,
+      agentNames: run.steps.filter((step) => !step.removed).map((step) => step.agentName),
+    }));
+    return groupRunResults(blocks, runs);
   });
 
   protected readonly openDelivery = signal<number | null>(null);

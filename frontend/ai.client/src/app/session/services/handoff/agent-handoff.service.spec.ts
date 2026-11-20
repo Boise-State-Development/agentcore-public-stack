@@ -50,6 +50,7 @@ describe('AgentHandoffService', () => {
   const toastInfo = vi.fn();
   const toastWarning = vi.fn().mockReturnValue('toast-1');
   const toastDismiss = vi.fn();
+  const toastSuccess = vi.fn();
   const navigate = vi.fn().mockResolvedValue(true);
   let sourceFiles: FileMetadata[] = [];
   let sourceMessages: Message[] = [];
@@ -58,6 +59,7 @@ describe('AgentHandoffService', () => {
     submitHandoffRequest.mockClear();
     draftRequest.mockClear();
     toastInfo.mockClear();
+    toastSuccess.mockClear();
     toastWarning.mockClear();
     toastDismiss.mockClear();
     loading = signal<ReadonlySet<string>>(new Set());
@@ -80,7 +82,7 @@ describe('AgentHandoffService', () => {
         { provide: Router, useValue: { navigate } },
         {
           provide: ToastService,
-          useValue: { info: toastInfo, success: vi.fn(), warning: toastWarning, dismiss: toastDismiss },
+          useValue: { info: toastInfo, success: toastSuccess, warning: toastWarning, dismiss: toastDismiss },
         },
       ],
     });
@@ -371,5 +373,44 @@ describe('AgentHandoffService', () => {
     TestBed.tick();
 
     expect(toastDismiss).toHaveBeenCalledExactlyOnceWith('toast-1');
+  });
+
+  it('a workflow run’s step says only that it needs the user; finishing is the run’s to announce', async () => {
+    vi.spyOn(TestBed.inject(HandoffNotificationService), 'onStateChange').mockImplementation(() => undefined);
+    const sent = service.startRunStep({
+      sourceSessionId: 'src',
+      handoffId: 'h9',
+      agentId: 'rubric',
+      agentName: 'Rubric Builder',
+      request: 'r',
+      sourceMessageIndex: 1,
+      excerptTokens: 1,
+      sourceTitle: 'Source',
+      sharedFileIds: [],
+      filesUnticked: 0,
+      runId: 'run1',
+      stepId: 's1',
+    });
+    void sent;
+    const target = submitHandoffRequest.mock.calls[0][0].targetSessionId as string;
+    const run = () => state.rowsFor('src').find((r) => r.handoffId === 'h9')!;
+
+    loading.set(new Set([target]));
+    TestBed.tick();
+    loading.set(new Set());
+    TestBed.tick();
+    await vi.waitFor(() => http.expectOne(`${API}/sessions/src/handoffs/h9`).flush({ ...run(), status: 'done' }), { timeout: 3000 });
+    await vi.waitFor(() => expect(run().status).toBe('done'));
+    expect(toastSuccess).not.toHaveBeenCalled();
+
+    loading.set(new Set([target]));
+    TestBed.tick();
+    loading.set(new Set());
+    TestBed.tick();
+    await vi.waitFor(() => http.expectOne(`${API}/sessions/src/handoffs/h9`).flush({
+      ...run(), status: 'needs_input', waitingOn: { kind: 'tool_approval', name: 'budget_check' },
+    }), { timeout: 3000 });
+    await vi.waitFor(() => expect(toastWarning).toHaveBeenCalled());
+    expect(toastWarning.mock.calls[0][0]).toBe('Rubric Builder needs your input');
   });
 });
