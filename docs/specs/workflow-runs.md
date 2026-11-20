@@ -523,6 +523,33 @@ changes a tool spec or the system prompt.
     and on each step row, so acceptance compares each step's card against it unchanged.
   - The final message is the only thing that differs from a single-handoff brief, so the cache reading is the
     same: a route test sends one body as a turn and as a run brief and asserts identical `get_agent` arguments.
+  - *Built (PR-W.3).* Where it differs from the plan above, or settles something it left open:
+    - **Request.** `handoff_brief: {handoffId, runId?}`; without `runId` the request, the instruction and the frames
+      are today's, byte for byte (pinned in `test_handoff_run_brief.py`). With it, the Runtime reads the `WFRUN#`
+      row beside the `HANDOFF#` read (one `gather`), and only then: an ordinary turn and a single brief read nothing
+      new. A run that is not the caller's, starts from another conversation, is not `open` (approved, dismissed, or
+      a day old and so `abandoned`) or does not keep `handoffId` as a step is the existing `not_open` fallback; a
+      failed read is too. **No new fallback reason.** Both frames add `runId` on a run's brief, additively.
+    - **The instruction** (`build_run_brief_instruction`, `BRIEF_RUN_INSTRUCTION_VERSION = 1`) names the shared
+      request and every kept step's Agent with its description, and a step's own request only where it differs
+      from the shared one. It asks for one brief for the work as a whole and not a section per Agent, since each
+      gets its own request separately. Descriptions are read concurrently with the caller's access check, as the
+      single brief's is. **Bound:** shared request 4,000 chars, per step name 120, description 300, own request
+      1,000, at most 8 steps, so the whole instruction is at most 18,000 chars (about 4.5k tokens with every part
+      at its cap; a run of four with short requests is under 1k). A cut part ends in `…`.
+    - **The cost row** carries `briefInstruction` (`"run"` or `"handoff"`) and `briefInstructionVersion`, and a
+      run's also `runStepCount`. `BRIEF_INSTRUCTION_VERSION`'s comment had said the single brief's version was on
+      the row; it was not until this PR, so a single brief's row gains those two fields too. Its request does not
+      change.
+    - **Recording.** `briefHash`, `briefTokens` and `briefCacheStatus` go on the run row
+      (`WorkflowRunStore.record_brief`, conditioned on `open`) and on every kept step's `HANDOFF#` row, all written
+      concurrently, each conditioned on its row being `open`. Acceptance (`HandoffTurn`, unchanged) then compares
+      each step's card with its own row's `briefHash`; a step whose write failed falls back to its `excerptHash`.
+    - **Metrics.** `HandoffBriefWritten` / `HandoffBriefFallback` keep their names and gain the properties
+      `briefScope: "run"` and `runStepCount` (the kept steps; absent for a fallback decided before the run was read).
+    - **IAM.** No change: the Runtime's `DynamoDBTableAccess` grant on sessions-metadata has no `LeadingKeys` or
+      sort-key condition, so it covers `WFRUN#` rows as it covers `HANDOFF#` ones.
+    - **Until W.4a sends `runId`,** the SPA's brief for a run is a single brief for the step it names.
 - **PR-W.4a — Start a run.** SPA. The design is §20.1.
   - Several `@`-mentions in one message, up to 8, each a chip in the composer.
   - The run sheet (§4), one brief streamed into one shared card, a request per step that defaults to the shared
