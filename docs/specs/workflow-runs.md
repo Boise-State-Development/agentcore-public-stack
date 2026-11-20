@@ -765,6 +765,29 @@ changes a tool spec or the system prompt.
   - ⚠️ **Verify first:** whether the session list already returns `spawnedFrom`; if not, add it, additive.
   - The sidebar shows a run's steps as one line under the source ("4 Agents · 2 of 4 finished") that expands to
     the step conversations. A step conversation whose source is not on the loaded page is listed as today.
+  - *Built (PR-W.4c).* Where it differs from the plan above, or settles what it left open:
+    - **The link.** `set_session_spawned_from` takes an optional `run_id`, and `HandoffTurn._link_target` passes
+      it only for a step, so a single handoff's link is written exactly as before. It is the same background `SET`
+      after acceptance; a test pins that the context block is back before that write runs.
+    - ✅ **Verified: the session list already reads `spawnedFrom`, and returned none of it.** `GET /sessions` reads
+      `SessionRecencyIndex`, which projects ALL, and `SessionMetadata` keeps extra fields; only
+      `SessionMetadataResponse` dropped it. It now declares `spawnedFrom: {sessionId, handoffId?, runId?}`
+      (the row's `settled` stays off the wire, and a malformed link drops the link, never the list). The pinned
+      list and `GET /sessions/{id}/metadata` build the same response, so they carry it too. No read per row.
+    - **Where the count comes from.** The list carries the link, not the steps' states, and a queued step has no
+      conversation yet, so the line can't count from the rows it nests. `WorkflowRunSidebarService` counts with
+      `runProgress` over the same sources and signals as the run's row: the run as `WorkflowRunStateService`
+      holds it (the source's own `GET /messages` replay), else the run read once with
+      `GET /sessions/{source}/workflow-runs/{runId}`, plus this tab's live handoff rows. That read is the
+      sidebar's, never on the turn path: once per run on the loaded page, and again only when one of its step
+      rows changes in the list (`lastMessageAt` or `awaitingInput`). Until it answers, or if it fails, the line
+      reads "*n* Agents" for the steps it lists, with no count.
+    - **A step started in this tab** nests at once, before the list reloads: the link is also read from this
+      tab's live handoff rows (`runId` and `targetSessionId`), the same fact written at acceptance.
+    - **Nesting is one level deep.** A step conversation hosts nothing itself, so a run started from a step lists
+      its own steps alone. A source that is a project task hosts nothing either (project tasks are grouped under
+      the project), and a pinned source is out of its bucket, so its steps list alone.
+    - **The expanded rows** are in the run's step order where the run is known, else the list's order.
 - **Dev validation** (each PR's own session, after merge): the worked example's four reviewers on one proposal, with
   one step needing a tool approval answered from the source, one stopped mid-run, a partial result brought back,
   and the full result sent. The source's `C#` rows show no prefix change beyond the appended block, and the
@@ -887,6 +910,21 @@ The look of `DeliveryCardsComponent`: the same container and footer, with one ro
   else the streaming dot if any runs. A waiting step is never hidden by the fold.
 - Pinning, dragging and the date buckets treat a step conversation as today. It nests only when its source is in
   the same bucket on the loaded page; otherwise it is listed alone, as now.
+- *Built (PR-W.4c).* As above, with these settled in the build:
+  - **Open by default only for the conversation you're in.** The line is collapsed unless one of its steps is
+    the current conversation (so opening a step from the run's row shows it highlighted in the sidebar); the
+    user's own toggle wins after that, for the life of the page.
+  - **The collapsed mark** is needs your input (a step's own row says it, or the run counts a `needs_input`
+    step), else streaming. Unread is not shown on the line: the run's toast says when its steps finish, and the
+    unread dot's dark shade (`primary-400`) measured 2.59:1 on the sidebar. The mark carries the row's own
+    screen-reader text, so the line's name reads "4 Agents · 2 of 4 finished (needs your input)".
+  - **Before the run is read** the line reads "*n* Agents" for the steps it lists; "1 Agent" in the singular.
+  - The steps' list is `ml-3.5 border-l`, the project group's indent. The line takes `aria-controls` only while
+    open, so it never names an element that isn't there.
+  - **Contrast, measured** in the running SPA against the composited sidebar: the line's text and chevron
+    **6.87:1 light**, **6.82:1 dark**; the nested rows 9.36:1 / 6.82:1. Marks (3:1): needs your input 4.57:1
+    light, 10.3:1 dark; streaming (`secondary-500`) 4.09:1 / 3.94:1. The focus ring is `primary-500` light
+    (9.63:1) and **`primary-300` dark (3.98:1)**: `primary-500` measured 1.67:1 on the dark sidebar.
 
 ### 20.5 Copy
 
