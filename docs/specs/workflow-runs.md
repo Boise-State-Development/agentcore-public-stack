@@ -517,6 +517,76 @@ changes a tool spec or the system prompt.
   - A `deliveryCases` case with parts in `handoff-prompt.fixture.json`, read by both sides' tests.
   - **TTFT:** the `delivery_attach` line's `waitMs` and `attachMs` on dev with 4 and 8 parts, stated in the PR, for
     the developer's acceptance.
+  - *Built (PR-W.2).* Where it differs from the plan above. W.4b reads these shapes.
+    - **The row.** `Delivery` gains `runId` and `parts: [{stepId, agentName, fromSessionId, fromTitle, status,
+      text, textHash, artifacts, files}]`, in step order; the row's own `text`, `artifacts` and `files` stay empty.
+      Its `fromSessionId` / `fromTitle` name the first finished step, for a reader that doesn't know parts. The
+      replay (`deliveries` on `GET /messages`) and the collect response carry `runId` and `parts` (each file without
+      its storage keys, no `textHash`); a plain card's view has no `parts` key at all. Worst case ~290 KB against
+      DynamoDB's 400 KB (eight parts of four-byte text at the cap, five artifacts a part, ten files); plain English
+      text is under 100 KB.
+    - **One set of checks.** `create_delivery(parts=[DeliveryPartRequest…], runId)` runs every rule of a card on
+      each part, against that part's own conversation (`load_linked_senders` reads the receiver once and every
+      sender beside it; `_checked_content` is the one place the artifact and file rules live, for a card and a
+      part alike). Only a `done` part carries anything, so only its conversation is a sender: a part that
+      stopped, waits or runs carries its status and reads nothing, so a step still starting can never refuse the
+      whole result for want of its `spawnedFrom`. A result with no finished step is refused (`empty`).
+    - **Collect.** `POST /sessions/{id}/workflow-runs/{runId}/collect` answers `{deliveryId, created, status,
+      delivery}`. Order: build and check the parts, then claim the run's `resultDeliveryId` (conditioned on
+      `approved`/`stopped` and the attribute unset), then write the row under that id; a failed write releases the
+      claim. A second call, or the loser of a race, gets the winner's card with `created: false`. 409 for a run never
+      approved, 422 when no step has finished.
+    - **A finished step's part** is its answer as it stood when it first finished (§8), not its latest:
+      `answer_message(at_or_before=…)` takes the latest assistant message stamped no later than the step row's
+      `done` write plus 60 s (Memory may stamp a turn's events when it flushes them, just after the status write),
+      the artifacts that message produced, and the step conversation's own files made by then, newest first, five
+      a part and ten a run in step order. `_send_back_message` now calls the same `answer_message`.
+    - **Part statuses.** `done`, `stopped`, `needs_input`, `running`, read from the step row. A step that never
+      started reads `running` while the run is approved (it is queued in the tab) and `stopped` once the run is
+      stopped; a dismissed, abandoned or missing row reads `stopped`. A removed step has no part.
+    - **"Bring back *k* results now"** fixes the run's one result at that moment. A step that finishes later is not
+      added: it comes back the ordinary way, with its own Bring back result (it is a handoff like any other).
+    - **What the model reads.** One block per part (`render_delivery_parts`), joined like separate cards, each 0a's
+      wrapper. Not planned: the block names the **Agent** and then the step conversation's title (`Generalist ·
+      Review of the proposal`, `delivery_part_label`), because every step starts from the same card and usually the
+      same request, so the titles alone read alike and the model could not tell whose answer is whose. A part with
+      no result is the same wrapper around a fixed note (`DELIVERY_PART_STATUS_NOTES`), so a stopped or waiting
+      step is named. A finished part the user emptied gives no block.
+    - **Attach.** Unchanged for a card. A parts row is still one conditional `UpdateItem`; its parts' files go in
+      one reference-row write (`write_reference_rows`, now in chunks of 25), and a failed write drops every part's
+      file lines, never the text. `deliveries[].parts: [{stepId, text}]` carries edited parts only; an edit for a
+      step that has no result, or a `parts` on a plain card, is ignored. `DeliveryEdited` counts the edited parts
+      as its value. The prefetch hints the tool gates from every part's files, as from a card's.
+    - **Prompt cache.** The blocks reach only the appended user message. Pinned two ways: an AST test on the
+      invocation route (`test_delivery_blocks_prompt_cache.py`) that the turn's `DeliveryTurn` is used only to
+      prefetch, hint, start and render, that its blocks go into `join_delivery_blocks(…, final_message)` alone,
+      and that no system-prompt, tool or agent builder reads it except through the file-kind hint; and a test that
+      a result with no files flips no gate.
+    - **Parity.** `renderDeliveryParts`, `deliveryPartLabel` and `DELIVERY_PART_STATUS_NOTES` in `handoff-prompt.ts`,
+      pinned by a `deliveryCases` case with parts that covers every status, an artifact, a file, a forged tag and an
+      emptied part. `extractDeliveryBlocks` reads a sent run result back as one block per part unchanged.
+    - **Metrics.** `WorkflowRunCollected` (`stepCount` = finished parts, `runDetail` `complete` or `partial`) and
+      `DeliveryParts` (the part count as its value). `DeliveryFiles` counts every part's files.
+    - **TTFT.** Measured 2026-11-20 with the real `DeliveryTurn` against dev's sessions-metadata and file-uploads
+      tables, from a laptop under a synthetic user (rows deleted after). A `GetItem` round trip is 35 ms from
+      there, about twice dev's in-region figure, so read the comparison, not the absolutes. Nine sends per
+      shape; each part ~6,000 characters with one artifact; the last part of a run `stopped`, one part edited.
+      `overlap` is how long the route runs between `start()` and `blocks()`; 0 ms is the worst case. Medians:
+
+      | Shape | Files | `attachMs` | `waitMs`, 0 ms overlap | `waitMs`, 15 ms overlap |
+      |---|---|---|---|---|
+      | 1 card (baseline) | 0 | 41.7 | 41.8 | 24.2 |
+      | 4 parts | 0 | 42.5 | 42.8 | 28.9 |
+      | 8 parts | 0 | 41.7 | 41.9 | 26.2 |
+      | 1 card | 2 | 80.9 | 81.0 | 63.1 |
+      | 4 parts | 4 | 82.0 | 82.2 | 65.7 |
+      | 8 parts | 8 | 85.3 | 86.0 | 69.0 |
+
+      A run result costs what a card costs: one round trip for the flip, plus one for the reference rows when it
+      carries files, as a card with files already does (PR-0.4a). Eight parts add nothing measurable without
+      files and ~4 ms with them. Eight separate cards would have been eight writes, and three per send at most. A
+      send without deliveries runs nothing new. The in-region `delivery_attach` numbers are recorded in this PR's
+      dev validation. ⚠️ The developer accepts this number before merge.
 - **PR-W.3 — One brief per run.** Runtime, rides `HANDOFF_BRIEF_ENABLED`.
   - `handoff_brief: {handoffId, runId?}`. With `runId`, the Runtime reads the run row and asks once with a run
     variant of the instruction that names every step's Agent and request, and records `briefHash` on the run row

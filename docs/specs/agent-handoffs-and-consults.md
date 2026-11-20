@@ -919,6 +919,7 @@ running one.** It waits until the user sends.
 | `status` | `pending` → `attached` \| `dismissed`. Phase 2b adds `claimed` (§9.4) |
 | `attachedVia`, `attachedAt`, `edited` | How and when it reached the model (`turn` in Phase 0; `steer` or `wake` in Phase 2) |
 | `hop` | The hop of the turn that sent it, for Phase 2c's loop budget (§9.5). Always 0 for `origin: user` |
+| `runId?`, `parts` | A workflow run's result (`workflow-runs.md` §7, PR-W.2): one part per step, each with its own sender, title, status, text, artifacts and files. Empty on every other delivery; see **Parts** below |
 
 **Creating one.** Only through `create_delivery(user, from_session_id, to_session_id, text, origin, ...)`. It
 checks that **the same user owns both sessions**, keyed on `(session, user)` as every live-state lookup is. In
@@ -953,6 +954,31 @@ if the card was edited. Before the first token the server:
    `original_message` stays what the user typed, so the bubble shows their words and the card.
 
 A turn carries at most `DELIVERY_MAX_PER_TURN = 3` blocks. Extra cards stay pending for the next send.
+
+**Parts.** *Added 2026-11-20 (`workflow-runs.md` PR-W.2).* A workflow run returns one delivery, not one per
+step. Its row carries `parts: [{stepId, agentName, fromSessionId, fromTitle, status, text, textHash, artifacts,
+files}]` in step order, and its own `text`, `artifacts` and `files` stay empty. A row without parts is a delivery
+exactly as above.
+
+- **One implementation still.** `create_delivery(parts=…)` holds **each** part to this section's and §4.9's rules
+  against that part's own sending conversation: both conversations the caller's, the sender linked to the
+  receiver, neither a Shared Project task, every artifact and file made in the sender. The receiver is read once.
+  Only a `done` part carries anything, so only its conversation is checked as a sender; a part that `stopped`,
+  is `needs_input` or `running` carries its status and nothing else.
+- **Bounds.** Each part's text is capped like a card's. At most `DELIVERY_MAX_ARTIFACTS` artifacts and
+  `DELIVERY_MAX_FILES` files a part, `RUN_RESULT_MAX_FILES = 10` files a row, and `DELIVERY_MAX_PARTS = 8` parts.
+  The worst case row is ~290 KB (eight parts of four-byte text at the cap) against DynamoDB's 400 KB; plain
+  English text is under 100 KB.
+- **The model reads one block per part**, in step order, each 0a's wrapper as for a card. Its
+  `from_conversation` names the Agent and then the step conversation's title (`Generalist · Review of the
+  proposal`), because every step starts from the same card and the titles read alike. A part with no result is the
+  same wrapper around a fixed status note, so a missing step is named, never silently absent. The blocks are one
+  card: one of the three per-send slots.
+- **Attaching is unchanged:** one conditional `UpdateItem` per row, however many parts. The request's
+  `deliveries[].parts: [{stepId, text}]` carries only edited parts, re-capped and counted (`DeliveryEdited`,
+  with the number of edited parts as its value); it is optional, so a send without it attaches the stored parts.
+  Every part's files are written as reference rows in the same batched write a card's are (in chunks of 25,
+  `BatchWriteItem`'s limit).
 
 **TTFT.** A send that carries `deliveries` pays one `BatchGetItem` and one conditional write before the first
 token. That is the same order of cost as 0a's acceptance read, and it should run in the same phase so a turn
