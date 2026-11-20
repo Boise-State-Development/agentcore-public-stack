@@ -1,10 +1,11 @@
 # Workflow runs: several steps under one approval
 
-**Status:** Proposal, 2026-11-19. Nothing built. It asks one design question of the handoffs work: should the
+**Status:** Accepted for step 1, 2026-11-20 (§19 is its delivery plan). Proposed 2026-11-19. Nothing built yet. It asks one design question of the handoffs work: should the
 user's review sit on each hop, as it does today, or on the whole piece of delegated work? Everything else follows
 from the answer.
 **Author:** Phil Merrell (drafted with Claude)
 **Targets branch:** `develop`
+**Tracking:** #2186 (step 1)
 **Related:**
 - `docs/specs/agent-handoffs-and-consults.md`: Phase 0 handoffs, deliveries and file references, which this
   generalises and mostly keeps (§12 here says what happens to each phase)
@@ -389,12 +390,20 @@ Counts only, on the rows and in EMF, as §4.7 of the handoffs spec does:
 
 0. **Build step 1 before the handoffs gate reads?** The gate was written so the cheap phase would show demand
    before more was built. Step 1 is small and reuses Phase 0, but it is still more, on one example.
+   *Answered 2026-11-20: yes, build step 1 now.*
 1. **The names.** "Workflow run" and "workflow", or something that does not lean on either overloaded word.
+   *Answered for step 1, 2026-11-20:* code says `WFRUN#`, `/workflow-runs` and `WORKFLOW_RUNS_ENABLED`; what the
+   user sees avoids "workflow" ("Hand off to 4 Agents", "Results from 4 Agents", "Stop run"). The user-facing name
+   is decided in step 2, when saved workflows exist.
 2. **A hard cost ceiling per run.** Between steps it is simple: a queued step does not start once the run has
    spent past the ceiling. Inside a running step there is no per-turn spend cap to call on today. Is the estimate
    plus the user's quota enough for the first version?
+   *Answered for step 1, 2026-11-20:* yes. The estimate on the sheet, the user's quota and the 8-step cap; no
+   hard ceiling until real runs show what they cost.
 3. **Where do step conversations appear?** Four reviewer conversations per proposal will crowd the sidebar. Nest
    them under the source, or hide them until opened from the run's row?
+   *Answered 2026-11-20:* nested under the source, as one line that expands ("4 Agents · 2 of 4 finished")
+   (PR-W.4c).
 4. **Whose Agents may be steps?** Any Agent the user can use, at a pinned version. Does the Agent's owner see that
    it is used in someone's workflow?
 5. **Shared Projects.** Deliveries refuse a Shared Project task today. Does a run inside a project follow the
@@ -410,3 +419,98 @@ Counts only, on the rows and in EMF, as §4.7 of the handoffs spec does:
 - Agents messaging each other outside a run.
 - Sharing a run, or its steps' conversations, with another user.
 - Evaluating or tuning a workflow (§14).
+
+## 19. Delivery plan, step 1 (group handoff in the tab)
+
+*Added 2026-11-20, after checking §2 against `develop` at `5a2b1989e` (#2177 merged).* Four facts the proposal did
+not have, each of which changes a PR below:
+
+- **The composer takes one `@`-mention per message.** `ChatInputComponent.mentionedAgent` is a single signal, and
+  the menu hides once an Agent is picked ("one mention per turn", Marketplace D11). Several Agents in one message
+  is new composer work, not a parse of what is already there.
+- **Mentions are never offered in a Shared Project** (`agentMentionsOffered` is false whenever `project()` is
+  set), and `create_delivery` refuses a project task (`project_task`). A run cannot start in a project in step 1,
+  so open question 5 does not block it.
+- **A delivery has one `text`.** `Delivery` has no parts. The attach (`DeliveryTurn`, on the Runtime) renders one
+  block per row and the request's `deliveries[]` carries one optional `text` per card. Parts change both, so the
+  grouped result is a turn-path PR.
+- **The brief instruction names one Agent** (`build_brief_instruction(request, agent_name, description)`), and
+  `briefHash` is recorded on one `HANDOFF#` row. One brief per run needs a run variant of the instruction on the
+  Runtime.
+
+Order: W.0, then W.1. After W.1, W.2, W.3 and W.4a can run at once (W.2 and W.3 touch different Runtime files).
+W.4b follows W.2, and W.4c follows W.1. Every PR is behind `WORKFLOW_RUNS_ENABLED` / `features.workflowRuns`, off by default, and none
+changes a tool spec or the system prompt.
+
+- **PR-W.0 — Land this spec.** Docs only: this file and `multi-agent-patterns.md` §11.
+- **PR-W.1 — The run row, its routes and the flag.** Backend only.
+  - `WORKFLOW_RUNS_ENABLED` in `feature_flags.py` (only `"true"` enables, and only with `HANDOFFS_ENABLED`), CDK
+    config and its test, `CDK_WORKFLOW_RUNS_ENABLED` in `platform.yml`, the docs-site row (Kind: feature switch),
+    and `features.workflowRuns: false` in all three environment files. App-api only; no Runtime variable.
+  - `WFRUN#` rows (§9) in `apis/shared/handoff/runs.py`, on the sessions-metadata table and `SessionLookupIndex`.
+    `runId` and `stepId` on `Handoff`, additive. Statuses on the run row: `open` → `approved` | `dismissed`; the
+    rest is derived from its steps when read.
+  - Routes beside the handoff routes, behind `get_current_user_from_session`, flag checked after auth:
+    `POST /sessions/{id}/workflow-runs` `{steps: [{agentId, request}], request}` writes the run and one `open`
+    mention row per step, and returns each step's card exactly as the mention create does, plus the run;
+    `…/{runId}/approve` `{steps: [{stepId, request?, removed?}], fileIds}` fixes the envelope, conditioned on
+    `open`; `GET …/{runId}`; `…/{runId}/stop` (marks the run stopped so no queued step starts; the running steps
+    are stopped by the SPA's existing cancel); `…/{runId}/dismiss` (dismisses every `open` step).
+  - Replay: `workflowRuns` on `GET /messages` beside `handoffs`, first page only, nothing while the flag is off.
+    Run rows go with the session delete cascade.
+  - Metrics (§15): `WorkflowRunCreated` by step count, `WorkflowRunApproved`, `WorkflowRunCancelled`,
+    `WorkflowRunEdited` by what changed.
+  - Acceptance: 2 to 8 steps, distinct Agents, else 422; a project task refused; a step row with a `runId` is
+    accepted on its first turn by the unchanged `HandoffTurn` (a test drives it); an approved run's unstarted
+    steps never read as `abandoned`; with the flag off every route is 404 after auth.
+- **PR-W.2 — The grouped result.** Backend, on the turn path.
+  - `parts: [{stepId, agentName, fromSessionId, fromTitle, status, text, textHash, artifacts, files}]` on
+    `Delivery`, additive; each part bounded at `SEND_BACK_MAX_TOKENS`.
+  - `POST …/{runId}/collect` builds the row from each step's last assistant message through the send-back
+    renderer, names a step that stopped or still waits as such, and is exactly-once through a condition on the
+    run's `resultDeliveryId`. The SPA calls it when the last step settles, or when the user brings back a partial
+    result.
+  - The attach stays one conditional `UpdateItem` per row. `DeliveryTurn` renders one `<handoff_context>` block per
+    part, in step order. The request gains `deliveries[].parts: [{stepId, text}]` for edited parts, optional,
+    so a stale SPA and the terminal client are unaffected.
+  - Files: at most `DELIVERY_MAX_FILES` per part and 10 per run, with the reference rows written in chunks of 25.
+  - A `deliveryCases` case with parts in `handoff-prompt.fixture.json`, read by both sides' tests.
+  - **TTFT:** the `delivery_attach` line's `waitMs` and `attachMs` on dev with 4 and 8 parts, stated in the PR, for
+    the developer's acceptance.
+- **PR-W.3 — One brief per run.** Runtime, rides `HANDOFF_BRIEF_ENABLED`.
+  - `handoff_brief: {handoffId, runId?}`. With `runId`, the Runtime reads the run row and asks once with a run
+    variant of the instruction that names every step's Agent and request, and records `briefHash` on the run row
+    and on each step row, so acceptance compares each step's card against it unchanged.
+  - The final message is the only thing that differs from a single-handoff brief, so the cache reading is the
+    same: a route test sends one body as a turn and as a run brief and asserts identical `get_agent` arguments.
+- **PR-W.4a — Start a run.** SPA.
+  - Several `@`-mentions in one message, up to 8, each a chip in the composer.
+  - The run sheet (§4), one brief streamed into one shared card, a request per step that defaults to the shared
+    one, the files as checkboxes.
+  - On approve, the queue: four steps at once through `AgentHandoffService.send`, the rest started as earlier ones
+    settle (`done`, `needs_input` or `stopped`). The queue lives as long as the tab; a reload shows unstarted steps
+    as "Not started" with one Start button.
+  - ⚠️ **Verify first:** five streams at once on one origin (the source and four steps) under HTTP/2 end to end.
+    On HTTP/1.1 the browser's six-connection limit would stall the rest of the page.
+- **PR-W.4b — The run in the source, and its result.** SPA.
+  - The run's row in the source thread: **one card with a line per step** (decided 2026-11-20, over a single
+    collapsed line). The header names the run and counts what needs the user; a segmented bar shows each step's
+    state; each line is the step's handoff row in small (status mark, Agent, live status line, a link to its
+    conversation). A step's relayed prompt opens under its own line, never behind a click, because a hidden
+    prompt is the stall §8 is about. Under the lines: Bring back *N* results now (a partial result) and Stop run.
+  - The grouped card on the composer, Preview and Edit per part, attached by default; the sent bubble rebuilds it
+    from its own text.
+  - The bell gets one entry for the run, plus one per step that needs input.
+- **PR-W.4c — Step conversations nested in the sidebar** (open question 3). Backend and SPA, after W.1.
+  - The step's `spawnedFrom` gains `runId`, written by the background `SET` after acceptance that already writes
+    it (`HandoffTurn`), so nothing moves onto the first-token path.
+  - ⚠️ **Verify first:** whether the session list already returns `spawnedFrom`; if not, add it, additive.
+  - The sidebar shows a run's steps as one line under the source ("4 Agents · 2 of 4 finished") that expands to
+    the step conversations. A step conversation whose source is not on the loaded page is listed as today.
+- **Dev validation** (each PR's own session, after merge): the worked example's four reviewers on one proposal, with
+  one step needing a tool approval answered from the source, one stopped mid-run, a partial result brought back,
+  and the full result sent. The source's `C#` rows show no prefix change beyond the appended block, and the
+  attach's TTFT number is recorded.
+
+Settled with the developer on 2026-11-20: the run's row (W.4b), the sidebar (W.4c), the wording and the cost
+rule (§17, questions 0 to 3).
