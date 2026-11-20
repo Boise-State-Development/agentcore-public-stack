@@ -1,6 +1,7 @@
 import { Component, computed, effect, input, output, inject, signal, untracked, PLATFORM_ID, ChangeDetectionStrategy } from '@angular/core';
 import { isPlatformBrowser, NgTemplateOutlet } from '@angular/common';
 import { Message, ToolUseData, isToolUseContentBlock } from '../../services/models/message.model';
+import { isToolResultMessage } from '../../services/session/tool-results';
 import type { Artifact } from '../../services/artifacts/artifact.model';
 import { UserMessageComponent } from './components/user-message.component';
 import { AssistantMessageComponent } from './components/assistant-message.component';
@@ -110,7 +111,7 @@ interface Turn {
 function isProtocolScaffolding(message: Message): boolean {
   if (message.role !== 'user') return false;
   if (message.continuation) return true;
-  return message.content.every((block) => block.type === 'toolResult');
+  return isToolResultMessage(message);
 }
 
 function segmentTurn(messages: readonly Message[]): TurnSegment[] {

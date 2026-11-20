@@ -16,6 +16,7 @@ import { ArtifactAvailabilityService } from '../../services/handoff/artifact-ava
 import { DeliveryStateService } from '../../services/handoff/delivery-state.service';
 import { DeliveryService } from '../../services/handoff/delivery.service';
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
+import { StreamParserService } from '../../services/chat/stream-parser.service';
 import { joinDeliveryBlocks, renderDeliveryBlock, renderDeliveryParts } from '../../services/handoff/handoff-prompt';
 import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
 import { WorkflowRunView } from '../../services/handoff/workflow-run.models';
@@ -383,6 +384,41 @@ describe('delivery UI', () => {
       });
 
       button(render(), 'Send to Course planning').click();
+
+      expect(delivery.openSendBack).toHaveBeenCalledWith('tgt', 3);
+    });
+
+    it('opens the review for the stored answer of a conversation streamed in this tab, tool round and all', () => {
+      // A handoff's target streams in the background from the source's tab and is never loaded from
+      // the server, so the ids its answer carries are the live parser's. The server stores the tool
+      // round's results as message 2, so the answer is message 3, as a reload says.
+      TestBed.inject(HandoffStateService).setSpawnedFrom('tgt', {
+        sessionId: 'src',
+        handoffId: 'h1',
+        sourceTitle: 'Course planning',
+        agentName: 'Rubric Builder',
+      });
+      const parser = TestBed.inject(StreamParserService);
+      parser.reset('tgt', 1);
+      const ev = (event: string, data: unknown) => parser.parseEventSourceMessage('tgt', event, data);
+      ev('message_start', { role: 'assistant' });
+      ev('content_block_start', { contentBlockIndex: 0, type: 'tool_use', toolUse: { toolUseId: 't1', name: 'search_documents' } });
+      ev('content_block_stop', { contentBlockIndex: 0 });
+      ev('message_stop', { stopReason: 'tool_use' });
+      ev('tool_result', { tool_result: { toolUseId: 't1', content: [{ text: 'BIO 101 rubric' }], status: 'success' } });
+      ev('message_start', { role: 'assistant' });
+      ev('content_block_start', { contentBlockIndex: 0, type: 'text' });
+      ev('content_block_delta', { contentBlockIndex: 0, type: 'text', text: 'Four rows, done.' });
+      ev('content_block_stop', { contentBlockIndex: 0 });
+      ev('message_stop', { stopReason: 'end_turn' });
+      ev('done', {});
+      // The answer's run, as the message list hands it to the action row.
+      const run = parser.allMessagesFor('tgt')().filter((m) => m.role === 'assistant');
+
+      const fixture = TestBed.createComponent(MessageActionsComponent);
+      fixture.componentRef.setInput('messages', run);
+      fixture.detectChanges();
+      button(fixture.nativeElement as HTMLElement, 'Send to Course planning').click();
 
       expect(delivery.openSendBack).toHaveBeenCalledWith('tgt', 3);
     });

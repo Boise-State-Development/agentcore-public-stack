@@ -15,7 +15,7 @@ import { DeliveryStateService } from '../handoff/delivery-state.service';
 import { HandoffStateService } from '../handoff/handoff-state.service';
 import { WorkflowRunStateService } from '../handoff/workflow-run-state.service';
 import { normalizeSteeringMessages } from '../chat/steering';
-import { matchToolResultsToToolUses } from './tool-results';
+import { isToolResultMessage, matchToolResultsToToolUses } from './tool-results';
 import { ChatStateService } from '../chat/chat-state.service';
 import { ContextBreakdown } from '../models/content-types';
 
@@ -419,9 +419,13 @@ export class MessageMapService {
       // follow-up). Skipping it keeps the truncation anchored on the user
       // message that actually opened the turn, which is what makes repeated
       // syncs idempotent. Same predicate turn grouping uses.
+      //
+      // A tool round's results message is the same case: the parser streams
+      // it at the index the server stores it at, and it does not start a turn.
       let lastUserMessageIndex = -1;
       for (let i = existingMessages.length - 1; i >= 0; i--) {
-        if (existingMessages[i].role === 'user' && !existingMessages[i].steering) {
+        const message = existingMessages[i];
+        if (message.role === 'user' && !message.steering && !isToolResultMessage(message)) {
           lastUserMessageIndex = i;
           break;
         }

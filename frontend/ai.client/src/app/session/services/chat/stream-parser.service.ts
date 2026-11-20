@@ -31,7 +31,7 @@ import { isPreviewableFilename } from '../file-preview/file-preview.model';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { ToolInsightService } from './tool-insight.service';
 import { SessionService } from '../session/session.service';
-import { toolResultMetadata } from '../session/tool-results';
+import { isToolResultMessage, toolResultMetadata } from '../session/tool-results';
 import { AgentNoticeService } from '../agent-notice/agent-notice.service';
 import { HandoffStateService } from '../handoff/handoff-state.service';
 import { QuotaStatusService } from '../../../services/quota/quota-status.service';
@@ -490,6 +490,13 @@ export class StreamParserService {
         if (!current) {
           return steering.length > 0 ? [...completed, ...steering] : completed;
         }
+        // A turn stopped between its tool results and the next model call
+        // ends here, so the stored results message is listed from the moment
+        // it exists, not only once a next message finalizes this one.
+        const builder = currentMessageBuilder();
+        const results =
+          builder && steering.length === 0 ? this.storedToolResultMessage(state, builder, completed.length + 1) : null;
+        if (results) return [...completed, current, results];
         return [...completed, current, ...steering];
       }),
       streamingMessageId: computed<string | null>(() => {
@@ -1386,17 +1393,21 @@ export class StreamParserService {
 
   private updateLastCompletedMessageWithMetadata(state: ParserSessionState): void {
     const completed = state.completedMessages();
-    if (completed.length === 0) return;
+    // The answer the usage describes, never the tool results stored after it
+    // (a turn that ends on a tool round ends on that message).
+    let at = completed.length - 1;
+    while (at >= 0 && isToolResultMessage(completed[at])) at--;
+    if (at < 0) return;
 
-    const lastMessage = completed[completed.length - 1];
+    const lastMessage = completed[at];
     const newMetadata = this.getMetadataForMessage(state);
     if (!newMetadata) return;
 
     if (!lastMessage.metadata) {
       state.completedMessages.update((messages) => {
         const updated = [...messages];
-        updated[updated.length - 1] = {
-          ...updated[updated.length - 1],
+        updated[at] = {
+          ...updated[at],
           metadata: newMetadata,
         };
         return updated;
@@ -1442,8 +1453,8 @@ export class StreamParserService {
         const existingTokenUsageObj = existingMetadata['tokenUsage'] as Record<string, unknown> | undefined;
         const newTokenUsageObj = newMetadata['tokenUsage'] as Record<string, unknown> | undefined;
 
-        updated[updated.length - 1] = {
-          ...updated[updated.length - 1],
+        updated[at] = {
+          ...updated[at],
           metadata: {
             ...existingMetadata,
             ...newMetadata,
@@ -1648,6 +1659,32 @@ export class StreamParserService {
     state.steeringMessages.update((messages) => [...messages, message]);
   }
 
+  /**
+   * The user message the server stored after `builder` with its tool results,
+   * shaped as `GET /messages` returns it, at the index it holds there; `null`
+   * when no result came back. A `tool_result` event is only sent once that
+   * message is stored, so a result here means the message exists.
+   */
+  private storedToolResultMessage(state: ParserSessionState, builder: MessageBuilder, offset: number): Message | null {
+    if (builder.role !== 'assistant') return null;
+    const content: ContentBlock[] = [];
+    for (const [, block] of [...builder.contentBlocks.entries()].sort(([a], [b]) => a - b)) {
+      if ((block.type === 'tool_use' || block.type === 'toolUse') && block.toolUseId && block.result) {
+        content.push({
+          type: 'toolResult',
+          toolResult: { toolUseId: block.toolUseId, content: block.result.content, status: block.result.status },
+        });
+      }
+    }
+    if (content.length === 0) return null;
+    return {
+      id: `msg-${state.sessionId}-${state.startingMessageCount + offset}`,
+      role: 'user',
+      content,
+      createdAt: builder.createdAt,
+    };
+  }
+
   private finalizeCurrentMessage(state: ParserSessionState): void {
     const builder = state.currentMessageBuilder();
     if (!builder) {
@@ -1671,6 +1708,16 @@ export class StreamParserService {
     const steering = state.steeringMessages();
     if (message.content.length > 0 || steering.length > 0) {
       const appended = message.content.length > 0 ? [message, ...steering] : steering;
+      // The server stores a tool round's results as a user message of their
+      // own, right after the assistant message that called the tools, and
+      // numbers every later message past it. Leave it out here and each tool
+      // round puts the live ids one behind the stored ones until a reload, so
+      // feedback, rewind, fork and Send to name the wrong message. A steer
+      // already stands in for it: it rides inside that same stored message.
+      if (message.content.length > 0 && steering.length === 0) {
+        const results = this.storedToolResultMessage(state, builder, state.completedMessages().length + 1);
+        if (results) appended.push(results);
+      }
       state.completedMessages.update((messages) => [...messages, ...appended]);
     }
     if (steering.length > 0) {
