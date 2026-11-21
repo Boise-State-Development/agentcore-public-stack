@@ -358,6 +358,8 @@ Each step is useful alone and stops if the one before shows no demand.
    source. No authoring and no new step kinds. Enough to try with the worked example's four reviewers.
 2. **Saved workflows, and prompt and checklist steps.** The reference file and its parser, the editor, `after`,
    the merge instruction and the merge that starts by itself. `workflow-designer.md` §14 proposes its PR plan.
+   *2026-11-20:* accepted as `workflow-designer.md` D.1 to D.5, planned PR by PR in §20 there. Prompt and
+   checklist steps are decided after D.5.
 3. **Runs on the server.** The executor, the `handoff_context` passthrough, the two verify-firsts in §6.2.
 4. **Runs the model proposes**, by extending `suggest_handoff` from one step to several.
 

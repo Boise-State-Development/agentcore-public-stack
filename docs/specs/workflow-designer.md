@@ -1,8 +1,9 @@
 # Workflow Designer: authoring a saved workflow on a canvas
 
-**Status:** Proposed 2026-11-20. Nothing here is built. It is the authoring half of step 2 in
+**Status:** Accepted for step 2 as D.1 to D.5, 2026-11-20 (§20 is its delivery plan). Prompt and checklist steps (D.6, D.7) and pinning (D.8) are decided later. Nothing here is built yet. It is the authoring half of step 2 in
 `docs/specs/workflow-runs.md` §14, and it replaces that spec's §10 editor (step cards in a list) with a canvas.
 **Targets branch:** `develop`
+**Tracking:** #2218 (step 2)
 **Mockup:** `docs/specs/mockups/workflow-designer-mockup.html` (standalone, clickable, drawn outside the SPA; this
 file is the source, not the picture)
 **Related:**
@@ -502,12 +503,15 @@ Counts only, on rows and in EMF:
 1. **Does the carrying skill show under Customize → Skills?** Recommended: yes, marked "Workflow" with a link to
    the designer, because a checklist step's field sets live in that skill and their editor is reached from it.
    Hidden is cleaner for users but leaves files nobody can see.
+   *Answered 2026-11-20: shown, marked Workflow, with a link to the designer (§20).*
 2. **Pinning policy (D.8).** May a run use a superseded snapshot of an Agent? What does a takedown do to a
    workflow that names the Agent?
 3. **Sharing.** Should Share warn when a recipient cannot use a step's Agent? Does an Agent's owner see that it
    is used in someone's workflow (`workflow-runs.md` §17, question 4)?
 4. **A step the starter cannot run.** Block until it is removed (recommended), or drop it and run the rest as a
    Shared Project harness does? Once stages exist: does a step that read a removed step still run?
+   *Answered 2026-11-20: block until it is removed. Once stages exist, a step that reads a removed step is
+   removed with it, and the sheet says so (§20).*
 5. **The flag when finished.** Fold into `WORKFLOW_RUNS_ENABLED` (recommended), or keep as a feature switch.
 6. **Who writes the merge.** Always the source conversation's model, or may the Result card name an Agent
    (`workflow-runs.md` §17, question 6)? The Result card is where that choice would sit.
@@ -537,3 +541,98 @@ beside is rewritten when the first build PR lands, as each spec's own rule says.
 | `workflow-runs.md` §17, question 1 | Answered for step 2: "Workflows" |
 | `workflow-runs.md` §18 | The non-goal is narrowed from "a canvas or graph editor" to "a free-form canvas" |
 | `multi-agent-patterns.md` §6.2 | The first canvas is this one, on the conversations layer |
+
+## 20. Delivery plan, step 2
+
+*Added 2026-11-20, after step 1 shipped (`workflow-runs.md` §19.1) and after checking §2, §6.3, §10 and §12
+against `develop` at `bcb0aef9a`.*
+
+### 20.1 Settled with the developer
+
+- **Step 2 is D.1 to D.5:** saved workflows of Agent steps, the designer, the test run, stages and the merge.
+  Prompt and checklist steps (D.6, D.7) are decided after D.5, from §20.4's measurement. Pinning (D.8) waits for
+  open question 2.
+- **The merge starts by itself** once the run settles, only if the source is idle and its composer is empty, and
+  the sheet says so before Start. Otherwise the card waits on the composer, as in step 1.
+- **The carrying skill is shown under Customize → Skills,** marked Workflow, with a link to the designer
+  (open question 1).
+- **A step the starter cannot run blocks Start** until it is removed. Once stages exist, removing a step also
+  removes the steps that read it, and the sheet names them (open question 4).
+
+### 20.2 What the code check changed
+
+- **A run can start from a new conversation with no new backend route.** W.1's create needs only the source's
+  metadata row, not its turns: an empty transcript renders an empty card. `PUT /sessions/{id}/metadata` already
+  creates an absent row with a title. The step-1 guards are in the SPA (`hasMessages()` in `session.page.ts`,
+  `multipleMentionsOffered` in the composer). So D.2 creates the row with the workflow's name as its title, then
+  opens the run. Prewarm writes no row and cannot stand in.
+- **The queue already survives leaving the conversation.** `WorkflowRunQueueService`, `ChatStateService` and the
+  step streams are `providedIn: 'root'`, and their unload listeners are on the window. The §6.3 verify-first is
+  answered. What does not exist off the session page is run *state*: it is hydrated when a source's messages
+  load (`message-map.service.ts`). D.4's panel has to load the run itself (`GET …/workflow-runs/{runId}`).
+- **The sheet opens pre-filled.** `WorkflowRunService.open(sourceSessionId, RunDraft)` takes any Agents and a
+  request, so a saved workflow reuses the sheet rather than building a second one.
+- **A carrying skill must never be active in a chat by itself.** An active skill puts its name and description
+  in `<available_skills>` (the system prompt), and a top-level `references/field-set.*.md` mounts
+  `document_extract`, which changes `toolConfig`. ⚠️ **D.1 verifies first** how a user's own skills become active
+  on a turn, and keeps a carrying skill out unless an Agent or project binds it. Within an active skill, the file
+  list reaches the model only in the instructions read on activation ("Bundled files"), which is a tool result,
+  not the prefix.
+- **The skill-file check covers field sets only.** `BundleFiles.add_resource` runs `validate_field_set_upload`
+  on every write whatever the flags, but parses only `field-set.<x>.md`, so a `workflow.<name>.md` passes
+  unchecked today. D.1 adds the workflow check beside it. Limits that apply: 1 MiB a file, 50 files a skill.
+- **Nothing bumps a skill's version on save.** Versions are cut only when something pins one (`pin_current`).
+  The file's own frontmatter `version` is what a no-op save must leave alone, as the field-set PUT does; the
+  generic upload route writes even when nothing changed, so `/workflows` writes through its own route.
+- **"See what changed" has no user route.** An Agent's `listing.published_version` is readable by anyone who can
+  use it, so the file can record it and the sheet can say "now version 4". The version list and diff routes are
+  admin-only. D.2 ships the line and **Mark as reviewed** without the diff link. A user-facing diff is a
+  follow-up, and the line says what it can without one.
+- **Confirmed: a turn cannot run a chosen Agent version** (`resolve_invocation_agent` takes none, and
+  `InvocationRequest` has no field for one). §10 stands.
+- **A step's result can be rendered for a later step.** `_part_for` (`app_api/handoffs/workflow_runs.py`) takes
+  the step conversation's answer at its `done` time and bounds it at `SEND_BACK_MAX_TOKENS`, and
+  `render_delivery_parts` already wraps parts for a message. Neither depends on collect, so D.5 reuses both.
+- **Nothing sends a turn by itself today,** and there is no shared "composer is empty" signal: the draft is
+  component state plus local storage. D.5's automatic merge needs both: a source-idle check
+  (`chatState.isSessionLoading`) and a composer-empty signal it can read without the composer on screen.
+- **Prompt and checklist steps need a new Runtime invocation.** `run_bounded` is a semaphore with no model call.
+  The only side call that writes a priced `C#` row with a `callKind` is the handoff brief, routed on the Runtime
+  through `_handoff_brief_invocation`, and app-api makes no Bedrock call. That, with G3's cache measurement, is
+  why D.6 and D.7 are left out of step 2.
+- **The run row has no workflow fields.** `WorkflowRun` gains `workflow {skillId, name, fingerprint}` and the
+  Agent versions it was started with, in D.2.
+
+### 20.3 The PRs
+
+Every PR is behind `WORKFLOWS_ENABLED` / `CDK_WORKFLOWS_ENABLED` / `features.workflows` (in development: only
+`"true"` enables, and only with `WORKFLOW_RUNS_ENABLED`), and none changes a tool spec or the system prompt.
+
+| PR | Side | Needs | What it ships |
+|---|---|---|---|
+| D.1 | Backend | — | The format and its routes, as §14 says. Also: the carrying skill kept out of turns (§20.2), the skill's `kind: workflow` mark for Customize, `reads` parsed in full now (so the format never changes) while run create refuses a step that reads another step until D.5 |
+| D.2 | Backend + SPA | D.1 | Start a saved workflow: `workflow` on run create, the run row's workflow fields, a run from a new conversation (§20.2), the composer `+` entry, Start on a workflow, the blocked-step rule, and the "this Agent has changed" line with Mark as reviewed |
+| D.3 | SPA | D.1 | The Workflows page and the designer in one column, as §14 says: the sidebar entry, the list, `WorkflowGraphComponent` in design mode, the Step and Preview tabs, Save as workflow (a new button on the run's row, which has no menu), the one template, Fit and pan. The Customize badge and link |
+| D.4 | SPA | D.2, D.3 | The test run on the canvas: run mode on the graph, and the run's row and result card in the panel, loaded by run id |
+| D.5a | Backend + SPA | D.2 | Stages: run create accepts reads; a step starts only when what it reads has settled; just before its send, app-api renders the read steps' results into that step's context (`_part_for`, `render_delivery_parts`), never on a turn's path; the result card takes the Result's reads; removing a step removes its readers |
+| D.5b | SPA (+ D.5a's row field) | D.5a | The merge that starts by itself (§20.1), with its instruction on the run row; View as graph on the run's row; the small graph on the sheet |
+
+**Order.** D.1 first. Then D.2 and D.3 at once (D.2 touches the sheet, the composer and the run service; D.3 is
+new pages and the graph, so their files do not overlap). D.4 after both. D.5a after D.2 and can run beside D.4.
+D.5b last. At most three writing sessions at a time.
+
+**Turn path.** Only D.5a comes near it, and it stays off: a later step's earlier results are written by app-api
+before the SPA sends that step, so the step's turn reads a ready row, as every step does today. Its PR states the
+step-start latency it adds in the tab, which is not TTFT.
+
+**Dev validation** (each PR's own session, after merge): the worked example as a saved workflow. Four reviewers
+in stage 1 and a merge, started from the Workflows page in a new conversation, with one Agent edited since it was
+added, and one step removed on the sheet so its reader goes too. The source's `C#` rows show only appended
+blocks, and the merge starts by itself when the composer is empty and waits when it is not.
+
+### 20.4 Before deciding D.6 and D.7
+
+Measure G3 (`multi-agent-patterns.md` §11.4) on dev: whether N prompt branches over one document read it from a
+shared cached prefix when one call warms it first, per model. Then choose between a side call on a new Runtime
+invocation (as the brief is routed) and a prompt step as a model-only conversation, which reuses everything step 1
+built and costs a conversation per step.
