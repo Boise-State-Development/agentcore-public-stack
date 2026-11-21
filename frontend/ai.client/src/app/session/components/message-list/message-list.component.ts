@@ -904,10 +904,28 @@ export class MessageListComponent {
     return map;
   });
 
+  /**
+   * Whether the thread's start is on screen: nothing loaded yet, or the first message is. A run
+   * started from a conversation with no turns (a saved workflow's new conversation) has
+   * `sourceMessageIndex: -1`, which no message matches, so it goes above the first turn while
+   * that turn is loaded, and only falls back to the tail while an older page hides it.
+   */
+  private readonly threadStartLoaded = computed(
+    () => this.messages().length === 0 || this.loadedMessageIndices().has(0),
+  );
+
+  /** Runs approved before the conversation's first turn, drawn above it. */
+  protected readonly leadingRunRows = computed<readonly WorkflowRunView[]>(() =>
+    this.threadStartLoaded() ? this.threadRuns().filter((run) => run.sourceMessageIndex < 0) : [],
+  );
+
   /** Runs whose anchor isn't in the loaded page, at the tail. */
   protected readonly unanchoredRunRows = computed<readonly WorkflowRunView[]>(() => {
     const loaded = this.loadedMessageIndices();
-    return this.threadRuns().filter((run) => !loaded.has(run.sourceMessageIndex));
+    const leading = this.threadStartLoaded();
+    return this.threadRuns().filter(
+      (run) => !loaded.has(run.sourceMessageIndex) && !(leading && run.sourceMessageIndex < 0),
+    );
   });
 
   protected runRowsForMessageId(id: string): readonly WorkflowRunView[] {

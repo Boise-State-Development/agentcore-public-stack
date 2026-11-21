@@ -27,7 +27,7 @@
       <app-paragraph-skeleton />
     </div>
   </div>
-} @else if (!hasMessages() && resolvedConfig().showEmptyState) {
+} @else if (!showsThread() && resolvedConfig().showEmptyState) {
   <!-- Empty state with greeting -->
   @if (resolvedConfig().embeddedMode) {
     <!-- Embedded mode: relative wrapper for absolute input positioning -->
