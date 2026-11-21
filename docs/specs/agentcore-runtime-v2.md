@@ -218,7 +218,7 @@ The blog's tip is to start the session as soon as the user engages, for example 
 3. **SPA:**
    - Stage the ID and fire the warm call on intent.
    - Make it fire-and-forget: a failure or a slow warm call must never delay or block the send.
-   - A send that arrives mid-warm simply lands on the same microVM while it restores, which is no worse than today.
+   - A send that arrives mid-warm does **not** share the start: the Runtime data plane answers it **409** before the container sees it (dev, 2026-11-21: a warm forward that took 2,017 ms for a snapshot restore, and a send 270 ms after the first keystroke refused, shown as "Already responding"). Our container's own 409 never arrives raw (the data plane rewrites it to 424), so app-api's chat proxy treats a raw Runtime 409 as "still starting": it waits on its own in-flight warm call for that `(user, session)` when it has one, else polls, then resends the turn, within 15 s (`_wait_out_runtime_session_start`). Only that refused path waits, so the send path is unchanged.
 4. **Optional:** warm on opening an existing conversation whose last activity is older than the idle timeout. That microVM has been reaped, so its next turn is also cold.
 
 **What it hides.** On today's cold path it hides:
