@@ -1,6 +1,6 @@
 # Workflow Designer: authoring a saved workflow on a canvas
 
-**Status:** Accepted for step 2 as D.1 to D.5, 2026-11-20 (§20 is its delivery plan). Prompt and checklist steps (D.6, D.7) and pinning (D.8) are decided later. Nothing here is built yet. It is the authoring half of step 2 in
+**Status:** Step 2 (D.1 to D.5) built and dev-validated, 2026-11-21, behind `WORKFLOWS_ENABLED` and `WORKFLOW_RUNS_ENABLED` (on in `development` only). §20 is its delivery plan and §20.5 what it showed. Prompt and checklist steps (D.6, D.7) and pinning (D.8) are decided later. It is the authoring half of step 2 in
 `docs/specs/workflow-runs.md` §14, and it replaces that spec's §10 editor (step cards in a list) with a canvas.
 **Targets branch:** `develop`
 **Tracking:** #2218 (step 2)
@@ -1022,3 +1022,59 @@ Measure G3 (`multi-agent-patterns.md` §11.4) on dev: whether N prompt branches 
 shared cached prefix when one call warms it first, per model. Then choose between a side call on a new Runtime
 invocation (as the brief is routed) and a prompt step as a model-only conversation, which reuses everything step 1
 built and costs a conversation per step.
+
+### 20.5 Step 2 outcome (2026-11-21)
+
+Every step-2 PR is merged and passed its dev check: D.1 (#2221), D.2 (#2223), D.3 (#2225), D.4 (#2233), D.5a
+(#2236), D.5b-1 (#2249) and D.5b-2 (#2251). D.5b was split in two when it started, by files: the designer half
+(Reads, stage columns, the Result card) and the run half (View as graph, the small graph on the sheet, the merge
+that starts by itself), so the two could be built at once without touching the same files.
+
+Seven fixes came out of the dev checks, each merged and checked on dev:
+
+- #2234: a conversation a saved workflow started shows its run row, and its first send goes through.
+- #2238: a waiting step's approval card comes back in the designer's test run after a reload.
+- #2242: a run's steps stay current after a reload, so a step waiting on earlier results starts without a second
+  reload. This also clears step 1's stale "Working on" line (§19.1 in `workflow-runs.md`).
+- #2243: a send the Runtime refused because its session was still starting is resent every 0.5 s, not after a
+  growing wait; and no "No messages yet" under a run's row.
+- #2247: the sidebar no longer reads a finished run on every page load. A run's steps carry `runSteps` (how many
+  the run kept, fixed at approve), so a run between stages is still read.
+- #2256: the run's own file on the composer no longer holds the merge; the run sheet keeps Start on screen.
+- #2260: Start takes the run's own files off the composer, so the next message doesn't send them to the source's
+  model again; the sheet fits a phone screen.
+
+**Measured on dev:**
+
+- **The source's prompt cache.** A merge is one appended turn. In every merge run checked, the source's next call
+  was a `hit` that read the whole cached prefix (64,686 and 68,104 tokens in two runs), with `toolConfigHash` and
+  `systemPromptHash` unchanged and nothing wasted. The merge turn carried no document (`documentsAttached: 0`).
+- **Prepare** (the earlier steps' results rendered into a later step's first message) took 1.0–1.6 s in the D.5a
+  checks. It runs in the tab before the step's send, never before a turn's first token. Skipping the artifact and
+  file lookups changed little: the time is in reading the earlier steps' messages and the checks on them.
+- **The sidebar on a page load.** Before #2247, 5 run reads, all for finished runs. After: none for a finished
+  run, one for a running run or a run between stages.
+- **The first send in a conversation that is still starting.** One resend, 3.0 s from send to answer, of which
+  1.3 s was the resend's own turn prelude. #2234's earlier "1.8 s after the session started" was measured the same
+  way and so overstated the old poll's cost.
+- **Cost of the checks.** The D.5 dev checks cost $0.75 across all their runs: $0.33 for D.5a's three runs, and
+  $0.42 for D.5b's five runs.
+
+**Open after step 2.** None blocks using it on dev.
+
+- **A workflow that takes a file can't be test-run from the designer.** Its sheet asks for a file, and the test
+  conversation has no composer to attach one.
+- **Cancelling a test run leaves an empty "Test:" conversation** (§17 question 8 is where it would be settled).
+- **Save as workflow on a run that a saved workflow started** makes a duplicate workflow.
+- **"This Agent has changed"** compares published versions, so it couldn't be checked with the demo Agents,
+  which were never published. A draft edit showed its marker in the review.
+- **A run's sidebar line** refreshes only when the session list reloads, not in place.
+- **Prepare carries text only:** an earlier step's artifacts and files don't reach the later step.
+- **From step 1, still open:** one result per run, Stop run reaching only steps streaming in this tab, no bell
+  entry for a finished run, and a resumed step without the mention's attachments (§19.1 in `workflow-runs.md`).
+- **Focus rings** that predate this work still have no dark pair, and `<ng-icon>` ignores `text-*` and `size-*`
+  app-wide (#2232).
+
+**Still to decide:** §17 questions 5 (the flag once finished), 6 (who writes the merge), 7 (templates) and 8
+(test conversations); D.6 and D.7 after §20.4's measurement; D.8 after question 2. The flags are on in
+`development` only.

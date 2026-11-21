@@ -1,6 +1,6 @@
 # Workflow runs: several steps under one approval
 
-**Status:** Step 1 built and dev-validated, 2026-11-20, behind `WORKFLOW_RUNS_ENABLED` (on in `development` only). §19 is its delivery plan and §19.1 what it showed. Steps 2 to 4 are proposed. Proposed 2026-11-19. It asks one design question of the handoffs work: should the
+**Status:** Step 1 built and dev-validated, 2026-11-20, behind `WORKFLOW_RUNS_ENABLED` (on in `development` only). §19 is its delivery plan and §19.1 what it showed. Step 2 (saved workflows, the designer and stages) built and dev-validated, 2026-11-21: `workflow-designer.md` §20.5. Steps 3 and 4 are proposed. Proposed 2026-11-19. It asks one design question of the handoffs work: should the
 user's review sit on each hop, as it does today, or on the whole piece of delegated work? Everything else follows
 from the answer.
 **Author:** Phil Merrell (drafted with Claude)
@@ -864,7 +864,7 @@ tool-using answers. Feedback rows from before the fix are not backfilled.
   since the fix recorded under `workflow-designer.md` §20.3.)*
 - **Display leftovers.** A partial card keeps "Still waiting" for steps that finished later. "Answered ·
   *X* resumed" stays under a finished step's line. A step line that was running at a reload reads "Working on"
-  until the next reload.
+  until the next reload. *(Fixed in step 2 by #2242: `workflow-designer.md` §20.5.)*
 - **Dark-mode focus rings** are missing (1.67:1) on the single review sheet's links, the project heading and the
   sidebar row menus. All three predate this work, and one small fix covers them.
 
