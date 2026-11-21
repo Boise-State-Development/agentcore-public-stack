@@ -813,7 +813,10 @@ what it settled:
   (after a reload) is read once with `GET /sessions/{id}/workflow-runs/{runId}`, which carries each waiting
   step's `relayedPrompts`; one that turns out never approved (the sheet was cancelled, or a reload came before
   Start) is forgotten and the tab goes back to Preview. After a reload no step streams here, so the row offers
-  Start for the steps left, as in a thread.
+  Start for the steps left, as in a thread. The read also seeds each step's handoff row into
+  `HandoffStateService` (`seedRows`, which never replaces a row the tab holds), because the relay registers a
+  waiting step's prompt from those rows. Dev validation found the approval card missing after a reload until
+  this was added (#2237).
 - **Leaving and coming back.** The queue, streams and run state are root, so leaving mid-run is fine, and
   opening the workflow's designer again selects its Test run tab. Close test run is offered once nothing is
   left running, and keeps the conversations.

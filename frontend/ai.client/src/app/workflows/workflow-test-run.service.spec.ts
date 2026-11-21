@@ -3,17 +3,23 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { environment } from '../../environments/environment';
 import { ConfigService } from '../services/config.service';
+import { FEATURES } from '../services/features';
+import { ToastService } from '../services/toast/toast.service';
+import { ToolApprovalService } from '../services/tool-approval/tool-approval.service';
 import { WorkflowStartService } from '../services/workflows/workflow-start.service';
 import { UserConnectorsService } from '../settings/connectors/services/user-connectors.service';
 import { ChatStateService } from '../session/services/chat/chat-state.service';
 import { ToolInsightService } from '../session/services/chat/tool-insight.service';
+import { HandoffRelayService } from '../session/services/handoff/handoff-relay.service';
 import { HandoffStateService } from '../session/services/handoff/handoff-state.service';
 import { HandoffView } from '../session/services/handoff/handoff.models';
 import { RunStepLine } from '../session/services/handoff/workflow-run-progress';
 import { WorkflowRunQueueService } from '../session/services/handoff/workflow-run-queue.service';
 import { WorkflowRunStateService } from '../session/services/handoff/workflow-run-state.service';
 import { WorkflowRunView } from '../session/services/handoff/workflow-run.models';
+import { MessageMapService } from '../session/services/session/message-map.service';
 import { WorkflowTestRunService } from './workflow-test-run.service';
 
 const API = 'https://api.test';
@@ -71,7 +77,10 @@ describe('WorkflowTestRunService', () => {
         provideHttpClientTesting(),
         { provide: ConfigService, useValue: { appApiUrl: () => API } },
         { provide: WorkflowStartService, useValue: { start } },
-        { provide: ChatStateService, useValue: { isSessionLoading: () => false } },
+        { provide: ChatStateService, useValue: { isSessionLoading: () => false, viewedSessionId: () => null } },
+        { provide: FEATURES, useValue: { ...environment.features, handoffs: true, workflows: true } },
+        { provide: MessageMapService, useValue: { reloadMessagesForSession: vi.fn() } },
+        { provide: ToastService, useValue: { info: vi.fn(), success: vi.fn(), error: vi.fn() } },
         { provide: WorkflowRunQueueService, useValue: { isPending: () => false } },
         { provide: ToolInsightService, useValue: { latestSummary: () => null, status: () => null } },
         { provide: UserConnectorsService, useValue: { displayNameFor: (id: string) => id } },
@@ -125,6 +134,45 @@ describe('WorkflowTestRunService', () => {
     expect(await loading).toBe('loaded');
     expect(service.runFor(REF)?.runId).toBe('RUN-1');
     expect(TestBed.inject(WorkflowRunStateService).runsFor('test-conv')).toHaveLength(1);
+  });
+
+  describe('after a reload (the run read by id)', () => {
+    const WAITING = handoff('needs_input', {
+      waitingOn: { kind: 'tool_approval', name: 'budget_check' },
+      relayedPrompts: [{ interruptId: 'int-1', kind: 'tool_approval', toolName: 'budget_check', toolUseId: 'tu-1' }],
+    });
+
+    async function loadRun(row: HandoffView): Promise<void> {
+      const service = create();
+      const loading = service.load({ sessionId: 'test-conv', runId: 'RUN-1' });
+      http.expectOne(`${API}/sessions/test-conv/workflow-runs/RUN-1`).flush(run('approved', row));
+      expect(await loading).toBe('loaded');
+      TestBed.tick();
+    }
+
+    it('brings a waiting step’s approval card back: the relay registers its prompt for the panel', async () => {
+      const relay = TestBed.inject(HandoffRelayService);
+      const approvals = TestBed.inject(ToolApprovalService);
+      expect(approvals.pending()).toEqual([]);
+
+      await loadRun(WAITING);
+
+      const held = TestBed.inject(HandoffStateService).rowsFor('test-conv');
+      expect(held.map((r) => r.handoffId)).toEqual(['h1']);
+      expect(relay.isWaiting(held[0])).toBe(true);
+      const request = relay.approvalFor(held[0], WAITING.relayedPrompts![0]);
+      expect(request).toMatchObject({ interruptId: 'int-1', toolName: 'budget_check', sessionId: 't1' });
+    });
+
+    it('never overwrites a row this tab already holds live', async () => {
+      const state = TestBed.inject(HandoffStateService);
+      const live = handoff('running', { statusLine: 'Reading section 4' });
+      state.upsertRow(live);
+
+      await loadRun(WAITING);
+
+      expect(state.rowsFor('test-conv')).toEqual([live]);
+    });
   });
 
   it('calls a run that was never approved, or is gone, gone', async () => {
