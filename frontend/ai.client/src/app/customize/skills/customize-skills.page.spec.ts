@@ -9,6 +9,7 @@ import { MySkill } from './models/my-skill.model';
 import { ConfigService } from '../../services/config.service';
 import { Dialog } from '@angular/cdk/dialog';
 import { of } from 'rxjs';
+import { FEATURES } from '../../services/features';
 
 /**
  * The rejection from a failed save travels catch → signal set, which lands a
@@ -398,6 +399,49 @@ describe('CustomizeSkillsPage', () => {
       const req = http.expectOne('/api/skills/preferences');
       expect(req.request.body.preferences).toEqual({ sk_syllabus: true });
       req.flush({});
+    });
+  });
+  describe('a saved workflow’s carrying skill (workflow-designer §17, question 1)', () => {
+    const carrier = mine({
+      skillId: 'sk_wf',
+      displayName: 'Proposal review',
+      kind: 'workflow',
+      resources: [
+        { filename: 'workflow.proposal-review.md', path: 'workflow.proposal-review.md', contentHash: 'h', size: 1, contentType: 'text/markdown', s3Key: 'k', kind: 'reference' },
+      ],
+    });
+
+    /** A fresh module whose build has workflows on or off; the page reads nothing else from FEATURES. */
+    function withWorkflows(on: boolean): void {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([]), { provide: FEATURES, useValue: { workflows: on } }],
+      });
+      TestBed.inject(ConfigService).appApiUrl.set('/api');
+      http = TestBed.inject(HttpTestingController);
+    }
+
+    it('is marked Workflow and links to its designer', async () => {
+      withWorkflows(true);
+      const fixture = await create(CATALOG, [carrier]);
+      const row = rows(fixture)[0] as HTMLElement;
+      expect(row.textContent).toContain('workflow');
+      const link = row.querySelector<HTMLAnchorElement>('a[aria-label="Open Proposal review in the workflow designer"]');
+      expect(link?.getAttribute('href')).toBe('/workflows/sk_wf/proposal-review');
+    });
+
+    it('keeps the mark but offers no link while workflows are off', async () => {
+      withWorkflows(false);
+      const fixture = await create(CATALOG, [carrier]);
+      const row = rows(fixture)[0] as HTMLElement;
+      expect(row.textContent).toContain('workflow');
+      expect(row.querySelector('a[aria-label*="workflow designer"]')).toBeNull();
+    });
+
+    it('marks no other skill', async () => {
+      withWorkflows(true);
+      const fixture = await create(CATALOG, [mine({ skillId: 'sk_plain', displayName: 'Plain' })]);
+      expect((rows(fixture)[0] as HTMLElement).querySelector('a[aria-label*="workflow designer"]')).toBeNull();
     });
   });
 });

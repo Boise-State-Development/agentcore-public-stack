@@ -102,8 +102,8 @@ describe('SidebarLayoutService', () => {
 
     await layout.save();
     const saved: SidebarItemPreference[] = settings.updateSettings.mock.calls[0][0].sidebarItems;
-    // Projects keeps the second slot it had, ready for a build that shows it.
-    expect(ids(saved)).toEqual(['customize', 'projects', 'agents', 'artifacts', 'schedules']);
+    // Projects and Workflows keep the slots they had, ready for a build that shows them.
+    expect(ids(saved)).toEqual(['customize', 'projects', 'workflows', 'agents', 'artifacts', 'schedules']);
   });
 
   it('saves nothing when nothing changed', async () => {

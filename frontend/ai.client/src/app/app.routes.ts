@@ -9,6 +9,8 @@ import { FEATURES } from './services/features';
 /** Matches only in a build with Shared Projects on (compile-time; see environments/feature-flags.ts). */
 const projectsEnabled = () => inject(FEATURES).projects;
 const fieldSetAuthoringEnabled = () => inject(FEATURES).fieldSetAuthoring;
+/** Saved workflows (docs/specs/workflow-designer.md §8.1): every /workflows URL is unmatched while off. */
+const workflowsEnabled = () => inject(FEATURES).workflows;
 
 export const routes: Routes = [
     {
@@ -160,6 +162,30 @@ export const routes: Routes = [
         path: 'projects',
         loadComponent: () => import('./projects/projects.page').then(m => m.ProjectsPage),
         canMatch: [projectsEnabled],
+        canActivate: [authGuard],
+    },
+    // Saved workflows (docs/specs/workflow-designer.md §8.1). `new` stays above
+    // `:skillId/:name` for the same reason as `customize/skills/new` below. The
+    // designer is full-screen (`fixed inset-0`), as the Agent Designer is, and
+    // asks the shell for no sidenav declaratively rather than hiding it by hand.
+    {
+        path: 'workflows/new',
+        loadComponent: () => import('./workflows/workflow-designer.page').then(m => m.WorkflowDesignerPage),
+        canMatch: [workflowsEnabled],
+        canActivate: [authGuard],
+        data: { chrome: 'minimal' },
+    },
+    {
+        path: 'workflows/:skillId/:name',
+        loadComponent: () => import('./workflows/workflow-designer.page').then(m => m.WorkflowDesignerPage),
+        canMatch: [workflowsEnabled],
+        canActivate: [authGuard],
+        data: { chrome: 'minimal' },
+    },
+    {
+        path: 'workflows',
+        loadComponent: () => import('./workflows/workflows.page').then(m => m.WorkflowsPage),
+        canMatch: [workflowsEnabled],
         canActivate: [authGuard],
     },
     {
