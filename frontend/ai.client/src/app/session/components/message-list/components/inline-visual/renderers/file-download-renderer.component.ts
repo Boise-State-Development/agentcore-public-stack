@@ -13,6 +13,7 @@ import { ConfigService } from '../../../../../../services/config.service';
 import { resolveMimeTypeFor } from '../../../../../../services/file-upload';
 import {
   CONTENT_CARD_ACTION_CLASS,
+  CONTENT_CARD_COMPACT_ACTION_CLASS,
   ContentCardComponent,
   OUTPUT_CARD_HOST_CLASS,
 } from '../../../../../../components/content-card/content-card.component';
@@ -64,8 +65,9 @@ interface ResolvedFile {
  * Placed under the tool rail that made it (the call itself folds into the
  * rail), so the download is never hidden inside a collapsed rail.
  *
- * The primary action is Preview where the docked pane renders the format,
- * with Download beside it; otherwise Download is the action. Download is a
+ * The primary action is a compact Preview, rightmost, where the docked pane
+ * renders the format, with a Download icon before it; otherwise Download is
+ * the action. Download is a
  * real link to the durable route, which 302s to a fresh presigned URL. The
  * chat's prose rules stop at a content card (`@scope` in styles.css), so the
  * links take the card's own colours rather than the answer's link style.
@@ -105,14 +107,6 @@ interface ResolvedFile {
              block whose root is a single node matching it. -->
         @if (f.previewable) {
           <ng-container contentCardAction>
-          <button
-            type="button"
-            [class]="actionClass"
-            [attr.aria-label]="'Preview ' + f.filename"
-            (click)="preview(f.uploadId, f.filename)"
-          >
-            Preview
-          </button>
           <a
             class="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-100"
             [href]="f.href"
@@ -123,6 +117,14 @@ interface ResolvedFile {
           >
             <ng-icon name="heroArrowDownTray" size="18" aria-hidden="true" />
           </a>
+          <button
+            type="button"
+            [class]="compactActionClass"
+            [attr.aria-label]="'Preview ' + f.filename"
+            (click)="preview(f.uploadId, f.filename)"
+          >
+            Preview
+          </button>
           </ng-container>
         } @else {
           <a
@@ -148,6 +150,7 @@ export class FileDownloadRendererComponent {
   private readonly filePreview = inject(FilePreviewStateService);
 
   protected readonly actionClass = CONTENT_CARD_ACTION_CLASS;
+  protected readonly compactActionClass = CONTENT_CARD_COMPACT_ACTION_CLASS;
 
   /** Narrowed, validated payload with its kind resolved (null when malformed). */
   file = computed<ResolvedFile | null>(() => {

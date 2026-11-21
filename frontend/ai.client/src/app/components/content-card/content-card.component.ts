@@ -313,3 +313,11 @@ export class ContentCardComponent {
 /** Shared look for a card's primary action, so every consumer matches. */
 export const CONTENT_CARD_ACTION_CLASS =
   'inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1 text-sm/6 font-medium text-gray-900 no-underline! ring-1 ring-gray-300 transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible disabled:cursor-not-allowed disabled:opacity-60 dark:text-gray-100 dark:ring-white/20 dark:hover:bg-white/10';
+
+/**
+ * A smaller primary action, for a card whose footer also holds an icon
+ * action, so the labelled button does not outweigh the row. Still 24px tall,
+ * the WCAG 2.5.8 minimum target.
+ */
+export const CONTENT_CARD_COMPACT_ACTION_CLASS =
+  'inline-flex shrink-0 items-center gap-1 rounded-md px-2.5 py-0.5 text-xs/5 font-medium text-gray-900 no-underline! ring-1 ring-gray-300 transition-colors hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible disabled:cursor-not-allowed disabled:opacity-60 dark:text-gray-100 dark:ring-white/20 dark:hover:bg-white/10';
