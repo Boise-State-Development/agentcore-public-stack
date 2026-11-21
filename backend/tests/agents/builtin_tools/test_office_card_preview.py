@@ -9,6 +9,8 @@ skeleton. These pin that the preview is written beside the file, in the shape
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import json
 from typing import Any, Dict, List
 
@@ -39,6 +41,12 @@ class _FakeRepository:
 
     async def create_file(self, metadata: Any) -> None:
         self.rows.append(metadata)
+
+    async def get_user_quota(self, user_id: str) -> Any:
+        return SimpleNamespace(total_bytes=0)
+
+    async def increment_quota(self, user_id: str, size_bytes: int) -> None:
+        return None
 
 
 @pytest.fixture

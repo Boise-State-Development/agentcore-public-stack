@@ -142,7 +142,7 @@ def test_every_action_is_namespaced() -> None:
     for action in ALL_ACTIONS:
         assert action.startswith(
         ("app_role.", "project.", "user_grant.", "quota_request.", "quota_extension.", "quota_period.", "aws_limit.",
-         "skill.")
+         "skill.", "sandbox.")
     ), action
 
 

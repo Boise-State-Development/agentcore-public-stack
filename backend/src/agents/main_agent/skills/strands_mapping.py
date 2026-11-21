@@ -61,10 +61,30 @@ _WORD_RUNNABLE_SCRIPT_NOTICE = (
 )
 
 
+# The notice while CODE_SANDBOX_ENABLED is on, when ``run_code`` can run any
+# Python script a bound skill ships (docs/specs/skill-code-sandbox.md §5). It
+# names the Word tools too only while WORD_SKILL_SCRIPTS_ENABLED is on. Chosen
+# per deployment, so it is constant for a session.
+_RUN_CODE_SCRIPT_NOTICE = (
+    "[This script is stored with the skill. If you have the run_code tool, run "
+    "it with run_code (skill_name, path and argv as the skill's instructions "
+    "give them) instead of copying it; read it only to learn what it does. "
+    "{word}Otherwise read it to understand the approach, then reproduce the "
+    "steps yourself.]"
+)
+_RUN_CODE_WORD_SENTENCE = (
+    "A Python file that builds or edits a Word document can also run through "
+    "create_word_document or modify_word_document's skill_name and path. "
+)
+
+
 def _script_notice() -> str:
     """The notice ``read_skill_file`` puts ahead of a script's text."""
-    from apis.shared.feature_flags import word_skill_scripts_enabled
+    from apis.shared.feature_flags import code_sandbox_enabled, word_skill_scripts_enabled
 
+    if code_sandbox_enabled():
+        word = _RUN_CODE_WORD_SENTENCE if word_skill_scripts_enabled() else ""
+        return _RUN_CODE_SCRIPT_NOTICE.format(word=word)
     return _WORD_RUNNABLE_SCRIPT_NOTICE if word_skill_scripts_enabled() else _INERT_SCRIPT_NOTICE
 
 

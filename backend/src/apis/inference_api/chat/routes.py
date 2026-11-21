@@ -153,6 +153,7 @@ from apis.shared.tools.always_on import (
 )
 from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
+    CODE_SANDBOX_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
     MEETING_TASKS_TOOL_IDS,
     POWERPOINT_PRESENTATION_TOOL_IDS,
@@ -1113,6 +1114,30 @@ def _build_word_document_tools(
 
     logger.info(f"Created {len(tools)} word document tools")
     return tools
+
+
+def _build_code_sandbox_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create ``run_code`` if the turn enables it and ``CODE_SANDBOX_ENABLED`` is on.
+
+    Closes over ``(session_id, user_id)`` and a ``TurnSkillRecords`` holder that
+    ``ChatAgent`` fills from the turn's skill records, as the Word tools' script
+    path does (``docs/specs/skill-code-sandbox.md``). Off, the spec never
+    reaches ``toolConfig``.
+    """
+    if not enabled_tools or not CODE_SANDBOX_TOOL_IDS.intersection(enabled_tools):
+        return []
+    from apis.shared.feature_flags import code_sandbox_enabled
+
+    if not code_sandbox_enabled():
+        return []
+    from agents.builtin_tools.code_sandbox import make_run_code_tool
+    from agents.main_agent.skills.skill_scripts import TurnSkillRecords
+
+    return [make_run_code_tool(session_id, user_id, TurnSkillRecords())]
 
 
 # ============================================================
@@ -4693,6 +4718,10 @@ async def _build_turn_tools(
         session_id=input_data.session_id,
         user_id=user_id,
     ) + _build_powerpoint_presentation_tools(
+        enabled_tools=effective_enabled_tools,
+        session_id=input_data.session_id,
+        user_id=user_id,
+    ) + _build_code_sandbox_tools(
         enabled_tools=effective_enabled_tools,
         session_id=input_data.session_id,
         user_id=user_id,

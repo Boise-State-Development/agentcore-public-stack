@@ -887,6 +887,28 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Code sandbox feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CODE_SANDBOX_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_CODE_SANDBOX_ENABLED;
+      expect(loadConfig(app).codeSandbox.enabled).toBe(false);
+      process.env.CDK_CODE_SANDBOX_ENABLED = '';
+      expect(loadConfig(app).codeSandbox.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_CODE_SANDBOX_ENABLED = 'True';
+      expect(loadConfig(app).codeSandbox.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_CODE_SANDBOX_ENABLED = value;
+        expect(loadConfig(app).codeSandbox.enabled).toBe(false);
+      }
+    });
+  });
+
   describe('Concurrent tool execution feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED;

@@ -282,6 +282,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     wordSkillScripts: {
       enabled: false,
     },
+    codeSandbox: {
+      enabled: false,
+    },
     converseDocumentsAsText: {
       enabled: false,
     },

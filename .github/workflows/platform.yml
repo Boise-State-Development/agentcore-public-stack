@@ -477,6 +477,11 @@ jobs:
       # "true" enables. Sets the flag on the AgentCore Runtime only, and only
       # while on; no resources.
       CDK_WORD_SKILL_SCRIPTS_ENABLED: ${{ vars.CDK_WORD_SKILL_SCRIPTS_ENABLED }}
+      # Code sandbox (run_code): a skill's scripts, or Python the model writes,
+      # run in the isolated Code Interpreter. In development, so only "true"
+      # enables. Sets the flag on the AgentCore Runtime only, and only while
+      # on; no resources.
+      CDK_CODE_SANDBOX_ENABLED: ${{ vars.CDK_CODE_SANDBOX_ENABLED }}
       # Documents as text on Converse: non-PDF attachments (docx, txt, md, csv,
       # html) reach a Bedrock Converse model as rendered text instead of
       # document blocks; PDFs stay native. In development, so only "true"

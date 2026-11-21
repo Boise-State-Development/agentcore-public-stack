@@ -50,6 +50,18 @@ class _DocGenError(Exception):
     """Raised when Code Interpreter fails to run the document code."""
 
 
+class StorageQuotaExceededError(Exception):
+    """Saving a file would take the user past their file-storage quota."""
+
+
+def _user_quota_bytes() -> int:
+    """The per-user storage quota, as app-api's upload path reads it."""
+    try:
+        return int(os.environ.get("FILE_UPLOAD_USER_QUOTA_BYTES", 1024 * 1024 * 1024))
+    except ValueError:
+        return 1024 * 1024 * 1024
+
+
 class _StorageNotConfiguredError(Exception):
     """Raised when the user-files S3 bucket is not configured for the runtime."""
 
@@ -360,6 +372,19 @@ async def _store_document(
         get_file_upload_repository,
     )
 
+    # The same quota an upload is held to (app-api ``FileUploadService``), so a
+    # tool cannot write past what the user could upload. Counted below once the
+    # row exists, as uploads are, so deleting the file gives the space back.
+    repository = get_file_upload_repository()
+    quota = await repository.get_user_quota(user_id)
+    limit = _user_quota_bytes()
+    if quota.total_bytes + len(file_bytes) > limit:
+        raise StorageQuotaExceededError(
+            f"saving {filename} would pass the user's file storage limit "
+            f"({quota.total_bytes / (1024 * 1024):.0f} of {limit / (1024 * 1024):.0f} MB used). "
+            "Tell the user to delete files they no longer need."
+        )
+
     bucket = _user_files_bucket()
     timestamp_hex = format(
         int(datetime.now(timezone.utc).timestamp() * 1000), "x"
@@ -389,9 +414,13 @@ async def _store_document(
     # The card preview goes beside the file while the row is written, so the
     # tool waits for the slower of the two, not both.
     await asyncio.gather(
-        get_file_upload_repository().create_file(metadata),
+        repository.create_file(metadata),
         _store_card_preview(bucket, s3_key, filename, mime_type, file_bytes),
     )
+    try:
+        await repository.increment_quota(user_id, len(file_bytes))
+    except Exception:  # noqa: BLE001 - the file is saved; a missed count is logged
+        logger.exception("could not count a saved file against the user's quota")
 
     size_kb = f"{len(file_bytes) / 1024:.1f} KB"
     return upload_id, size_kb
