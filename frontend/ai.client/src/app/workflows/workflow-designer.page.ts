@@ -194,16 +194,17 @@ export class WorkflowDesignerPage {
   }));
 
   protected readonly resultCard = computed(() => {
+    const merge = this.store.draft().result.mode === 'merge';
+    const title = merge ? 'A merge' : 'One card';
     const progress = this.graphMode() === 'run' ? this.testProgress() : null;
     if (progress) {
       const finished = `${progress.done} of ${progress.total} finished`;
-      return { title: 'One card', meta: this.testRun()?.resultDeliveryId ? `Results ready · ${finished}` : finished };
+      return { title, meta: this.testRun()?.resultDeliveryId ? `Results ready · ${finished}` : finished };
     }
-    const count = this.store.stepCount();
-    return {
-      title: 'One card',
-      meta: count ? `Back to chat · ${count} ${count === 1 ? 'result' : 'results'}` : 'Back to chat',
-    };
+    // What the Result reads, not every step: "Reads: summary" is one result (§9.1).
+    const count = this.store.resultSteps().length;
+    const where = merge ? 'Starts by itself' : 'Back to chat';
+    return { title, meta: count ? `${where} · ${count} ${count === 1 ? 'result' : 'results'}` : where };
   });
 
   protected readonly graphStages = computed<GraphStepCard[][]>(() => {
@@ -242,9 +243,9 @@ export class WorkflowDesignerPage {
         if (from) edges.push([from, step.key]);
       }
     }
-    const takes = this.store.draft().result.reads;
+    const takes = new Set(this.store.resultSteps());
     for (const step of steps) {
-      if (takes === null || takes.includes(step.name)) edges.push([step.key, RESULT_NODE]);
+      if (takes.has(step.name)) edges.push([step.key, RESULT_NODE]);
     }
     return edges;
   });
@@ -277,8 +278,8 @@ export class WorkflowDesignerPage {
     this.tab.set('step');
   }
 
-  protected addStep(): void {
-    const key = this.store.add();
+  protected addStep(stage = 0): void {
+    const key = this.store.add(stage);
     if (!key) return;
     this.tab.set('step');
     afterNextRender(() => document.getElementById('wf-agent-filter')?.focus(), { injector: this.injector });

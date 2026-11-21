@@ -4,9 +4,9 @@ import { heroArrowDown, heroArrowUp, heroExclamationTriangle, heroMagnifyingGlas
 
 import { AgentIconComponent } from '../../agents/components/agent-icon.component';
 import { MentionableAgent } from '../../agents/services/agent-mention.service';
-import { DraftStep, stepReads } from '../workflow-draft';
+import { DraftStep } from '../workflow-draft';
 import { RESULT_NODE, START_NODE, WorkflowDesignerStore } from '../workflow-designer.store';
-import { WorkflowFiles } from '../workflow.models';
+import { MAX_WORKFLOW_STEPS, WorkflowFiles } from '../workflow.models';
 
 const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
   { value: 'none', label: 'No files', hint: 'The starter only writes a request.' },
@@ -17,6 +17,12 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
 /**
  * The Step tab (docs/specs/workflow-designer.md §5): edits the selected card. Agent steps and the
  * two fixed cards only; prompt and checklist steps are D.6 and D.7.
+ *
+ * Reads decide a step's stage (§4.1): a step can read any other step's result except one that
+ * already reads it, directly or on the way, which is shown disabled with why, so the form can't
+ * make the cycle the format refuses. The Result sets how it comes back (card, or a merge with its
+ * instruction) and which steps' results it includes. The SPA never writes the file: the server's
+ * `PUT` does, and refuses what the format refuses.
  *
  * A dense form, so it stays plain: the canvas is the page's one bold surface.
  */
@@ -86,34 +92,92 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
             <legend class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">How it comes back</legend>
             <div class="mt-2 space-y-2">
               <label class="flex items-start gap-3 text-sm/6 text-gray-900 dark:text-white">
-                <input type="radio" name="wf-result" value="card" checked disabled class="mt-1 size-4 border-gray-300 text-primary-accessible dark:border-gray-600 dark:bg-gray-800" />
+                <input
+                  type="radio"
+                  name="wf-result"
+                  value="card"
+                  [checked]="draft().result.mode === 'card'"
+                  [disabled]="!editable()"
+                  (change)="store.setResultMode('card')"
+                  [class]="radioClass"
+                />
                 <span>
                   One card on the composer
-                  <span class="block text-xs/5 text-gray-600 dark:text-gray-400">Every step’s result, sent with your next message.</span>
+                  <span class="block text-xs/5 text-gray-600 dark:text-gray-400">The results, sent with your next message.</span>
                 </span>
               </label>
-              <label class="flex items-start gap-3 text-sm/6 text-gray-500 dark:text-gray-400">
-                <input type="radio" name="wf-result" value="merge" disabled class="mt-1 size-4 border-gray-300 dark:border-gray-600 dark:bg-gray-800" />
+              <label class="flex items-start gap-3 text-sm/6 text-gray-900 dark:text-white">
+                <input
+                  type="radio"
+                  name="wf-result"
+                  value="merge"
+                  [checked]="draft().result.mode === 'merge'"
+                  [disabled]="!editable()"
+                  (change)="useMerge()"
+                  [class]="radioClass"
+                />
                 <span>
                   A merge that starts by itself
-                  <span class="block text-xs/5 text-gray-600 dark:text-gray-400">Not available yet: it comes with stages.</span>
+                  <span class="block text-xs/5 text-gray-600 dark:text-gray-400">
+                    Once every step has finished, the conversation that started the run gets the results and this instruction, and answers.
+                  </span>
                 </span>
               </label>
             </div>
+            @if (draft().result.mode === 'merge') {
+              <label for="wf-result-instruction" class="mt-3 block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Merge instruction</label>
+              <textarea
+                id="wf-result-instruction"
+                rows="4"
+                [value]="draft().result.instruction ?? ''"
+                [readOnly]="!editable()"
+                (input)="store.setResultInstruction(textOf($event))"
+                placeholder="Write one report: the inline notes first, then the audit table."
+                aria-describedby="wf-result-instruction-help"
+                [class]="textareaClass"
+              ></textarea>
+              <p id="wf-result-instruction-help" class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
+                Leave it blank and the conversation is only asked to combine the results.
+              </p>
+            }
           </fieldset>
-          <div>
-            <h3 class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">It includes</h3>
+
+          <fieldset>
+            <legend class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">It includes</legend>
             @if (draft().steps.length) {
-              <ol class="mt-1 list-decimal space-y-0.5 pl-5 text-sm/6 text-gray-900 dark:text-white">
+              <div class="mt-2 space-y-1.5">
                 @for (step of draft().steps; track step.key) {
-                  <li>{{ store.stepLabel(step) }}</li>
+                  @let included = includes(step.name);
+                  @let last = included && store.resultSteps().length === 1;
+                  <label class="flex items-start gap-3 text-sm/6 text-gray-900 dark:text-white">
+                    <input
+                      type="checkbox"
+                      [checked]="included"
+                      [disabled]="!editable() || last"
+                      (change)="store.toggleResultRead(step.name)"
+                      [attr.aria-describedby]="last ? 'wf-result-last' : null"
+                      [class]="checkboxClass + ' mt-1'"
+                    />
+                    <span>
+                      {{ store.stepLabel(step) }}’s result
+                      <span class="block text-xs/5 text-gray-600 dark:text-gray-400">Stage {{ store.stageOf(step.key) }}</span>
+                    </span>
+                  </label>
                 }
-              </ol>
-              <p class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">Every step’s result, in the order the steps are listed.</p>
+              </div>
+              <p class="mt-2 text-xs/5 text-gray-600 dark:text-gray-400" [attr.id]="store.resultSteps().length === 1 ? 'wf-result-last' : null">
+                @if (draft().result.reads === null) {
+                  Every step’s result, in the order the steps are listed, including steps you add later.
+                } @else if (store.resultSteps().length === 1) {
+                  One step’s result. The result always includes at least one.
+                } @else {
+                  {{ store.resultSteps().length }} of {{ draft().steps.length }} steps’ results, in the order the steps are listed.
+                }
+              </p>
             } @else {
               <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">Each step’s result, once you add steps.</p>
             }
-          </div>
+          </fieldset>
         </section>
       }
 
@@ -250,20 +314,37 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                   The run’s files
                 </label>
                 @for (other of otherSteps(); track other.key) {
-                  <label class="flex items-center gap-3 text-sm/6 text-gray-500 dark:text-gray-400">
-                    <input type="checkbox" [checked]="step.reads.includes(other.name)" disabled [class]="checkboxClass" [attr.aria-describedby]="'wf-reads-stages'" />
-                    {{ store.stepLabel(other) }}’s result
+                  @let blocked = readers().has(other.key);
+                  <label class="flex items-start gap-3 text-sm/6" [class]="blocked ? 'text-gray-600 dark:text-gray-400' : 'text-gray-900 dark:text-white'">
+                    <input
+                      type="checkbox"
+                      [checked]="step.reads.includes(other.name)"
+                      [disabled]="!editable() || blocked"
+                      (change)="toggleStepRead(step, other.name)"
+                      [attr.aria-describedby]="blocked ? 'wf-read-why-' + other.key : null"
+                      [class]="checkboxClass + ' mt-1'"
+                    />
+                    <span>
+                      {{ store.stepLabel(other) }}’s result
+                      <span class="block text-xs/5 text-gray-600 dark:text-gray-400" [attr.id]="blocked ? 'wf-read-why-' + other.key : null">
+                        @if (blocked) {
+                          {{ blockedReason(other.key) }}
+                        } @else {
+                          Stage {{ store.stageOf(other.key) }}
+                        }
+                      </span>
+                    </span>
                   </label>
                 }
               </div>
-              @if (otherSteps().length) {
-                <p id="wf-reads-stages" class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
-                  Reading another step’s result needs stages, which come later.
-                </p>
-              }
-              @if (stepReadsAny(step)) {
-                <p class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">This step reads another step’s result in the saved file.</p>
-              }
+              <p id="wf-reads-rules" class="mt-2 text-xs/5 text-gray-600 dark:text-gray-400">
+                @if (otherSteps().length) {
+                  A step runs in the stage after the latest step it reads. It can’t read itself, or a step that reads it.
+                } @else {
+                  Add another step and this one can read its result.
+                }
+                {{ store.stepCount() }} of {{ maxSteps }} steps.
+              </p>
             </fieldset>
 
             @if (editable()) {
@@ -316,6 +397,11 @@ export class WorkflowStepTabComponent {
   protected readonly fileChoices = FILE_CHOICES;
   protected readonly checkboxClass =
     'size-4 rounded border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800';
+  protected readonly radioClass =
+    'mt-1 size-4 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800';
+  protected readonly textareaClass =
+    'mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-400';
+  protected readonly maxSteps = MAX_WORKFLOW_STEPS;
   protected readonly filter = signal('');
 
   protected readonly draft = this.store.draft;
@@ -364,6 +450,12 @@ export class WorkflowStepTabComponent {
     return this.draft().steps.filter((other) => other.key !== step?.key);
   });
 
+  /** The steps this one can't read, because each already reads it (directly or on the way). */
+  protected readonly readers = computed(() => {
+    const step = this.step();
+    return step ? this.store.readersOf(step.key) : new Map<string, string | null>();
+  });
+
   protected readonly choices = computed(() => {
     const needle = this.filter().trim().toLowerCase();
     const all = this.store.agents();
@@ -376,8 +468,27 @@ export class WorkflowStepTabComponent {
     return this.draft().steps.some((other) => other.key !== step?.key && other.agentId === agentId);
   }
 
-  protected stepReadsAny(step: DraftStep): boolean {
-    return stepReads(step).length > 0;
+  /** "reads this step", or "reads Colleague, which reads this step". */
+  protected blockedReason(key: string): string {
+    const via = this.readers().get(key);
+    if (!via) return 'Reads this step, so this step can’t read it';
+    const through = this.draft().steps.find((s) => s.name === via);
+    return `Reads ${through ? this.store.stepLabel(through) : via}, which reads this step`;
+  }
+
+  protected includes(name: string): boolean {
+    return this.store.resultSteps().includes(name);
+  }
+
+  protected toggleStepRead(step: DraftStep, name: string): void {
+    const reads = step.reads.includes(name) ? step.reads.filter((r) => r !== name) : [...step.reads, name];
+    this.store.setReads(step.key, reads);
+  }
+
+  /** Merge, then the instruction: it is what the merge is for. */
+  protected useMerge(): void {
+    this.store.setResultMode('merge');
+    afterNextRender(() => document.getElementById('wf-result-instruction')?.focus(), { injector: this.injector });
   }
 
   protected textOf(event: Event): string {

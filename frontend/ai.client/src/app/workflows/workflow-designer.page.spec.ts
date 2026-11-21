@@ -201,6 +201,138 @@ describe('WorkflowDesignerPage', () => {
     });
   });
 
+  describe('stages', () => {
+    /** Colleague reads Generalist and Fiscal reader, so it is stage 2; the Result reads Colleague only. */
+    function staged(): WorkflowDocument {
+      const [gen, fis, col] = view().steps;
+      return doc({
+        steps: [gen, fis, { ...col, reads: ['request', 'files', 'generalist', 'fiscal'] }],
+        result: { mode: 'merge', reads: ['colleague'], steps: ['colleague'], instruction: 'Write one report.' },
+      });
+    }
+
+    function checkbox(label: string): HTMLInputElement {
+      const found = [...el.querySelectorAll<HTMLLabelElement>('#wf-panel-step label')].find((l) => l.textContent!.includes(label));
+      if (!found) throw new Error(`no checkbox "${label}"`);
+      return found.querySelector('input')!;
+    }
+
+    it('draws a column per stage from the reads, with connectors that follow them', async () => {
+      service.read.mockResolvedValue({ ok: true, document: staged() });
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+
+      const groups = [...el.querySelectorAll('[role="group"]')];
+      const headings = groups.map((g) => el.querySelector(`#${g.getAttribute('aria-labelledby')}`)!.textContent!.trim());
+      expect(headings).toEqual(['Stage 1', 'Stage 2', 'Stage 3']);
+      expect([...groups[1].querySelectorAll('ul button')].map((c) => c.getAttribute('aria-label'))).toEqual([
+        'Colleague, Agent step, stage 2, reads the request, the files and 2 results',
+      ]);
+      const edges = fixture.componentInstance['graphEdges']().map(([from, to]) => `${from}>${to}`);
+      const keys = fixture.componentInstance['graphStages']().flat().map((c) => c.key);
+      const [gen, fis, col] = keys;
+      expect(edges).toEqual([`start>${gen}`, `start>${fis}`, `${gen}>${col}`, `${fis}>${col}`, `${col}>result`]);
+    });
+
+    it('counts the results the Result reads, not every step, and names a merge', async () => {
+      service.read.mockResolvedValue({ ok: true, document: staged() });
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      const result = el.querySelector('[data-node-id="result"]')!;
+      expect(result.textContent).toContain('A merge');
+      expect(result.textContent).toContain('Starts by itself · 1 result');
+    });
+
+    it('starts a new stage from the last column, reading every step of the stage before', async () => {
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Add step to stage 2, a new stage').click();
+      await settle();
+
+      expect(announce).toHaveBeenCalledWith('Step added to stage 2. 4 of 8 steps', 'polite');
+      expect(checkbox('Generalist’s result').checked).toBe(true);
+      expect(checkbox('Fiscal reader’s result').checked).toBe(true);
+      expect(checkbox('Colleague’s result').checked).toBe(true);
+      expect(el.querySelector('#wf-panel-step')!.textContent).toContain('Agent step · stage 2');
+    });
+
+    it('reads another step, says the new stage, and keeps focus on the checkbox', async () => {
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Colleague').click();
+      await settle();
+
+      const box = checkbox('Generalist’s result');
+      expect(box.disabled).toBe(false);
+      box.focus();
+      box.click();
+      await settle();
+
+      expect(announce).toHaveBeenCalledWith('Colleague moved to stage 2', 'polite');
+      expect(document.activeElement).toBe(checkbox('Generalist’s result'));
+      expect(el.querySelector('#wf-panel-step')!.textContent).toContain('Agent step · stage 2');
+      expect(el.querySelector('#wf-reads-rules')!.textContent).toContain('can’t read itself, or a step that reads it');
+      expect(el.querySelector('#wf-reads-rules')!.textContent).toContain('3 of 8 steps');
+    });
+
+    it('never offers a read that would make a cycle, and says why', async () => {
+      service.read.mockResolvedValue({ ok: true, document: staged() });
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Generalist').click();
+      await settle();
+
+      const box = checkbox('Colleague’s result');
+      expect(box.disabled).toBe(true);
+      const why = el.querySelector(`#${box.getAttribute('aria-describedby')}`)!;
+      expect(why.textContent).toContain('Reads this step');
+      // The step itself is never listed.
+      expect([...el.querySelectorAll('#wf-panel-step label')].some((l) => l.textContent!.includes('Generalist’s result'))).toBe(false);
+    });
+
+    it('edits the Result: merge and its instruction, and which results it includes, and saves them', async () => {
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Result').click();
+      await settle();
+
+      const merge = el.querySelector<HTMLInputElement>('input[name="wf-result"][value="merge"]')!;
+      expect(merge.disabled).toBe(false);
+      merge.click();
+      await settle();
+      expect(document.activeElement?.id).toBe('wf-result-instruction');
+      const instruction = el.querySelector<HTMLTextAreaElement>('#wf-result-instruction')!;
+      instruction.value = 'Write one report.';
+      instruction.dispatchEvent(new Event('input'));
+      checkbox('Generalist’s result').click();
+      checkbox('Fiscal reader’s result').click();
+      await settle();
+
+      // One left, and it can't be left out.
+      expect(checkbox('Colleague’s result').disabled).toBe(true);
+      expect(el.querySelector('[data-node-id="result"]')!.textContent).toContain('Starts by itself · 1 result');
+
+      service.write.mockResolvedValue({ ok: true, document: doc({ version: 4 }, true) });
+      button('Save workflow').click();
+      await settle();
+      expect((service.write.mock.calls[0][1] as WorkflowWrite).result).toEqual({
+        mode: 'merge',
+        reads: ['colleague'],
+        instruction: 'Write one report.',
+      });
+    });
+
+    it('shows the server’s message when it refuses a save', async () => {
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      const title = el.querySelector<HTMLInputElement>('#wf-title')!;
+      title.value = 'Edited';
+      title.dispatchEvent(new Event('input'));
+      await settle();
+      service.write.mockResolvedValue({
+        ok: false,
+        conflict: false,
+        message: "workflow 'proposal-review' has a cycle: generalist → colleague → generalist",
+      });
+      button('Save workflow').click();
+      await settle();
+      expect(el.querySelector('header [role="alert"]')!.textContent).toContain('has a cycle');
+    });
+  });
+
   describe('Move up and Move down', () => {
     it('moves the step, keeps focus on the control, and says where it went', async () => {
       await open({ skillId: 'SKL-1', name: 'proposal-review' });
