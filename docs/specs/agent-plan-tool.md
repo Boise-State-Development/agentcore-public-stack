@@ -29,7 +29,7 @@ The model has the matching problem. On a twenty-call turn its first statement of
 | Property | Value | Why |
 |---|---|---|
 | Registration | static registry, behind `plan_tool_enabled()` | Unregistered while off, so the tool never reaches `toolConfig` |
-| Access | `update_plan` catalog row, `enabledByDefault: false` | A product choice that costs prefix tokens; each deployment grants it per role |
+| Access | `update_plan` catalog row, `enabledByDefault: false`; rolled out by binding it to long-running Agents (§5.2) | A product choice that costs prefix tokens, and the strongest guard against plans on simple tasks |
 | Identity captured | none | Agent-cache eligible; no injected-tool bypass |
 | Concurrency | in `PARALLEL_SAFE_TOOLS` | It reads history and writes nothing, so it can run beside the real work in the same batch |
 | New SSE event | **none** | The SPA reads the `toolUse` input it already receives |
@@ -58,7 +58,7 @@ One call carries exactly one of these forms:
 
 Limits:
 
-* 1–12 items.
+* 3–12 items. The minimum is a restraint rule (§5.3).
 * `content` at most 100 characters.
 * `status` is one of `pending`, `in_progress`, `completed`.
 * At most one item may be `in_progress` after the call is applied.
@@ -83,6 +83,8 @@ An error result says exactly what to send instead. Each one is a wasted model ro
 
 | Case | Result text |
 |---|---|
+| `items` with fewer than 3 steps (§5.3) | `A plan needs at least 3 steps. For shorter work, skip the plan and do the work.` |
+| New plan with no real tool call in the same batch (§5.3) | `Start a plan only alongside the first tool call that does the work. If this task needs no tools, skip the plan.` |
 | Delta with no plan in view (e.g. compaction summarised it away) | `No plan to update. Send the full list with "items".` |
 | Index out of range | `Step 7 does not exist; the plan has 5 steps.` |
 | Two `in_progress` after applying | `Only one step can be in progress.` |
@@ -102,21 +104,64 @@ The current plan is a pure function of the conversation: **fold every `update_pl
 * **Parity is pinned** by `plan-fold.fixture.json` beside the SPA twin. `backend/tests/.../test_plan_fold_fixture.py` reads it, the same pattern as `handoff-prompt.fixture.json`. A case must cover each of:
   * reset;
   * each delta form;
-  * each error;
+  * each error, including both restraint refusals;
+  * a new plan vs. a re-plan vs. a delta on an earlier turn's plan, with the turn boundary placed after a steer;
   * same-batch conflict;
   * a delta whose base was compacted away.
 
 Rewind and compaction need no special handling. Rewind cuts the Runtime's live list and hides the same messages in the SPA, so both twins fold the same calls. Compaction can drop the base from the Runtime's view while the SPA still shows it. The delta then errors, the model resends `items`, and because both twins skip error results, they agree again.
 
-## 5. Model guidance
+## 5. Restraint: only long tool work gets a plan
 
-`ask-user-question.md` § Trigger rate measured that tool-*description* wording barely moved the call rate. The same sentences in the *system prompt*, added only for turns whose post-filter tool list contains the tool, took it from 4/24 to 24/24 without false positives. This tool needs the opposite control. Its risk is over-use: a three-item checklist for "what's 2+2", or a plan call alone in a batch, which costs a whole extra model call (§6).
+This tool's main risk is over-use, not under-use. Models like checklists. A three-item plan for "what's 2+2" is noise for the user. A plan call alone in a batch costs a whole extra model call (§6). The model's judgement is one layer of defence, and the weakest one: `ask-user-question.md` § Trigger rate showed a system-prompt sentence can make a model call a tool *more*, and nothing yet shows the same lever makes it call one *less*. So there are four layers, strongest first. Only the third depends on the model.
 
-The first candidate text, appended through `_system_prompt_for` exactly as `SYSTEM_PROMPT_GUIDANCE` is:
+### 5.1 The obvious control is not available
 
-> For a task that will take three or more distinct steps, call update_plan once at the start with the steps, then advance it as you finish each one. Send each update in the same batch as the tool call that starts the next step, never alone. Do not use it for questions, single-step tasks, or anything you can answer without tools.
+We can't offer the tool only on turns that look long. The tool spec sits in `toolConfig`, which comes before the system prompt and the whole restored history in the cached prefix. A per-turn decision would rewrite that prefix every time it flipped, which the prompt-cache contract rules out. For a given configuration (Agent, role grants, model) the tool is either always present or never present. Every control below works within that rule.
 
-The description carries the schema rules. The prompt carries the when-and-how. The eval decides the final wording and where it goes, and the chosen text gets the same do-not-reword warning and byte-equality test as `SYSTEM_PROMPT_GUIDANCE`.
+### 5.2 Layer 1: grant it to long-running Agents, not to general chat
+
+Most simple questions land in general chat, so the biggest lever is to keep the tool out of it. The rollout binds `update_plan` to the Agents whose work is long and tool-heavy, such as award intake, grading passes, `document_extract` batches and `run_code` sessions, through the Agent's tool binding. On dev, it is also granted to the roles that test them. General chat does not get it until production data (§5.5) shows the over-use rate is low enough on Agent turns to risk it on open-ended ones.
+
+This costs nothing extra: an Agent's tool list is already part of its configuration, so binding the tool rewrites that Agent's prefix once, and no other conversation's.
+
+### 5.3 Layer 2: the tool refuses a plan that is not next to real work
+
+Two deterministic checks at call time. Both are cheap because the tool already reads its own assistant message for the fold (§4.4).
+
+1. **Every `items` call has 3–12 steps.** This is the schema's `minItems`, and the tool also checks it. Two-step work does not need a checklist.
+2. **A new plan must share its batch with a real tool call.** "Real" means a call to any tool other than `update_plan`. "New" means either no plan is in view, or the plan in view was last changed before this turn began. A turn begins at the last user message that carries no `toolResult` block; a mid-turn steer rides a tool-result message, so it does not start one.
+   * Deltas are exempt. So is re-planning an active plan from this same turn: refusing a mid-task correction would cost more than it saves.
+   * A "continue" turn that advances an earlier turn's plan uses a delta, so it passes.
+
+The refusal is an ordinary error result (§4.3), so both fold twins skip it and **a refused plan never renders**. A wrong call costs one model round trip with an error the model can act on. It never puts a checklist in front of the user.
+
+Rule 2 has three useful effects:
+
+* A question with no tool work cannot produce a plan at all.
+* A pure writing task (a five-section report with no tools) never gets one. That is right: the streaming text already shows progress there, and the plan exists to show progress across tool calls.
+* It turns §6's "never call it alone" from a request into a rule for the opening call, which is the one most likely to go out alone.
+
+**Risk to watch:** the 3-step minimum may tempt a model to pad a two-step task with a filler third step. The eval reads plans for steps that match no tool work (§7).
+
+### 5.4 Layer 3: guidance
+
+The first candidate text, appended through `_system_prompt_for` exactly as `SYSTEM_PROMPT_GUIDANCE` is, and only for turns whose post-filter tool list contains the tool:
+
+> For a task that will take three or more distinct steps using tools, call update_plan once at the start, in the same batch as the first tool call, then advance it in the same batch as each tool call that starts the next step. Never call it alone. Do not use it for questions, writing without tools, single-step tasks, or follow-ups to a finished task.
+
+The description carries the schema rules. The prompt carries the when-and-how. The eval decides the final wording and where it goes, measuring both placements, because this tool's aim is restraint, not reach. The chosen text gets the same do-not-reword warning and byte-equality test as `SYSTEM_PROMPT_GUIDANCE`.
+
+### 5.5 Layer 4: watch it in production
+
+At the end of each turn that called `update_plan`, `AgentStatusHook` emits two EMF metrics:
+
+* `PlanTurn` for every such turn;
+* `TrivialPlanTurn` when the turn made fewer than three real tool calls.
+
+The hook already sees every call, and emitting runs after the stream, so nothing is added before the first token. The metrics carry ids and counts only. The **trivial-plan rate** is `TrivialPlanTurn / PlanTurn`, broken down by Agent and model. The bar is under 10%. Above it, the guidance is failing on that Agent or model, and the tool comes off that binding until it is fixed.
+
+PR-4 adds the rate to the dev readout. Whether it also becomes a release-ledger counter is decided there, after seeing whether the EMF series is enough.
 
 ## 6. Cost and latency
 
@@ -124,7 +169,7 @@ The description carries the schema rules. The prompt carries the when-and-how. T
 * **Guidance.** About 60 tokens, constant per configuration, inside the system segment, and only for turns that have the tool.
 * **History.** Each call adds its input and the one-line result, both appended at the end of history. History stays append-only, so the cached prefix never moves.
 * **Time to first token: zero.** No `Before*` hook is added and nothing runs before the first token. The tool runs only when the model calls it.
-* **The real cost is a solo plan call.** When a batch contains *only* `update_plan`, the event loop pays a full extra model call to continue. That call reads the whole cached prefix (0.1× input) and adds its own time to first token. This is the number the eval must hold down (§7). The guidance's "never alone" exists for it.
+* **The real cost is a solo plan call.** When a batch contains *only* `update_plan`, the event loop pays a full extra model call to continue. That call reads the whole cached prefix (0.1× input) and adds its own time to first token. This is the number the eval must hold down (§7). For the opening call, §5.3's rule 2 refuses it. For later updates, it is guidance only, because refusing a mid-task update would cost the same extra call it is meant to prevent.
 * **Side channels it must not trigger.** `AgentStatusHook` skips the plan tool by name (a `NON_WORK_TOOLS` constant). Without the skip:
   * a plan call would flash "Using update_plan" in the loader;
   * it would add a line to the batch the Nova Micro summariser sees;
@@ -136,21 +181,32 @@ The description carries the schema rules. The prompt carries the when-and-how. T
 
 Run the cases with `backend/scripts/eval_harness.py` on a production-shaped tool set, at n ≥ 16 per cell. `ask-user-question.md` found baseline noise of 17–44%, so anything closer than about 25 points is not a result.
 
+The easy ends are not where over-use shows up. The middle rows are the ones that decide whether §5's layers work.
+
+"Plan attempted" counts every `items` call, refused or not. A refusal costs a wasted round trip even though nothing renders.
+
 | Case class | Example | Pass bar |
 |---|---|---|
-| Question, no tools | "What does F&A stand for?" | 0 plan calls in ≥ 15/16 |
-| Single-tool task | "Find the syllabus assignment in BIO 101" | 0 plan calls in ≥ 15/16 |
+| Question, no tools | "What does F&A stand for?" | plan attempted in ≤ 1/16 |
+| Single-tool task | "Find the syllabus assignment in BIO 101" | plan attempted in ≤ 1/16 |
+| Two-step task | look one thing up, then write one row | plan attempted in ≤ 2/16; no padded plans |
+| Sounds big, is small | "Tell me everything about this award" when one document read answers it | plan attempted in ≤ 2/16 |
+| Long writing, no tools | "Draft a five-section report from what I pasted" | 0 rendered by construction (§5.3); plan attempted in ≤ 2/16 |
+| Follow-up to a finished plan turn | "Thanks!" or "Can you shorten the email?" | no new plan and no update in ≥ 15/16 |
 | Multi-step task | intake an award PDF into the tracker, grade five submissions | plan created in ≥ 14/16 |
-| Same, plan quality | — | every step either completed or explicitly dropped by the end |
+| Same, plan quality | — | every step completed or explicitly dropped by the end; no step that matches no tool work (padding) |
 
 Measured per model: Haiku 4.5, Haiku 5.5, Sonnet 5.5, Opus 5.5.
 
 | Metric | Bar |
 |---|---|
 | Solo plan-call cycles, excluding the opening call | ≤ 10% of plan calls |
-| Plan-call error rate | ≤ 5%; every error fixed on the next call |
+| Plan-call error rate on multi-step tasks | ≤ 5%; every error fixed on the next call |
+| Trivial-plan rate across all classes (§5.5's definition) | ≤ 10% |
 | Output tokens per multi-step turn vs. tool absent | stated in the PR, not barred |
 | Task completion vs. tool absent (LLM judge) | no regression; the hoped-for gain is fewer dropped steps on 15+ call turns |
+
+Run each class twice: with the tool bound as an Agent's tool (§5.2), and with it in a general-chat tool set. The gap between the two is the evidence for whether general chat ever gets it.
 
 Two of these settle open questions: delta vs. full list (§4.1) and result echo (§4.2). Report the eval's own cost per model and in total, estimate vs. actual.
 
@@ -196,10 +252,10 @@ No SPA flag. The renderer keys on the tool name, which appears only when the bac
 
 | PR | Contents | Done when |
 |---|---|---|
-| **PR-1** backend | flag + CDK + workflow; `fold.py` and the tool; registry and catalog row; `PARALLEL_SAFE_TOOLS`; `AgentStatusHook` skip; guidance constant behind `_system_prompt_for`; spec digest test; fold fixture (Python side); measured spec tokens on dev | hermetic suites green; tool callable on a local stack |
-| **PR-2** eval | the §7 cases and harness wiring; run per model; guidance wording and delta/echo decisions recorded here | every §7 bar met or the gap stated and accepted |
+| **PR-1** backend | flag + CDK + workflow; `fold.py` and the tool, with §5.3's two refusals; registry and catalog row; `PARALLEL_SAFE_TOOLS`; `AgentStatusHook` skip plus the `PlanTurn` / `TrivialPlanTurn` metrics; guidance constant behind `_system_prompt_for`; spec digest test; fold fixture (Python side); measured spec tokens on dev | hermetic suites green; tool callable on a local stack |
+| **PR-2** eval | the §7 cases, middle rows included, in both the Agent-bound and general-chat tool sets; run per model; guidance wording, placement and delta/echo decisions recorded here | every §7 bar met or the gap stated and accepted |
 | **PR-3** SPA | `plan-fold.ts` against the shared fixture; rail exclusion; plan card; loader line; shared view | checked in the in-app browser on dev: live, reload, Stop, rewind, shared view |
-| **PR-4** dev | flag on in the `development` environment; smoke turn-matrix row for a plan turn; readout from the release ledger | one week of dev use with no unexplained cache misses on plan turns |
+| **PR-4** dev | flag on in the `development` environment; tool bound to the long-running dev Agents only; smoke turn-matrix row for a plan turn; readout from the release ledger plus the trivial-plan rate | one week of dev use with no unexplained cache misses on plan turns and a trivial-plan rate under 10% |
 
 PR-2 comes before the SPA on purpose. Its result can change the contract (full list instead of deltas), and the SPA's fold should be written once against the final one.
 
@@ -207,6 +263,7 @@ PR-2 comes before the SPA on purpose. Its result can change the contract (full l
 
 1. **Deltas or full list?** Recommend deltas with full-list reset (§4.1). §7 decides.
 2. **Echo the whole plan in the result?** Recommend the one-line echo; measure the full echo against it on 15+ call turns, where drift shows.
-3. **Guidance in the prompt or the description?** Recommend the prompt, given `ask_user_question`'s finding. Measure both, since this tool's goal is restraint, not reach.
+3. **Guidance in the prompt or the description?** Recommend the prompt, given `ask_user_question`'s finding. Measure both (§5.4), since this tool's goal is restraint, not reach.
 4. **Does a plan stay visible across turns?** Recommend no sticky element: each turn's card shows the plan as that turn left it, and the next turn's card picks up from there. Revisit if users "continue" long tasks across turns often.
-5. **Which roles get it first?** Recommend the roles behind the long agentic Agents (award intake, grading) on dev, rather than everyone.
+5. **Does general chat ever get it?** Settled for now by §5.2: long-running Agents only. Reopen once production has a trivial-plan rate on Agent turns, and the §7 general-chat runs say whether open-ended conversations can hold the same bar.
+6. **Is three steps the right minimum?** Three matches common practice in coding agents. If the eval finds padded plans (§5.3's risk), the fix is guidance first; lowering the minimum to two would weaken the refusal that keeps two-step work plan-free.
