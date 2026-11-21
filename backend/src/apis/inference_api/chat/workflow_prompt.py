@@ -48,6 +48,7 @@ from apis.shared.extraction.batch import run_bounded
 from apis.shared.files.whole_document import WholeDocument, WholeDocumentError, read_whole_document
 from apis.shared.feature_flags import prompt_steps_enabled
 from apis.shared.handoff.models import PromptStopReason
+from apis.shared.handoff.prompt_models import prompt_model_supported
 from apis.shared.handoff.prompt_steps import PromptStepStore, WorkflowPromptRequest, get_prompt_step_store
 from apis.shared.handoff.run_reads import StepReadsNotSettled, render_step_reads
 from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep, WorkflowRunStore, get_workflow_run_store
@@ -82,6 +83,32 @@ SYSTEM_PROMPT = (
 
 #: Ahead of an instruction, so the model can tell this step's own ask from the material it reads.
 INSTRUCTION_HEADING = "This step's instruction:"
+
+#: Ahead of the user's request for the whole run, for a step that reads it and has its own instruction.
+RUN_REQUEST_HEADING = "The user's request for this workflow:"
+
+
+def step_reads_inputs(step: WorkflowRunStep) -> Tuple[bool, bool]:
+    """``(reads_request, reads_files)``: which of the run's inputs a prompt step reads.
+
+    A step's ``reads`` names ``request`` and ``files`` beside the steps it reads (the format's
+    ``INPUT_READS``). A row with no ``reads`` at all reads both, as every step did before reads.
+    """
+    from apis.shared.workflows.format import READ_FILES, READ_REQUEST
+
+    if step.reads is None:
+        return True, True
+    return READ_REQUEST in step.reads, READ_FILES in step.reads
+
+
+def run_request_for(run: WorkflowRun, step: WorkflowRunStep) -> str:
+    """The run's request as a step's message carries it: only when the step reads it and its own
+    instruction is not that same request (a step with no instruction of its own is sent it as one)."""
+    reads_request, _ = step_reads_inputs(step)
+    shared = (run.request or "").strip()
+    if not reads_request or not shared or shared == (step.request or "").strip():
+        return ""
+    return shared
 
 
 # --- Frames ---------------------------------------------------------------------------------------
@@ -147,16 +174,24 @@ def document_blocks(documents: Sequence[WholeDocument]) -> List[Dict[str, Any]]:
 
 
 def step_content(
-    prefix: Sequence[Dict[str, Any]], reads_block: str, instruction: str, *, cache_point: bool
+    prefix: Sequence[Dict[str, Any]],
+    reads_block: str,
+    instruction: str,
+    *,
+    cache_point: bool,
+    run_request: str = "",
 ) -> List[Dict[str, Any]]:
-    """One step's user message: the shared prefix, a cachePoint after it, its reads, its instruction.
+    """One step's user message: the shared prefix, a cachePoint after it, then the step's own tail.
 
-    The cachePoint goes only where there is a prefix to cache and the model takes one. Everything
-    after it is the step's own, so each step writes only its own tail.
+    The tail is the user's run request (when the step reads it and it differs from the step's own
+    instruction), the results it reads, and its instruction. The cachePoint goes only where there
+    is a prefix to cache and the model takes one, so each step writes only its own tail.
     """
     content: List[Dict[str, Any]] = list(prefix)
     if prefix and cache_point:
         content.append({"cachePoint": {"type": "default"}})
+    if run_request.strip():
+        content.append({"text": f"{RUN_REQUEST_HEADING}\n\n{run_request.strip()}"})
     if reads_block.strip():
         content.append({"text": reads_block.strip()})
     content.append({"text": f"{INSTRUCTION_HEADING}\n\n{instruction.strip()}"})
@@ -280,7 +315,7 @@ async def resolve_model_plan(user: User, model_id: str) -> ModelPlan:
     """Retirement first, then access as the caller, then a catalog row, then this path's limits.
 
     A model with no row is refused (it would price to nothing), as is one this call path cannot send
-    to: a provider other than Bedrock Converse, or a TEXT-only model, which takes no PDF.
+    to (``prompt_model_supported``, the rule the run sheet blocks by too).
     """
     from apis.shared.files.attachment_plan import ModelFacts, document_budget, pdf_page_limit, token_profile
     from apis.shared.models.retirement import resolve_effective_model
@@ -301,8 +336,7 @@ async def resolve_model_plan(user: User, model_id: str) -> ModelPlan:
     )
     if not allowed:
         return ModelPlan(model_id=effective.model_id, refusal="model_refused")
-    modalities = {str(m).strip().upper() for m in (record.input_modalities or [])}
-    if (record.provider or "").lower() != "bedrock" or modalities == {"TEXT"}:
+    if not prompt_model_supported(record):
         return ModelPlan(model_id=effective.model_id, refusal="model_refused")
 
     context_window = int(record.max_input_tokens) if record.max_input_tokens else None
@@ -536,6 +570,8 @@ class StepPlan:
 
     step: WorkflowRunStep
     reads_block: str
+    run_request: str = ""
+    reads_files: bool = True
 
     @property
     def step_id(self) -> str:
@@ -672,7 +708,10 @@ class PromptStepRun:
                 logger.warning("workflow prompt: rendering a step's reads failed", exc_info=True)
                 self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_pending"))
                 continue
-            plans.append(StepPlan(step=step, reads_block=block))
+            _, reads_files = step_reads_inputs(step)
+            plans.append(
+                StepPlan(step=step, reads_block=block, run_request=run_request_for(run, step), reads_files=reads_files)
+            )
         return plans
 
     async def _claim(self, run: WorkflowRun, plans: List[StepPlan]) -> List[StepPlan]:
@@ -736,12 +775,13 @@ class PromptStepRun:
                 await self._stop(plan, "quota")
             return
 
+        file_ids = run.file_ids if any(plan.reads_files for plan in claimed) else []
         try:
             documents = list(
                 await asyncio.gather(
                     *(
                         self._read_document(self.user.user_id, self.session_id, file_id, reader="workflow_prompt")
-                        for file_id in run.file_ids
+                        for file_id in file_ids
                     )
                 )
             )
@@ -773,7 +813,7 @@ class PromptStepRun:
                 for plan in plans:
                     await self._stop(plan, model_plan.refusal)
                 return
-            if too_large(documents, model_plan):
+            if any(plan.reads_files for plan in plans) and too_large(documents, model_plan):
                 for plan in plans:
                     await self._stop(plan, "too_large")
                 return
@@ -811,7 +851,10 @@ class PromptStepRun:
         doc_tokens = document_tokens(documents, model_plan.model_id)
         warm: Dict[str, Optional[int]] = {"prefix": None}
 
-        first, rest = plans[0], plans[1:]
+        # The warm call is a step that sends the documents, so the rest read them; a step that
+        # reads no files has no shared prefix and only joins the fan-out.
+        first = next((plan for plan in plans if plan.reads_files and prefix), plans[0])
+        rest = [plan for plan in plans if plan is not first]
         await self._run_step(model, model_plan, prefix, doc_tokens, first, warm)
         if not rest or self._stopped:
             return
@@ -851,7 +894,13 @@ class PromptStepRun:
         if self._stopped:
             await self._stop(plan, "user_stopped")
             return
-        content = step_content(prefix, plan.reads_block, plan.step.request, cache_point=model_plan.cache_point)
+        content = step_content(
+            prefix if plan.reads_files else [],
+            plan.reads_block,
+            plan.step.request,
+            cache_point=model_plan.cache_point,
+            run_request=plan.run_request,
+        )
         messages = [{"role": "user", "content": content}]
         cancel = threading.Event()
         self._cancels[plan.step_id] = cancel
@@ -885,8 +934,8 @@ class PromptStepRun:
 
         usage, estimate = result.usage, None
         if not _reported(usage) and result.stop_reason == "cancelled" and result.answered:
-            prompt_tokens = doc_tokens + math.ceil(
-                (len(SYSTEM_PROMPT) + len(plan.reads_block) + len(plan.step.request)) / 4
+            prompt_tokens = (doc_tokens if plan.reads_files else 0) + math.ceil(
+                (len(SYSTEM_PROMPT) + len(plan.run_request) + len(plan.reads_block) + len(plan.step.request)) / 4
             )
             usage, estimate = estimate_cancelled_usage(
                 model_id=model_plan.model_id,

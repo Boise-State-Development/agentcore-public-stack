@@ -204,7 +204,8 @@ def _work(
         return quota
 
     async def reads(user_id, session_id, run_, step):
-        return "" if not step.reads else "<handoff_context>earlier</handoff_context>"
+        steps_read = [r for r in step.reads or [] if r not in ("request", "files")]
+        return "<handoff_context>earlier</handoff_context>" if steps_read else ""
 
 
     user = type("U", (), {"user_id": "alice"})()
@@ -385,7 +386,7 @@ async def test_the_default_renderer_is_the_shared_one_prepare_uses():
 @pytest.mark.asyncio
 async def test_a_step_that_reads_others_carries_the_rendered_results_after_the_cache_point():
     model = Model()
-    await _drain(_work(_run([_step(1, reads=["lens-0"])]), StepStore({"h1": "open"}), model))
+    await _drain(_work(_run([_step(1, reads=["files", "lens-0"])]), StepStore({"h1": "open"}), model))
 
     content = model.calls[0][0]["content"]
     assert [next(iter(b)) for b in content] == ["document", "cachePoint", "text", "text"]
@@ -728,3 +729,70 @@ async def test_model_groups_warm_side_by_side_under_one_shared_limit(limit):
     for warm_step, group in (("1", {"2", "3", "4"}), ("5", {"6", "7", "8"})):
         warm_end = model.events.index(("end", MODEL if warm_step == "1" else SONNET, warm_step))
         assert not any(e[0] == "start" and e[2] in group for e in model.events[:warm_end])
+
+
+# --- What a step reads of the run's inputs -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_step_with_its_own_instruction_that_reads_the_request_is_sent_the_users_request():
+    model = Model()
+    step = _step(1, reads=["request", "files"])
+    run = _run([step], request="Focus on the budget")
+
+    await _drain(_work(run, StepStore({"h1": "open"}), model))
+
+    content = model.calls[0][0]["content"]
+    assert [next(iter(b)) for b in content] == ["document", "cachePoint", "text", "text"]
+    assert content[2] == {"text": f"{wp.RUN_REQUEST_HEADING}\n\nFocus on the budget"}
+    assert content[3]["text"].endswith(step.request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reads, run_request",
+    [(["files"], "Focus on the budget"), (["request", "files"], "Review the proposal through lens 1.")],
+    ids=["does-not-read-the-request", "its-instruction-is-the-request"],
+)
+async def test_the_users_request_is_sent_once_and_only_to_a_step_that_reads_it(reads, run_request):
+    model = Model()
+    await _drain(_work(_run([_step(1, reads=reads)], request=run_request), StepStore({"h1": "open"}), model))
+
+    texts = [b["text"] for b in model.calls[0][0]["content"] if "text" in b]
+    assert not any(t.startswith(wp.RUN_REQUEST_HEADING) for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_a_step_that_does_not_read_files_gets_no_documents_and_no_cache_point():
+    model = Model()
+    reads: List[str] = []
+
+    async def read_document(*args, **kwargs):
+        reads.append(args[2])
+        return _pdf_doc()
+
+    work = _work(_run([_step(1, reads=["request"])]), StepStore({"h1": "open"}), model)
+    work._read_document = read_document
+    await _drain(work)
+
+    content = model.calls[0][0]["content"]
+    assert [next(iter(b)) for b in content] == ["text", "text"]
+    assert reads == [], "no step reads the files, so none is read"
+
+
+@pytest.mark.asyncio
+async def test_the_warm_call_is_a_step_that_sends_the_documents():
+    model = Model(delay=0.01)
+    run = _run([_step(1, reads=["request"]), _step(2, reads=["files"]), _step(3, reads=["files"])])
+
+    await _drain(_work(run, StepStore({"h1": "open", "h2": "open", "h3": "open"}), model))
+
+    first = model.calls[0][0]["content"]
+    assert next(iter(first[0])) == "document"
+    assert model.events[:2] == ["start1", "end1"]
+
+
+def test_a_row_without_reads_reads_both_inputs():
+    assert wp.step_reads_inputs(_step(1)) == (True, True)
+    assert wp.step_reads_inputs(_step(1, reads=["lens-0"])) == (False, False)
+    assert wp.step_reads_inputs(_step(1, reads=["request", "lens-0"])) == (True, False)
