@@ -226,6 +226,9 @@ class MySkillResponse(BaseModel):
     updated_at: Optional[str] = Field(None, alias="updatedAt")
     # Set once the skill was imported from a bundle (skill-bundle-import.md §3).
     import_source: Optional[SkillImportSource] = Field(None, alias="importSource")
+    # "workflow" for a skill the workflow designer made, so Customize can badge it
+    # (workflow-designer.md §20.1); absent for every other skill.
+    kind: Optional[str] = None
 
     model_config = {"populate_by_name": True}
 
@@ -244,6 +247,7 @@ class MySkillResponse(BaseModel):
             created_at=skill.created_at.isoformat() if skill.created_at else None,
             updated_at=skill.updated_at.isoformat() if skill.updated_at else None,
             import_source=skill.import_source,
+            kind=skill.kind,
         )
 
 

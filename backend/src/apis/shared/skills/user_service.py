@@ -167,8 +167,12 @@ class UserSkillService:
         allowed_tools: Optional[List[str]] = None,
         skill_metadata: Optional[Dict] = None,
         category: Optional[str] = None,
+        kind: Optional[str] = None,
     ) -> SkillDefinition:
         """Create a skill owned by ``user``.
+
+        ``kind="workflow"`` marks a skill the workflow designer creates to carry a
+        saved workflow (workflow-designer §20.3); every other caller passes none.
 
         The ``skill_id`` is allocated server-side from the display name — users
         never type one. Ids are globally unique across both tiers on purpose:
@@ -205,6 +209,7 @@ class UserSkillService:
             allowed_tools=list(allowed_tools or []),
             skill_metadata=dict(skill_metadata or {}),
             category=category,
+            kind=kind,
             status=SkillStatus.ACTIVE,
             owner_id=user.user_id,
             visibility=SkillVisibility.PRIVATE,
