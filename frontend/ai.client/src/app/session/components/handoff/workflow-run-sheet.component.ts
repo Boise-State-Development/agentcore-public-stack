@@ -22,7 +22,7 @@ import { MAX_SHARED_FILES } from '../../services/handoff/handoff.models';
 import { estimateRunInputUsd, formatEstimateUsd } from '../../services/handoff/workflow-run-estimate';
 import { RunReviewStep, RunShareableFile } from '../../services/handoff/workflow-run.models';
 import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
-import { WorkflowRunService, agentsLabel, canStart, keptSteps, stepRequest } from '../../services/handoff/workflow-run.service';
+import { WorkflowRunService, agentsLabel, canStart, keptSteps, readersOf, removalOf, stepRequest } from '../../services/handoff/workflow-run.service';
 import { ModelService } from '../../services/model/model.service';
 
 /** One step as the sheet renders it. */
@@ -40,6 +40,8 @@ interface StepRow {
   stepName?: string;
   /** "This Agent has changed since it was added…" (§10), when it has. */
   changedLine?: string;
+  /** The kept steps that read this one, which Remove takes with it (PR-D.5a), as the sheet names them. */
+  readers: string[];
 }
 
 /**
@@ -140,7 +142,7 @@ interface StepRow {
                         type="button"
                         [id]="removeId(row.step.stepId)"
                         class="rounded-sm p-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
-                        [attr.aria-label]="'Remove ' + row.label"
+                        [attr.aria-label]="removeLabel(row)"
                         [disabled]="r.phase === 'starting'"
                         (click)="removeStep(row.step.stepId)"
                       >
@@ -190,6 +192,7 @@ interface StepRow {
                 </li>
               }
             </ul>
+            <p class="text-sm/6 text-gray-700 empty:hidden dark:text-gray-300" [class.mt-2]="!!removalNote()" role="status">{{ removalNote() }}</p>
 
             @if (r.phase === 'blocked') {
               <p class="mt-3 text-sm/6 text-gray-700 dark:text-gray-300" role="status">
@@ -392,6 +395,8 @@ export class WorkflowRunSheetComponent {
   protected readonly editingCard = signal(false);
   protected readonly previewOpen = signal(false);
   protected readonly editingStep = signal<string | null>(null);
+  /** What the last Remove took with it, or why it took nothing (PR-D.5a). */
+  protected readonly removalNote = signal('');
   protected readonly previewStep = signal<string | null>(null);
 
   private readonly sheet = viewChild<ElementRef<HTMLElement>>('sheet');
@@ -436,6 +441,7 @@ export class WorkflowRunSheetComponent {
         unavailable,
         stepName: saved?.name,
         changedLine: saved && !unavailable && saved.changed ? changedLine(saved.publishedVersion, saved.runsDraft) : undefined,
+        readers: readersOf(r, step.stepId).map((reader) => readerLabel(reader)),
       };
     });
   });
@@ -537,6 +543,7 @@ export class WorkflowRunSheetComponent {
         this.previewOpen.set(false);
         this.editingStep.set(null);
         this.previewStep.set(null);
+        this.removalNote.set('');
       }
     });
   }
@@ -553,20 +560,40 @@ export class WorkflowRunSheetComponent {
     this.editingStep.set(this.editingStep() === stepId ? null : stepId);
   }
 
+  /** Remove's name, which says when the steps reading this one go with it (PR-D.5a). */
+  protected removeLabel(row: StepRow): string {
+    const n = row.readers.length;
+    if (n === 0) return `Remove ${row.label}`;
+    return `Remove ${row.label} and the ${n === 1 ? 'step' : `${n} steps`} that ${n === 1 ? 'reads' : 'read'} it`;
+  }
+
   /**
-   * Remove a step, then move focus to the next step's Remove (or the previous one's, for the
-   * last row), so the keyboard user stays in the list rather than falling back to the page. With
-   * one step left there is no Remove, so focus goes to the sheet.
+   * Remove a step, and every step that reads it (PR-D.5a), saying which went. Then move focus to
+   * the Remove of the step now in its place (or the last one's), so the keyboard user stays in the
+   * list rather than falling back to the page. With one step left there is no Remove, so focus
+   * goes to the sheet. A step every other step reads can't be removed, and the sheet says so.
    */
   protected removeStep(stepId: string): void {
     const rows = this.stepRows();
     const index = rows.findIndex((row) => row.step.stepId === stepId);
-    const neighbour = rows[index + 1] ?? rows[index - 1];
-    if (this.editingStep() === stepId) this.editingStep.set(null);
+    const row = rows[index];
+    const r = this.review();
+    if (!row || !r) return;
+    const removed = removalOf(r, stepId);
+    if (removed.length === 0) {
+      this.removalNote.set(
+        row.readers.length > 0 ? `${row.label} can’t be removed: every other step reads it.` : '',
+      );
+      return;
+    }
+    if (removed.includes(this.editingStep() ?? '')) this.editingStep.set(null);
     this.runs.removeStep(this.sessionId(), stepId);
+    this.removalNote.set(row.readers.length > 0 ? `Removed ${row.label}, and ${joinNames(row.readers)}, which read it.` : '');
     afterNextRender(
       () => {
-        const next = neighbour ? document.getElementById(this.removeId(neighbour.step.stepId)) : null;
+        const left = this.stepRows();
+        const neighbour = left[Math.min(index, left.length - 1)];
+        const next = left.length > 1 && neighbour ? document.getElementById(this.removeId(neighbour.step.stepId)) : null;
         (next ?? this.sheet()?.nativeElement)?.focus();
       },
       { injector: this.injector },
@@ -603,4 +630,15 @@ export function changedLine(publishedVersion: number | undefined, runsDraft: boo
   const now = publishedVersion !== undefined ? `, now version ${publishedVersion}` : '';
   const line = `This Agent has changed since it was added. A run uses its published version${now}.`;
   return runsDraft ? `${line} You own it, so your run uses its draft.` : line;
+}
+
+/** A step as the sheet names it when another's Remove takes it too. */
+function readerLabel(step: RunReviewStep): string {
+  return step.agentName || step.workflowStep?.name || 'a step';
+}
+
+/** "A", "A and B", "A, B and C". */
+function joinNames(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }

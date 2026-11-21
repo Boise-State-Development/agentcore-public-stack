@@ -34,7 +34,6 @@ from apis.shared.skills.models import SkillDefinition, SkillResourceRef, SkillSt
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.skills.user_service import get_user_skill_service
 from apis.shared.workflows.format import (
-    INPUT_READS,
     RESULT_MERGE,
     Workflow,
     WorkflowError,
@@ -126,7 +125,6 @@ SheetBlockerCode = Literal[
     "too_few_steps",
     "step_unavailable",
     "same_agent_twice",
-    "reads_step",
     "merge_result",
 ]
 
@@ -291,8 +289,9 @@ def sheet_for(workflow: Workflow, agents: Dict[str, AgentView]) -> SheetView:
     """What blocks Start today, each reason once, with the step it is about.
 
     Step 1's engine is the bound: at least two steps, each Agent once, every step one the caller
-    can run (§20.1: a step the starter can't run blocks Start until it is removed), no step that
-    reads another's result until stages (D.5a), and a card result until the merge (D.5b).
+    can run (§20.1: a step the starter can't run blocks Start until it is removed), and a card
+    result until the merge (D.5b). A step that reads another step's result runs in a later stage
+    (PR-D.5a), so it no longer blocks.
     """
     blockers: List[SheetBlocker] = []
     seen: Dict[str, str] = {}
@@ -316,14 +315,6 @@ def sheet_for(workflow: Workflow, agents: Dict[str, AgentView]) -> SheetView:
             )
         else:
             seen[step.agent_id] = step.name
-        if any(read not in INPUT_READS for read in step.reads):
-            blockers.append(
-                SheetBlocker(
-                    code="reads_step",
-                    step=step.name,
-                    message="A step that reads another step's result needs stages, which aren't available yet",
-                )
-            )
     if len(workflow.steps) < WORKFLOW_RUN_MIN_STEPS:
         blockers.insert(
             0,

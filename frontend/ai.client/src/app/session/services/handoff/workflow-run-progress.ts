@@ -25,6 +25,12 @@ export interface RunStepLine {
   /** The step's handoff row, live if this tab has one; `null` when the row is gone. */
   row: HandoffView | null;
   state: RunStepState;
+  /**
+   * A step that reads other steps and hasn't started (`queued` or `not_started`): the Agents of the
+   * steps it reads that haven't settled yet, in step order (PR-D.5a). Empty or absent once it
+   * could start; optional so a line built elsewhere (the graph's run mode) needs no change.
+   */
+  waitingFor?: string[];
 }
 
 export interface RunProgress {
@@ -70,12 +76,44 @@ export function stepState(run: WorkflowRunView, row: HandoffView | null, step: W
   }
 }
 
+/** The steps `step` reads (PR-D.5a), in step order. None on a run of mentions. */
+export function readStepsOf(run: WorkflowRunView, step: WorkflowRunStepView): WorkflowRunStepView[] {
+  const names = new Set(step.reads ?? []);
+  if (names.size === 0) return [];
+  return run.steps.filter((candidate) => candidate.stepId !== step.stepId && !!candidate.stepName && names.has(candidate.stepName));
+}
+
+/**
+ * A step a later one reads has settled: it is done or stopped (a dropped, failed or never-started
+ * step of a stopped run included), so it will give nothing more. The reader starts then, whatever
+ * the outcome, and its first message names a step that stopped, as the run's result does.
+ */
+export function readSettled(run: WorkflowRunView, read: WorkflowRunStepView, liveRows: readonly HandoffView[], signals: RunStepSignals): boolean {
+  if (read.removed) return true;
+  const state = stepState(run, stepRow(read, liveRows), read, signals);
+  return state === 'done' || state === 'stopped';
+}
+
+/** "Waiting for Generalist", "… for Generalist and Colleague", "… for A, B and C". */
+export function waitingLabel(agentNames: readonly string[]): string {
+  const names = agentNames.map((name) => name.trim() || 'another step');
+  if (names.length <= 1) return `Waiting for ${names[0] ?? 'another step'}`;
+  return `Waiting for ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
 export function runProgress(run: WorkflowRunView, liveRows: readonly HandoffView[], signals: RunStepSignals): RunProgress {
   const lines = run.steps
     .filter((step) => !step.removed)
     .map((step): RunStepLine => {
       const row = stepRow(step, liveRows);
-      return { step, row, state: stepState(run, row, step, signals) };
+      const state = stepState(run, row, step, signals);
+      const waitingFor =
+        state === 'queued' || state === 'not_started'
+          ? readStepsOf(run, step)
+              .filter((read) => !readSettled(run, read, liveRows, signals))
+              .map((read) => read.agentName)
+          : [];
+      return { step, row, state, waitingFor };
     });
   const done = lines.filter((line) => line.state === 'done').length;
   const needsInput = lines.filter((line) => line.state === 'needs_input').length;

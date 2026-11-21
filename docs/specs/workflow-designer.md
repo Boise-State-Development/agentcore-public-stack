@@ -616,8 +616,14 @@ Every PR is behind `WORKFLOWS_ENABLED` / `CDK_WORKFLOWS_ENABLED` / `features.wor
 | D.2 | Backend + SPA | D.1 | Start a saved workflow: `workflow` on run create, the run row's workflow fields, a run from a new conversation (§20.2), the composer `+` entry, Start on a workflow, the blocked-step rule, and the "this Agent has changed" line with Mark as reviewed |
 | D.3 | SPA | D.1 | The Workflows page and the designer in one column, as §14 says: the sidebar entry, the list, `WorkflowGraphComponent` in design mode, the Step and Preview tabs, Save as workflow (a new button on the run's row, which has no menu), the one template, Fit and pan. The Customize badge and link |
 | D.4 | SPA | D.2, D.3 | The test run on the canvas: run mode on the graph, and the run's row and result card in the panel, loaded by run id |
-| D.5a | Backend + SPA | D.2 | Stages: run create accepts reads; a step starts only when what it reads has settled; just before its send, app-api renders the read steps' results into that step's context (`_part_for`, `render_delivery_parts`), never on a turn's path; the result card takes the Result's reads; removing a step removes its readers |
-| D.5b | SPA (+ D.5a's row field) | D.5a | The merge that starts by itself (§20.1), with its instruction on the run row; View as graph on the run's row; the small graph on the sheet |
+| D.5a | Backend + SPA | D.2 | Stages in the run engine only: run create accepts reads; a step starts only when what it reads has settled; just before its send, app-api renders the read steps' results into that step's context (`_part_for`, `render_delivery_parts`), never on a turn's path; the result card takes the Result's reads; removing a step on the sheet removes its readers |
+| D.5b | SPA (+ D.5a's row field) | D.5a, D.4 | Reads enabled in the designer, multi-column stages on the canvas, View as graph on the run's row and the small graph on the sheet (moved from D.5a, see below), and the merge that starts by itself (§20.1), with its instruction on the run row |
+
+**Scope change (2026-11-21, settled by the orchestrator).** D.5a is the engine only. Enabling Reads in the
+designer, multi-column stages on the canvas, View as graph and the small graph on the sheet move to D.5b with the
+automatic merge, because D.4 was editing `WorkflowGraphComponent` at the same time. Until D.5b, a workflow with
+stages is written through `PUT /workflows/…` (or by hand), and the designer still shows its Reads as "needs
+stages".
 
 *Built (PR-D.1).* The format is `apis/shared/workflows/format.py` (standard library only) and the routes are
 `app_api/workflows/routes.py`. Where it differs from the plan, and what it settled:
@@ -827,6 +833,55 @@ what it settled:
   and is `1em`. The run row's and the canvas's status marks render in the text colour, not green or amber.
   The state is still said in words, so nothing relies on the colour, but the marks don't look as designed.
   Filed as its own fix (#2232).
+
+*Built (PR-D.5a).* Stages in the run engine. Where it differs from the plan, and what it settled:
+
+- **Create.** The `reads_step` blocker is gone, from the sheet and so from run create. Each `WFRUN#` step keeps
+  `reads`, the other steps it reads by `stepName` in step order (steps only; the request and the files still go
+  to every step), and `workflow.resultReads` keeps the steps the Result takes (absent means all). Both are
+  written only when set, so a run of mentions and every row before this read exactly as before, and the replay
+  and `GET …/workflow-runs/{runId}` carry `reads` on each step.
+- **Approve** refuses (422) a kept step that reads a removed one, naming both. The sheet never sends one.
+- **Settled is done or stopped.** A dismissed, abandoned or gone row, and a never-started step of a stopped run,
+  count as stopped. `needs_input` has not settled: the user's answer is still to come. A reader starts whatever
+  its reads' outcome, and its first message names a stopped step with the run result's own status note.
+- **`POST /sessions/{id}/workflow-runs/{runId}/steps/{stepId}/prepare`** returns `{stepId, message, readsBlock,
+  parts: [{stepId, stepName, agentName, status}]}`. Each read step is `_part_for`'s part (its answer as it stood
+  when it first finished, capped at `SEND_BACK_MAX_TOKENS`), checked by `prepare_delivery` against the source
+  as a result's parts are, and wrapped by `render_delivery_parts`, so the blocks are byte-for-byte what a run
+  result carries (a test pins it). `message` is `readsBlock`, a blank line, then the step's request. It is
+  owner-scoped (`(session, user)` through the run row's key and its session), 409 while a read step has not
+  settled ("Waiting for *X* to finish"), for a run never approved and for a removed step, and **writes
+  nothing**, so it is idempotent by construction. A step that reads nothing prepares as its request.
+- **Where the blocks go: the step's own text, not a stored row.** The SPA sends `message` as the user text of
+  the step's first send, and the Runtime puts the run's card in front of it as for every step. So the
+  Runtime, the turn path, `HandoffTurn` and the `HANDOFF#` row (which the target's first turn reads before
+  its first token) are unchanged, and nothing larger is read there. The step's row keeps the plain request.
+- **Text only.** The blocks carry no `<artifact>` or `<file>` lines. Those are references into the read step's
+  conversation, and the reading step's conversation could not open them. Carrying a read step's artifacts and
+  files across (reference rows written into the reader's conversation once it exists) is a follow-up.
+- **The queue.** `RunStepLaunch.reads` names the read steps' handoff ids. A pending step starts once each has
+  settled, in step order among the ready ones and still within `limits.concurrency`. Its slot is held while
+  `…/prepare` runs, and the line reads "Queued" or "Waiting for *X*" then, never "Not started". The tab sees a
+  step finish from its stream a moment before the Runtime writes its row, so a 409 is retried
+  (`PREPARE_ATTEMPTS` 6, waits of 0.5 s, 1 s, … ); any other failure frees the slot and leaves the step "Not
+  started". A pending step whose read will never settle in this tab (never started, not queued, not running)
+  leaves the queue, with anything reading it, so the tab's unload guard never waits on it.
+- **Reload.** `unstartedSteps` carries each step's reads, so Start after a reload queues the steps left and the
+  reader waits on them as above. The run row's line for a step not started whose reads have not settled is
+  "Waiting for *X*" (`waitingFor` on `RunStepLine`, `waitingLabel`, both in `workflow-run-progress.ts`); once
+  they have, it is "Not started" with Start, as in step 1.
+- **The sheet.** Remove on a saved workflow's step takes every step that reads it, transitively (`removalOf`),
+  its accessible name says so ("Remove Generalist and the 2 steps that read it"), and a status line names them
+  after. A step every other step reads cannot be removed, and the line says why. The component's inputs and
+  outputs are unchanged.
+- **Collect** takes the kept steps the Result reads, in step order, stopped ones named; if every step it names
+  was removed at the sheet it takes every kept step rather than bring back nothing. A one-part result shows in
+  the source as a single card, not "From *N* Agents".
+- **The step's first bubble.** A handoff's first message that opens with delivery blocks (live, or from
+  `displayText` after a reload) shows them as cards and the bubble shows only the request; a step sent with
+  its card removed no longer reads its first result as "Context from".
+- **Not in D.5a:** the designer and canvas, the automatic merge, and `WorkflowStartService`.
 
 **Order.** D.1 first. Then D.2 and D.3 at once (D.2 touches the sheet, the composer and the run service; D.3 is
 new pages and the graph, so their files do not overlap). D.4 after both. D.5a after D.2 and can run beside D.4.

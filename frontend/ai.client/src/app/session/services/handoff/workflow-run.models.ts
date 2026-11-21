@@ -35,6 +35,11 @@ export interface WorkflowRunStepView {
   stepName?: string;
   /** The Agent's published version when a saved workflow's run was created (PR-D.2). */
   agentVersion?: number;
+  /**
+   * The other steps this step reads, by `stepName` (PR-D.5a). It starts once each has settled, and
+   * its first message carries their results. Absent on a run of mentions and on a step reading none.
+   */
+  reads?: string[];
   handoff?: HandoffView | null;
 }
 
@@ -218,4 +223,18 @@ export interface RunStepLaunch {
   agentId: string;
   agentName: string;
   request: string;
+  /**
+   * Handoff ids of the steps this one reads (PR-D.5a). The queue starts it only once each has
+   * settled, and sends the message `…/prepare` renders. Empty or absent: it starts as step 1's do.
+   */
+  reads?: string[];
+}
+
+/** `POST …/workflow-runs/{runId}/steps/{stepId}/prepare` (PR-D.5a). */
+export interface PrepareRunStepResponse {
+  stepId: string;
+  /** What the step's send carries: the read steps' results as delivery blocks, then its request. */
+  message: string;
+  readsBlock: string;
+  parts: { stepId: string; stepName?: string; agentName: string; status: 'done' | 'stopped' }[];
 }

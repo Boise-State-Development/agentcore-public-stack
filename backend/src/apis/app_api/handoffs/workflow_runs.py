@@ -6,6 +6,8 @@
     POST /sessions/{session_id}/workflow-runs/{run_id}/stop      no queued step starts after this
     POST /sessions/{session_id}/workflow-runs/{run_id}/dismiss   cancel the sheet
     POST /sessions/{session_id}/workflow-runs/{run_id}/collect   the run's one result, once (PR-W.2)
+    POST /sessions/{session_id}/workflow-runs/{run_id}/steps/{step_id}/prepare
+                                                                 a later stage's first message (PR-D.5a)
 
 All 404 to a signed-in user while ``WORKFLOW_RUNS_ENABLED`` (or ``HANDOFFS_ENABLED``) is off, and
 401 unauthenticated regardless: the flag is checked after authentication.
@@ -17,6 +19,13 @@ approved steps itself, up to ``limits.concurrency`` at once, with the call it al
 handoff. Nothing here runs on a turn. The run's result is one ``DELIVERY#`` row with a part per
 kept step (``collect``), made by ``create_delivery``'s own checks and attached by the unchanged
 ``DeliveryTurn`` on the source's next send.
+
+**Stages (PR-D.5a).** A saved workflow's step may read other steps' results. The run row keeps each
+step's ``reads``; the tab's queue starts such a step only once everything it reads has settled
+(done or stopped), and just before its send asks ``…/prepare`` for its first message: the read
+steps' results as the same ``<handoff_context>`` part blocks a run result carries, then its
+request. That message is sent as the step's own text, so the Runtime and the turn path are
+unchanged, and nothing is rendered on a turn.
 """
 
 from __future__ import annotations
@@ -35,8 +44,13 @@ from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.feature_flags import workflow_runs_enabled, workflows_enabled
 from apis.shared.files.linked_files import HANDOFF_MAX_FILES
 from apis.shared.handoff import HandoffStore, HandoffStoreUnavailable, TurnsCovered, get_handoff_store
-from apis.shared.handoff.context import build_handoff_message
+from apis.shared.handoff.context import (
+    DeliveryPartBlock,
+    build_handoff_message,
+    render_delivery_parts,
+)
 from apis.shared.files.linked_files import DELIVERY_MAX_FILES
+from apis.shared.handoff.delivery_turn import join_delivery_blocks
 from apis.shared.handoff.delivery import (
     RUN_RESULT_MAX_FILES,
     DeliveryPartStatus,
@@ -74,6 +88,7 @@ from apis.shared.timestamps import utc_now_iso
 from apis.shared.workflows.format import (
     FILES_NONE,
     FILES_ONE,
+    INPUT_READS,
     WorkflowError,
     require_workflow_name,
     workflow_fingerprint,
@@ -267,6 +282,7 @@ async def create_workflow_run(
                 request=row.request,
                 step_name=step.step_name,
                 agent_version=step.agent_version,
+                reads=list(step.reads) or None,
             )
             for row, step in zip(rows, plan.steps)
         ],
@@ -321,6 +337,8 @@ class _PlannedStep:
     rate: Optional[float]
     step_name: Optional[str] = None
     agent_version: Optional[int] = None
+    #: The other steps this one reads, by name, in step order (PR-D.5a). Empty for a mention run.
+    reads: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -368,8 +386,9 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
     404 while ``WORKFLOWS_ENABLED`` is off, for a workflow the caller can't reach (another user's
     private one reads as absent), and for a bad name; 422 for a file that no longer parses, and
     with the sheet's own blockers while any applies (a step the caller can't run, the same Agent
-    twice, a step that reads another step until stages, a merged result until the merge, fewer
-    than two steps). ``removedSteps`` are taken out first, with every step that reads them.
+    twice, a merged result until the merge, fewer than two steps). ``removedSteps`` are taken out
+    first, with every step that reads them. Each step keeps the steps it reads (PR-D.5a), and the
+    run keeps the steps the result takes.
     """
     if not workflows_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -405,6 +424,7 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
                 rate=agents[step.agent_id].input_price_per_million_tokens,
                 step_name=step.name,
                 agent_version=agents[step.agent_id].published_version,
+                reads=tuple(read for read in step.reads if read not in INPUT_READS),
             )
             for step in trimmed.steps
         ],
@@ -416,6 +436,7 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
             version=workflow.version,
             files=workflow.files,
             removed_steps=list(removed) or None,
+            result_reads=list(trimmed.result.reads) if trimmed.result.reads is not None else None,
         ),
     )
 
@@ -550,6 +571,7 @@ async def approve_workflow_run(
     kept = [step for step in approved if not step.removed]
     if not kept:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Keep at least one Agent")
+    _check_readers_kept(approved)
     if edited_requests or shared_request != run.request:
         edits.append("request")
     if len(kept) < len(approved):
@@ -582,6 +604,24 @@ async def approve_workflow_run(
     for edit in edits:
         emit_workflow_run_metric("WorkflowRunEdited", session_id=session_id, run_id=run_id, detail=edit)
     return await _run_view(store, user, updated, relay=False)
+
+
+def _check_readers_kept(steps: List[WorkflowRunStep]) -> None:
+    """422 when a kept step reads a removed one (PR-D.5a): it would wait on a result that never comes.
+
+    The sheet removes every reader with the step it reads (``workflow-designer.md`` §20.1), so
+    this only refuses a client that didn't. A step reads others only in a saved workflow's run.
+    """
+    removed = {step.step_name for step in steps if step.removed and step.step_name}
+    for step in steps:
+        if step.removed:
+            continue
+        missing = [name for name in step.reads or [] if name in removed]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Remove '{step.step_name}' too: it reads '{missing[0]}', which was removed",
+            )
 
 
 def _check_files_rule(run: WorkflowRun, file_ids: List[str]) -> None:
@@ -702,7 +742,8 @@ async def collect_workflow_run(
 ) -> CollectWorkflowRunResponse:
     """Bring back the run's results as one card on this conversation's composer, exactly once.
 
-    One part per kept step, in step order. A finished step's part is its answer as it stood when the
+    One part per kept step the result takes, in step order: a saved workflow's Result may read
+    only some steps (PR-D.5a), and a run of mentions takes them all. A finished step's part is its answer as it stood when the
     step first finished, through the send-back renderer, with the artifacts that answer made and
     the step conversation's own files, as Bring back result picks them (at most
     ``DELIVERY_MAX_FILES`` a part and ``RUN_RESULT_MAX_FILES`` a run). A step that stopped, still
@@ -719,7 +760,7 @@ async def collect_workflow_run(
     if run.result_delivery_id:
         return await _collected(deliveries, user, run.result_delivery_id, created=False)
 
-    kept = [step for step in run.steps if not step.removed]
+    kept = _result_steps(run)
     rows = await asyncio.gather(*(asyncio.to_thread(store.get, user.user_id, step.handoff_id) for step in kept))
     parts = list(await asyncio.gather(*(_part_for(user, run, step, row) for step, row in zip(kept, rows))))
     parts = _within_run_file_cap(parts)
@@ -761,6 +802,21 @@ async def collect_workflow_run(
     return CollectWorkflowRunResponse(
         delivery_id=delivery_id, created=True, status=delivery.status, delivery=DeliveryView.from_row(delivery)
     )
+
+
+def _result_steps(run: WorkflowRun) -> List[WorkflowRunStep]:
+    """The kept steps the run's result takes, in step order (PR-D.5a).
+
+    Every kept step, unless the saved workflow's Result names some (``resultReads``). If every step
+    it names was removed at the sheet, the result takes every kept step rather than bring back
+    nothing.
+    """
+    kept = run.kept_steps()
+    reads = run.workflow.result_reads if run.workflow is not None else None
+    if reads is None:
+        return kept
+    named = [step for step in kept if step.step_name in set(reads)]
+    return named or kept
 
 
 #: A step row's status as its part reads it. ``open`` depends on the run (see ``_part_status``).
@@ -860,6 +916,135 @@ async def _collected(
         created=created,
         status=row.status if row is not None else "dismissed",
         delivery=DeliveryView.from_row(row) if row is not None else None,
+    )
+
+
+# --- Prepare a later stage's step -----------------------------------------------------------------
+
+
+class PreparedPart(BaseModel):
+    """One step a prepared step reads, as its block names it."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    step_id: str = Field(..., alias="stepId")
+    step_name: Optional[str] = Field(None, alias="stepName")
+    agent_name: str = Field(..., alias="agentName")
+    status: DeliveryPartStatus = Field(..., description="done or stopped: a read step has always settled here")
+
+
+class PrepareRunStepResponse(BaseModel):
+    """A step's first message once what it reads has settled (PR-D.5a).
+
+    ``message`` is what the step's send carries as its text: ``readsBlock``, a blank line, then the
+    step's request. The Runtime puts the run's card before it, as for every step, so the Agent
+    reads the card, then the earlier results, then the request.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    step_id: str = Field(..., alias="stepId")
+    message: str
+    reads_block: str = Field(..., alias="readsBlock", description="The read steps' results, one block each; empty when it reads none")
+    parts: List[PreparedPart] = Field(default_factory=list, description="The steps it reads, in step order")
+
+
+#: A read step has settled when its part reads one of these: it will give nothing more (§6.1).
+_SETTLED_PARTS = frozenset({"done", "stopped"})
+
+
+@router.post(
+    "/{session_id}/workflow-runs/{run_id}/steps/{step_id}/prepare",
+    response_model=PrepareRunStepResponse,
+    response_model_by_alias=True,
+    response_model_exclude_none=True,
+)
+async def prepare_workflow_run_step(
+    session_id: str,
+    run_id: str,
+    step_id: str,
+    user: User = Depends(require_workflow_runs_user),
+    store: HandoffStore = Depends(get_handoff_store),
+    runs: WorkflowRunStore = Depends(get_workflow_run_store),
+) -> PrepareRunStepResponse:
+    """The first message of a step that reads other steps, rendered before its send (PR-D.5a).
+
+    Each step it reads becomes a part exactly as ``…/collect`` makes one (``_part_for``: its answer
+    as it stood when it first finished, bounded at ``SEND_BACK_MAX_TOKENS``), checked by
+    ``prepare_delivery`` against this conversation as a run result is, and wrapped by
+    ``render_delivery_parts``, so the Agent reads the same ``<handoff_context>`` blocks a run result
+    carries. A step that stopped is named by its block, as the result card names it.
+
+    Only the text crosses: the blocks name no artifact or file, because those are references into
+    the read step's conversation that this step's conversation could not open.
+
+    Writes nothing, so it is idempotent: the same run gives the same message until a read step
+    settles differently. 404 for a run or step that isn't the caller's from this conversation; 409
+    for a run never approved, a removed step, or while a step it reads hasn't settled yet.
+    """
+    run = await _owned_run(runs, user, session_id, run_id)
+    if run.status not in ("approved", "stopped"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This run was never started")
+    step = next((candidate for candidate in run.steps if candidate.step_id == step_id), None)
+    if step is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Step not found")
+    if step.removed:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This step was removed")
+
+    names = set(step.reads or [])
+    reads = [candidate for candidate in run.steps if candidate.step_name in names and candidate.step_id != step.step_id]
+    if not reads:
+        return PrepareRunStepResponse(step_id=step.step_id, message=step.request, reads_block="", parts=[])
+
+    rows = await asyncio.gather(*(asyncio.to_thread(store.get, user.user_id, read.handoff_id) for read in reads))
+    statuses = ["stopped" if read.removed else _part_status(run, row) for read, row in zip(reads, rows)]
+    waiting = [read.agent_name or read.step_name or "a step" for read, s in zip(reads, statuses) if s not in _SETTLED_PARTS]
+    if waiting:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=f"Waiting for {', '.join(waiting)} to finish"
+        )
+
+    parts = await asyncio.gather(
+        *(_read_part(user, run, read, row, part_status) for read, row, part_status in zip(reads, rows, statuses))
+    )
+    block = await _render_reads(user, session_id, run_id, list(parts))
+    return PrepareRunStepResponse(
+        step_id=step.step_id,
+        message=join_delivery_blocks([block], step.request.strip()),
+        reads_block=block,
+        parts=[
+            PreparedPart(step_id=read.step_id, step_name=read.step_name, agent_name=read.agent_name, status=part.status)
+            for read, part in zip(reads, parts)
+        ],
+    )
+
+
+async def _read_part(
+    user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff], part_status: str
+) -> DeliveryPartRequest:
+    """A read step as its part: ``_part_for``'s, text only, since the artifacts and files it names
+    are references into that step's conversation, which the reading step's can't open."""
+    if part_status != "done":
+        return DeliveryPartRequest(step_id=step.step_id, agent_name=step.agent_name, status="stopped")
+    part = await _part_for(user, run, step, row)
+    return replace(part, artifact_ids=(), file_ids=())
+
+
+async def _render_reads(user: User, session_id: str, run_id: str, parts: List[DeliveryPartRequest]) -> str:
+    """The parts as the model reads a run result's, through the checks a result's parts pass."""
+    try:
+        row = await prepare_delivery(user_id=user.user_id, to_session_id=session_id, parts=parts, run_id=run_id)
+    except DeliveryRefused as exc:
+        if exc.reason != "empty":
+            raise handoff_routes._refused(exc)
+        # Nothing finished with text: each part is its status note, which needs no sender.
+        blocks = [DeliveryPartBlock(text="", agent_name=p.agent_name, from_title="", status=p.status) for p in parts]
+        return render_delivery_parts(blocks)
+    return render_delivery_parts(
+        [
+            DeliveryPartBlock(text=p.text, agent_name=p.agent_name, from_title=p.from_title, status=p.status)
+            for p in row.parts
+        ]
     )
 
 

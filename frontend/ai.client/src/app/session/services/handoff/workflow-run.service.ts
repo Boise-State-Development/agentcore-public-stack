@@ -36,6 +36,7 @@ import {
   WorkflowRunCard,
   WorkflowRunView,
 } from './workflow-run.models';
+import { readStepsOf } from './workflow-run-progress';
 
 /**
  * Starting a workflow run (docs/specs/workflow-runs.md §4, §19 PR-W.4a, §20.1).
@@ -218,18 +219,30 @@ export class WorkflowRunService {
 
   /**
    * Remove a step from the run. The last one stays: a run of one still starts (§20.1). On a saved
-   * workflow's blocked sheet, every step that reads the removed one goes with it, and once no step
-   * the starter can't run is left, the run is created without them.
+   * workflow's sheet every step that reads the removed one goes with it, directly or through
+   * another, since it would wait on a result that never comes (PR-D.5a). On the blocked sheet, once
+   * no step the starter can't run is left, the run is created without them.
+   *
+   * Returns the step ids taken out, the removed one first and then its readers in step order;
+   * empty when nothing was removed (an unknown step, or one whose readers are every step left).
    */
-  removeStep(sourceSessionId: string, stepId: string): void {
+  removeStep(sourceSessionId: string, stepId: string): string[] {
     const review = this.state.reviewFor(sourceSessionId);
-    if (!review || keptSteps(review).length <= 1) return;
+    if (!review) return [];
+    const removed = removalOf(review, stepId);
+    if (removed.length === 0) return [];
     if (review.phase === 'blocked') {
       this.removeBlockedStep(sourceSessionId, review, stepId);
-      return;
+      return removed;
     }
-    this.updateStep(sourceSessionId, stepId, { removed: true });
+    const ids = new Set(removed);
+    this.state.updateReview(sourceSessionId, {
+      steps: review.steps.map((step) => (ids.has(step.stepId) ? { ...step, removed: true } : step)),
+    });
+    return removed;
   }
+
+
 
   private removeBlockedStep(sourceSessionId: string, review: RunReview, stepId: string): void {
     const name = review.steps.find((step) => step.stepId === stepId)?.workflowStep?.name;
@@ -379,6 +392,8 @@ export class WorkflowRunService {
         agentId: step.agentId,
         agentName: step.agentName,
         request: step.request,
+        // A step that reads others waits for them in the queue (PR-D.5a); a mention run has none.
+        ...(step.reads?.length ? { reads: readStepsOf(approved, step).map((read) => read.handoffId) } : {}),
       }));
 
     this.state.upsertRun(approved);
@@ -585,6 +600,26 @@ export class WorkflowRunService {
 /** The steps still in the run. */
 export function keptSteps(review: RunReview): RunReviewStep[] {
   return review.steps.filter((step) => !step.removed);
+}
+
+/** The kept steps that read `stepId`, directly or through another (PR-D.5a); none on a run of mentions. */
+export function readersOf(review: RunReview, stepId: string): RunReviewStep[] {
+  const name = review.steps.find((step) => step.stepId === stepId)?.workflowStep?.name;
+  if (!name) return [];
+  const gone = withReaders(keptSteps(review), name);
+  return keptSteps(review).filter((step) => step.stepId !== stepId && gone.has(step.workflowStep?.name ?? ''));
+}
+
+/**
+ * What Remove on `stepId` takes out: the step, then its readers in step order (PR-D.5a). Empty
+ * when it can't go: an unknown or removed step, or one whose readers are every step left, since a
+ * run keeps at least one step.
+ */
+export function removalOf(review: RunReview, stepId: string): string[] {
+  const kept = keptSteps(review);
+  if (kept.length <= 1 || !kept.some((step) => step.stepId === stepId)) return [];
+  const removed = [stepId, ...readersOf(review, stepId).map((step) => step.stepId)];
+  return removed.length >= kept.length ? [] : removed;
 }
 
 /** A step's request as it will be sent: its own, else the shared one. */

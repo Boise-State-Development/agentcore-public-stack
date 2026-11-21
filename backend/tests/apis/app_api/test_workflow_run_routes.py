@@ -899,7 +899,6 @@ def test_removing_a_step_removes_every_step_that_reads_it():
 @pytest.mark.parametrize(
     "file_text, code",
     [
-        (REVIEW_FILE.replace("| request, files |\n| outsider", "| request, generalist |\n| outsider"), "reads_step"),
         (REVIEW_FILE.replace("files: one", "files: one\nresult: merge"), "merge_result"),
         (REVIEW_FILE.replace("colleague @ 2", "generalist"), "same_agent_twice"),
     ],
@@ -1020,3 +1019,258 @@ def test_a_run_row_without_the_workflow_fields_still_reads(table):
     assert run.workflow is None and run.steps[0].step_name is None and run.steps[0].agent_version is None
     view = WorkflowRunView.from_row(run).model_dump(by_alias=True, exclude_none=True)
     assert "workflow" not in view and "stepName" not in view["steps"][0]
+
+
+# ---------------------------------------------------------------- stages (PR-D.5a)
+
+STAGED_FILE = """---
+title: Panel review
+version: 1
+---
+
+| step       | kind  | worker     | reads                           |
+|------------|-------|------------|---------------------------------|
+| generalist | agent | generalist | request, files                  |
+| colleague  | agent | colleague  | request, files                  |
+| summary    | agent | fiscal     | request, generalist, colleague  |
+
+## Request
+
+Review this proposal
+
+## Step: summary
+
+Summarize the reviews
+
+## Result
+
+Reads: summary
+"""
+
+
+@pytest.fixture()
+def staged(skills):
+    skills.files["wf-key"] = STAGED_FILE
+    return skills
+
+
+def _prepare(client: TestClient, run_id: str, step_id: str):
+    return client.post(f"/sessions/src/workflow-runs/{run_id}/steps/{step_id}/prepare")
+
+
+def test_a_step_that_reads_another_starts_and_keeps_its_reads(make_client, stores, staged):
+    resp = _start(make_client())
+
+    assert resp.status_code == 201, resp.text
+    run = stores[1].get("alice", resp.json()["run"]["runId"])
+    assert [(s.step_name, s.reads) for s in run.steps] == [
+        ("generalist", None), ("colleague", None), ("summary", ["generalist", "colleague"]),
+    ]
+    assert run.workflow.result_reads == ["summary"]
+    assert [s.get("reads") for s in resp.json()["run"]["steps"]] == [None, None, ["generalist", "colleague"]]
+
+
+def test_the_sheet_no_longer_blocks_a_step_that_reads_another():
+    from apis.shared.workflows.format import read_workflow_file
+    from apis.shared.workflows.sheet import AgentView, sheet_for
+
+    workflow, _ = read_workflow_file(STAGED_FILE, name="review")
+    agents = {s.agent_id: AgentView(can_run=True, name=s.agent_id) for s in workflow.steps}
+    assert sheet_for(workflow, agents).model_dump() == {"startable": True, "blockers": []}
+
+
+def test_a_mention_run_has_no_reads_and_its_row_is_unchanged(make_client, stores):
+    created = _create(make_client()).json()
+
+    item = stores[1]._table.get_item(Key={"PK": "USER#alice", "SK": f"WFRUN#{created['run']['runId']}"})["Item"]
+    assert all("reads" not in step for step in item["steps"])
+    assert "workflow" not in item
+    assert all("reads" not in step for step in created["run"]["steps"])
+
+
+def test_approve_refuses_a_kept_step_that_reads_a_removed_one(make_client, stores, staged):
+    client = make_client()
+    created = _start(client).json()
+    rows = created["steps"]
+
+    refused = _approve(client, created["run"]["runId"], steps=[{"stepId": rows[0]["stepId"], "removed": True}])
+    assert refused.status_code == 422
+    assert refused.json()["detail"] == "Remove 'summary' too: it reads 'generalist', which was removed"
+    assert stores[1].get("alice", created["run"]["runId"]).status == "open"
+
+    ok = _approve(
+        client,
+        created["run"]["runId"],
+        steps=[{"stepId": rows[0]["stepId"], "removed": True}, {"stepId": rows[2]["stepId"], "removed": True}],
+    )
+    assert ok.status_code == 200, ok.text
+
+
+def _staged_run(client: TestClient, stores, steps: _Steps):
+    """An approved staged run: the generalist finished, the colleague stopped, the summary waits."""
+    handoffs, _runs = stores
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    assert _approve(client, run_id).status_code == 200
+    rows = created["steps"]
+    for index, step in enumerate(rows[:2]):
+        handoffs.accept("alice", step["handoffId"], target_session_id=f"t{index}", context_edited=False, context_removed=False)
+    steps.target(
+        "t0", rows[0]["handoffId"], "Generalist · Review of the proposal",
+        [(1, "Strong aims; the budget is thin.", "2026-01-01T00:00:00Z"), (3, "Later work in this chat.", "2999-01-01T00:00:00Z")],
+    )
+    steps.target("t1", rows[1]["handoffId"], "Colleague · Review", [])
+    steps.heads[("alice", "t0")] = [
+        {"artifact_id": "memo", "version": 2, "title": "Memo", "content_type": "text/markdown", "produced_by_message_index": 1},
+    ]
+    steps.files["t0"] = [_file("own-1", "t0", "2026-01-01T00:00:00Z")]
+    return run_id, rows
+
+
+def test_prepare_is_409_until_every_read_step_has_settled(collect_client, stores, steps, staged):
+    client = collect_client()
+    run_id, rows = _staged_run(client, stores, steps)
+
+    waiting = _prepare(client, run_id, rows[2]["stepId"])
+    assert waiting.status_code == 409
+    assert waiting.json()["detail"] == "Waiting for Generalist, Colleague to finish"
+
+    stores[0].transition("alice", rows[0]["handoffId"], "done")
+    stores[0].transition("alice", rows[1]["handoffId"], "needs_input")
+    assert _prepare(client, run_id, rows[2]["stepId"]).json()["detail"] == "Waiting for Colleague to finish"
+
+
+def test_prepare_renders_the_read_results_bounded_in_step_order_with_a_stopped_step_named(collect_client, stores, steps, staged):
+    from apis.shared.handoff.context import DELIVERY_PART_STATUS_NOTES
+    from apis.shared.handoff.delivery import SEND_BACK_MAX_CHARS
+
+    client = collect_client()
+    run_id, rows = _staged_run(client, stores, steps)
+    long_answer = "x" * (SEND_BACK_MAX_CHARS * 2)
+    steps.messages["t0"][0] = MessageResponse(
+        id="msg-t0-1", role="assistant", content=[{"type": "text", "text": long_answer}], created_at="2026-01-01T00:00:00Z"
+    )
+    stores[0].transition("alice", rows[0]["handoffId"], "done")
+    stores[0].transition("alice", rows[1]["handoffId"], "stopped", stoppedReason="user_stopped")
+
+    resp = _prepare(client, run_id, rows[2]["stepId"])
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert [(p["stepName"], p["agentName"], p["status"]) for p in data["parts"]] == [
+        ("generalist", "Generalist", "done"), ("colleague", "Colleague", "stopped"),
+    ]
+    block = data["readsBlock"]
+    first, second = block.split("\n\n<handoff_context ")
+    assert first.startswith('<handoff_context from_conversation="Generalist · Review of the proposal">')
+    assert len(first) < SEND_BACK_MAX_CHARS + 400  # bounded as a send-back's text is
+    assert "Later work in this chat." not in block  # the answer as it stood when the step finished
+    assert second.startswith('from_conversation="Colleague">')
+    assert DELIVERY_PART_STATUS_NOTES["stopped"] in second
+    # Text only: the artifacts and files are references the reading conversation couldn't open.
+    assert "<artifact " not in block and "<file " not in block
+    assert data["message"] == f"{block}\n\nSummarize the reviews"
+
+
+def test_prepare_uses_the_same_blocks_collect_would(collect_client, stores, steps, staged):
+    from apis.shared.handoff.context import DeliveryPartBlock, render_delivery_parts
+
+    client = collect_client()
+    run_id, rows = _staged_run(client, stores, steps)
+    stores[0].transition("alice", rows[0]["handoffId"], "done")
+    stores[0].transition("alice", rows[1]["handoffId"], "stopped")
+
+    block = _prepare(client, run_id, rows[2]["stepId"]).json()["readsBlock"]
+
+    expected = render_delivery_parts(
+        [
+            DeliveryPartBlock(
+                text="Strong aims; the budget is thin.",
+                agent_name="Generalist",
+                from_title="Generalist · Review of the proposal",
+                status="done",
+            ),
+            DeliveryPartBlock(text="", agent_name="Colleague", from_title="", status="stopped"),
+        ]
+    )
+    assert block == expected
+
+
+def test_prepare_is_idempotent_and_writes_nothing(collect_client, stores, steps, staged, table):
+    client = collect_client()
+    run_id, rows = _staged_run(client, stores, steps)
+    stores[0].transition("alice", rows[0]["handoffId"], "done")
+    stores[0].transition("alice", rows[1]["handoffId"], "done")
+    before = table.scan()["Items"]
+
+    first = _prepare(client, run_id, rows[2]["stepId"])
+    second = _prepare(client, run_id, rows[2]["stepId"])
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    assert sorted(map(str, table.scan()["Items"])) == sorted(map(str, before))
+
+
+def test_every_read_step_stopped_still_names_them(collect_client, stores, steps, staged):
+    client = collect_client()
+    run_id, rows = _staged_run(client, stores, steps)
+    stores[0].transition("alice", rows[0]["handoffId"], "stopped")
+    stores[0].transition("alice", rows[1]["handoffId"], "stopped")
+
+    data = _prepare(client, run_id, rows[2]["stepId"]).json()
+
+    assert [p["status"] for p in data["parts"]] == ["stopped", "stopped"]
+    assert data["readsBlock"].count("<handoff_context ") == 2
+
+
+def test_a_step_that_reads_nothing_prepares_as_its_request(collect_client, stores, steps, staged):
+    client = collect_client()
+    run_id, rows = _staged_run(client, stores, steps)
+
+    data = _prepare(client, run_id, rows[0]["stepId"]).json()
+
+    assert data == {"stepId": rows[0]["stepId"], "message": "Review this proposal", "readsBlock": "", "parts": []}
+
+
+def test_prepare_is_owner_scoped_bound_to_its_conversation_and_flag_gated(collect_client, stores, steps, staged, monkeypatch):
+    client = collect_client()
+    run_id, rows = _staged_run(client, stores, steps)
+    stores[0].transition("alice", rows[0]["handoffId"], "done")
+    stores[0].transition("alice", rows[1]["handoffId"], "done")
+
+    assert _prepare(collect_client(BOB), run_id, rows[2]["stepId"]).status_code == 404
+    assert client.post(f"/sessions/other/workflow-runs/{run_id}/steps/{rows[2]['stepId']}/prepare").status_code == 404
+    assert _prepare(client, run_id, "no-such-step").status_code == 404
+    monkeypatch.setenv("WORKFLOW_RUNS_ENABLED", "false")
+    assert _prepare(client, run_id, rows[2]["stepId"]).status_code == 404
+
+
+def test_prepare_refuses_a_run_never_approved(make_client, staged):
+    client = make_client()
+    created = _start(client).json()
+    assert _prepare(client, created["run"]["runId"], created["steps"][2]["stepId"]).status_code == 409
+
+
+def test_collect_takes_only_the_steps_the_result_reads(collect_client, stores, steps, staged):
+    client = collect_client()
+    run_id, rows = _staged_run(client, stores, steps)
+    stores[0].transition("alice", rows[0]["handoffId"], "done")
+    stores[0].transition("alice", rows[1]["handoffId"], "done")
+    stores[0].accept("alice", rows[2]["handoffId"], target_session_id="t2", context_edited=False, context_removed=False)
+    steps.target("t2", rows[2]["handoffId"], "Fiscal outsider · Summary", [(1, "Both reviews agree.", "2026-01-01T00:00:00Z")])
+    stores[0].transition("alice", rows[2]["handoffId"], "done")
+
+    parts = _collect_run(client, run_id).json()["delivery"]["parts"]
+
+    assert [(p["stepId"], p["status"], p["text"]) for p in parts] == [(rows[2]["stepId"], "done", "Both reviews agree.")]
+
+
+def test_collect_takes_every_kept_step_when_the_result_names_none(collect_client, stores, steps, staged):
+    staged.files["wf-key"] = STAGED_FILE.replace("\nReads: summary\n", "\n")
+    client = collect_client()
+    run_id, rows = _staged_run(client, stores, steps)
+    stores[0].transition("alice", rows[0]["handoffId"], "done")
+
+    parts = _collect_run(client, run_id).json()["delivery"]["parts"]
+
+    assert [p["stepId"] for p in parts] == [r["stepId"] for r in rows]
