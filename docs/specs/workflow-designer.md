@@ -972,6 +972,21 @@ half (Reads, stage columns, the Result card) is D.5b-1. Where it differs from th
   footer with its body scrolling between them, so Start stays on screen with five steps, the files and the merge
   notice. Dev validation of both runs (the merge by itself, the card waiting on a draft, Merge now, append-only
   `C#` rows, both graphs) is on #2251; the two runs cost $0.341.
+- **Start takes the run's files off the composer** (the developer's call after #2256's dev check, #2257). Once
+  the approve succeeds on a saved workflow's sheet, `ComposerDraftStorageService.releaseAttachments` drops the
+  run's `fileIds` from the source's stored draft and announces it, the composer showing that draft takes those
+  cards down, and `ComposerEmptyService` is told, so a reload doesn't bring them back. Typed text, a queued
+  follow-up, folders, any other file and the result cards stay; Cancel and a refused Start clear nothing. The
+  merge's rule that the run's own files are no draft stays, for drafts written before this. Every place Start is
+  offered goes through `WorkflowRunService.start`. The designer's test run has nothing to release: its "Test:"
+  conversation has no composer, so nothing can be attached there, and a `files: one` workflow's test run cannot
+  start (its sheet asks for a file it has no way to take).
+- **The sheet fits its column on small screens.** A fixed 14rem reserve clipped the sheet's title at 375 px under
+  a composer with a file card. The chat page now passes `fitAbove`: the sheet measures everything else in its
+  column (the composer, with its cards or a long draft) and caps itself to the room above it, below a 72 px top
+  reserve, at most 42rem and at least 240 px. In a conversation with no turns, the empty layout puts its column at
+  the bottom and hides the greeting while a sheet is open, as the thread's footer does, so the column's bottom
+  edge is fixed and the cap never feeds back on the sheet's own height.
 - **The run row** shows "Merge: *instruction*" under its heading. **View as graph** (a disclosure, closed by
   default, behind `features.workflows`) draws the run on `WorkflowGraphComponent` in run mode, as it is: stages
   from each step's `reads`, edges to the Result from `resultReads`, each card's phrase the row line's own, its

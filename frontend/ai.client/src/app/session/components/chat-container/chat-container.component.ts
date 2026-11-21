@@ -378,6 +378,9 @@ export class ChatContainerComponent {
    * §20.3, PR-D.2's new-conversation start): the run's row, with Bring back results, Stop run and
    * Save as workflow, and the result card it makes, are drawn only in the thread.
    */
+  /** A run sheet is open on this conversation: the empty layout makes room for it (PR-D.5b). */
+  protected readonly runSheetOpen = computed(() => !!this.workflowRunState.reviewFor(this.sessionId()));
+
   protected readonly showsThread = computed(
     () => this.hasMessages() || this.workflowRunState.runsFor(this.sessionId()).some(showsInThread),
   );

@@ -142,6 +142,19 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
     expect(body.querySelector('textarea')).not.toBeNull();
   });
 
+  it('sizes itself to its column only where the host asks (fitAbove)', async () => {
+    await render(review());
+    const section = (): HTMLElement => el().querySelector('section')!;
+    expect(section().style.maxHeight).toBe('');
+
+    fixture.componentRef.setInput('fitAbove', true);
+    fixture.detectChanges();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fixture.detectChanges();
+    // jsdom lays nothing out, so the room measures as nothing and the floor applies.
+    expect(section().style.maxHeight).toBe('240px');
+  });
+
   it('is titled with the workflow’s name', async () => {
     await render(review());
     expect(el().querySelector('h2')?.textContent?.trim()).toBe('Proposal review');

@@ -3422,6 +3422,36 @@ describe('ChatInputComponent — the per-message file limit', () => {
     ).toEqual(['u1']);
   });
 
+  it('takes down only the files a started workflow run took, and keeps the text and the rest', () => {
+    component.restoredAttachments.set([
+      { uploadId: 'r1', filename: 'r1.pdf', mimeType: 'application/pdf', sizeBytes: 10, sessionId: 's1', status: 'ready', createdAt: '' },
+      { uploadId: 'r2', filename: 'r2.pdf', mimeType: 'application/pdf', sizeBytes: 10, sessionId: 's1', status: 'ready', createdAt: '' },
+    ]);
+    component.userInput.set('keep this text');
+    fixture.detectChanges();
+
+    TestBed.inject(ComposerDraftStorageService).releaseAttachments(NEW_CONVERSATION_DRAFT_KEY, ['r1']);
+    fixture.detectChanges();
+
+    expect(component.restoredAttachments().map(a => a.uploadId)).toEqual(['r2']);
+    expect(component.userInput()).toBe('keep this text');
+    expect(
+      TestBed.inject(ComposerDraftStorageService).read(NEW_CONVERSATION_DRAFT_KEY).attachments?.map(a => a.uploadId),
+    ).toEqual(['r2']);
+  });
+
+  it("ignores a release for another conversation's draft", () => {
+    component.restoredAttachments.set([
+      { uploadId: 'r1', filename: 'r1.pdf', mimeType: 'application/pdf', sizeBytes: 10, sessionId: 's1', status: 'ready', createdAt: '' },
+    ]);
+    fixture.detectChanges();
+
+    TestBed.inject(ComposerDraftStorageService).releaseAttachments('other-session', ['r1']);
+    fixture.detectChanges();
+
+    expect(component.restoredAttachments()).toHaveLength(1);
+  });
+
   it("ignores a discard for another conversation's draft", () => {
     component.restoredAttachments.set([
       { uploadId: 'r1', filename: 'r1.pdf', mimeType: 'application/pdf', sizeBytes: 10, sessionId: 's1', status: 'ready', createdAt: '' },
