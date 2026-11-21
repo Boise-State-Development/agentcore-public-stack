@@ -41,14 +41,14 @@ interface ListRow {
             <a
               routerLink="/workflows/new"
               [queryParams]="{ template: template }"
-              class="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white px-3.5 py-2 text-sm/6 font-medium text-gray-700 shadow-xs transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+              class="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white px-3.5 py-2 text-sm/6 font-medium text-gray-700 shadow-xs transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
             >
               <ng-icon name="heroSquare2Stack" class="size-4" aria-hidden="true" />
               From the proposal review template
             </a>
             <a
               routerLink="/workflows/new"
-              class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+              class="inline-flex items-center gap-2 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark"
             >
               <ng-icon name="heroPlus" class="size-4" aria-hidden="true" />
               New workflow
@@ -61,7 +61,7 @@ interface ListRow {
         } @else if (list.error()) {
           <div role="alert" class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm/6 text-red-800 dark:border-red-800/60 dark:bg-red-900/20 dark:text-red-300">
             Your workflows couldn’t be loaded.
-            <button type="button" (click)="list.reload()" class="ml-2 font-medium underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500">Try again</button>
+            <button type="button" (click)="list.reload()" class="ml-2 font-medium underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark">Try again</button>
           </div>
         } @else if (!yours().length && !others().length) {
           <div class="rounded-2xl border border-dashed border-gray-300 px-6 py-12 text-center dark:border-gray-600">
@@ -110,7 +110,7 @@ interface ListRow {
         </span>
         <div class="min-w-0 flex-1">
           <h3 class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">
-            <a [routerLink]="row.link" class="after:absolute after:inset-0 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500">{{ row.title }}</a>
+            <a [routerLink]="row.link" class="after:absolute after:inset-0 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark">{{ row.title }}</a>
           </h3>
           @if (row.summary.problem) {
             <p class="flex items-center gap-1 text-xs/5 font-medium text-state-warning-700 dark:text-state-warning-300">

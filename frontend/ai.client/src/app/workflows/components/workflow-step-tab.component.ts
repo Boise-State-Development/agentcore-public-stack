@@ -46,7 +46,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                     [checked]="draft().files === choice.value"
                     [disabled]="!editable()"
                     (change)="store.setFiles(choice.value)"
-                    class="mt-1 size-4 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                    class="mt-1 size-4 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800"
                   />
                   <span>
                     {{ choice.label }}
@@ -67,7 +67,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
               (input)="store.setRequest(textOf($event))"
               placeholder="Review this proposal against the solicitation."
               aria-describedby="wf-request-help"
-              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+              class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
             ></textarea>
             <p id="wf-request-help" class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
               The sheet opens with this filled in, and the starter can change it. Every step gets it unless it has its own.
@@ -157,7 +157,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                   (input)="filter.set(textOf($event))"
                   placeholder="Find an Agent"
                   [disabled]="!editable()"
-                  class="block w-full rounded-2xl border border-gray-300 bg-white py-1.5 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-400"
+                  class="block w-full rounded-2xl border border-gray-300 bg-white py-1.5 pl-9 pr-3 text-sm/6 text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-400"
                 />
               </div>
               <div class="mt-2 max-h-64 overflow-y-auto rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
@@ -172,7 +172,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                       [checked]="agent.agentId === step.agentId"
                       [disabled]="!editable() || usedElsewhere(agent.agentId)"
                       (change)="choose(agent)"
-                      class="size-4 shrink-0 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                      class="size-4 shrink-0 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800"
                     />
                     <app-agent-icon [agentId]="agent.agentId" [iconUrl]="agent.iconUrl" [emoji]="agent.emoji" [size]="28" />
                     <span class="min-w-0 flex-1">
@@ -208,7 +208,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                     [checked]="step.ownRequest === null"
                     [disabled]="!editable()"
                     (change)="store.setOwnRequest(step.key, null)"
-                    class="mt-1 size-4 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                    class="mt-1 size-4 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800"
                   />
                   <span>The run’s request</span>
                 </label>
@@ -219,7 +219,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                     [checked]="step.ownRequest !== null"
                     [disabled]="!editable()"
                     (change)="useOwnRequest(step)"
-                    class="mt-1 size-4 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                    class="mt-1 size-4 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800"
                   />
                   <span>Its own request</span>
                 </label>
@@ -233,7 +233,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                   [readOnly]="!editable()"
                   (input)="store.setOwnRequest(step.key, textOf($event))"
                   placeholder="Check the budget justification against the cost table."
-                  class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  class="mt-2 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
                 ></textarea>
               }
             </fieldset>
@@ -274,7 +274,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                   (click)="move(step, -1)"
                   [disabled]="position().first"
                   [attr.aria-label]="'Move ' + store.stepLabel(step) + ' up'"
-                  class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                  class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
                 >
                   <ng-icon name="heroArrowUp" class="size-4" aria-hidden="true" />
                   Move up
@@ -285,7 +285,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                   (click)="move(step, 1)"
                   [disabled]="position().last"
                   [attr.aria-label]="'Move ' + store.stepLabel(step) + ' down'"
-                  class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                  class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
                 >
                   <ng-icon name="heroArrowDown" class="size-4" aria-hidden="true" />
                   Move down
@@ -315,7 +315,7 @@ export class WorkflowStepTabComponent {
 
   protected readonly fileChoices = FILE_CHOICES;
   protected readonly checkboxClass =
-    'size-4 rounded border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800';
+    'size-4 rounded border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800';
   protected readonly filter = signal('');
 
   protected readonly draft = this.store.draft;

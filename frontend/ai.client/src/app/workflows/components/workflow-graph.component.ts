@@ -126,7 +126,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
 
     <div
       #scroller
-      class="wf-grid relative md:h-full md:overflow-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 md:cursor-grab"
+      class="wf-grid relative md:h-full md:overflow-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark md:cursor-grab"
       [style.cursor]="panning() ? 'grabbing' : null"
       [class.select-none]="panning()"
       tabindex="0"
@@ -219,7 +219,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                   data-node-id="add"
                   (click)="add.emit(s)"
                   [disabled]="stepCount() >= maxSteps()"
-                  class="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-2xl border border-dashed border-gray-400 bg-white/40 px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition-colors hover:bg-white/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none dark:border-gray-500 dark:bg-gray-800/40 dark:text-gray-200 dark:hover:bg-gray-800/80"
+                  class="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-2xl border border-dashed border-gray-500 bg-white/40 px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition-colors hover:bg-white/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none dark:border-gray-400 dark:bg-gray-800/40 dark:text-gray-200 dark:hover:bg-gray-800/80"
                   [attr.aria-describedby]="'wf-step-cap'"
                 >
                   <ng-icon name="heroPlus" class="size-3.5" aria-hidden="true" />
@@ -262,7 +262,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
         type="button"
         (click)="toggleFit()"
         [attr.aria-pressed]="fit()"
-        class="pointer-events-auto inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 shadow-xs hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+        class="pointer-events-auto inline-flex items-center gap-1.5 rounded-2xl border border-gray-500 bg-white px-3 py-1.5 text-xs/5 font-medium text-gray-700 shadow-xs hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:border-gray-400 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
       >
         <ng-icon [name]="fit() ? 'heroArrowsPointingOut' : 'heroArrowsPointingIn'" class="size-4" aria-hidden="true" />
         Fit
@@ -291,7 +291,7 @@ export class WorkflowGraphComponent {
   private readonly graph = viewChild.required<ElementRef<HTMLElement>>('graph');
 
   protected readonly cardClass =
-    'flex w-full items-center gap-2.5 rounded-2xl border border-gray-200 bg-white/80 px-3 py-2.5 text-left shadow-xs backdrop-blur-md transition-colors hover:border-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 motion-reduce:transition-none aria-pressed:border-primary-accessible aria-pressed:ring-1 aria-pressed:ring-primary-accessible dark:border-gray-600 dark:bg-gray-800/75 dark:hover:border-gray-500 dark:aria-pressed:border-primary-300 dark:aria-pressed:ring-primary-300';
+    'flex w-full items-center gap-2.5 rounded-2xl border border-gray-200 bg-white/80 px-3 py-2.5 text-left shadow-xs backdrop-blur-md transition-colors hover:border-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark motion-reduce:transition-none aria-pressed:border-primary-accessible aria-pressed:ring-1 aria-pressed:ring-primary-accessible dark:border-gray-600 dark:bg-gray-800/75 dark:hover:border-gray-500 dark:aria-pressed:border-primary-300 dark:aria-pressed:ring-primary-300';
 
   protected readonly fit = signal(false);
   protected readonly panning = signal(false);

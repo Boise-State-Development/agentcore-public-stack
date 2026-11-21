@@ -134,7 +134,8 @@ export class WorkflowDesignerStore {
     effect(() => {
       const draft = this.draft();
       const ref = this.ref();
-      if (!ref || this.load() !== 'ready' || !isComplete(draft) || !this.isOwned()) return;
+      // A save in flight describes the draft itself; the preview waits for it.
+      if (!ref || this.load() !== 'ready' || this.saving() || !isComplete(draft) || !this.isOwned()) return;
       untracked(() => this.schedulePreview(ref, draft));
     });
   }

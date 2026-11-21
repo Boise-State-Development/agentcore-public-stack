@@ -1,11 +1,11 @@
 <div class="fixed inset-0 flex flex-col bg-gray-50 dark:bg-gray-900">
   <header class="shrink-0 border-b border-gray-200/80 bg-white/80 backdrop-blur dark:border-gray-700/60 dark:bg-gray-900/80">
     <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 sm:px-6 lg:px-8">
-      <div class="flex min-w-0 flex-1 items-center gap-3">
+      <div class="flex min-w-[15rem] flex-1 items-center gap-3">
         <a
           routerLink="/workflows"
           aria-label="Back to workflows"
-          class="rounded-2xl p-1.5 text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+          class="rounded-2xl p-1.5 text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
         >
           <ng-icon name="heroArrowLeft" class="size-5" aria-hidden="true" />
         </a>
@@ -20,7 +20,7 @@
               [value]="store.draft().title"
               [readOnly]="!store.isOwned()"
               (input)="store.setTitle(titleOf($event))"
-              class="block w-full max-w-md truncate rounded-2xl border border-transparent bg-transparent px-2 py-0.5 text-base/7 font-semibold text-gray-900 hover:border-gray-300 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:text-white dark:hover:border-gray-600"
+              class="block w-full max-w-md truncate rounded-2xl border border-transparent bg-transparent px-2 py-0.5 text-base/7 font-semibold text-gray-900 hover:border-gray-300 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-accessible-dark dark:text-white dark:hover:border-gray-600"
             />
             <p class="flex items-center gap-1 px-2 text-xs/5 text-gray-600 dark:text-gray-400" role="status">
               @if (store.savedState() === 'saved') {
@@ -34,12 +34,12 @@
         </div>
       </div>
       @if (store.load() === 'ready' && store.isOwned()) {
-        <div class="flex items-center gap-2">
+        <div class="ml-auto flex items-center gap-2">
           @if (store.ref()) {
             <button
               type="button"
               (click)="confirmDelete()"
-              class="inline-flex items-center gap-1.5 rounded-2xl px-3 py-2 text-sm/6 font-medium text-gray-700 transition hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:hover:bg-gray-800"
+              class="inline-flex items-center gap-1.5 rounded-2xl px-3 py-2 text-sm/6 font-medium text-gray-700 transition hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:text-gray-300 dark:hover:bg-gray-800"
             >
               <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
               Delete
@@ -50,7 +50,7 @@
             (click)="save()"
             [disabled]="!store.canSave()"
             [attr.aria-describedby]="store.saveBlockedReason() ? 'wf-save-blocked' : null"
-            class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+            class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:cursor-not-allowed disabled:opacity-50"
           >
             <ng-icon name="heroCheck" class="size-4" aria-hidden="true" />
             {{ store.saving() ? 'Saving…' : 'Save workflow' }}
@@ -70,14 +70,14 @@
             <button
               type="button"
               (click)="store.reloadStored()"
-              class="rounded-2xl bg-primary-accessible px-3 py-1 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+              class="rounded-2xl bg-primary-accessible px-3 py-1 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark"
             >
               {{ conflict.document ? 'Reload the saved workflow' : 'Reload' }}
             </button>
             <button
               type="button"
               (click)="store.dismissConflict()"
-              class="rounded-2xl px-3 py-1 text-sm/6 font-medium hover:bg-state-warning-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-state-warning-800/40"
+              class="rounded-2xl px-3 py-1 text-sm/6 font-medium hover:bg-state-warning-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:hover:bg-state-warning-800/40"
             >
               Not now
             </button>
@@ -118,7 +118,7 @@
     @default {
       <main class="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
         <app-workflow-graph
-          class="md:h-[30rem] md:shrink-0 lg:h-auto lg:min-w-0 lg:flex-1"
+          class="shrink-0 md:h-[30rem] lg:h-auto lg:min-w-0 lg:flex-1 lg:shrink"
           [stages]="graphStages()"
           [edges]="graphEdges()"
           [start]="startCard()"
@@ -141,7 +141,7 @@
               [attr.tabindex]="tab() === 'step' ? 0 : -1"
               (click)="setTab('step')"
               (keydown)="onTabKeydown($event)"
-              class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-selected:border-b-primary-accessible aria-selected:font-semibold aria-selected:text-primary-accessible dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-primary-accessible-dark dark:aria-selected:text-primary-accessible-dark"
+              class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark aria-selected:border-b-primary-accessible aria-selected:font-semibold aria-selected:text-primary-accessible dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-primary-accessible-dark dark:aria-selected:text-primary-accessible-dark"
             >
               Step
             </button>
@@ -154,7 +154,7 @@
               [attr.tabindex]="tab() === 'preview' ? 0 : -1"
               (click)="setTab('preview')"
               (keydown)="onTabKeydown($event)"
-              class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-selected:border-b-primary-accessible aria-selected:font-semibold aria-selected:text-primary-accessible dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-primary-accessible-dark dark:aria-selected:text-primary-accessible-dark"
+              class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark aria-selected:border-b-primary-accessible aria-selected:font-semibold aria-selected:text-primary-accessible dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-primary-accessible-dark dark:aria-selected:text-primary-accessible-dark"
             >
               Preview
             </button>
