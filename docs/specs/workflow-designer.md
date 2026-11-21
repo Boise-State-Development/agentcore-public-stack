@@ -718,6 +718,20 @@ Every PR is behind `WORKFLOWS_ENABLED` / `CDK_WORKFLOWS_ENABLED` / `features.wor
 - **For D.3.** Wire types are in `src/app/services/workflows/workflow.models.ts` and the client in
   `workflows-api.service.ts` (`list`, `get`, `save`, and `definitionOf` to turn a document back into a PUT body).
 
+- **Fixed after D.3's dev check: the run in a conversation with no turns.** Two gaps on this start path.
+  *The row.* The run's row (Bring back results, Stop run, Save as workflow) and its result card are drawn only
+  in the thread, and the empty-conversation layout drew none. `ChatContainerComponent` now draws the thread
+  when the conversation has a run to show (`showsInThread`: approved or stopped), messages or not; while the
+  sheet is still open it keeps the empty state with the sheet in it. Such a run's `sourceMessageIndex` is
+  `-1`, which no message matches, so the message list draws it above the first turn (`leadingRunRows`), and
+  at the tail only while an older page hides that turn. *The first send.* It was refused as "Already
+  responding" with nothing streaming. No turn lease held it: the composer's first keystroke prewarmed the
+  conversation's runtime session, the Runtime began a snapshot restore (2,017 ms), and the send 270 ms later
+  got a raw **409 from the Runtime data plane**, before the container. Any send in the seconds after a
+  conversation's first keystroke could hit it, not only a workflow's. app-api's chat proxy now waits out a
+  raw Runtime 409 and resends the turn (`agentcore-runtime-v2.md` §5a); a container's own 409 still arrives
+  as a 424 and is never resent.
+
 *Built (PR-D.3).* The SPA is `frontend/ai.client/src/app/workflows/`; the one backend change is in
 `app_api/workflows/`. Where it differs from the plan, and what it settled:
 

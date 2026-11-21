@@ -34,7 +34,9 @@ import { SessionAffinityService } from './session-affinity.service';
  *   Runtime's 900 s idle timeout; a real turn counts ({@link noteTurn}).
  *   app-api applies the same window and a per-user rate limit.
  * - Fire-and-forget, errors swallowed without a toast. A send never waits for
- *   a warm call; one that lands mid-warm shares the microVM while it starts.
+ *   a warm call here. One that lands mid-warm is refused 409 by the Runtime
+ *   while the session starts; app-api's chat proxy waits that out and resends
+ *   it (`_wait_out_runtime_session_start`), so the SPA sees one send.
  * - A new conversation's id is minted here and handed to its first send
  *   through {@link claimNewConversationId}, so the turn lands on the warmed
  *   microVM. While the flag is off nothing is minted or sent.

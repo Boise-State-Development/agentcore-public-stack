@@ -60,6 +60,7 @@ describe('MessageListComponent — handoffs', () => {
       handoffRowsForMessageId: (id: string) => readonly HandoffView[];
       runRowsForMessageId: (id: string) => readonly WorkflowRunView[];
       unanchoredRunRows: () => WorkflowRunView[];
+      leadingRunRows: () => WorkflowRunView[];
     };
   }
 
@@ -227,6 +228,34 @@ describe('MessageListComponent — handoffs', () => {
     it("renders a run whose message isn't loaded at the tail", () => {
       TestBed.inject(WorkflowRunStateService).hydrate('src', [run({ sourceMessageIndex: 40 })]);
       render([message('src', 0)], 'src');
+      expect(api().unanchoredRunRows().map((r) => r.runId)).toEqual(['run1']);
+    });
+
+    // A saved workflow started from a new conversation (workflow-designer spec §20.3, PR-D.2):
+    // the run is approved before the conversation has a turn, so its anchor is -1.
+    it('renders a run from a conversation with no turns, with no messages at all', () => {
+      TestBed.inject(WorkflowRunStateService).hydrate('src', [run({ sourceMessageIndex: -1 })]);
+      render([], 'src');
+      expect(api().leadingRunRows().map((r) => r.runId)).toEqual(['run1']);
+      expect(api().unanchoredRunRows()).toEqual([]);
+      expect(fixture.nativeElement.querySelectorAll('app-workflow-run-row')).toHaveLength(1);
+    });
+
+    it('keeps that run above the first turn once the conversation has one', () => {
+      TestBed.inject(WorkflowRunStateService).hydrate('src', [run({ sourceMessageIndex: -1 })]);
+      render([message('src', 0), message('src', 1)], 'src');
+      const rows = fixture.nativeElement.querySelectorAll('app-workflow-run-row');
+      expect(rows).toHaveLength(1);
+      const firstTurn = fixture.nativeElement.querySelector('app-user-message');
+      expect(firstTurn).not.toBeNull();
+      expect(rows[0].compareDocumentPosition(firstTurn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(api().leadingRunRows().map((r) => r.runId)).toEqual(['run1']);
+    });
+
+    it('falls back to the tail while an older page hides the first turn', () => {
+      TestBed.inject(WorkflowRunStateService).hydrate('src', [run({ sourceMessageIndex: -1 })]);
+      render([message('src', 30), message('src', 31)], 'src');
+      expect(api().leadingRunRows()).toEqual([]);
       expect(api().unanchoredRunRows().map((r) => r.runId)).toEqual(['run1']);
     });
   });
