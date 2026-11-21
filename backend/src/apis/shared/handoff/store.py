@@ -340,8 +340,12 @@ class HandoffStore:
         run_id: str,
         approved_at: str,
         request: Optional[str] = None,
+        run_steps: Optional[int] = None,
     ) -> Optional[Handoff]:
         """Mark an ``open`` step row of ``run_id`` approved, and set its request if it was edited.
+
+        ``run_steps`` is how many steps the run kept; acceptance carries it into the step
+        conversation's ``spawnedFrom`` (workflow-runs spec §20.4), with no read of the run.
 
         The row stays ``open``: the tab's queue sends it, and the target's first turn accepts it
         exactly as it accepts any mention. ``runApprovedAt`` is what keeps it from reading as
@@ -353,6 +357,9 @@ class HandoffStore:
         names = {"#status": "status", "#updatedAt": "updatedAt", "#runId": "runId"}
         values: Dict[str, Any] = {":open": "open", ":run": run_id, ":approved": approved_at, ":now": approved_at}
         sets = ["runApprovedAt = :approved", "#updatedAt = :now"]
+        if run_steps is not None and run_steps > 0:
+            values[":steps"] = run_steps
+            sets.append("runSteps = :steps")
         if request is not None:
             names["#request"] = "request"
             values[":request"] = request
@@ -436,7 +443,7 @@ class HandoffStore:
 
 def _from_item(item: Dict[str, Any]) -> Handoff:
     data = {k: v for k, v in item.items() if k not in _KEY_ATTRS}
-    for key in ("sourceMessageIndex", "excerptTokens"):
+    for key in ("sourceMessageIndex", "excerptTokens", "runSteps"):
         if key in data:
             data[key] = int(data[key])
     turns = data.get("turnsCovered")

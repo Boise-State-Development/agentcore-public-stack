@@ -463,7 +463,10 @@ class HandoffTurn:
         if accepted.run_id:
             # A run's step (workflow-runs spec §19 PR-W.4c): the sidebar nests it under its source.
             # Same background write, after acceptance, so nothing moves onto the first-token path.
+            # The run's kept step count rides along from the accepted row (§20.4), with no read.
             args.append(accepted.run_id)
+            if accepted.run_steps:
+                args.append(accepted.run_steps)
         set_session_spawned_from(*args)
 
     async def _write_status(self, outcome: TurnOutcome) -> None:

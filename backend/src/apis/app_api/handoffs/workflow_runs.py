@@ -598,7 +598,10 @@ async def approve_workflow_run(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This run was already started or cancelled")
 
     await asyncio.gather(
-        *(_settle_step(store, user, run_id, step, approved_at, edited_requests.get(step.step_id)) for step in approved)
+        *(
+            _settle_step(store, user, run_id, step, approved_at, edited_requests.get(step.step_id), len(kept))
+            for step in approved
+        )
     )
     emit_workflow_run_metric("WorkflowRunApproved", session_id=session_id, run_id=run_id, step_count=len(kept))
     for edit in edits:
@@ -646,13 +649,23 @@ async def _settle_step(
     step: WorkflowRunStep,
     approved_at: str,
     request: Optional[str],
+    run_steps: int,
 ) -> None:
-    """Dismiss a removed step's row, or mark a kept one approved. A row that moved on is left alone."""
+    """Dismiss a removed step's row, or mark a kept one approved. A row that moved on is left alone.
+
+    A kept row also gets ``runSteps``, the run's kept count, which approval fixes for good.
+    """
     if step.removed:
         moved = await asyncio.to_thread(store.transition, user.user_id, step.handoff_id, "dismissed")
     else:
         moved = await asyncio.to_thread(
-            store.approve_run_step, user.user_id, step.handoff_id, run_id=run_id, approved_at=approved_at, request=request
+            store.approve_run_step,
+            user.user_id,
+            step.handoff_id,
+            run_id=run_id,
+            approved_at=approved_at,
+            request=request,
+            run_steps=run_steps,
         )
     if moved is None:
         logger.warning("Workflow run: a step row was no longer open at approval")

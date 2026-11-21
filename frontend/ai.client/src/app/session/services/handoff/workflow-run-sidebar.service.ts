@@ -27,6 +27,10 @@ export interface RunLink {
  * in the thread can never disagree. A run whose source this tab hasn't opened is read once with
  * `GET /sessions/{source}/workflow-runs/{runId}`, and again only when one of its step
  * conversations changes in the list; that read is the sidebar's, never on the turn path.
+ *
+ * A run whose listed steps are all done by the list's own word (`spawnedFrom.settled`) is not read
+ * for its collapsed line, which the list already counts; it is read once when its line is opened,
+ * for the step order. So a page load reads only the runs still going, however long the history.
  */
 @Injectable({ providedIn: 'root' })
 export class WorkflowRunSidebarService {
@@ -81,9 +85,14 @@ export class WorkflowRunSidebarService {
    * Read a run this tab doesn't hold, once per `listState` (what its step conversations look like
    * in the list). A run the source's own `GET /messages` replayed is never read here. A failed
    * read is left alone; the line then counts only the steps it lists.
+   *
+   * A `settled` run (every listed step done, which is final) is read only while its line is
+   * `expanded`, and only once: what it shows collapsed comes from the list, and nothing it holds
+   * can change.
    */
-  ensure(link: RunLink, listState: string): void {
+  ensure(link: RunLink, listState: string, view: { settled: boolean; expanded: boolean }): void {
     if (this.runState.runsFor(link.sourceSessionId).some((run) => run.runId === link.runId)) return;
+    if (view.settled && (!view.expanded || this.fetched().has(link.runId))) return;
     if (this.readFor.get(link.runId) === listState || this.inFlight.has(link.runId)) return;
     this.readFor.set(link.runId, listState);
     this.inFlight.add(link.runId);

@@ -30,7 +30,7 @@ import { AgentPinService } from '../../../../agents/services/agent-pin.service';
 import { AgentIconComponent } from '../../../../agents/components/agent-icon.component';
 import { PinnedAgent } from '../../../../agents/models/store.model';
 import { WorkflowRunSidebarService } from '../../../../session/services/handoff/workflow-run-sidebar.service';
-import { SessionRunGroup, nestRunSteps } from './run-nesting';
+import { SessionRunGroup, isRunSettled, nestRunSteps } from './run-nesting';
 
 /** Numbers each SessionList so its drop-list ids are unique on the page. */
 let nextSessionListId = 0;
@@ -56,7 +56,10 @@ export type SessionRowIndicator = 'streaming' | 'awaiting-input' | 'unread' | nu
 
 /** The disclosure line for one run's step conversations under their source (workflow-runs §20.4). */
 export interface RunLineView {
-  /** "4 Agents · 2 of 4 finished", or "4 Agents" until the run itself has been read. */
+  /**
+   * "4 Agents · 2 of 4 finished"; for a run the list says is done and that hasn't been read,
+   * "4 Agents · 4 of 4 finished" from the listed steps; else "4 Agents" until the run is read.
+   */
   label: string;
   expanded: boolean;
   /** The strongest state among the steps, shown only while the line is collapsed. */
@@ -265,7 +268,8 @@ export class SessionList {
 
   /**
    * Read the runs this tab doesn't hold, once per change in their step conversations' rows, so
-   * the line can count steps the way the run's row does. The sidebar's read, off the turn path.
+   * the line can count steps the way the run's row does. A run whose listed steps are all done is
+   * read only once its line is open. The sidebar's read, off the turn path.
    */
   private readonly runReadEffect = effect(() => {
     const sidebar = this.runSidebar;
@@ -278,7 +282,8 @@ export class SessionList {
             .map(step => `${step.sessionId}:${step.lastMessageAt}:${step.awaitingInput ?? ''}`)
             .sort()
             .join('|');
-          untracked(() => sidebar.ensure(run, listState));
+          const view = { settled: isRunSettled(run), expanded: this.isRunExpanded(run) };
+          untracked(() => sidebar.ensure(run, listState, view));
         }
       }
     }
@@ -289,9 +294,12 @@ export class SessionList {
     const sidebar = this.runSidebar;
     const run = sidebar?.runFor(group) ?? null;
     const progress = run && sidebar ? sidebar.progressFor(run) : null;
+    const listed = group.steps.length;
     const label = progress && progress.total > 0
       ? `${agentCount(progress.total)} · ${progress.done} of ${progress.total} finished`
-      : agentCount(group.steps.length);
+      : isRunSettled(group)
+        ? `${agentCount(listed)} · ${listed} of ${listed} finished`
+        : agentCount(listed);
     const expanded = this.isRunExpanded(group);
     return { label, expanded, indicator: expanded ? null : this.runIndicator(group, progress?.needsInput ?? 0) };
   }

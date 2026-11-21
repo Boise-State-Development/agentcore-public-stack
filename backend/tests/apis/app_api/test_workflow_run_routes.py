@@ -271,6 +271,9 @@ def test_approve_dismisses_removed_steps_edits_requests_and_marks_the_rest(make_
     kept = handoffs.get("alice", s3["handoffId"])
     assert (kept.request, kept.run_approved_at is not None) == ("argue the other side", True)
     assert handoffs.get("alice", s1["handoffId"]).run_approved_at is not None
+    # Each kept row carries the run's kept count (two of three), which acceptance copies into the
+    # step conversation's spawnedFrom for the sidebar (workflow-runs spec §20.4).
+    assert [handoffs.get("alice", s["handoffId"]).run_steps for s in (s1, s2, s3)] == [2, None, 2]
     assert runs.get("alice", run_id).edits == ["request", "step_removed", "file_unticked"]
     assert [(name, kw.get("detail"), kw.get("step_count")) for name, kw in metrics] == [
         ("WorkflowRunApproved", None, 2),
