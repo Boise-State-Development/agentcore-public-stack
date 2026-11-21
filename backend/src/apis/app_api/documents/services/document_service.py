@@ -515,6 +515,7 @@ async def update_document_import_metadata(
     size_bytes: int,
     s3_key: str,
     source_etag: Optional[str] = None,
+    content_hash: Optional[str] = None,
 ) -> Optional[Document]:
     """
     Backfill a document's file metadata after an async import download.
@@ -537,6 +538,8 @@ async def update_document_import_metadata(
         size_bytes: Size of the downloaded bytes
         s3_key: Final S3 object key the bytes are PUT to
         source_etag: Provider-side version stamp at import time, if known
+        content_hash: SHA-256 of the staged bytes, if known. Written so a KB
+            sync's first run can hash-match instead of re-ingesting the page
 
     Returns:
         Updated Document object, or None if the record no longer exists
@@ -574,6 +577,9 @@ async def update_document_import_metadata(
     if source_etag is not None:
         set_parts.append("sourceEtag = :source_etag")
         expression_attribute_values[":source_etag"] = source_etag
+    if content_hash is not None:
+        set_parts.append("contentHash = :content_hash")
+        expression_attribute_values[":content_hash"] = content_hash
 
     try:
         response = await asyncio.to_thread(table.update_item,
