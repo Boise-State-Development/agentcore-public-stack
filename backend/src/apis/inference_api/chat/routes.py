@@ -5737,15 +5737,13 @@ async def _run_step_descriptions(run: "WorkflowRun", current_user: User) -> list
 
     A prompt step has no Agent to read, so its slot is ``None`` without a read.
     """
-    from apis.inference_api.chat.handoff_brief import is_prompt_step
-
     async def _none() -> Optional[str]:
         return None
 
     return list(
         await asyncio.gather(
             *(
-                _none() if is_prompt_step(step) else _handoff_target_description(step.agent_id, current_user)
+                _none() if step.is_prompt else _handoff_target_description(step.agent_id, current_user)
                 for step in run.kept_steps()
             )
         )

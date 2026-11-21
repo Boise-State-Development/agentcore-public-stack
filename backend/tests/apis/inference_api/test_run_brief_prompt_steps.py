@@ -4,18 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Optional
-
 import apis.inference_api.chat.handoff_brief as brief_module
 from apis.shared.handoff.brief import RunBriefStep
 from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep
-
-
-class PromptRunStep(WorkflowRunStep):
-    """A run step with D.6a's ``kind`` and ``modelId`` (stand-in until those fields land)."""
-
-    kind: str = "agent"
-    model_id: Optional[str] = None
 
 
 def _run() -> WorkflowRun:
@@ -27,12 +18,12 @@ def _run() -> WorkflowRun:
         status="open",
         request="Review this proposal",
         steps=[
-            PromptRunStep(step_id="s1", handoff_id="h1", agent_id="a1", agent_name="Generalist", request="Review this proposal"),
-            PromptRunStep(
+            WorkflowRunStep(step_id="s1", handoff_id="h1", agent_id="a1", agent_name="Generalist", request="Review this proposal"),
+            WorkflowRunStep(
                 step_id="s2",
                 handoff_id="h2",
                 agent_id="",
-                agent_name="",
+                agent_name="Claude Haiku 5.5",
                 step_name="budget-lens",
                 request="Check the budget only",
                 kind="prompt",
@@ -55,7 +46,7 @@ def test_a_prompt_step_is_named_by_its_step_and_described_as_a_prompt_step():
 
     assert steps == [
         RunBriefStep("Generalist", "Review this proposal", "Reads anything."),
-        RunBriefStep("budget-lens", "Check the budget only", brief_module.PROMPT_STEP_BRIEF_DESCRIPTION),
+        RunBriefStep("budget-lens (Claude Haiku 5.5)", "Check the budget only", brief_module.PROMPT_STEP_BRIEF_DESCRIPTION),
     ]
 
 

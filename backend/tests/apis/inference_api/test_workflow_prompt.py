@@ -30,29 +30,25 @@ from apis.inference_api.chat.workflow_prompt import (
 from apis.shared.files.attachment_plan import FileFacts
 from apis.shared.files.whole_document import WholeDocument, WholeDocumentError
 from apis.shared.handoff.prompt_steps import WorkflowPromptRequest
+from apis.shared.handoff.run_reads import StepReadsNotSettled
+from apis.shared.handoff.send_back import DeliveryRefused
 from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep
 
 MODEL = "us.anthropic.claude-haiku-5-5"
 PDF = b"%PDF-1.7 fake proposal bytes"
 
 
-class PromptRunStep(WorkflowRunStep):
-    """A run step with D.6a's ``kind`` and ``modelId`` (stand-in until those fields land)."""
-
-    kind: str = "agent"
-    model_id: Optional[str] = None
-
-
-def _step(n: int, *, kind: str = "prompt", reads: Optional[List[str]] = None, model: str = MODEL) -> PromptRunStep:
-    return PromptRunStep(
+def _step(n: int, *, kind: str = "prompt", reads: Optional[List[str]] = None, model: str = MODEL) -> WorkflowRunStep:
+    prompt = kind == "prompt"
+    return WorkflowRunStep(
         step_id=f"s{n}",
         handoff_id=f"h{n}",
-        agent_id="",
-        agent_name="",
+        agent_id="" if prompt else "agent-1",
+        agent_name="Claude Haiku 5.5" if prompt else "Reviewer",
         step_name=f"lens-{n}",
         request=f"Review the proposal through lens {n}.",
         kind=kind,
-        model_id=model,
+        model_id=model if prompt else None,
         reads=reads,
     )
 
@@ -210,6 +206,7 @@ def _work(
     async def reads(user_id, session_id, run_, step):
         return "" if not step.reads else "<handoff_context>earlier</handoff_context>"
 
+
     user = type("U", (), {"user_id": "alice"})()
     return PromptStepRun(
         WorkflowPromptRequest(run_id=run.run_id, step_ids=ids),
@@ -351,13 +348,38 @@ async def test_agent_steps_unknown_steps_and_unsettled_reads_are_skipped_unclaim
     steps = StepStore({"h1": "open", "h2": "open", "h3": "open"}, kinds={"h2": "mention"})
 
     async def pending(user_id, session_id, run_, step):
-        return None if step.reads else ""
+        if step.reads:
+            raise StepReadsNotSettled(["lens-1"])
+        return ""
 
     frames = await _drain(_work(run, steps, Model(), step_ids=["s1", "s2", "s3", "nope"], render_reads=pending))
 
     reasons = {f["stepId"]: f.get("reason") for f in frames if f.get("status") == "skipped"}
     assert reasons == {"s2": "not_prompt", "s3": "reads_pending", "nope": "not_in_run"}
     assert steps.rows["h2"]["status"] == "open" and steps.rows["h3"]["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_reads_a_delivery_rule_refuses_leave_the_step_open_and_unclaimed():
+    steps = StepStore({"h1": "open"})
+
+    async def refused(user_id, session_id, run_, step):
+        raise DeliveryRefused("project_task")
+
+    frames = await _drain(_work(_run([_step(1, reads=["lens-0"])]), steps, Model(), render_reads=refused))
+
+    assert next(f for f in frames if f["event"] == "workflow_prompt_step")["reason"] == "reads_refused"
+    assert steps.rows["h1"]["status"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_the_default_renderer_is_the_shared_one_prepare_uses():
+    run = _run([_step(1, reads=["lens-0"])])
+    with patch.object(wp, "render_step_reads", AsyncMock(return_value=("<block/>", []))) as shared:
+        block = await wp.render_reads("alice", "src", run, run.steps[0])
+
+    assert block == "<block/>"
+    shared.assert_awaited_once_with("alice", "src", run, run.steps[0])
 
 
 @pytest.mark.asyncio

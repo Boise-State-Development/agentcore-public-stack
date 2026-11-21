@@ -243,10 +243,14 @@ async def _run_steps(
             found = []
     steps: List[RunBriefStep] = []
     for index, step in enumerate(kept):
-        if is_prompt_step(step):
+        if step.is_prompt:
+            # A prompt row's agentName is its model's display name.
+            name = step.step_name or "Prompt step"
+            if step.agent_name:
+                name = f"{name} ({step.agent_name})"
             steps.append(
                 RunBriefStep(
-                    agent_name=step.step_name or step.agent_name or "Prompt step",
+                    agent_name=name,
                     request=step.request,
                     agent_description=PROMPT_STEP_BRIEF_DESCRIPTION,
                 )
@@ -268,10 +272,6 @@ PROMPT_STEP_BRIEF_DESCRIPTION = (
     "It does not read this brief."
 )
 
-
-def is_prompt_step(step: Any) -> bool:
-    """Whether a run step is a prompt step (``kind: prompt``) rather than an Agent's."""
-    return getattr(step, "kind", None) == "prompt"
 
 
 async def _record_brief(

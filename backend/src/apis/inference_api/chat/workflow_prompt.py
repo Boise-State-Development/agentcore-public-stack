@@ -46,14 +46,12 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optiona
 from apis.shared.auth.models import User
 from apis.shared.extraction.batch import run_bounded
 from apis.shared.files.whole_document import WholeDocument, WholeDocumentError, read_whole_document
-from apis.shared.handoff.prompt_steps import (
-    PROMPT_KIND,
-    PromptStepStore,
-    PromptStopReason,
-    WorkflowPromptRequest,
-    get_prompt_step_store,
-)
+from apis.shared.feature_flags import prompt_steps_enabled
+from apis.shared.handoff.models import PromptStopReason
+from apis.shared.handoff.prompt_steps import PromptStepStore, WorkflowPromptRequest, get_prompt_step_store
+from apis.shared.handoff.run_reads import StepReadsNotSettled, render_step_reads
 from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep, WorkflowRunStore, get_workflow_run_store
+from apis.shared.handoff.send_back import DeliveryRefused
 from apis.shared.models.cache_points import bedrock_cache_points_supported
 
 logger = logging.getLogger(__name__)
@@ -97,7 +95,8 @@ def step_frame(run_id: str, step_id: str, status: str, *, stopped_reason: Option
     """One step settled: ``done``, ``stopped`` (with ``stoppedReason``), or ``skipped`` (with ``reason``).
 
     ``skipped`` is a step this invocation did not run and did not write: not a prompt step of the
-    run, not ``open`` (another invocation claimed it, or it settled), or one whose reads have not.
+    run, not ``open`` (another invocation claimed it, or it settled), one whose reads have not
+    settled, or one whose reads a delivery rule refused. A client treats it as not started.
     """
     data: Dict[str, Any] = {"type": "workflow_prompt_step", "runId": run_id, "stepId": step_id, "status": status}
     if stopped_reason:
@@ -181,7 +180,7 @@ class CallResult:
 
 
 CallModel = Callable[[Any, List[Dict[str, Any]], threading.Event], Awaitable[CallResult]]
-RenderReads = Callable[[str, str, WorkflowRun, WorkflowRunStep], Awaitable[Optional[str]]]
+RenderReads = Callable[[str, str, WorkflowRun, WorkflowRunStep], Awaitable[str]]
 
 
 def _reported(usage: Optional[Dict[str, Any]]) -> bool:
@@ -255,25 +254,14 @@ def build_bedrock_model(model_id: str) -> Any:
 # --- Checks ---------------------------------------------------------------------------------------
 
 
-def _prompt_steps_enabled() -> bool:
-    """Stand-in for D.6a's ``prompt_steps_enabled()`` until it merges: only ``"true"`` enables."""
-    from apis.shared.feature_flags import workflows_enabled
+async def render_reads(user_id: str, session_id: str, run: WorkflowRun, step: WorkflowRunStep) -> str:
+    """The results ``step`` reads, as app-api's ``…/prepare`` renders them (``render_step_reads``).
 
-    return os.environ.get("PROMPT_STEPS_ENABLED", "").strip().lower() == "true" and workflows_enabled()
-
-
-def _step_kind(step: WorkflowRunStep) -> str:
-    return str(getattr(step, "kind", None) or "agent")
-
-
-def _step_model(step: WorkflowRunStep) -> str:
-    return str(getattr(step, "model_id", None) or "")
-
-
-async def _render_reads_standin(user_id: str, session_id: str, run: WorkflowRun, step: WorkflowRunStep) -> Optional[str]:
-    """Stand-in until the shared reads renderer lands: a step that reads none has an empty block, and
-    one that reads any is left for later (``None``)."""
-    return "" if not step.reads else None
+    Raises ``StepReadsNotSettled`` while a read step is still running, and ``DeliveryRefused`` when
+    a read part breaks a delivery rule; the caller skips the step unclaimed on either.
+    """
+    block, _parts = await render_step_reads(user_id, session_id, run, step)
+    return block
 
 
 @dataclass
@@ -571,12 +559,12 @@ class PromptStepRun:
         steps: Optional[PromptStepStore] = None,
         call_model: CallModel = call_bedrock,
         build_model: Callable[[str], Any] = build_bedrock_model,
-        render_reads: RenderReads = _render_reads_standin,
+        render_reads: RenderReads = render_reads,
         read_document: Callable[..., Awaitable[WholeDocument]] = read_whole_document,
         model_plan: Callable[[User, str], Awaitable[ModelPlan]] = resolve_model_plan,
         quota: Callable[[User, str], Awaitable[bool]] = check_quota,
         meter: Callable[..., Awaitable[Optional[str]]] = meter_call,
-        enabled: Callable[[], bool] = _prompt_steps_enabled,
+        enabled: Callable[[], bool] = prompt_steps_enabled,
         step_timeout: float = STEP_TIMEOUT_SECONDS,
         poll_seconds: float = RUN_POLL_SECONDS,
     ) -> None:
@@ -664,15 +652,23 @@ class PromptStepRun:
             if step is None:
                 self._emit(step_frame(self.run_id, step_id, "skipped", reason="not_in_run"))
                 continue
-            if _step_kind(step) != PROMPT_KIND:
+            if not step.is_prompt:
                 self._emit(step_frame(self.run_id, step_id, "skipped", reason="not_prompt"))
                 continue
+            # Checked before the claim: a step whose reads haven't settled is left ``open`` for
+            # the queue to send again, never stopped.
             try:
                 block = await self._render_reads(self.user.user_id, self.session_id, run, step)
+            except StepReadsNotSettled:
+                self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_pending"))
+                continue
+            except DeliveryRefused as exc:
+                logger.info("workflow prompt: a step's reads were refused (%s)", getattr(exc, "reason", ""))
+                self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_refused"))
+                continue
             except Exception:
+                # A failed read (a store error) is a retry later, like a step not ready yet.
                 logger.warning("workflow prompt: rendering a step's reads failed", exc_info=True)
-                block = None
-            if block is None:
                 self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_pending"))
                 continue
             plans.append(StepPlan(step=step, reads_block=block))
@@ -763,7 +759,7 @@ class PromptStepRun:
 
         groups: Dict[str, List[StepPlan]] = {}
         for plan in claimed:
-            groups.setdefault(_step_model(plan.step), []).append(plan)
+            groups.setdefault(plan.step.model_id or "", []).append(plan)
         for model_id, plans in groups.items():
             if self._stopped:
                 break

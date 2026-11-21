@@ -13,9 +13,8 @@ condition is the guard: two invocations for one step (two tabs, a resend) both t
 exactly one wins, and a step that finished never moves again. No session lease is taken; the
 claim is what keeps a step from running twice.
 
-The row is read and written by attribute name only (``status``, ``kind``, ``runId``,
-``outputText``, ``outputHash``, ``outputTokens``, ``stoppedReason``, ``updatedAt``), so these
-writes do not depend on how a reader models the row. ``updatedAt`` on the ``done`` write is the
+The row is written by attribute name, with the names ``models.py`` defines for a prompt row
+(``PROMPT_STEP_FIELDS``), and every move follows ``PROMPT_TRANSITIONS``. ``updatedAt`` on the ``done`` write is the
 finish time a run's collect reads.
 """
 
@@ -24,7 +23,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -35,19 +34,21 @@ except ImportError:  # pragma: no cover - exercised only without boto3
 
 from apis.shared.handoff.context import context_hash
 from apis.shared.handoff.delivery import cap_delivery_text
+from apis.shared.handoff.models import (
+    KIND_PROMPT_STEP,
+    PROMPT_FIELD_OUTPUT_HASH,
+    PROMPT_FIELD_OUTPUT_TEXT,
+    PROMPT_FIELD_OUTPUT_TOKENS,
+    PROMPT_FIELD_STOPPED_REASON,
+    PROMPT_FIELD_UPDATED_AT,
+    PROMPT_STOP_REASONS,
+    PromptStopReason,
+)
 
 logger = logging.getLogger(__name__)
 
-#: The ``HANDOFF#`` kind of a prompt step.
-PROMPT_KIND = "prompt"
-
 #: Step ids one ``workflow_prompt`` request may name: a run's whole envelope.
 WORKFLOW_PROMPT_MAX_STEPS = 8
-
-#: Why a prompt step stopped (§21.3). ``model_refused`` is a model the caller may not run here
-#: (no catalog row, no access, retired with no successor, or one this call path can't send to).
-PromptStopReason = Literal["user_stopped", "too_large", "model_refused", "quota", "timeout", "error"]
-PROMPT_STOP_REASONS = ("user_stopped", "too_large", "model_refused", "quota", "timeout", "error")
 
 _SK_PREFIX = "HANDOFF#"
 
@@ -104,7 +105,7 @@ class PromptStepStore:
             handoff_id,
             sets={"#status": ("status", "running")},
             condition="#status = :from0 AND #kind = :kind AND #runId = :runId",
-            condition_values={":from0": "open", ":kind": PROMPT_KIND, ":runId": run_id},
+            condition_values={":from0": "open", ":kind": KIND_PROMPT_STEP, ":runId": run_id},
             condition_names={"#kind": "kind", "#runId": "runId"},
         )
 
@@ -116,13 +117,13 @@ class PromptStepStore:
             handoff_id,
             sets={
                 "#status": ("status", "done"),
-                "#outputText": ("outputText", text),
-                "#outputHash": ("outputHash", context_hash(text)),
-                "#outputTokens": ("outputTokens", max(0, int(output_tokens or 0))),
+                "#outputText": (PROMPT_FIELD_OUTPUT_TEXT, text),
+                "#outputHash": (PROMPT_FIELD_OUTPUT_HASH, context_hash(text)),
+                "#outputTokens": (PROMPT_FIELD_OUTPUT_TOKENS, max(0, int(output_tokens or 0))),
             },
             condition="#status = :from0",
             condition_values={":from0": "running"},
-            remove=("stoppedReason",),
+            remove=(PROMPT_FIELD_STOPPED_REASON,),
         )
 
     def stop(self, user_id: str, handoff_id: str, reason: PromptStopReason) -> bool:
@@ -132,7 +133,7 @@ class PromptStepStore:
         return self._update(
             user_id,
             handoff_id,
-            sets={"#status": ("status", "stopped"), "#stoppedReason": ("stoppedReason", reason)},
+            sets={"#status": ("status", "stopped"), "#stoppedReason": (PROMPT_FIELD_STOPPED_REASON, reason)},
             condition="#status = :from0",
             condition_values={":from0": "running"},
         )
@@ -152,7 +153,7 @@ class PromptStepStore:
             from apis.shared.handoff.store import HandoffStoreUnavailable
 
             raise HandoffStoreUnavailable("DYNAMODB_SESSIONS_METADATA_TABLE_NAME is not configured")
-        names: Dict[str, str] = {"#updatedAt": "updatedAt", **(condition_names or {})}
+        names: Dict[str, str] = {"#updatedAt": PROMPT_FIELD_UPDATED_AT, **(condition_names or {})}
         values: Dict[str, Any] = {":now": datetime.now(timezone.utc).isoformat(), **condition_values}
         clauses: List[str] = ["#updatedAt = :now"]
         for placeholder, (attribute, value) in sets.items():
@@ -196,10 +197,7 @@ def get_prompt_step_store() -> PromptStepStore:
 
 
 __all__ = [
-    "PROMPT_KIND",
-    "PROMPT_STOP_REASONS",
     "PromptStepStore",
-    "PromptStopReason",
     "WORKFLOW_PROMPT_MAX_STEPS",
     "WorkflowPromptRequest",
     "get_prompt_step_store",
