@@ -434,7 +434,6 @@ class TestWrite:
         assert sheet["startable"] is False
         assert [(b["code"], b.get("step")) for b in sheet["blockers"]] == [
             ("same_agent_twice", "b"),
-            ("reads_step", "b"),
             ("step_unavailable", "c"),
             ("merge_result", None),
         ]

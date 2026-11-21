@@ -93,6 +93,13 @@ class WorkflowRunStep(BaseModel):
         alias="agentVersion",
         description="The Agent's published version when the run was created from a saved workflow (PR-D.2)",
     )
+    reads: Optional[List[str]] = Field(
+        None,
+        description=(
+            "The other steps this step reads, by stepName, in step order (PR-D.5a). Steps only: the "
+            "request and the files go to every step. Absent on a mention run and on a step that reads none"
+        ),
+    )
 
 
 class WorkflowRunSource(BaseModel):
@@ -114,6 +121,11 @@ class WorkflowRunSource(BaseModel):
     version: Optional[int] = None
     files: Optional[str] = Field(None, description="none | one | any, from the file")
     removed_steps: Optional[List[str]] = Field(None, alias="removedSteps")
+    result_reads: Optional[List[str]] = Field(
+        None,
+        alias="resultReads",
+        description="The steps the result takes, by stepName (PR-D.5a); absent means every step",
+    )
 
 
 class WorkflowRunCard(BaseModel):
@@ -204,6 +216,7 @@ class WorkflowRunStepView(BaseModel):
     removed: bool
     step_name: Optional[str] = Field(None, alias="stepName")
     agent_version: Optional[int] = Field(None, alias="agentVersion")
+    reads: Optional[List[str]] = None
     handoff: Optional[HandoffView] = None
 
 
@@ -246,6 +259,7 @@ class WorkflowRunView(BaseModel):
                     removed=step.removed,
                     step_name=step.step_name,
                     agent_version=step.agent_version,
+                    reads=step.reads,
                     handoff=views.get(step.handoff_id),
                 )
                 for step in run.steps
