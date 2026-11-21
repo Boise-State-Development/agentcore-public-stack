@@ -59,6 +59,29 @@ export const MANAGED_KB_TAG_KEYS = {
  * file the request. An alarm at the limit is a post-mortem.
  */
 export const MANAGED_KB_ACCOUNT_QUOTA = 10_000;
+
+/**
+ * How many ingestion consumers may run at once.
+ *
+ * Each running consumer polls `GetKnowledgeBaseDocuments` every 5 s
+ * (`INDEXED_POLL_INTERVAL_SECONDS`), and that API's quota is 5 requests per
+ * second per account, shared with app-api's search-status reads. Unbounded,
+ * a KB-sync tick that rewrote ~240 files in prod fanned out to 68 consumers
+ * (~14 req/s): the probes throttled, documents timed out still `NOT_FOUND`,
+ * and every one raised for redelivery, which tripped the Lambda Errors alarm.
+ * All of them were indexed on a retry, so the cost was the noise and two extra
+ * attempts per document.
+ *
+ * 15 caps polling at 3 req/s and leaves the rest of the quota for everyone
+ * else. An event over the cap is not lost or failed: Lambda keeps a throttled
+ * async event in its own queue and retries it for up to the event age (6 h by
+ * default) without spending either of the two `retryAttempts`. At the
+ * measured ~12 s mean run, a 240-document burst drains in about 3 minutes.
+ *
+ * `backend/tests/supply_chain/test_kb_migration_env_contract.py` checks this
+ * against the Python poll interval and the quota.
+ */
+export const INGESTION_CONSUMER_RESERVED_CONCURRENCY = 15;
 export const MANAGED_KB_COUNT_ALARM_FRACTION = 0.8;
 
 /** Metric names the alarms below watch. Published by backend task 14.1. */
@@ -305,6 +328,9 @@ export class KbMigrationConstruct extends Construct {
       // retry (Requirement 10.7) before the event lands in the queue.
       deadLetterQueue: this.ingestionConsumerDlq,
       retryAttempts: 2,
+      // Bounds the fleet's status polling under Bedrock's per-account quota;
+      // see INGESTION_CONSUMER_RESERVED_CONCURRENCY.
+      reservedConcurrentExecutions: INGESTION_CONSUMER_RESERVED_CONCURRENCY,
       environment: sharedEnvironment,
       description:
         'Managed_KB ingestion consumer - routes an uploaded document to the legacy pipeline or to Direct_Ingestion',

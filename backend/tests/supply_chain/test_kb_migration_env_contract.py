@@ -250,6 +250,31 @@ class TestTheIngestionPollBudgetFitsTheLambdaTimeout:
             f"the Lambda timeout; leave at least 120s for the ingest call itself"
         )
 
+    def test_the_concurrency_cap_keeps_polling_under_the_quota(self):
+        """Running consumers × poll rate must stay under GetKnowledgeBaseDocuments' quota.
+
+        The quota (5 requests per second per account, shared with app-api's
+        search-status reads) is pinned as a literal: it is a property of Bedrock,
+        not a knob. Shorten the poll interval or raise the cap past it and a sync
+        burst throttles the probes into a wave of redeliveries again.
+        """
+        import re
+
+        from apis.app_api.kb_migration import ingestion_consumer as ic
+
+        match = re.search(
+            r"INGESTION_CONSUMER_RESERVED_CONCURRENCY\s*=\s*(\d+)",
+            CONSTRUCT.read_text(encoding="utf-8"),
+        )
+        assert match, "could not find the ingestion consumer's concurrency cap in the construct"
+        cap = int(match.group(1))
+
+        polling_rate = cap / ic.INDEXED_POLL_INTERVAL_SECONDS
+        assert polling_rate < 5.0, (
+            f"{cap} consumers polling every {ic.INDEXED_POLL_INTERVAL_SECONDS:.0f}s is "
+            f"{polling_rate:.1f} req/s, at or over the 5 req/s GetKnowledgeBaseDocuments quota"
+        )
+
     def test_the_budget_covers_the_measured_indexing_tail(self):
         """264 s was the slowest PDF in the §5.1 benchmark; dev saw 5 m 30 s.
 
