@@ -214,6 +214,9 @@ have no conversation. They are what the audit half of the worked example needs, 
 
 They are also the cheaper kind of step where no follow-up conversation is wanted (§11).
 
+*2026-11-21:* prompt steps are being built this way, as a new Runtime invocation with no session lease and one
+`HANDOFF#` row of kind `prompt` per step (`workflow-designer.md` §21). Checklist steps are decided after them.
+
 ## 7. Results
 
 **Decision: a run returns one result, not one per step.**

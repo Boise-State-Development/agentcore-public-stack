@@ -1018,6 +1018,8 @@ blocks, and the merge starts by itself when the composer is empty and waits when
 
 ### 20.4 Before deciding D.6 and D.7
 
+*Done 2026-11-21: measured and decided in §21.*
+
 Measure G3 (`multi-agent-patterns.md` §11.4) on dev: whether N prompt branches over one document read it from a
 shared cached prefix when one call warms it first, per model. Then choose between a side call on a new Runtime
 invocation (as the brief is routed) and a prompt step as a model-only conversation, which reuses everything step 1
@@ -1078,3 +1080,167 @@ Seven fixes came out of the dev checks, each merged and checked on dev:
 **Still to decide:** §17 questions 5 (the flag once finished), 6 (who writes the merge), 7 (templates) and 8
 (test conversations); D.6 and D.7 after §20.4's measurement; D.8 after question 2. The flags are on in
 `development` only.
+
+## 21. Delivery plan, step 3: prompt steps (D.6)
+
+*Added 2026-11-21, after measuring G3 (§20.4) on dev and checking the side-call path and the run engine against
+`develop` at `d1e5f51ee`.*
+
+### 21.1 G3, measured
+
+Direct Converse calls on dev (no platform path exists for a prompt step yet), with the `us.*` ids: five NSF
+reviewer lenses over the four-page compact sample proposal. The system prompt and the PDF come to ~10,080 tokens
+on both models. Two trials per model, each cell cold (a nonce at the head of the system prompt).
+
+| Layout | Branches 2–5 that read the document | Input cost of 5 branches, Haiku 5.5 | Sonnet 5.5 | Wall time, Haiku / Sonnet |
+|---|---|---|---|---|
+| Document first, a cachePoint after it, one call to warm, then 4 at once | 16 of 16, all ~10,080 tokens | $0.0020 | $0.036 | 16.7 s / 24.5 s |
+| Today's turn layout: the text first, then the document, one cachePoint at the end (`prompt_builder.py`) | 0 of 16 | $0.0072 | $0.144 | 16.8 s / 25.3 s |
+| Document first, all 5 at once, no warm call | 0 of 20 | $0.0071 | $0.143 | 8.6 s / 13.2 s |
+
+- **The saving is 3.6× on Haiku 5.5 and 3.9× on Sonnet 5.5**, on input. Output costs the same in every layout.
+- **Today's layout costs more than no caching at all.** Every branch writes the whole prefix at 1.25× and nothing
+  reads it: $0.144 against $0.114 uncached on Sonnet.
+- **The warm call must finish first.** A request sent at the same time cannot read a write still in flight. The
+  price is about one branch's latency.
+- **Agent steps today** (the four PDF runs on dev): every step's first call was a `first_write` of its own ~8.5k
+  prompt. Each Agent has its own system prompt, so nothing ahead of the document is shared.
+- At the worked example's 19 branches on Sonnet 5.5, document input is ~$0.05 warmed and ~$0.53 in the turn
+  layout. The measurement cost $1.20 ($0.06 Haiku, $1.14 Sonnet), almost all of it output.
+- **Not measured, and it bears on D.7:** the prefix order is tools, then system, then messages. Checklist branches
+  that each carry their own strict-tool schema, as `document_extract` does, cannot share the document.
+
+### 21.2 Settled with the developer
+
+- **A prompt step is a side call on a new Runtime invocation** (§20.4's first option), because the saving needs a
+  request layout we choose. A step conversation on the turn path gets the second row of §21.1.
+- **D.7 is decided after D.6 ships.** A checklist step can't reuse D.6's saving as `document_extract` is built
+  (§21.1's last bullet), and G1 and G2 are open. D.7 starts with its own measurement: strict schema per branch
+  against the field list in the instruction, on cost and on accuracy against the answer key.
+
+### 21.3 The design
+
+**The step.** A prompt step is a `HANDOFF#` row of a new kind, `prompt`. It has no Agent and no conversation.
+Keeping the row means every reader that joins a step on `handoffId` keeps working: the run view, the replay, the
+SPA's handoff state and the run refresh.
+
+- **Fields:**
+  - `modelId`
+  - `request`: the instruction, as an Agent step's today
+  - `outputText`, capped by `cap_delivery_text` at write
+  - `outputHash`, `outputTokens`
+  - `stoppedReason`
+  - `updatedAt`, which collect uses as the finish time
+- **Statuses:** `open → running → done | stopped`. A prompt step never asks the user anything, so it has no
+  `needs_input`.
+- **Stop reasons:** `user_stopped`, `too_large`, `model_refused`, `quota`, `timeout`, `error`.
+- **Writes:** every move is one conditional update. `open → running` is the claim, so a step never runs twice
+  (two tabs, a resend).
+
+**The format.** `kind = prompt` and `worker = <model id>`. The `## Step: <name>` section is the instruction, and
+reads work as they do for Agent steps. The envelope is unchanged: 8 steps.
+
+- **The parser accepts `prompt` whatever the flag**, like every other parse check. Run create refuses a prompt
+  step while the flag is off, and the sheet shows it as a blocker.
+- **The model needs a catalog row** and passes `grants_model_access` as the starter. This is checked at create
+  (a blocker on the sheet) and again on the Runtime before the call, with retirement resolved first. With a row,
+  every call is priced, so `UnmeteredModelCall` has nothing to catch.
+
+**The invocation.**
+- **The request** is `InvocationRequest.workflow_prompt: {runId, stepIds}` (optional, additive, at most 8
+  ids). The tab's run queue sends it through app-api's generic `/chat/stream`, on the **source** session id, so
+  it lands on the source's Runtime session.
+- **It takes no session lease.** The user can keep chatting in the source meanwhile, and a source send never
+  preempts a step. Each step's claim is the guard instead.
+- **It does not go through `_run_invocation`.** That means no agent build, no history, no tools, and none of the
+  source's system prompt. The brief's path builds the whole source agent first, which a prompt step neither needs
+  nor wants on its prefix.
+- **It runs its own checks:** the flag, the run is the caller's and `approved`, each step is `open` with its
+  reads settled, model access, and quota.
+
+**The request layout** is §21.1's measured one:
+- `system` is one constant prompt-step frame per deployment. It names the task and bounds the answer.
+- `messages` is one user message: `[documents…, cachePoint, earlier results (if the step reads any),
+  instruction]`.
+- Documents go in the run's `fileIds` order under fixed names, so the prefix is byte-identical across the run's
+  steps.
+- The first claimed step is called alone to warm the prefix. The rest go through `run_bounded` with the run's
+  `limits.concurrency`. A later stage's prompt steps read the same prefix while it is within its 5-minute TTL.
+- **Prompt steps that are ready together go in one invocation**, which is what lets one call warm the rest.
+
+**The documents.**
+- **A PDF goes native**, the whole document, when it is within the model's page limit. A new read-through helper
+  in `apis/shared/files/` does this: `readable_view` resolves references, then the S3 read.
+- **Other kinds go as text**, rendered the way documents-as-text on Converse renders them.
+- **A prepared large document goes as its text.**
+- **Over the document budget the step stops with `too_large`.** The budget is 0.5 × the model's chat ceiling,
+  which is 50K on Haiku 5.5 and keeps under its 100K 5× line. v1 does not truncate.
+
+**The output.**
+- `maxTokens` is 4,000, with the model's default effort.
+- The answer is stored capped at `SEND_BACK_MAX_TOKENS` (2,000), as a delivery part is.
+- The model sees its own instruction, the documents and any earlier results it reads. It sees nothing else of the
+  run.
+
+**Metering.**
+- One `C#` row per call, on the source session, with `callKind: "workflow_prompt"`, no `messageId`, and
+  attributes `{runId, stepId}`.
+- `ledger_rollups.CALL_KINDS` gains the kind, because an unlisted kind counts as `other`. The admin cost view
+  maps it too.
+- It is never a turn and never moves the context meter.
+
+**The stream.** It exists on its own stream only, never on a turn's:
+- `workflow_prompt_step {runId, stepId, status, stoppedReason?}` is sent as each step settles, then `done`.
+- No text is streamed. The run row shows the step's status, and the answer is read from the step's row.
+- It is added to the SSE table. The terminal client never sees it, since it never sends `workflow_prompt`.
+
+**Stop.**
+- The invocation re-reads the run row every 2 s. On `stopped` it cancels calls in flight and stops claimed steps
+  with `user_stopped`.
+- Each step has a 120 s timeout.
+- A closed tab does not cancel. The calls finish and write their rows, and the run refresh picks them up.
+
+**Results.**
+- `_part_status`, `_part_for` and `_read_part` take a prompt row's `outputText`. A prompt step has no
+  `targetSessionId`, no artifacts and no files.
+- `_prepare_run_result` gains a text-only branch for a part with no sender conversation.
+- `delivery_part_label` names the step and the model.
+- The caps are unchanged, and so is the parity fixture's shape. It gains a case.
+
+**The SPA.**
+- **The queue's `start()` branches on kind**, sends ready prompt steps together, and settles each one from its
+  frame.
+- **Progress:** `stepState` reads a prompt row's own status.
+- **The run row** shows a prompt step without a link, with its answer in a block that opens.
+- **The sheet** labels it "Prompt · *model*" and estimates it at the catalog rate. The estimate stays an upper
+  bound: it does not count the cache read.
+- **The designer:** Add step offers Prompt. The Step tab gives a model picker (only models the user can use) and
+  the instruction. The graph card names the model.
+
+**The flag.**
+- The backend flag is `PROMPT_STEPS_ENABLED` / `CDK_PROMPT_STEPS_ENABLED`, on app-api and on the Runtime. The
+  Runtime copy is written only while on, so the default spends none of the V2 environment budget.
+- The SPA flag is `features.promptSteps`.
+- It is in development: only `"true"` enables, and only with `WORKFLOWS_ENABLED`.
+- It is the first workflow flag on the Runtime.
+
+**Cost and TTFT.** Nothing new runs on a turn's path. No turn's `toolConfig` or system prompt changes. The
+source's prefix is never touched: a prompt step's answer reaches it as a delivery part, appended like any other.
+
+### 21.4 The PRs
+
+| PR | Side | Needs | What it ships |
+|---|---|---|---|
+| D.6a | Backend (shared, app-api), infra | — | The format's `prompt` kind. The `prompt` `HANDOFF#` kind and its fields in `models.py`, `runs.py` and the store's readers. Create, approve and the sheet: blockers, model and rate from the catalog. Collect and prepare with text-only parts, and the parity case. The flag: reader, CDK on both services, `platform.yml`, docs-site row |
+| D.6b | Runtime | D.6a merged first | `workflow_prompt` on `InvocationRequest`, its dispatch in `routes.py`, a new `inference_api/chat/workflow_prompt.py`, the whole-document helper, the claim/finish/stop writes in a new `apis/shared/handoff/prompt_steps.py`, metering with `CALL_KINDS` and the admin cost mapping, the frames and the SSE table row |
+| D.6c | SPA | D.6a, D.6b merged | `features.promptSteps`, the queue's prompt branch, progress, the run row, the sheet, and the designer's Add step, Step tab and card |
+
+- **D.6a and D.6b run in parallel**, split by file ownership:
+  - **D.6b owns** `prompt_steps.py`, the Runtime module, `routes.py`, `ledger_rollups.py` and the admin cost
+    mapping. It writes the row's fields by the names in §21.3.
+  - **D.6a owns** everything under `apis/shared/handoff/` except `prompt_steps.py`, plus `apis/shared/workflows/`,
+    `app_api/`, `feature_flags.py` and infra.
+  - **Merge order:** D.6b imports `prompt_steps_enabled()` from D.6a, so it merges second and rebases first.
+- **Dev check:** each PR's own session validates it on dev after merge. D.6c's check is the end-to-end one: the
+  NSF panel as five prompt steps over the sample proposal on Haiku 5.5 and Sonnet 5.5. It shows the warm read on
+  the `C#` rows, a stop, a `too_large`, and a stage that reads a prompt step.

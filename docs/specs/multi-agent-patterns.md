@@ -425,7 +425,9 @@ Nothing in this section is scheduled.
   outputs returned to the turn's model, which does the reduce. ⚠️ **Measure first:** whether the branches read the
   document from a shared cached prefix (document first, one call warmed before the rest, as extraction warms a
   grammar). Caches are per model, so two tiers pay two writes. Without that, each of 19 branches pays for the whole
-  proposal at the uncached rate.
+  proposal at the uncached rate. *Measured 2026-11-21* (`workflow-designer.md` §21.1): with the document first, a
+  cachePoint after it and one warm call, 16 of 16 branches read it on Haiku 5.5 and Sonnet 5.5, for 3.6–3.9× less
+  input; in a turn's layout none did. Prompt steps are being built as that side call (§21.3 there).
 - **G4. An annotated PDF.** A `source_provenance` locator (`kind`, `value`, `precision`) plus its quote is the
   anchor an annotator needs, and nothing consumes it for output yet. Skill scripts could carry the annotator, but
   they run only under the Word tools today (`WORD_SKILL_SCRIPTS_ENABLED`).
