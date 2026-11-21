@@ -55,6 +55,19 @@ describe('HandoffStateService', () => {
     ]);
   });
 
+  it('seeds only rows it does not hold, never replacing a live one, and leaves the map alone when nothing is new', () => {
+    const live = row('h1', { status: 'running', statusLine: 'Reading section 4' });
+    state.upsertRow(live);
+
+    state.seedRows([row('h1', { status: 'needs_input' }), row('h2', { status: 'done' }), row('h3', { sessionId: 'other' })]);
+
+    expect(state.rowsFor('src')).toEqual([live, row('h2', { status: 'done' })]);
+    expect(state.rowsFor('other').map((r) => r.handoffId)).toEqual(['h3']);
+    const held = state.rowsFor('src');
+    state.seedRows([row('h1', { status: 'stopped' })]);
+    expect(state.rowsFor('src')).toBe(held);
+  });
+
   it('records where a target came from', () => {
     state.hydrate('tgt', [], { sessionId: 'src', handoffId: 'h1', sourceTitle: 'Course planning', agentName: 'Rubric Builder' });
     expect(state.spawnedFrom('tgt')?.sourceTitle).toBe('Course planning');
