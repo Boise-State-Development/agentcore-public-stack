@@ -126,9 +126,13 @@ describe('WorkflowRunRowComponent', () => {
     });
   });
 
-  function render(value: WorkflowRunView): { el: HTMLElement; detect: (next?: WorkflowRunView) => void } {
+  function render(
+    value: WorkflowRunView,
+    inputs: { offerSaveAsWorkflow?: boolean } = {},
+  ): { el: HTMLElement; detect: (next?: WorkflowRunView) => void } {
     const fixture = TestBed.createComponent(WorkflowRunRowComponent);
     fixture.componentRef.setInput('run', value);
+    if (inputs.offerSaveAsWorkflow !== undefined) fixture.componentRef.setInput('offerSaveAsWorkflow', inputs.offerSaveAsWorkflow);
     fixture.detectChanges();
     return {
       el: fixture.nativeElement as HTMLElement,
@@ -271,6 +275,12 @@ describe('WorkflowRunRowComponent', () => {
       features.workflows = true;
       const { el } = render(run([stepRow(0, 'done'), stepRow(1, 'running')]));
       expect(buttons(el)).not.toContain('Save as workflow');
+    });
+
+    it('is not offered where the host turns it off (the designer’s test run, PR-D.4)', () => {
+      features.workflows = true;
+      const { el } = render(run([stepRow(0, 'done'), stepRow(1, 'done')]), { offerSaveAsWorkflow: false });
+      expect(buttons(el)).toEqual(['Bring back results']);
     });
 
     it('is never offered while workflows are off', () => {

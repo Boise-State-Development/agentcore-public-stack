@@ -26,14 +26,24 @@ import {
 import { firstValueFrom } from 'rxjs';
 
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../components/confirmation-dialog';
-import { GraphEdge, GraphStepCard, WorkflowGraphComponent } from './components/workflow-graph.component';
+import { RunStepLine } from '../session/services/handoff/workflow-run-progress';
+import { WorkflowRunView } from '../session/services/handoff/workflow-run.models';
+import {
+  GraphEdge,
+  GraphMode,
+  GraphStepCard,
+  GraphStepStatus,
+  WorkflowGraphComponent,
+} from './components/workflow-graph.component';
 import { WorkflowPreviewTabComponent } from './components/workflow-preview-tab.component';
 import { WorkflowStepTabComponent } from './components/workflow-step-tab.component';
-import { stepReads } from './workflow-draft';
+import { WorkflowTestRunPanelComponent } from './components/workflow-test-run-panel.component';
+import { DraftStep, stepReads } from './workflow-draft';
 import { RESULT_NODE, START_NODE, WorkflowDesignerStore } from './workflow-designer.store';
+import { WorkflowTestRunService, isStartedRun } from './workflow-test-run.service';
 import { MAX_WORKFLOW_STEPS, WorkflowFiles } from './workflow.models';
 
-type PanelTab = 'step' | 'preview';
+type PanelTab = 'step' | 'preview' | 'test';
 
 const START_META: Record<WorkflowFiles, string> = {
   none: 'A request, no files',
@@ -53,7 +63,14 @@ const START_META: Record<WorkflowFiles, string> = {
 @Component({
   selector: 'app-workflow-designer-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, WorkflowGraphComponent, WorkflowStepTabComponent, WorkflowPreviewTabComponent],
+  imports: [
+    NgIcon,
+    RouterLink,
+    WorkflowGraphComponent,
+    WorkflowStepTabComponent,
+    WorkflowPreviewTabComponent,
+    WorkflowTestRunPanelComponent,
+  ],
   providers: [
     WorkflowDesignerStore,
     provideIcons({ heroArrowLeft, heroCheck, heroCheckCircle, heroExclamationTriangle, heroPencilSquare, heroTrash }),
@@ -66,6 +83,7 @@ export class WorkflowDesignerPage {
   private readonly location = inject(Location);
   private readonly dialog = inject(Dialog);
   private readonly injector = inject(Injector);
+  private readonly testRuns = inject(WorkflowTestRunService);
 
   /** Route params, bound by `withComponentInputBinding()`. Absent on `/workflows/new`. */
   readonly skillId = input<string>();
@@ -87,7 +105,75 @@ export class WorkflowDesignerPage {
         else this.store.startNew(template);
       });
     });
+
+    // Coming back to a workflow whose test run is still shown opens its tab, once per workflow.
+    let shownFor: string | null = null;
+    effect(() => {
+      const ref = this.store.ref();
+      if (this.store.load() !== 'ready' || !ref) return;
+      const key = `${ref.skillId}/${ref.name}`;
+      if (shownFor === key) return;
+      shownFor = key;
+      if (untracked(() => this.testRuns.recordFor(ref))) this.tab.set('test');
+    });
+
+    // The test run was cancelled on its sheet, or closed: back to the Preview it started from.
+    effect(() => {
+      if (this.tab() === 'test' && !this.testRecord()) untracked(() => this.tab.set('preview'));
+    });
   }
+
+  /** The workflow's test run, while the designer shows one (PR-D.4). */
+  protected readonly testRecord = computed(() => this.testRuns.recordFor(this.store.ref()));
+
+  /** The test run's run, once Start was pressed on its sheet. */
+  private readonly testRun = computed<WorkflowRunView | null>(() => {
+    const run = this.testRuns.runFor(this.store.ref());
+    return isStartedRun(run) ? run : null;
+  });
+
+  /** The canvas draws the run while its tab is open and the run has started (§7 D4). */
+  protected readonly graphMode = computed<GraphMode>(() => (this.tab() === 'test' && this.testRun() ? 'run' : 'design'));
+
+  private readonly testProgress = computed(() => {
+    const run = this.testRun();
+    return run ? this.testRuns.progress(run) : null;
+  });
+
+  /** Each draft step's line in the run, matched by the step's saved name (then by its Agent). */
+  private readonly testLines = computed(() => {
+    const progress = this.testProgress();
+    const lines = new Map<string, RunStepLine>();
+    if (!progress) return lines;
+    for (const step of this.store.draft().steps) {
+      const line = lineFor(step, progress.lines);
+      if (line) lines.set(step.key, line);
+    }
+    return lines;
+  });
+
+  protected readonly graphStatus = computed<ReadonlyMap<string, GraphStepStatus>>(() => {
+    const run = this.testRun();
+    const status = new Map<string, GraphStepStatus>();
+    if (!run) return status;
+    for (const [key, line] of this.testLines()) {
+      status.set(key, {
+        state: line.state,
+        phrase: this.testRuns.phrase(line),
+        elapsed: line.state === 'done' ? elapsedLabel(run.approvedAt, line.row?.updatedAt) : undefined,
+      });
+    }
+    return status;
+  });
+
+  /** Start has finished once the run started; a step once it is done. */
+  protected readonly graphFinished = computed<ReadonlySet<string>>(() => {
+    const finished = new Set<string>();
+    if (!this.testRun()) return finished;
+    finished.add(START_NODE);
+    for (const [key, line] of this.testLines()) if (line.state === 'done') finished.add(key);
+    return finished;
+  });
 
   protected readonly savedLabel = computed(() => {
     switch (this.store.savedState()) {
@@ -104,10 +190,15 @@ export class WorkflowDesignerPage {
 
   protected readonly startCard = computed(() => ({
     title: 'Starts with',
-    meta: START_META[this.store.draft().files],
+    meta: this.graphMode() === 'run' ? `Started · ${START_META[this.store.draft().files]}` : START_META[this.store.draft().files],
   }));
 
   protected readonly resultCard = computed(() => {
+    const progress = this.graphMode() === 'run' ? this.testProgress() : null;
+    if (progress) {
+      const finished = `${progress.done} of ${progress.total} finished`;
+      return { title: 'One card', meta: this.testRun()?.resultDeliveryId ? `Results ready · ${finished}` : finished };
+    }
     const count = this.store.stepCount();
     return {
       title: 'One card',
@@ -158,17 +249,27 @@ export class WorkflowDesignerPage {
     return edges;
   });
 
+  /** The panel's tabs: Step and Preview, and Test run while there is one. */
+  protected readonly tabs = computed<PanelTab[]>(() => (this.testRecord() ? ['step', 'preview', 'test'] : ['step', 'preview']));
+
   protected setTab(tab: PanelTab): void {
     this.tab.set(tab);
   }
 
-  /** Arrow keys move between the two tabs, as a tablist does. */
+  /** Arrow keys move between the tabs, as a tablist does, wrapping at either end. */
   protected onTabKeydown(event: KeyboardEvent): void {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
-    const next: PanelTab = this.tab() === 'step' ? 'preview' : 'step';
+    const tabs = this.tabs();
+    const index = tabs.indexOf(this.tab());
+    const next = tabs[(index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
     this.tab.set(next);
     document.getElementById(`wf-tab-${next}`)?.focus();
+  }
+
+  /** The test run's sheet is up: show it. */
+  protected showTestRun(): void {
+    this.tab.set('test');
   }
 
   protected selectNode(node: string): void {
@@ -211,4 +312,27 @@ export class WorkflowDesignerPage {
     if ((await firstValueFrom(ref.closed)) !== true) return;
     if (await this.store.remove()) void this.router.navigate(['/workflows']);
   }
+}
+
+/** A draft step's line in a run: the run's step with the same saved name, else the same Agent. */
+function lineFor(step: DraftStep, lines: readonly RunStepLine[]): RunStepLine | undefined {
+  return (
+    lines.find((line) => line.step.stepName === step.name) ??
+    lines.find((line) => !line.step.stepName && !!step.agentId && line.step.agentId === step.agentId)
+  );
+}
+
+/**
+ * "1m 04s": from the run's approval to the step's handoff row settling. A queued step's wait for a
+ * slot is in it, which is what the person waited.
+ */
+export function elapsedLabel(from: string | undefined, to: string | undefined): string | undefined {
+  if (!from || !to) return undefined;
+  const ms = Date.parse(to) - Date.parse(from);
+  if (!Number.isFinite(ms) || ms < 0) return undefined;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`;
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
 }

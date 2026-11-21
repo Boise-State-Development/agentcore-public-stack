@@ -234,6 +234,11 @@ export class WorkflowRunRowComponent {
   private readonly router = inject(Router);
 
   readonly run = input.required<WorkflowRunView>();
+  /**
+   * Offer Save as workflow once the run has settled. The designer's test run (PR-D.4) turns it off:
+   * that run already is a saved workflow's.
+   */
+  readonly offerSaveAsWorkflow = input(true);
 
   constructor() {
     // A step waiting on a connection names the connector the way its consent card does.
@@ -305,7 +310,7 @@ export class WorkflowRunRowComponent {
    * takes a run that is `approved` or `stopped`; a run still going is offered it once it settles.
    */
   protected readonly offerSave = computed(() => {
-    if (!this.features.workflows) return false;
+    if (!this.features.workflows || !this.offerSaveAsWorkflow()) return false;
     const status = this.run().status;
     return status === 'stopped' || (status === 'approved' && this.progress().settled);
   });

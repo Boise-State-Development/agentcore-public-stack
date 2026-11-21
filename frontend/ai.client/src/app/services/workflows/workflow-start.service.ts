@@ -16,6 +16,14 @@ import { WorkflowDocument, WorkflowRef } from './workflow.models';
 export interface WorkflowStartOptions {
   /** Open the sheet in this conversation. Absent: a new conversation titled with the workflow's title. */
   sessionId?: string;
+  /**
+   * Navigate to the new conversation (default true). The designer's test run passes false: the
+   * sheet opens in its own panel and the tab stays on the designer (PR-D.4). Ignored with
+   * `sessionId`.
+   */
+  navigate?: boolean;
+  /** Put in front of the workflow's title for a new conversation, e.g. `Test: ` (§6.3). */
+  titlePrefix?: string;
 }
 
 /**
@@ -33,7 +41,8 @@ export interface WorkflowStartOptions {
  * the Runtime names a conversation only when its row is new.
  *
  * The signature is stable: D.3 calls `start(ref)` for Start and `start(ref)` for Try in a chat, and
- * `start(ref, { sessionId })` from inside a conversation.
+ * `start(ref, { sessionId })` from inside a conversation. The designer's test run (PR-D.4) calls
+ * `start(ref, { navigate: false, titlePrefix: 'Test: ' })`.
  */
 @Injectable({ providedIn: 'root' })
 export class WorkflowStartService {
@@ -64,7 +73,7 @@ export class WorkflowStartService {
     const title = document.workflow.title;
     const sessionId = options.sessionId
       ? await this.ensureRow(options.sessionId, title)
-      : await this.newConversation(title);
+      : await this.newConversation(`${options.titlePrefix ?? ''}${title}`, options.navigate ?? true);
     if (!sessionId) return null;
     void this.runs.open(sessionId, {
       agents: document.workflow.steps.map((step) => ({
@@ -98,9 +107,13 @@ export class WorkflowStartService {
     return sessionId;
   }
 
-  /** A conversation with no turns, titled `title`, shown in the sidebar and navigated to. */
-  private async newConversation(title: string): Promise<string | null> {
-    const sessionId = this.prewarm.claimNewConversationId() ?? uuidv4();
+  /**
+   * A conversation with no turns, titled `title`, shown in the sidebar and (unless `navigate` is
+   * false) navigated to. A prewarmed id belongs to the new-conversation page, so only a start
+   * that goes there claims it.
+   */
+  private async newConversation(title: string, navigate: boolean): Promise<string | null> {
+    const sessionId = (navigate ? this.prewarm.claimNewConversationId() : null) ?? uuidv4();
     try {
       await this.sessions.updateSessionMetadata(sessionId, { title });
     } catch {
@@ -109,7 +122,7 @@ export class WorkflowStartService {
     }
     const user = this.users.currentUser();
     this.sessions.addSessionToCache(sessionId, user?.user_id || 'anonymous', title);
-    await this.router.navigate(['s', sessionId]);
+    if (navigate) await this.router.navigate(['s', sessionId]);
     return sessionId;
   }
 }
