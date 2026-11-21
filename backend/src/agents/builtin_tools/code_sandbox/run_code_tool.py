@@ -772,14 +772,18 @@ def make_run_code_tool(session_id: str, user_id: str, skill_records: TurnSkillRe
         example `python scripts/fill_fillable_fields.py in.pdf fields.json out.pdf`)
         or to write a short program (pypdf, pdfplumber, reportlab, pandas,
         openpyxl, python-docx, python-pptx, Pillow, matplotlib and more are
-        installed). Never copy a skill's script into `code`: run it by name.
+        installed). Run a skill's script only with `skill_name` + `path` +
+        `argv`: never copy it into `code`, and never start it from `code`
+        (subprocess, runpy, import).
 
         The sandbox has NO network access and cannot install packages. Python
         3.12; poppler's pdftoppm/pdftotext are available, qpdf/pdftk/tesseract
         are not. Each call is a fresh process; files persist for the rest of
         this turn only. Working folder layout:
           inputs/          the conversation files you name in `files`
-          skills/<name>/   the active skill's whole folder (scripts/, references/, assets/)
+          skills/<name>/   a skill's whole folder (scripts/, references/, assets/),
+                           copied in only when you run one of its scripts by
+                           `skill_name` + `path`; until then it is not there
           outputs/         write results here; each new file is saved to the chat
                            with a download card (pdf, docx, xlsx, pptx, csv, txt,
                            md, html and images)

@@ -384,7 +384,7 @@ def test_the_run_command_times_out_inside_the_sandbox():
 # The spec, the flag and the notice
 # ---------------------------------------------------------------------------
 
-RUN_CODE_SPEC_DIGEST = "c920f320e6876f4d1f391f096cffdd91b306959938dc1ae415e636e78c73e062"
+RUN_CODE_SPEC_DIGEST = "ef18f56db60e566b18cd13d8c6beecff5ec5423f313c4bc819f6f23e59c07d26"
 
 
 def test_spec_is_pinned_and_says_there_is_no_network():
