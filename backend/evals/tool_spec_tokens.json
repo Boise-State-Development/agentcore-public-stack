@@ -171,12 +171,12 @@
       "specHash": "b9ad413aaba89704"
     },
     "run_code": {
-      "tokens": 743,
+      "tokens": 811,
       "tools": {
-        "run_code": 743
+        "run_code": 811
       },
-      "chars": 2459,
-      "specHash": "5a19c8af03565823"
+      "chars": 2686,
+      "specHash": "03e10afbec4a8f06"
     },
     "set_default_model": {
       "tokens": 298,
