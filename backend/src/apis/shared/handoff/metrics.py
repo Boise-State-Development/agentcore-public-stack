@@ -58,17 +58,19 @@ def emit_workflow_run_metric(
     step_count: Optional[int] = None,
     detail: Optional[str] = None,
     count: int = 1,
+    run_source: str = "user",
 ) -> None:
     """One count of a workflow run's ``name`` (``docs/specs/workflow-runs.md`` §15).
 
-    ``WorkflowRunCreated`` carries the run's ``stepCount`` and its ``runSource`` (``user`` in step
-    1; saved workflows and model proposals come later). ``WorkflowRunApproved`` carries the steps
+    ``WorkflowRunCreated`` carries the run's ``stepCount`` and its ``runSource``: ``user`` for a run
+    of mentions, ``workflow`` for one started from a saved workflow (PR-D.2); model proposals come
+    later. ``WorkflowRunApproved`` carries the steps
     left, ``WorkflowRunEdited`` what the approval changed as ``runDetail`` (``request``,
     ``step_removed``, ``file_unticked``; one count each), ``WorkflowRunCancelled`` a run dismissed
     at its sheet, and ``WorkflowRunStopped`` an approved run stopped. Properties, not dimensions.
     Best-effort: never raises.
     """
-    properties: dict = {"sessionId": session_id, "runId": run_id, "runSource": "user"}
+    properties: dict = {"sessionId": session_id, "runId": run_id, "runSource": run_source}
     if step_count is not None:
         properties["stepCount"] = step_count
     if detail is not None:
