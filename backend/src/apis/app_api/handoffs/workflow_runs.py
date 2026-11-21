@@ -43,7 +43,6 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -54,11 +53,8 @@ from apis.shared.feature_flags import workflow_runs_enabled, workflows_enabled
 from apis.shared.files.linked_files import HANDOFF_MAX_FILES
 from apis.shared.handoff import HandoffStore, HandoffStoreUnavailable, TurnsCovered, get_handoff_store
 from apis.shared.handoff.context import (
-    DeliveryPartBlock,
     build_handoff_message,
     context_hash,
-    prompt_part_names,
-    render_delivery_parts,
 )
 from apis.shared.files.linked_files import DELIVERY_MAX_FILES
 from apis.shared.handoff.delivery_turn import join_delivery_blocks
@@ -72,6 +68,13 @@ from apis.shared.handoff.delivery import (
 from apis.shared.handoff.metrics import emit_workflow_run_metric
 from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, KIND_PROMPT_STEP, Handoff, HandoffView
 from apis.shared.handoff.relay import load_relayed_prompts
+from apis.shared.handoff.run_reads import (
+    StepReadsNotSettled,
+    finished_by,
+    part_status,
+    prompt_part,
+    render_step_reads,
+)
 from apis.shared.handoff.runs import (
     WORKFLOW_RUN_MAX_STEPS,
     WORKFLOW_RUN_MIN_STEPS,
@@ -960,58 +963,23 @@ def _result_steps(run: WorkflowRun) -> List[WorkflowRunStep]:
     return named or kept
 
 
-#: A step row's status as its part reads it. ``open`` depends on the run (see ``_part_status``).
-_PART_STATUS: Dict[str, DeliveryPartStatus] = {
-    "done": "done",
-    "stopped": "stopped",
-    "needs_input": "needs_input",
-    "running": "running",
-    "dismissed": "stopped",
-    "abandoned": "stopped",
-}
+async def _part_for(user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff]) -> DeliveryPartRequest:
+    """One kept step as collect's part, before ``create_delivery``'s checks. Reads the step's answer only when done.
 
-
-def _part_status(run: WorkflowRun, row: Optional[Handoff]) -> DeliveryPartStatus:
-    """What a kept step's part says. A step that never started is still to come in an approved run
-    (the tab's queue), and will never start in a stopped one."""
-    if row is None or row.run_id != run.run_id:
-        return "stopped"
-    effective = row.effective_status()
-    if effective == "open":
-        return "running" if run.status == "approved" else "stopped"
-    if effective == "done" and not row.target_session_id and not row.is_prompt_step:
-        # A prompt step has no conversation by design (§21.3); an Agent step without one never ran.
-        return "stopped"
-    return _PART_STATUS.get(effective, "stopped")
-
-
-async def _part_for(
-    user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff], *, references: bool = True
-) -> DeliveryPartRequest:
-    """One kept step as its part, before ``create_delivery``'s checks. Reads the step's answer only when done.
-
-    ``references=False`` reads the answer alone, for a part that carries no artifact or file
-    (``…/prepare``'s): the two lookups for them would only be thrown away.
+    With the artifacts that answer made and the step conversation's own files, as Bring back result
+    picks them. A prompt step's part is its text alone (``run_reads.prompt_part``). A later step's
+    reads go through ``run_reads.render_step_reads`` instead, which carries text only.
     """
-    part_status = _part_status(run, row)
+    status_now = part_status(run, row)
     if step.is_prompt:
-        return _prompt_part(step, row, part_status)
+        return prompt_part(step, row, status_now)
     target = (row.target_session_id or "") if row is not None and row.run_id == run.run_id else ""
-    if part_status != "done":
+    if status_now != "done":
         return DeliveryPartRequest(
-            step_id=step.step_id, agent_name=step.agent_name, status=part_status, from_session_id=target
+            step_id=step.step_id, agent_name=step.agent_name, status=status_now, from_session_id=target
         )
     assert row is not None
-    finished_at = _finished_by(row.updated_at)
-    if not references:
-        found = await answer_message(target, user.user_id, at_or_before=finished_at)
-        return DeliveryPartRequest(
-            step_id=step.step_id,
-            agent_name=step.agent_name,
-            status="done",
-            from_session_id=target,
-            text=render_return_excerpt(found[0]) if found is not None else "",
-        )
+    finished_at = finished_by(row.updated_at)
     found, files = await asyncio.gather(
         answer_message(target, user.user_id, at_or_before=finished_at),
         asyncio.to_thread(offered_files, user.user_id, target, created_before=finished_at),
@@ -1033,40 +1001,8 @@ async def _part_for(
     )
 
 
-def _prompt_part(step: WorkflowRunStep, row: Optional[Handoff], part_status: DeliveryPartStatus) -> DeliveryPartRequest:
-    """A prompt step's part (§21.3): its row's ``outputText`` when done, text alone, named by its model and step.
-
-    It has no conversation, so nothing is read but the row already in hand: no answer lookup, no
-    artifacts, no files. The text was capped when the Runtime wrote it and is capped again by
-    ``prepare_delivery``, as every part is.
-    """
-    agent_name, from_title = prompt_part_names(step.agent_name or (row.agent_name if row else ""), step.step_name)
-    text = (row.output_text or "") if part_status == "done" and row is not None and row.is_prompt_step else ""
-    return DeliveryPartRequest(
-        step_id=step.step_id,
-        agent_name=agent_name,
-        status=part_status if row is None or row.is_prompt_step else "stopped",
-        text=text,
-        prompt=True,
-        from_title=from_title,
-    )
-
-
-#: How long after a step's ``done`` write its own answer may still be stamped. Memory may stamp the
-#: turn's events when it flushes them, just after the status write; the user's next turn in that
-#: conversation is human-paced, far later than this.
-_SETTLE_SLACK = timedelta(seconds=60)
-
-
-def _finished_by(updated_at: str) -> str:
-    """The cutoff for "the answer as it stood when the step first finished" (spec §8)."""
-    try:
-        at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-    except ValueError:
-        return updated_at
-    if at.tzinfo is None:
-        at = at.replace(tzinfo=timezone.utc)
-    return (at + _SETTLE_SLACK).isoformat()
+#: Kept under its old name for the tests that pin the cutoff (workflow-runs §8).
+_finished_by = finished_by
 
 
 def _within_run_file_cap(parts: List[DeliveryPartRequest]) -> List[DeliveryPartRequest]:
@@ -1125,10 +1061,6 @@ class PrepareRunStepResponse(BaseModel):
     parts: List[PreparedPart] = Field(default_factory=list, description="The steps it reads, in step order")
 
 
-#: A read step has settled when its part reads one of these: it will give nothing more (§6.1).
-_SETTLED_PARTS = frozenset({"done", "stopped"})
-
-
 @router.post(
     "/{session_id}/workflow-runs/{run_id}/steps/{step_id}/prepare",
     response_model=PrepareRunStepResponse,
@@ -1145,8 +1077,10 @@ async def prepare_workflow_run_step(
 ) -> PrepareRunStepResponse:
     """The first message of a step that reads other steps, rendered before its send (PR-D.5a).
 
-    Each step it reads becomes a part exactly as ``…/collect`` makes one (``_part_for``: its answer
-    as it stood when it first finished, bounded at ``SEND_BACK_MAX_TOKENS``), checked by
+    Rendered by ``apis.shared.handoff.run_reads.render_step_reads``, which the Runtime also uses for
+    a prompt step's reads, so both build the same bytes. Each step it reads becomes a part as
+    ``…/collect`` makes one (its answer as it stood when it first finished, bounded at
+    ``SEND_BACK_MAX_TOKENS``; a prompt step's ``outputText``), checked by
     ``prepare_delivery`` against this conversation as a run result is, and wrapped by
     ``render_delivery_parts``, so the Agent reads the same ``<handoff_context>`` blocks a run result
     carries. A step that stopped is named by its block, as the result card names it.
@@ -1167,67 +1101,22 @@ async def prepare_workflow_run_step(
     if step.removed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This step was removed")
 
-    names = set(step.reads or [])
-    reads = [candidate for candidate in run.steps if candidate.step_name in names and candidate.step_id != step.step_id]
-    if not reads:
+    try:
+        block, parts = await render_step_reads(user.user_id, session_id, run, step, store=store)
+    except StepReadsNotSettled as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except DeliveryRefused as exc:
+        raise handoff_routes._refused(exc)
+    if not parts:
         return PrepareRunStepResponse(step_id=step.step_id, message=step.request, reads_block="", parts=[])
-
-    rows = await asyncio.gather(*(asyncio.to_thread(store.get, user.user_id, read.handoff_id) for read in reads))
-    statuses = ["stopped" if read.removed else _part_status(run, row) for read, row in zip(reads, rows)]
-    waiting = [read.agent_name or read.step_name or "a step" for read, s in zip(reads, statuses) if s not in _SETTLED_PARTS]
-    if waiting:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=f"Waiting for {', '.join(waiting)} to finish"
-        )
-
-    parts = await asyncio.gather(
-        *(_read_part(user, run, read, row, part_status) for read, row, part_status in zip(reads, rows, statuses))
-    )
-    block = await _render_reads(user, session_id, run_id, list(parts))
     return PrepareRunStepResponse(
         step_id=step.step_id,
         message=join_delivery_blocks([block], step.request.strip()),
         reads_block=block,
         parts=[
-            PreparedPart(step_id=read.step_id, step_name=read.step_name, agent_name=read.agent_name, status=part.status)
-            for read, part in zip(reads, parts)
-        ],
-    )
-
-
-async def _read_part(
-    user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff], part_status: str
-) -> DeliveryPartRequest:
-    """A read step as its part: ``_part_for``'s, text only, since the artifacts and files it names
-    are references into that step's conversation, which the reading step's can't open. So their
-    lookups are skipped, and the step's answer is the only read."""
-    if step.is_prompt:
-        return _prompt_part(step, row, part_status if part_status == "done" else "stopped")
-    if part_status != "done":
-        return DeliveryPartRequest(step_id=step.step_id, agent_name=step.agent_name, status="stopped")
-    return await _part_for(user, run, step, row, references=False)
-
-
-async def _render_reads(user: User, session_id: str, run_id: str, parts: List[DeliveryPartRequest]) -> str:
-    """The parts as the model reads a run result's, through the checks a result's parts pass."""
-    try:
-        row = await prepare_delivery(user_id=user.user_id, to_session_id=session_id, parts=parts, run_id=run_id)
-    except DeliveryRefused as exc:
-        if exc.reason != "empty":
-            raise handoff_routes._refused(exc)
-        # Nothing finished with text: each part is its status note, which needs no sender.
-        blocks = [
-            DeliveryPartBlock(
-                text="", agent_name=p.agent_name, from_title=p.from_title if p.prompt else "", status=p.status
-            )
+            PreparedPart(step_id=p.step_id, step_name=p.step_name, agent_name=p.agent_name, status=p.status)
             for p in parts
-        ]
-        return render_delivery_parts(blocks)
-    return render_delivery_parts(
-        [
-            DeliveryPartBlock(text=p.text, agent_name=p.agent_name, from_title=p.from_title, status=p.status)
-            for p in row.parts
-        ]
+        ],
     )
 
 

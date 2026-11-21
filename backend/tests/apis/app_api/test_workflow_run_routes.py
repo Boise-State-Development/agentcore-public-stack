@@ -1658,3 +1658,38 @@ def test_a_stopped_prompt_step_is_named_by_its_model_and_step(collect_client, st
     second = data["readsBlock"].split("\n\n<handoff_context ")[1]
     assert second.startswith('from_conversation="Claude Haiku 5.5 · budget">')
     assert DELIVERY_PART_STATUS_NOTES["stopped"] in second
+
+
+def test_the_shared_renderer_is_what_prepare_sends_and_says_what_it_waits_on(collect_client, stores, steps, prompted, table):
+    """``run_reads.render_step_reads`` is the one renderer: prepare's block, and the Runtime's for a prompt step."""
+    import asyncio
+
+    from apis.shared.handoff.run_reads import StepReadsNotSettled, render_step_reads
+
+    handoffs, runs = stores
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    generalist, budget, summary = created["steps"]
+    run = runs.get("alice", run_id)
+    reader = next(s for s in run.steps if s.step_id == summary["stepId"])
+
+    with pytest.raises(StepReadsNotSettled) as waiting:
+        asyncio.run(render_step_reads("alice", "src", run, reader, store=handoffs))
+    assert waiting.value.waiting == ["Generalist", "Claude Haiku 5.5"]
+    assert str(waiting.value) == "Waiting for Generalist, Claude Haiku 5.5 to finish"
+
+    handoffs.accept("alice", generalist["handoffId"], target_session_id="t0", context_edited=False, context_removed=False)
+    handoffs.transition("alice", generalist["handoffId"], "done")
+    steps.target("t0", generalist["handoffId"], "Generalist · Review", [(1, "Strong aims.", "2026-01-01T00:00:00Z")])
+    _finish_prompt(table, budget["handoffId"], "Personnel 60%.")
+
+    block, parts = asyncio.run(render_step_reads("alice", "src", run, reader, store=handoffs))
+
+    assert block == _prepare(client, run_id, summary["stepId"]).json()["readsBlock"]
+    assert [(p.step_name, p.agent_name, p.status) for p in parts] == [
+        ("generalist", "Generalist", "done"), ("budget", "Claude Haiku 5.5", "done"),
+    ]
+    first_step = next(s for s in run.steps if s.step_id == generalist["stepId"])
+    assert asyncio.run(render_step_reads("alice", "src", run, first_step, store=handoffs)) == ("", [])
