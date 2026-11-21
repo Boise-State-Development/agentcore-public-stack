@@ -360,7 +360,7 @@ export class WorkflowRunRowComponent {
     const base = { handoffId: line.step.handoffId, agentName: line.step.agentName, state: line.state };
     if (line.state === 'queued' || line.state === 'not_started' || !line.row?.targetSessionId) {
       const statusLine =
-        line.waitingFor.length > 0
+        line.waitingFor?.length
           ? waitingLabel(line.waitingFor)
           : line.state === 'queued'
             ? 'Queued'

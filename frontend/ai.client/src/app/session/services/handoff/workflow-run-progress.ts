@@ -27,9 +27,10 @@ export interface RunStepLine {
   state: RunStepState;
   /**
    * A step that reads other steps and hasn't started (`queued` or `not_started`): the Agents of the
-   * steps it reads that haven't settled yet, in step order (PR-D.5a). Empty once it could start.
+   * steps it reads that haven't settled yet, in step order (PR-D.5a). Empty or absent once it
+   * could start; optional so a line built elsewhere (the graph's run mode) needs no change.
    */
-  waitingFor: string[];
+  waitingFor?: string[];
 }
 
 export interface RunProgress {
