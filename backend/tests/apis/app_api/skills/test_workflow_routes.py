@@ -23,6 +23,7 @@ from apis.app_api.skills import routes as my_skill_routes
 from apis.app_api.workflows import routes as workflow_routes
 from apis.shared.auth import get_current_user_from_session
 from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep
+from apis.shared.workflows import sheet as workflow_sheet
 
 BROKEN = b"---\ntitle: T\n---\n\n| step | kind | worker | reads |\n|---|---|---|---|\n| a | agent | AST-1 | a |\n"
 
@@ -84,11 +85,12 @@ def world(user_skill_service, monkeypatch):
         model = getattr(getattr(agent, "model_settings", None), "model_id", None)
         return (model, 3.0) if model else (None, None)
 
-    monkeypatch.setattr(workflow_routes, "get_user_skill_service", lambda: user_skill_service)
-    monkeypatch.setattr(workflow_routes, "get_skill_catalog_repository", lambda: user_skill_service.repository)
-    monkeypatch.setattr(workflow_routes, "resolve_accessible_skill_ids", w.accessible)
-    monkeypatch.setattr(workflow_routes, "get_assistant_with_access_check", w.agent_lookup)
-    monkeypatch.setattr(workflow_routes, "step_model", step_model)
+    for module in (workflow_routes, workflow_sheet):
+        monkeypatch.setattr(module, "get_user_skill_service", lambda: user_skill_service)
+        monkeypatch.setattr(module, "get_skill_catalog_repository", lambda: user_skill_service.repository)
+        monkeypatch.setattr(module, "resolve_accessible_skill_ids", w.accessible)
+        monkeypatch.setattr(module, "get_assistant_with_access_check", w.agent_lookup)
+    monkeypatch.setattr(workflow_sheet, "step_model", step_model)
     monkeypatch.setattr(workflow_routes, "get_workflow_run_store", w.run_store)
     monkeypatch.setattr(my_skill_routes, "get_user_skill_service", lambda: user_skill_service)
     return w

@@ -7,7 +7,7 @@ about access and storage.
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,6 +21,19 @@ from apis.shared.workflows.format import (
     Workflow,
     WorkflowResult,
     WorkflowStep,
+)
+
+# The document every read and write answers with lives beside the sheet logic it carries, in
+# ``apis.shared``, because run create (``app_api/handoffs``) builds the same one (PR-D.2).
+from apis.shared.workflows.sheet import (  # noqa: F401 - re-exported for the routes and tests
+    AgentView,
+    ResultView,
+    SheetBlocker,
+    SheetBlockerCode,
+    SheetView,
+    StepView,
+    WorkflowDocument,
+    WorkflowView,
 )
 
 
@@ -100,104 +113,6 @@ class CreateWorkflowRequest(BaseModel):
 
     title: Optional[str] = Field(None, max_length=200, description="'Untitled workflow' when absent")
     from_run: Optional[FromRunRequest] = Field(None, alias="fromRun")
-
-
-class AgentView(BaseModel):
-    """A step's Agent as the caller sees it. A name only when the caller can use the Agent."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    can_run: bool = Field(..., alias="canRun")
-    name: Optional[str] = None
-    emoji: Optional[str] = None
-    image_url: Optional[str] = Field(None, alias="imageUrl")
-    has_icon: bool = Field(False, alias="hasIcon")
-    model_id: Optional[str] = Field(
-        None, alias="modelId", description="The Agent's own model after retirement redirects; null runs on the send's"
-    )
-    input_price_per_million_tokens: Optional[float] = Field(None, alias="inputPricePerMillionTokens")
-    published_version: Optional[int] = Field(None, alias="publishedVersion")
-    changed: bool = Field(
-        False, description="The Agent's published version moved since the step recorded it (§10)"
-    )
-    runs_draft: bool = Field(
-        False, alias="runsDraft", description="The caller owns the Agent, so their test runs its draft (§10)"
-    )
-
-
-class StepView(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    name: str
-    kind: str
-    agent_id: str = Field(..., alias="agentId")
-    agent_version: Optional[int] = Field(None, alias="agentVersion")
-    reads: List[str]
-    request: Optional[str] = None
-    effective_request: str = Field(..., alias="effectiveRequest", description="Its own request, else the shared one")
-    agent: AgentView
-
-
-class ResultView(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    mode: str
-    reads: Optional[List[str]] = None
-    steps: List[str] = Field(..., description="The steps the result takes, in table order")
-    instruction: Optional[str] = None
-
-
-class WorkflowView(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    skill_id: str = Field(..., alias="skillId")
-    name: str
-    title: str
-    version: int
-    files: str
-    request: Optional[str] = None
-    steps: List[StepView]
-    result: ResultView
-    fingerprint: str
-    is_owned: bool = Field(..., alias="isOwned")
-
-
-SheetBlockerCode = Literal[
-    "too_few_steps",
-    "step_unavailable",
-    "same_agent_twice",
-    "reads_step",
-    "merge_result",
-]
-
-
-class SheetBlocker(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    code: SheetBlockerCode
-    message: str
-    step: Optional[str] = None
-
-
-class SheetView(BaseModel):
-    """What the approval sheet would say if this workflow were started now (§6.1, D3)."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    startable: bool
-    blockers: List[SheetBlocker]
-
-
-class WorkflowDocument(BaseModel):
-    """``GET``, ``POST`` and ``PUT`` all answer with the workflow and its sheet."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    workflow: WorkflowView
-    sheet: SheetView
-    written: Optional[bool] = Field(
-        None, description="PUT only: false for ?validate=true and for a save that changed nothing"
-    )
 
 
 class WorkflowSummary(BaseModel):
