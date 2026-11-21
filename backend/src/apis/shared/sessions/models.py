@@ -452,6 +452,11 @@ class SessionMetadata(BaseModel):
         alias="contextWindow",
         description="Model max input tokens at the time of the most recent turn",
     )
+    long_context_threshold: Optional[int] = Field(
+        default=None,
+        alias="longContextThreshold",
+        description="Prompt tokens past which the most recent turn's model bills on its long-context row",
+    )
 
     # Cumulative count of turns rolled into a compaction summary across this
     # session's lifetime. Lifted out of the nested `compaction` map at GET
@@ -794,6 +799,11 @@ class SessionMetadataResponse(BaseModel):
         alias="contextWindow",
         description="Model max input tokens at the time of the most recent turn",
     )
+    long_context_threshold: Optional[int] = Field(
+        default=None,
+        alias="longContextThreshold",
+        description="Prompt tokens past which the most recent turn's model bills on its long-context row",
+    )
     total_summarized_turns: Optional[int] = Field(
         default=None,
         alias="totalSummarizedTurns",
@@ -988,6 +998,17 @@ class PricingSnapshot(BaseModel):
     )
     currency: str = Field(default="USD", description="Currency code")
     snapshot_at: str = Field(..., alias="snapshotAt", description="ISO timestamp when pricing was captured")
+    # The model's long-context row, captured with the rates so a historical
+    # row reprices exactly as it was billed (`CostCalculator.rates_for_call`).
+    long_context_threshold_tokens: Optional[int] = Field(
+        None, alias="longContextThresholdTokens", description="Prompt tokens above which the long-context rates apply"
+    )
+    long_context_input_multiplier: Optional[float] = Field(
+        None, alias="longContextInputMultiplier", description="Long-context multiplier on input and both cache rates"
+    )
+    long_context_output_multiplier: Optional[float] = Field(
+        None, alias="longContextOutputMultiplier", description="Long-context multiplier on the output rate"
+    )
 
 
 class ModelInfo(BaseModel):

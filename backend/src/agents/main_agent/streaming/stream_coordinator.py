@@ -1223,6 +1223,12 @@ class StreamCoordinator:
                                 window, _source = resolve_context_window(model_id, max_input_tokens)
                                 if window:
                                     final_metadata["contextWindow"] = window
+                                # The prompt size past which the model bills on its
+                                # long-context row (Haiku 5.5: 100K at 5x). The meter
+                                # names that line rather than reading it as "full".
+                                threshold = getattr(model_record, "long_context_threshold_tokens", None)
+                                if isinstance(threshold, int) and threshold > 0:
+                                    final_metadata["longContextThreshold"] = threshold
                             except Exception as ctx_err:
                                 logger.debug(f"Skipping contextWindow lookup: {ctx_err}")
 
@@ -4747,6 +4753,8 @@ class StreamCoordinator:
             pricing_snapshot = None
             cost = None
             context_window: Optional[int] = None
+            long_context_threshold: Optional[int] = None
+            long_context = False
 
             if agent and hasattr(agent, "model_config"):
                 model_id = agent.model_config.model_id
@@ -4765,6 +4773,9 @@ class StreamCoordinator:
                         max_input_tokens = getattr(model_record, "max_input_tokens", None)
                         if max_input_tokens:
                             context_window = int(max_input_tokens)
+                        threshold = getattr(model_record, "long_context_threshold_tokens", None)
+                        if isinstance(threshold, int) and threshold > 0:
+                            long_context_threshold = threshold
                 except Exception as ctx_err:
                     logger.debug(f"Skipping contextWindow capture for storage: {ctx_err}")
 
@@ -4792,6 +4803,9 @@ class StreamCoordinator:
                     )
                     if cost_result is not None:
                         cost = cost_result
+                        long_context = self._is_long_context_call(
+                            accumulated_metadata.get("usage", {}), pricing_snapshot
+                        )
 
                 # Tokens spent, nothing charged: the row is written with no
                 # cost, so the rollups and the user's quota never see it.
@@ -4829,6 +4843,13 @@ class StreamCoordinator:
                 )
                 if context_window is not None:
                     metadata_kwargs["contextWindow"] = context_window
+                if long_context_threshold is not None:
+                    metadata_kwargs["longContextThreshold"] = long_context_threshold
+                # Priced on the model's long-context row (every bucket at its
+                # multiplier). Present only when true, so a scan can count the
+                # calls that crossed the line without re-deriving the rule.
+                if long_context:
+                    metadata_kwargs["longContext"] = True
                 # This call's usage was estimated, not reported: a field ->
                 # method map naming what produced each figure. Present only on
                 # the interrupted call's row (see `interrupted_usage`); its
@@ -5117,6 +5138,17 @@ class StreamCoordinator:
         except Exception as e:
             logger.error(f"Failed to get pricing snapshot for {model_id}: {e}")
             return None
+
+    @staticmethod
+    def _is_long_context_call(usage: Dict[str, Any], pricing: Any) -> bool:
+        """Whether this call billed on its model's long-context row."""
+        try:
+            from apis.shared.costs.calculator import CostCalculator
+
+            pricing_dict = pricing.model_dump(by_alias=True) if hasattr(pricing, "model_dump") else (pricing or {})
+            return CostCalculator.is_long_context(usage or {}, pricing_dict)
+        except Exception:  # noqa: BLE001
+            return False
 
     def _calculate_message_cost(
         self,

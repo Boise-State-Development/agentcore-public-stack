@@ -54,6 +54,13 @@ COPY backend/src/apis/shared/browser_takeover/ ${LAMBDA_TASK_ROOT}/apis/shared/b
 # sessions/metadata.py lazily reaches these on its storage + EMF paths.
 COPY backend/src/apis/shared/storage/ ${LAMBDA_TASK_ROOT}/apis/shared/storage/
 COPY backend/src/apis/shared/observability/ ${LAMBDA_TASK_ROOT}/apis/shared/observability/
+# sessions/metadata.py prices a call's wastedUsd and cache savings through
+# CostCalculator.rates_for_call (the long-context rule). The package's
+# __init__ imports only these two pure-python leaves; pricing_config, which
+# would pull in boto3 and the model catalog, is deliberately not copied.
+COPY backend/src/apis/shared/costs/__init__.py ${LAMBDA_TASK_ROOT}/apis/shared/costs/__init__.py
+COPY backend/src/apis/shared/costs/models.py ${LAMBDA_TASK_ROOT}/apis/shared/costs/models.py
+COPY backend/src/apis/shared/costs/calculator.py ${LAMBDA_TASK_ROOT}/apis/shared/costs/calculator.py
 # Schedules that run in a project (Shared Projects 3.2): the dispatcher checks
 # the project and the creator's role before each run (projects/schedules.py), and
 # the worker writes the project's run rows. Pauses notify through the inbox,

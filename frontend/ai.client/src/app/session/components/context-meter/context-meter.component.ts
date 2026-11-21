@@ -168,7 +168,11 @@ function formatUsd(value: number): string {
               <span class="font-medium text-gray-900 dark:text-white">Context window</span>
               <span class="tabular-nums text-gray-500 dark:text-gray-400">
                 {{ usedLabel() }} / {{ windowLabel() }}
-                <span [class]="pctTextClass()">({{ contextLabel() }})</span>
+                @if (overLongContext()) {
+                  <span class="font-medium text-state-danger-700 dark:text-state-danger-400">(long-context pricing)</span>
+                } @else {
+                  <span [class]="pctTextClass()">({{ contextLabel() }})</span>
+                }
               </span>
             </div>
 
@@ -217,6 +221,17 @@ function formatUsd(value: number): string {
                   <span class="tabular-nums text-gray-500 dark:text-gray-400">{{ freeLabel() }}</span>
                 </li>
               </ul>
+            }
+
+            @if (overLongContext()) {
+              <p class="mt-2 text-[11px]/4 font-medium text-state-danger-700 dark:text-state-danger-400" role="note">
+                This turn's prompt was over {{ thresholdLabel() }} tokens, so it was billed at this model's
+                long-context rates.
+              </p>
+            } @else if (longContextThreshold() > 0) {
+              <p class="mt-2 text-[11px]/4 text-gray-500 dark:text-gray-400">
+                Prompts over {{ thresholdLabel() }} tokens are billed at this model's higher long-context rates.
+              </p>
             }
 
             <p class="mt-2 text-[11px]/4 text-gray-500 dark:text-gray-400">
@@ -311,6 +326,26 @@ export class ContextMeterComponent {
     const id = this.sessionId();
     return id ? this.chatStateService.contextPctFor(id) : this.chatStateService.contextPct();
   });
+
+  /**
+   * The prompt size past which this session's model bills every bucket on its
+   * long-context row (Claude Haiku 5.5: 100,000 at 5x), or 0 when it has none.
+   * Above it the meter says so rather than reading a percentage past 100:
+   * the window is not "full", the turn is just priced differently.
+   */
+  protected readonly longContextThreshold = computed(() => {
+    const id = this.sessionId();
+    return id
+      ? this.chatStateService.longContextThresholdFor(id)
+      : this.chatStateService.longContextThreshold();
+  });
+
+  protected readonly overLongContext = computed(() => {
+    const threshold = this.longContextThreshold();
+    return threshold > 0 && this.contextTokens() > threshold;
+  });
+
+  protected readonly thresholdLabel = computed(() => formatTokens(this.longContextThreshold()));
 
   private readonly breakdown = computed(() => {
     const id = this.sessionId();
@@ -504,6 +539,12 @@ export class ContextMeterComponent {
   protected readonly triggerAriaLabel = computed(() => {
     const cost = `conversation cost ${this.costLabel()}`;
     if (!this.showContext()) return `Context window not measured yet, ${cost}. Show details`;
+    if (this.overLongContext()) {
+      return (
+        `Context over long-context pricing ` +
+        `(${this.usedLabel()} of ${this.thresholdLabel()} tokens), ${cost}. Show details`
+      );
+    }
     return (
       `Context window ${this.contextLabel()} full ` +
       `(${this.usedLabel()} of ${this.windowLabel()} tokens), ${cost}. Show details`

@@ -236,6 +236,16 @@ export interface ManagedModel {
   speechInputPricePerMillionTokens?: number | null;
   /** Speech output price per million tokens (in USD). Speech-to-speech models only. */
   speechOutputPricePerMillionTokens?: number | null;
+  /**
+   * Prompt tokens (input + cache read + cache write) past which the model bills
+   * every bucket on its "Long Context" row. Claude Haiku 5.5: 100,000. The
+   * OpenAI family: 272,000. Absent on a model with one rate card.
+   */
+  longContextThresholdTokens?: number | null;
+  /** Long-context multiplier on the input, cache-read and cache-write rates (Haiku 5.5: 5). */
+  longContextInputMultiplier?: number | null;
+  /** Long-context multiplier on the output rate (Haiku 5.5: 5, OpenAI: 1.5). */
+  longContextOutputMultiplier?: number | null;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
   /** Whether this model supports prompt caching (Bedrock only) */
@@ -368,6 +378,16 @@ export interface ManagedModelFormData {
   speechInputPricePerMillionTokens?: number | null;
   /** Speech output price per million tokens (in USD). Speech-to-speech models only. */
   speechOutputPricePerMillionTokens?: number | null;
+  /**
+   * Prompt tokens (input + cache read + cache write) past which the model bills
+   * every bucket on its "Long Context" row. Claude Haiku 5.5: 100,000. The
+   * OpenAI family: 272,000. Absent on a model with one rate card.
+   */
+  longContextThresholdTokens?: number | null;
+  /** Long-context multiplier on the input, cache-read and cache-write rates (Haiku 5.5: 5). */
+  longContextInputMultiplier?: number | null;
+  /** Long-context multiplier on the output rate (Haiku 5.5: 5, OpenAI: 1.5). */
+  longContextOutputMultiplier?: number | null;
   /** Knowledge cutoff date for the model */
   knowledgeCutoffDate?: string | null;
   /** Whether this model supports prompt caching (Bedrock only) */

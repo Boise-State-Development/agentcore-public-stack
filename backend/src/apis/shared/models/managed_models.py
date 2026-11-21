@@ -300,6 +300,9 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         cache_read_price_per_million_tokens=model_data.cache_read_price_per_million_tokens,
         speech_input_price_per_million_tokens=model_data.speech_input_price_per_million_tokens,
         speech_output_price_per_million_tokens=model_data.speech_output_price_per_million_tokens,
+        long_context_threshold_tokens=model_data.long_context_threshold_tokens,
+        long_context_input_multiplier=model_data.long_context_input_multiplier,
+        long_context_output_multiplier=model_data.long_context_output_multiplier,
         knowledge_cutoff_date=model_data.knowledge_cutoff_date,
         supports_caching=_resolve_supports_caching(model_data.supports_caching, model_data.provider),
         is_default=model_data.is_default,
@@ -352,6 +355,12 @@ async def _create_managed_model_cloud(model_data: ManagedModelCreate, table_name
         item['speechInputPricePerMillionTokens'] = model_data.speech_input_price_per_million_tokens
     if model_data.speech_output_price_per_million_tokens is not None:
         item['speechOutputPricePerMillionTokens'] = model_data.speech_output_price_per_million_tokens
+    if model_data.long_context_threshold_tokens is not None:
+        item['longContextThresholdTokens'] = model_data.long_context_threshold_tokens
+    if model_data.long_context_input_multiplier is not None:
+        item['longContextInputMultiplier'] = model_data.long_context_input_multiplier
+    if model_data.long_context_output_multiplier is not None:
+        item['longContextOutputMultiplier'] = model_data.long_context_output_multiplier
     if model_data.knowledge_cutoff_date is not None:
         item['knowledgeCutoffDate'] = model_data.knowledge_cutoff_date
     if model_data.short_description:

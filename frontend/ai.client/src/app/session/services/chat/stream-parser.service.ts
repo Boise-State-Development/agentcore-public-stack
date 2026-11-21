@@ -1263,6 +1263,7 @@ export class StreamParserService {
         totalContext,
         data.contextWindow,
         data.contextBreakdown ?? null,
+        data.longContextThreshold ?? 0,
       );
     }
   }

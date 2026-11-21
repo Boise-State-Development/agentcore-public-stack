@@ -6,7 +6,7 @@ This module handles:
 - Multi-provider cost support (Bedrock, OpenAI, Gemini)
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from .models import CostBreakdown
 
 
@@ -18,6 +18,67 @@ class CostCalculator:
     # cacheWritePricePerMtok already carries). See the prompt-cache contract
     # in CLAUDE.md.
     LONG_TTL_CACHE_WRITE_MULTIPLIER = 2.0
+
+    # Pricing keys a long-context call multiplies. Input and both cache buckets
+    # share one multiplier and output has its own: that is the shape of every
+    # card with a long-context row today (Haiku 5.5 is 5x / 5x, the OpenAI
+    # family 2x / 1.5x), and the 1h cache write follows automatically because
+    # it is derived from the input rate.
+    _LONG_CONTEXT_INPUT_KEYS = ("inputPricePerMtok", "cacheReadPricePerMtok", "cacheWritePricePerMtok")
+    _LONG_CONTEXT_OUTPUT_KEYS = ("outputPricePerMtok",)
+
+    @staticmethod
+    def prompt_tokens(usage: Dict[str, int]) -> int:
+        """The tokens a long-context threshold is measured against.
+
+        Input plus cache read plus cache write: the whole prompt, however much
+        of it was cached. Output is repriced on a long-context call but does not
+        count toward the line. Dev's Cost Explorer settles it: Haiku 5.5 billed
+        8-token-input calls on its long-context row whenever their cache reads
+        took the prompt past 100,000.
+        """
+        return int(
+            (usage.get("inputTokens") or 0)
+            + (usage.get("cacheReadInputTokens") or 0)
+            + (usage.get("cacheWriteInputTokens") or 0)
+        )
+
+    @staticmethod
+    def is_long_context(usage: Dict[str, int], pricing: Dict[str, Any]) -> bool:
+        """Whether this call bills on the model's long-context row.
+
+        True only when the pricing names a threshold and the prompt EXCEEDS it
+        (the cards say "over 100,000" / "more than 272K", so exactly at the
+        line is still standard).
+        """
+        threshold = pricing.get("longContextThresholdTokens")
+        if not threshold or threshold <= 0:
+            return False
+        return CostCalculator.prompt_tokens(usage) > threshold
+
+    @staticmethod
+    def rates_for_call(usage: Dict[str, int], pricing: Dict[str, Any]) -> Dict[str, Any]:
+        """The pricing dict this call is actually billed at.
+
+        The one place the long-context rule lives. A call under the model's
+        threshold (or on a model with none) gets ``pricing`` back unchanged; one
+        over it gets every rate multiplied by the row's long-context multiplier
+        for that bucket. Everything that prices a call — its cost, its
+        ``wastedUsd``, its cache savings — reads its rates from here, so quota,
+        the rollups and the release ledger agree with the bill.
+        """
+        if not CostCalculator.is_long_context(usage, pricing):
+            return pricing
+        input_multiplier = pricing.get("longContextInputMultiplier") or 1.0
+        output_multiplier = pricing.get("longContextOutputMultiplier") or 1.0
+        effective = dict(pricing)
+        for key in CostCalculator._LONG_CONTEXT_INPUT_KEYS:
+            if effective.get(key) is not None:
+                effective[key] = effective[key] * input_multiplier
+        for key in CostCalculator._LONG_CONTEXT_OUTPUT_KEYS:
+            if effective.get(key) is not None:
+                effective[key] = effective[key] * output_multiplier
+        return effective
 
     @staticmethod
     def calculate_message_cost(
@@ -73,6 +134,11 @@ class CostCalculator:
         cache_read_tokens = usage.get("cacheReadInputTokens") or 0
         cache_write_tokens = usage.get("cacheWriteInputTokens") or 0
 
+        # A prompt over the model's long-context threshold bills every bucket
+        # on the long-context row (see `rates_for_call`).
+        long_context = CostCalculator.is_long_context(usage, pricing)
+        pricing = CostCalculator.rates_for_call(usage, pricing)
+
         # Extract pricing (default to 0 if not present or None)
         # Note: dict.get() with default only handles missing keys, not None values
         input_price = pricing.get("inputPricePerMtok") or 0.0
@@ -113,7 +179,8 @@ class CostCalculator:
             outputCost=output_cost,
             cacheReadCost=cache_read_cost,
             cacheWriteCost=cache_write_cost,
-            totalCost=total_cost
+            totalCost=total_cost,
+            longContext=long_context,
         )
 
         return total_cost, breakdown
