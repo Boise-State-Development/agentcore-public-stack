@@ -294,6 +294,84 @@ class TestWrite:
         assert changed.json()["written"] is True
         assert changed.json()["workflow"]["version"] == 3
 
+    def test_a_save_against_the_stored_version_writes(self, client):
+        wf = _create(client, title="Proposal review")
+        path = f"/workflows/{wf['skillId']}/{wf['name']}"
+
+        resp = client.put(path, json=dict(DEFINITION, expectedVersion=wf["version"]))
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["written"] is True
+        assert resp.json()["workflow"]["version"] == wf["version"] + 1
+
+    def test_a_stale_save_is_409_with_the_current_document_and_writes_nothing(self, client, user_skill_service):
+        wf = _create(client, title="Proposal review")
+        path = f"/workflows/{wf['skillId']}/{wf['name']}"
+        # Another tab saves first, moving the stored version on.
+        other_tab = client.put(path, json=dict(DEFINITION, expectedVersion=wf["version"]))
+        assert other_tab.json()["workflow"]["version"] == 2
+        before = _resources(client, wf["skillId"])
+
+        calls = []
+        original = user_skill_service.add_resource
+
+        async def spy(*args, **kwargs):
+            calls.append(args)
+            return await original(*args, **kwargs)
+
+        user_skill_service.add_resource = spy
+        stale = client.put(path, json=dict(DEFINITION, request="Mine instead", expectedVersion=wf["version"]))
+
+        assert stale.status_code == 409
+        body = stale.json()
+        assert body["code"] == "version_conflict"
+        assert "version 2" in body["detail"]
+        assert body["document"]["workflow"]["version"] == 2
+        assert body["document"]["workflow"]["request"] == DEFINITION["request"]
+        assert body["document"]["sheet"]["startable"] is True
+        assert calls == []
+        assert _resources(client, wf["skillId"]) == before
+
+    def test_a_stale_no_op_save_is_409_too(self, client):
+        wf = _create(client, title="Proposal review")
+        path = f"/workflows/{wf['skillId']}/{wf['name']}"
+        client.put(path, json=DEFINITION)
+
+        stale = client.put(path, json=dict(DEFINITION, expectedVersion=wf["version"]))
+
+        assert stale.status_code == 409
+        assert stale.json()["document"]["workflow"]["version"] == 2
+
+    def test_without_expected_version_a_save_replaces_whatever_is_stored(self, client):
+        wf = _create(client, title="Proposal review")
+        path = f"/workflows/{wf['skillId']}/{wf['name']}"
+        client.put(path, json=DEFINITION)
+
+        resp = client.put(path, json=dict(DEFINITION, request="Last write wins"))
+
+        assert resp.status_code == 200
+        assert resp.json()["workflow"]["version"] == 3
+
+    def test_validate_never_checks_the_version(self, client):
+        wf = _create(client, title="Proposal review")
+        path = f"/workflows/{wf['skillId']}/{wf['name']}"
+        client.put(path, json=DEFINITION)
+
+        resp = client.put(path, json=dict(DEFINITION, expectedVersion=1), params={"validate": "true"})
+
+        assert resp.status_code == 200
+        assert resp.json()["written"] is False
+
+    def test_a_save_against_a_deleted_workflow_is_409(self, client):
+        skill_id = client.post("/skills/mine", json={"displayName": "Hand built", "description": "d"}).json()["skillId"]
+
+        resp = client.put(f"/workflows/{skill_id}/review", json=dict(DEFINITION, expectedVersion=3))
+
+        assert resp.status_code == 409
+        assert resp.json()["code"] == "workflow_deleted"
+        assert resp.json()["document"] is None
+        assert all(not r["filename"].startswith("workflow.") for r in _resources(client, skill_id))
+
     def test_validate_writes_nothing_and_returns_the_sheet(self, client):
         wf = _create(client, title="Proposal review")
         path = f"/workflows/{wf['skillId']}/{wf['name']}"

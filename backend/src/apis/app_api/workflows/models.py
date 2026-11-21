@@ -59,6 +59,16 @@ class WorkflowDefinitionModel(BaseModel):
     request: Optional[str] = Field(None, max_length=MAX_REQUEST_CHARS)
     steps: List[WorkflowStepModel] = Field(default_factory=list, max_length=MAX_STEPS)
     result: WorkflowResultModel = Field(default_factory=WorkflowResultModel)
+    expected_version: Optional[int] = Field(
+        None,
+        alias="expectedVersion",
+        ge=1,
+        description=(
+            "PUT only: the stored version the save was made against. A save whose stored file has moved "
+            "on answers 409 with the current document, so one tab never clobbers another. Absent, a save "
+            "replaces whatever is stored, as before"
+        ),
+    )
 
     def to_workflow(self, *, name: str, version: int) -> Workflow:
         return Workflow(

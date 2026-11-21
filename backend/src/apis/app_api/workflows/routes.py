@@ -3,7 +3,8 @@
     GET    /workflows                     every workflow in a skill the caller owns or can use
     POST   /workflows                     a new carrying skill and its file; ``fromRun`` fills it from a run
     GET    /workflows/{skillId}/{name}    one, with each step's Agent as the caller sees it, and its sheet
-    PUT    /workflows/{skillId}/{name}    write it; ``?validate=true`` writes nothing
+    PUT    /workflows/{skillId}/{name}    write it; ``?validate=true`` writes nothing; a stale
+                                          ``expectedVersion`` is 409 with the current document
     DELETE /workflows/{skillId}/{name}    the file, and its carrying skill when that held nothing else
 
 A workflow is ``references/workflow.<name>.md`` in a skill (D1), so access is the skill's: anyone
@@ -474,6 +475,46 @@ async def read_workflow(
 # --- Write ----------------------------------------------------------------------------------------
 
 
+async def _version_conflict(
+    skill: SkillDefinition,
+    stored_ref: Optional[SkillResourceRef],
+    stored: Optional[Workflow],
+    expected: int,
+    user: User,
+) -> Optional[JSONResponse]:
+    """409 when the stored file is no longer the version the save was made against, else ``None``.
+
+    The body carries the current document, so the designer can say the workflow changed elsewhere
+    and offer to reload it without a second request. A file deleted since is a conflict too, with no
+    document. A stored file that no longer parses has no version to compare and is replaced whole,
+    as a save without ``expectedVersion`` replaces it.
+    """
+    if stored_ref is None:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "detail": "This workflow was deleted somewhere else",
+                "code": "workflow_deleted",
+                "document": None,
+            },
+        )
+    if stored is None or stored.version == expected:
+        return None
+    current = await _document(skill, stored, user)
+    logger.info("Refused a stale workflow save", extra={"event": "workflow_version_conflict"})
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "detail": (
+                f"This workflow changed somewhere else: it is now version {stored.version}, "
+                f"and this save was made against version {expected}"
+            ),
+            "code": "version_conflict",
+            "document": current.model_dump(by_alias=True, exclude_none=True, mode="json"),
+        },
+    )
+
+
 @router.put(
     "/{skill_id}/{name}",
     response_model=WorkflowDocument,
@@ -486,12 +527,14 @@ async def write_workflow(
     body: WorkflowDefinitionModel,
     validate: bool = False,
     user: User = Depends(get_current_user_from_session),
-) -> WorkflowDocument:
+) -> WorkflowDocument | JSONResponse:
     """Create or replace one workflow on a skill the caller owns.
 
     ``?validate=true`` writes nothing and answers with the normalised definition and its sheet. A
     save whose definition is the stored one writes nothing and leaves ``version`` alone; any other
-    save moves ``version`` by one. The body's own ``version`` is never read. The stored file's
+    save moves ``version`` by one. The body's own ``version`` is never read. With ``expectedVersion``,
+    a save made against a version that is no longer the stored one answers 409 with the current
+    document (``_version_conflict``); ``?validate=true`` never checks it. The stored file's
     prose, extra frontmatter and extra columns ride through untouched (``carry_layout``). This is
     its own route, not the generic resource upload, because that one always writes.
     """
@@ -519,6 +562,11 @@ async def write_workflow(
             stored, layout = read_workflow_file(markdown, name=name)
         except WorkflowError:
             stored, layout = None, None  # a broken file is replaced whole
+
+    if body.expected_version is not None and not validate:
+        conflict = await _version_conflict(skill, stored_ref, stored, body.expected_version, user)
+        if conflict is not None:
+            return conflict
 
     try:
         proposed = body.to_workflow(name=name, version=1)
