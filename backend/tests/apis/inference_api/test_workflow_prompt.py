@@ -792,7 +792,10 @@ async def test_the_warm_call_is_a_step_that_sends_the_documents():
     assert model.events[:2] == ["start1", "end1"]
 
 
-def test_a_row_without_reads_reads_both_inputs():
-    assert wp.step_reads_inputs(_step(1)) == (True, True)
-    assert wp.step_reads_inputs(_step(1, reads=["lens-0"])) == (False, False)
-    assert wp.step_reads_inputs(_step(1, reads=["request", "lens-0"])) == (True, False)
+def test_the_run_request_follows_the_steps_own_reads_input():
+    run = _run([_step(1)], request="Focus on the budget")
+
+    assert wp.run_request_for(run, _step(1)) == "Focus on the budget", "a row with no reads reads both"
+    assert wp.run_request_for(run, _step(1, reads=["lens-0"])) == ""
+    assert wp.run_request_for(run, _step(1, reads=["request", "lens-0"])) == "Focus on the budget"
+    assert wp.run_request_for(run, _step(1, reads=[])) == ""

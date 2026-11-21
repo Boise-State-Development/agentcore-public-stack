@@ -54,6 +54,7 @@ from apis.shared.handoff.run_reads import StepReadsNotSettled, render_step_reads
 from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep, WorkflowRunStore, get_workflow_run_store
 from apis.shared.handoff.send_back import DeliveryRefused
 from apis.shared.models.cache_points import bedrock_cache_points_supported
+from apis.shared.workflows.format import READ_FILES, READ_REQUEST
 
 logger = logging.getLogger(__name__)
 
@@ -88,25 +89,12 @@ INSTRUCTION_HEADING = "This step's instruction:"
 RUN_REQUEST_HEADING = "The user's request for this workflow:"
 
 
-def step_reads_inputs(step: WorkflowRunStep) -> Tuple[bool, bool]:
-    """``(reads_request, reads_files)``: which of the run's inputs a prompt step reads.
-
-    A step's ``reads`` names ``request`` and ``files`` beside the steps it reads (the format's
-    ``INPUT_READS``). A row with no ``reads`` at all reads both, as every step did before reads.
-    """
-    from apis.shared.workflows.format import READ_FILES, READ_REQUEST
-
-    if step.reads is None:
-        return True, True
-    return READ_REQUEST in step.reads, READ_FILES in step.reads
-
-
 def run_request_for(run: WorkflowRun, step: WorkflowRunStep) -> str:
-    """The run's request as a step's message carries it: only when the step reads it and its own
-    instruction is not that same request (a step with no instruction of its own is sent it as one)."""
-    reads_request, _ = step_reads_inputs(step)
+    """The run's request as a step's message carries it: only when the step reads it
+    (``reads_input``) and its own instruction is not that same request (a step with no
+    instruction of its own is sent it as one)."""
     shared = (run.request or "").strip()
-    if not reads_request or not shared or shared == (step.request or "").strip():
+    if not step.reads_input(READ_REQUEST) or not shared or shared == (step.request or "").strip():
         return ""
     return shared
 
@@ -708,9 +696,13 @@ class PromptStepRun:
                 logger.warning("workflow prompt: rendering a step's reads failed", exc_info=True)
                 self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_pending"))
                 continue
-            _, reads_files = step_reads_inputs(step)
             plans.append(
-                StepPlan(step=step, reads_block=block, run_request=run_request_for(run, step), reads_files=reads_files)
+                StepPlan(
+                    step=step,
+                    reads_block=block,
+                    run_request=run_request_for(run, step),
+                    reads_files=step.reads_input(READ_FILES),
+                )
             )
         return plans
 
