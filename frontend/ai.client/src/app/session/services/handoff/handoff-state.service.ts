@@ -91,6 +91,26 @@ export class HandoffStateService {
     });
   }
 
+  /**
+   * Add rows this tab doesn't hold yet, and never replace one it does: a row this tab holds is
+   * kept current by its stream and end-of-turn re-read, so a copy read elsewhere may be older.
+   * For a source whose messages were never loaded here (the designer's test run, read by id after
+   * a reload), so the relay can register a waiting step's prompts.
+   */
+  seedRows(rows: readonly HandoffView[]): void {
+    if (rows.length === 0) return;
+    this.rowsBySource.update((map) => {
+      let next: Map<string, readonly HandoffView[]> | null = null;
+      for (const row of rows) {
+        const held = (next ?? map).get(row.sessionId) ?? [];
+        if (held.some((existing) => existing.handoffId === row.handoffId)) continue;
+        next ??= new Map(map);
+        next.set(row.sessionId, [...held, row]);
+      }
+      return next ?? map;
+    });
+  }
+
   setSpawnedFrom(targetSessionId: string, spawnedFrom: SpawnedFrom): void {
     this.spawnedByTarget.update((map) => new Map(map).set(targetSessionId, spawnedFrom));
   }

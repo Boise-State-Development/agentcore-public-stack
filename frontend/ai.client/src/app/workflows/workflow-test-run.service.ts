@@ -126,8 +126,10 @@ export class WorkflowTestRunService {
 
   /**
    * `GET /sessions/{id}/workflow-runs/{runId}` into run state, for a test run this tab doesn't hold
-   * (after a reload). `gone` when it was never started (cancelled on the sheet, or the reload came
-   * before Start) or no longer exists; the caller forgets it then.
+   * (after a reload), and its steps' handoff rows into `HandoffStateService` where this tab holds
+   * none, so a waiting step's relayed prompt can be answered here. `gone` when it was never
+   * started (cancelled on the sheet, or the reload came before Start) or no longer exists; the
+   * caller forgets it then.
    */
   async load(record: Required<TestRunRecord>): Promise<TestRunLoad> {
     const url = `${this.config.appApiUrl()}/sessions/${encodeURIComponent(record.sessionId)}/workflow-runs/${encodeURIComponent(record.runId)}`;
@@ -138,6 +140,10 @@ export class WorkflowTestRunService {
       if (!isStartedRun(run)) return 'gone';
       // Another read may have put it there meanwhile; this tab's copy wins.
       if (!this.runState.runsFor(run.sessionId).some((r) => r.runId === run.runId)) this.runState.upsertRun(run);
+      // The relay registers a waiting step's prompts from the handoff rows this tab holds, and a
+      // source whose messages never loaded here has none: seed the run's copies, never over a
+      // row this tab already holds live.
+      this.handoffState.seedRows(run.steps.flatMap((step) => (step.handoff ? [step.handoff] : [])));
       return 'loaded';
     } catch (error) {
       return error instanceof HttpErrorResponse && error.status === 404 ? 'gone' : 'failed';
