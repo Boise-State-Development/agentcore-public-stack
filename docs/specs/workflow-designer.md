@@ -762,7 +762,9 @@ stages".
   (`src/app/services/workflows/`), which gained `listQuietly`, `create`, `read`, `validate`, `write` (the
   checked save, mapping the 409) and `remove`. Those send `SUPPRESS_ERROR_TOAST`, because each caller shows its
   own error; D.2's `list`, `get` and `save` are unchanged.
-- **Save as workflow** is on a run's row once it is `stopped`, or `approved` and every step has settled.
+- **Save as workflow** is on a run's row once it is `stopped`, or `approved` and every step has settled. The
+  workflow is named after the source conversation (`POST /workflows {title, fromRun}`), or "Untitled workflow"
+  while that still has the placeholder title; a repeated title gets a suffixed skill id.
 - **The Customize badge** is the row's existing chip ("workflow") on an active carrier, with **Open in designer**
   beside it while `features.workflows` is on. The workflow's name comes from the carrier's
   `workflow.<name>.md` filename, never its content.
