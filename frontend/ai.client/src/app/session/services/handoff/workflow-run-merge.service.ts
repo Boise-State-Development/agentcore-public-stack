@@ -42,7 +42,7 @@ export function mergeInstructionOf(run: Pick<WorkflowRunView, 'workflow'> | null
  *   is attached by that one send, as any card is.
  * - **Only when nothing is in the way, checked at the moment of sending:** the source is the
  *   conversation on screen (its page registered a sender), it is not streaming, its composer is
- *   empty (`ComposerEmptyService`), the run's card is on the composer and is the only card there,
+ *   empty apart from the run's own files (`ComposerEmptyService`), the run's card is on the composer and is the only card there,
  *   and no run sheet is open on it. Otherwise the card waits on the composer, as in step 1, and the
  *   run's row offers Merge now.
  * - **Why on screen.** A send is built from the page's selections, and the session page restores a
@@ -96,7 +96,9 @@ export class WorkflowRunMergeService {
     // waiting there rides the send, as it would ride their own.
     if (options.manual) return null;
     if (cards.length > 1) return 'other_cards';
-    if (!this.composer.isEmpty(sessionId)) return 'composer_not_empty';
+    // The run's own file stays on the composer after Start (attached with + for the sheet), and
+    // is no draft: it already went to every step.
+    if (!this.composer.isEmpty(sessionId, new Set(run.fileIds))) return 'composer_not_empty';
     return null;
   }
 

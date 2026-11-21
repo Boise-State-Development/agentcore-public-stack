@@ -964,6 +964,14 @@ half (Reads, stage columns, the Result card) is D.5b-1. Where it differs from th
   key, written by the composer every time it mirrors its draft (`syncDraft`, the send's `persistDraftNow`, its
   destroy), and seeded on first read from the draft's `localStorage` row (`isEmptyDraft`), so a draft left before
   a reload counts.
+- **Found in dev validation, fixed after it: a run's own file held the merge.** A saved workflow that takes a file
+  is started with the file attached with + for the sheet, and the file stays on the composer after Start, so the
+  composer never read as empty and the merge never started by itself in the main case (`files: one`).
+  `ComposerEmptyService` now keeps which files are attached, and the merge ignores the run's own `fileIds`; typed
+  text, a queued follow-up, a folder or any other file still holds it. The sheet also gained a fixed header and
+  footer with its body scrolling between them, so Start stays on screen with five steps, the files and the merge
+  notice. Dev validation of both runs (the merge by itself, the card waiting on a draft, Merge now, append-only
+  `C#` rows, both graphs) is on #2251; the two runs cost $0.341.
 - **The run row** shows "Merge: *instruction*" under its heading. **View as graph** (a disclosure, closed by
   default, behind `features.workflows`) draws the run on `WorkflowGraphComponent` in run mode, as it is: stages
   from each step's `reads`, edges to the Result from `resultReads`, each card's phrase the row line's own, its

@@ -70,8 +70,9 @@ interface StepRow {
         role="region"
         [attr.aria-label]="title()"
         tabindex="-1"
-        class="mb-2 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900"
+        class="mb-2 flex max-h-[min(42rem,calc(100dvh-14rem))] flex-col rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900"
       >
+        <div class="shrink-0 border-b border-gray-200 px-4 pt-4 pb-3 dark:border-gray-700">
         <div class="flex items-start justify-between gap-3">
           <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">{{ title() }}</h2>
           <button
@@ -86,6 +87,10 @@ interface StepRow {
         <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
           Each Agent starts a new conversation in the background. You stay here.
         </p>
+        </div>
+
+        <!-- The body scrolls between the fixed header and footer, so Start never leaves the screen. -->
+        <div class="min-h-0 flex-1 overflow-y-auto px-4 pb-3" data-testid="run-sheet-body">
 
         <label [attr.for]="requestId" class="mt-3 block text-xs font-medium text-gray-700 dark:text-gray-300">
           Request
@@ -393,7 +398,9 @@ interface StepRow {
           <p class="mt-2 text-sm/6 text-state-danger-700 dark:text-state-danger-300" role="alert">{{ r.error }}</p>
         }
 
-        <div class="mt-4 flex justify-end gap-2">
+        </div>
+
+        <div class="flex shrink-0 justify-end gap-2 border-t border-gray-200 px-4 py-3 dark:border-gray-700" data-testid="run-sheet-footer">
           <button
             type="button"
             (click)="cancel()"
