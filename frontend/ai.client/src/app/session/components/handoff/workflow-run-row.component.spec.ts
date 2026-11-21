@@ -80,6 +80,7 @@ describe('WorkflowRunRowComponent', () => {
   const runs = { resume: vi.fn(), stop: vi.fn() };
   const results = { collect: vi.fn(), isCollecting: () => false, isOnComposer: () => onComposer() };
   const features = { workflows: false };
+  let sessionTitle = 'Proposal review';
   const workflows = { create: vi.fn(), messageFor: (_err: unknown, fallback: string) => fallback };
 
   beforeEach(() => {
@@ -91,6 +92,7 @@ describe('WorkflowRunRowComponent', () => {
     results.collect.mockClear();
     workflows.create.mockReset();
     features.workflows = false;
+    sessionTitle = 'Proposal review';
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
@@ -104,7 +106,7 @@ describe('WorkflowRunRowComponent', () => {
         { provide: ToolInsightService, useValue: { latestSummary: () => undefined, status: () => undefined } },
         {
           provide: SessionService,
-          useValue: { mergedSessionsResource: () => ({ sessions: [{ sessionId: 'src', title: 'Proposal review' }] }) },
+          useValue: { mergedSessionsResource: () => ({ sessions: [{ sessionId: 'src', title: sessionTitle }] }) },
         },
         { provide: UserConnectorsService, useValue: { ensureLoaded: vi.fn(), displayNameFor: (id: string) => id } },
         { provide: WorkflowRunQueueService, useValue: { isPending: (_run: string, id: string) => pending.has(id) } },
@@ -261,8 +263,22 @@ describe('WorkflowRunRowComponent', () => {
       [...el.querySelectorAll('button')].find((b) => text(b) === 'Save as workflow')!.click();
       await new Promise((resolve) => setTimeout(resolve));
 
-      expect(workflows.create).toHaveBeenCalledWith({ fromRun: { sessionId: 'src', runId: 'run1' } });
+      // Named after the source conversation ("Proposal review" in the SessionService stub).
+      expect(workflows.create).toHaveBeenCalledWith({ title: 'Proposal review', fromRun: { sessionId: 'src', runId: 'run1' } });
       expect(navigate).toHaveBeenCalledWith(['/workflows', 'SKL-1', 'proposal-review']);
+    });
+
+    it('leaves the name to the server while the conversation has no title yet', async () => {
+      features.workflows = true;
+      sessionTitle = 'New Conversation';
+      workflows.create.mockResolvedValue({ workflow: { skillId: 'SKL-1', name: 'untitled-workflow' } });
+      vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+      const { el } = render(run([stepRow(0, 'done'), stepRow(1, 'done')]));
+
+      [...el.querySelectorAll('button')].find((b) => text(b) === 'Save as workflow')!.click();
+      await new Promise((resolve) => setTimeout(resolve));
+
+      expect(workflows.create).toHaveBeenCalledWith({ title: undefined, fromRun: { sessionId: 'src', runId: 'run1' } });
     });
 
     it('is offered on a stopped run', () => {
