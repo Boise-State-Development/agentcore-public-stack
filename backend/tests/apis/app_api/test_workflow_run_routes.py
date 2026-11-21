@@ -1434,7 +1434,12 @@ def test_a_prompt_step_opens_a_prompt_row_on_its_catalog_model_and_rate(make_cli
         ("prompt", "", HAIKU, "budget"),
         ("prompt", "", SONNET, "summary"),
     ]
-    assert stored.steps[2].reads == ["generalist", "budget"]
+    # An Agent step keeps only the steps it reads; a prompt step keeps its whole set, inputs included,
+    # in canonical order, because it gets the request or the documents only when it reads them.
+    assert [s.reads for s in stored.steps] == [None, ["files"], ["request", "generalist", "budget"]]
+    assert [(s.reads_input("request"), s.reads_input("files")) for s in stored.steps] == [
+        (True, True), (False, True), (True, False),
+    ]
     assert [s.get("kind") for s in data["run"]["steps"]] == [None, "prompt", "prompt"]
     assert data["run"]["steps"][1]["handoff"]["modelId"] == HAIKU
 
@@ -1693,3 +1698,44 @@ def test_the_shared_renderer_is_what_prepare_sends_and_says_what_it_waits_on(col
     ]
     first_step = next(s for s in run.steps if s.step_id == generalist["stepId"])
     assert asyncio.run(render_step_reads("alice", "src", run, first_step, store=handoffs)) == ("", [])
+
+
+def test_a_prompt_step_that_reads_nothing_stores_an_empty_set_and_gets_no_input(make_client, stores, prompted, skills):
+    skills.files["wf-key"] = PROMPT_FILE.replace(f"| budget     | prompt | {HAIKU}    | files                       |", f"| budget     | prompt | {HAIKU}    |                             |")
+    data = _start(make_client()).json()
+
+    stored = stores[1].get("alice", data["run"]["runId"])
+    budget = stored.steps[1]
+    assert budget.reads == []
+    assert (budget.reads_input("request"), budget.reads_input("files")) == (False, False)
+
+
+def test_a_prompt_steps_run_row_with_no_reads_reads_as_both_and_a_list_is_exact():
+    from apis.shared.handoff.runs import WorkflowRunStep
+
+    absent = WorkflowRunStep(step_id="s", handoff_id="h", kind="prompt", model_id=HAIKU)
+    assert (absent.reads_input("request"), absent.reads_input("files")) == (True, True)
+    steps_only = WorkflowRunStep(step_id="s", handoff_id="h", kind="prompt", model_id=HAIKU, reads=["generalist"])
+    assert (steps_only.reads_input("request"), steps_only.reads_input("files")) == (False, False)
+    agent = WorkflowRunStep(step_id="s", handoff_id="h", agent_id="a", reads=["generalist"])
+    assert (agent.reads_input("request"), agent.reads_input("files")) == (True, True)
+
+
+def test_the_input_names_in_a_prompt_steps_reads_never_read_as_steps(collect_client, stores, steps, prompted, table):
+    """``render_step_reads`` matches steps by name, and no step may be named ``request`` or ``files``."""
+    import asyncio
+
+    from apis.shared.handoff.run_reads import render_step_reads, steps_read_by
+
+    handoffs, runs = stores
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    run = runs.get("alice", run_id)
+    budget = next(s for s in run.steps if s.step_name == "budget")
+    summary = next(s for s in run.steps if s.step_name == "summary")
+
+    assert budget.reads == ["files"] and steps_read_by(run, budget) == []
+    assert asyncio.run(render_step_reads("alice", "src", run, budget, store=handoffs)) == ("", [])
+    assert [s.step_name for s in steps_read_by(run, summary)] == ["generalist", "budget"]

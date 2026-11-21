@@ -109,14 +109,29 @@ class WorkflowRunStep(BaseModel):
     reads: Optional[List[str]] = Field(
         None,
         description=(
-            "The other steps this step reads, by stepName, in step order (PR-D.5a). Steps only: the "
-            "request and the files go to every step. Absent on a mention run and on a step that reads none"
+            "What this step reads (PR-D.5a). On an Agent step, the other steps only, by stepName in step "
+            "order: the request and the files go to every Agent step, so the input names are left out, and "
+            "it is absent on a mention run and on a step that reads no step. On a prompt step "
+            "(workflow-designer §21.3), the whole set in canonical order (request, files, then steps), "
+            "always written, even empty: a prompt step gets the request or the files only when it reads "
+            "them. A prompt step's row with no reads at all (absent) reads as both"
         ),
     )
 
     @property
     def is_prompt(self) -> bool:
         return self.kind == "prompt"
+
+    def reads_input(self, name: str) -> bool:
+        """Whether the step gets the run's ``request`` or ``files`` (``name``).
+
+        Every Agent step does. A prompt step does only when its ``reads`` names it; its ``reads`` is
+        always written at create, even empty, so an absent one (a row from before inputs were kept)
+        reads as both. No prompt row was written before then outside development.
+        """
+        if not self.is_prompt or self.reads is None:
+            return True
+        return name in self.reads
 
     @model_validator(mode="after")
     def _worker(self) -> "WorkflowRunStep":

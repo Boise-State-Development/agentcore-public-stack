@@ -325,7 +325,8 @@ async def create_workflow_run(
                 request=row.request,
                 step_name=step.step_name,
                 agent_version=step.agent_version,
-                reads=list(step.reads) or None,
+                # A prompt step keeps its whole set, even empty; an Agent step only the steps it reads.
+                reads=list(step.reads) if step.kind == KIND_PROMPT else (list(step.reads) or None),
             )
             for row, step in zip(rows, plan.steps)
         ],
@@ -390,7 +391,8 @@ class _PlannedStep:
     rate: Optional[float]
     step_name: Optional[str] = None
     agent_version: Optional[int] = None
-    #: The other steps this one reads, by name, in step order (PR-D.5a). Empty for a mention run.
+    #: What this one reads (PR-D.5a): the other steps by name, in step order, for an Agent step (empty
+    #: for a mention run); the whole set in canonical order, inputs included, for a prompt step (§21.3).
     reads: tuple = ()
     kind: str = "agent"
 
@@ -529,8 +531,12 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
 
 
 def _planned_step(step: WorkflowStep, agents: Dict[str, AgentView], models: Dict[str, ModelView]) -> _PlannedStep:
-    """A saved workflow's step as the run opens it: its Agent, or a prompt step's model, as the caller."""
-    reads = tuple(read for read in step.reads if read not in INPUT_READS)
+    """A saved workflow's step as the run opens it: its Agent, or a prompt step's model, as the caller.
+
+    An Agent step's reads drop the inputs, since every Agent step gets the request and the files. A
+    prompt step keeps them, in the file's canonical order (request, files, then steps), because it
+    gets the request or the documents only when it reads them, and the Runtime reads that here.
+    """
     if step.is_prompt:
         model = models[step.model_id or ""]
         return _PlannedStep(
@@ -540,7 +546,7 @@ def _planned_step(step: WorkflowStep, agents: Dict[str, AgentView], models: Dict
             model_id=model.model_id,
             rate=model.input_price_per_million_tokens,
             step_name=step.name,
-            reads=reads,
+            reads=tuple(step.reads),
             kind=KIND_PROMPT,
         )
     agent = agents[step.agent_id]
@@ -552,7 +558,7 @@ def _planned_step(step: WorkflowStep, agents: Dict[str, AgentView], models: Dict
         rate=agent.input_price_per_million_tokens,
         step_name=step.name,
         agent_version=agent.published_version,
-        reads=reads,
+        reads=tuple(read for read in step.reads if read not in INPUT_READS),
     )
 
 
