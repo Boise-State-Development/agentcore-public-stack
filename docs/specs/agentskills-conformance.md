@@ -144,7 +144,7 @@ audit; "read" means established from the code only.
 | # | Finding | Evidence | Severity | Fix |
 |---|---|---|---|---|
 | **S1** | **YAML alias expansion in bundle import.** `yaml.safe_load` permits anchors and aliases; `_dynamo_safe` then deep-copies the shared structure. A 314-byte frontmatter produced 2,097,152 leaves in 277 ms, growing 8× per added line; a few more lines exhaust an app-api task's memory. Any signed-in user can send it | Reproduced against `parse_skill_md` + `_dynamo_safe` | **High on dev**, where `SKILL_BUNDLE_IMPORT_ENABLED` is on (GitHub variable set 2026-11-18); none in production, where it is unset | Refuse anchors and aliases in the one shared parser; cap depth and node count (§6.1) |
-| **S2** | **Skill scripts run with open internet egress.** The Code Interpreter is `networkMode: 'PUBLIC'`. A skill script receives the user's document and `params`. With a shared Agent the author is not the person whose document it is, so a script can send that document anywhere. The execution role is logs-only, so there is no AWS data to reach | Read (`code-interpreter-construct.ts`, `word_document_tool.py`). `_ci_exec` has no timeout. The flag is **on in the `development` and `production` GitHub environments** (production since 2026-11-18); CLAUDE.md's "off everywhere" is stale | **High, live in production.** Reaching it needs a shared Agent or project whose bound skill carries a script, and an invoker with the Word tools | A second interpreter in `SANDBOX` mode for skill scripts and a timeout now (briefs, PR 2); the consent gates in §6.6 later. Model-written code already runs in the public one; the new element is code that persists and was written by someone else |
+| **S2** | **Skill scripts run with open internet egress.** The Code Interpreter is `networkMode: 'PUBLIC'`. A skill script receives the user's document and `params`. With a shared Agent the author is not the person whose document it is, so a script can send that document anywhere. The execution role is logs-only, so there is no AWS data to reach | Read (`code-interpreter-construct.ts`, `word_document_tool.py`). `_ci_exec` has no timeout. The flag is **on in the `development` and `production` GitHub environments** (production since 2026-11-18); CLAUDE.md's "off everywhere" is stale | **High, live in production.** Reaching it needs a shared Agent or project whose bound skill carries a script, and an invoker with the Word tools | A second interpreter in `SANDBOX` mode for skill scripts and a timeout now (briefs, PR 2); the consent gates in §6.6 later. Model-written code already runs in the public one; the new element is code that persists and was written by someone else. Superseded by the `VPC`-mode interpreter with no network path out (#2244) |
 | **S3** | **An unpinned shared skill can change under its users.** Editing a skill bound to a shared Agent changes what runs in other people's sessions on their next turn. The `my_skill_*` tool writes show the reach on an approval card; the REST writes and bundle re-import show nothing | Read | Medium | Reach confirmation on every write path; bindings to imported skills pin by default (§6.5) |
 | **S4** | **A GitHub refresh shows that the instructions changed, not how.** The preview returns per-field change flags and an instruction length. D3's "nothing is written that the user did not see" holds for files, not for the text that steers the model | Read (`skill-bundle-import.md` §3) | Medium | Return a text diff of description and instructions; show owner, repo and both commit SHAs |
 | **S5** | **No audit trail.** Skill create, update, import, refresh and delete write no audit event; `import_source` records only the latest import | Read (no audit call under `apis/shared/skills` or the skills routes) | Medium | Audit events with content hashes (§6.5) |
@@ -278,6 +278,10 @@ promoted to default-on, or any general runner is built, all of the following hol
 1. **A dedicated Code Interpreter for skill scripts with `networkMode: 'SANDBOX'`.**
    One more resource in `PlatformStack`, with the same logs-only role. No egress means a
    script cannot send a document anywhere and cannot fetch dependencies.
+   **Superseded:** every interpreter call, skill scripts and model-written code alike, now
+   goes to one interpreter in `VPC` mode in an isolated VPC with no route, no
+   security-group egress and DNS off, and the `PUBLIC` and `SANDBOX` interpreters are
+   removed (#2244). AWS documents `SANDBOX` as allowing S3 access.
 2. **Python only, from the manifest only**, by strict lookup, from a skill bound to the
    turn. No shell tool, no interpreter choice, no `uv`/`npx`.
 3. **The script's hash is part of the consent.** The first run of a given
@@ -364,7 +368,7 @@ All eight PRs merged into `develop` and passed their dev checks, each recorded a
 | PR | Pull request | Closed |
 |---|---|---|
 | 1. Parser hardening | 2147 | S1, S6 (new admin ids), S7, S8 (name and description), S9, F4, F11 |
-| 2. Isolate skill script execution | 2149 | S2: skill scripts run in a `SANDBOX` Code Interpreter with a 120 s limit. Dev check: public internet and both S3 endpoints unreachable, the Contract Redline script unaffected |
+| 2. Isolate skill script execution | 2149 | S2: skill scripts run in a `SANDBOX` Code Interpreter with a 120 s limit. Dev check: public internet and both S3 endpoints unreachable, the Contract Redline script unaffected. Superseded by the `VPC`-mode interpreter (#2244) |
 | 3. Validator and conformant projection | 2151, follow-up 2153 | F5–F9, F13. The follow-up made non-string metadata a warning on input, so stored skills stay editable |
 | 4. Export | 2155 | F3 for the artifact, F12 |
 | 5. One ingest path | 2157 | F1, F2, C5, C6, S4 |

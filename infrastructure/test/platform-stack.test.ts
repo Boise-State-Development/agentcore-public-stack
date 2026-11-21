@@ -41,12 +41,13 @@ describe('PlatformStack', () => {
   });
 
   describe('Network resources', () => {
-    it('creates a VPC', () => {
-      template.resourceCountIs('AWS::EC2::VPC', 1);
+    it('creates the platform VPC and the Code Interpreter\'s isolated one', () => {
+      template.resourceCountIs('AWS::EC2::VPC', 2);
     });
 
-    it('creates public and private subnets', () => {
-      template.resourceCountIs('AWS::EC2::Subnet', 4); // 2 AZs × 2 types
+    it('creates public and private subnets, plus two isolated ones', () => {
+      // Platform VPC: 2 AZs × (public, private). Code sandbox VPC: 2 isolated.
+      template.resourceCountIs('AWS::EC2::Subnet', 6);
     });
 
     it('creates a NAT gateway', () => {
@@ -65,8 +66,8 @@ describe('PlatformStack', () => {
       template.resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 2); // HTTPS + HTTP redirect
     });
 
-    it('creates ALB security group', () => {
-      template.resourceCountIs('AWS::EC2::SecurityGroup', 1);
+    it('creates the ALB security group and the code sandbox\'s', () => {
+      template.resourceCountIs('AWS::EC2::SecurityGroup', 2);
     });
 
     it('creates an ECS cluster', () => {

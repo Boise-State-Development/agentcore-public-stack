@@ -153,8 +153,8 @@ describe('Single-stack integration', () => {
 
     it('creates the AgentCore Memory + CI + Browser + Gateway', () => {
       template.resourceCountIs('AWS::BedrockAgentCore::Memory', 1);
-      // The model-code interpreter (PUBLIC) and the skill-script one (SANDBOX).
-      template.resourceCountIs('AWS::BedrockAgentCore::CodeInterpreterCustom', 2);
+      // One interpreter, in VPC mode with no path out, for every tool.
+      template.resourceCountIs('AWS::BedrockAgentCore::CodeInterpreterCustom', 1);
       template.resourceCountIs('AWS::BedrockAgentCore::BrowserCustom', 1);
       template.resourceCountIs('AWS::BedrockAgentCore::Gateway', 1);
     });
@@ -180,7 +180,8 @@ describe('Single-stack integration', () => {
     });
 
     it('owns the VPC + ALB', () => {
-      template.resourceCountIs('AWS::EC2::VPC', 1);
+      // The platform VPC and the Code Interpreter's isolated one.
+      template.resourceCountIs('AWS::EC2::VPC', 2);
       template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
     });
   });
