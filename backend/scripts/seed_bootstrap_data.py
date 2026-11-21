@@ -464,6 +464,26 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        # Context-bound: enabling it injects run_code at runtime (see
+        # CODE_SANDBOX_TOOL_IDS and _build_code_sandbox_tools in
+        # apis/inference_api/chat/routes.py), and only while
+        # CODE_SANDBOX_ENABLED is on. Off by default: it runs code a user can
+        # steer, so a role is granted it on purpose
+        # (docs/specs/skill-code-sandbox.md §7).
+        "toolId": "run_code",
+        "displayName": "Run Code",
+        "description": (
+            "Run a skill's Python scripts, or short programs the assistant "
+            "writes, in an isolated sandbox with no network access, on files "
+            "from this conversation."
+        ),
+        "category": "code",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
         "toolId": "generate_diagram_and_validate",
         "displayName": "Code Interpreter",
         "description": "Generate diagrams, charts, and visualizations using Python code in a sandboxed environment.",

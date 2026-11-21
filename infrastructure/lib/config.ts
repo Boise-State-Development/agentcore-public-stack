@@ -121,6 +121,7 @@ export interface AppConfig {
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
   concurrentToolExecution: ConcurrentToolExecutionConfig;
   wordSkillScripts: WordSkillScriptsConfig;
+  codeSandbox: CodeSandboxConfig;
   converseDocumentsAsText: ConverseDocumentsAsTextConfig;
   projectFileReadiness: ProjectFileReadinessConfig;
   agents: AgentsConfig;
@@ -1086,6 +1087,22 @@ export interface WebSearchDefaultMaxResultsConfig {
  * and already runs Code Interpreter sessions.
  */
 export interface WordSkillScriptsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Code sandbox (`run_code`). On, a turn whose tools include the `run_code`
+ * catalog row (seeded `enabledByDefault: false`) can run a bound skill's
+ * `scripts/*.py` or Python the model writes in the stack's isolated Code
+ * Interpreter (docs/specs/skill-code-sandbox.md). The tool refuses to run
+ * unless that interpreter is in `VPC` network mode. **Opt-in while in
+ * development**: off unless CDK_CODE_SANDBOX_ENABLED=true (or a
+ * `codeSandbox.enabled: true` cdk.json context). Sets CODE_SANDBOX_ENABLED on
+ * the AgentCore Runtime only, and **only while on**, so the default spends none
+ * of the V2 payload budget. No resources and no IAM: the Runtime already runs
+ * sessions on the interpreter and reads skill resources and user files.
+ */
+export interface CodeSandboxConfig {
   enabled: boolean;
 }
 
@@ -2193,6 +2210,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED
         ? process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('wordSkillScripts')?.enabled ?? false,
+    },
+    codeSandbox: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_CODE_SANDBOX_ENABLED
+        ? process.env.CDK_CODE_SANDBOX_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('codeSandbox')?.enabled ?? false,
     },
     converseDocumentsAsText: {
       // In development: only "true" enables, and an unset GitHub variable

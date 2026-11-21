@@ -108,6 +108,26 @@ def word_skill_scripts_enabled() -> bool:
     return os.environ.get("WORD_SKILL_SCRIPTS_ENABLED", "").strip().lower() == "true"
 
 
+def code_sandbox_enabled() -> bool:
+    """Whether ``run_code`` exists: a skill's scripts, or Python the model writes,
+    run in the stack's isolated Code Interpreter (``docs/specs/skill-code-sandbox.md``).
+
+    On, a turn whose tools include the ``run_code`` catalog row (seeded
+    ``enabledByDefault: false``) gets the tool, and ``read_skill_file`` tells the
+    model to run a script with it instead of copying it. The tool itself refuses
+    to run unless the interpreter is in ``VPC`` network mode, so a deployment
+    that has not taken the isolation update gets a refusal, never a run.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.codeSandbox.enabled``. No SPA switch: results arrive as download
+    cards and images in the tool result. A **feature switch** once finished: it
+    runs code users can steer, which a deployment may not want.
+    """
+    return os.environ.get("CODE_SANDBOX_ENABLED", "").strip().lower() == "true"
+
+
 def assistant_kb_full_context_enabled() -> bool:
     """Whether a small assistant knowledge base reaches the model whole
     (``apis/shared/assistants/kb_full_context.py``).

@@ -287,6 +287,8 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // Concurrent tool execution: one Runtime variable, written only while on.
     concurrentToolExecution: { enabled: true },
     wordSkillScripts: { enabled: true },
+    // Code sandbox (run_code): one Runtime variable, written only while on.
+    codeSandbox: { enabled: true },
     // Documents as text: one Runtime variable, written only while on.
     converseDocumentsAsText: { enabled: true },
     // Project file readiness: one Runtime variable, written only while on.

@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-11-20",
+  "measuredAt": "2026-11-21",
   "modelId": "anthropic.claude-haiku-4-5-20251001-v1:0",
   "region": "us-west-2",
   "method": "Bedrock CountTokens, marginal beside one anchor tool (the fixed tool-use preamble is in the baseline); flags in MEASURE_ENV forced on",
@@ -169,6 +169,14 @@
       },
       "chars": 1434,
       "specHash": "b9ad413aaba89704"
+    },
+    "run_code": {
+      "tokens": 743,
+      "tools": {
+        "run_code": 743
+      },
+      "chars": 2459,
+      "specHash": "5a19c8af03565823"
     },
     "set_default_model": {
       "tokens": 298,
