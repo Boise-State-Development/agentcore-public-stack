@@ -12,6 +12,12 @@ class CostBreakdown(BaseModel):
     cache_write_cost: float = Field(0.0, alias="cacheWriteCost", description="Cost from cache writes")
     cache_read_cost: float = Field(0.0, alias="cacheReadCost", description="Cost from cache reads")
     total_cost: float = Field(..., alias="totalCost", description="Total cost (sum of all)")
+    long_context: bool = Field(
+        False,
+        alias="longContext",
+        description="The prompt exceeded the model's long-context threshold, so every bucket "
+                    "was priced at the long-context rates",
+    )
 
 
 class ModelCostSummary(BaseModel):

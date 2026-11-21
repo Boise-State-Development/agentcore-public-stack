@@ -133,6 +133,15 @@ describe('WorkflowStartService', () => {
     ]);
   });
 
+  it('a test run: a new conversation titled "Test: …", never navigated to and never the prewarmed id', async () => {
+    const sessionId = await readDoc(service.start(REF, { navigate: false, titlePrefix: 'Test: ' }));
+
+    expect(sessionId).not.toBe('new-conv');
+    expect(sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(calls).toEqual([`put:${sessionId}:Test: Proposal review`, `cache:${sessionId}:Test: Proposal review`, `open:${sessionId}`]);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it('in a conversation with turns: opens the sheet there and leaves its title alone', async () => {
     messages = [{ role: 'user' }];
     newSessions.add('src');

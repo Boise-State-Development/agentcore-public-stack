@@ -264,6 +264,9 @@ interface ModelFormGroup {
   cacheReadPricePerMillionTokens: FormControl<number | null>;
   speechInputPricePerMillionTokens: FormControl<number | null>;
   speechOutputPricePerMillionTokens: FormControl<number | null>;
+  longContextThresholdTokens: FormControl<number | null>;
+  longContextInputMultiplier: FormControl<number | null>;
+  longContextOutputMultiplier: FormControl<number | null>;
   knowledgeCutoffDate: FormControl<string | null>;
   supportsCaching: FormControl<boolean>;
   mantleApiMode: FormControl<MantleApiMode>;
@@ -404,6 +407,9 @@ export class ModelFormPage implements OnInit {
     cacheReadPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     speechInputPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
     speechOutputPricePerMillionTokens: this.fb.control<number | null>(null, { validators: [Validators.min(0)] }),
+    longContextThresholdTokens: this.fb.control<number | null>(null, { validators: [Validators.min(1)] }),
+    longContextInputMultiplier: this.fb.control<number | null>(null, { validators: [Validators.min(1)] }),
+    longContextOutputMultiplier: this.fb.control<number | null>(null, { validators: [Validators.min(1)] }),
     knowledgeCutoffDate: this.fb.control<string | null>(null),
     // Seeded for the form's initial provider ('bedrock') and re-derived on
     // every provider switch. A hardcoded `false` here disagreed with the
@@ -950,6 +956,9 @@ export class ModelFormPage implements OnInit {
         cacheReadPricePerMillionTokens: model.cacheReadPricePerMillionTokens ?? null,
         speechInputPricePerMillionTokens: model.speechInputPricePerMillionTokens ?? null,
         speechOutputPricePerMillionTokens: model.speechOutputPricePerMillionTokens ?? null,
+        longContextThresholdTokens: model.longContextThresholdTokens ?? null,
+        longContextInputMultiplier: model.longContextInputMultiplier ?? null,
+        longContextOutputMultiplier: model.longContextOutputMultiplier ?? null,
         knowledgeCutoffDate: model.knowledgeCutoffDate,
         supportsCaching: model.supportsCaching ?? true,
         mantleApiMode: this.coerceMantleApiMode(model.apiMode),
@@ -998,6 +1007,9 @@ export class ModelFormPage implements OnInit {
       cacheReadPricePerMillionTokens: template.cacheReadPricePerMillionTokens ?? null,
       speechInputPricePerMillionTokens: template.speechInputPricePerMillionTokens ?? null,
       speechOutputPricePerMillionTokens: template.speechOutputPricePerMillionTokens ?? null,
+      longContextThresholdTokens: template.longContextThresholdTokens ?? null,
+      longContextInputMultiplier: template.longContextInputMultiplier ?? null,
+      longContextOutputMultiplier: template.longContextOutputMultiplier ?? null,
       knowledgeCutoffDate: template.knowledgeCutoffDate ?? null,
       supportsCaching: template.supportsCaching ?? true,
       mantleApiMode: this.coerceMantleApiMode(template.apiMode),
@@ -1257,6 +1269,9 @@ export class ModelFormPage implements OnInit {
         cacheReadPricePerMillionTokens: v.cacheReadPricePerMillionTokens,
         speechInputPricePerMillionTokens: v.speechInputPricePerMillionTokens,
         speechOutputPricePerMillionTokens: v.speechOutputPricePerMillionTokens,
+        longContextThresholdTokens: v.longContextThresholdTokens,
+        longContextInputMultiplier: v.longContextInputMultiplier,
+        longContextOutputMultiplier: v.longContextOutputMultiplier,
         knowledgeCutoffDate: v.knowledgeCutoffDate,
         supportsCaching: supportsCachingForProvider(v.provider, v.supportsCaching),
         // Only meaningful on an OpenAI-compatible Bedrock surface; null

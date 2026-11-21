@@ -724,6 +724,20 @@ stages".
 - **For D.3.** Wire types are in `src/app/services/workflows/workflow.models.ts` and the client in
   `workflows-api.service.ts` (`list`, `get`, `save`, and `definitionOf` to turn a document back into a PUT body).
 
+- **Fixed after D.3's dev check: the run in a conversation with no turns.** Two gaps on this start path.
+  *The row.* The run's row (Bring back results, Stop run, Save as workflow) and its result card are drawn only
+  in the thread, and the empty-conversation layout drew none. `ChatContainerComponent` now draws the thread
+  when the conversation has a run to show (`showsInThread`: approved or stopped), messages or not; while the
+  sheet is still open it keeps the empty state with the sheet in it. Such a run's `sourceMessageIndex` is
+  `-1`, which no message matches, so the message list draws it above the first turn (`leadingRunRows`), and
+  at the tail only while an older page hides that turn. *The first send.* It was refused as "Already
+  responding" with nothing streaming. No turn lease held it: the composer's first keystroke prewarmed the
+  conversation's runtime session, the Runtime began a snapshot restore (2,017 ms), and the send 270 ms later
+  got a raw **409 from the Runtime data plane**, before the container. Any send in the seconds after a
+  conversation's first keystroke could hit it, not only a workflow's. app-api's chat proxy now waits out a
+  raw Runtime 409 and resends the turn (`agentcore-runtime-v2.md` §5a); a container's own 409 still arrives
+  as a 424 and is never resent.
+
 *Built (PR-D.3).* The SPA is `frontend/ai.client/src/app/workflows/`; the one backend change is in
 `app_api/workflows/`. Where it differs from the plan, and what it settled:
 
@@ -775,6 +789,50 @@ stages".
   ring, `primary-500` in both themes, is 1.67:1 on the dark canvas, so every workflows control adds
   `dark:focus-visible:outline-primary-accessible-dark` (4.53:1 on the canvas, 3.95:1 on a card). The app's other
   surfaces still use `primary-500` in dark.
+
+*Built (PR-D.4).* SPA only, in `frontend/ai.client/src/app/workflows/`. Where it differs from the plan, and
+what it settled:
+
+- **Start test run stays on the designer.** `WorkflowStartService.start(ref, {navigate: false, titlePrefix:
+  'Test: '})` makes the source the way D.2 does (`PUT /sessions/{id}/metadata`, then run create through the
+  sheet) and does not navigate; it never claims the prewarmed id, which belongs to the new-conversation page.
+  `start(ref)` and `start(ref, {sessionId})` are unchanged, and Try in a chat still calls `start(ref)`.
+- **A third panel tab, Test run,** shown while the workflow has a test run. It hosts the starter's own
+  `WorkflowRunSheetComponent`, unchanged: its only host assumption is `reviewFor(sessionId)`, which holds off
+  the session page too. A note above it says the run spends quota and where everything it makes can be
+  opened. After Start the tab shows W.4b's `WorkflowRunRowComponent` (relayed prompts answered under each
+  step's line, each line a link to its conversation) and, once collected, `DeliveryCardsComponent` for the
+  test conversation, with "Open the test conversation". The row gained one input, `offerSaveAsWorkflow`
+  (default true), which the tab turns off: the run already is a saved workflow's.
+- **Run mode is the tab, not the run.** The canvas draws the run while the Test run tab is open and the run has
+  started; the Step tab gives the editable canvas back, so editing mid-run is still possible. In run mode a
+  step card shows the run row's mark and phrase (`runProgress` / `stepState`, worded by `handoffStatusLine`),
+  "· 1m 04s" once done, measured from the run's `approvedAt` to the step row's `updatedAt` (so a queued step's
+  wait for a slot is in it); the cards are not buttons, Add step is hidden, the running pulse has
+  `motion-reduce:animate-none`, and a connector is `primary-500` / dark `primary-300` at 2px once the node it
+  leaves has finished (Starts with, once the run started). Draft steps match run steps by `stepName`. The
+  columns still come from `stagesOf`, so nothing changes for D.5b's stages.
+- **Loading and freshness.** `WorkflowTestRunService` (root) remembers each workflow's `{sessionId, runId}`,
+  and keeps it in `sessionStorage` (this tab only, wrapped in try/catch). In the tab that started it, approve
+  upserts the run into `WorkflowRunStateService` and the steps stream in this tab, so the row and the canvas
+  read the live handoff rows exactly as the row in a thread does; nothing polls. A run the tab doesn't hold
+  (after a reload) is read once with `GET /sessions/{id}/workflow-runs/{runId}`, which carries each waiting
+  step's `relayedPrompts`; one that turns out never approved (the sheet was cancelled, or a reload came before
+  Start) is forgotten and the tab goes back to Preview. After a reload no step streams here, so the row offers
+  Start for the steps left, as in a thread.
+- **Leaving and coming back.** The queue, streams and run state are root, so leaving mid-run is fine, and
+  opening the workflow's designer again selects its Test run tab. Close test run is offered once nothing is
+  left running, and keeps the conversations.
+- **Measured before merge** (the running SPA, both themes, against the composited card or panel): a step's
+  phrase 7.49:1 light / 10.5:1 dark, the waiting phrase 4.99:1 / 10.69:1, the panel's note 10.3:1 / 9.96:1,
+  its links 10.14:1 / 4.53:1. Connectors (non-text, 3:1): finished 10.14:1 / 3.98:1, neutral 4.63:1 / 6.82:1.
+  Every new focus ring has its dark pair (`primary-accessible-dark`, 4.53:1).
+- ⚠️ **Found, not fixed here:** `ng-icon` puts its colour in `@layer ng-icon`, which is declared after
+  Tailwind's layers and so outranks `utilities`, and sets its width and height unlayered. So a `text-*` or
+  `size-*` class on an `<ng-icon>` never applies anywhere in the SPA: the icon inherits its parent's colour
+  and is `1em`. The run row's and the canvas's status marks render in the text colour, not green or amber.
+  The state is still said in words, so nothing relies on the colour, but the marks don't look as designed.
+  Filed as its own fix (#2232).
 
 *Built (PR-D.5a).* Stages in the run engine. Where it differs from the plan, and what it settled:
 

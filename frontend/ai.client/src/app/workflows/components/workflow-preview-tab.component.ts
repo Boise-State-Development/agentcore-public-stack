@@ -1,10 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, output, signal } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroExclamationTriangle, heroInformationCircle } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../agents/components/agent-icon.component';
 import { ModelService } from '../../session/services/model/model.service';
 import { WorkflowStartService } from '../../services/workflows/workflow-start.service';
+import { WorkflowTestRunService } from '../workflow-test-run.service';
 import { estimateRunInputUsd, formatEstimateUsd } from '../../session/services/handoff/workflow-run-estimate';
 import { WorkflowDesignerStore } from '../workflow-designer.store';
 import { WorkflowFiles, WorkflowStepView } from '../workflow.models';
@@ -151,27 +152,30 @@ interface PreviewRow {
           <div class="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              (click)="start()"
+              (click)="startTestRun()"
               [disabled]="!canStart()"
               [attr.aria-describedby]="startBlockedReason() ? 'wf-start-blocked' : null"
               class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:focus-visible:outline-primary-accessible-dark"
             >
-              {{ starting() ? 'Opening…' : 'Start test run' }}
+              {{ starting() === 'test' ? 'Opening…' : 'Start test run' }}
             </button>
             <button
               type="button"
-              (click)="start()"
+              (click)="tryInChat()"
               [disabled]="!canStart()"
               [attr.aria-describedby]="startBlockedReason() ? 'wf-start-blocked' : null"
               class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus-visible:outline-primary-accessible-dark"
             >
-              Try in a chat
+              {{ starting() === 'chat' ? 'Opening…' : 'Try in a chat' }}
             </button>
           </div>
           @if (startBlockedReason(); as reason) {
             <p id="wf-start-blocked" class="text-xs/5 text-gray-700 dark:text-gray-300">{{ reason }}</p>
           } @else {
-            <p class="text-xs/5 text-gray-600 dark:text-gray-400">Both open a new conversation with this sheet up. Nothing runs until you press Start there.</p>
+            <p class="text-xs/5 text-gray-600 dark:text-gray-400">
+              Start test run opens this sheet here, in a new conversation titled “Test: {{ doc.workflow.title }}”, and draws the run on the canvas.
+              Try in a chat opens it in a new conversation and takes you there. Nothing runs until you press Start on the sheet.
+            </p>
           }
         </section>
 
@@ -191,8 +195,12 @@ export class WorkflowPreviewTabComponent {
   protected readonly store = inject(WorkflowDesignerStore);
   private readonly models = inject(ModelService);
   private readonly starter = inject(WorkflowStartService);
+  private readonly testRuns = inject(WorkflowTestRunService);
 
-  protected readonly starting = signal(false);
+  /** The test run's sheet is up in the panel: the designer switches to its Test run tab. */
+  readonly testRunOpened = output<void>();
+
+  protected readonly starting = signal<'test' | 'chat' | null>(null);
 
   /** Why Start is off, or null. A run reads the saved file, so unsaved edits come first. */
   protected readonly startBlockedReason = computed(() => {
@@ -204,15 +212,27 @@ export class WorkflowPreviewTabComponent {
 
   protected readonly canStart = computed(() => !!this.store.ref() && !this.starting() && !this.startBlockedReason());
 
-  /** Open a new conversation with this workflow's sheet up (PR-D.2's start path). */
-  protected async start(): Promise<void> {
+  /** Open the sheet in this page's panel, in a new "Test: …" conversation, and stay here (PR-D.4). */
+  protected async startTestRun(): Promise<void> {
     const ref = this.store.ref();
     if (!ref || !this.canStart()) return;
-    this.starting.set(true);
+    this.starting.set('test');
+    try {
+      if (await this.testRuns.begin(ref)) this.testRunOpened.emit();
+    } finally {
+      this.starting.set(null);
+    }
+  }
+
+  /** Open a new conversation with this workflow's sheet up, and go there (PR-D.2's start path). */
+  protected async tryInChat(): Promise<void> {
+    const ref = this.store.ref();
+    if (!ref || !this.canStart()) return;
+    this.starting.set('chat');
     try {
       await this.starter.start(ref);
     } finally {
-      this.starting.set(false);
+      this.starting.set(null);
     }
   }
 

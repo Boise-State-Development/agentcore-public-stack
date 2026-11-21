@@ -91,6 +91,20 @@ async def get_model_pricing(model_id: str) -> Optional[Dict[str, float]]:
     if _is_rate(speech_out):
         pricing["speechOutputPricePerMtok"] = float(speech_out)
 
+    # A second rate card above a prompt-size threshold (Haiku 5.5, the OpenAI
+    # family). Carried only when the row names a threshold, so a model with one
+    # card keeps exactly the dict it had; `CostCalculator.rates_for_call` reads it.
+    threshold = getattr(model, "long_context_threshold_tokens", None)
+    if _is_rate(threshold) and threshold > 0:
+        pricing["longContextThresholdTokens"] = int(threshold)
+        for attr, key in (
+            ("long_context_input_multiplier", "longContextInputMultiplier"),
+            ("long_context_output_multiplier", "longContextOutputMultiplier"),
+        ):
+            value = getattr(model, attr, None)
+            if _is_rate(value):
+                pricing[key] = float(value)
+
     return pricing
 
 

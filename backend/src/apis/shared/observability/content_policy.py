@@ -111,6 +111,7 @@ SESSION_ROW_PROJECTION: Tuple[str, ...] = (
     "totalCost",
     "lastContextTokens",
     "contextWindow",
+    "longContextThreshold",
     "totalCacheReadTokens",
     "totalCacheWriteTokens",
     "avoidableMissCount",
@@ -187,6 +188,10 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     "callKind",
     "prefixFingerprints",
     "contextWindow",
+    # The call billed on its model's long-context row: a boolean, and the
+    # model's threshold (a number), no content.
+    "longContext",
+    "longContextThreshold",
     "toolCalls",            # per-call census, optional (PR-3)
     # Context ledger, optional: the agent's stable prefix split
     # ({system, tools} tokens), the conversation window's cumulative trim

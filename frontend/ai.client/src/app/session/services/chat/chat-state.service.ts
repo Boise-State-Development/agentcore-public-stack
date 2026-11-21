@@ -56,6 +56,9 @@ interface SessionChatState {
     costDollars: WritableSignal<number>;
     contextTokens: WritableSignal<number>;
     contextWindow: WritableSignal<number>;
+    /** Prompt tokens past which the session's model bills on its long-context
+     *  row; 0 when it has none. */
+    longContextThreshold: WritableSignal<number>;
     /** What filled the context on the most recent turn, when the backend
      *  could attribute it (Bedrock Converse only; null until a turn streams). */
     contextBreakdown: WritableSignal<ContextBreakdown | null>;
@@ -132,6 +135,7 @@ export class ChatStateService {
     readonly costDollars = computed(() => this.viewedState()?.costDollars() ?? 0);
     readonly contextTokens = computed(() => this.viewedState()?.contextTokens() ?? 0);
     readonly contextWindowSize = computed(() => this.viewedState()?.contextWindow() ?? 0);
+    readonly longContextThreshold = computed(() => this.viewedState()?.longContextThreshold() ?? 0);
     readonly contextBreakdown = computed(() => this.viewedState()?.contextBreakdown() ?? null);
 
     readonly contextPct = computed(() => {
@@ -228,6 +232,11 @@ export class ChatStateService {
     /** A session's context window size, or 0 when unknown. */
     contextWindowFor(sessionId: string): number {
         return this.states().get(sessionId)?.contextWindow() ?? 0;
+    }
+
+    /** A session's model's long-context pricing line, or 0 when it has none. */
+    longContextThresholdFor(sessionId: string): number {
+        return this.states().get(sessionId)?.longContextThreshold() ?? 0;
     }
 
     /** A session's most-recent-turn context breakdown, or null when unknown. */
@@ -400,12 +409,14 @@ export class ChatStateService {
         totalCost?: number;
         lastContextTokens?: number;
         contextWindow?: number;
+        longContextThreshold?: number;
         contextBreakdown?: ContextBreakdown | null;
     } = {}): void {
         const state = this.stateFor(sessionId);
         state.costDollars.set(values.totalCost ?? 0);
         state.contextTokens.set(values.lastContextTokens ?? 0);
         state.contextWindow.set(values.contextWindow ?? 0);
+        state.longContextThreshold.set(values.longContextThreshold ?? 0);
         // Session metadata carries no breakdown, and this re-runs whenever that
         // metadata refreshes — so keep the live one unless a caller has one.
         if (values.contextBreakdown !== undefined) {
@@ -435,6 +446,7 @@ export class ChatStateService {
         tokens: number,
         window?: number,
         breakdown?: ContextBreakdown | null,
+        longContextThreshold?: number,
     ): void {
         const state = this.stateFor(sessionId);
         state.contextBreakdown.set(breakdown ?? null);
@@ -443,6 +455,10 @@ export class ChatStateService {
         }
         if (window !== undefined && Number.isFinite(window) && window > 0) {
             state.contextWindow.set(window);
+            // The final metadata event names the line whenever the model has
+            // one, so a window without it means this model has none.
+            const threshold = longContextThreshold ?? 0;
+            state.longContextThreshold.set(Number.isFinite(threshold) && threshold > 0 ? threshold : 0);
         }
     }
 
@@ -527,6 +543,7 @@ export class ChatStateService {
             costDollars: signal(0),
             contextTokens: signal(0),
             contextWindow: signal(0),
+            longContextThreshold: signal(0),
             contextBreakdown: signal<ContextBreakdown | null>(null),
             abortController: null,
         };

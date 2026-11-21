@@ -411,6 +411,7 @@ export class ConversationPage implements OnDestroy {
         totalCost: aggregates.totalCost,
         lastContextTokens: aggregates.lastContextTokens,
         contextWindow: aggregates.contextWindow,
+        longContextThreshold: aggregates.longContextThreshold,
       });
     });
 

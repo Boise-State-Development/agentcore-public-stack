@@ -860,7 +860,8 @@ tool-using answers. Feedback rows from before the fix are not backfilled.
 - **A step started from "Not started"** carries the card and the request, but not the mention's attachments,
   skills or folders.
 - **A run needs a source with turns.** The multi-mention composer only appears in a thread with messages, and
-  create needs the session row.
+  create needs the session row. *(A saved workflow can start one from a new conversation since PR-D.2, and its row shows there
+  since the fix recorded under `workflow-designer.md` §20.3.)*
 - **Display leftovers.** A partial card keeps "Still waiting" for steps that finished later. "Answered ·
   *X* resumed" stays under a finished step's line. A step line that was running at a reload reads "Working on"
   until the next reload.

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
@@ -8,6 +8,9 @@ import { ChatContainerComponent } from './chat-container.component';
 import { Agent } from '../../../agents/models/agent.model';
 import { ListingState } from '../../../agents/models/store.model';
 import { MessageMapService } from '../../services/session/message-map.service';
+import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
+import type { WorkflowRunView } from '../../services/handoff/workflow-run.models';
+import { provideMarkdown } from 'ngx-markdown';
 
 /**
  * The foot-of-conversation feedback link is offered for **published** marketplace agents
@@ -191,5 +194,79 @@ describe('ChatContainerComponent — archive-served conversations', () => {
   it('keeps the composer for any other session, and for a new chat', () => {
     expect(archivedFor('live', new Set(['old']))).toBe(false);
     expect(archivedFor(null, new Set(['old']))).toBe(false);
+  });
+});
+
+/**
+ * A saved workflow started from a new conversation (workflow-designer spec §20.3, PR-D.2) is
+ * approved before the conversation has a turn. Its row, with Bring back results, Stop run and
+ * Save as workflow, and the result card it makes, are drawn only in the thread, so a conversation
+ * with a run to show draws the thread even with no messages.
+ */
+describe('ChatContainerComponent — a run in a conversation with no turns', () => {
+  function run(status: WorkflowRunView['status']): WorkflowRunView {
+    return {
+      runId: 'run1',
+      sessionId: 'src',
+      status,
+      request: 'r',
+      steps: [],
+      fileIds: [],
+      limits: { maxSteps: 8, concurrency: 4 },
+      sourceMessageIndex: -1,
+      createdAt: '',
+      updatedAt: '',
+    };
+  }
+
+  function render(sessionId: string, runs: WorkflowRunView[]) {
+    TestBed.resetTestingModule();
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    TestBed.configureTestingModule({
+      providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting(), provideMarkdown()],
+    });
+    TestBed.inject(WorkflowRunStateService).hydrate('src', runs);
+    const fixture = TestBed.createComponent(ChatContainerComponent);
+    fixture.componentRef.setInput('messages', []);
+    fixture.componentRef.setInput('sessionId', sessionId);
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('draws the thread, with the run row in it, once the run is approved', () => {
+    const fixture = render('src', [run('approved')]);
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('app-message-list')).not.toBeNull();
+    expect(el.querySelectorAll('app-workflow-run-row')).toHaveLength(1);
+    expect(el.querySelector('[data-testid="greeting-message"]')).toBeNull();
+    fixture.destroy();
+  });
+
+  it('draws the thread for a stopped run too', () => {
+    const fixture = render('src', [run('stopped')]);
+    expect(fixture.nativeElement.querySelectorAll('app-workflow-run-row')).toHaveLength(1);
+    fixture.destroy();
+  });
+
+  it('keeps the empty state while the run is still at its sheet', () => {
+    const fixture = render('src', [run('open')]);
+    const el: HTMLElement = fixture.nativeElement;
+    expect(el.querySelector('app-message-list')).toBeNull();
+    expect(el.querySelector('[data-testid="greeting-message"]')).not.toBeNull();
+    fixture.destroy();
+  });
+
+  it("never draws another conversation's run", () => {
+    const fixture = render('other', [run('approved')]);
+    expect(fixture.nativeElement.querySelector('app-message-list')).toBeNull();
+    fixture.destroy();
   });
 });

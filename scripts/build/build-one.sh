@@ -268,6 +268,10 @@ case "$SERVICE" in
             "backend/src/apis/shared/extraction/field_sets.py"
             "backend/src/apis/shared/extraction/schema.py"
             "backend/src/apis/shared/models/assistant_prefill.py"
+            # sessions/metadata.py's long-context pricing (CostCalculator.rates_for_call).
+            "backend/src/apis/shared/costs/__init__.py"
+            "backend/src/apis/shared/costs/models.py"
+            "backend/src/apis/shared/costs/calculator.py"
         )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).

@@ -12,18 +12,24 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroArrowsPointingIn,
   heroArrowsPointingOut,
+  heroCheckCircle,
+  heroExclamationCircle,
   heroExclamationTriangle,
   heroInboxArrowDown,
+  heroMinusCircle,
   heroPaperClip,
+  heroPauseCircle,
   heroPlus,
   heroUserPlus,
 } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../agents/components/agent-icon.component';
+import { RunStepState } from '../../session/services/handoff/workflow-run-progress';
 
 /** One step's card as the graph draws it. Everything it says is in text, never colour alone. */
 export interface GraphStepCard {
@@ -40,6 +46,21 @@ export interface GraphStepCard {
   /** "reads the request and the files": the card's edges, in words (§4.4). */
   readsLabel: string;
 }
+
+/**
+ * A step's status in run mode (§7 D4): the state its line on the run's row has (`runProgress` /
+ * `stepState`), that line's phrase, and how long it took once it has finished.
+ */
+export interface GraphStepStatus {
+  state: RunStepState;
+  /** "Waiting for your approval to run budget_check", worded as the run's row words it. */
+  phrase: string;
+  /** "1m 04s", once the step has finished. */
+  elapsed?: string;
+}
+
+/** What the canvas draws: the designer's editable graph, or a run's status on the same graph. */
+export type GraphMode = 'design' | 'run';
 
 /** The two fixed cards: Starts with and Result. */
 export interface GraphFixedCard {
@@ -80,16 +101,28 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
  * and Fit scales the whole graph to the canvas, never below 60%. No wheel or pinch zoom.
  *
  * The canvas is the page's one bold surface: the graph-paper grid and two still blobs in the
- * brand colour, with frosted cards on top. Run mode is D.4.
+ * brand colour, with frosted cards on top.
+ *
+ * Run mode (§7 D4, PR-D.4) is the same graph with a run's status on it: each step card shows its
+ * status mark and phrase from the run's row (`status`), and its elapsed time once finished; a
+ * connector is drawn in the brand colour once the node it leaves has finished (`finished`); Add
+ * step is hidden and the cards are not buttons, since nothing on the canvas edits a run. Every
+ * state is said in text, never by colour alone, and reduced motion stops the running pulse. The
+ * columns come from `stages` either way, so a run with several stages draws as it will once D.5b
+ * gives the canvas them.
  */
 @Component({
   selector: 'app-workflow-graph',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, AgentIconComponent],
+  imports: [NgIcon, NgTemplateOutlet, AgentIconComponent],
   providers: [
     provideIcons({
       heroArrowsPointingIn,
       heroArrowsPointingOut,
+      heroCheckCircle,
+      heroExclamationCircle,
+      heroMinusCircle,
+      heroPauseCircle,
       heroExclamationTriangle,
       heroInboxArrowDown,
       heroPaperClip,
@@ -131,7 +164,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
       [class.select-none]="panning()"
       tabindex="0"
       role="region"
-      aria-label="Workflow canvas"
+      [attr.aria-label]="mode() === 'run' ? 'Test run canvas' : 'Workflow canvas'"
       (pointerdown)="onPointerDown($event)"
       (pointermove)="onPointerMove($event)"
       (pointerup)="endPan($event)"
@@ -147,9 +180,11 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
             @for (path of paths(); track path.id) {
               <path
                 [attr.d]="path.d"
+                [attr.data-edge]="path.id"
+                [attr.data-finished]="path.finished ? '' : null"
                 fill="none"
-                class="stroke-gray-500 transition-[stroke] duration-300 motion-reduce:transition-none dark:stroke-gray-400"
-                stroke-width="1.5"
+                [class]="path.finished ? edgeFinishedClass : edgeClass"
+                [attr.stroke-width]="path.finished ? 2 : 1.5"
               />
             }
           </svg>
@@ -157,14 +192,23 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
           <!-- Starts with -->
           <section class="relative md:w-56" aria-labelledby="wf-col-start">
             <h2 id="wf-col-start" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">Starts with</h2>
-            <button
-              type="button"
-              data-node-id="start"
-              [attr.aria-pressed]="selected() === 'start'"
-              [attr.aria-label]="'Starts with: ' + start().meta"
-              (click)="selectNode.emit('start')"
-              [class]="cardClass"
-            >
+            @if (mode() === 'run') {
+              <div data-node-id="start" [class]="runCardClass">
+                <ng-container *ngTemplateOutlet="startBody" />
+              </div>
+            } @else {
+              <button
+                type="button"
+                data-node-id="start"
+                [attr.aria-pressed]="selected() === 'start'"
+                [attr.aria-label]="'Starts with: ' + start().meta"
+                (click)="selectNode.emit('start')"
+                [class]="cardClass"
+              >
+                <ng-container *ngTemplateOutlet="startBody" />
+              </button>
+            }
+            <ng-template #startBody>
               <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-gray-100 text-primary-accessible dark:bg-gray-700 dark:text-primary-50" aria-hidden="true">
                 <ng-icon name="heroPaperClip" class="size-4.5" />
               </span>
@@ -172,7 +216,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                 <span class="truncate text-sm/5 font-medium text-gray-900 dark:text-white">{{ start().title }}</span>
                 <span class="truncate text-xs/5 text-gray-600 dark:text-gray-300">{{ start().meta }}</span>
               </span>
-            </button>
+            </ng-template>
           </section>
 
           @for (stage of stages(); track $index; let s = $index) {
@@ -183,6 +227,25 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
               <ul role="list" class="flex flex-col gap-2.5">
                 @for (card of stage; track card.key) {
                   <li>
+                    @if (mode() === 'run') {
+                      @let st = statusOf(card.key);
+                      <div [attr.data-node-id]="card.key" [attr.data-state]="st.state" [class]="runCardClass">
+                        <span class="relative shrink-0">
+                          @if (card.agentId) {
+                            <app-agent-icon [agentId]="card.agentId" [iconUrl]="card.iconUrl" [emoji]="card.emoji" [size]="28" />
+                          }
+                          <span class="absolute -right-1.5 -bottom-1.5 rounded-full bg-white dark:bg-gray-800" aria-hidden="true">
+                            <ng-container *ngTemplateOutlet="mark; context: { $implicit: st.state }" />
+                          </span>
+                        </span>
+                        <span class="flex min-w-0 flex-col">
+                          <span class="truncate text-sm/5 font-medium text-gray-900 dark:text-white">{{ card.title }}</span>
+                          <span class="line-clamp-2 text-xs/5" [class]="phraseClass(st.state)">
+                            {{ st.phrase }}@if (st.elapsed) {<span class="tabular-nums"> · {{ st.elapsed }}</span>}
+                          </span>
+                        </span>
+                      </div>
+                    } @else {
                     <button
                       type="button"
                       [attr.data-node-id]="card.key"
@@ -210,10 +273,11 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                         }
                       </span>
                     </button>
+                    }
                   </li>
                 }
               </ul>
-              @if (s === 0) {
+              @if (s === 0 && mode() === 'design') {
                 <button
                   type="button"
                   data-node-id="add"
@@ -235,14 +299,23 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
           <!-- Result -->
           <section class="relative md:w-56" aria-labelledby="wf-col-result">
             <h2 id="wf-col-result" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">Result</h2>
-            <button
-              type="button"
-              data-node-id="result"
-              [attr.aria-pressed]="selected() === 'result'"
-              [attr.aria-label]="'Result: ' + result().title + ', ' + result().meta"
-              (click)="selectNode.emit('result')"
-              [class]="cardClass"
-            >
+            @if (mode() === 'run') {
+              <div data-node-id="result" [class]="runCardClass">
+                <ng-container *ngTemplateOutlet="resultBody" />
+              </div>
+            } @else {
+              <button
+                type="button"
+                data-node-id="result"
+                [attr.aria-pressed]="selected() === 'result'"
+                [attr.aria-label]="'Result: ' + result().title + ', ' + result().meta"
+                (click)="selectNode.emit('result')"
+                [class]="cardClass"
+              >
+                <ng-container *ngTemplateOutlet="resultBody" />
+              </button>
+            }
+            <ng-template #resultBody>
               <span class="grid size-8 shrink-0 place-items-center rounded-lg bg-gray-100 text-primary-accessible dark:bg-gray-700 dark:text-primary-50" aria-hidden="true">
                 <ng-icon name="heroInboxArrowDown" class="size-4.5" />
               </span>
@@ -250,7 +323,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                 <span class="truncate text-sm/5 font-medium text-gray-900 dark:text-white">{{ result().title }}</span>
                 <span class="truncate text-xs/5 text-gray-600 dark:text-gray-300">{{ result().meta }}</span>
               </span>
-            </button>
+            </ng-template>
           </section>
         </div>
       </div>
@@ -271,6 +344,35 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
         }
       </button>
     </div>
+
+    <!-- The run row's status marks (workflow-runs §20.2), never the only sign of a state. -->
+    <ng-template #mark let-state>
+      <span class="flex size-4.5 items-center justify-center">
+        @switch (state) {
+          @case ('running') {
+            <span class="relative flex size-2.5" data-mark="running">
+              <span class="absolute inline-flex size-full animate-ping rounded-full bg-primary-500 opacity-60 motion-reduce:animate-none dark:bg-primary-300"></span>
+              <span class="relative inline-flex size-2.5 rounded-full bg-primary-500 dark:bg-primary-300"></span>
+            </span>
+          }
+          @case ('needs_input') {
+            <ng-icon name="heroExclamationCircle" class="size-4.5 text-state-warning-700 dark:text-state-warning-400" />
+          }
+          @case ('done') {
+            <ng-icon name="heroCheckCircle" class="size-4.5 text-state-success-600 dark:text-state-success-400" />
+          }
+          @case ('queued') {
+            <span class="size-2.5 rounded-full ring-1 ring-inset ring-gray-500"></span>
+          }
+          @case ('not_started') {
+            <ng-icon name="heroPauseCircle" class="size-4.5 text-gray-500 dark:text-gray-400" />
+          }
+          @default {
+            <ng-icon name="heroMinusCircle" class="size-4.5 text-gray-500 dark:text-gray-400" />
+          }
+        }
+      </span>
+    </ng-template>
   `,
 })
 export class WorkflowGraphComponent {
@@ -282,6 +384,12 @@ export class WorkflowGraphComponent {
   readonly stepCount = input.required<number>();
   readonly maxSteps = input.required<number>();
   readonly concurrency = 4;
+  /** `run` draws a run's status on the graph (§7 D4); `design` is the editable canvas. */
+  readonly mode = input<GraphMode>('design');
+  /** Run mode: each step card's status, by step key. */
+  readonly status = input<ReadonlyMap<string, GraphStepStatus>>(new Map());
+  /** Run mode: the nodes that have finished. A connector leaving one is drawn in the brand colour. */
+  readonly finished = input<ReadonlySet<string>>(new Set());
 
   readonly selectNode = output<string>();
   readonly add = output<number>();
@@ -293,13 +401,21 @@ export class WorkflowGraphComponent {
   protected readonly cardClass =
     'flex w-full items-center gap-2.5 rounded-2xl border border-gray-200 bg-white/80 px-3 py-2.5 text-left shadow-xs backdrop-blur-md transition-colors hover:border-gray-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark motion-reduce:transition-none aria-pressed:border-primary-accessible aria-pressed:ring-1 aria-pressed:ring-primary-accessible dark:border-gray-600 dark:bg-gray-800/75 dark:hover:border-gray-500 dark:aria-pressed:border-primary-300 dark:aria-pressed:ring-primary-300';
 
+  /** A run card: the design card's frosted look, with nothing to press. */
+  protected readonly runCardClass =
+    'flex w-full items-center gap-2.5 rounded-2xl border border-gray-200 bg-white/80 px-3 py-2.5 text-left shadow-xs backdrop-blur-md dark:border-gray-600 dark:bg-gray-800/75';
+  protected readonly edgeClass =
+    'stroke-gray-500 transition-[stroke] duration-300 motion-reduce:transition-none dark:stroke-gray-400';
+  protected readonly edgeFinishedClass =
+    'stroke-primary-500 transition-[stroke] duration-300 motion-reduce:transition-none dark:stroke-primary-300';
+
   protected readonly fit = signal(false);
   protected readonly panning = signal(false);
   private readonly natural = signal({ width: 0, height: 0 });
   private readonly canvas = signal({ width: 0, height: 0 });
   /** Whether the graph is laid out as a row (md and up); a stack is never scaled. */
   private readonly wide = signal(false);
-  protected readonly paths = signal<{ id: string; d: string }[]>([]);
+  protected readonly paths = signal<{ id: string; d: string; finished: boolean }[]>([]);
 
   protected readonly scale = computed(() => (this.fit() && this.wide() ? fitScale(this.natural(), this.canvas()) : 1));
   protected readonly percent = computed(() => Math.round(this.scale() * 100));
@@ -331,6 +447,9 @@ export class WorkflowGraphComponent {
       this.stages();
       this.edges();
       this.selected();
+      this.mode();
+      this.status();
+      this.finished();
       this.drawEdges();
     });
   }
@@ -343,6 +462,18 @@ export class WorkflowGraphComponent {
 
   protected toggleFit(): void {
     this.fit.update((on) => !on);
+  }
+
+  /** A step's status in run mode; a step the run doesn't have reads "Not in this run". */
+  protected statusOf(key: string): GraphStepStatus {
+    return this.status().get(key) ?? { state: 'stopped', phrase: 'Not in this run' };
+  }
+
+  /** A step waiting on the user says so in the warning tone, in words as well as colour. */
+  protected phraseClass(state: RunStepState): string {
+    return state === 'needs_input'
+      ? 'font-medium text-state-warning-700 dark:text-state-warning-300'
+      : 'text-gray-600 dark:text-gray-300';
   }
 
   protected accessibleName(card: GraphStepCard, stageIndex: number): string {
@@ -403,7 +534,8 @@ export class WorkflowGraphComponent {
         mid: (r.top + r.height / 2 - origin.top) / scale,
       };
     };
-    const paths: { id: string; d: string }[] = [];
+    const paths: { id: string; d: string; finished: boolean }[] = [];
+    const finished = this.mode() === 'run' ? this.finished() : new Set<string>();
     for (const [from, to] of this.edges()) {
       const a = box(from);
       const b = box(to);
@@ -414,10 +546,14 @@ export class WorkflowGraphComponent {
       paths.push({
         id: `${from}>${to}`,
         d: `M ${x1} ${a.mid} C ${x1 + bend} ${a.mid}, ${x2 - bend} ${b.mid}, ${x2} ${b.mid}`,
+        finished: finished.has(from),
       });
     }
     const current = this.paths();
-    if (current.length !== paths.length || current.some((p, i) => p.d !== paths[i].d || p.id !== paths[i].id)) {
+    if (
+      current.length !== paths.length ||
+      current.some((p, i) => p.d !== paths[i].d || p.id !== paths[i].id || p.finished !== paths[i].finished)
+    ) {
       this.paths.set(paths);
     }
   }

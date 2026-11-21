@@ -1,14 +1,18 @@
 import { LiveAnnouncer } from '@angular/cdk/a11y';
 import { Location } from '@angular/common';
-import { signal } from '@angular/core';
+import { Component, input, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentMentionService, MentionableAgent } from '../agents/services/agent-mention.service';
+import { RunProgress, RunStepLine } from '../session/services/handoff/workflow-run-progress';
+import { WorkflowRunView } from '../session/services/handoff/workflow-run.models';
 import { ModelService } from '../session/services/model/model.service';
 import { fitScale } from './components/workflow-graph.component';
-import { WorkflowDesignerPage } from './workflow-designer.page';
+import { WorkflowTestRunPanelComponent } from './components/workflow-test-run-panel.component';
+import { WorkflowDesignerPage, elapsedLabel } from './workflow-designer.page';
+import { TestRunRecord, WorkflowTestRunService } from './workflow-test-run.service';
 import { WorkflowDocument, WorkflowView, WorkflowWrite } from './workflow.models';
 import { WorkflowStartService } from '../services/workflows/workflow-start.service';
 import { WorkflowsApiService } from '../services/workflows/workflows-api.service';
@@ -41,6 +45,45 @@ function view(overrides: Partial<WorkflowView> = {}): WorkflowView {
   };
 }
 
+/** The panel stands in for itself: its own spec covers what it renders. */
+@Component({ selector: 'app-workflow-test-run-panel', template: '<p data-testid="test-run-panel">{{ ref().name }}</p>' })
+class StubTestRunPanel {
+  readonly ref = input.required<{ skillId: string; name: string }>();
+}
+
+const APPROVED_AT = '2026-11-20T10:00:00Z';
+
+function runLine(stepName: string, agentId: string, state: RunStepLine['state'], updatedAt = APPROVED_AT): RunStepLine {
+  const step = { stepId: `st-${stepName}`, handoffId: `h-${stepName}`, agentId, agentName: stepName, request: 'r', removed: false, stepName };
+  const row = state === 'queued' ? null : ({ handoffId: step.handoffId, targetSessionId: `t-${stepName}`, updatedAt } as RunStepLine['row']);
+  return { step, row, state };
+}
+
+/** A stand-in for the test-run service: a record and a run whose progress the spec sets. */
+class FakeTestRuns {
+  readonly record = signal<TestRunRecord | undefined>(undefined);
+  readonly run = signal<WorkflowRunView | undefined>(undefined);
+  readonly lines = signal<RunStepLine[]>([]);
+  readonly begin = vi.fn(async () => {
+    this.record.set({ sessionId: 'test-conv' });
+    return true;
+  });
+  recordFor() {
+    return this.record();
+  }
+  runFor() {
+    return this.run();
+  }
+  progress(): RunProgress {
+    const lines = this.lines();
+    const done = lines.filter((l) => l.state === 'done').length;
+    return { lines, total: lines.length, done, needsInput: 0, settled: false, active: true };
+  }
+  phrase(line: RunStepLine): string {
+    return line.state === 'done' ? 'Finished' : line.state === 'needs_input' ? 'Waiting for your approval to run budget_check' : 'Working';
+  }
+}
+
 function doc(overrides: Partial<WorkflowView> = {}, written?: boolean): WorkflowDocument {
   return { workflow: view(overrides), sheet: { startable: true, blockers: [] }, written };
 }
@@ -59,8 +102,10 @@ describe('WorkflowDesignerPage', () => {
   let announce: ReturnType<typeof vi.fn>;
   let replaceState: ReturnType<typeof vi.fn>;
   let start: ReturnType<typeof vi.fn>;
+  let testRuns: FakeTestRuns;
 
   beforeEach(() => {
+    testRuns = new FakeTestRuns();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     service = {
       read: vi.fn().mockResolvedValue({ ok: true, document: doc() }),
@@ -83,7 +128,12 @@ describe('WorkflowDesignerPage', () => {
         { provide: LiveAnnouncer, useValue: { announce } },
         { provide: Location, useValue: { replaceState, path: () => '' } },
         { provide: WorkflowStartService, useValue: { start } },
+        { provide: WorkflowTestRunService, useValue: testRuns },
       ],
+    });
+    TestBed.overrideComponent(WorkflowDesignerPage, {
+      remove: { imports: [WorkflowTestRunPanelComponent] },
+      add: { imports: [StubTestRunPanel] },
     });
   });
 
@@ -263,18 +313,35 @@ describe('WorkflowDesignerPage', () => {
       expect(service.write).not.toHaveBeenCalled();
     });
 
-    it('starts the saved workflow through D.2’s start service, from both buttons', async () => {
+    it('Try in a chat starts the saved workflow through D.2’s start service, which navigates', async () => {
       await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      el.querySelector<HTMLButtonElement>('#wf-tab-preview')!.click();
+      await settle();
+
+      button('Try in a chat').click();
+      await settle();
+
+      expect(start.mock.calls).toEqual([[{ skillId: 'SKL-1', name: 'proposal-review' }]]);
+      expect(testRuns.begin).not.toHaveBeenCalled();
+      expect(service.validate).not.toHaveBeenCalled();
+    });
+
+    it('Start test run opens the sheet in the panel’s Test run tab and stays on the designer', async () => {
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      expect(el.querySelector('#wf-tab-test')).toBeNull();
       el.querySelector<HTMLButtonElement>('#wf-tab-preview')!.click();
       await settle();
 
       button('Start test run').click();
       await settle();
-      button('Try in a chat').click();
-      await settle();
 
-      expect(start.mock.calls).toEqual([[{ skillId: 'SKL-1', name: 'proposal-review' }], [{ skillId: 'SKL-1', name: 'proposal-review' }]]);
-      expect(service.validate).not.toHaveBeenCalled();
+      expect(testRuns.begin).toHaveBeenCalledWith({ skillId: 'SKL-1', name: 'proposal-review' });
+      expect(start).not.toHaveBeenCalled();
+      const tab = el.querySelector<HTMLButtonElement>('#wf-tab-test')!;
+      expect(tab.getAttribute('aria-selected')).toBe('true');
+      expect(el.querySelector('#wf-panel-test [data-testid="test-run-panel"]')!.textContent).toBe('proposal-review');
+      // The sheet is up but nothing has started: the canvas is still the designer's.
+      expect(el.querySelector('[aria-label="Workflow canvas"]')).not.toBeNull();
     });
 
     it('keeps Start off while there are unsaved changes, and says why', async () => {
@@ -289,6 +356,88 @@ describe('WorkflowDesignerPage', () => {
       expect(button('Try in a chat').disabled).toBe(true);
       expect(el.querySelector('#wf-start-blocked')!.textContent).toContain('Save your changes to start');
     });
+  });
+
+  describe('the test run', () => {
+    function approvedRun(): WorkflowRunView {
+      return { runId: 'RUN-1', sessionId: 'test-conv', status: 'approved', approvedAt: APPROVED_AT } as WorkflowRunView;
+    }
+
+    it('comes back on its own tab, and the canvas draws the run: states, phrases, elapsed, nothing to edit', async () => {
+      testRuns.record.set({ sessionId: 'test-conv', runId: 'RUN-1' });
+      testRuns.run.set(approvedRun());
+      testRuns.lines.set([
+        runLine('generalist', 'AST-gen', 'done', '2026-11-20T10:01:04Z'),
+        runLine('fiscal', 'AST-fis', 'needs_input'),
+        runLine('colleague', 'AST-col', 'running'),
+      ]);
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+
+      expect(el.querySelector('#wf-tab-test')!.getAttribute('aria-selected')).toBe('true');
+      expect(el.querySelector('[aria-label="Test run canvas"]')).not.toBeNull();
+      const cards = [...el.querySelectorAll<HTMLElement>('[role="group"] [data-node-id]')];
+      expect(cards.map((c) => c.dataset['state'])).toEqual(['done', 'needs_input', 'running']);
+      expect(cards.map((c) => c.textContent!.replace(/\s+/g, ' ').trim())).toEqual([
+        '🧭Generalist Finished · 1m 04s',
+        '💵Fiscal reader Waiting for your approval to run budget_check',
+        '🤝Colleague Working',
+      ]);
+      // Nothing on the canvas edits a run: no card is a button, and Add step is gone.
+      expect(el.querySelector('[role="group"] button')).toBeNull();
+      expect(el.textContent).not.toContain('Add step');
+      // The running pulse stops under reduced motion.
+      expect(el.querySelector('[data-mark="running"] .animate-ping')!.classList).toContain('motion-reduce:animate-none');
+      expect(el.querySelector('[data-node-id="result"]')!.textContent).toContain('1 of 3 finished');
+    });
+
+    it('draws the canvas for design again on the Step tab', async () => {
+      testRuns.record.set({ sessionId: 'test-conv', runId: 'RUN-1' });
+      testRuns.run.set(approvedRun());
+      testRuns.lines.set([runLine('generalist', 'AST-gen', 'running')]);
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+
+      el.querySelector<HTMLButtonElement>('#wf-tab-step')!.click();
+      await settle();
+
+      expect(el.querySelector('[aria-label="Workflow canvas"]')).not.toBeNull();
+      expect(el.querySelectorAll('[role="group"] ul button').length).toBe(3);
+      expect(el.textContent).toContain('Add step');
+    });
+
+    it('goes back to Preview when the test run is cancelled on its sheet', async () => {
+      testRuns.record.set({ sessionId: 'test-conv' });
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      expect(el.querySelector('#wf-tab-test')!.getAttribute('aria-selected')).toBe('true');
+
+      testRuns.record.set(undefined);
+      await settle();
+
+      expect(el.querySelector('#wf-tab-test')).toBeNull();
+      expect(el.querySelector('#wf-tab-preview')!.getAttribute('aria-selected')).toBe('true');
+    });
+
+    it('moves between three tabs with the arrow keys, wrapping', async () => {
+      testRuns.record.set({ sessionId: 'test-conv' });
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+
+      const test = el.querySelector<HTMLButtonElement>('#wf-tab-test')!;
+      test.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+      await settle();
+      expect(el.querySelector('#wf-tab-step')!.getAttribute('aria-selected')).toBe('true');
+      el.querySelector('#wf-tab-step')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+      await settle();
+      expect(el.querySelector('#wf-tab-test')!.getAttribute('aria-selected')).toBe('true');
+    });
+  });
+});
+
+describe('elapsedLabel', () => {
+  it('reads seconds, then minutes and seconds, then hours and minutes', () => {
+    expect(elapsedLabel('2026-11-20T10:00:00Z', '2026-11-20T10:00:42Z')).toBe('42s');
+    expect(elapsedLabel('2026-11-20T10:00:00Z', '2026-11-20T10:01:04Z')).toBe('1m 04s');
+    expect(elapsedLabel('2026-11-20T10:00:00Z', '2026-11-20T11:02:00Z')).toBe('1h 02m');
+    expect(elapsedLabel(undefined, '2026-11-20T10:00:42Z')).toBeUndefined();
+    expect(elapsedLabel('2026-11-20T10:00:42Z', '2026-11-20T10:00:00Z')).toBeUndefined();
   });
 });
 
