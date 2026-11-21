@@ -202,6 +202,21 @@ describe('the merge that starts by itself', () => {
     expect(merge.holdFor(r, 'd1')).toBeNull();
   });
 
+  it('the run’s own file left on the composer is no draft, but another file is', () => {
+    const r = mergeRun(['done', 'done']);
+    r.fileIds = ['up-1'];
+    merge.register('src', sender);
+    deliveries.add('src', delivery('d1'));
+    const file = (uploadId: string) => ({ uploadId, filename: 'f.pdf', mimeType: 'application/pdf', sizeBytes: 1 });
+
+    composer.note('src', { text: '', attachments: [file('up-1')] });
+    expect(merge.holdFor(r, 'd1')).toBeNull();
+    composer.note('src', { text: '', attachments: [file('up-1'), file('up-2')] });
+    expect(merge.holdFor(r, 'd1')).toBe('composer_not_empty');
+    composer.note('src', { text: 'and a question', attachments: [file('up-1')] });
+    expect(merge.holdFor(r, 'd1')).toBe('composer_not_empty');
+  });
+
   it('reads a draft left in storage before this tab’s composer reported one', async () => {
     TestBed.inject(ComposerDraftStorageService).write('src', { text: 'left over from before the reload' });
     merge.register('src', sender);
