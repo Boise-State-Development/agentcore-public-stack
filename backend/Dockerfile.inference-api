@@ -38,8 +38,15 @@ COPY backend/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --extra agentcore --extra bidi --no-install-project --no-dev --no-editable
 
-# Copy source code and install the project itself
-COPY backend/src ./src
+# Copy source code and install the project itself. Only the three packages the
+# Runtime runs: app_api and lambdas are never imported here (enforced by
+# backend/tests/architecture/test_import_boundaries.py, which also holds these
+# COPY lines and build-one.sh's inference-api SOURCE_DIRS to one list). Copying
+# them made every app-api-only merge a new image, and every new image is a new
+# AgentCore Runtime version against a 1,000-version quota.
+COPY backend/src/agents ./src/agents
+COPY backend/src/apis/shared ./src/apis/shared
+COPY backend/src/apis/inference_api ./src/apis/inference_api
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --extra agentcore --extra bidi --no-dev --no-editable
 
@@ -56,8 +63,10 @@ RUN apt-get update && apt-get install -y \
 # Copy the virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv
 
-# Copy application code
-COPY backend/src /app/src
+# Copy application code: the same three packages as the builder stage.
+COPY backend/src/agents /app/src/agents
+COPY backend/src/apis/shared /app/src/apis/shared
+COPY backend/src/apis/inference_api /app/src/apis/inference_api
 
 # Precompile our own source the same way the venv was (see UV_COMPILE_BYTECODE
 # above). `-q` keeps the layer log quiet; a syntax error still fails the build,

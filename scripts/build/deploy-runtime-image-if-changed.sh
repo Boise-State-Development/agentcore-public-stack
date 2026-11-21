@@ -153,6 +153,51 @@ if [[ "$CURRENT_URI" == "$NEW_CONTAINER_URI" ]]; then
     exit 0
 fi
 
+# 3b. The same image under a different reference (another tag, or a digest
+# pin) is also no change. Every update-agent-runtime call creates an
+# immutable Runtime version, and a Runtime stops accepting updates at its
+# "Versions per Agent" quota (1,000 by default), with no API to delete one.
+# The payload below is the live configuration with only the container URI
+# swapped, so an equal digest means the call would change nothing at all.
+# Best effort: a digest that cannot be read (no ecr:DescribeImages on that
+# repository, an image no longer in ECR) falls through to the update, which
+# is what this script did before.
+image_digest() {
+    local uri="$1"
+    if [[ "$uri" == *@sha256:* ]]; then
+        echo "${uri##*@}"
+        return 0
+    fi
+    [[ "$uri" =~ $ECR_URI_REGEX ]] || return 0
+    local without_tag="${uri%:*}"
+    local tag="${uri##*:}"
+    local registry="${without_tag%%/*}"
+    local repo_name="${without_tag#*/}"
+    local registry_id="${registry%%.*}"
+    local region="${registry#*.dkr.ecr.}"
+    region="${region%%.amazonaws.com}"
+    local digest
+    digest="$(aws ecr describe-images \
+        --region "$region" \
+        --registry-id "$registry_id" \
+        --repository-name "$repo_name" \
+        --image-ids "imageTag=$tag" \
+        --query 'imageDetails[0].imageDigest' \
+        --output text 2>/dev/null)" || return 0
+    [[ "$digest" == sha256:* ]] && echo "$digest"
+    return 0
+}
+
+CURRENT_DIGEST="$(image_digest "$CURRENT_URI")"
+NEW_DIGEST="$(image_digest "$NEW_CONTAINER_URI")"
+log "Current image digest: ${CURRENT_DIGEST:-<unknown>}"
+log "Target image digest: ${NEW_DIGEST:-<unknown>}"
+if [[ -n "$CURRENT_DIGEST" && "$CURRENT_DIGEST" == "$NEW_DIGEST" ]]; then
+    log "Runtime already runs digest $NEW_DIGEST (as $CURRENT_URI) — skipping update-agent-runtime."
+    echo "$IMAGE_TAG"
+    exit 0
+fi
+
 # 4. Confirm this CLI can carry platformVersion through the update.
 # A CLI whose service model predates the field never parses it out
 # of get-agent-runtime, so the full-replace update below would omit

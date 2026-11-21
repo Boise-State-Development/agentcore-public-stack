@@ -82,7 +82,14 @@ case "$SERVICE" in
         ;;
     inference-api)
         DOCKERFILE="backend/Dockerfile.inference-api"
-        SOURCE_DIRS=("backend/src")
+        # Exactly the Dockerfile's COPY list, so an app-api-only change keeps
+        # the tag and deploy-runtime-image-if-changed.sh makes no new Runtime
+        # version. test_import_boundaries.py holds the two lists together.
+        SOURCE_DIRS=(
+            "backend/src/agents"
+            "backend/src/apis/shared"
+            "backend/src/apis/inference_api"
+        )
         MANIFESTS=("backend/pyproject.toml" "backend/uv.lock")
         # Inference API runs on AgentCore Runtime (arm64).
         PLATFORM="linux/arm64"

@@ -21,7 +21,16 @@
  * Fix: read Image/containerUri from SSM at deploy time. The build
  * pipeline writes the live image URI to the same SSM path, so CFN
  * always picks up the latest live image — bootstrap stub or real
- * image — on any task-def / Runtime update. See:
+ * image — on any task-def / Runtime update.
+ *
+ * The two read it differently. The task definition uses an
+ * `AWS::SSM::Parameter::Value<String>` template parameter, which CFN
+ * re-reads on every stack update. The Runtime uses a
+ * `{{resolve:ssm:…}}` dynamic reference, whose template text never
+ * changes: with the parameter, every platform deploy after an image
+ * push sent UpdateAgentRuntime with the image the Runtime already ran,
+ * and each call is a Runtime version against a 1,000-version quota.
+ * See:
  *   scripts/stack-bootstrap/seed-image-tags.sh
  *   scripts/platform/deploy.sh
  */
@@ -74,10 +83,10 @@ describe('Compute image URI resolution', () => {
     expect(found!.type).toBe('AWS::SSM::Parameter::Value<String>');
   });
 
-  it('emits an AWS::SSM::Parameter::Value<String> for inference-api image-tag', () => {
-    const found = findSsmParameterValue('/test-project/inference-api/image-tag');
-    expect(found).toBeDefined();
-    expect(found!.type).toBe('AWS::SSM::Parameter::Value<String>');
+  it('emits no template parameter for the inference-api image-tag', () => {
+    // A parameter would be re-read on every stack update and make CFN send
+    // the Runtime a no-op UpdateAgentRuntime (a new version) after every push.
+    expect(findSsmParameterValue('/test-project/inference-api/image-tag')).toBeUndefined();
   });
 
   it('the app-api task definition Image is a Ref to the app-api image-tag parameter, not a literal', () => {
@@ -95,10 +104,7 @@ describe('Compute image URI resolution', () => {
     expect(containers[0].Image).toEqual({ Ref: found!.paramName });
   });
 
-  it('the AgentCore Runtime containerUri is a Ref to the inference-api image-tag parameter, not a literal', () => {
-    const found = findSsmParameterValue('/test-project/inference-api/image-tag');
-    expect(found).toBeDefined();
-
+  it('the AgentCore Runtime containerUri is an SSM dynamic reference to the inference-api image-tag, not a literal', () => {
     const runtimes = template.findResources('AWS::BedrockAgentCore::Runtime');
     expect(Object.keys(runtimes)).toHaveLength(1);
     const runtime = Object.values(runtimes)[0];
@@ -106,7 +112,11 @@ describe('Compute image URI resolution', () => {
       AgentRuntimeArtifact: { ContainerConfiguration: { ContainerUri: unknown } };
     }).AgentRuntimeArtifact;
 
-    expect(artifact.ContainerConfiguration.ContainerUri).toEqual({ Ref: found!.paramName });
+    // Unversioned on purpose: CFN resolves the latest value whenever it
+    // updates the Runtime, and the text never changes between deploys.
+    expect(artifact.ContainerConfiguration.ContainerUri).toBe(
+      '{{resolve:ssm:/test-project/inference-api/image-tag}}',
+    );
   });
 
   it('emits bootstrap-image-hash CfnOutputs for the seed script', () => {

@@ -27,7 +27,12 @@ export function runtimeLogGroupPrefix(agentRuntimeName: string): string {
 
 export interface RuntimeLogRetentionSweepConstructProps {
   config: AppConfig;
-  /** The CfnRuntime's `agentRuntimeName` — stable across replacements. */
+  /**
+   * The CfnRuntime's `agentRuntimeName`. Stable across replacements by
+   * CloudFormation, but not across a new `inferenceApi.runtimeGeneration`,
+   * which is a new name: the previous generation's groups keep the retention
+   * this sweep already gave them.
+   */
   agentRuntimeName: string;
 }
 

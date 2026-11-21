@@ -291,6 +291,18 @@ export interface InferenceApiConfig {
    * docs/specs/agentcore-runtime-v2.md.
    */
   runtimePlatformVersion: string;
+  /**
+   * Runtime generation (CDK_AGENTCORE_RUNTIME_GENERATION), unset by default.
+   * When set, it is appended to the Runtime's name (`{prefix}_agentcore_runtime_{generation}`).
+   * A new name makes CloudFormation create a new Runtime, repoint everything
+   * that references it, then delete the old one. That is the only way to get
+   * a Runtime with no versions, because AWS cannot delete a single version
+   * and a Runtime stops accepting updates at the account's "Versions per
+   * Agent" quota (1,000 by default). Unset keeps the original name, so the
+   * template is unchanged. Use 1-8 lowercase letters or digits, for example
+   * `g2`. Runbook: docs/specs/agentcore-runtime-v2.md §11.
+   */
+  runtimeGeneration?: string;
 }
 
 export interface RagIngestionConfig {
@@ -1374,6 +1386,27 @@ export const AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT = 'V1';
 export const AGENTCORE_RUNTIME_PLATFORM_VERSIONS = ['V1', 'V2'] as const;
 
 /**
+ * What `inferenceApi.runtimeGeneration` may be: legal in a Runtime name
+ * (`[a-zA-Z][a-zA-Z0-9_]{0,47}`) and short enough that the longest name fits.
+ * A project prefix is at most 21 characters, so 21 + `_agentcore_runtime` (18)
+ * + `_` + 8 is exactly AgentCore's 48.
+ */
+export const AGENTCORE_RUNTIME_GENERATION_PATTERN = /^[a-z0-9]{1,8}$/;
+
+/**
+ * The AgentCore Runtime's name: `{prefix}_agentcore_runtime`, plus
+ * `_{generation}` when `inferenceApi.runtimeGeneration` is set. Runtime names
+ * cannot contain `-`, hence the replace. Everything that keys on the name
+ * (the CloudWatch `Name` dimension, the log-retention sweep's prefix) reads it
+ * from here, so it follows a new generation.
+ */
+export function getAgentRuntimeName(config: AppConfig): string {
+  const base = getResourceName(config, 'agentcore_runtime').replace(/-/g, '_');
+  const generation = config.inferenceApi.runtimeGeneration;
+  return generation ? `${base}_${generation}` : base;
+}
+
+/**
  * Default for `appApi.apiConverseMaxInFlight` (CDK_APP_API_CONVERSE_MAX_IN_FLIGHT).
  * Mirrors `DEFAULT_MAX_IN_FLIGHT` in backend/src/apis/app_api/chat/bedrock_offload.py,
  * which is what a task falls back to when the variable is absent; keep the two
@@ -1753,6 +1786,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
         || scope.node.tryGetContext('inferenceApi.runtimePlatformVersion')
         || scope.node.tryGetContext('inferenceApi')?.runtimePlatformVersion
         || AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT,
+      // Same chain. Unset (or '', an unset GitHub variable) keeps the
+      // original Runtime name, so the template is unchanged.
+      runtimeGeneration:
+        process.env.CDK_AGENTCORE_RUNTIME_GENERATION?.trim()
+        || scope.node.tryGetContext('inferenceApi.runtimeGeneration')
+        || scope.node.tryGetContext('inferenceApi')?.runtimeGeneration
+        || undefined,
     },
     ragIngestion: {
       additionalCorsOrigins: process.env.CDK_RAG_CORS_ORIGINS || scope.node.tryGetContext('ragIngestion')?.additionalCorsOrigins,
@@ -2999,6 +3039,13 @@ function validateConfig(config: AppConfig): void {
     throw new Error(
       `Invalid inferenceApi.runtimePlatformVersion: "${String(config.inferenceApi.runtimePlatformVersion)}". ` +
       `Expected one of ${AGENTCORE_RUNTIME_PLATFORM_VERSIONS.join(', ')} (CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION).`
+    );
+  }
+  const runtimeGeneration = config.inferenceApi.runtimeGeneration;
+  if (runtimeGeneration !== undefined && !AGENTCORE_RUNTIME_GENERATION_PATTERN.test(String(runtimeGeneration))) {
+    throw new Error(
+      `Invalid inferenceApi.runtimeGeneration: "${String(runtimeGeneration)}". ` +
+      'Expected 1-8 lowercase letters or digits, for example "g2" (CDK_AGENTCORE_RUNTIME_GENERATION).'
     );
   }
   if (!config.appApi.maxCapacity) {
