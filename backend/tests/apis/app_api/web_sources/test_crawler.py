@@ -50,6 +50,7 @@ class _Recorder:
         self.kb_record: dict | None = None  # the knowledge-base record a new page reads
         self.s3_content_types: List[str] = []  # the ContentType of each S3 PUT, in order
         self.metadata_calls: List[dict] = []  # every update_document_import_metadata kwargs
+        self.metadata_hashes: Dict[str, str | None] = {}  # document_id -> content_hash written
         self.status_messages: Dict[str, str | None] = {}  # document_id -> last error_message
 
     def next_doc_id(self) -> str:
@@ -109,8 +110,10 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         size_bytes: int,
         s3_key: str,
         source_etag: str | None = None,
+        content_hash: str | None = None,
     ):
         rec.metadata_updates.append(document_id)
+        rec.metadata_hashes[document_id] = content_hash
         rec.metadata_calls.append(
             {"document_id": document_id, "filename": filename, "content_type": content_type, "size_bytes": size_bytes}
         )
@@ -680,6 +683,51 @@ async def test_refresh_identical_hash_skips_stage(recorder: _Recorder):
     assert recorder.s3_puts == []
     # etag advanced via on_result so next run's conditional GET can 304
     assert log.events == [("unchanged", ROOT, 0)]
+
+
+@pytest.mark.asyncio
+async def test_first_crawl_stores_the_hash_its_first_refresh_matches(recorder: _Recorder):
+    """The first crawl records each page's hash, so the first scheduled
+    re-crawl of an unchanged site stages nothing.
+
+    Without it every page of a new crawl project re-embedded on its first
+    re-crawl (prod 2026-11-21: 8 new policies, 0 of 185 pages unchanged),
+    and the burst throttled the managed KB's ingestion consumer.
+    """
+    html = "<html><head><title>T</title></head><body><p>same content</p></body></html>"
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=ROOT,
+        settings=CrawlSettings(max_depth=0, max_pages=1),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(_build_refresh_handler({ROOT: html}, {ROOT: '"v1"'})),
+    )
+    stored_hash = recorder.metadata_hashes[recorder.preassigned_root_id]
+    assert stored_hash is not None
+
+    recorder.s3_puts.clear()
+    state, log = _refresh_state(
+        recorder,
+        {ROOT: crawler.RefreshDoc(document_id="DOC-root", source_etag='"v1"', content_hash=stored_hash)},
+    )
+    # A new ETag defeats the conditional GET, as a CMS that re-stamps pages does.
+    await _run_refresh(recorder, {ROOT: html}, state, etags={ROOT: '"v2"'})
+
+    assert state.unchanged == 1 and state.changed == 0
+    assert recorder.s3_puts == []
+
+
+@pytest.mark.asyncio
+async def test_first_crawl_stores_the_hash_of_a_pdf_as_staged(recorder: _Recorder):
+    pdf_url = "https://example.com/files/report.pdf"
+    handler = _files_handler({ROOT: (_HTML, _page_linking("/files/report.pdf")), pdf_url: ("application/pdf", _PDF)})
+
+    await _crawl(recorder, handler)
+
+    [(pdf_doc, _source)] = recorder.created_docs
+    assert recorder.metadata_hashes[pdf_doc] == crawler._bytes_sha256(_PDF)
 
 
 @pytest.mark.asyncio

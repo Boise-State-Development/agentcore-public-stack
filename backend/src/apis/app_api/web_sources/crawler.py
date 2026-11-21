@@ -1037,11 +1037,13 @@ async def run_crawl(
                         if links_html is not None:
                             await enqueue_links(links_html, final_url, depth)
 
-                    content_hash: Optional[str] = None
+                    # Hashed on every crawl, not only a refresh: the first crawl
+                    # stores it with the page, so the first scheduled re-crawl
+                    # can hash-match instead of re-embedding the whole site.
+                    # Hashing a PDF of up to MAX_PDF_BYTES is real CPU; keep it
+                    # off the loop like the extraction above.
+                    content_hash = await asyncio.to_thread(_bytes_sha256, payload)
                     if refresh is not None:
-                        # Hashing a PDF of up to MAX_PDF_BYTES is real CPU;
-                        # keep it off the loop like the extraction above.
-                        content_hash = await asyncio.to_thread(_bytes_sha256, payload)
                         if existing is not None:
                             if existing.content_hash and existing.content_hash == content_hash:
                                 # Same bytes under a new/absent ETag: record
@@ -1114,6 +1116,7 @@ async def run_crawl(
                         size_bytes=len(payload),
                         s3_key=s3_key,
                         source_etag=etag,
+                        content_hash=content_hash,
                     )
                     logger.info(
                         "Crawl %s wrote %s to s3 (key=%s); ingestion Lambda will take over",
