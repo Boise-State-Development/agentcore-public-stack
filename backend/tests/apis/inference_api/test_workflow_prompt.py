@@ -664,3 +664,67 @@ def test_a_cancelled_calls_estimate_reads_the_warm_prefix():
     assert usage["cacheReadInputTokens"] == 10_080
     assert usage["outputTokens"] == 100
     assert estimate["reason"] == "interrupted"
+
+
+# --- Several models -------------------------------------------------------------------------------
+
+SONNET = "us.anthropic.claude-sonnet-5-5"
+
+
+class TaggedModel:
+    """Records each call as ``(model, step)`` start and end events, and the calls in flight."""
+
+    def __init__(self, delay: float = 0.03) -> None:
+        self.delay = delay
+        self.events: List[tuple] = []
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def __call__(self, model: Any, messages: List[Dict[str, Any]], cancel: threading.Event) -> CallResult:
+        step = messages[0]["content"][-1]["text"].rsplit("lens ", 1)[1].rstrip(".")
+        self.events.append(("start", model, step))
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(self.delay)
+            return CallResult(
+                stop_reason="end_turn",
+                text=f"Answer {step}",
+                usage={"inputTokens": 40, "outputTokens": 300, "totalTokens": 340},
+                answered=True,
+            )
+        finally:
+            self.in_flight -= 1
+            self.events.append(("end", model, step))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [2, 4])
+async def test_model_groups_warm_side_by_side_under_one_shared_limit(limit):
+    """Two models' groups share no cache, so their warm calls overlap; every call still takes a slot
+    from one semaphore, so the run's concurrency bounds the total, not each group's."""
+    steps_list = [_step(1), _step(2), _step(3), _step(4), _step(5, model=SONNET), _step(6, model=SONNET), _step(7, model=SONNET), _step(8, model=SONNET)]
+    run = _run(steps_list)
+    run.limits.concurrency = limit
+    store = StepStore({f"h{n}": "open" for n in range(1, 9)})
+    model = TaggedModel()
+    plans = {MODEL: _plan(), SONNET: _plan(model_id=SONNET)}
+
+    async def model_plan(user, model_id: str) -> ModelPlan:
+        return plans[model_id]
+
+    work = _work(run, store, model)
+    work._model_plan = model_plan
+    work._build_model = lambda model_id: model_id
+    frames = await _drain(work)
+
+    assert _statuses(frames) == {f"s{n}": "done" for n in range(1, 9)}
+    assert model.max_in_flight <= limit
+    # Both groups' warm calls (steps 1 and 5) start before either ends.
+    first_end = next(i for i, e in enumerate(model.events) if e[0] == "end")
+    started_before = {e[2] for e in model.events[:first_end] if e[0] == "start"}
+    assert {"1", "5"} <= started_before
+    # Within each group, nothing fans out until its own warm call has ended.
+    for warm_step, group in (("1", {"2", "3", "4"}), ("5", {"6", "7", "8"})):
+        warm_end = model.events.index(("end", MODEL if warm_step == "1" else SONNET, warm_step))
+        assert not any(e[0] == "start" and e[2] in group for e in model.events[:warm_end])

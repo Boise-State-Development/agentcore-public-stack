@@ -589,6 +589,7 @@ class PromptStepRun:
         self._stopped = False
         self._settled: Set[str] = set()
         self._claimed: List[StepPlan] = []
+        self._slots = asyncio.Semaphore(1)
         #: Order the calls started in, by step id (warm-then-fan-out is observable here).
         self.call_order: List[str] = []
 
@@ -757,22 +758,35 @@ class PromptStepRun:
             return
         prefix = document_blocks(documents)
 
+        # One group per model, side by side: each model has its own cache, so nothing is shared
+        # between groups and running them in turn would only add a group's wall time. One
+        # semaphore across the groups keeps every call in flight within the run's concurrency.
+        limit = max(1, int(run.limits.concurrency or 1))
+        self._slots = asyncio.Semaphore(limit)
         groups: Dict[str, List[StepPlan]] = {}
         for plan in claimed:
             groups.setdefault(plan.step.model_id or "", []).append(plan)
-        for model_id, plans in groups.items():
-            if self._stopped:
-                break
+
+        async def _group(model_id: str, plans: List[StepPlan]) -> None:
             model_plan = await self._model_plan(self.user, model_id)
             if model_plan.refusal is not None:
                 for plan in plans:
                     await self._stop(plan, model_plan.refusal)
-                continue
+                return
             if too_large(documents, model_plan):
                 for plan in plans:
                     await self._stop(plan, "too_large")
-                continue
-            await self._run_group(run, model_plan, documents, prefix, plans)
+                return
+            await self._run_group(run, model_plan, documents, prefix, plans, limit=limit)
+
+        outcomes = await asyncio.gather(
+            *(_group(model_id, plans) for model_id, plans in groups.items()), return_exceptions=True
+        )
+        for outcome in outcomes:
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, BaseException):
+                logger.warning("workflow prompt: a model group failed", exc_info=outcome)
 
         for plan in claimed:
             if plan.step_id not in self._settled:
@@ -785,8 +799,14 @@ class PromptStepRun:
         documents: Sequence[WholeDocument],
         prefix: List[Dict[str, Any]],
         plans: List[StepPlan],
+        *,
+        limit: int,
     ) -> None:
-        """Warm, then fan out: the first step alone writes the prefix; the rest read it."""
+        """Warm, then fan out: the first step alone writes the prefix; the rest read it.
+
+        "Alone" is within the group: another model's group may be calling at the same time, since
+        it has a cache of its own. Every call takes a slot from the run's shared semaphore.
+        """
         model = self._build_model(model_plan.model_id)
         doc_tokens = document_tokens(documents, model_plan.model_id)
         warm: Dict[str, Optional[int]] = {"prefix": None}
@@ -800,7 +820,7 @@ class PromptStepRun:
                 (lambda plan=plan: self._run_step(model, model_plan, prefix, doc_tokens, plan, warm))
                 for plan in rest
             ],
-            limit=max(1, int(run.limits.concurrency or 1)),
+            limit=limit,
         )
         for plan, result in zip(rest, results):
             if isinstance(result, BaseException):
@@ -808,6 +828,18 @@ class PromptStepRun:
                 await self._stop(plan, "error")
 
     async def _run_step(
+        self,
+        model: Any,
+        model_plan: ModelPlan,
+        prefix: List[Dict[str, Any]],
+        doc_tokens: int,
+        plan: StepPlan,
+        warm: Dict[str, Optional[int]],
+    ) -> None:
+        async with self._slots:
+            await self._call_step(model, model_plan, prefix, doc_tokens, plan, warm)
+
+    async def _call_step(
         self,
         model: Any,
         model_plan: ModelPlan,
