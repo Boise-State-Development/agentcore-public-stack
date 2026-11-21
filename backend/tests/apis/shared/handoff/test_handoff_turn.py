@@ -336,6 +336,32 @@ class TestFirstTurn:
         assert asyncio.run(first_turn(store, agent_id="someone-else").context_block()) == ""
         assert store.get("alice", "h1").status == "open"
 
+    @pytest.mark.parametrize("agent_id", ["", "rubric"])
+    def test_a_prompt_step_is_never_accepted_by_a_turn(self, store, meta, agent_id):
+        """A prompt step has no Agent and no conversation (workflow-designer §21.3): only the Runtime claims it."""
+        now = datetime.now(timezone.utc).isoformat()
+        store.create(
+            Handoff(
+                handoff_id="p1", user_id="alice", session_id="src", kind="prompt", agent_id="",
+                model_id="us.anthropic.claude-haiku-5-5-v1:0", request="List the budget lines",
+                created_at=now, updated_at=now, run_id="run-1", step_id="s1",
+            )
+        )
+        turn = HandoffTurn.for_turn(
+            user_id="alice",
+            session_id="tgt",
+            agent_id=agent_id,
+            handoff_context=HandoffContextRequest(handoff_id="p1", text=EXCERPT),
+            session_row=None,
+            is_resume=False,
+            is_continuation=False,
+            store=store,
+        )
+
+        assert turn is None or asyncio.run(turn.context_block()) == ""
+        row = store.get("alice", "p1")
+        assert (row.status, row.target_session_id) == ("open", None)
+
     def test_a_second_send_gets_no_context(self, store, meta):
         asyncio.run(first_turn(store).context_block())
         second = first_turn(store)

@@ -175,9 +175,8 @@ class TestEnvelope:
     def test_a_step_named_twice_is_refused(self):
         _refused(_file("| a | agent | AST-1 | |\n| a | agent | AST-2 | |\n"), "two steps are named 'a'")
 
-    @pytest.mark.parametrize("kind", ["prompt", "checklist"])
-    def test_reserved_kinds_are_refused_with_a_sentence(self, kind):
-        _refused(_file(f"| a | {kind} | m | |\n"), f"'{kind}' steps are not available yet")
+    def test_checklist_is_still_reserved_and_refused_with_a_sentence(self):
+        _refused(_file("| a | checklist | m | |\n"), "'checklist' steps are not available yet")
 
     def test_an_unknown_kind_is_refused(self):
         _refused(_file("| a | robot | AST-1 | |\n"), "unknown kind 'robot'")
@@ -256,3 +255,94 @@ class TestHelpers:
         assert step_name_for("Budget Reader", taken=["budget_reader"]) == "budget_reader_2"
         assert step_name_for("42") == "step_42"
         assert step_name_for("Files") == "files_step"
+
+
+HAIKU = "us.anthropic.claude-haiku-5-5-v1:0"
+SONNET = "us.anthropic.claude-sonnet-5-5-v1:0"
+
+PROMPT_FILE = f"""---
+title: Panel
+version: 2
+---
+
+| step | kind | worker | reads |
+|---|---|---|---|
+| generalist | agent | AST-1 @ 5 | request, files |
+| fiscal | prompt | {HAIKU} | files |
+| summary | prompt | {SONNET} | files, generalist, fiscal |
+
+## Step: fiscal
+
+Check the budget against the solicitation.
+
+## Step: summary
+
+Merge the two reviews.
+"""
+
+
+class TestPromptSteps:
+    """A prompt step (workflow-designer §21.3): kind ``prompt``, a model id as its worker."""
+
+    def test_a_prompt_step_reads_as_its_model_and_its_instruction(self):
+        workflow = parse_workflow(PROMPT_FILE, name="panel")
+
+        fiscal = workflow.step("fiscal")
+        assert fiscal.kind == "prompt"
+        assert fiscal.is_prompt
+        assert fiscal.model_id == HAIKU
+        assert fiscal.agent_id == ""
+        assert fiscal.agent_version is None
+        assert fiscal.worker == HAIKU
+        assert fiscal.request == "Check the budget against the solicitation."
+        assert workflow.step("summary").reads == ("files", "generalist", "fiscal")
+        assert workflow.step("generalist").model_id is None
+
+    def test_it_round_trips_byte_for_byte(self):
+        workflow, layout = read_workflow_file(PROMPT_FILE, name="panel")
+
+        text = serialize_workflow(workflow, layout=layout)
+
+        assert text == PROMPT_FILE
+        assert read_workflow_file(text, name="panel") == (workflow, layout)
+
+    def test_the_fingerprint_names_the_model(self):
+        workflow = parse_workflow(PROMPT_FILE, name="panel")
+        other = parse_workflow(PROMPT_FILE.replace(f"| fiscal | prompt | {HAIKU}", f"| fiscal | prompt | {SONNET}"), name="panel")
+
+        assert workflow_fingerprint(workflow) != workflow_fingerprint(other)
+
+    def test_an_agent_only_file_keeps_its_fingerprint(self):
+        """Pinned from ``develop`` before prompt steps: a run's recorded fingerprint must not move."""
+        workflow = parse_workflow(FULL, name="proposal-review")
+
+        assert workflow_fingerprint(workflow) == "2eba911c9973a3c9"
+
+    def test_the_parser_accepts_it_whatever_the_flag(self, monkeypatch):
+        monkeypatch.delenv("PROMPT_STEPS_ENABLED", raising=False)
+
+        assert validate_workflow_upload("workflow.panel.md", PROMPT_FILE.encode()) is not None
+
+    @pytest.mark.parametrize("worker", [f"{HAIKU} @ 2", "", "has space", "-leading-dash"])
+    def test_a_worker_that_is_not_a_model_id_is_refused(self, worker):
+        _refused(_file(f"| a | prompt | {worker} | files |\n"), "a prompt step's worker must be a model id")
+
+    def test_an_arn_is_a_model_id(self):
+        arn = "arn:aws:bedrock:us-west-2:000000000000:inference-profile/us.anthropic.claude-haiku-5-5-v1:0"
+        assert parse_workflow(_file(f"| a | prompt | {arn} | files |\n"), name="review").steps[0].model_id == arn
+
+    def test_a_definition_must_not_mix_an_agent_and_a_model(self):
+        both = WorkflowStep(name="a", agent_id="AST-1", kind="prompt", model_id=HAIKU)
+        with pytest.raises(WorkflowError, match="names no Agent"):
+            serialize_workflow(Workflow(name="x", title="T", steps=(both,)))
+        agent_with_model = WorkflowStep(name="a", agent_id="AST-1", model_id=HAIKU)
+        with pytest.raises(WorkflowError, match="names no model"):
+            serialize_workflow(Workflow(name="x", title="T", steps=(agent_with_model,)))
+        no_model = WorkflowStep(name="a", agent_id="", kind="prompt")
+        with pytest.raises(WorkflowError, match="is not a model id"):
+            serialize_workflow(Workflow(name="x", title="T", steps=(no_model,)))
+
+    def test_a_no_op_save_of_a_prompt_step_is_the_same_definition(self):
+        workflow = parse_workflow(PROMPT_FILE, name="panel")
+
+        assert same_definition(workflow, replace(workflow, version=9))

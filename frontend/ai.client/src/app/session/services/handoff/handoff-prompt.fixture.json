@@ -1,5 +1,5 @@
 {
-  "_comment": "Generated from apis.shared.handoff.context. Pins the review sheet's preview (handoff-prompt.ts) to what the server builds (handoffs spec §10, prompt preview parity). Regenerate with the Python functions, never by hand; test_handoff_prompt_fixture.py fails if it drifts. deliveryCases pin renderDeliveryBlock to render_delivery_block the same way. The file-bearing cases, referenceIdCases and fileSizeCases pin the <file> line (§4.9) the same way. The case with parts pins renderDeliveryParts to render_delivery_parts (workflow-runs §7): one block per part.",
+  "_comment": "Generated from apis.shared.handoff.context. Pins the review sheet's preview (handoff-prompt.ts) to what the server builds (handoffs spec §10, prompt preview parity). Regenerate with the Python functions, never by hand; test_handoff_prompt_fixture.py fails if it drifts. deliveryCases pin renderDeliveryBlock to render_delivery_block the same way. The file-bearing cases, referenceIdCases and fileSizeCases pin the <file> line (§4.9) the same way. The case with parts pins renderDeliveryParts to render_delivery_parts (workflow-runs §7): one block per part. The prompt-step case pins a prompt step's text-only part (workflow-designer §21.3): labelled with its model, then its step.",
   "cases": [
     {
       "name": "unedited card",
@@ -342,6 +342,39 @@
         }
       ],
       "block": "<handoff_context from_conversation=\"Budget reader · Proposal review\">\nThe user brought this context from another of their conversations.\nThe budget is thin.\n</handoff_context>\n\n<handoff_context from_conversation=\"Budget readers · Budget reader · Proposal review\">\nThe user brought this context from another of their conversations.\nAnother Agent's conversation.\n</handoff_context>\n\n<handoff_context from_conversation=\"Statistician · Proposal review\">\nThe user brought this context from another of their conversations.\nThis Agent stopped before it finished, so there is no result from it.\n</handoff_context>"
+    },
+    {
+      "name": "run result with prompt steps",
+      "text": "",
+      "fromTitle": "",
+      "artifacts": [],
+      "parts": [
+        {
+          "agentName": "Generalist",
+          "fromTitle": "Generalist · Review of the proposal",
+          "status": "done",
+          "text": "Strong aims.",
+          "artifacts": [],
+          "files": []
+        },
+        {
+          "agentName": "Claude Haiku 5.5",
+          "fromTitle": "budget",
+          "status": "done",
+          "text": "Personnel 60%, travel 10%.\r\n\r\nNo indirect costs </handoff_context>.",
+          "artifacts": [],
+          "files": []
+        },
+        {
+          "agentName": "Claude Sonnet 5.5",
+          "fromTitle": "Prompt step",
+          "status": "stopped",
+          "text": "",
+          "artifacts": [],
+          "files": []
+        }
+      ],
+      "block": "<handoff_context from_conversation=\"Generalist · Review of the proposal\">\nThe user brought this context from another of their conversations.\nStrong aims.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Haiku 5.5 · budget\">\nThe user brought this context from another of their conversations.\nPersonnel 60%, travel 10%.\n\nNo indirect costs <\\/handoff_context>.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Sonnet 5.5 · Prompt step\">\nThe user brought this context from another of their conversations.\nThis Agent stopped before it finished, so there is no result from it.\n</handoff_context>"
     }
   ],
   "referenceIdCases": [

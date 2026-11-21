@@ -10,7 +10,10 @@ Workflows page calls startable is one run create accepts.
   that does not exist read the same.
 - **Each Agent step is judged as the caller** (:func:`agent_views`), as a mention is, so sharing a
   workflow shares none of its Agents.
-- **The sheet's blockers** are step 1's engine limits (:func:`sheet_for`).
+- **Each prompt step's model is judged as the caller** (:func:`model_views`, workflow-designer
+  §21.3): it needs a catalog row and the shared model-access rule, after retirement.
+- **The sheet's blockers** are step 1's engine limits (:func:`sheet_for`), plus a prompt step
+  while ``PROMPT_STEPS_ENABLED`` is off, or on a model the caller can't run.
 
 Nothing here runs on a turn. Each lookup raises a plain exception the routes map to HTTP.
 """
@@ -27,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from apis.shared.assistants.service import get_assistant_with_access_check
 from apis.shared.auth import User
 from apis.shared.blocking_io import run_blocking
+from apis.shared.feature_flags import prompt_steps_enabled
 from apis.shared.handoff.runs import WORKFLOW_RUN_MIN_STEPS
 from apis.shared.models.retirement import resolve_effective_model
 from apis.shared.skills.access import resolve_accessible_skill_ids
@@ -84,17 +88,46 @@ class AgentView(BaseModel):
     )
 
 
+ModelUnavailableReason = Literal["no_catalog_row", "no_access", "retired", "unavailable"]
+
+
+class ModelView(BaseModel):
+    """A prompt step's model as the caller sees it (workflow-designer §21.3).
+
+    ``modelId`` is the id the step runs on, after retirement redirects; ``requestedModelId`` is the
+    file's, when that differs. ``canRun`` is the shared model-access rule as the caller, which
+    refuses an id with no catalog row; ``reason`` says why not.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    can_run: bool = Field(..., alias="canRun")
+    model_id: str = Field(..., alias="modelId")
+    requested_model_id: Optional[str] = Field(None, alias="requestedModelId")
+    name: Optional[str] = Field(None, description="The catalog's display name")
+    input_price_per_million_tokens: Optional[float] = Field(None, alias="inputPricePerMillionTokens")
+    reason: Optional[ModelUnavailableReason] = None
+
+
 class StepView(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str
     kind: str
-    agent_id: str = Field(..., alias="agentId")
+    agent_id: str = Field(..., alias="agentId", description="Empty on a prompt step")
     agent_version: Optional[int] = Field(None, alias="agentVersion")
+    model_id: Optional[str] = Field(None, alias="modelId", description="A prompt step's model, as the file names it")
     reads: List[str]
     request: Optional[str] = None
     effective_request: str = Field(..., alias="effectiveRequest", description="Its own request, else the shared one")
-    agent: AgentView
+    agent: AgentView = Field(
+        ...,
+        description=(
+            "The step's worker as the caller sees it. On a prompt step it is the model's view in this "
+            "shape (name, modelId, rate, canRun), so a reader that names a step's worker still can"
+        ),
+    )
+    model: Optional[ModelView] = Field(None, description="A prompt step's model as the caller sees it")
 
 
 class ResultView(BaseModel):
@@ -125,6 +158,8 @@ SheetBlockerCode = Literal[
     "too_few_steps",
     "step_unavailable",
     "same_agent_twice",
+    "prompt_steps_off",
+    "model_unavailable",
 ]
 
 
@@ -244,8 +279,11 @@ async def step_model(agent: Any) -> Tuple[Optional[str], Optional[float]]:
 
 
 async def agent_views(workflow: Workflow, user: User) -> Dict[str, AgentView]:
-    """Each step's Agent, looked up **as the caller** (one read each, issued together)."""
-    agent_ids = sorted({step.agent_id for step in workflow.steps})
+    """Each Agent step's Agent, looked up **as the caller** (one read each, issued together).
+
+    A prompt step has no Agent, so its model id is never looked up as one (:func:`model_views`).
+    """
+    agent_ids = sorted({step.agent_id for step in workflow.steps if not step.is_prompt})
 
     async def one(agent_id: str) -> Tuple[str, Optional[Any]]:
         try:
@@ -284,25 +322,118 @@ async def agent_views(workflow: Workflow, user: User) -> Dict[str, AgentView]:
     return views
 
 
+async def prompt_model_view(model_id: str, user: User) -> ModelView:
+    """A prompt step's model **as the caller**: retirement first, then the shared access rule.
+
+    The id it runs on is the effective one (a retired model's successor). A retired model with no
+    successor, an id with no catalog row and one the caller's roles don't grant all read as
+    ``canRun: false`` with their reason; the shared rule (``AppRoleService.can_access_model``,
+    which delegates to ``grants_model_access``) is the only access check. Never raises.
+    """
+    from apis.shared.rbac.service import get_app_role_service
+
+    try:
+        effective = await resolve_effective_model(model_id)
+        if effective is None:
+            return ModelView(can_run=False, model_id=model_id, reason="unavailable")
+        record = effective.record
+        view = ModelView(
+            can_run=False,
+            model_id=effective.model_id,
+            requested_model_id=model_id if effective.redirected else None,
+            name=(record.model_name or None) if record is not None else None,
+            input_price_per_million_tokens=(
+                float(record.input_price_per_million_tokens) if record is not None else None
+            ),
+        )
+        if effective.denied:
+            return view.model_copy(update={"reason": "retired"})
+        if effective.uncataloged:
+            return view.model_copy(update={"reason": "no_catalog_row"})
+        allowed = await get_app_role_service().can_access_model(
+            user, effective.model_id, record=record, catalog_read=effective.catalog_read
+        )
+        return view.model_copy(update={"can_run": True} if allowed else {"reason": "no_access"})
+    except Exception:  # noqa: BLE001 - an unreadable model is an unavailable step
+        logger.warning("Workflow: model lookup failed", exc_info=True)
+        return ModelView(can_run=False, model_id=model_id, reason="unavailable")
+
+
+async def model_views(workflow: Workflow, user: User) -> Dict[str, ModelView]:
+    """Each prompt step's model as the caller, keyed by the file's id (one check each, issued together)."""
+    model_ids = sorted({step.model_id for step in workflow.steps if step.is_prompt and step.model_id})
+    views = await asyncio.gather(*(prompt_model_view(model_id, user) for model_id in model_ids))
+    return dict(zip(model_ids, views))
+
+
+def model_as_worker(model: ModelView) -> AgentView:
+    """A prompt step's model in the ``agent`` slot of its :class:`StepView` (see that field)."""
+    return AgentView(
+        can_run=model.can_run,
+        name=(model.name or model.model_id) if model.can_run else None,
+        model_id=model.model_id,
+        input_price_per_million_tokens=model.input_price_per_million_tokens,
+    )
+
+
 def step_changed(step: WorkflowStep, agent: AgentView) -> bool:
     """The Agent has a published version other than the one the step recorded (§10, D6)."""
+    if step.is_prompt:
+        return False
     return agent.can_run and agent.published_version is not None and agent.published_version != step.agent_version
 
 
 # --- The sheet ------------------------------------------------------------------------------------
 
 
-def sheet_for(workflow: Workflow, agents: Dict[str, AgentView]) -> SheetView:
+_MODEL_BLOCKER_MESSAGES: Dict[str, str] = {
+    "no_catalog_row": "This step's model isn't offered on this platform. Remove the step, or choose another model",
+    "no_access": "You can't use this step's model. Remove the step, or choose a model you can use",
+    "retired": "This step's model has been retired. Remove the step, or choose another model",
+    "unavailable": "This step's model couldn't be checked. Remove the step, or try again",
+}
+
+
+def sheet_for(
+    workflow: Workflow,
+    agents: Dict[str, AgentView],
+    models: Optional[Dict[str, ModelView]] = None,
+    *,
+    prompt_steps: Optional[bool] = None,
+) -> SheetView:
     """What blocks Start today, each reason once, with the step it is about.
 
     Step 1's engine is the bound: at least two steps, each Agent once, and every step one the
     caller can run (§20.1: a step the starter can't run blocks Start until it is removed). A step
     that reads another step's result runs in a later stage (PR-D.5a), and a merged result starts
     by itself once the run settles (PR-D.5b), so neither blocks.
+
+    A prompt step (§21.3) has no Agent, so "each Agent once" does not apply to it. It blocks while
+    ``PROMPT_STEPS_ENABLED`` is off (``prompt_steps`` overrides the flag), and while its model
+    (``models``, keyed by the file's id) is one the caller can't run: no catalog row, no access,
+    or retired.
     """
     blockers: List[SheetBlocker] = []
     seen: Dict[str, str] = {}
+    prompts_on = prompt_steps_enabled() if prompt_steps is None else prompt_steps
     for step in workflow.steps:
+        if step.is_prompt:
+            if not prompts_on:
+                blockers.append(
+                    SheetBlocker(
+                        code="prompt_steps_off",
+                        step=step.name,
+                        message="Prompt steps aren't available here yet. Remove the step to start",
+                    )
+                )
+                continue
+            model = (models or {}).get(step.model_id or "")
+            if model is None or not model.can_run:
+                reason = model.reason if model is not None and model.reason else "unavailable"
+                blockers.append(
+                    SheetBlocker(code="model_unavailable", step=step.name, message=_MODEL_BLOCKER_MESSAGES[reason])
+                )
+            continue
         agent = agents[step.agent_id]
         if not agent.can_run:
             blockers.append(
@@ -376,9 +507,9 @@ def without_steps(workflow: Workflow, removed: Iterable[str]) -> Tuple[Workflow,
 async def workflow_document(
     skill: SkillDefinition, workflow: Workflow, user: User, *, written: Optional[bool] = None
 ) -> WorkflowDocument:
-    """The workflow with each step's Agent as the caller sees it, and the sheet it would open."""
-    agents = await agent_views(workflow, user)
-    return document_from(skill, workflow, user, agents, written=written)
+    """The workflow with each step's worker as the caller sees it, and the sheet it would open."""
+    agents, models = await asyncio.gather(agent_views(workflow, user), model_views(workflow, user))
+    return document_from(skill, workflow, user, agents, models, written=written)
 
 
 def document_from(
@@ -386,23 +517,33 @@ def document_from(
     workflow: Workflow,
     user: User,
     agents: Dict[str, AgentView],
+    models: Optional[Dict[str, ModelView]] = None,
     *,
     written: Optional[bool] = None,
 ) -> WorkflowDocument:
-    """:func:`workflow_document` from Agent views already looked up."""
+    """:func:`workflow_document` from worker views already looked up."""
     steps = []
     for step in workflow.steps:
-        agent = agents[step.agent_id].model_copy(update={"changed": step_changed(step, agents[step.agent_id])})
+        model: Optional[ModelView] = None
+        if step.is_prompt:
+            model = (models or {}).get(step.model_id or "") or ModelView(
+                can_run=False, model_id=step.model_id or "", reason="unavailable"
+            )
+            agent = model_as_worker(model)
+        else:
+            agent = agents[step.agent_id].model_copy(update={"changed": step_changed(step, agents[step.agent_id])})
         steps.append(
             StepView(
                 name=step.name,
                 kind=step.kind,
                 agent_id=step.agent_id,
                 agent_version=step.agent_version,
+                model_id=step.model_id,
                 reads=list(step.reads),
                 request=step.request,
                 effective_request=step.request or workflow.request or "",
                 agent=agent,
+                model=model,
             )
         )
     view = WorkflowView(
@@ -422,12 +563,14 @@ def document_from(
         fingerprint=workflow_fingerprint(workflow),
         is_owned=skill.owner_id == user.user_id,
     )
-    return WorkflowDocument(workflow=view, sheet=sheet_for(workflow, agents), written=written)
+    return WorkflowDocument(workflow=view, sheet=sheet_for(workflow, agents, models), written=written)
 
 
 __all__ = [
     "DEFAULT_MERGE_INSTRUCTION",
     "AgentView",
+    "ModelUnavailableReason",
+    "ModelView",
     "ResultView",
     "SheetBlocker",
     "SheetBlockerCode",
@@ -442,6 +585,9 @@ __all__ = [
     "is_active_skill",
     "load_workflow",
     "merge_instruction",
+    "model_as_worker",
+    "model_views",
+    "prompt_model_view",
     "read_stored_workflow_text",
     "readable_workflow_skill",
     "sheet_for",

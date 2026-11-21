@@ -47,6 +47,7 @@ from apis.shared.skills.user_service import (
 )
 from apis.shared.workflows.format import (
     INPUT_READS,
+    KIND_PROMPT,
     Workflow,
     WorkflowError,
     WorkflowStep,
@@ -191,29 +192,51 @@ async def list_workflows(user: User = Depends(get_current_user_from_session)) ->
 
 
 async def _steps_from_run(user: User, run: WorkflowRun) -> Tuple[Optional[str], Tuple[WorkflowStep, ...]]:
-    """``(request, steps)`` from a run's kept steps, each Agent's current published version recorded."""
+    """``(request, steps)`` from a run's kept steps, each Agent's current published version recorded.
+
+    A prompt step (workflow-designer §21.3) is kept as one, on the model it ran on, named by its
+    step name when it has one; it has no Agent to look up.
+    """
     kept = run.kept_steps()
+    agent_steps = [s for s in kept if not s.is_prompt]
     lookups = await asyncio.gather(
         *(
             get_assistant_with_access_check(assistant_id=s.agent_id, user_id=user.user_id, user_email=user.email)
-            for s in kept
+            for s in agent_steps
         )
     )
+    agents = {s.step_id: agent for s, (agent, _permission) in zip(agent_steps, lookups)}
     shared = (run.request or "").strip() or None
     taken: List[str] = []
     steps: List[WorkflowStep] = []
-    for run_step, (agent, _permission) in zip(kept, lookups):
+    for run_step in kept:
+        own = (run_step.request or "").strip()
+        request = own if own and own != shared else None
+        if run_step.is_prompt:
+            name = step_name_for(run_step.step_name or run_step.agent_name or "prompt", taken=taken)
+            taken.append(name)
+            steps.append(
+                WorkflowStep(
+                    name=name,
+                    agent_id="",
+                    kind=KIND_PROMPT,
+                    model_id=run_step.model_id,
+                    reads=INPUT_READS,
+                    request=request,
+                )
+            )
+            continue
+        agent = agents.get(run_step.step_id)
         name = step_name_for(run_step.agent_name or (agent.name if agent else "") or "step", taken=taken)
         taken.append(name)
         listing = getattr(agent, "listing", None) if agent is not None else None
-        own = (run_step.request or "").strip()
         steps.append(
             WorkflowStep(
                 name=name,
                 agent_id=run_step.agent_id,
                 agent_version=getattr(listing, "published_version", None) if listing is not None else None,
                 reads=INPUT_READS,
-                request=own if own and own != shared else None,
+                request=request,
             )
         )
     return shared, tuple(steps)

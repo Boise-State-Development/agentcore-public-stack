@@ -13,6 +13,13 @@ so no sweep job is needed. Two kinds of ``open`` row never do: a suggestion's ch
 an approved workflow run (``runApprovedAt``), which waits on the tab's queue rather than on a
 review sheet (``docs/specs/workflow-runs.md`` §19, PR-W.1).
 
+A **prompt step** (``kind="prompt"``, ``docs/specs/workflow-designer.md`` §21.3) is a step of a
+workflow run that is one model call, with no Agent and no conversation. Its row is kept so every
+reader that joins a step on ``handoffId`` keeps working, and it moves only along
+``PROMPT_TRANSITIONS``: ``open → running → done | stopped``, never ``needs_input``, and never with
+a ``targetSessionId``. The Runtime writes those moves (``apis.shared.handoff.prompt_steps``) by
+the field names below (``PROMPT_STEP_FIELDS``); nothing here writes them.
+
 Status writes after acceptance happen after the target's ``done`` block (PR-0.2), which is why a
 ``needs_input`` row can go straight to ``done`` or ``stopped``: the intermediate ``running`` is
 live state in the SPA, not a write. Once ``done``, the target conversation is the user's own and
@@ -28,7 +35,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.sessions.models import PendingInterrupt
 
-HandoffKind = Literal["mention", "suggested", "send_back"]
+HandoffKind = Literal["mention", "suggested", "send_back", "prompt"]
+#: A workflow run's prompt step (§21.3): one model call, no Agent, no conversation.
+KIND_PROMPT_STEP = "prompt"
 WaitingKind = Literal["oauth_consent", "tool_approval", "user_question", "browser_login"]
 HandoffStatus = Literal["open", "running", "needs_input", "done", "stopped", "dismissed"]
 EffectiveHandoffStatus = Literal["open", "running", "needs_input", "done", "stopped", "dismissed", "abandoned"]
@@ -56,6 +65,46 @@ TRANSITIONS: Dict[str, FrozenSet[str]] = {
     "done": frozenset(),
     "dismissed": frozenset(),
 }
+
+
+#: A prompt step's moves (workflow-designer §21.3). Each is one conditional update; ``open → running``
+#: is the claim, so a step never runs twice. ``open → dismissed`` is a step removed at the sheet.
+PROMPT_TRANSITIONS: Dict[str, FrozenSet[str]] = {
+    "open": frozenset({"running", "dismissed"}),
+    "running": frozenset({"done", "stopped"}),
+    "done": frozenset(),
+    "stopped": frozenset(),
+    "dismissed": frozenset(),
+}
+
+#: Why a prompt step stopped (``stoppedReason``), §21.3.
+PromptStopReason = Literal["user_stopped", "too_large", "model_refused", "quota", "timeout", "error"]
+PROMPT_STOP_REASONS: FrozenSet[str] = frozenset(
+    {"user_stopped", "too_large", "model_refused", "quota", "timeout", "error"}
+)
+
+# A prompt step row's own attributes, by their stored (camelCase) names. The contract with the
+# Runtime's writes (PR-D.6b): it names them through these, never as literals of its own.
+#: The model the step runs on, as approved (retirement resolved at create).
+PROMPT_FIELD_MODEL_ID = "modelId"
+#: The answer, capped by ``cap_delivery_text`` at write.
+PROMPT_FIELD_OUTPUT_TEXT = "outputText"
+#: ``context_hash`` of ``outputText``.
+PROMPT_FIELD_OUTPUT_HASH = "outputHash"
+#: The call's output tokens, as the model reported them.
+PROMPT_FIELD_OUTPUT_TOKENS = "outputTokens"
+#: One of ``PROMPT_STOP_REASONS``; the same attribute a handoff row stops with.
+PROMPT_FIELD_STOPPED_REASON = "stoppedReason"
+#: When the row last moved; collect reads a ``done`` row's as its finish time.
+PROMPT_FIELD_UPDATED_AT = "updatedAt"
+PROMPT_STEP_FIELDS = (
+    PROMPT_FIELD_MODEL_ID,
+    PROMPT_FIELD_OUTPUT_TEXT,
+    PROMPT_FIELD_OUTPUT_HASH,
+    PROMPT_FIELD_OUTPUT_TOKENS,
+    PROMPT_FIELD_STOPPED_REASON,
+    PROMPT_FIELD_UPDATED_AT,
+)
 
 
 def sources_of(status: str) -> FrozenSet[str]:
@@ -131,9 +180,11 @@ class Handoff(BaseModel):
     session_id: str = Field(..., alias="sessionId", description="The source conversation")
     kind: HandoffKind
     status: HandoffStatus = "open"
-    agent_id: str = Field(..., alias="agentId")
-    agent_name: str = Field("", alias="agentName")
-    request: str = ""
+    agent_id: str = Field("", alias="agentId", description="Empty on a prompt step, which has no Agent")
+    agent_name: str = Field(
+        "", alias="agentName", description="The Agent's name; a prompt step's model's display name"
+    )
+    request: str = Field("", description="What the Agent is asked; a prompt step's instruction")
     source_title: str = Field("", alias="sourceTitle", description="The title the wrapper names, fixed at create")
     source_message_index: int = Field(
         -1, alias="sourceMessageIndex", description="Index of the message the handoff row sits after; -1 for none"
@@ -185,9 +236,21 @@ class Handoff(BaseModel):
         description=(
             "How many steps the run kept at approve, fixed from then on. Copied into the step "
             "conversation's spawnedFrom at acceptance, so the sidebar can tell a finished run "
-            "from one with a step still to start (workflow-runs spec §20.4)"
+            "from one with a step still to start (workflow-runs spec §20.4). Counts only the "
+            "steps that have a conversation: a prompt step never does (workflow-designer §21.3)"
         ),
     )
+    # A prompt step (workflow-designer §21.3); absent on every other kind.
+    model_id: Optional[str] = Field(None, alias=PROMPT_FIELD_MODEL_ID, description="A prompt step's model")
+    output_text: Optional[str] = Field(
+        None, alias=PROMPT_FIELD_OUTPUT_TEXT, description="A done prompt step's answer, capped at write"
+    )
+    output_hash: Optional[str] = Field(None, alias=PROMPT_FIELD_OUTPUT_HASH)
+    output_tokens: Optional[int] = Field(None, alias=PROMPT_FIELD_OUTPUT_TOKENS)
+
+    @property
+    def is_prompt_step(self) -> bool:
+        return self.kind == KIND_PROMPT_STEP
 
     def effective_status(self, now: Optional[datetime] = None) -> EffectiveHandoffStatus:
         """The status as read: an ``open`` row past ``ABANDON_AFTER`` is ``abandoned``.
@@ -247,6 +310,9 @@ class HandoffView(BaseModel):
     tool_use_id: Optional[str] = Field(None, alias="toolUseId")
     run_id: Optional[str] = Field(None, alias="runId")
     step_id: Optional[str] = Field(None, alias="stepId")
+    model_id: Optional[str] = Field(None, alias="modelId", description="A prompt step's model")
+    output_text: Optional[str] = Field(None, alias="outputText", description="A done prompt step's answer")
+    output_tokens: Optional[int] = Field(None, alias="outputTokens")
 
     @classmethod
     def from_row(cls, row: Handoff) -> "HandoffView":
@@ -273,6 +339,9 @@ class HandoffView(BaseModel):
             tool_use_id=row.tool_use_id,
             run_id=row.run_id,
             step_id=row.step_id,
+            model_id=row.model_id,
+            output_text=row.output_text,
+            output_tokens=row.output_tokens,
         )
 
 
@@ -285,6 +354,17 @@ __all__ = [
     "HandoffView",
     "HandoffKind",
     "HandoffStatus",
+    "KIND_PROMPT_STEP",
+    "PROMPT_FIELD_MODEL_ID",
+    "PROMPT_FIELD_OUTPUT_HASH",
+    "PROMPT_FIELD_OUTPUT_TEXT",
+    "PROMPT_FIELD_OUTPUT_TOKENS",
+    "PROMPT_FIELD_STOPPED_REASON",
+    "PROMPT_FIELD_UPDATED_AT",
+    "PROMPT_STEP_FIELDS",
+    "PROMPT_STOP_REASONS",
+    "PROMPT_TRANSITIONS",
+    "PromptStopReason",
     "RelayedPrompt",
     "SUGGESTION_AGENT_HINT_MAX_CHARS",
     "SUGGESTION_PROMPT_MAX_CHARS",

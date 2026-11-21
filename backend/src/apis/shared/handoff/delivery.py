@@ -147,6 +147,13 @@ class DeliveryPart(BaseModel):
     text_hash: str = Field("", alias="textHash")
     artifacts: List[DeliveryArtifact] = Field(default_factory=list)
     files: List[DeliveryFile] = Field(default_factory=list)
+    kind: Optional[Literal["prompt"]] = Field(
+        None,
+        description=(
+            "prompt for a prompt step's part (workflow-designer §21.3): text alone, from no conversation, "
+            "so fromSessionId is empty even when done; absent on an Agent step's"
+        ),
+    )
 
 
 class DeliveryPartView(BaseModel):
@@ -162,6 +169,7 @@ class DeliveryPartView(BaseModel):
     text: str
     artifacts: List[DeliveryArtifact]
     files: List[DeliveryFileView]
+    kind: Optional[Literal["prompt"]] = None
 
     @classmethod
     def from_part(cls, part: DeliveryPart) -> "DeliveryPartView":
@@ -174,6 +182,7 @@ class DeliveryPartView(BaseModel):
             text=part.text,
             artifacts=part.artifacts,
             files=[DeliveryFileView.from_file(f) for f in part.files],
+            kind=part.kind,
         )
 
 

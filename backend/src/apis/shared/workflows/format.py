@@ -20,10 +20,11 @@ THE GRAMMAR
 
     Prose here is kept, and nothing reads it.
 
-    | step       | kind  | worker          | reads          |
-    |------------|-------|-----------------|----------------|
-    | generalist | agent | AST-123 @ 5     | request, files |
-    | fiscal     | agent | AST-456         | request, files |
+    | step       | kind   | worker                | reads            |
+    |------------|--------|-----------------------|------------------|
+    | generalist | agent  | AST-123 @ 5           | request, files   |
+    | fiscal     | agent  | AST-456               | request, files   |
+    | summary    | prompt | us.anthropic.claude-… | files, fiscal    |
 
     ## Request
 
@@ -42,10 +43,14 @@ THE GRAMMAR
 - **The table** is the steps, in authored order. It is found by its header: a
   row naming the ``step``, ``kind`` and ``worker`` columns. A table of anything
   else before it is prose. Any other column is kept, cell by cell, and nothing
-  reads it. ``kind`` is ``agent``; ``prompt`` and ``checklist`` are reserved and
-  refused until they ship. An agent's ``worker`` is its id, and ``@ <n>`` records
+  reads it. ``kind`` is ``agent`` or ``prompt``; ``checklist`` is reserved and
+  refused until it ships. An agent's ``worker`` is its id, and ``@ <n>`` records
   the published version it had when the step was added or last reviewed (§10,
-  D6). Coordinates are never stored: the canvas arranges itself.
+  D6). A prompt step (§21) is one model call with no Agent: its ``worker`` is a
+  model id, with no version, and its ``## Step:`` section is the instruction.
+  The parser accepts it whatever the flags say; run create is what refuses one
+  while ``PROMPT_STEPS_ENABLED`` is off. Coordinates are never stored: the
+  canvas arranges itself.
 - **``reads`` is the whole graph:** ``request``, ``files``, and the names of other
   steps, comma-separated. It is a set, so it is held and written in one order:
   ``request``, ``files``, then steps in table order.
@@ -99,9 +104,11 @@ WORKFLOW_SUFFIX = ".md"
 KIND_AGENT = "agent"
 KIND_PROMPT = "prompt"
 KIND_CHECKLIST = "checklist"
-#: Kinds the format will carry once they ship (D.6, D.7). Named now so a file
+#: The kinds a step can be today, in the order a message lists them.
+STEP_KINDS = (KIND_AGENT, KIND_PROMPT)
+#: Kinds the format will carry once they ship (D.7). Named now so a file
 #: holding one is refused with a sentence, not as an unknown word.
-RESERVED_KINDS = frozenset({KIND_PROMPT, KIND_CHECKLIST})
+RESERVED_KINDS = frozenset({KIND_CHECKLIST})
 
 READ_REQUEST = "request"
 READ_FILES = "files"
@@ -120,6 +127,9 @@ RESULT_MODES = (RESULT_CARD, RESULT_MERGE)
 _WORKFLOW_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _STEP_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+#: A Bedrock model id or inference-profile id (``us.anthropic.claude-…-v1:0``), or
+#: an ARN. Never whitespace, ``|`` (it ends a cell) or ``@`` (it starts a version).
+_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 _WORKER_RE = re.compile(r"^(?P<id>[^@\s]+)\s*(?:@\s*(?P<version>\S+))?$")
 _SECTION_RE = re.compile(
     r"^##[ \t]+(?:(?P<request>request)|(?P<result>result)|step:[ \t]*(?P<step>\S*))[ \t]*$",
@@ -145,7 +155,12 @@ class WorkflowError(ValueError):
 
 @dataclass(frozen=True)
 class WorkflowStep:
-    """One step. Only Agent steps exist today."""
+    """One step: an Agent (``kind="agent"``) or one model call (``kind="prompt"``).
+
+    A prompt step has no Agent, so its ``agent_id`` is ``""`` and its
+    ``agent_version`` ``None``; its worker is ``model_id``. An Agent step's
+    ``model_id`` is ``None``: its model is the Agent's own.
+    """
 
     #: ``snake_case``, unique in the workflow. What other steps read it by.
     name: str
@@ -158,6 +173,17 @@ class WorkflowStep:
     #: This step's own request; ``None`` means the shared one.
     request: Optional[str] = None
     kind: str = KIND_AGENT
+    #: A prompt step's model id; ``None`` for an Agent step.
+    model_id: Optional[str] = None
+
+    @property
+    def is_prompt(self) -> bool:
+        return self.kind == KIND_PROMPT
+
+    @property
+    def worker(self) -> str:
+        """What the ``worker`` cell names: the Agent's id, or a prompt step's model id."""
+        return (self.model_id or "") if self.is_prompt else self.agent_id
 
 
 @dataclass(frozen=True)
@@ -335,16 +361,7 @@ def check_envelope(workflow: Workflow) -> None:
 
     names: Dict[str, int] = {}
     for index, step in enumerate(workflow.steps):
-        if step.kind in RESERVED_KINDS:
-            raise WorkflowError(
-                f"workflow '{name}', step '{step.name}': '{step.kind}' steps are not "
-                "available yet. Only 'agent' steps can be saved today"
-            )
-        if step.kind != KIND_AGENT:
-            raise WorkflowError(
-                f"workflow '{name}', step '{step.name}': unknown kind {step.kind!r}. "
-                "Expected 'agent'"
-            )
+        _check_kind(step.kind, step=step.name, name=name)
         if not _STEP_NAME_RE.match(step.name or ""):
             raise WorkflowError(
                 f"workflow '{name}': step name {step.name!r} must be snake_case, starting "
@@ -361,7 +378,14 @@ def check_envelope(workflow: Workflow) -> None:
                 "its own name, because that is what other steps read it by"
             )
         names[step.name] = index
-        if not _AGENT_ID_RE.match(step.agent_id or ""):
+        if step.is_prompt:
+            _check_prompt_worker(step, name=name)
+        elif step.model_id is not None:
+            raise WorkflowError(
+                f"workflow '{name}', step '{step.name}': an Agent step runs on its Agent's "
+                "own model, so it names no model"
+            )
+        elif not _AGENT_ID_RE.match(step.agent_id or ""):
             raise WorkflowError(
                 f"workflow '{name}', step '{step.name}': {step.agent_id!r} is not an Agent id"
             )
@@ -411,6 +435,32 @@ def check_envelope(workflow: Workflow) -> None:
                     f"workflow '{name}': the result reads '{read}', which is not a step "
                     "in this workflow"
                 )
+
+
+def _check_kind(kind: str, *, step: str, name: str) -> None:
+    if kind in RESERVED_KINDS:
+        raise WorkflowError(
+            f"workflow '{name}', step '{step}': '{kind}' steps are not available "
+            "yet. Only 'agent' and 'prompt' steps can be saved today"
+        )
+    if kind not in STEP_KINDS:
+        raise WorkflowError(
+            f"workflow '{name}', step '{step}': unknown kind {kind!r}. "
+            "Expected 'agent' or 'prompt'"
+        )
+
+
+def _check_prompt_worker(step: WorkflowStep, *, name: str) -> None:
+    """A prompt step names a model and nothing of an Agent's."""
+    if step.agent_id or step.agent_version is not None:
+        raise WorkflowError(
+            f"workflow '{name}', step '{step.name}': a prompt step has no Agent, so it "
+            "names no Agent or Agent version"
+        )
+    if not _MODEL_ID_RE.match(step.model_id or ""):
+        raise WorkflowError(
+            f"workflow '{name}', step '{step.name}': {step.model_id!r} is not a model id"
+        )
 
 
 def canonical_reads(reads: Sequence[str], steps: Sequence[WorkflowStep]) -> Tuple[str, ...]:
@@ -630,16 +680,22 @@ def read_workflow_file(text: str, *, name: str) -> Tuple[Workflow, WorkflowLayou
         if not step_name:
             raise WorkflowError(f"workflow '{name}', table row {line_number}: no step name")
         kind = (row.get("kind") or KIND_AGENT).strip().lower() or KIND_AGENT
-        if kind in RESERVED_KINDS:
-            raise WorkflowError(
-                f"workflow '{name}', step '{step_name}': '{kind}' steps are not available "
-                "yet. Only 'agent' steps can be saved today"
-            )
-        if kind != KIND_AGENT:
-            raise WorkflowError(
-                f"workflow '{name}', step '{step_name}': unknown kind {kind!r}. Expected 'agent'"
-            )
+        _check_kind(kind, step=step_name, name=name)
         worker = (row.get("worker") or "").strip().strip("`")
+        reads = _parse_reads(row.get("reads", ""))
+        request = step_sections.get(step_name) or None
+        if kind == KIND_PROMPT:
+            if not worker or not _MODEL_ID_RE.match(worker):
+                raise WorkflowError(
+                    f"workflow '{name}', step '{step_name}': a prompt step's worker must be "
+                    "a model id, with no '@ <version>'"
+                )
+            raw_steps.append(
+                WorkflowStep(
+                    name=step_name, agent_id="", reads=reads, request=request, kind=kind, model_id=worker
+                )
+            )
+            continue
         match = _WORKER_RE.match(worker)
         if not worker or match is None:
             raise WorkflowError(
@@ -653,8 +709,8 @@ def read_workflow_file(text: str, *, name: str) -> Tuple[Workflow, WorkflowLayou
                 agent_version=_parse_version(
                     match.group("version"), what=f"step '{step_name}''s Agent version", name=name
                 ),
-                reads=_parse_reads(row.get("reads", "")),
-                request=step_sections.get(step_name) or None,
+                reads=reads,
+                request=request,
                 kind=kind,
             )
         )
@@ -673,6 +729,7 @@ def read_workflow_file(text: str, *, name: str) -> Tuple[Workflow, WorkflowLayou
             reads=canonical_reads(s.reads, raw_steps),
             request=s.request,
             kind=s.kind,
+            model_id=s.model_id,
         )
         for s in raw_steps
     )
@@ -811,7 +868,7 @@ def serialize_workflow(workflow: Workflow, *, layout: Optional[WorkflowLayout] =
     lines.append("|" + "---|" * (len(_SERIALIZED_COLUMNS) + len(extra_columns)))
     extra_rows: List[Tuple[str, ...]] = []
     for index, step in enumerate(workflow.steps):
-        worker = step.agent_id if step.agent_version is None else f"{step.agent_id} @ {step.agent_version}"
+        worker = step.worker if step.agent_version is None else f"{step.agent_id} @ {step.agent_version}"
         extras: Tuple[str, ...] = ()
         if extra_columns:
             row_cells = layout.unmanaged_cells[index]
@@ -896,6 +953,7 @@ def normalized(workflow: Workflow) -> Workflow:
                 reads=canonical_reads(s.reads, workflow.steps),
                 request=text(s.request),
                 kind=s.kind,
+                model_id=s.model_id,
             )
             for s in workflow.steps
         ),
@@ -945,7 +1003,8 @@ def workflow_fingerprint(workflow: Workflow) -> str:
         "files": w.files,
         "request": w.request,
         "steps": [
-            [s.name, s.kind, s.agent_id, s.agent_version, list(s.reads), s.request] for s in w.steps
+            # The worker cell's value, so an Agent-only file's digest is what it always was.
+            [s.name, s.kind, s.worker, s.agent_version, list(s.reads), s.request] for s in w.steps
         ],
         "result": [w.result.mode, list(w.result.reads) if w.result.reads is not None else None, w.result.instruction],
     }
@@ -994,6 +1053,7 @@ __all__ = [
     "RESULT_CARD",
     "RESULT_MERGE",
     "RESULT_MODES",
+    "STEP_KINDS",
     "WORKFLOW_PREFIX",
     "WORKFLOW_SUFFIX",
     "Workflow",

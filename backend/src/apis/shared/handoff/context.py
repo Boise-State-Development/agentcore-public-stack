@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Optional, Protocol, Sequence, Tuple
 
 
 class DeliveryArtifactLine(Protocol):
@@ -222,6 +222,10 @@ def delivery_part_label(agent_name: str, from_title: str) -> str:
     Every step of a run starts from the same card and usually the same request, so their titles
     read alike; the Agent's name is what tells the model whose answer is whose. A step's title
     already starts with its Agent's name (``run_step_title``), so the name is written once.
+
+    A prompt step's part (workflow-designer §21.3) has no conversation, so it is labelled with its
+    model's name in place of the Agent's and its step's name in place of the title
+    (``prompt_part_names``): ``"{model} · {step}"``.
     """
     agent, title = agent_name.strip(), from_title.strip()
     if not agent or not title:
@@ -229,6 +233,20 @@ def delivery_part_label(agent_name: str, from_title: str) -> str:
     if agent == title or title.startswith(f"{agent}{AGENT_TITLE_SEPARATOR}"):
         return title
     return f"{agent}{AGENT_TITLE_SEPARATOR}{title}"
+
+
+#: A prompt step's block names its step by this when the run kept no step name for it.
+PROMPT_STEP_FALLBACK_NAME = "Prompt step"
+
+
+def prompt_part_names(model_name: str, step_name: Optional[str]) -> Tuple[str, str]:
+    """``(agent_name, from_title)`` for a prompt step's part: its model, then its step (§21.3).
+
+    A prompt step has no Agent and no conversation, so the two names a part's label is built from
+    (``delivery_part_label``) are the model's display name and the step's name. Feeding them
+    through the same fields keeps the rendered block, and its TypeScript twin, unchanged.
+    """
+    return model_name.strip(), (step_name or "").strip() or PROMPT_STEP_FALLBACK_NAME
 
 
 def render_delivery_parts(parts: Sequence[DeliveryPartBlock]) -> str:
@@ -285,6 +303,7 @@ __all__ = [
     "FILE_TAG",
     "FileLine",
     "HANDOFF_CONTEXT_TAG",
+    "PROMPT_STEP_FALLBACK_NAME",
     "build_handoff_message",
     "context_hash",
     "delivery_part_label",
@@ -292,6 +311,7 @@ __all__ = [
     "format_file_size",
     "neutralize_close_tags",
     "normalize_context_text",
+    "prompt_part_names",
     "render_delivery_block",
     "render_delivery_parts",
     "render_file_line",

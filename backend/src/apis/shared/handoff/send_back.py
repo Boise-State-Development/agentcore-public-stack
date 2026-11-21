@@ -78,6 +78,11 @@ class DeliveryPartRequest:
 
     ``from_session_id`` is the step's conversation, empty for a step that never started. Only a
     ``done`` part may carry text, artifacts or files.
+
+    A prompt step's part (``prompt=True``, workflow-designer §21.3) has no conversation at all: it
+    is text alone, the step's own answer, with no sender to check, no artifacts and no files.
+    ``from_title`` is what its block names beside ``agent_name`` (the step, beside the model);
+    an Agent step's comes from its conversation's title instead, and this is ignored.
     """
 
     step_id: str
@@ -87,6 +92,8 @@ class DeliveryPartRequest:
     text: str = ""
     artifact_ids: Sequence[str] = ()
     file_ids: Sequence[str] = ()
+    prompt: bool = False
+    from_title: str = ""
 
 
 def render_return_excerpt(message: Mapping[str, Any]) -> str:
@@ -132,6 +139,22 @@ async def load_linked_senders(user_id: str, sender_ids: Sequence[str], receiver_
         if not (_spawned_from(sender.row) == receiver_id or _spawned_from(receiver.row) == sender_id):
             raise DeliveryRefused("not_linked")
     return {s: LinkedPair(sender=r.row, receiver=receiver.row) for s, r in zip(senders, rows)}
+
+
+async def load_receiver(user_id: str, receiver_id: str) -> Dict[str, Any]:
+    """The receiving conversation's ``META`` row, held to a receiver's rules, or ``DeliveryRefused``.
+
+    For a run result with no sending conversation (only prompt steps' parts): the caller's, and not
+    a Shared Project task, exactly as ``load_linked_senders`` holds a receiver.
+    """
+    from apis.shared.sessions.metadata import load_session_meta
+
+    receiver = await load_session_meta(receiver_id, user_id)
+    if receiver.row is None:
+        raise DeliveryRefused("not_found")
+    if project_of(receiver.row):
+        raise DeliveryRefused("project_task")
+    return receiver.row
 
 
 async def answer_message(
@@ -354,35 +377,46 @@ async def _prepare_run_result(
     for part in parts:
         if part.status != "done" and (part.text or part.artifact_ids or part.file_ids):
             raise ValueError("only a finished step carries a result")
+        if part.prompt and (part.from_session_id or part.artifact_ids or part.file_ids):
+            raise ValueError("a prompt step's part is text alone, from no conversation")
     if sum(len(set(p.file_ids)) for p in parts) > RUN_RESULT_MAX_FILES:
         raise DeliveryRefused("too_many_files")
 
     # Only a finished part carries anything across, so only its conversation is a sender, held to
-    # every rule. A part with no result names its step and Agent and reads nothing.
-    senders = [p.from_session_id for p in parts if p.status == "done" and p.from_session_id]
-    if any(p.status == "done" and not p.from_session_id for p in parts):
+    # every rule. A part with no result names its step and Agent and reads nothing. A prompt step's
+    # part has no conversation (workflow-designer §21.3): its text is the step's own answer, made
+    # inside this run, so it has no sender to check, and only the receiver is held to the rules.
+    senders = [p.from_session_id for p in parts if p.status == "done" and not p.prompt and p.from_session_id]
+    if any(p.status == "done" and not p.prompt and not p.from_session_id for p in parts):
         raise ValueError("a finished step names its conversation")
-    if not senders:
+    text_only = any(p.status == "done" and p.prompt for p in parts)
+    if not senders and not text_only:
         raise DeliveryRefused("empty")
-    pairs = await load_linked_senders(user_id, senders, to_session_id)
+    if senders:
+        pairs = await load_linked_senders(user_id, senders, to_session_id)
+    else:
+        await load_receiver(user_id, to_session_id)
+        pairs = {}
 
     def title_of(part: DeliveryPartRequest) -> str:
+        if part.prompt:
+            return part.from_title
         pair = pairs.get(part.from_session_id) if part.status == "done" else None
         return str(pair.sender.get("title") or "") if pair is not None else ""
 
-    contents = await asyncio.gather(
-        *(
-            _checked_content(
-                user_id,
-                part.from_session_id,
-                title_of(part),
-                text=part.text,
-                artifact_ids=part.artifact_ids,
-                file_ids=part.file_ids,
-            )
-            for part in parts
+    async def content_of(part: DeliveryPartRequest) -> Tuple[str, List[DeliveryArtifact], List[DeliveryFile]]:
+        if part.prompt:
+            return cap_delivery_text(part.text), [], []
+        return await _checked_content(
+            user_id,
+            part.from_session_id,
+            title_of(part),
+            text=part.text,
+            artifact_ids=part.artifact_ids,
+            file_ids=part.file_ids,
         )
-    )
+
+    contents = await asyncio.gather(*(content_of(part) for part in parts))
     built = [
         DeliveryPart(
             step_id=part.step_id,
@@ -394,6 +428,7 @@ async def _prepare_run_result(
             text_hash=context_hash(body) if body else "",
             artifacts=artifacts,
             files=files,
+            kind="prompt" if part.prompt else None,
         )
         for part, (body, artifacts, files) in zip(parts, contents)
     ]
@@ -401,7 +436,9 @@ async def _prepare_run_result(
         raise DeliveryRefused("empty")
 
     now = utc_now_iso()
-    first = next(p for p in built if p.status == "done")
+    done = [p for p in built if p.status == "done"]
+    # A conversation to name when there is one: a prompt step's part has none.
+    first = next((p for p in done if p.from_session_id), done[0])
     return Delivery(
         delivery_id=delivery_id or str(uuid.uuid4()),
         user_id=user_id,
@@ -540,6 +577,7 @@ __all__ = [
     "create_delivery",
     "load_linked_pair",
     "load_linked_senders",
+    "load_receiver",
     "offered_artifacts",
     "offered_files",
     "prepare_delivery",
