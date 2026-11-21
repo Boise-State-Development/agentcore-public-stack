@@ -293,7 +293,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                 <button
                   type="button"
                   (click)="remove(step)"
-                  class="ml-auto inline-flex items-center gap-1.5 rounded-2xl px-3 py-1.5 text-sm/6 font-medium text-red-700 hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:text-red-400 dark:hover:bg-red-900/20"
+                  class="ml-auto inline-flex items-center gap-1.5 rounded-2xl px-3 py-1.5 text-sm/6 font-medium text-state-danger-700 hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-500 dark:text-state-danger-400 dark:hover:bg-state-danger-900/20"
                 >
                   <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
                   Remove step

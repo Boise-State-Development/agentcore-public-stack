@@ -183,7 +183,7 @@ const BAR_FILL: Record<RunStepState, string> = {
             {{ savingWorkflow() ? 'Saving as a workflow…' : 'Save as workflow' }}
           </button>
           @if (saveWorkflowError(); as error) {
-            <span class="text-red-700 dark:text-red-400" role="alert">{{ error }}</span>
+            <span class="text-state-danger-700 dark:text-state-danger-400" role="alert">{{ error }}</span>
           }
         }
       </div>

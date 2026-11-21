@@ -121,7 +121,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
     <!-- The two still blobs. Decorative, so out of the tree and out of the pointer's way. -->
     <div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
       <div class="wf-blob absolute left-[8%] top-[10%] h-80 w-[26rem] bg-primary-500/15 blur-3xl dark:bg-primary-400/20"></div>
-      <div class="wf-blob absolute bottom-[6%] right-[6%] h-72 w-[22rem] bg-sky-400/15 blur-3xl dark:bg-sky-400/10"></div>
+      <div class="wf-blob absolute bottom-[6%] right-[6%] h-72 w-[22rem] bg-primary-300/15 blur-3xl dark:bg-primary-300/10"></div>
     </div>
 
     <div

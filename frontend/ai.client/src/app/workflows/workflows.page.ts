@@ -59,7 +59,7 @@ interface ListRow {
         @if (list.isLoading()) {
           <p class="text-sm/6 text-gray-600 dark:text-gray-400" role="status">Loading workflows…</p>
         } @else if (list.error()) {
-          <div role="alert" class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm/6 text-red-800 dark:border-red-800/60 dark:bg-red-900/20 dark:text-red-300">
+          <div role="alert" class="rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-800/60 dark:bg-state-danger-900/20 dark:text-state-danger-300">
             Your workflows couldn’t be loaded.
             <button type="button" (click)="list.reload()" class="ml-2 font-medium underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark">Try again</button>
           </div>

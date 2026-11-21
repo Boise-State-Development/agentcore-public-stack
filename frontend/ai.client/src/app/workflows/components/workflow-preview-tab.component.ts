@@ -52,7 +52,7 @@ interface PreviewRow {
       <div class="space-y-4" [attr.aria-busy]="store.validating()">
         <p class="sr-only" role="status">{{ store.validating() ? 'Updating the preview' : '' }}</p>
         @if (store.previewError(); as error) {
-          <p role="alert" class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm/6 text-red-800 dark:border-red-800/60 dark:bg-red-900/20 dark:text-red-300">
+          <p role="alert" class="rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-800/60 dark:bg-state-danger-900/20 dark:text-state-danger-300">
             {{ error }}
           </p>
         }
@@ -150,7 +150,7 @@ interface PreviewRow {
         </p>
       </div>
     } @else if (store.previewError(); as error) {
-      <p role="alert" class="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm/6 text-red-800 dark:border-red-800/60 dark:bg-red-900/20 dark:text-red-300">{{ error }}</p>
+      <p role="alert" class="rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-800/60 dark:bg-state-danger-900/20 dark:text-state-danger-300">{{ error }}</p>
     } @else {
       <p class="text-sm/6 text-gray-600 dark:text-gray-400" role="status">Building the preview…</p>
     }
