@@ -359,6 +359,8 @@
             [remainingFolders]="remainingFolderSlots()"
             (sourceFolderPicked)="onSourceFolderPicked($event)"
             (skillPicked)="insertSkillCommand($event)"
+            [showWorkflows]="workflowsOffered()"
+            [sessionId]="sessionId()"
           />
         }
       </div>
