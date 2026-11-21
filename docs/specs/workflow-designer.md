@@ -748,8 +748,14 @@ Every PR is behind `WORKFLOWS_ENABLED` / `CDK_WORKFLOWS_ENABLED` / `features.wor
 - **The Preview tab** is the server's sheet from a debounced `PUT …?validate=true`, never a model call: the
   steps with their models, the files rule, the request, the blockers in the parser's words, and each step's
   input rate with the request-only floor of the sheet's own estimate (`estimateRunInputUsd`). It needs a saved
-  workflow, because validate is a route on one. Start test run and Try in a chat call D.2's
-  `WorkflowStartService.start`.
+  workflow, because validate is a route on one. Start test run and Try in a chat both call D.2's
+  `WorkflowStartService.start(ref)`, a new conversation with the sheet up; they are off while the draft has
+  unsaved edits (a run reads the saved file) or the sheet has blockers, and say which. The run drawn on the
+  canvas is D.4.
+- **One client.** The designer, the list and Save as workflow use D.2's `WorkflowsApiService` and wire types
+  (`src/app/services/workflows/`), which gained `listQuietly`, `create`, `read`, `validate`, `write` (the
+  checked save, mapping the 409) and `remove`. Those send `SUPPRESS_ERROR_TOAST`, because each caller shows its
+  own error; D.2's `list`, `get` and `save` are unchanged.
 - **Save as workflow** is on a run's row once it is `stopped`, or `approved` and every step has settled.
 - **The Customize badge** is the row's existing chip ("workflow") on an active carrier, with **Open in designer**
   beside it while `features.workflows` is on. The workflow's name comes from the carrier's

@@ -10,13 +10,16 @@ import { ModelService } from '../session/services/model/model.service';
 import { fitScale } from './components/workflow-graph.component';
 import { WorkflowDesignerPage } from './workflow-designer.page';
 import { WorkflowDocument, WorkflowView, WorkflowWrite } from './workflow.models';
-import { WorkflowService } from './workflow.service';
+import { WorkflowStartService } from '../services/workflows/workflow-start.service';
+import { WorkflowsApiService } from '../services/workflows/workflows-api.service';
 
 const AGENTS: MentionableAgent[] = [
   { agentId: 'AST-gen', name: 'Generalist', emoji: '🧭', group: 'own' },
   { agentId: 'AST-fis', name: 'Fiscal reader', emoji: '💵', group: 'pinned' },
   { agentId: 'AST-col', name: 'Colleague', emoji: '🤝', group: 'own' },
 ];
+
+const AGENT_VIEW = { canRun: true, hasIcon: false, changed: false, runsDraft: false };
 
 function view(overrides: Partial<WorkflowView> = {}): WorkflowView {
   return {
@@ -27,9 +30,9 @@ function view(overrides: Partial<WorkflowView> = {}): WorkflowView {
     files: 'one',
     request: 'Review this proposal',
     steps: [
-      { name: 'generalist', kind: 'agent', agentId: 'AST-gen', agentVersion: 2, reads: ['request', 'files'], effectiveRequest: 'Review this proposal', agent: { canRun: true, name: 'Generalist', modelId: 'us.model-a', inputPricePerMillionTokens: 3, publishedVersion: 2 } },
-      { name: 'fiscal', kind: 'agent', agentId: 'AST-fis', agentVersion: 4, reads: ['request', 'files'], effectiveRequest: 'Review this proposal', agent: { canRun: true, name: 'Fiscal reader', publishedVersion: 4 } },
-      { name: 'colleague', kind: 'agent', agentId: 'AST-col', agentVersion: 1, reads: ['request', 'files'], effectiveRequest: 'Review this proposal', agent: { canRun: true, name: 'Colleague', publishedVersion: 1 } },
+      { name: 'generalist', kind: 'agent', agentId: 'AST-gen', agentVersion: 2, reads: ['request', 'files'], effectiveRequest: 'Review this proposal', agent: { ...AGENT_VIEW, name: 'Generalist', modelId: 'us.model-a', inputPricePerMillionTokens: 3, publishedVersion: 2 } },
+      { name: 'fiscal', kind: 'agent', agentId: 'AST-fis', agentVersion: 4, reads: ['request', 'files'], effectiveRequest: 'Review this proposal', agent: { ...AGENT_VIEW, name: 'Fiscal reader', publishedVersion: 4 } },
+      { name: 'colleague', kind: 'agent', agentId: 'AST-col', agentVersion: 1, reads: ['request', 'files'], effectiveRequest: 'Review this proposal', agent: { ...AGENT_VIEW, name: 'Colleague', publishedVersion: 1 } },
     ],
     result: { mode: 'card', steps: ['generalist', 'fiscal', 'colleague'] },
     fingerprint: 'f',
@@ -48,37 +51,38 @@ describe('WorkflowDesignerPage', () => {
   let service: {
     read: ReturnType<typeof vi.fn>;
     create: ReturnType<typeof vi.fn>;
-    save: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
     validate: ReturnType<typeof vi.fn>;
     remove: ReturnType<typeof vi.fn>;
-    list: ReturnType<typeof vi.fn>;
     messageFor: (err: unknown, fallback: string) => string;
   };
   let announce: ReturnType<typeof vi.fn>;
   let replaceState: ReturnType<typeof vi.fn>;
+  let start: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     service = {
       read: vi.fn().mockResolvedValue({ ok: true, document: doc() }),
       create: vi.fn(),
-      save: vi.fn(),
+      write: vi.fn(),
       validate: vi.fn().mockResolvedValue(doc()),
       remove: vi.fn(),
-      list: vi.fn(),
       messageFor: (_err, fallback) => fallback,
     };
     announce = vi.fn();
     replaceState = vi.fn();
+    start = vi.fn().mockResolvedValue('new-session');
     TestBed.configureTestingModule({
       imports: [WorkflowDesignerPage],
       providers: [
         provideRouter([]),
-        { provide: WorkflowService, useValue: service },
+        { provide: WorkflowsApiService, useValue: service },
         { provide: AgentMentionService, useValue: { mentionable: signal(AGENTS), load: vi.fn().mockResolvedValue(undefined) } },
         { provide: ModelService, useValue: { modelNameFor: (id: string) => (id === 'us.model-a' ? 'Model A' : null) } },
         { provide: LiveAnnouncer, useValue: { announce } },
         { provide: Location, useValue: { replaceState, path: () => '' } },
+        { provide: WorkflowStartService, useValue: { start } },
       ],
     });
   });
@@ -188,13 +192,13 @@ describe('WorkflowDesignerPage', () => {
 
       service.create.mockResolvedValue(doc({ version: 1, steps: [], name: 'untitled-workflow' }));
       service.validate.mockResolvedValue(doc({ version: 1, name: 'untitled-workflow', steps: [view().steps[0]] }));
-      service.save.mockResolvedValue({ ok: true, document: doc({ version: 2, name: 'untitled-workflow', steps: [view().steps[0]] }, true) });
+      service.write.mockResolvedValue({ ok: true, document: doc({ version: 2, name: 'untitled-workflow', steps: [view().steps[0]] }, true) });
 
       button('Save workflow').click();
       await settle();
 
       expect(service.create).toHaveBeenCalledWith({ title: 'Untitled workflow' });
-      const body = service.save.mock.calls[0][1] as WorkflowWrite;
+      const body = service.write.mock.calls[0][1] as WorkflowWrite;
       expect(body.expectedVersion).toBe(1);
       expect(body.steps).toEqual([
         { name: 'generalist', kind: 'agent', agentId: 'AST-gen', agentVersion: 2, reads: ['request', 'files'], request: null },
@@ -212,7 +216,7 @@ describe('WorkflowDesignerPage', () => {
       title.dispatchEvent(new Event('input'));
       await settle();
 
-      service.save.mockResolvedValue({
+      service.write.mockResolvedValue({
         ok: false,
         conflict: true,
         message: 'This workflow changed somewhere else since you opened it.',
@@ -221,7 +225,7 @@ describe('WorkflowDesignerPage', () => {
       button('Save workflow').click();
       await settle();
 
-      expect((service.save.mock.calls[0][1] as WorkflowWrite).expectedVersion).toBe(3);
+      expect((service.write.mock.calls[0][1] as WorkflowWrite).expectedVersion).toBe(3);
       const alert = el.querySelector('[role="alert"]')!;
       expect(alert.textContent).toContain('changed somewhere else');
 
@@ -256,7 +260,34 @@ describe('WorkflowDesignerPage', () => {
       expect(panel.textContent).toContain('Model A');
       expect(panel.textContent).toContain('Fiscal reader: You can’t use this step’s Agent');
       expect(panel.textContent).toContain('makes no model call');
-      expect(service.save).not.toHaveBeenCalled();
+      expect(service.write).not.toHaveBeenCalled();
+    });
+
+    it('starts the saved workflow through D.2’s start service, from both buttons', async () => {
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      el.querySelector<HTMLButtonElement>('#wf-tab-preview')!.click();
+      await settle();
+
+      button('Start test run').click();
+      await settle();
+      button('Try in a chat').click();
+      await settle();
+
+      expect(start.mock.calls).toEqual([[{ skillId: 'SKL-1', name: 'proposal-review' }], [{ skillId: 'SKL-1', name: 'proposal-review' }]]);
+      expect(service.validate).not.toHaveBeenCalled();
+    });
+
+    it('keeps Start off while there are unsaved changes, and says why', async () => {
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      const title = el.querySelector<HTMLInputElement>('#wf-title')!;
+      title.value = 'Edited';
+      title.dispatchEvent(new Event('input'));
+      el.querySelector<HTMLButtonElement>('#wf-tab-preview')!.click();
+      await settle();
+
+      expect(button('Start test run').disabled).toBe(true);
+      expect(button('Try in a chat').disabled).toBe(true);
+      expect(el.querySelector('#wf-start-blocked')!.textContent).toContain('Save your changes to start');
     });
   });
 });

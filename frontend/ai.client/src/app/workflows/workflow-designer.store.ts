@@ -29,7 +29,7 @@ import {
   WorkflowFiles,
   WorkflowRef,
 } from './workflow.models';
-import { WorkflowService } from './workflow.service';
+import { WorkflowsApiService } from '../services/workflows/workflows-api.service';
 
 export type DesignerLoad = 'loading' | 'ready' | 'not_found' | 'broken' | 'error';
 
@@ -53,7 +53,7 @@ const PREVIEW_DEBOUNCE_MS = 500;
  */
 @Injectable()
 export class WorkflowDesignerStore {
-  private readonly workflows = inject(WorkflowService);
+  private readonly workflows = inject(WorkflowsApiService);
   private readonly mentions = inject(AgentMentionService);
   private readonly models = inject(ModelService);
   private readonly announcer = inject(LiveAnnouncer);
@@ -219,7 +219,7 @@ export class WorkflowDesignerStore {
       }
       const body = toWrite(draft, views, expected);
       if (!body) return null;
-      const result = await this.workflows.save(ref, body);
+      const result = await this.workflows.write(ref, body);
       if (result.ok) {
         this.adopt(result.document, draft);
         this.announcer.announce(result.document.written ? 'Workflow saved' : 'No changes to save', 'polite');

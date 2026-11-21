@@ -1,9 +1,10 @@
-import { ChangeDetectionStrategy, Component, computed, inject, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroExclamationTriangle, heroInformationCircle } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../agents/components/agent-icon.component';
 import { ModelService } from '../../session/services/model/model.service';
+import { WorkflowStartService } from '../../services/workflows/workflow-start.service';
 import { estimateRunInputUsd, formatEstimateUsd } from '../../session/services/handoff/workflow-run-estimate';
 import { WorkflowDesignerStore } from '../workflow-designer.store';
 import { WorkflowFiles, WorkflowStepView } from '../workflow.models';
@@ -31,7 +32,8 @@ interface PreviewRow {
  * Shown: the steps with their models, the files rule, the request, what blocks Start, and the
  * estimate's inputs. Start test run and Try in a chat are the starting half (PR-D.2's
  * `WorkflowStartService`), offered only for a saved workflow with no unsaved edits, because a run
- * reads the saved file.
+ * reads the saved file. Both open a new conversation with the sheet up, so nothing runs until the
+ * author presses Start there; the run drawn on the canvas is D.4.
  */
 @Component({
   selector: 'app-workflow-preview-tab',
@@ -144,6 +146,35 @@ interface PreviewRow {
           </p>
         </section>
 
+        <section aria-labelledby="wf-start-title" class="space-y-2">
+          <h2 id="wf-start-title" class="sr-only">Start</h2>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              (click)="start()"
+              [disabled]="!canStart()"
+              [attr.aria-describedby]="startBlockedReason() ? 'wf-start-blocked' : null"
+              class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:focus-visible:outline-primary-accessible-dark"
+            >
+              {{ starting() ? 'Opening…' : 'Start test run' }}
+            </button>
+            <button
+              type="button"
+              (click)="start()"
+              [disabled]="!canStart()"
+              [attr.aria-describedby]="startBlockedReason() ? 'wf-start-blocked' : null"
+              class="inline-flex items-center gap-1.5 rounded-2xl border border-gray-300 bg-white px-4 py-2 text-sm/6 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus-visible:outline-primary-accessible-dark"
+            >
+              Try in a chat
+            </button>
+          </div>
+          @if (startBlockedReason(); as reason) {
+            <p id="wf-start-blocked" class="text-xs/5 text-gray-700 dark:text-gray-300">{{ reason }}</p>
+          } @else {
+            <p class="text-xs/5 text-gray-600 dark:text-gray-400">Both open a new conversation with this sheet up. Nothing runs until you press Start there.</p>
+          }
+        </section>
+
         <p class="flex items-start gap-1.5 text-xs/5 text-gray-600 dark:text-gray-400">
           <ng-icon name="heroInformationCircle" class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           Building this preview makes no model call. Starting the workflow runs it for real: real conversations, on your quota.
@@ -159,9 +190,31 @@ interface PreviewRow {
 export class WorkflowPreviewTabComponent {
   protected readonly store = inject(WorkflowDesignerStore);
   private readonly models = inject(ModelService);
+  private readonly starter = inject(WorkflowStartService);
 
-  /** Asks the page to start the saved workflow (`chat`: in a new conversation). */
-  readonly start = output<'test' | 'chat'>();
+  protected readonly starting = signal(false);
+
+  /** Why Start is off, or null. A run reads the saved file, so unsaved edits come first. */
+  protected readonly startBlockedReason = computed(() => {
+    if (this.store.dirty()) return 'Save your changes to start: a run uses the saved workflow.';
+    const doc = this.document();
+    if (doc && !doc.sheet.startable) return 'Fix what the sheet lists above to start it.';
+    return null;
+  });
+
+  protected readonly canStart = computed(() => !!this.store.ref() && !this.starting() && !this.startBlockedReason());
+
+  /** Open a new conversation with this workflow's sheet up (PR-D.2's start path). */
+  protected async start(): Promise<void> {
+    const ref = this.store.ref();
+    if (!ref || !this.canStart()) return;
+    this.starting.set(true);
+    try {
+      await this.starter.start(ref);
+    } finally {
+      this.starting.set(false);
+    }
+  }
 
   protected readonly document = this.store.document;
 

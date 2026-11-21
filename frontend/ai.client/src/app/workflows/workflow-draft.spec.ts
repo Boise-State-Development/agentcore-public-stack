@@ -17,6 +17,8 @@ import {
 } from './workflow-draft';
 import { MAX_WORKFLOW_STEPS, workflowNameFor } from './workflow.models';
 
+const VIEW = { canRun: true, hasIcon: false, changed: false, runsDraft: false };
+
 function step(key: string, name: string, overrides: Partial<DraftStep> = {}): DraftStep {
   return { key, name, autoName: false, agentId: `AST-${name}`, agentVersion: null, reads: ['request', 'files'], ownRequest: null, ...overrides };
 }
@@ -132,7 +134,7 @@ describe('addStep', () => {
 describe('toWrite', () => {
   it('records the Agent’s published version for a step that has none', () => {
     const d = draft([step('a', 'one'), step('b', 'two', { agentVersion: 2 })]);
-    const body = toWrite(d, new Map([['AST-one', { canRun: true, publishedVersion: 5 }], ['AST-two', { canRun: true, publishedVersion: 9 }]]), 4)!;
+    const body = toWrite(d, new Map([['AST-one', { ...VIEW, publishedVersion: 5 }], ['AST-two', { ...VIEW, publishedVersion: 9 }]]), 4)!;
     expect(body.steps.map((s) => s.agentVersion)).toEqual([5, 2]);
     expect(body.expectedVersion).toBe(4);
   });

@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FEATURES } from '../../../services/features';
 import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
-import { WorkflowService } from '../../../workflows/workflow.service';
+import { WorkflowsApiService } from '../../../services/workflows/workflows-api.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ToolInsightService } from '../../services/chat/tool-insight.service';
 import { AgentHandoffService } from '../../services/handoff/agent-handoff.service';
@@ -95,7 +95,7 @@ describe('WorkflowRunRowComponent', () => {
       providers: [
         provideRouter([]),
         { provide: FEATURES, useValue: features },
-        { provide: WorkflowService, useValue: workflows },
+        { provide: WorkflowsApiService, useValue: workflows },
         {
           provide: AgentHandoffService,
           useValue: { targetLink: (row: HandoffView) => (row.targetSessionId ? { commands: ['/s', row.targetSessionId], queryParams: {} } : null) },

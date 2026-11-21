@@ -13,7 +13,7 @@ import {
 import { FEATURES } from '../../../services/features';
 import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
 import { designerLink } from '../../../workflows/workflow.models';
-import { WorkflowService } from '../../../workflows/workflow.service';
+import { WorkflowsApiService } from '../../../services/workflows/workflows-api.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ToolInsightService } from '../../services/chat/tool-insight.service';
 import { AgentHandoffService } from '../../services/handoff/agent-handoff.service';
@@ -230,7 +230,7 @@ export class WorkflowRunRowComponent {
   private readonly results = inject(WorkflowRunResultService);
   private readonly card = viewChild<ElementRef<HTMLElement>>('card');
   private readonly features = inject(FEATURES);
-  private readonly workflows = inject(WorkflowService);
+  private readonly workflows = inject(WorkflowsApiService);
   private readonly router = inject(Router);
 
   readonly run = input.required<WorkflowRunView>();

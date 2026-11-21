@@ -6,7 +6,7 @@ import { heroChevronRight, heroExclamationTriangle, heroPlus, heroRectangleGroup
 
 import { PROPOSAL_REVIEW_TEMPLATE } from './workflow-draft';
 import { WorkflowSummary, designerLink } from './workflow.models';
-import { WorkflowService } from './workflow.service';
+import { WorkflowsApiService } from '../services/workflows/workflows-api.service';
 
 interface ListRow {
   summary: WorkflowSummary;
@@ -130,14 +130,14 @@ interface ListRow {
   `,
 })
 export class WorkflowsPage {
-  private readonly workflows = inject(WorkflowService);
+  private readonly workflows = inject(WorkflowsApiService);
 
   protected readonly template = PROPOSAL_REVIEW_TEMPLATE;
 
-  protected readonly list = resource({ loader: () => this.workflows.list() });
+  protected readonly list = resource({ loader: () => this.workflows.listQuietly() });
 
   private readonly rows = computed<ListRow[]>(() =>
-    (this.list.hasValue() ? this.list.value().workflows : []).map((summary) => {
+    (this.list.hasValue() ? this.list.value() : []).map((summary) => {
       const steps = summary.stepCount ?? 0;
       const parts = [`${steps} ${steps === 1 ? 'step' : 'steps'}`];
       if (summary.version) parts.push(`version ${summary.version}`);

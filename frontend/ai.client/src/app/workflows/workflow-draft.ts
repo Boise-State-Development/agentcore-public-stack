@@ -91,7 +91,7 @@ export function draftFrom(view: WorkflowView): WorkflowDraft {
       ownRequest: step.request ?? null,
     })),
     result: {
-      mode: view.result.mode,
+      mode: view.result.mode === 'merge' ? 'merge' : 'card',
       reads: view.result.reads ? [...view.result.reads] : null,
       instruction: view.result.instruction ?? null,
     },
