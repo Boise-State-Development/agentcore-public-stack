@@ -919,8 +919,11 @@ starts by itself). Where it differs from the plan, and what it settled:
   the same reason. The canvas card counts what the Result reads ("Starts by itself · 3 results", "Back to chat ·
   1 result"), not every step, and a merge is titled "A merge". Until D.5b-2 lifts the sheet's `merge_result`
   blocker, a saved merge workflow shows that blocker on the Preview tab.
-- **`WorkflowGraphComponent`'s inputs are unchanged** (the new controls only render in design mode), so the run
-  row and the review sheet can embed it with a run's `stages`, `status` and `finished`.
+- **`WorkflowGraphComponent` changed only additively,** so the run row and the review sheet can embed it with a
+  run's `stages`, `status` and `finished`. The new controls render only in design mode. Its heading and
+  description ids are unique per instance (a static counter, as the run sheet's are), so two graphs on one page
+  never point `aria-labelledby` at each other's headings, and an optional `label` names its scroll region
+  (default "Workflow canvas", or "Test run canvas" in run mode), for D.5b-2's "Graph of this run".
 - **Measured before merge** on the running SPA, both themes, against the canvas or panel and the strongest blob:
   the Reads hints 7.23:1 light / 6.82:1 dark; the new-stage box's text 10.22:1 / 12.51:1 (5.68:1 / 9.18:1 for
   its hint over a blob); its dashed border 4.63:1 / 6.82:1; the Result card's count 7.49:1 / 10.52:1. Every new

@@ -170,7 +170,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
       [class.select-none]="panning()"
       tabindex="0"
       role="region"
-      [attr.aria-label]="mode() === 'run' ? 'Test run canvas' : 'Workflow canvas'"
+      [attr.aria-label]="regionLabel()"
       (pointerdown)="onPointerDown($event)"
       (pointermove)="onPointerMove($event)"
       (pointerup)="endPan($event)"
@@ -196,8 +196,8 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
           </svg>
 
           <!-- Starts with -->
-          <section class="relative md:w-56" aria-labelledby="wf-col-start">
-            <h2 id="wf-col-start" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">Starts with</h2>
+          <section class="relative md:w-56" [attr.aria-labelledby]="ids.start">
+            <h2 [id]="ids.start" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">Starts with</h2>
             @if (mode() === 'run') {
               <div data-node-id="start" [class]="runCardClass">
                 <ng-container *ngTemplateOutlet="startBody" />
@@ -226,8 +226,8 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
           </section>
 
           @for (stage of stages(); track $index; let s = $index) {
-            <section class="relative md:w-60" role="group" [attr.aria-labelledby]="'wf-col-stage-' + s">
-              <h2 [id]="'wf-col-stage-' + s" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">
+            <section class="relative md:w-60" role="group" [attr.aria-labelledby]="ids.stage + s">
+              <h2 [id]="ids.stage + s" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">
                 Stage {{ s + 1 }}@if (stage.length > concurrency) { · {{ concurrency }} at once }
               </h2>
               <ul role="list" class="flex flex-col gap-2.5">
@@ -291,13 +291,13 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                   [disabled]="stepCount() >= maxSteps()"
                   [attr.aria-label]="'Add step to stage ' + (s + 1)"
                   [class]="addClass"
-                  aria-describedby="wf-step-cap"
+                  [attr.aria-describedby]="ids.cap"
                 >
                   <ng-icon name="heroPlus" class="size-3.5" aria-hidden="true" />
                   Add step
                 </button>
                 @if (s === 0) {
-                  <p id="wf-step-cap" class="mt-1 text-center text-xs/5 text-gray-600 tabular-nums dark:text-gray-300">
+                  <p [id]="ids.cap" class="mt-1 text-center text-xs/5 text-gray-600 tabular-nums dark:text-gray-300">
                     {{ stepCount() }} of {{ maxSteps() }} steps
                   </p>
                 }
@@ -307,8 +307,8 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
 
           <!-- The next stage: not a stage yet, only a way to start one (§4.1). -->
           @if (mode() === 'design' && stepCount() > 0) {
-            <section class="relative md:w-60" role="group" aria-labelledby="wf-col-next">
-              <h2 id="wf-col-next" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">Stage {{ stages().length + 1 }}</h2>
+            <section class="relative md:w-60" role="group" [attr.aria-labelledby]="ids.next">
+              <h2 [id]="ids.next" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">Stage {{ stages().length + 1 }}</h2>
               <!-- Frosted like a card, so a connector passing behind it to Result stays behind it. -->
               <button
                 type="button"
@@ -317,13 +317,13 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                 [disabled]="stepCount() >= maxSteps()"
                 [attr.aria-label]="'Add step to stage ' + (stages().length + 1) + ', a new stage'"
                 [class]="newStageClass"
-                aria-describedby="wf-next-help wf-step-cap"
+                [attr.aria-describedby]="ids.nextHelp + ' ' + ids.cap"
               >
                 <span class="flex items-center gap-1.5 text-xs/5 font-medium text-gray-700 dark:text-gray-200">
                   <ng-icon name="heroPlus" class="size-3.5" aria-hidden="true" />
                   Add step
                 </span>
-                <span id="wf-next-help" class="text-xs/5 font-normal text-gray-600 dark:text-gray-300">
+                <span [id]="ids.nextHelp" class="text-xs/5 font-normal text-gray-600 dark:text-gray-300">
                   Runs after stage {{ stages().length }} and reads its results
                 </span>
               </button>
@@ -331,8 +331,8 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
           }
 
           <!-- Result -->
-          <section class="relative md:w-56" aria-labelledby="wf-col-result">
-            <h2 id="wf-col-result" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">Result</h2>
+          <section class="relative md:w-56" [attr.aria-labelledby]="ids.result">
+            <h2 [id]="ids.result" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">Result</h2>
             @if (mode() === 'run') {
               <div data-node-id="result" [class]="runCardClass">
                 <ng-container *ngTemplateOutlet="resultBody" />
@@ -424,9 +424,23 @@ export class WorkflowGraphComponent {
   readonly status = input<ReadonlyMap<string, GraphStepStatus>>(new Map());
   /** Run mode: the nodes that have finished. A connector leaving one is drawn in the brand colour. */
   readonly finished = input<ReadonlySet<string>>(new Set());
+  /** The scroll region's name, for a host that shows more than one graph or a graph of its own kind. */
+  readonly label = input<string | null>(null);
 
   readonly selectNode = output<string>();
   readonly add = output<number>();
+
+  private static nextId = 0;
+  /**
+   * Ids unique to this instance, so two graphs on one page (two runs' rows, or a row and the sheet's
+   * small graph) never point `aria-labelledby` at the other's heading.
+   */
+  protected readonly ids = (() => {
+    const p = `wf-graph-${WorkflowGraphComponent.nextId++}`;
+    return { start: `${p}-col-start`, stage: `${p}-col-stage-`, next: `${p}-col-next`, result: `${p}-col-result`, cap: `${p}-step-cap`, nextHelp: `${p}-next-help` };
+  })();
+
+  protected readonly regionLabel = computed(() => this.label() ?? (this.mode() === 'run' ? 'Test run canvas' : 'Workflow canvas'));
 
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly scroller = viewChild.required<ElementRef<HTMLElement>>('scroller');
