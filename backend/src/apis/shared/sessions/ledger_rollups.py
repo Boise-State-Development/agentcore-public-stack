@@ -86,7 +86,7 @@ OUTCOME_COUNTERS = {
 
 #: The kinds a call is classified into. ``callKind`` on the row wins; the rest
 #: are recognised by the id shapes their writers use.
-CALL_KINDS = ("chat", "handoff_brief", "voice", "api_converse", "document_extract", "other")
+CALL_KINDS = ("chat", "handoff_brief", "workflow_prompt", "voice", "api_converse", "document_extract", "other")
 _KIND_PATTERN = re.compile(r"^[a-z0-9_]{1,32}$")
 
 #: What one character of a tool result costs as input, in tokens (D4). An
@@ -164,7 +164,7 @@ def _key_part(value: Any) -> str:
 def call_kind(row: Mapping[str, Any]) -> str:
     """What kind of call a cost row records (``callKind.<kind>`` on the version row).
 
-    ``callKind`` on the row (a handoff brief) wins. Rows from writers that set
+    ``callKind`` on the row (a handoff brief, a workflow prompt step) wins. Rows from writers that set
     none are told apart by the ids they write: api-converse uses a
     ``api-converse-<key>`` pseudo-session, voice a ``voice:<n>`` message id and
     ``document_extract`` an ``extract:<toolUseId>`` one. Everything else is a

@@ -13,6 +13,7 @@ from apis.shared.assistants.models import MAX_AGENT_INSTRUCTIONS_CHARS
 from apis.shared.browser_takeover import coerce_frame_height
 from apis.shared.handoff.brief import HandoffBriefRequest
 from apis.shared.handoff.delivery_turn import DELIVERY_FIELD_MAX_ITEMS, DeliveryAttachRequest
+from apis.shared.handoff.prompt_steps import WorkflowPromptRequest
 from apis.shared.handoff.turn import HandoffContextRequest
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
 
@@ -245,6 +246,11 @@ class InvocationRequest(BaseModel):
     # resolves and builds the agent exactly as for that turn, then streams the brief from a
     # side call over a copy of the history instead of running a turn. Nothing is persisted.
     handoff_brief: Optional[HandoffBriefRequest] = None
+    # A workflow run's prompt steps to run (docs/specs/workflow-designer.md §21.3), `{runId, stepIds}`
+    # with at most 8 ids, sent on the run's SOURCE session. Never a turn: no agent build, no history,
+    # no tools, no lease; each step's claim on its HANDOFF# row is the guard. The stream carries one
+    # `workflow_prompt_step` frame per step, then `done`. Absent, the request is unchanged.
+    workflow_prompt: Optional[WorkflowPromptRequest] = None
     # Deliveries (agent-handoffs-and-consults.md §4.8): the cards waiting on this conversation's
     # composer that this send carries, `[{deliveryId, text?}]`, `text` present only when the card
     # was edited. Each is attached exactly once (a conditional write, issued beside the agent build)

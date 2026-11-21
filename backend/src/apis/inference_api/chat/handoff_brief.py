@@ -229,7 +229,11 @@ async def stream_handoff_brief(
 async def _run_steps(
     run: WorkflowRun, descriptions: "Optional[asyncio.Task[List[Optional[str]]]]"
 ) -> List[RunBriefStep]:
-    """The run's kept steps as the run instruction names them, each with its Agent's description."""
+    """The run's kept steps as the run instruction names them, each with its Agent's description.
+
+    A prompt step (``workflow-designer.md`` §21.3) has no Agent: it is named by its step name and
+    described as what it is, a single model call that reads the shared files and not the card.
+    """
     kept = run.kept_steps()
     found: Sequence[Optional[str]] = []
     if descriptions is not None:
@@ -237,14 +241,37 @@ async def _run_steps(
             found = await descriptions
         except Exception:  # noqa: BLE001 - descriptions are optional
             found = []
-    return [
-        RunBriefStep(
-            agent_name=step.agent_name,
-            request=step.request,
-            agent_description=found[index] if index < len(found) else None,
+    steps: List[RunBriefStep] = []
+    for index, step in enumerate(kept):
+        if is_prompt_step(step):
+            steps.append(
+                RunBriefStep(
+                    agent_name=step.step_name or step.agent_name or "Prompt step",
+                    request=step.request,
+                    agent_description=PROMPT_STEP_BRIEF_DESCRIPTION,
+                )
+            )
+            continue
+        steps.append(
+            RunBriefStep(
+                agent_name=step.agent_name,
+                request=step.request,
+                agent_description=found[index] if index < len(found) else None,
+            )
         )
-        for index, step in enumerate(kept)
-    ]
+    return steps
+
+
+#: How the run brief describes a prompt step, which has no Agent and no description of its own.
+PROMPT_STEP_BRIEF_DESCRIPTION = (
+    "A prompt step, not an agent: one model call over the shared files and its own instruction. "
+    "It does not read this brief."
+)
+
+
+def is_prompt_step(step: Any) -> bool:
+    """Whether a run step is a prompt step (``kind: prompt``) rather than an Agent's."""
+    return getattr(step, "kind", None) == "prompt"
 
 
 async def _record_brief(
