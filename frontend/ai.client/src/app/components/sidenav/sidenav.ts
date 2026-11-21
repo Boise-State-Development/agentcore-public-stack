@@ -13,6 +13,7 @@ import {
   heroClock,
   heroDocumentText,
   heroFolderOpen,
+  heroRectangleGroup,
   heroSparkles,
 } from '@ng-icons/heroicons/outline';
 import { SessionList } from './components/session-list/session-list';
@@ -56,6 +57,7 @@ import { EditSidebarDialogComponent } from './components/edit-sidebar-dialog.com
       heroClock,
       heroDocumentText,
       heroFolderOpen,
+      heroRectangleGroup,
       heroSparkles,
     }),
   ],

@@ -55,6 +55,11 @@ export interface MySkill {
   updatedAt: string | null;
   /** Set once the skill was imported from a bundle (skill-bundle-import.md §3). */
   importSource?: SkillImportSource | null;
+  /**
+   * `"workflow"` for a saved workflow's carrying skill (workflow-designer.md §20.3, PR-D.1):
+   * Customize marks it Workflow and links it to its designer. Null for any other skill.
+   */
+  kind?: 'workflow' | null;
 }
 
 /** Where a skill was last imported from. Display and refresh only; never versioned. */

@@ -718,6 +718,56 @@ Every PR is behind `WORKFLOWS_ENABLED` / `CDK_WORKFLOWS_ENABLED` / `features.wor
 - **For D.3.** Wire types are in `src/app/services/workflows/workflow.models.ts` and the client in
   `workflows-api.service.ts` (`list`, `get`, `save`, and `definitionOf` to turn a document back into a PUT body).
 
+*Built (PR-D.3).* The SPA is `frontend/ai.client/src/app/workflows/`; the one backend change is in
+`app_api/workflows/`. Where it differs from the plan, and what it settled:
+
+- **A save can't clobber another tab.** `PUT /workflows/{skillId}/{name}` takes an optional `expectedVersion`.
+  When the stored file has moved on it answers 409 `{detail, code: "version_conflict", document}` with the
+  current document, or `{code: "workflow_deleted", document: null}` when the file is gone, and writes nothing.
+  Without it a save behaves as before, and `?validate=true` never checks it. The designer always sends it and
+  answers a 409 with "This workflow changed somewhere else" and **Reload the saved workflow**.
+- **Nothing is stored until Save.** `/workflows/new` (blank, or `?template=proposal-review`) edits a draft only
+  the page holds. The first Save is `POST /workflows {title}` then `PUT … expectedVersion: 1`, and the URL becomes
+  the workflow's own with `Location.replaceState`, so the page and its selection stay put. Save is off while any
+  step has no Agent, and says why. A step records its Agent's published version from the server's last
+  description of it; an Agent picked since is described first (one `?validate=true`), so no step reads as
+  changed the moment it is saved.
+- **The canvas** is `WorkflowGraphComponent`: Starts with, one column per stage, Result. Stages come from
+  `stagesOf` (a step's stage is one after the latest step it reads), so the file's reads already draw the right
+  graph, though D.3 can only make stage 1. Each column is a labelled group with a list of buttons named "Fiscal
+  reader, Agent step, stage 1, reads the request and the files". The connectors are an SVG measured from the
+  cards and `aria-hidden`. Fit scales to the canvas, never below 60%; a drag on the empty grid pans; there is no
+  wheel or pinch zoom. Below `md` the columns stack and no connector is drawn. The designer route sets
+  `data: { chrome: 'minimal' }` rather than hiding the sidenav by hand.
+- **The Step tab.** Starts with edits the files rule and the default request; the format has no "request
+  required" flag, so neither does the tab. An Agent step picks from the author's own Agents and pins
+  (`AgentMentionService`, the `@` menu's list), with an Agent already used by another step disabled. Its model
+  is read-only. Move up and Move down keep focus on the button that moved (the other one at an end) and announce
+  the new position politely; Remove moves focus to the neighbouring card. Reads of other steps show disabled
+  with "needs stages", and the Result offers only the card.
+- **The Preview tab** is the server's sheet from a debounced `PUT …?validate=true`, never a model call: the
+  steps with their models, the files rule, the request, the blockers in the parser's words, and each step's
+  input rate with the request-only floor of the sheet's own estimate (`estimateRunInputUsd`). It needs a saved
+  workflow, because validate is a route on one. Start test run and Try in a chat both call D.2's
+  `WorkflowStartService.start(ref)`, a new conversation with the sheet up; they are off while the draft has
+  unsaved edits (a run reads the saved file) or the sheet has blockers, and say which. The run drawn on the
+  canvas is D.4.
+- **One client.** The designer, the list and Save as workflow use D.2's `WorkflowsApiService` and wire types
+  (`src/app/services/workflows/`), which gained `listQuietly`, `create`, `read`, `validate`, `write` (the
+  checked save, mapping the 409) and `remove`. Those send `SUPPRESS_ERROR_TOAST`, because each caller shows its
+  own error; D.2's `list`, `get` and `save` are unchanged.
+- **Save as workflow** is on a run's row once it is `stopped`, or `approved` and every step has settled.
+- **The Customize badge** is the row's existing chip ("workflow") on an active carrier, with **Open in designer**
+  beside it while `features.workflows` is on. The workflow's name comes from the carrier's
+  `workflow.<name>.md` filename, never its content.
+- **No Share.** `resolve_accessible_skill_ids` never returns another user's skill, so a workflow can't be shared
+  person to person today; "You can use" on the list is role grants only. Sharing is a later decision.
+- **Measured before merge** (both themes, transitions off, against the canvas and against the strongest blob):
+  card text 7.1–17.6:1, the warning line 4.73:1 at worst, the selected border 3.45:1 at worst. The app's focus
+  ring, `primary-500` in both themes, is 1.67:1 on the dark canvas, so every workflows control adds
+  `dark:focus-visible:outline-primary-accessible-dark` (4.53:1 on the canvas, 3.95:1 on a card). The app's other
+  surfaces still use `primary-500` in dark.
+
 **Order.** D.1 first. Then D.2 and D.3 at once (D.2 touches the sheet, the composer and the run service; D.3 is
 new pages and the graph, so their files do not overlap). D.4 after both. D.5a after D.2 and can run beside D.4.
 D.5b last. At most three writing sessions at a time.

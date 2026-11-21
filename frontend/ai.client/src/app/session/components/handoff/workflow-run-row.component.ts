@@ -1,6 +1,6 @@
-import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, input, untracked, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, inject, input, signal, untracked, viewChild } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import {
   heroCheckCircle,
@@ -10,7 +10,10 @@ import {
   heroPauseCircle,
 } from '@ng-icons/heroicons/outline';
 
+import { FEATURES } from '../../../services/features';
 import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
+import { designerLink } from '../../../workflows/workflow.models';
+import { WorkflowsApiService } from '../../../services/workflows/workflows-api.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ToolInsightService } from '../../services/chat/tool-insight.service';
 import { AgentHandoffService } from '../../services/handoff/agent-handoff.service';
@@ -141,7 +144,7 @@ const BAR_FILL: Record<RunStepState, string> = {
       </ul>
     </section>
 
-    @if (offerStart() || offerBringBack() || onComposer() || offerStop() || startElsewhere()) {
+    @if (offerStart() || offerBringBack() || onComposer() || offerStop() || startElsewhere() || offerSave()) {
       <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-4 text-xs/5">
         @if (offerStart()) {
           <button type="button" (click)="start()" class="rounded-md font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark">
@@ -169,6 +172,19 @@ const BAR_FILL: Record<RunStepState, string> = {
           <button type="button" (click)="stop()" class="rounded-md font-medium text-gray-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300">
             Stop run
           </button>
+        }
+        @if (offerSave()) {
+          <button
+            type="button"
+            (click)="saveAsWorkflow()"
+            [disabled]="savingWorkflow()"
+            class="rounded-md font-medium text-gray-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-wait disabled:opacity-60 dark:text-gray-300"
+          >
+            {{ savingWorkflow() ? 'Saving as a workflow…' : 'Save as workflow' }}
+          </button>
+          @if (saveWorkflowError(); as error) {
+            <span class="text-state-danger-700 dark:text-state-danger-400" role="alert">{{ error }}</span>
+          }
         }
       </div>
     }
@@ -213,6 +229,9 @@ export class WorkflowRunRowComponent {
   private readonly runs = inject(WorkflowRunService);
   private readonly results = inject(WorkflowRunResultService);
   private readonly card = viewChild<ElementRef<HTMLElement>>('card');
+  private readonly features = inject(FEATURES);
+  private readonly workflows = inject(WorkflowsApiService);
+  private readonly router = inject(Router);
 
   readonly run = input.required<WorkflowRunView>();
 
@@ -279,6 +298,34 @@ export class WorkflowRunRowComponent {
   });
 
   protected readonly offerStop = computed(() => this.run().status === 'approved' && !this.progress().settled);
+
+  /**
+   * Save as workflow (docs/specs/workflow-designer.md §8.2): on a run that was started and has
+   * finished, it keeps the run's steps as a saved workflow and opens it in the designer. The server
+   * takes a run that is `approved` or `stopped`; a run still going is offered it once it settles.
+   */
+  protected readonly offerSave = computed(() => {
+    if (!this.features.workflows) return false;
+    const status = this.run().status;
+    return status === 'stopped' || (status === 'approved' && this.progress().settled);
+  });
+
+  protected readonly savingWorkflow = signal(false);
+  protected readonly saveWorkflowError = signal<string | null>(null);
+
+  protected async saveAsWorkflow(): Promise<void> {
+    const run = this.run();
+    this.savingWorkflow.set(true);
+    this.saveWorkflowError.set(null);
+    try {
+      const document = await this.workflows.create({ fromRun: { sessionId: run.sessionId, runId: run.runId } });
+      void this.router.navigate(designerLink(document.workflow));
+    } catch (err) {
+      this.saveWorkflowError.set(this.workflows.messageFor(err, 'It couldn’t be saved as a workflow.'));
+    } finally {
+      this.savingWorkflow.set(false);
+    }
+  }
 
   protected fill(state: RunStepState): string {
     return BAR_FILL[state];

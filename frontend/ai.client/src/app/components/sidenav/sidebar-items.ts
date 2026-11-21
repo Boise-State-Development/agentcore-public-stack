@@ -33,6 +33,8 @@ export const SIDEBAR_ITEMS: readonly SidebarItemDef[] = [
   { id: 'agents', label: 'Agents', route: '/agents', icon: 'heroSparkles', defaultVisible: true },
   // Shared Projects (shared-projects §6), only in a build that turns them on.
   { id: 'projects', label: 'Projects', route: '/projects', icon: 'heroFolderOpen', defaultVisible: true, feature: 'projects' },
+  // Saved workflows (workflow-designer §8.1), only in a build that turns them on.
+  { id: 'workflows', label: 'Workflows', route: '/workflows', icon: 'heroRectangleGroup', defaultVisible: true, feature: 'workflows' },
   { id: 'artifacts', label: 'Artifacts', route: '/artifacts', icon: 'heroDocumentText', defaultVisible: true },
   // The capabilities hub; see `docs/specs/customize-surface.md`.
   { id: 'customize', label: 'Customize', route: '/customize', icon: 'heroAdjustmentsHorizontal', defaultVisible: true },

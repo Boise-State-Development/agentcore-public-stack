@@ -105,13 +105,19 @@ describe('app routes — shell chrome', () => {
 
   it('leaves every other route on the full shell', () => {
     // Opt-in by design: the flag strips app navigation, so it should
-    // never spread by accident. Both entries here are artifact viewers,
-    // which is the shape that needs it — one thing, filling the shell,
-    // carrying its own way back.
+    // never spread by accident. The artifact viewers are the shape that
+    // needs it — one thing, filling the shell, carrying its own way back —
+    // and so is the workflow designer, a full-screen editor with a back
+    // link in its header (workflow-designer.md §5).
     const minimal = routes
       .filter(r => r.data?.['chrome'] === MINIMAL_CHROME)
       .map(r => r.path);
-    expect(minimal).toEqual(['shared-artifact/:shareId', 'artifacts/:artifactId']);
+    expect(minimal).toEqual([
+      'shared-artifact/:shareId',
+      'workflows/new',
+      'workflows/:skillId/:name',
+      'artifacts/:artifactId',
+    ]);
   });
 });
 

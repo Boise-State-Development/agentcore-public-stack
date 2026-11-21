@@ -8,6 +8,7 @@ import {
   heroClock,
   heroDocumentText,
   heroFolderOpen,
+  heroRectangleGroup,
   heroSparkles,
 } from '@ng-icons/heroicons/outline';
 import { DialogShellComponent } from '../../dialog/dialog-shell.component';
@@ -31,6 +32,7 @@ import { SidebarEntry, SidebarLayoutService } from '../sidebar-layout.service';
       heroClock,
       heroDocumentText,
       heroFolderOpen,
+      heroRectangleGroup,
       heroSparkles,
     }),
   ],

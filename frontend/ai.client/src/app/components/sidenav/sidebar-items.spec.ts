@@ -79,6 +79,7 @@ describe('SIDEBAR_ITEMS', () => {
     expect(SIDEBAR_ITEMS.filter(def => def.defaultVisible).map(def => def.id)).toEqual([
       'agents',
       'projects',
+      'workflows',
       'artifacts',
       'customize',
       'schedules',

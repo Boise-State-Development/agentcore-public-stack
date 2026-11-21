@@ -3,10 +3,12 @@
 // HTTP in workflow-run.service.spec.ts / workflow-run-result.service.spec.ts.
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { FEATURES } from '../../../services/features';
 import { UserConnectorsService } from '../../../settings/connectors/services/user-connectors.service';
+import { WorkflowsApiService } from '../../../services/workflows/workflows-api.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { ToolInsightService } from '../../services/chat/tool-insight.service';
 import { AgentHandoffService } from '../../services/handoff/agent-handoff.service';
@@ -77,6 +79,8 @@ describe('WorkflowRunRowComponent', () => {
   const onComposer = signal(false);
   const runs = { resume: vi.fn(), stop: vi.fn() };
   const results = { collect: vi.fn(), isCollecting: () => false, isOnComposer: () => onComposer() };
+  const features = { workflows: false };
+  const workflows = { create: vi.fn(), messageFor: (_err: unknown, fallback: string) => fallback };
 
   beforeEach(() => {
     pending.clear();
@@ -85,9 +89,13 @@ describe('WorkflowRunRowComponent', () => {
     runs.resume.mockClear();
     runs.stop.mockClear();
     results.collect.mockClear();
+    workflows.create.mockReset();
+    features.workflows = false;
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
+        { provide: FEATURES, useValue: features },
+        { provide: WorkflowsApiService, useValue: workflows },
         {
           provide: AgentHandoffService,
           useValue: { targetLink: (row: HandoffView) => (row.targetSessionId ? { commands: ['/s', row.targetSessionId], queryParams: {} } : null) },
@@ -237,5 +245,47 @@ describe('WorkflowRunRowComponent', () => {
     expect(scroll).toHaveBeenCalled();
     expect(document.activeElement).toBe(el.querySelector('a[data-handoff-id="h2"]'));
     expect(TestBed.inject(HandoffStateService).focusedHandoffId()).toBeNull();
+  });
+  describe('Save as workflow (workflow-designer §8.2)', () => {
+    it('is offered on a finished run while workflows are on, and saves it and opens the designer', async () => {
+      features.workflows = true;
+      workflows.create.mockResolvedValue({ workflow: { skillId: 'SKL-1', name: 'proposal-review' } });
+      const { el } = render(run([stepRow(0, 'done'), stepRow(1, 'stopped')]));
+      const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+
+      expect(buttons(el)).toEqual(['Bring back results', 'Save as workflow']);
+      [...el.querySelectorAll('button')].find((b) => text(b) === 'Save as workflow')!.click();
+      await new Promise((resolve) => setTimeout(resolve));
+
+      expect(workflows.create).toHaveBeenCalledWith({ fromRun: { sessionId: 'src', runId: 'run1' } });
+      expect(navigate).toHaveBeenCalledWith(['/workflows', 'SKL-1', 'proposal-review']);
+    });
+
+    it('is offered on a stopped run', () => {
+      features.workflows = true;
+      const { el } = render(run([stepRow(0, 'done'), stepRow(1, 'running')], { status: 'stopped' }));
+      expect(buttons(el)).toContain('Save as workflow');
+    });
+
+    it('waits until every step has settled', () => {
+      features.workflows = true;
+      const { el } = render(run([stepRow(0, 'done'), stepRow(1, 'running')]));
+      expect(buttons(el)).not.toContain('Save as workflow');
+    });
+
+    it('is never offered while workflows are off', () => {
+      const { el } = render(run([stepRow(0, 'done'), stepRow(1, 'done')]));
+      expect(buttons(el)).not.toContain('Save as workflow');
+    });
+
+    it('says why when the save is refused', async () => {
+      features.workflows = true;
+      workflows.create.mockRejectedValue(new Error('nope'));
+      const { el, detect } = render(run([stepRow(0, 'done'), stepRow(1, 'done')]));
+      [...el.querySelectorAll('button')].find((b) => text(b) === 'Save as workflow')!.click();
+      await new Promise((resolve) => setTimeout(resolve));
+      detect();
+      expect(text(el.querySelector('[role="alert"]'))).toBe('It couldn’t be saved as a workflow.');
+    });
   });
 });
