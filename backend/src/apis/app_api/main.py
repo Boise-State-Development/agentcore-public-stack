@@ -266,6 +266,7 @@ from apis.app_api.files.folders.routes import recent_router as recent_folders_ro
 from apis.app_api.files.folders.routes import router as folder_attachments_router
 from apis.app_api.handoffs.routes import router as handoffs_router
 from apis.app_api.handoffs.workflow_runs import router as workflow_runs_router
+from apis.app_api.workflows.routes import router as workflows_router
 from apis.app_api.assistants.routes import router as assistants_router
 from apis.app_api.agent_designer.routes import router as agents_router
 from apis.app_api.documents.routes import router as documents_router
@@ -302,6 +303,7 @@ app.include_router(folder_attachments_router)  # /sessions/{id}/folders (drive-f
 app.include_router(recent_folders_router)  # /folders/recent (composer picker PR-2); 404s while FOLDER_ATTACHMENTS_ENABLED is off
 app.include_router(handoffs_router)  # /sessions/{id}/handoffs (handoffs PR-0.1); 404s while HANDOFFS_ENABLED is off
 app.include_router(workflow_runs_router)  # /sessions/{id}/workflow-runs (workflow-runs PR-W.1); 404s while WORKFLOW_RUNS_ENABLED is off
+app.include_router(workflows_router)  # /workflows (workflow-designer PR-D.1); 404s while WORKFLOWS_ENABLED is off
 app.include_router(admin_router)
 app.include_router(assistants_router)
 app.include_router(agents_router)  # Agent Designer /agents surface; 404s while AGENTS_API_ENABLED off

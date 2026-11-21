@@ -21,6 +21,7 @@ from typing import Iterable, List, Optional, Protocol, Tuple
 from apis.shared.auth.models import User
 from apis.shared.blocking_io import run_blocking
 from apis.shared.extraction.field_sets import validate_field_set_upload
+from apis.shared.workflows.format import validate_workflow_upload
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.bundle import generate_skill_md
 from apis.shared.skills.models import SkillDefinition, SkillResourceRef
@@ -159,6 +160,10 @@ class SkillBundleFiles:
             # FieldSetError is a ValueError, so it reaches the author as a 400
             # or a tool error carrying the parser's own message.
             validate_field_set_upload(filename, content)
+            # A saved workflow (workflow-designer §9.1) is checked beside it, by
+            # the same rule: whatever the flags say, at the top of `references/`.
+            # WorkflowError is a ValueError too.
+            validate_workflow_upload(filename, content)
 
         existing = list(skill.resources)
         # Adding a NEW filename must respect the per-skill cap; replacing an
@@ -245,6 +250,7 @@ class SkillBundleFiles:
                 )
             if f.kind == "reference" and "/" not in path:
                 validate_field_set_upload(f.filename, f.content)
+                validate_workflow_upload(f.filename, f.content)
 
             key = resource_key(skill_id, f.kind, path)
             ref = current.get(path)

@@ -200,6 +200,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     workflowRuns: {
       enabled: false,
     },
+    workflows: {
+      enabled: false,
+    },
     sessionRewind: {
       enabled: false,
     },

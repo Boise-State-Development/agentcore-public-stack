@@ -402,6 +402,10 @@ export function buildAppApiEnvironment(
     // /sessions/{id}/workflow-runs, and only while handoffs are on too.
     // app-api only; a step is an ordinary handoff turn on the Runtime.
     WORKFLOW_RUNS_ENABLED: config.handoffs.enabled && config.workflowRuns.enabled ? 'true' : 'false',
+    // Saved workflows (opt-in while in development): gates /workflows, and only
+    // while workflow runs (and so handoffs) are on too. app-api only.
+    WORKFLOWS_ENABLED:
+      config.handoffs.enabled && config.workflowRuns.enabled && config.workflows.enabled ? 'true' : 'false',
     // Conversation rewind (default on): gates
     // POST /sessions/{id}/rewind and GET /messages' hiding of rewound turns.
     SESSION_REWIND_ENABLED: config.sessionRewind.enabled ? 'true' : 'false',

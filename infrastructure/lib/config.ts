@@ -89,6 +89,7 @@ export interface AppConfig {
   sessionPrewarm: SessionPrewarmConfig;
   handoffs: HandoffsConfig;
   workflowRuns: WorkflowRunsConfig;
+  workflows: WorkflowsConfig;
   sessionRewind: SessionRewindConfig;
   sessionFork: SessionForkConfig;
   quotaRequests: QuotaRequestsConfig;
@@ -541,6 +542,19 @@ export interface AwsLimitsConfig {
  * sessions-metadata on the existing SessionLookupIndex.
  */
 export interface WorkflowRunsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Saved workflows (docs/specs/workflow-designer.md §13): a run's shape, kept in a
+ * skill as `references/workflow.<name>.md` and edited through `/workflows`.
+ * **Opt-in while the feature is in development**: off unless
+ * CDK_WORKFLOWS_ENABLED=true (or a `workflows.enabled: true` cdk.json context),
+ * and it needs `workflowRuns.enabled` (and so `handoffs.enabled`) too. Sets
+ * WORKFLOWS_ENABLED on **app-api only**; the Runtime needs no copy. No new
+ * resources: a workflow is a skill reference file.
+ */
+export interface WorkflowsConfig {
   enabled: boolean;
 }
 
@@ -1946,6 +1960,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WORKFLOW_RUNS_ENABLED
         ? process.env.CDK_WORKFLOW_RUNS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('workflowRuns')?.enabled ?? false,
+    },
+    workflows: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_WORKFLOWS_ENABLED
+        ? process.env.CDK_WORKFLOWS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('workflows')?.enabled ?? false,
     },
     sessionRewind: {
       // Default ON with a kill switch, same parsing as projects above.

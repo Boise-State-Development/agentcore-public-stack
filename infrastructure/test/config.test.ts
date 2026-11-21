@@ -1226,6 +1226,32 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Workflows feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_WORKFLOWS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_WORKFLOWS_ENABLED is unset', () => {
+      delete process.env.CDK_WORKFLOWS_ENABLED;
+      expect(loadConfig(app).workflows.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_WORKFLOWS_ENABLED = '';
+      expect(loadConfig(app).workflows.enabled).toBe(false);
+    });
+
+    test('CDK_WORKFLOWS_ENABLED="true" turns it on', () => {
+      process.env.CDK_WORKFLOWS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).workflows.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_WORKFLOWS_ENABLED = 'yes';
+      expect(loadConfig(app).workflows.enabled).toBe(false);
+    });
+  });
+
   describe('Handoff brief feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_HANDOFF_BRIEF_ENABLED;

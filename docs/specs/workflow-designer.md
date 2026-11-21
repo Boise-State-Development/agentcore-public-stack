@@ -355,6 +355,8 @@ Write one report: the inline notes first, then the audit table.
 Merge the four reviews into inline notes. Keep each reviewer's strongest point and say where they disagree.
 ```
 
+- *2026-11-20, PR-D.1:* the request is a `## Request` section, not a frontmatter line; the exact grammar is
+  the *Built (PR-D.1)* note in §20.3.
 - Ids appear only in the file. The designer shows names and icons.
 - `reads` is the whole graph. There is no `after` column and no stage column.
 - The parser enforces the envelope: at most 8 steps, no cycle, a step reads only steps that exist, a checklist
@@ -616,6 +618,63 @@ Every PR is behind `WORKFLOWS_ENABLED` / `CDK_WORKFLOWS_ENABLED` / `features.wor
 | D.4 | SPA | D.2, D.3 | The test run on the canvas: run mode on the graph, and the run's row and result card in the panel, loaded by run id |
 | D.5a | Backend + SPA | D.2 | Stages: run create accepts reads; a step starts only when what it reads has settled; just before its send, app-api renders the read steps' results into that step's context (`_part_for`, `render_delivery_parts`), never on a turn's path; the result card takes the Result's reads; removing a step removes its readers |
 | D.5b | SPA (+ D.5a's row field) | D.5a | The merge that starts by itself (§20.1), with its instruction on the run row; View as graph on the run's row; the small graph on the sheet |
+
+*Built (PR-D.1).* The format is `apis/shared/workflows/format.py` (standard library only) and the routes are
+`app_api/workflows/routes.py`. Where it differs from the plan, and what it settled:
+
+- **The grammar.** Frontmatter holds `title` (required, one line), `version` (a positive integer), `files`
+  (`none` / `one` / `any`, default `any`) and `result` (`card` / `merge`, default `card`). Any other frontmatter
+  line is kept and nothing reads it. The step table is found by a header naming `step`, `kind` and `worker`, and
+  `reads` is its fourth column. Any other column is kept cell by cell, and its cells follow their step by name
+  through a structured save. A `worker` is an Agent id, optionally `@ <n>` for the `listing.published_version`
+  recorded when the step was added. `reads` is a set, held and written in one order: `request`, `files`, then
+  steps in table order. Sections start at `## Request`, `## Result` or `## Step: <name>`, each at most once, and
+  run to the next of those, so an instruction can hold its own table. `## Result` opens with an optional
+  `Reads:` line; without it the result takes every step. Prose before and after the table is kept.
+- **The request moved out of the frontmatter** (§9.1's sketch had `request:` there), into `## Request`, because
+  a request can span lines. A `request:` frontmatter line is refused with a message that says so.
+- **The envelope** the parser enforces: at most 8 steps (pinned to `WORKFLOW_RUN_MAX_STEPS`), no step named
+  twice or named `request` / `files`, no read of a missing step or of itself, no cycle (the message names the
+  steps on it), and requests within `HANDOFF_REQUEST_MAX_CHARS`. `prompt` and `checklist` are reserved and
+  refused with "not available yet". A blank workflow (no steps) is valid at rest. What step 1's engine cannot
+  start yet is the sheet's to say, not the format's: fewer than 2 steps, the same Agent twice, a step that reads
+  another step (until D.5a), and `result: merge` (until D.5b) are `blockers` on the sheet, so the format never
+  changes when stages ship.
+- **`version` is the server's.** A save whose definition equals the stored one (whitespace and read order
+  ignored) writes nothing and leaves `version` alone; any other save moves it by one. The body's `version` is
+  never read. The stored file's prose, frontmatter and extra columns are re-applied on the server
+  (`carry_layout`), so unlike field sets the SPA never sees or sends a layout.
+- **The check on every skill-file write** is `validate_workflow_upload`, beside `validate_field_set_upload` in
+  `SkillBundleFiles.add_resource` (the user and admin uploads and `my_skill_write_file`) and `put_imported_files`,
+  and beside it in `bundle_import` (a broken workflow is skipped as `invalid workflow: …`). It runs whatever the
+  flags say. A `workflow.<x>.md` with a bad name is refused, since it would never list.
+- **The carrier.** `POST /workflows` creates a private user skill with `kind: "workflow"` (a new optional field on
+  `SkillDefinition`, written only when set, never read by an access check and not a snapshot field, so it moves
+  no pinned version) and returns it on `GET /skills/mine` for Customize. Its instructions are a fixed sentence
+  that never lists the steps. `DELETE` removes the carrier only when it has `kind: "workflow"` and no other file.
+- **Verify-first, answered: a carrier is never active on a turn by itself, and no turn-path change was needed.**
+  A plain turn's skills are exactly the request's `enabled_skills` intersected with what the user can reach
+  (`_apply_enabled_skills_filter`); absent or empty means none (Skills v2 D6). The SPA sends only skills whose
+  preference the user turned on, and an untouched skill is off (`GET /skills/` `isEnabled`), and nothing writes
+  that preference for them. An Agent's or project's bindings replace the selection outright
+  (`_apply_agent_skills_override`). So a carrier's name and description reach `<available_skills>`, and a field
+  set in it reaches `toolConfig`, only when the user turns it on in the picker or an Agent or project binds it.
+  The carrier does show in the composer's picker, as every owned skill does.
+- **`fromRun`** takes a run that was started (`approved` or `stopped`) from the caller's own conversation; an
+  `open` or dismissed run is 409. Its kept steps, in order, become steps named after their Agents, each reading
+  `request, files`, with the Agent's current published version. A step's own request is kept only where it
+  differs from the run's shared request.
+- **The document.** `GET`, `POST` and `PUT` answer `{workflow, sheet, written?}`. Each step carries its Agent as
+  the caller sees it (`canRun`, then name, emoji, image, `hasIcon`, `modelId` with its input rate, as W.1's
+  create prices a step, `publishedVersion`, `changed` and `runsDraft` for the Agent's owner). An Agent the caller
+  cannot use shows no name. `sheet` is `{startable, blockers: [{code, message, step?}]}`. `workflow.fingerprint`
+  (`workflow_fingerprint`, version excluded) is what D.2 records on the `WFRUN#` row.
+- **Access.** Reading is the skill's: its owner, or anyone `resolve_accessible_skill_ids` lets reach it (role
+  grants; ACTIVE only). Writing and deleting are the owner's. A shared skill lists for the people it is shared
+  with, and each Agent step is judged as the caller, so sharing a workflow shares none of its Agents.
+- **For D.2 and D.3.** The list reads each workflow file once (one S3 GET each, concurrently); its rows carry
+  `problem` for a file that no longer parses, and `GET /workflows/{skillId}/{name}` answers such a file with 400
+  plus its markdown. No user-facing Agent version diff exists, as §20.2 says.
 
 **Order.** D.1 first. Then D.2 and D.3 at once (D.2 touches the sheet, the composer and the run service; D.3 is
 new pages and the graph, so their files do not overlap). D.4 after both. D.5a after D.2 and can run beside D.4.
