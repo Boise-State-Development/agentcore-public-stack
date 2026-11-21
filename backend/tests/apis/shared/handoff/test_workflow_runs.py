@@ -134,6 +134,13 @@ class TestAbandoned:
         assert row.status == "open"
         assert row.effective_status(now=datetime.now(timezone.utc) + timedelta(days=30)) == "open"
 
+    def test_approving_a_step_records_the_runs_kept_count(self, handoffs):
+        handoffs.create(_step_row("h1", "generalist"))
+        assert handoffs.approve_run_step("alice", "h1", run_id="r1", approved_at=_iso(), run_steps=4).run_steps == 4
+        assert handoffs.get("alice", "h1").run_steps == 4
+        handoffs.create(_step_row("h2", "colleague"))
+        assert handoffs.approve_run_step("alice", "h2", run_id="r1", approved_at=_iso()).run_steps is None
+
     def test_approving_a_step_sets_its_edited_request(self, handoffs):
         handoffs.create(_step_row("h1", "generalist"))
         updated = handoffs.approve_run_step("alice", "h1", run_id="r1", approved_at=_iso(), request="only the budget")
@@ -163,7 +170,7 @@ def test_a_step_row_is_accepted_on_its_first_turn_by_the_unchanged_handoff_turn(
     monkeypatch.setattr(metadata, "set_session_spawned_from", lambda *a: spawned.append(a) or True)
     monkeypatch.setattr(metadata, "settle_session_spawned_from", lambda *a: None)
     handoffs.create(_step_row("h1", "generalist"))
-    handoffs.approve_run_step("alice", "h1", run_id="r1", approved_at=_iso())
+    handoffs.approve_run_step("alice", "h1", run_id="r1", approved_at=_iso(), run_steps=3)
 
     async def run() -> str:
         turn = HandoffTurn.for_turn(
@@ -193,8 +200,9 @@ def test_a_step_row_is_accepted_on_its_first_turn_by_the_unchanged_handoff_turn(
     row = handoffs.get("alice", "h1")
     assert (row.status, row.target_session_id, row.run_id, row.step_id) == ("running", "tgt", "r1", "s1")
     assert (before, pending) == ([], 1)
-    # The step's spawnedFrom gains runId, in the same SET as before (workflow-runs spec §19 PR-W.4c).
-    assert spawned == [("tgt", "alice", "src", "h1", "r1")]
+    # The step's spawnedFrom gains runId, and the run's kept count read from the accepted row, in
+    # the same SET as before (workflow-runs spec §19 PR-W.4c, §20.4).
+    assert spawned == [("tgt", "alice", "src", "h1", "r1", 3)]
 
 
 # ---------------------------------------------------------------- the run store

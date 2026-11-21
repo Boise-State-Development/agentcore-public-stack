@@ -201,10 +201,16 @@ describe('SessionList: a run\'s step conversations', () => {
     expect(text(line(fixture.nativeElement))).toBe('1 Agent');
   });
 
-  /** Run `r`'s `count` step conversations under source `src{r}`, each settled (done) unless `running` names it. */
-  function runOf(r: number, count: number, running: number[] = []): SessionMetadata[] {
+  /**
+   * Run `r`'s `count` started step conversations under source `src{r}`, each settled (done) unless
+   * `running` names it, of a run that kept `kept` steps (all of them started, by default).
+   */
+  function runOf(r: number, count: number, running: number[] = [], kept = count): SessionMetadata[] {
     const steps = Array.from({ length: count }, (_, i) => session(`r${r}t${i + 1}`, {
-      spawnedFrom: { sessionId: `src${r}`, handoffId: `r${r}h${i + 1}`, runId: `run${r}`, ...(running.includes(i) ? {} : { settled: true }) },
+      spawnedFrom: {
+        sessionId: `src${r}`, handoffId: `r${r}h${i + 1}`, runId: `run${r}`, runSteps: kept,
+        ...(running.includes(i) ? {} : { settled: true }),
+      },
     }));
     return [session(`src${r}`), ...steps];
   }
@@ -253,8 +259,29 @@ describe('SessionList: a run\'s step conversations', () => {
     expect(lines(fixture.nativeElement)[1]).toBe('3 Agents · 3 of 3 finished');
   });
 
+  it('reads a run between stages on load: every started step done, a later one still to start', async () => {
+    // Stage 1's three steps are done; the summarizer that reads them is queued, with no conversation yet.
+    sessions.set({ sessions: [...runOf(1, 3, [], 4)], nextToken: null });
+    const fixture = render();
+    const reads = anyRunReads();
+    expect(reads.map((r) => r.request.url.replace(/.*\/sessions\//, ''))).toEqual(['src1/workflow-runs/run1']);
+    expect(lines(fixture.nativeElement)).toEqual(['3 Agents']);
+    reads[0].flush({ ...run(['done', 'done', 'done', 'open']), runId: 'run1', sessionId: 'src1' });
+    await new Promise((resolve) => setTimeout(resolve));
+    fixture.detectChanges();
+    expect(lines(fixture.nativeElement)).toEqual(['4 Agents · 3 of 4 finished']);
+  });
+
+  it('reads a run whose rows carry no kept count, as before', () => {
+    const rows = runOf(1, 2).map((s) => (s.spawnedFrom ? { ...s, spawnedFrom: { ...s.spawnedFrom, runSteps: undefined } } : s));
+    sessions.set({ sessions: rows, nextToken: null });
+    const fixture = render();
+    expect(anyRunReads().length).toBe(1);
+    expect(lines(fixture.nativeElement)).toEqual(['2 Agents']);
+  });
+
   it('reads a finished run once, when its line is opened, for the step order', async () => {
-    sessions.set({ sessions: [session('src'), step(1, { spawnedFrom: { sessionId: 'src', handoffId: 'h2', runId: 'run1', settled: true } }), step(0, { spawnedFrom: { sessionId: 'src', handoffId: 'h1', runId: 'run1', settled: true } })], nextToken: null });
+    sessions.set({ sessions: [session('src'), step(1, { spawnedFrom: { sessionId: 'src', handoffId: 'h2', runId: 'run1', runSteps: 2, settled: true } }), step(0, { spawnedFrom: { sessionId: 'src', handoffId: 'h1', runId: 'run1', runSteps: 2, settled: true } })], nextToken: null });
     const fixture = render();
     expect(runReads()).toEqual([]);
     const button = line(fixture.nativeElement)!;

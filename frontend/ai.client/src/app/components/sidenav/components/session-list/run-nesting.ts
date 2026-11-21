@@ -10,12 +10,16 @@ export interface SessionRunGroup {
 }
 
 /**
- * Every listed step of the run is done, as the list itself says (`spawnedFrom.settled`, set once a
- * step's handoff is done, which is final). Such a run is not read for its line; a step still
- * going, stopped, or known only from this tab's live rows makes it unsettled.
+ * Every step of the run started and is done, as the list itself says: each listed step is
+ * `settled` (set once its handoff is done, which is final) and the list holds as many steps as
+ * the run kept (`runSteps`, fixed at approve). Such a run is not read for its line. A step still
+ * going, stopped, not started yet (a later stage), off the loaded page or in another bucket, known
+ * only from this tab's live rows, or a row without `runSteps` makes it unsettled, so a doubt
+ * always reads the run rather than claiming it finished.
  */
 export function isRunSettled(group: SessionRunGroup): boolean {
-  return group.steps.length > 0 && group.steps.every((step) => step.spawnedFrom?.settled === true);
+  const count = group.steps.length;
+  return count > 0 && group.steps.every((step) => step.spawnedFrom?.settled === true && step.spawnedFrom.runSteps === count);
 }
 
 export interface NestedBucket {

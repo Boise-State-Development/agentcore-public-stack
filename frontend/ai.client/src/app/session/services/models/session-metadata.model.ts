@@ -54,9 +54,10 @@ export interface SessionMetadata {
   /** Set on a fork: where it was cut from its parent. */
   forkedFrom?: { sessionId: string; messageIndex: number; cut: number };
   /** Set on a handoff's target: the source it came from. `runId` is set on a workflow run's
-   *  step, which the sidebar nests under its source (workflow-runs spec §20.4). `settled` is
-   *  true once the handoff is done, so the sidebar counts a finished run without reading it. */
-  spawnedFrom?: { sessionId: string; handoffId?: string; runId?: string; settled?: boolean };
+   *  step, which the sidebar nests under its source (workflow-runs spec §20.4). `runSteps` is the
+   *  run's kept step count, started or not, and `settled` is true once the handoff is done: with
+   *  both, the sidebar counts a finished run without reading it. */
+  spawnedFrom?: { sessionId: string; handoffId?: string; runId?: string; runSteps?: number; settled?: boolean };
   /** Running USD cost across all turns in this session. Denormalized on the
    *  session row by the backend's _bump_session_aggregates; legacy sessions
    *  are lazily backfilled on first read. */

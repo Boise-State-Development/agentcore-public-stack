@@ -6,6 +6,7 @@ This module contains all session-related data models including:
 - Session preferences and configuration
 """
 
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
@@ -751,13 +752,19 @@ class SessionSpawnedFromLink(BaseModel):
     Read from ``spawnedFrom`` on the row the list already loaded (handoffs spec §4.2), so it costs
     no read. ``runId`` is set on a workflow run's step (workflow-runs spec §19 PR-W.4c), which the
     sidebar nests under its source. ``settled`` is set once the handoff is done (a ``done`` row is
-    frozen), so the sidebar can count a run whose listed steps all settled without reading the run.
+    frozen) and ``runSteps`` is the run's kept step count, so the sidebar can count a run whose
+    steps all started and all settled without reading the run.
     """
 
     model_config = ConfigDict(populate_by_name=True)
     session_id: str = Field(..., alias="sessionId", description="The source conversation")
     handoff_id: Optional[str] = Field(None, alias="handoffId", description="The source's HANDOFF# row")
     run_id: Optional[str] = Field(None, alias="runId", description="Set on a workflow run's step")
+    run_steps: Optional[int] = Field(
+        None,
+        alias="runSteps",
+        description="On a run's step: how many steps the run kept at approve, started or not",
+    )
     settled: Optional[bool] = Field(
         None,
         description="True once this conversation's handoff is done; absent until then",
@@ -856,7 +863,7 @@ class SessionMetadataResponse(BaseModel):
     spawned_from: Optional[SessionSpawnedFromLink] = Field(
         default=None,
         alias="spawnedFrom",
-        description="Set on a handoff's target conversation: {sessionId, handoffId, runId?, settled?}, from the row already loaded. A workflow run's step carries runId, and the sidebar nests it under its source (workflow-runs spec §20.4); settled is true once the handoff is done, so the sidebar reads no finished run",
+        description="Set on a handoff's target conversation: {sessionId, handoffId, runId?, runSteps?, settled?}, from the row already loaded. A workflow run's step carries runId, and the sidebar nests it under its source (workflow-runs spec §20.4); settled is true once the handoff is done, so the sidebar reads no finished run",
     )
 
     @field_validator("spawned_from", mode="before")
@@ -866,6 +873,10 @@ class SessionMetadataResponse(BaseModel):
         if not isinstance(value, dict) or not isinstance(value.get("sessionId"), str):
             return None
         link = {key: value[key] for key in ("sessionId", "handoffId", "runId") if isinstance(value.get(key), str)}
+        steps = value.get("runSteps")
+        # A stored number comes back as Decimal, or float once the row's numbers are converted.
+        if isinstance(steps, (int, float, Decimal)) and not isinstance(steps, bool) and steps > 0 and steps == int(steps):
+            link["runSteps"] = int(steps)
         if value.get("settled") is True:
             link["settled"] = True
         return link

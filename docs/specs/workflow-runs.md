@@ -991,15 +991,17 @@ The look of `DeliveryCardsComponent`: the same container and footer, with one ro
     unread dot's dark shade (`primary-400`) measured 2.59:1 on the sidebar. The mark carries the row's own
     screen-reader text, so the line's name reads "4 Agents · 2 of 4 finished (needs your input)".
   - **Before the run is read** the line reads "*n* Agents" for the steps it lists; "1 Agent" in the singular.
-  - **A finished run is not read for its line.** The list carries `spawnedFrom.settled` on a step conversation
-    once its handoff is done (the flag the Runtime already wrote to stop following the step's turns; a `done`
-    row is frozen). A run whose listed steps are all settled reads "*n* Agents · *n* of *n* finished" from the
-    list, and `GET …/workflow-runs/{runId}` runs only when its line is opened (for the step order), once. A run
-    with a step still going, stopped, or known only from this tab's live rows is read as before. So a page load
-    reads only the runs still going, however long the user's run history. The
-    list's count is the started steps, so a finished run with steps that never started (stopped before they
-    were queued in, or left "Not started") reads "2 of 2" in the sidebar against the thread's "2 of 4" until
-    its line is opened.
+  - **A finished run is not read for its line.** A step conversation's `spawnedFrom` on the list carries
+    `runSteps`, the run's kept step count (set on each kept step's `HANDOFF#` row at approve, which fixes it,
+    and copied at acceptance in the same background write that sets `spawnedFrom`, from the row acceptance
+    already returned), and `settled` once its handoff is done (the flag the Runtime already wrote to stop
+    following the step's turns; a `done` row is frozen). A run whose listed steps are all settled **and** number
+    `runSteps` reads "*n* Agents · *n* of *n* finished" from the list, and `GET …/workflow-runs/{runId}` runs
+    only when its line is opened (for the step order), once. Anything less is read as before: a step still
+    going or stopped, a step not started yet (a later stage waiting on the ones it reads, or "Not started"), a
+    step off the loaded page or in another bucket, a step known only from this tab's live rows, or a row from
+    before `runSteps` existed. So a doubt always costs a read, never a false "finished", and a page load reads
+    only the runs still going, however long the user's run history.
   - The steps' list is `ml-3.5 border-l`, the project group's indent. The line takes `aria-controls` only while
     open, so it never names an element that isn't there.
   - **Contrast, measured** in the running SPA against the composited sidebar: the line's text and chevron

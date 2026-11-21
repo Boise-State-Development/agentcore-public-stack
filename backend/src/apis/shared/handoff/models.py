@@ -179,6 +179,15 @@ class Handoff(BaseModel):
         alias="runApprovedAt",
         description="When the step's run was approved; an approved step not yet started never reads as abandoned",
     )
+    run_steps: Optional[int] = Field(
+        None,
+        alias="runSteps",
+        description=(
+            "How many steps the run kept at approve, fixed from then on. Copied into the step "
+            "conversation's spawnedFrom at acceptance, so the sidebar can tell a finished run "
+            "from one with a step still to start (workflow-runs spec §20.4)"
+        ),
+    )
 
     def effective_status(self, now: Optional[datetime] = None) -> EffectiveHandoffStatus:
         """The status as read: an ``open`` row past ``ABANDON_AFTER`` is ``abandoned``.

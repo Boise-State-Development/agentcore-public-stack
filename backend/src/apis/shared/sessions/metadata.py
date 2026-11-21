@@ -2639,6 +2639,7 @@ def set_session_spawned_from(
     source_session_id: str,
     handoff_id: str,
     run_id: Optional[str] = None,
+    run_steps: Optional[int] = None,
 ) -> bool:
     """Record on a handoff's target conversation where it came from (handoffs spec §4.2).
 
@@ -2649,16 +2650,20 @@ def set_session_spawned_from(
     run it in a worker thread, after the first token. Returns False when the row is missing.
 
     A workflow run's step also gets ``runId`` (workflow-runs spec §19 PR-W.4c), in this same
-    write, so the session list can nest the step under its source with no read of its own.
+    write, so the session list can nest the step under its source with no read of its own, and
+    ``runSteps``, the run's kept step count, so the sidebar can tell a finished run from one with a
+    step still to start (§20.4).
     """
     from botocore.exceptions import ClientError
 
     table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
     if not table_name:
         return False
-    spawned: Dict[str, str] = {"sessionId": source_session_id, "handoffId": handoff_id}
+    spawned: Dict[str, Any] = {"sessionId": source_session_id, "handoffId": handoff_id}
     if run_id:
         spawned["runId"] = run_id
+        if run_steps and run_steps > 0:
+            spawned["runSteps"] = run_steps
     try:
         get_dynamodb_table(table_name).update_item(
             Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
