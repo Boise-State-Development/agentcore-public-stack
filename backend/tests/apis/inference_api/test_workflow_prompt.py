@@ -813,3 +813,19 @@ def test_the_run_request_follows_the_steps_own_reads_input():
     assert wp.run_request_for(run, _step(1, reads=["lens-0"])) == ""
     assert wp.run_request_for(run, _step(1, reads=["request", "lens-0"])) == "Focus on the budget"
     assert wp.run_request_for(run, _step(1, reads=[])) == ""
+
+
+@pytest.mark.asyncio
+async def test_too_large_stops_only_the_steps_that_send_the_files():
+    """A step that reads only earlier steps sends none of the documents, so it still runs."""
+    steps = StepStore({"h1": "open", "h2": "open"})
+    model = Model()
+    run = _run([_step(1, reads=["files"]), _step(2, reads=["request", "lens-1"])])
+
+    frames = await _drain(_work(run, steps, model, plan=_plan(document_budget=1_000)))
+
+    assert steps.rows["h1"]["stoppedReason"] == "too_large"
+    assert steps.rows["h2"]["status"] == "done"
+    assert len(model.calls) == 1
+    assert all("document" not in block for block in model.calls[0][0]["content"])
+    assert _statuses(frames) == {"s1": "stopped", "s2": "done"}

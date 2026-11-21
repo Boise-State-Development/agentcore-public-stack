@@ -543,14 +543,52 @@ def estimate_cancelled_usage(
     return usage, estimate
 
 
-def _fingerprint(messages: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def prefix_key(model_id: str, prefix: Sequence[Dict[str, Any]]) -> str:
+    """What a prompt step's cached prefix is made of: the model, the system prompt and the documents.
+
+    Every prompt-step call has the same ``toolConfigHash`` (no tools) and ``systemPromptHash`` (one
+    constant), so those two alone would make any earlier prompt-step row a step's predecessor: a
+    Sonnet group's warm write would read as a missed read of the Haiku group's entry, and a run
+    over a new document as a missed read of the last run's. Neither entry was there to read: each
+    model has its own cache, and a different document is a different prefix. This key is the
+    prefix the cache is keyed on, so only a row that wrote the same one can be a predecessor.
+
+    A document's bytes are hashed directly, never rendered into the key's JSON.
+    """
+    import hashlib
+
+    from apis.shared.observability.prompt_cache import fingerprint_canonical_json
+
+    parts: List[Dict[str, str]] = []
+    for block in prefix:
+        document = block.get("document") if isinstance(block, dict) else None
+        if isinstance(document, dict):
+            raw = (document.get("source") or {}).get("bytes") or b""
+            parts.append({"document": str(document.get("name") or ""), "sha256": hashlib.sha256(raw).hexdigest()})
+        else:
+            text = str(block.get("text") or "") if isinstance(block, dict) else ""
+            parts.append({"text": hashlib.sha256(text.encode("utf-8")).hexdigest()})
+    return fingerprint_canonical_json({"modelId": model_id, "system": SYSTEM_PROMPT, "prefix": parts})
+
+
+def _fingerprint(messages: List[Dict[str, Any]], key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """This call's prefix hashes, marked stateless (``extendsMessagesHashes``) with ``key``.
+
+    The stateless match is the one api-converse uses: a predecessor counts only if its
+    ``messagesHash`` is in this call's ``extendsMessagesHashes`` (``_derive_cache_observability``).
+    Here both are the call's ``prefix_key``, so a step's predecessor is a call that wrote its prefix.
+    """
     try:
         from agents.main_agent.session.hooks.prefix_fingerprint import compute_prefix_fingerprint
 
-        return compute_prefix_fingerprint([], [{"text": SYSTEM_PROMPT}], messages)
+        fingerprint = compute_prefix_fingerprint([], [{"text": SYSTEM_PROMPT}], messages)
     except Exception:  # noqa: BLE001 - a row without fingerprints falls back to the previous call
         logger.debug("workflow prompt: fingerprint failed", exc_info=True)
         return None
+    if key:
+        fingerprint["messagesHash"] = key
+        fingerprint["extendsMessagesHashes"] = [key]
+    return fingerprint
 
 
 # --- The run --------------------------------------------------------------------------------------
@@ -816,9 +854,13 @@ class PromptStepRun:
                 if not plans:
                     return
             if any(plan.reads_files for plan in plans) and too_large(documents, model_plan):
-                for plan in plans:
+                # Only the steps that send the documents are over the budget; a step that reads
+                # only earlier steps sends none of them, so it still runs.
+                for plan in [p for p in plans if p.reads_files]:
                     await self._stop(plan, "too_large")
-                return
+                plans = [p for p in plans if not p.reads_files]
+                if not plans:
+                    return
             await self._run_group(run, model_plan, documents, prefix, plans, limit=limit)
 
         outcomes = await asyncio.gather(
@@ -851,7 +893,12 @@ class PromptStepRun:
         """
         model = self._build_model(model_plan.model_id)
         doc_tokens = document_tokens(documents, model_plan.model_id)
-        warm: Dict[str, Optional[int]] = {"prefix": None}
+        # The group's two prefixes: with the documents, for a step that reads files, and without.
+        warm: Dict[str, Any] = {
+            "prefix": None,
+            "key": prefix_key(model_plan.model_id, prefix),
+            "bare_key": prefix_key(model_plan.model_id, []),
+        }
 
         # The warm call is a step that sends the documents, so the rest read them; a step that
         # reads no files has no shared prefix and only joins the fan-out.
@@ -879,7 +926,7 @@ class PromptStepRun:
         prefix: List[Dict[str, Any]],
         doc_tokens: int,
         plan: StepPlan,
-        warm: Dict[str, Optional[int]],
+        warm: Dict[str, Any],
     ) -> None:
         async with self._slots:
             await self._call_step(model, model_plan, prefix, doc_tokens, plan, warm)
@@ -891,7 +938,7 @@ class PromptStepRun:
         prefix: List[Dict[str, Any]],
         doc_tokens: int,
         plan: StepPlan,
-        warm: Dict[str, Optional[int]],
+        warm: Dict[str, Any],
     ) -> None:
         if self._stopped:
             await self._stop(plan, "user_stopped")
@@ -959,7 +1006,7 @@ class PromptStepRun:
                 metrics=result.metrics,
                 started=started,
                 ended=ended,
-                fingerprint=_fingerprint(messages),
+                fingerprint=_fingerprint(messages, warm.get("key" if plan.reads_files else "bare_key")),
                 attributes={"runId": self.run_id, "stepId": plan.step_id},
                 usage_estimate=estimate,
             )
