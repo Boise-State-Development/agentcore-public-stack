@@ -16,6 +16,7 @@ import { HandoffRelayService } from '../../services/handoff/handoff-relay.servic
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
 import { HandoffStatus, HandoffView } from '../../services/handoff/handoff.models';
 import { WorkflowRunQueueService } from '../../services/handoff/workflow-run-queue.service';
+import { WorkflowRunMergeService } from '../../services/handoff/workflow-run-merge.service';
 import { WorkflowRunResultService } from '../../services/handoff/workflow-run-result.service';
 import { WorkflowRunView } from '../../services/handoff/workflow-run.models';
 import { WorkflowRunService } from '../../services/handoff/workflow-run.service';
@@ -78,7 +79,9 @@ describe('WorkflowRunRowComponent', () => {
   const loading = new Set<string>();
   const onComposer = signal(false);
   const runs = { resume: vi.fn(), stop: vi.fn() };
-  const results = { collect: vi.fn(), isCollecting: () => false, isOnComposer: () => onComposer() };
+  const results = { collect: vi.fn(), isCollecting: () => false, isOnComposer: () => onComposer(), resultCardOf: () => 'd1' };
+  const mergeHold = signal<string | null>('not_on_screen');
+  const merge = { holdFor: vi.fn(() => mergeHold()), startNow: vi.fn() };
   const features = { workflows: false };
   let sessionTitle = 'Proposal review';
   const workflows = { create: vi.fn(), messageFor: (_err: unknown, fallback: string) => fallback };
@@ -90,6 +93,8 @@ describe('WorkflowRunRowComponent', () => {
     runs.resume.mockClear();
     runs.stop.mockClear();
     results.collect.mockClear();
+    merge.startNow.mockClear();
+    mergeHold.set('not_on_screen');
     workflows.create.mockReset();
     features.workflows = false;
     sessionTitle = 'Proposal review';
@@ -112,6 +117,7 @@ describe('WorkflowRunRowComponent', () => {
         { provide: WorkflowRunQueueService, useValue: { isPending: (_run: string, id: string) => pending.has(id) } },
         { provide: WorkflowRunService, useValue: runs },
         { provide: WorkflowRunResultService, useValue: results },
+        { provide: WorkflowRunMergeService, useValue: merge },
         {
           provide: HandoffRelayService,
           useValue: {
@@ -259,7 +265,7 @@ describe('WorkflowRunRowComponent', () => {
       const { el } = render(run([stepRow(0, 'done'), stepRow(1, 'stopped')]));
       const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
 
-      expect(buttons(el)).toEqual(['Bring back results', 'Save as workflow']);
+      expect(buttons(el)).toEqual(['Bring back results', 'View as graph', 'Save as workflow']);
       [...el.querySelectorAll('button')].find((b) => text(b) === 'Save as workflow')!.click();
       await new Promise((resolve) => setTimeout(resolve));
 
@@ -312,6 +318,58 @@ describe('WorkflowRunRowComponent', () => {
       await new Promise((resolve) => setTimeout(resolve));
       detect();
       expect(text(el.querySelector('[role="alert"]'))).toBe('It couldn’t be saved as a workflow.');
+    });
+  });
+
+  describe('a saved workflow’s graph and merge (PR-D.5b)', () => {
+    const merging = { skillId: 'sk', name: 'review', title: 'Review', fingerprint: 'f', resultMode: 'merge' as const, resultInstruction: 'Write one review.' };
+
+    it('View as graph opens the run on the graph, in run mode, as a disclosure', () => {
+      features.workflows = true;
+      const { el, detect } = render(run([stepRow(0, 'done'), stepRow(1, 'running')]));
+      const toggle = [...el.querySelectorAll('button')].find((b) => text(b) === 'View as graph')!;
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(el.querySelector('app-workflow-graph')).toBeNull();
+
+      toggle.click();
+      detect();
+      const graph = el.querySelector('app-workflow-graph')!;
+      expect(graph).not.toBeNull();
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      expect(toggle.getAttribute('aria-controls')).toBe(graph.id);
+      expect(text(graph.querySelector('[data-node-id="s1"]'))).toContain('Generalist');
+      expect(graph.querySelector('[data-node-id="s1"]')?.getAttribute('data-state')).toBe('done');
+      expect(text(toggle)).toBe('Hide graph');
+    });
+
+    it('offers no graph while workflows are off, nor in the designer’s test run', () => {
+      expect(buttons(render(run([stepRow(0, 'done')])).el)).not.toContain('View as graph');
+      features.workflows = true;
+      expect(buttons(render(run([stepRow(0, 'done')]), { offerSaveAsWorkflow: false }).el)).not.toContain('View as graph');
+    });
+
+    it('shows the merge instruction, and none for a card result', () => {
+      expect(text(render(run([stepRow(0, 'running')], { workflow: merging })).el.querySelector('[data-testid="run-merge-instruction"]'))).toBe(
+        'Merge: Write one review.',
+      );
+      expect(render(run([stepRow(0, 'running')])).el.querySelector('[data-testid="run-merge-instruction"]')).toBeNull();
+    });
+
+    it('offers Merge now while the result waits and nothing holds it', () => {
+      onComposer.set(true);
+      mergeHold.set(null);
+      const { el } = render(run([stepRow(0, 'done'), stepRow(1, 'done')], { workflow: merging, resultDeliveryId: 'd1' }));
+      const button = [...el.querySelectorAll('button')].find((b) => text(b) === 'Merge now')!;
+      button.click();
+      expect(merge.startNow).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run1' }), 'd1');
+      expect(merge.holdFor).toHaveBeenCalledWith(expect.anything(), 'd1', { manual: true });
+    });
+
+    it('no Merge now off screen, or for a card result', () => {
+      onComposer.set(true);
+      expect(buttons(render(run([stepRow(0, 'done')], { workflow: merging })).el)).not.toContain('Merge now');
+      mergeHold.set(null);
+      expect(buttons(render(run([stepRow(0, 'done')])).el)).not.toContain('Merge now');
     });
   });
 });

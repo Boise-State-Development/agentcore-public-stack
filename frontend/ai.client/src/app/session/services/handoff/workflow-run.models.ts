@@ -60,7 +60,20 @@ export interface WorkflowRunView {
   /** The card as the user reviewed it, kept at approval (PR-W.4b); absent on runs approved before. */
   card?: WorkflowRunCard;
   /** The saved workflow it was started from (PR-D.2); absent for a run of mentions. */
-  workflow?: WorkflowRunSource;
+  workflow?: WorkflowRunSourceView;
+}
+
+/**
+ * The saved workflow on a run's row, with what D.5a and D.5b added: written only when set, so a
+ * run of a card workflow from before reads as it did.
+ */
+export interface WorkflowRunSourceView extends WorkflowRunSource {
+  /** The steps the Result takes, by `stepName` (PR-D.5a); absent means every kept step. */
+  resultReads?: string[];
+  /** `merge` when the Result merges (PR-D.5b); absent means one card. */
+  resultMode?: 'card' | 'merge';
+  /** What the one merge turn asks the source conversation's model (PR-D.5b), with `resultMode: 'merge'`. */
+  resultInstruction?: string;
 }
 
 /**

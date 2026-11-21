@@ -9,6 +9,7 @@ import { DeliveryStateService } from './delivery-state.service';
 import { DeliveryView } from './handoff.models';
 import { HandoffNotificationService } from './handoff-notification.service';
 import { HandoffStateService } from './handoff-state.service';
+import { WorkflowRunMergeService, mergeInstructionOf } from './workflow-run-merge.service';
 import { WorkflowRunQueueService } from './workflow-run-queue.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
 import { WorkflowRunView } from './workflow-run.models';
@@ -40,6 +41,10 @@ interface WatchedRun {
  *   stopped. Then, unless the user pressed Stop run, it says "*N* Agents finished · Open" (Open
  *   scrolls to the run's row) and collects. A run nobody watched here (a reload) collects only on
  *   the row's Bring back results.
+ * - **The merge (PR-D.5b).** When the watch's collect made the card (`created: true`, the run's
+ *   one `claim_result`) and the saved workflow's Result merges, `WorkflowRunMergeService` sends
+ *   the one merge turn if the source is on screen, idle and its composer empty, checked then.
+ *   Otherwise the card waits, as in step 1, and the row offers Merge now.
  */
 @Injectable({ providedIn: 'root' })
 export class WorkflowRunResultService {
@@ -52,6 +57,7 @@ export class WorkflowRunResultService {
   private readonly deliveryState = inject(DeliveryStateService);
   private readonly notifications = inject(HandoffNotificationService);
   private readonly toast = inject(ToastService);
+  private readonly merge = inject(WorkflowRunMergeService);
 
   private readonly watched = signal<ReadonlyMap<string, WatchedRun>>(new Map());
   private readonly collecting = signal<ReadonlySet<string>>(new Set());
@@ -91,9 +97,14 @@ export class WorkflowRunResultService {
     return this.collecting().has(runId);
   }
 
+  /** The run's result card: the one this tab collected, else the run row's. */
+  resultCardOf(run: Pick<WorkflowRunView, 'runId' | 'resultDeliveryId'>): string | undefined {
+    return this.collected().get(run.runId) ?? run.resultDeliveryId;
+  }
+
   /** The run's result card is waiting on its source's composer. */
   isOnComposer(run: Pick<WorkflowRunView, 'runId' | 'sessionId' | 'resultDeliveryId'>): boolean {
-    const deliveryId = this.collected().get(run.runId) ?? run.resultDeliveryId;
+    const deliveryId = this.resultCardOf(run);
     if (!deliveryId) return false;
     return this.deliveryState.cardsFor(run.sessionId).some((card) => card.deliveryId === deliveryId);
   }
@@ -102,7 +113,10 @@ export class WorkflowRunResultService {
    * Bring the run's results back as one card on the source's composer. `quiet` is the watch's own
    * collect, which says nothing when it fails: the row still offers Bring back results.
    */
-  async collect(run: Pick<WorkflowRunView, 'runId' | 'sessionId'>, options: { quiet?: boolean } = {}): Promise<void> {
+  async collect(
+    run: Pick<WorkflowRunView, 'runId' | 'sessionId'>,
+    options: { quiet?: boolean; merge?: boolean } = {},
+  ): Promise<void> {
     if (this.isCollecting(run.runId)) return;
     this.collecting.update((set) => new Set(set).add(run.runId));
     try {
@@ -116,6 +130,8 @@ export class WorkflowRunResultService {
       if (result.status === 'pending' && result.delivery) {
         this.deliveryState.add(run.sessionId, result.delivery);
         this.collected.update((map) => new Map(map).set(run.runId, result.deliveryId));
+        // Only the collect that made the card may merge by itself: that is the run's one claim.
+        if (options.merge && result.created && this.mergeIfReady(run, result.deliveryId)) return;
         if (!options.quiet) this.toast.success('Results added to your next message');
         return;
       }
@@ -143,7 +159,14 @@ export class WorkflowRunResultService {
         ? { label: 'Open', handler: () => this.notifications.openSource({ handoffId: first.handoffId, sourceSessionId: run.sessionId }) }
         : undefined,
     });
-    if (!run.resultDeliveryId) void this.collect(run, { quiet: true });
+    if (!run.resultDeliveryId) void this.collect(run, { quiet: true, merge: true });
+  }
+
+  /** The merge turn, when the run's Result merges and nothing is in the way now (PR-D.5b). */
+  private mergeIfReady(run: Pick<WorkflowRunView, 'runId' | 'sessionId'>, deliveryId: string): boolean {
+    const current = this.runs.runsFor(run.sessionId).find((r) => r.runId === run.runId);
+    if (!current || mergeInstructionOf(current) === null) return false;
+    return this.merge.startIfReady(current, deliveryId);
   }
 
   /** Keep the run's `resultDeliveryId` in step with the server, so the row knows a result exists. */

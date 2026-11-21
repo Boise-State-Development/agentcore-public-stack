@@ -243,4 +243,44 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
       expect(el().textContent).toContain('Generalist can’t be removed: every other step reads it.');
     });
   });
+
+  describe('the small graph and the merge (PR-D.5b)', () => {
+    function merging(): RunReview {
+      const r = review();
+      const doc = {
+        ...r.workflow!.document,
+        workflow: { ...r.workflow!.document.workflow, result: { mode: 'merge', steps: ['generalist', 'colleague'], instruction: 'Write one review.' } },
+        sheet: { startable: true, blockers: [], mergeInstruction: 'Write one review.' },
+      };
+      return { ...r, workflow: { ...r.workflow!, document: doc } };
+    }
+
+    it('says before Start that the merge starts by itself, and when it waits', async () => {
+      await render(merging());
+      const notice = el().querySelector('[data-testid="run-merge-notice"]');
+      expect(notice?.textContent?.replace(/\s+/g, ' ')).toContain('Then this conversation merges the results: Write one review.');
+      expect(notice?.textContent?.replace(/\s+/g, ' ')).toContain(
+        'The merge starts by itself when every Agent finishes, if this conversation is open and nothing is typed in its composer. Otherwise the results wait on your composer.',
+      );
+    });
+
+    it('a card result says nothing about a merge', async () => {
+      await render(review());
+      expect(el().querySelector('[data-testid="run-merge-notice"]')).toBeNull();
+    });
+
+    it('Show as a graph draws the steps it would start, as a disclosure', async () => {
+      await render(merging());
+      const toggle = buttons().find((b) => b.textContent?.includes('Show as a graph'))!;
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      toggle.click();
+      fixture.detectChanges();
+
+      const graph = el().querySelector('app-workflow-graph')!;
+      expect(graph).not.toBeNull();
+      expect(toggle.getAttribute('aria-controls')).toBe(graph.id);
+      expect(graph.querySelector('[data-node-id="s1"]')?.textContent).toContain('Starts first');
+      expect(graph.querySelector('[data-node-id="result"]')?.textContent).toContain('Merged in this conversation');
+    });
+  });
 });

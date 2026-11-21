@@ -931,6 +931,55 @@ starts by itself). Where it differs from the plan, and what it settled:
   the app's `primary-500` would be 1.67:1. At 375 px the columns stack, the new-stage box with them, and nothing
   scrolls sideways.
 
+*Built (PR-D.5b-2).* The run-side half of D.5b: the run graphs and the merge that starts by itself. The designer
+half (Reads, stage columns, the Result card) is D.5b-1. Where it differs from the plan, and what it settled:
+
+- **`result: merge` starts.** The `merge_result` blocker is gone from the sheet, so from run create too. The run
+  row's `workflow` gains `resultMode: "merge"` and `resultInstruction` beside `resultReads`, written only for a
+  merged result, so a card run's row reads exactly as before. A merge with no instruction of its own keeps
+  `DEFAULT_MERGE_INSTRUCTION` ("Combine these results into one answer."), resolved on the server once
+  (`merge_instruction` in `apis/shared/workflows/sheet.py`). The document's `sheet` carries the same text as
+  `mergeInstruction`, so the sheet and the row never word it differently.
+- **One turn, through the existing paths.** The merge is an ordinary send in the source conversation: its text is
+  the instruction, and the run's one result card rides it through `deliveries`, attached by default as any card is.
+  The source conversation's model writes it (§17, question 6 stays open). No route, request field, SSE event,
+  `toolConfig` or system-prompt change. Nothing new runs on the turn path: the checks below are synchronous reads
+  in the tab before the send, and the turn appends one user message to the source's history.
+- **Exactly once is the run's existing claim.** Only the collect that made the card (`created: true`, which is the
+  server's `claim_result`) may merge, and only the watch's own collect in the tab that started or resumed the run
+  asks. A second tab, a reload and the row's Bring back results get `created: false` and never merge. Nothing else
+  records that a merge happened.
+- **Checked at the moment of sending, not when the run settled** (`WorkflowRunMergeService.holdFor`): the source
+  is the conversation on screen, it is not streaming, no run sheet is open on it, its composer is empty, and the
+  run's card is on the composer and is the only card there. Otherwise the card waits, as in step 1, and the row
+  offers **Merge now**, which keeps a typed draft where it is.
+- **Why "on screen", which narrows §20.1.** A send is built from the page's selections, and the session page
+  restores a conversation's last model when it is opened. A merge sent from another page would run on that
+  page's model and binding; a model switch re-writes the source's whole cached prefix. So the page registers its
+  send for its own conversation (`register`), and a merge only starts there. Away from the source, the results
+  wait on its composer. The sheet says so before Start: "The merge starts by itself when every Agent finishes,
+  if this conversation is open and nothing is typed in its composer. Otherwise the results wait on your
+  composer." The designer's test run, whose conversation is never on screen, always waits.
+- **The composer-empty signal** is `ComposerEmptyService` (`session/services/session/`): one boolean per draft
+  key, written by the composer every time it mirrors its draft (`syncDraft`, the send's `persistDraftNow`, its
+  destroy), and seeded on first read from the draft's `localStorage` row (`isEmptyDraft`), so a draft left before
+  a reload counts.
+- **The run row** shows "Merge: *instruction*" under its heading. **View as graph** (a disclosure, closed by
+  default, behind `features.workflows`) draws the run on `WorkflowGraphComponent` in run mode, as it is: stages
+  from each step's `reads`, edges to the Result from `resultReads`, each card's phrase the row line's own, its
+  elapsed time once done, finished connectors in the brand colour. It is not offered where the host turns Save as
+  workflow off (the designer's test run, whose canvas already draws the run). The Result card reads "Merged in
+  this conversation" or "One card". The builders are pure (`workflow-run-graph.ts`).
+- **The sheet's small graph** is **Show as a graph**, a disclosure on a saved workflow's sheet: the kept steps
+  (a removed step and its readers drop out), each saying "Starts first" or "After *A* and *B*" with its model.
+- **Two graphs on one page** (two rows' View as graph, or a row and the sheet) rely on D.5b-1's per-instance
+  ids. Each passes its own `label`: "Graph of this run" on the row, "Graph of the steps to start" on the sheet.
+- **Measured** (the built stylesheet in the in-app browser, both themes, against the composited surface): the
+  instruction 7.56:1 light / 6.82:1 dark, its label 10.3:1 / 12.05:1; View as graph 10.3:1 / 12.05:1; Merge now and
+  Show as a graph 10.6:1 / 4.53:1; the sheet's notice 14.04:1 / 12.59:1 and its meta line 7.23:1 / 5.99:1. Every
+  new focus ring has its dark pair: `primary-500` 10.6:1 on white, `primary-accessible-dark` 4.53:1 on
+  `gray-900` (`primary-500` would be 1.67:1).
+
 **Order.** D.1 first. Then D.2 and D.3 at once (D.2 touches the sheet, the composer and the run service; D.3 is
 new pages and the graph, so their files do not overlap). D.4 after both. D.5a after D.2 and can run beside D.4.
 D.5b last. At most three writing sessions at a time.

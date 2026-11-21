@@ -24,6 +24,9 @@ import { RunReviewStep, RunShareableFile } from '../../services/handoff/workflow
 import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
 import { WorkflowRunService, agentsLabel, canStart, keptSteps, readersOf, removalOf, stepRequest } from '../../services/handoff/workflow-run.service';
 import { ModelService } from '../../services/model/model.service';
+import { WorkflowGraphComponent } from '../../../workflows/components/workflow-graph.component';
+import { MAX_WORKFLOW_STEPS } from '../../../workflows/workflow.models';
+import { reviewGraph } from '../../services/handoff/workflow-run-graph';
 
 /** One step as the sheet renders it. */
 interface StepRow {
@@ -57,7 +60,7 @@ interface StepRow {
 @Component({
   selector: 'app-workflow-run-sheet',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon, SpinnerComponent, AgentIconComponent],
+  imports: [FormsModule, NgIcon, SpinnerComponent, AgentIconComponent, WorkflowGraphComponent],
   providers: [provideIcons({ heroArrowRight, heroChevronRight, heroMinusCircle, heroPaperClip, heroXMark })],
   host: { '(keydown.escape)': 'cancel()' },
   template: `
@@ -193,6 +196,34 @@ interface StepRow {
               }
             </ul>
             <p class="text-sm/6 text-gray-700 empty:hidden dark:text-gray-300" [class.mt-2]="!!removalNote()" role="status">{{ removalNote() }}</p>
+
+            @if (r.workflow) {
+              <button
+                type="button"
+                class="mt-2 flex items-center gap-1.5 text-sm/6 font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:focus-visible:outline-primary-accessible-dark"
+                [attr.aria-expanded]="graphOpen()"
+                [attr.aria-controls]="graphOpen() ? graphId : null"
+                (click)="graphOpen.set(!graphOpen())"
+              >
+                <ng-icon name="heroChevronRight" class="size-4 shrink-0 transition-transform motion-reduce:transition-none" [class.rotate-90]="graphOpen()" aria-hidden="true" />
+                {{ graphOpen() ? 'Hide the graph' : 'Show as a graph' }}
+              </button>
+              @if (graphOpen() && graph(); as g) {
+                <app-workflow-graph
+                  [id]="graphId"
+                  class="mt-2 overflow-hidden rounded-xl border border-gray-200 md:h-64 dark:border-gray-700"
+                  [stages]="g.stages"
+                  [edges]="g.edges"
+                  [start]="g.start"
+                  [result]="g.result"
+                  [stepCount]="g.stepCount"
+                  [maxSteps]="maxSteps"
+                  mode="run"
+                  [status]="g.status"
+                  [finished]="g.finished"
+                />
+              }
+            }
 
             @if (r.phase === 'blocked') {
               <p class="mt-3 text-sm/6 text-gray-700 dark:text-gray-300" role="status">
@@ -346,6 +377,17 @@ interface StepRow {
         @if (r.phase === 'ready' || r.phase === 'starting') {
           <p class="mt-2 text-xs/5 text-gray-600 dark:text-gray-400">{{ estimateLine() }}</p>
         }
+        @if (mergeInstruction(); as instruction) {
+          <div class="mt-3 rounded-lg bg-gray-50 px-3 py-2 dark:bg-white/5" data-testid="run-merge-notice">
+            <p class="text-sm/6 text-gray-800 dark:text-gray-200">
+              <span class="font-medium">Then this conversation merges the results:</span> {{ instruction }}
+            </p>
+            <p class="mt-0.5 text-xs/5 text-gray-600 dark:text-gray-400">
+              The merge starts by itself when every Agent finishes, if this conversation is open and
+              nothing is typed in its composer. Otherwise the results wait on your composer.
+            </p>
+          </div>
+        }
         @if (r.phase === 'ready' && r.error) {
           <p class="mt-2 text-sm/6 text-state-danger-700 dark:text-state-danger-300" role="alert">{{ r.error }}</p>
         }
@@ -390,6 +432,10 @@ export class WorkflowRunSheetComponent {
   protected readonly previewPickerId = `run-preview-picker-${this.uid}`;
   protected readonly filesHintId = `run-files-hint-${this.uid}`;
   protected readonly maxFiles = MAX_SHARED_FILES;
+  protected readonly maxSteps = MAX_WORKFLOW_STEPS;
+  protected readonly graphId = `run-sheet-graph-${this.uid}`;
+  /** The small graph (PR-D.5b), behind a disclosure so the sheet stays short. */
+  protected readonly graphOpen = signal(false);
 
   protected readonly cardOpen = signal(false);
   protected readonly editingCard = signal(false);
@@ -417,6 +463,17 @@ export class WorkflowRunSheetComponent {
 
   /** The saved workflow's `files` rule, or undefined for a run of mentions. */
   protected readonly fileRule = computed(() => this.review()?.workflow?.document.workflow.files);
+
+  /** A merging Result's instruction, as the server's sheet words it (PR-D.5b). */
+  protected readonly mergeInstruction = computed(() => this.review()?.workflow?.document.sheet.mergeInstruction?.trim() || null);
+
+  /** The steps it would start, on the designer's graph (PR-D.5b). */
+  protected readonly graph = computed(() => {
+    const r = this.review();
+    const rows = this.stepRows();
+    const names = new Map(rows.map((row) => [row.step.stepId, row.modelName]));
+    return r ? reviewGraph(r, (stepId) => names.get(stepId) ?? 'Your selected model') : null;
+  });
 
   /** Mark as reviewed is the workflow owner's: it rewrites the file (§10). */
   protected readonly isOwner = computed(() => !!this.review()?.workflow?.document.workflow.isOwned);
@@ -544,6 +601,7 @@ export class WorkflowRunSheetComponent {
         this.editingStep.set(null);
         this.previewStep.set(null);
         this.removalNote.set('');
+        this.graphOpen.set(false);
       }
     });
   }

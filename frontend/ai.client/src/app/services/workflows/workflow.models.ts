@@ -85,6 +85,8 @@ export interface WorkflowSheetBlocker {
 export interface WorkflowSheet {
   startable: boolean;
   blockers: WorkflowSheetBlocker[];
+  /** A merged Result only (PR-D.5b): what the one merge turn will ask, the file's instruction or the default. */
+  mergeInstruction?: string;
 }
 
 /** `GET`, `POST` and `PUT` on `/workflows` all answer with this. */
