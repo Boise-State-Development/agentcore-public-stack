@@ -337,7 +337,8 @@
     <ng-container [ngTemplateOutlet]="conversationTail" />
   }
 
-  @if (messages().length === 0) {
+  <!-- Not under a run's row: a conversation a saved workflow started has something to show. -->
+  @if (messages().length === 0 && !hasThreadRuns()) {
     <div class="py-12 text-center text-gray-500 dark:text-gray-400">
       <p class="text-lg">No messages yet</p>
       <p class="text-sm">Start a conversation to see messages here</p>

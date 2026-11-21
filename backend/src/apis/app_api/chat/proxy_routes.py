@@ -213,8 +213,10 @@ async def _token_for_retry(
 # ran, so the turn can be sent again. Only that failing path waits; a turn
 # that is accepted first time pays nothing.
 _RUNTIME_STARTING_BUDGET_SECONDS = 15.0
-# Between polls when no warm call of this task's own is in flight to wait on.
-_RUNTIME_STARTING_POLL_SECONDS = (0.25, 0.5, 1.0, 1.5, 2.0)
+# Between polls when no warm call of this task's own is in flight to wait on (the warm call
+# went through another app-api task). Capped at 0.5 s: on dev a 1.5 s step left a turn waiting
+# 1.8 s after the session had started, and a refused resend is a cheap, fast 409.
+_RUNTIME_STARTING_POLL_SECONDS = (0.25, 0.5)
 
 
 def _is_runtime_target(target_url: str) -> bool:

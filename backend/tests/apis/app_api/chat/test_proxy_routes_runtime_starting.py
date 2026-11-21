@@ -188,6 +188,11 @@ def test_a_local_inference_api_409_is_the_lease_and_is_relayed_at_once(monkeypat
     assert calls == [1]
 
 
+def test_polling_never_waits_more_than_half_a_second_between_resends() -> None:
+    """A longer step leaves a turn waiting after the session has started (1.8 s on dev)."""
+    assert max(proxy_routes._RUNTIME_STARTING_POLL_SECONDS) <= 0.5
+
+
 def test_an_accepted_turn_sends_once(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: List[int] = []
 
