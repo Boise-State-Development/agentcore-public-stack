@@ -126,47 +126,47 @@
           [selected]="tab() === 'step' ? store.selected() : null"
           [stepCount]="store.stepCount()"
           [maxSteps]="maxSteps"
+          [mode]="graphMode()"
+          [status]="graphStatus()"
+          [finished]="graphFinished()"
           (selectNode)="selectNode($event)"
           (add)="addStep()"
         />
 
         <aside class="flex shrink-0 flex-col border-t border-gray-200/80 bg-gray-50 lg:w-[28rem] lg:border-l lg:border-t-0 dark:border-gray-700/60 dark:bg-gray-900" aria-label="Workflow panel">
           <div class="flex gap-1 border-b border-gray-200 px-4 dark:border-gray-700" role="tablist" aria-label="Panel">
-            <button
-              id="wf-tab-step"
-              type="button"
-              role="tab"
-              aria-controls="wf-panel-step"
-              [attr.aria-selected]="tab() === 'step'"
-              [attr.tabindex]="tab() === 'step' ? 0 : -1"
-              (click)="setTab('step')"
-              (keydown)="onTabKeydown($event)"
-              class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark aria-selected:border-b-primary-accessible aria-selected:font-semibold aria-selected:text-primary-accessible dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-primary-accessible-dark dark:aria-selected:text-primary-accessible-dark"
-            >
-              Step
-            </button>
-            <button
-              id="wf-tab-preview"
-              type="button"
-              role="tab"
-              aria-controls="wf-panel-preview"
-              [attr.aria-selected]="tab() === 'preview'"
-              [attr.tabindex]="tab() === 'preview' ? 0 : -1"
-              (click)="setTab('preview')"
-              (keydown)="onTabKeydown($event)"
-              class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark aria-selected:border-b-primary-accessible aria-selected:font-semibold aria-selected:text-primary-accessible dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-primary-accessible-dark dark:aria-selected:text-primary-accessible-dark"
-            >
-              Preview
-            </button>
+            @for (t of tabs(); track t) {
+              <button
+                [id]="'wf-tab-' + t"
+                type="button"
+                role="tab"
+                [attr.aria-controls]="'wf-panel-' + t"
+                [attr.aria-selected]="tab() === t"
+                [attr.tabindex]="tab() === t ? 0 : -1"
+                (click)="setTab(t)"
+                (keydown)="onTabKeydown($event)"
+                class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark aria-selected:border-b-primary-accessible aria-selected:font-semibold aria-selected:text-primary-accessible dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-primary-accessible-dark dark:aria-selected:text-primary-accessible-dark"
+              >
+                @switch (t) {
+                  @case ('step') { Step }
+                  @case ('preview') { Preview }
+                  @default { Test run }
+                }
+              </button>
+            }
           </div>
           <div class="min-h-0 flex-1 p-4 lg:overflow-y-auto">
             @if (tab() === 'step') {
               <div id="wf-panel-step" role="tabpanel" aria-labelledby="wf-tab-step">
                 <app-workflow-step-tab (focusCanvas)="focusCanvas($event)" />
               </div>
-            } @else {
+            } @else if (tab() === 'preview') {
               <div id="wf-panel-preview" role="tabpanel" aria-labelledby="wf-tab-preview">
-                <app-workflow-preview-tab />
+                <app-workflow-preview-tab (testRunOpened)="showTestRun()" />
+              </div>
+            } @else if (store.ref(); as ref) {
+              <div id="wf-panel-test" role="tabpanel" aria-labelledby="wf-tab-test">
+                <app-workflow-test-run-panel [ref]="ref" />
               </div>
             }
           </div>
