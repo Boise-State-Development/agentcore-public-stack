@@ -76,6 +76,8 @@ REFUSED_PATHS = {
     "nda\x00.md": "NUL",
     "a/b/c/d/e.md": f"at most {MAX_PATH_SEGMENTS}",
     "legal/bad name!/nda.md": "not allowed",
+    "legal/-rf.md": "not allowed",
+    ".hidden/nda.md": "not allowed",
     "": "empty",
 }
 
@@ -232,7 +234,10 @@ def test_the_path_rule_refuses_each_shape(bad, why):
     assert problem is not None and why.lower() in problem.lower()
 
 
-@pytest.mark.parametrize("good", ["nda.md", "legal/nda.md", "a/b/c/d.md", "v1.2/notes_x-y.md"])
+@pytest.mark.parametrize(
+    "good",
+    ["nda.md", "legal/nda.md", "a/b/c/d.md", "v1.2/notes_x-y.md", "__init__.py", "office/helpers/__init__.py"],
+)
 def test_the_path_rule_accepts_up_to_four_segments(good):
     assert path_problem(good) is None
 

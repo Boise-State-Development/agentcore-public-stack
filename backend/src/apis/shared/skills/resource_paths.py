@@ -22,8 +22,11 @@ from typing import Any, Iterable, List, Optional
 
 from apis.shared.skills.resource_store import KIND_DIRS
 
-# Safe filenames: no separators, no traversal, a visible first character.
-FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+# Safe filenames: no separators, no traversal, a visible first character. A
+# leading '_' is allowed so a Python package keeps its ``__init__.py`` (a
+# package whose marker is renamed no longer imports); a leading '.' (hidden
+# file) or '-' (read as a command-line flag) is not.
+FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
 
 #: The deepest a file may sit below its kind directory (``a/b/c/file.md``).
 MAX_PATH_SEGMENTS = 4
@@ -50,7 +53,7 @@ def path_problem(path: Optional[str]) -> Optional[str]:
         if not FILENAME_PATTERN.match(segment):
             return (
                 f"'{segment}' is not allowed: use letters, digits, '.', '_' and '-' "
-                "only, starting with a letter or digit, 1-128 characters"
+                "only, starting with a letter, digit or '_', 1-128 characters"
             )
     return None
 
