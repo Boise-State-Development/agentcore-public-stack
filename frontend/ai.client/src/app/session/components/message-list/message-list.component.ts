@@ -888,6 +888,9 @@ export class MessageListComponent {
     this.workflowRunState.runsFor(this.sessionId()).filter(showsInThread),
   );
 
+  /** Whether the thread draws a run, which a conversation with no turns can (a saved workflow's). */
+  protected readonly hasThreadRuns = computed(() => this.threadRuns().length > 0);
+
   private readonly runStepIds = computed<ReadonlySet<string>>(
     () => new Set(this.threadRuns().flatMap((run) => run.steps.map((step) => step.handoffId))),
   );

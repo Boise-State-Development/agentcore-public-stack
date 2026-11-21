@@ -239,6 +239,13 @@ describe('MessageListComponent — handoffs', () => {
       expect(api().leadingRunRows().map((r) => r.runId)).toEqual(['run1']);
       expect(api().unanchoredRunRows()).toEqual([]);
       expect(fixture.nativeElement.querySelectorAll('app-workflow-run-row')).toHaveLength(1);
+      // The list's empty placeholder would read wrong under a run's row.
+      expect(fixture.nativeElement.textContent).not.toContain('No messages yet');
+    });
+
+    it('still says "No messages yet" in an empty conversation with no run', () => {
+      render([], 'src');
+      expect(fixture.nativeElement.textContent).toContain('No messages yet');
     });
 
     it('keeps that run above the first turn once the conversation has one', () => {
