@@ -74,7 +74,7 @@ export interface WorkflowView extends WorkflowRef {
   isOwned: boolean;
 }
 
-export type WorkflowSheetBlockerCode = 'too_few_steps' | 'step_unavailable' | 'same_agent_twice' | 'reads_step' | 'merge_result';
+export type WorkflowSheetBlockerCode = 'too_few_steps' | 'step_unavailable' | 'same_agent_twice' | 'reads_step';
 
 export interface WorkflowSheetBlocker {
   code: WorkflowSheetBlockerCode;

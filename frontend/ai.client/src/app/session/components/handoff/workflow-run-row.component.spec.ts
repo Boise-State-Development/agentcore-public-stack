@@ -340,6 +340,7 @@ describe('WorkflowRunRowComponent', () => {
       expect(text(graph.querySelector('[data-node-id="s1"]'))).toContain('Generalist');
       expect(graph.querySelector('[data-node-id="s1"]')?.getAttribute('data-state')).toBe('done');
       expect(text(toggle)).toBe('Hide graph');
+      expect(graph.querySelector('[role="region"]')?.getAttribute('aria-label')).toBe('Graph of this run');
     });
 
     it('offers no graph while workflows are off, nor in the designer’s test run', () => {

@@ -218,6 +218,7 @@ interface StepRow {
                   [result]="g.result"
                   [stepCount]="g.stepCount"
                   [maxSteps]="maxSteps"
+                  label="Graph of the steps to start"
                   mode="run"
                   [status]="g.status"
                   [finished]="g.finished"

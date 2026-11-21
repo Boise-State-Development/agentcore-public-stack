@@ -281,6 +281,7 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
       expect(toggle.getAttribute('aria-controls')).toBe(graph.id);
       expect(graph.querySelector('[data-node-id="s1"]')?.textContent).toContain('Starts first');
       expect(graph.querySelector('[data-node-id="result"]')?.textContent).toContain('Merged in this conversation');
+      expect(graph.querySelector('[role="region"]')?.getAttribute('aria-label')).toBe('Graph of the steps to start');
     });
   });
 });

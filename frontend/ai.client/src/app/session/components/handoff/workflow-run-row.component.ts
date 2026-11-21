@@ -163,6 +163,7 @@ const BAR_FILL: Record<RunStepState, string> = {
           [result]="graph().result"
           [stepCount]="graph().stepCount"
           [maxSteps]="maxSteps"
+          label="Graph of this run"
           mode="run"
           [status]="graph().status"
           [finished]="graph().finished"
