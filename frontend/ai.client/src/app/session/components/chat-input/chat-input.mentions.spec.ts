@@ -76,8 +76,10 @@ describe('ChatInputComponent — several `@`-mentions (workflow runs)', () => {
   let textarea: HTMLTextAreaElement;
   let sent: Sent[];
 
-  async function build(options: { workflowRuns?: boolean; handoffs?: boolean; offer?: boolean; project?: boolean } = {}): Promise<void> {
-    const { workflowRuns = true, handoffs = true, offer = true, project = false } = options;
+  async function build(
+    options: { workflowRuns?: boolean; handoffs?: boolean; offer?: boolean; project?: boolean; workflows?: boolean } = {},
+  ): Promise<void> {
+    const { workflowRuns = true, handoffs = true, offer = true, project = false, workflows = false } = options;
     await TestBed.configureTestingModule({
       imports: [ChatInputComponent],
       providers: [
@@ -97,7 +99,7 @@ describe('ChatInputComponent — several `@`-mentions (workflow runs)', () => {
             registerKnownFile: () => undefined,
           },
         },
-        { provide: FEATURES, useValue: { workflowRuns, handoffs } },
+        { provide: FEATURES, useValue: { workflowRuns, handoffs, workflows } },
         { provide: ToastService, useValue: { error: () => undefined, warning: () => undefined, info: () => undefined } },
         { provide: ToolService, useValue: {} },
         { provide: ModelService, useClass: ModelServiceStub },
@@ -218,6 +220,26 @@ describe('ChatInputComponent — several `@`-mentions (workflow runs)', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(component.mentionedAgents().map((a) => a.agentId)).toEqual(['a1', 'a2']);
+  });
+
+  describe('the `+` menu’s Workflows entry (workflow-designer.md §8.3, PR-D.2)', () => {
+    const offered = (): boolean => (component as unknown as { workflowsOffered: () => boolean }).workflowsOffered();
+
+    it('is offered with features.workflows on', async () => {
+      await build({ workflows: true });
+      expect(offered()).toBe(true);
+    });
+
+    for (const [label, options] of [
+      ['features.workflows off', { workflows: false }],
+      ['features.workflowRuns off', { workflows: true, workflowRuns: false }],
+      ['in a Shared Project', { workflows: true, project: true }],
+    ] as const) {
+      it(`is hidden: ${label}`, async () => {
+        await build(options);
+        expect(offered()).toBe(false);
+      });
+    }
   });
 
   describe('off, the composer keeps one mention per turn', () => {

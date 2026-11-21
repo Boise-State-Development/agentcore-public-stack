@@ -42,7 +42,13 @@ import { ConversationBindingService } from './services/session/conversation-bind
 import { AgentService } from '../agents/services/agent.service';
 import { AgentBindingLocksService } from '../agents/services/agent-binding-locks.service';
 import { AgentMentionService } from '../agents/services/agent-mention.service';
-import { routeMention, runMentionTargets, stripMention, stripMentions } from './services/chat/mention-routing';
+import {
+  mentionsOpenRunSheet,
+  routeMention,
+  runMentionTargets,
+  stripMention,
+  stripMentions,
+} from './services/chat/mention-routing';
 import { AgentHandoffService } from './services/handoff/agent-handoff.service';
 import { WorkflowRunService } from './services/handoff/workflow-run.service';
 import { ToastService } from '../services/toast/toast.service';
@@ -841,7 +847,7 @@ export class ConversationPage implements OnDestroy {
     if (message.mentionAgentIds?.length && this.features.handoffs && this.features.workflowRuns) {
       const targets = runMentionTargets(message.mentionAgentIds, boundAssistantId);
       const names = message.mentionAgentIds.map((id) => this.mentionedAgentName(id));
-      if (targets.length >= 2 && sessionIdToUse && this.hasMessages()) {
+      if (sessionIdToUse && mentionsOpenRunSheet(targets.length, sessionIdToUse, this.hasMessages())) {
         void this.workflowRuns.open(sessionIdToUse, {
           agents: targets.map((agentId) => this.runDraftAgent(agentId)),
           request: stripMentions(message.content, names),

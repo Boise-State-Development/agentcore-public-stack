@@ -676,6 +676,48 @@ Every PR is behind `WORKFLOWS_ENABLED` / `CDK_WORKFLOWS_ENABLED` / `features.wor
   `problem` for a file that no longer parses, and `GET /workflows/{skillId}/{name}` answers such a file with 400
   plus its markdown. No user-facing Agent version diff exists, as §20.2 says.
 
+*Built (PR-D.2).* Start a saved workflow. Where it differs from the plan, and what it settled:
+
+- **Run create.** `POST /sessions/{id}/workflow-runs` takes `workflow: {skillId, name, removedSteps?}` in place of
+  `steps` (both, or neither with fewer than two steps, is a 422). The file is read with the skill's access rules,
+  as the caller: another user's private workflow, a missing one and a bad name are all 404, and a shared one
+  still judges each Agent as the starter. With `WORKFLOWS_ENABLED` off the `workflow` form is 404; a run of
+  mentions does not need the flag. The file's request is the shared one unless the body's `request` is not blank.
+- **Blockers refuse.** Create answers 422 `{detail: {code: "workflow_blocked", message, blockers}}` with the
+  sheet's own blockers while any applies, so the Workflows page and run create cannot disagree: the sheet logic
+  moved to `apis/shared/workflows/sheet.py` (with the document models and W.1's `step_model`, re-exported from
+  `app_api/workflows/models.py`), and both route modules import it from there. A file that no longer parses is 422.
+- **`removedSteps` was not in the plan.** A step the starter can't run blocks the run before it exists, so the
+  sheet needs a way to drop it without a run to approve. The sheet opens *blocked* from `GET /workflows/…`,
+  listing the step and why; removing it (and, through `without_steps`, every step that reads it, so the cascade
+  is ready for D.5a) creates the run without them. Too few steps left is the `too_few_steps` blocker.
+- **The run row** gains `workflow: {skillId, name, title, fingerprint, version, files, removedSteps?}`, and each
+  step `stepName` and `agentVersion`, all optional and written only when set. `agentVersion` is the Agent's
+  published version when the run was created, which is what a non-owner's step runs (§10); `version` and `files`
+  were added so approve reads the rule the run was opened with, not a file edited since. `WorkflowRunView` and
+  the `workflowRuns` replay carry them. `WorkflowRunCreated` has `runSource: "workflow"` for these runs.
+- **`files` at approve**: `none` takes no file and `one` exactly one, else 422 before anything is written. The
+  sheet keeps Start off until the rule holds, swaps the ticked file under `one`, and hides the list under `none`.
+- **A new conversation.** `WorkflowStartService.start(ref, {sessionId?})` (`src/app/services/workflows/`) reads
+  the workflow first, so one that is gone leaves no empty conversation. Without a `sessionId` it takes the
+  prewarmed id if there is one, `PUT /sessions/{id}/metadata` with the workflow's title, adds the sidebar row and
+  navigates, then opens the sheet. A conversation this tab started with no turns (staged by an attachment) gets
+  its row the same way; any other keeps its title. The first turn keeps the title, because the Runtime names a
+  conversation only when its row is new (`ensure_session_metadata_exists`). No brief is asked for an empty
+  conversation. The empty-conversation layout renders the run sheet too. The step-1 guard is unchanged and now
+  a pure function, `mentionsOpenRunSheet`, with a spec.
+- **The sheet** is `WorkflowRunService.open(…, RunDraft)` with `draft.workflow`, titled with the workflow. A
+  changed step shows "This Agent has changed since it was added. A run uses its published version, now version
+  N.", plus "You own it, so your run uses its draft." for the Agent's owner. **Mark as reviewed** is the
+  workflow owner's only, a `PUT /workflows/{skillId}/{name}` with that step's `agentVersion` set to the
+  published one; the run already opened is unchanged. A `one`-file workflow in a conversation with no files says
+  to attach one with + and *look again*.
+- **The composer.** The `+` menu's Workflows submenu lists `GET /workflows` (the caller's first, files that no
+  longer parse left out), behind `features.workflows`, `features.workflowRuns` and `features.handoffs`, and never
+  in a Shared Project or an embedded preview. `features.workflows` is on in `environment.development.ts`.
+- **For D.3.** Wire types are in `src/app/services/workflows/workflow.models.ts` and the client in
+  `workflows-api.service.ts` (`list`, `get`, `save`, and `definitionOf` to turn a document back into a PUT body).
+
 *Built (PR-D.3).* The SPA is `frontend/ai.client/src/app/workflows/`; the one backend change is in
 `app_api/workflows/`. Where it differs from the plan, and what it settled:
 

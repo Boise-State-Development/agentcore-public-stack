@@ -85,6 +85,35 @@ class WorkflowRunStep(BaseModel):
     agent_name: str = Field("", alias="agentName")
     request: str = ""
     removed: bool = False
+    step_name: Optional[str] = Field(
+        None, alias="stepName", description="The saved workflow's name for this step (PR-D.2); absent for a mention run"
+    )
+    agent_version: Optional[int] = Field(
+        None,
+        alias="agentVersion",
+        description="The Agent's published version when the run was created from a saved workflow (PR-D.2)",
+    )
+
+
+class WorkflowRunSource(BaseModel):
+    """The saved workflow a run was started from (``workflow-designer.md`` §9.2, PR-D.2).
+
+    Absent on a run started from mentions, so a row without it reads as before. ``fingerprint``
+    is ``workflow_fingerprint`` of the file as it was read at create (its version excluded);
+    ``files`` is the file's rule for the files a run takes, enforced at approve; ``removedSteps``
+    names the steps the starter took out before the run was created (a step they couldn't run,
+    and every step that reads it).
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    skill_id: str = Field(..., alias="skillId")
+    name: str
+    title: str = ""
+    fingerprint: str = ""
+    version: Optional[int] = None
+    files: Optional[str] = Field(None, description="none | one | any, from the file")
+    removed_steps: Optional[List[str]] = Field(None, alias="removedSteps")
 
 
 class WorkflowRunCard(BaseModel):
@@ -135,6 +164,9 @@ class WorkflowRun(BaseModel):
     brief_cache_status: Optional[str] = Field(
         None, alias="briefCacheStatus", description="The run brief's call's cacheStatus on the source"
     )
+    workflow: Optional[WorkflowRunSource] = Field(
+        None, description="The saved workflow this run was started from (PR-D.2); absent for a mention run"
+    )
 
     def kept_steps(self) -> List["WorkflowRunStep"]:
         """The steps the run will start: every step not removed at the sheet, in order."""
@@ -170,6 +202,8 @@ class WorkflowRunStepView(BaseModel):
     agent_name: str = Field(..., alias="agentName")
     request: str
     removed: bool
+    step_name: Optional[str] = Field(None, alias="stepName")
+    agent_version: Optional[int] = Field(None, alias="agentVersion")
     handoff: Optional[HandoffView] = None
 
 
@@ -191,6 +225,7 @@ class WorkflowRunView(BaseModel):
     approved_at: Optional[str] = Field(None, alias="approvedAt")
     result_delivery_id: Optional[str] = Field(None, alias="resultDeliveryId")
     card: Optional[WorkflowRunCard] = Field(None, description="The card as reviewed; absent until approved")
+    workflow: Optional[WorkflowRunSource] = Field(None, description="The saved workflow it started from, if any")
 
     @classmethod
     def from_row(cls, run: WorkflowRun, handoffs: Optional[Dict[str, HandoffView]] = None) -> "WorkflowRunView":
@@ -209,6 +244,8 @@ class WorkflowRunView(BaseModel):
                     agent_name=step.agent_name,
                     request=step.request,
                     removed=step.removed,
+                    step_name=step.step_name,
+                    agent_version=step.agent_version,
                     handoff=views.get(step.handoff_id),
                 )
                 for step in run.steps
@@ -221,6 +258,7 @@ class WorkflowRunView(BaseModel):
             approved_at=run.approved_at,
             result_delivery_id=run.result_delivery_id,
             card=run.card,
+            workflow=run.workflow,
         )
 
 
@@ -312,7 +350,7 @@ class WorkflowRunStore:
         """
         sets = {
             "request": request,
-            "steps": [step.model_dump(by_alias=True) for step in steps],
+            "steps": [step.model_dump(by_alias=True, exclude_none=True) for step in steps],
             "fileIds": list(file_ids),
             "approvedAt": approved_at,
         }
@@ -483,6 +521,12 @@ def _from_item(item: Dict[str, Any]) -> WorkflowRun:
         data["sourceMessageIndex"] = int(data["sourceMessageIndex"])
     if "briefTokens" in data:
         data["briefTokens"] = int(data["briefTokens"])
+    for step in data.get("steps") or []:
+        if isinstance(step, dict) and step.get("agentVersion") is not None:
+            step["agentVersion"] = int(step["agentVersion"])
+    workflow = data.get("workflow")
+    if isinstance(workflow, dict) and workflow.get("version") is not None:
+        workflow["version"] = int(workflow["version"])
     limits = data.get("limits")
     if isinstance(limits, dict):
         data["limits"] = {k: int(v) for k, v in limits.items()}
@@ -514,6 +558,7 @@ __all__ = [
     "WorkflowRunCard",
     "WorkflowRunEdit",
     "WorkflowRunLimits",
+    "WorkflowRunSource",
     "WorkflowRunStatus",
     "WorkflowRunStep",
     "WorkflowRunStepView",

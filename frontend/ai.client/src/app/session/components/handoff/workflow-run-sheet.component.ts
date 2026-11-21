@@ -28,10 +28,18 @@ import { ModelService } from '../../services/model/model.service';
 /** One step as the sheet renders it. */
 interface StepRow {
   step: RunReviewStep;
+  /** The Agent's name, or for a saved step the starter can't use, a stand-in naming the step. */
+  label: string;
   modelName: string;
   emoji?: string;
   iconUrl?: string;
   ownRequest: boolean;
+  /** A saved workflow's step whose Agent the starter can't use (§11). */
+  unavailable: boolean;
+  /** The saved step's name, for Mark as reviewed. */
+  stepName?: string;
+  /** "This Agent has changed since it was added…" (§10), when it has. */
+  changedLine?: string;
 }
 
 /**
@@ -103,11 +111,18 @@ interface StepRow {
                   <div class="flex items-center gap-3">
                     <app-agent-icon [agentId]="row.step.agentId" [iconUrl]="row.iconUrl" [emoji]="row.emoji" [size]="28" />
                     <div class="min-w-0 flex-1">
-                      <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ row.step.agentName }}</p>
-                      <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">
-                        {{ row.modelName }}@if (row.ownRequest) { · Own request }
-                      </p>
+                      <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ row.label }}</p>
+                      @if (row.unavailable) {
+                        <p class="text-xs/5 text-state-danger-700 dark:text-state-danger-300">
+                          You can't use this step's Agent. Remove the step, or ask its owner to share it.
+                        </p>
+                      } @else {
+                        <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">
+                          {{ row.modelName }}@if (row.ownRequest) { · Own request }
+                        </p>
+                      }
                     </div>
+                    @if (!row.unavailable) {
                     <button
                       type="button"
                       class="text-sm/6 font-medium text-primary-accessible underline-offset-2 dark:text-primary-accessible-dark hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50"
@@ -119,12 +134,13 @@ interface StepRow {
                     >
                       {{ editingStep() === row.step.stepId ? 'Done' : 'Edit' }}
                     </button>
+                    }
                     @if (stepRows().length > 1) {
                       <button
                         type="button"
                         [id]="removeId(row.step.stepId)"
                         class="rounded-sm p-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
-                        [attr.aria-label]="'Remove ' + row.step.agentName"
+                        [attr.aria-label]="'Remove ' + row.label"
                         [disabled]="r.phase === 'starting'"
                         (click)="removeStep(row.step.stepId)"
                       >
@@ -132,6 +148,22 @@ interface StepRow {
                       </button>
                     }
                   </div>
+                  @if (row.changedLine; as line) {
+                    <div class="mt-1 pl-10 text-xs/5 text-gray-600 dark:text-gray-400">
+                      <p>{{ line }}</p>
+                      @if (isOwner()) {
+                        <button
+                          type="button"
+                          class="mt-0.5 font-medium text-primary-accessible underline-offset-2 dark:text-primary-accessible-dark hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50"
+                          [disabled]="!!r.reviewingStep"
+                          [attr.aria-label]="'Mark ' + row.label + ' as reviewed'"
+                          (click)="markReviewed(row)"
+                        >
+                          {{ r.reviewingStep === row.stepName ? 'Marking as reviewed…' : 'Mark as reviewed' }}
+                        </button>
+                      }
+                    </div>
+                  }
                   @if (editingStep() === row.step.stepId) {
                     <div [id]="stepEditorId(row.step.stepId)" class="mt-2 pl-8">
                       <label [attr.for]="stepEditorId(row.step.stepId) + '-text'" class="block text-xs font-medium text-gray-700 dark:text-gray-300">
@@ -159,6 +191,11 @@ interface StepRow {
               }
             </ul>
 
+            @if (r.phase === 'blocked') {
+              <p class="mt-3 text-sm/6 text-gray-700 dark:text-gray-300" role="status">
+                Remove the steps you can't use to continue.
+              </p>
+            } @else {
             <div class="mt-3 rounded-lg bg-gray-50 px-3 py-2 dark:bg-white/5">
               @if (r.brief?.status === 'writing') {
                 @if (!r.brief.text) {
@@ -250,14 +287,31 @@ interface StepRow {
                 </div>
               }
             </div>
+            }
           }
         }
 
-        @if (r.files?.length) {
+        @if (fileRule() === 'one' && !r.files?.length) {
+          <p class="mt-3 text-xs/5 text-gray-600 dark:text-gray-400">
+            This workflow takes one file from this conversation. Attach it with the + button, then
+            <button
+              type="button"
+              class="font-medium text-primary-accessible underline-offset-2 dark:text-primary-accessible-dark hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+              (click)="runs.refreshFiles(sessionId())"
+            >
+              look again
+            </button>.
+          </p>
+        }
+        @if (r.files?.length && fileRule() !== 'none') {
           <fieldset class="mt-3">
             <legend class="text-xs font-medium text-gray-700 dark:text-gray-300">Files from this conversation</legend>
             <p [id]="filesHintId" class="text-xs text-gray-600 dark:text-gray-400">
-              Every Agent can open the ones you tick. Up to {{ maxFiles }}.
+              @if (fileRule() === 'one') {
+                This workflow takes exactly one file. Tick the one every Agent should open.
+              } @else {
+                Every Agent can open the ones you tick. Up to {{ maxFiles }}.
+              }
             </p>
             <ul class="mt-1 space-y-1" [attr.aria-describedby]="filesHintId">
               @for (file of r.files; track file.uploadId) {
@@ -267,7 +321,7 @@ interface StepRow {
                       type="checkbox"
                       class="size-4 rounded-sm border-gray-300 text-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-600"
                       [checked]="r.fileIds.includes(file.uploadId)"
-                      [disabled]="r.phase === 'starting' || (!r.fileIds.includes(file.uploadId) && r.fileIds.length >= maxFiles)"
+                      [disabled]="r.phase === 'starting' || (fileRule() !== 'one' && !r.fileIds.includes(file.uploadId) && r.fileIds.length >= maxFiles)"
                       (change)="toggleFile(file.uploadId, $event)"
                     />
                     <span class="min-w-0 truncate">{{ file.filename }}</span>
@@ -348,11 +402,19 @@ export class WorkflowRunSheetComponent {
     const r = this.review();
     // While the run loads, the sheet already names what the composer mentioned.
     if (!r) return 0;
-    return r.phase === 'loading' || r.phase === 'error' ? r.draft.agents.length : keptSteps(r).length;
+    if (r.phase === 'loading' || r.phase === 'error') return r.draft.agents.length - (r.removedSteps?.length ?? 0);
+    return keptSteps(r).length;
   });
 
   protected readonly agents = computed(() => agentsLabel(this.keptCount()));
-  protected readonly title = computed(() => `Hand off to ${this.agents()}`);
+  /** A saved workflow's sheet is titled with its name (§8.3); a run of mentions says who it goes to. */
+  protected readonly title = computed(() => this.review()?.workflow?.document.workflow.title || `Hand off to ${this.agents()}`);
+
+  /** The saved workflow's `files` rule, or undefined for a run of mentions. */
+  protected readonly fileRule = computed(() => this.review()?.workflow?.document.workflow.files);
+
+  /** Mark as reviewed is the workflow owner's: it rewrites the file (§10). */
+  protected readonly isOwner = computed(() => !!this.review()?.workflow?.document.workflow.isOwned);
 
   protected readonly stepRows = computed<StepRow[]>(() => {
     const r = this.review();
@@ -362,12 +424,18 @@ export class WorkflowRunSheetComponent {
     return keptSteps(r).map((step) => {
       const agent = r.draft.agents.find((candidate) => candidate.agentId === step.agentId);
       const model = step.modelId ? catalog.find((m) => m.modelId === step.modelId) : sendModel;
+      const saved = step.workflowStep;
+      const unavailable = !!saved?.unavailable;
       return {
         step,
+        label: unavailable ? `Unavailable Agent (${saved?.name})` : step.agentName,
         modelName: model?.modelName || step.modelId || 'Your selected model',
         emoji: agent?.emoji,
         iconUrl: agent?.iconUrl,
         ownRequest: step.ownRequest !== null,
+        unavailable,
+        stepName: saved?.name,
+        changedLine: saved && !unavailable && saved.changed ? changedLine(saved.publishedVersion, saved.runsDraft) : undefined,
       };
     });
   });
@@ -521,4 +589,18 @@ export class WorkflowRunSheetComponent {
   protected start(): void {
     void this.runs.start(this.sessionId());
   }
+
+  protected markReviewed(row: StepRow): void {
+    if (row.stepName) void this.runs.markReviewed(this.sessionId(), row.stepName);
+  }
+}
+
+/**
+ * §10's line for a saved step whose Agent published a newer version since it was added. There is
+ * no "See what changed": the version diff routes are admin-only (§20.2).
+ */
+export function changedLine(publishedVersion: number | undefined, runsDraft: boolean): string {
+  const now = publishedVersion !== undefined ? `, now version ${publishedVersion}` : '';
+  const line = `This Agent has changed since it was added. A run uses its published version${now}.`;
+  return runsDraft ? `${line} You own it, so your run uses its draft.` : line;
 }
