@@ -49,7 +49,12 @@ from apis.shared.files.whole_document import WholeDocument, WholeDocumentError, 
 from apis.shared.feature_flags import prompt_steps_enabled
 from apis.shared.handoff.models import PromptStopReason
 from apis.shared.handoff.prompt_models import prompt_model_supported
-from apis.shared.handoff.prompt_steps import PromptStepStore, WorkflowPromptRequest, get_prompt_step_store
+from apis.shared.handoff.prompt_steps import (
+    PromptStepStore,
+    WorkflowPromptRequest,
+    get_prompt_step_store,
+    mark_cut_off,
+)
 from apis.shared.handoff.run_reads import StepReadsNotSettled, render_step_reads
 from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep, WorkflowRunStore, get_workflow_run_store
 from apis.shared.handoff.send_back import DeliveryRefused
@@ -62,10 +67,23 @@ logger = logging.getLogger(__name__)
 CALL_KIND = "workflow_prompt"
 
 #: Output tokens a step may write (§21.3). The stored answer is capped lower, at the delivery cap.
-MAX_OUTPUT_TOKENS = 4_000
+#:
+#: **Reasoning counts against it.** Haiku 5.5 and Sonnet 5.5 reason at their default effort, and at
+#: 4,000 three of ten NSF lens steps on dev were cut off mid-sentence: one Haiku step spent all
+#: 4,000 tokens for 653 characters of answer. 16,000 leaves room for the reasoning and an answer the
+#: system prompt keeps under 1,200 words. An answer that still reaches it is kept and marked
+#: (``mark_cut_off``), and its cost row says ``truncated``.
+MAX_OUTPUT_TOKENS = 16_000
 
-#: One step's call, from request to its last token.
-STEP_TIMEOUT_SECONDS = 120.0
+#: One step's call, from request to its last token, sized from the measured output rate.
+#:
+#: The slowest whole-call rate on dev was Sonnet 5.5's 116 output tokens a second (reasoning and the
+#: time to first token included; Haiku 5.5's slowest was 184). 16,000 tokens at that rate is 138 s,
+#: so 180 s with a 30% margin. That keeps a run's longest shape (8 steps on one model at the default
+#: concurrency of 4: the warm call, then two waves) at 540 s, inside the 600 s the Runtime stream
+#: allows. A run that takes longer still finishes: a closed stream does not cancel the work, and the
+#: run refresh reads the rows.
+STEP_TIMEOUT_SECONDS = 180.0
 
 #: How often a running invocation re-reads its run row for a stop.
 RUN_POLL_SECONDS = 2.0
@@ -1007,7 +1025,11 @@ class PromptStepRun:
                 started=started,
                 ended=ended,
                 fingerprint=_fingerprint(messages, warm.get("key" if plan.reads_files else "bare_key")),
-                attributes={"runId": self.run_id, "stepId": plan.step_id},
+                attributes={
+                    "runId": self.run_id,
+                    "stepId": plan.step_id,
+                    **({"truncated": True} if result.stop_reason == "max_tokens" else {}),
+                },
                 usage_estimate=estimate,
             )
 
@@ -1021,6 +1043,9 @@ class PromptStepRun:
         if not text:
             await self._stop(plan, "error")
             return
+        if result.stop_reason == "max_tokens":
+            # Kept, not stopped: the answer so far is worth having, as long as it says it is cut.
+            text = mark_cut_off(text)
         await self._finish(plan, text, int((result.usage or {}).get("outputTokens") or 0))
 
 
