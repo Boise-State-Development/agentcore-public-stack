@@ -1274,3 +1274,21 @@ def test_collect_takes_every_kept_step_when_the_result_names_none(collect_client
     parts = _collect_run(client, run_id).json()["delivery"]["parts"]
 
     assert [p["stepId"] for p in parts] == [r["stepId"] for r in rows]
+
+
+def test_prepare_reads_only_the_answers_never_the_artifacts_or_files(collect_client, stores, steps, staged, monkeypatch):
+    client = collect_client()
+    run_id, rows = _staged_run(client, stores, steps)
+    stores[0].transition("alice", rows[0]["handoffId"], "done")
+    stores[0].transition("alice", rows[1]["handoffId"], "done")
+
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("prepare carries no artifact or file, so it never looks them up")
+
+    monkeypatch.setattr(workflow_runs, "offered_files", refuse)
+    monkeypatch.setattr(workflow_runs, "offered_artifacts", refuse)
+
+    resp = _prepare(client, run_id, rows[2]["stepId"])
+
+    assert resp.status_code == 200, resp.text
+    assert "Strong aims; the budget is thin." in resp.json()["readsBlock"]

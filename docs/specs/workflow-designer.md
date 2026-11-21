@@ -885,6 +885,14 @@ what it settled:
   `displayText` after a reload) shows them as cards and the bubble shows only the request; a step sent with
   its card removed no longer reads its first result as "Context from".
 - **Not in D.5a:** the designer and canvas, the automatic merge, and `WorkflowStartService`.
+- **Found in dev validation and fixed after it (#2241).** After a reload mid-run the steps kept running on the
+  Runtime and finished, but nothing re-read their rows, so a reader queued behind them waited until the next
+  reload. `WorkflowRunRefreshService` now re-reads the run with one `GET …/workflow-runs/{runId}` a tick, while a
+  run on screen or in this tab's queue has a step pending on the server and not streaming here: 5 s, doubling
+  to 30 s while nothing moves, paused while the page is hidden, stopped once nothing is pending. The rows go
+  through `HandoffStateService.advanceRows`, which only takes a copy written later and never one this tab
+  streams. That also clears step 1's stale "Working on" line after a reload. Prepare measured 1.2–1.6 s on dev
+  (it is not on a turn's path); it now skips the artifact and file lookups its text-only blocks throw away.
 
 **Order.** D.1 first. Then D.2 and D.3 at once (D.2 touches the sheet, the composer and the run service; D.3 is
 new pages and the graph, so their files do not overlap). D.4 after both. D.5a after D.2 and can run beside D.4.
