@@ -120,6 +120,7 @@ import {
   StoredComposerDraft,
   StoredFolder,
 } from '../../services/session/composer-draft-storage.service';
+import { ComposerEmptyService } from '../../services/session/composer-empty.service';
 import { ComposerHandoffService } from './composer-handoff.service';
 import { MAX_RUN_STEPS } from '../../services/handoff/workflow-run.models';
 import { IncognitoToggleComponent } from './incognito-toggle.component';
@@ -402,6 +403,8 @@ export class ChatInputComponent {
   private pastedChars = 0;
   private readonly composerDraft = inject(ComposerDraftService);
   private readonly draftStorage = inject(ComposerDraftStorageService);
+  /** Whether this composer is empty, for readers off the composer (the automatic merge, PR-D.5b). */
+  private readonly composerEmpty = inject(ComposerEmptyService);
   private readonly toolService = inject(ToolService);
   private readonly modelService = inject(ModelService);
   private readonly voiceChatService = inject(VoiceChatService);
@@ -1763,7 +1766,9 @@ export class ChatInputComponent {
     // A replacement with the same key gets them back from the draft.
     inject(DestroyRef).onDestroy(() => {
       if (!this.mirroredDraftKey) return;
-      this.draftStorage.write(this.mirroredDraftKey, this.composerDraftSnapshot());
+      const draft = this.composerDraftSnapshot();
+      this.draftStorage.write(this.mirroredDraftKey, draft);
+      this.composerEmpty.note(this.mirroredDraftKey, draft);
       this.fileUploadService.clearReadyUploads();
     });
     // A folder card's poll must not outlive the composer that shows it.
@@ -1849,12 +1854,14 @@ export class ChatInputComponent {
   private syncDraft(key: string | null, draft: StoredComposerDraft): void {
     if (key === this.mirroredDraftKey) {
       if (key !== null) this.draftStorage.write(key, draft);
+      this.composerEmpty.note(key, draft);
       return;
     }
     // `draft` is the outgoing conversation's — park it there first. `undefined`
     // is first mount, where there is nothing to park.
     if (this.mirroredDraftKey) {
       this.draftStorage.write(this.mirroredDraftKey, draft);
+      this.composerEmpty.note(this.mirroredDraftKey, draft);
       // `FileUploadService` is application-wide, so its pending list is not
       // scoped to a conversation by itself. The line above just filed these
       // under the conversation being left; releasing them here is what stops
@@ -1867,7 +1874,11 @@ export class ChatInputComponent {
     // change. On first mount there is nothing to wait for, and a file staged
     // from the empty-state page before this composer rendered would otherwise
     // never be filed against the conversation at all.
-    if (key !== null) this.draftStorage.write(key, this.composerDraftSnapshot());
+    if (key !== null) {
+      const adopted = this.composerDraftSnapshot();
+      this.draftStorage.write(key, adopted);
+      this.composerEmpty.note(key, adopted);
+    }
   }
 
   /**
@@ -1881,7 +1892,9 @@ export class ChatInputComponent {
    */
   private persistDraftNow(): void {
     if (this.mirroredDraftKey) {
-      this.draftStorage.write(this.mirroredDraftKey, this.composerDraftSnapshot());
+      const draft = this.composerDraftSnapshot();
+      this.draftStorage.write(this.mirroredDraftKey, draft);
+      this.composerEmpty.note(this.mirroredDraftKey, draft);
     }
   }
 
