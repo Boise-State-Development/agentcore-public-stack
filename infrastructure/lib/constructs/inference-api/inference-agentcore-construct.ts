@@ -11,7 +11,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { Construct } from 'constructs';
-import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getAgentRuntimeName, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from '../../config';
+import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getAgentRuntimeName, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins, promptStepsOn } from '../../config';
 import { AlarmFactory } from '../observability/alarm-factory';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import {
@@ -511,6 +511,11 @@ export class InferenceAgentCoreConstruct extends Construct {
         // written only while both are ON; the default costs nothing.
         ...(config.handoffs.enabled && config.handoffs.briefEnabled ? { HANDOFF_BRIEF_ENABLED: 'true' } : {}),
         ...(config.handoffs.enabled && config.handoffs.suggestionsEnabled ? { HANDOFF_SUGGESTIONS_ENABLED: 'true' } : {}),
+        // Prompt steps (in development): the Runtime answers a `workflow_prompt`
+        // invocation. The first workflow flag on the Runtime, which has no copy of
+        // the flags it needs, so it is written only while the whole chain is ON
+        // (`promptStepsOn`) and the default costs nothing against the V2 budget.
+        ...(promptStepsOn(config) ? { PROMPT_STEPS_ENABLED: 'true' } : {}),
         // Conversation rewind (default on): the Runtime filters rewound
         // messages at restore and cuts a warm agent's list in place. Spread in
         // only while OFF: the code reads unset as on, so the default costs

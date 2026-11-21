@@ -31,7 +31,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, FrozenSet, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 try:  # boto3 is absent in some local-dev setups
     from boto3.dynamodb.conditions import Key
@@ -74,15 +74,28 @@ class WorkflowRunLimits(BaseModel):
     concurrency: int = WORKFLOW_RUN_CONCURRENCY
 
 
+WorkflowRunStepKind = Literal["agent", "prompt"]
+
+
 class WorkflowRunStep(BaseModel):
-    """One step as the run holds it: its Agent, its request, and the handoff row that runs it."""
+    """One step as the run holds it: its worker, its request, and the handoff row that runs it.
+
+    An Agent step (``kind`` ``agent``, or absent on rows written before prompt steps) names its
+    Agent. A prompt step (``kind`` ``prompt``, workflow-designer §21.3) has no Agent: its
+    ``agentId`` is empty, ``modelId`` names the model, ``agentName`` is that model's display name
+    (so every reader that names a step's worker names it), and ``request`` is its instruction.
+    """
 
     model_config = ConfigDict(populate_by_name=True)
 
     step_id: str = Field(..., alias="stepId")
     handoff_id: str = Field(..., alias="handoffId")
-    agent_id: str = Field(..., alias="agentId")
+    kind: Optional[WorkflowRunStepKind] = Field(
+        None, description="agent or prompt; absent reads as agent, so rows written before it read as before"
+    )
+    agent_id: str = Field("", alias="agentId", description="Empty only on a prompt step")
     agent_name: str = Field("", alias="agentName")
+    model_id: Optional[str] = Field(None, alias="modelId", description="A prompt step's model; absent on an Agent step")
     request: str = ""
     removed: bool = False
     step_name: Optional[str] = Field(
@@ -96,10 +109,38 @@ class WorkflowRunStep(BaseModel):
     reads: Optional[List[str]] = Field(
         None,
         description=(
-            "The other steps this step reads, by stepName, in step order (PR-D.5a). Steps only: the "
-            "request and the files go to every step. Absent on a mention run and on a step that reads none"
+            "What this step reads (PR-D.5a). On an Agent step, the other steps only, by stepName in step "
+            "order: the request and the files go to every Agent step, so the input names are left out, and "
+            "it is absent on a mention run and on a step that reads no step. On a prompt step "
+            "(workflow-designer §21.3), the whole set in canonical order (request, files, then steps), "
+            "always written, even empty: a prompt step gets the request or the files only when it reads "
+            "them. A prompt step's row with no reads at all (absent) reads as both"
         ),
     )
+
+    @property
+    def is_prompt(self) -> bool:
+        return self.kind == "prompt"
+
+    def reads_input(self, name: str) -> bool:
+        """Whether the step gets the run's ``request`` or ``files`` (``name``).
+
+        Every Agent step does. A prompt step does only when its ``reads`` names it; its ``reads`` is
+        always written at create, even empty, so an absent one (a row from before inputs were kept)
+        reads as both. No prompt row was written before then outside development.
+        """
+        if not self.is_prompt or self.reads is None:
+            return True
+        return name in self.reads
+
+    @model_validator(mode="after")
+    def _worker(self) -> "WorkflowRunStep":
+        if self.is_prompt:
+            if self.agent_id or not self.model_id:
+                raise ValueError("a prompt step names a model and no Agent")
+        elif not self.agent_id:
+            raise ValueError("an Agent step names its Agent")
+        return self
 
 
 class WorkflowRunSource(BaseModel):
@@ -223,8 +264,10 @@ class WorkflowRunStepView(BaseModel):
 
     step_id: str = Field(..., alias="stepId")
     handoff_id: str = Field(..., alias="handoffId")
+    kind: Optional[str] = Field(None, description="agent or prompt; absent on runs written before prompt steps")
     agent_id: str = Field(..., alias="agentId")
     agent_name: str = Field(..., alias="agentName")
+    model_id: Optional[str] = Field(None, alias="modelId")
     request: str
     removed: bool
     step_name: Optional[str] = Field(None, alias="stepName")
@@ -266,8 +309,10 @@ class WorkflowRunView(BaseModel):
                 WorkflowRunStepView(
                     step_id=step.step_id,
                     handoff_id=step.handoff_id,
+                    kind=step.kind,
                     agent_id=step.agent_id,
                     agent_name=step.agent_name,
+                    model_id=step.model_id,
                     request=step.request,
                     removed=step.removed,
                     step_name=step.step_name,
@@ -588,6 +633,7 @@ __all__ = [
     "WorkflowRunSource",
     "WorkflowRunStatus",
     "WorkflowRunStep",
+    "WorkflowRunStepKind",
     "WorkflowRunStepView",
     "WorkflowRunStore",
     "WorkflowRunView",

@@ -399,6 +399,11 @@ class HandoffTurn:
         if row is None:
             logger.warning("handoff_context ignored: no such handoff for this user")
             return None, ""
+        if row.is_prompt_step:
+            # A prompt step has no Agent and no conversation (workflow-designer §21.3): only the
+            # Runtime's workflow_prompt invocation claims it, never a turn.
+            logger.warning("handoff_context ignored: the handoff is a prompt step")
+            return None, ""
         if row.agent_id != self.agent_id:
             logger.warning("handoff_context ignored: the handoff is for a different Agent")
             return None, ""

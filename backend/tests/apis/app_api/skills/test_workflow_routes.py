@@ -411,12 +411,12 @@ class TestWrite:
         assert resp.status_code == 400
         assert "reads its own result" in resp.json()["detail"]
 
-    def test_reserved_kinds_are_refused(self, client):
+    def test_checklist_is_still_reserved(self, client):
         wf = _create(client)
-        bad = dict(DEFINITION, steps=[{"name": "a", "kind": "prompt", "agentId": "m"}])
+        bad = dict(DEFINITION, steps=[{"name": "a", "kind": "checklist", "agentId": "m"}])
         resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=bad)
         assert resp.status_code == 400
-        assert "'prompt' steps are not available yet" in resp.json()["detail"]
+        assert "'checklist' steps are not available yet" in resp.json()["detail"]
 
     def test_the_sheet_names_what_blocks_start(self, client):
         wf = _create(client)
@@ -589,3 +589,134 @@ def _store_raw(service, skill_id: str, filename: str, content: bytes):
         kind="reference",
         path=filename,
     )
+
+
+HAIKU = "us.anthropic.claude-haiku-5-5-v1:0"
+SONNET = "us.anthropic.claude-sonnet-5-5-v1:0"
+
+WITH_PROMPTS = dict(
+    DEFINITION,
+    steps=[
+        *DEFINITION["steps"],
+        {"name": "budget", "kind": "prompt", "modelId": HAIKU, "reads": ["files"], "request": "List the budget lines"},
+        {"name": "summary", "kind": "prompt", "modelId": SONNET, "reads": ["files", "generalist", "budget"]},
+    ],
+)
+
+
+class TestPromptSteps:
+    """A prompt step (workflow-designer §21.3): a model as its worker, judged as the caller."""
+
+    @pytest.fixture(autouse=True)
+    def _on(self, monkeypatch, prompt_models):
+        monkeypatch.setenv("PROMPT_STEPS_ENABLED", "true")
+        self.models = prompt_models
+
+    def test_a_prompt_step_saves_and_reads_back_with_its_model(self, client):
+        wf = _create(client)
+        resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_PROMPTS)
+
+        assert resp.status_code == 200, resp.text
+        doc = resp.json()
+        budget = doc["workflow"]["steps"][2]
+        assert budget["kind"] == "prompt"
+        assert budget["modelId"] == HAIKU
+        assert budget["agentId"] == ""
+        assert budget["request"] == "List the budget lines"
+        assert budget["model"] == {
+            "canRun": True,
+            "modelId": HAIKU,
+            "name": "Claude Haiku 5.5",
+            "inputPricePerMillionTokens": 1.1,
+        }
+        # The worker slot every reader names a step by carries the model, never an Agent lookup.
+        assert budget["agent"]["name"] == "Claude Haiku 5.5"
+        assert budget["agent"]["canRun"] is True
+        assert doc["workflow"]["steps"][3]["reads"] == ["files", "generalist", "budget"]
+        assert doc["sheet"] == {"startable": True, "blockers": []}
+
+    def test_saving_it_again_writes_nothing(self, client):
+        wf = _create(client)
+        first = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_PROMPTS).json()
+        again = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_PROMPTS).json()
+
+        assert again["written"] is False
+        assert again["workflow"]["version"] == first["workflow"]["version"]
+        assert again["workflow"]["fingerprint"] == first["workflow"]["fingerprint"]
+
+    def test_it_is_saved_while_the_flag_is_off_and_the_sheet_says_so(self, client, monkeypatch):
+        monkeypatch.setenv("PROMPT_STEPS_ENABLED", "")
+        wf = _create(client)
+        resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_PROMPTS)
+
+        assert resp.status_code == 200
+        assert [(b["code"], b["step"]) for b in resp.json()["sheet"]["blockers"]] == [
+            ("prompt_steps_off", "budget"),
+            ("prompt_steps_off", "summary"),
+        ]
+
+    def test_a_model_the_caller_cant_use_or_with_no_catalog_row_blocks_start(self, client):
+        self.models.allowed.discard(SONNET)
+        body = dict(WITH_PROMPTS, steps=[*WITH_PROMPTS["steps"][:3], dict(WITH_PROMPTS["steps"][3], modelId="us.vendor.unlisted-v1:0")])
+        body["steps"].append({"name": "second", "kind": "prompt", "modelId": SONNET, "reads": ["files"]})
+        wf = _create(client)
+        sheet = client.put(
+            f"/workflows/{wf['skillId']}/{wf['name']}", json=body, params={"validate": "true"}
+        ).json()["sheet"]
+
+        assert sheet["startable"] is False
+        assert [(b["code"], b["step"]) for b in sheet["blockers"]] == [
+            ("model_unavailable", "summary"),
+            ("model_unavailable", "second"),
+        ]
+        assert "isn't offered on this platform" in sheet["blockers"][0]["message"]
+        assert "You can't use this step's model" in sheet["blockers"][1]["message"]
+
+    def test_the_same_model_twice_is_not_the_same_agent_twice(self, client):
+        body = dict(WITH_PROMPTS, steps=[*WITH_PROMPTS["steps"][:3], dict(WITH_PROMPTS["steps"][3], modelId=HAIKU)])
+        wf = _create(client)
+        sheet = client.put(
+            f"/workflows/{wf['skillId']}/{wf['name']}", json=body, params={"validate": "true"}
+        ).json()["sheet"]
+
+        assert sheet == {"startable": True, "blockers": []}
+
+    def test_a_prompt_step_that_names_an_agent_is_refused(self, client):
+        bad = dict(DEFINITION, steps=[{"name": "a", "kind": "prompt", "agentId": "AST-gen", "modelId": HAIKU}])
+        wf = _create(client)
+        resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=bad)
+
+        assert resp.status_code == 400
+        assert "a prompt step has no Agent" in resp.json()["detail"]
+
+    def test_save_as_workflow_from_a_run_keeps_its_prompt_steps(self, client, world, author_user):
+        from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep
+
+        world.runs["run-1"] = WorkflowRun(
+            run_id="run-1",
+            user_id=author_user.user_id,
+            session_id="sess-1",
+            status="approved",
+            request="Review this",
+            steps=[
+                WorkflowRunStep(step_id="s1", handoff_id="h1", agent_id="AST-gen", agent_name="Generalist", request="Review this"),
+                WorkflowRunStep(
+                    step_id="s2",
+                    handoff_id="h2",
+                    kind="prompt",
+                    model_id=HAIKU,
+                    agent_name="Claude Haiku 5.5",
+                    request="List the budget lines",
+                    step_name="budget",
+                ),
+            ],
+            created_at="2026-11-21T00:00:00+00:00",
+            updated_at="2026-11-21T00:00:00+00:00",
+        )
+        resp = client.post("/workflows", json={"fromRun": {"sessionId": "sess-1", "runId": "run-1"}})
+
+        assert resp.status_code == 201, resp.text
+        steps = resp.json()["workflow"]["steps"]
+        assert [(s["name"], s["kind"]) for s in steps] == [("generalist", "agent"), ("budget", "prompt")]
+        assert steps[1]["modelId"] == HAIKU
+        assert steps[1]["request"] == "List the budget lines"

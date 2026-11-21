@@ -119,7 +119,8 @@ async def load_workflow_run_replay(
 
 def _replayed(row: Handoff) -> bool:
     """A handoff that was sent (its row), or a suggestion still waiting on the user (its chip)."""
-    if row.kind == "send_back":
+    if row.kind in ("send_back", "prompt"):
+        # A prompt step has no conversation to link to; its run's replay carries it.
         return False
     if row.target_session_id:
         return True

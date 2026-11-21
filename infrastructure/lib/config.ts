@@ -569,6 +569,19 @@ export interface WorkflowRunsConfig {
  */
 export interface WorkflowsConfig {
   enabled: boolean;
+  /**
+   * Prompt steps (docs/specs/workflow-designer.md §21): a workflow step that is one
+   * model call over the run's files, with no Agent and no conversation, run as a
+   * side call on its own Runtime invocation. **Opt-in while in development**: off
+   * unless CDK_PROMPT_STEPS_ENABLED=true (or a `workflows.promptStepsEnabled: true`
+   * cdk.json context), and it needs `enabled` (and so `workflowRuns.enabled` and
+   * `handoffs.enabled`) too. Sets PROMPT_STEPS_ENABLED on **app-api** and on the
+   * **AgentCore Runtime**, each only while the whole chain is on; the Runtime copy is
+   * written only while on, so the default spends none of the V2 environment budget.
+   * The Runtime has no copy of the workflow flags it depends on, so its copy alone
+   * carries the chain. No new resources.
+   */
+  promptStepsEnabled: boolean;
 }
 
 /**
@@ -2023,6 +2036,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WORKFLOWS_ENABLED
         ? process.env.CDK_WORKFLOWS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('workflows')?.enabled ?? false,
+      promptStepsEnabled: process.env.CDK_PROMPT_STEPS_ENABLED
+        ? process.env.CDK_PROMPT_STEPS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('workflows')?.promptStepsEnabled ?? false,
     },
     sessionRewind: {
       // Default ON with a kill switch, same parsing as projects above.
@@ -3249,6 +3265,21 @@ export function applyStandardTags(stack: cdk.Stack, config: AppConfig): void {
  * @param config  The top-level AppConfig
  * @param additionalOrigins  Optional comma-separated extra origins to append
  */
+/**
+ * Whether prompt steps are on for this deployment: their own switch and every flag
+ * they need (saved workflows, workflow runs, handoffs). The one answer both
+ * services' environments are written from, so app-api and the Runtime never
+ * disagree about it.
+ */
+export function promptStepsOn(config: Pick<AppConfig, 'handoffs' | 'workflowRuns' | 'workflows'>): boolean {
+  return (
+    config.handoffs.enabled &&
+    config.workflowRuns.enabled &&
+    config.workflows.enabled &&
+    config.workflows.promptStepsEnabled
+  );
+}
+
 export function buildCorsOrigins(config: AppConfig, additionalOrigins?: string): string[] {
   const origins = new Set<string>();
   if (config.corsOrigins) {

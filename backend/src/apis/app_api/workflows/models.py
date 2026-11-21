@@ -27,6 +27,7 @@ from apis.shared.workflows.format import (
 # ``apis.shared``, because run create (``app_api/handoffs``) builds the same one (PR-D.2).
 from apis.shared.workflows.sheet import (  # noqa: F401 - re-exported for the routes and tests
     AgentView,
+    ModelView,
     ResultView,
     SheetBlocker,
     SheetBlockerCode,
@@ -43,12 +44,17 @@ class WorkflowStepModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str = Field(..., min_length=1, max_length=64)
-    kind: str = KIND_AGENT
-    agent_id: str = Field(..., alias="agentId", min_length=1, max_length=256)
+    kind: str = Field(KIND_AGENT, description="agent, or prompt: one model call with no Agent (§21.3)")
+    agent_id: str = Field(
+        "", alias="agentId", max_length=256, description="An Agent step's Agent; empty on a prompt step"
+    )
     agent_version: Optional[int] = Field(
         None,
         alias="agentVersion",
         description="The Agent's published version when the step was added or last reviewed (D6)",
+    )
+    model_id: Optional[str] = Field(
+        None, alias="modelId", max_length=512, description="A prompt step's model; absent on an Agent step"
     )
     reads: List[str] = Field(default_factory=lambda: list(INPUT_READS), max_length=MAX_STEPS + 2)
     request: Optional[str] = Field(None, max_length=MAX_REQUEST_CHARS, description="This step's own request")
@@ -98,6 +104,7 @@ class WorkflowDefinitionModel(BaseModel):
                     reads=tuple(step.reads),
                     request=step.request,
                     kind=step.kind,
+                    model_id=step.model_id,
                 )
                 for step in self.steps
             ),

@@ -1338,3 +1338,404 @@ def test_prepare_reads_only_the_answers_never_the_artifacts_or_files(collect_cli
 
     assert resp.status_code == 200, resp.text
     assert "Strong aims; the budget is thin." in resp.json()["readsBlock"]
+
+
+# --- Prompt steps (workflow-designer §21.3, PR-D.6a) -------------------------------------------
+
+HAIKU = "us.anthropic.claude-haiku-5-5-v1:0"
+SONNET = "us.anthropic.claude-sonnet-5-5-v1:0"
+
+PROMPT_FILE = f"""---
+title: Panel review
+version: 1
+---
+
+| step       | kind   | worker     | reads                       |
+|------------|--------|------------|-----------------------------|
+| generalist | agent  | generalist | request, files              |
+| budget     | prompt | {HAIKU}    | files                       |
+| summary    | prompt | {SONNET}   | request, generalist, budget |
+
+## Request
+
+Review this proposal
+
+## Step: budget
+
+List the budget lines
+
+## Step: summary
+
+Summarize the reviews
+"""
+
+
+@pytest.fixture()
+def prompted(skills, prompt_models, monkeypatch):
+    """A saved workflow of one Agent step and two prompt steps, with prompt steps on."""
+    skills.files["wf-key"] = PROMPT_FILE
+    monkeypatch.setenv("PROMPT_STEPS_ENABLED", "true")
+    return prompt_models
+
+
+def _finish_prompt(table, handoff_id: str, text: str) -> None:
+    """What the Runtime's finish write leaves (PR-D.6b): ``done`` with its output, by the shared names."""
+    from apis.shared.handoff.models import (
+        PROMPT_FIELD_OUTPUT_HASH,
+        PROMPT_FIELD_OUTPUT_TEXT,
+        PROMPT_FIELD_OUTPUT_TOKENS,
+        PROMPT_FIELD_UPDATED_AT,
+    )
+
+    table.update_item(
+        Key={"PK": "USER#alice", "SK": f"HANDOFF#{handoff_id}"},
+        UpdateExpression="SET #s = :done, #t = :text, #h = :hash, #n = :tokens, #u = :now",
+        ExpressionAttributeNames={
+            "#s": "status",
+            "#t": PROMPT_FIELD_OUTPUT_TEXT,
+            "#h": PROMPT_FIELD_OUTPUT_HASH,
+            "#n": PROMPT_FIELD_OUTPUT_TOKENS,
+            "#u": PROMPT_FIELD_UPDATED_AT,
+        },
+        ExpressionAttributeValues={
+            ":done": "done", ":text": text, ":hash": "h", ":tokens": 42, ":now": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+
+def test_a_prompt_step_opens_a_prompt_row_on_its_catalog_model_and_rate(make_client, stores, prompted, metrics):
+    handoffs, runs = stores
+    resp = _start(make_client())
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert [(s.get("kind"), s["agentId"], s["agentName"]) for s in data["steps"]] == [
+        (None, "generalist", "Generalist"),
+        ("prompt", "", "Claude Haiku 5.5"),
+        ("prompt", "", "Claude Sonnet 5.5"),
+    ]
+    assert [(s.get("modelId"), s.get("inputPricePerMillionTokens")) for s in data["steps"]] == [
+        ("us.sonnet", 3.0), (HAIKU, 1.1), (SONNET, 3.3),
+    ]
+    # A prompt step gets no card: the model reads its instruction after the run's files.
+    assert data["steps"][1]["prompt"] == "List the budget lines"
+    assert data["steps"][0]["prompt"] == build_handoff_message(data["contextBlock"], "Review this proposal")
+
+    budget = handoffs.get("alice", data["steps"][1]["handoffId"])
+    assert (budget.kind, budget.status, budget.agent_id, budget.model_id) == ("prompt", "open", "", HAIKU)
+    assert budget.request == "List the budget lines" and budget.target_session_id is None
+    assert budget.run_id == data["run"]["runId"] and budget.step_id == data["steps"][1]["stepId"]
+    generalist = handoffs.get("alice", data["steps"][0]["handoffId"])
+    assert generalist.kind == "mention" and generalist.model_id is None
+
+    stored = runs.get("alice", data["run"]["runId"])
+    assert [(s.kind, s.agent_id, s.model_id, s.step_name) for s in stored.steps] == [
+        (None, "generalist", None, "generalist"),
+        ("prompt", "", HAIKU, "budget"),
+        ("prompt", "", SONNET, "summary"),
+    ]
+    # An Agent step keeps only the steps it reads; a prompt step keeps its whole set, inputs included,
+    # in canonical order, because it gets the request or the documents only when it reads them.
+    assert [s.reads for s in stored.steps] == [None, ["files"], ["request", "generalist", "budget"]]
+    assert [(s.reads_input("request"), s.reads_input("files")) for s in stored.steps] == [
+        (True, True), (False, True), (True, False),
+    ]
+    assert [s.get("kind") for s in data["run"]["steps"]] == [None, "prompt", "prompt"]
+    assert data["run"]["steps"][1]["handoff"]["modelId"] == HAIKU
+
+
+def test_a_prompt_step_on_a_retired_model_runs_on_its_successor(make_client, stores, prompted):
+    prompted.retired[HAIKU] = SONNET
+    data = _start(make_client()).json()
+
+    assert data["steps"][1]["modelId"] == SONNET
+    assert stores[0].get("alice", data["steps"][1]["handoffId"]).model_id == SONNET
+
+
+def test_prompt_steps_are_a_sheet_blocker_while_the_flag_is_off(make_client, stores, prompted, monkeypatch):
+    monkeypatch.setenv("PROMPT_STEPS_ENABLED", "")
+    resp = _start(make_client())
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["code"] == "workflow_blocked"
+    assert [(b["code"], b["step"]) for b in detail["blockers"]] == [
+        ("prompt_steps_off", "budget"), ("prompt_steps_off", "summary"),
+    ]
+
+
+@pytest.mark.parametrize("problem", ["no_access", "no_catalog_row", "retired"])
+def test_a_model_the_starter_cant_run_blocks_start_until_the_step_is_removed(make_client, stores, prompted, problem):
+    if problem == "no_access":
+        prompted.allowed.discard(HAIKU)
+    elif problem == "no_catalog_row":
+        del prompted.catalog[HAIKU]
+    else:
+        prompted.retired[HAIKU] = None
+    client = make_client()
+
+    refused = _start(client)
+    assert refused.status_code == 422
+    assert [(b["code"], b["step"]) for b in refused.json()["detail"]["blockers"]] == [("model_unavailable", "budget")]
+
+    # Removing it takes the summary too, which reads it, and one step is too few to start.
+    assert _start(client, removedSteps=["budget"]).json()["detail"]["blockers"][0]["code"] == "too_few_steps"
+    prompted.allowed.add(HAIKU)
+    prompted.catalog.setdefault(HAIKU, SimpleNamespace(model_name="Claude Haiku 5.5", input_price_per_million_tokens=1.1))
+    prompted.retired.pop(HAIKU, None)
+    assert _start(client).status_code == 201
+
+
+def test_approve_settles_prompt_rows_like_agent_rows_and_counts_only_conversations(make_client, stores, prompted):
+    handoffs, _runs = stores
+    client = make_client()
+    created = _start(client).json()
+
+    view = _approve(client, created["run"]["runId"], steps=[{"stepId": created["steps"][1]["stepId"], "request": "Only the totals"}]).json()
+
+    assert [s["handoff"]["status"] for s in view["steps"]] == ["open", "open", "open"]
+    rows = [handoffs.get("alice", s["handoffId"]) for s in created["steps"]]
+    assert all(row.run_approved_at for row in rows)
+    assert rows[1].request == "Only the totals"
+    # runSteps counts the steps with a conversation: the one Agent step, never a prompt step.
+    assert rows[0].run_steps == 1
+
+
+def test_a_prompt_rows_handoff_view_carries_its_answer(make_client, stores, prompted, table):
+    client = make_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    _finish_prompt(table, created["steps"][1]["handoffId"], "Personnel 60%, travel 10%.")
+
+    view = client.get(f"/sessions/src/workflow-runs/{run_id}").json()
+
+    handoff = view["steps"][1]["handoff"]
+    assert (handoff["kind"], handoff["status"], handoff["outputText"], handoff["outputTokens"]) == (
+        "prompt", "done", "Personnel 60%, travel 10%.", 42,
+    )
+
+
+def test_collect_carries_a_done_prompt_step_as_a_text_only_part(collect_client, stores, steps, prompted, table):
+    handoffs, _runs = stores
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    generalist, budget, summary = created["steps"]
+    handoffs.accept("alice", generalist["handoffId"], target_session_id="t0", context_edited=False, context_removed=False)
+    handoffs.transition("alice", generalist["handoffId"], "done")
+    steps.target("t0", generalist["handoffId"], "Generalist · Review", [(1, "Strong aims.", "2026-01-01T00:00:00Z")])
+    _finish_prompt(table, budget["handoffId"], "Personnel 60%, travel 10%.")
+
+    resp = _collect_run(client, run_id)
+
+    assert resp.status_code == 200, resp.text
+    parts = resp.json()["delivery"]["parts"]
+    assert [(p["agentName"], p["fromTitle"], p["status"], p.get("kind")) for p in parts] == [
+        ("Generalist", "Generalist · Review", "done", None),
+        ("Claude Haiku 5.5", "budget", "done", "prompt"),
+        ("Claude Sonnet 5.5", "summary", "running", "prompt"),
+    ]
+    assert parts[1]["text"] == "Personnel 60%, travel 10%."
+    assert (parts[1]["fromSessionId"], parts[1]["artifacts"], parts[1]["files"]) == ("", [], [])
+
+    from apis.shared.handoff.context import DeliveryPartBlock, render_delivery_parts
+
+    stored = collect_client.deliveries.get("alice", resp.json()["deliveryId"])
+    block = render_delivery_parts(
+        [DeliveryPartBlock(text=p.text, agent_name=p.agent_name, from_title=p.from_title, status=p.status) for p in stored.parts]
+    )
+    assert '<handoff_context from_conversation="Claude Haiku 5.5 · budget">' in block
+    assert "Personnel 60%, travel 10%." in block
+
+
+def test_collect_of_prompt_steps_alone_holds_only_the_receiver_to_the_rules(collect_client, stores, steps, prompted, table):
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    _finish_prompt(table, created["steps"][1]["handoffId"], "Personnel 60%.")
+
+    resp = _collect_run(client, run_id)
+
+    assert resp.status_code == 200, resp.text
+    delivery = resp.json()["delivery"]
+    assert [(p["status"], p.get("kind")) for p in delivery["parts"]] == [
+        ("running", None), ("done", "prompt"), ("running", "prompt"),
+    ]
+    # No step conversation to name: the card reads as from its first finished part.
+    assert (delivery["fromSessionId"], delivery["fromTitle"]) == ("", "budget")
+
+
+def test_a_project_receiver_still_refuses_a_text_only_result():
+    import asyncio
+
+    from apis.shared.handoff import send_back
+
+    async def run():
+        async def load_session_meta(session_id, user_id):
+            return SimpleNamespace(row={"projectId": "p1"}, owned_by_other=False)
+
+        import apis.shared.sessions.metadata as metadata
+
+        original = metadata.load_session_meta
+        metadata.load_session_meta = load_session_meta
+        try:
+            await send_back.prepare_delivery(
+                user_id="alice",
+                to_session_id="src",
+                parts=[send_back.DeliveryPartRequest(step_id="s", agent_name="M", status="done", text="x", prompt=True)],
+            )
+        finally:
+            metadata.load_session_meta = original
+
+    with pytest.raises(send_back.DeliveryRefused) as refused:
+        asyncio.run(run())
+    assert refused.value.reason == "project_task"
+
+
+def test_a_prompt_part_never_carries_a_conversation_or_references():
+    import asyncio
+
+    from apis.shared.handoff import send_back
+
+    for extra in ({"from_session_id": "t0"}, {"file_ids": ["f1"]}, {"artifact_ids": ["a1"]}):
+        part = send_back.DeliveryPartRequest(step_id="s", agent_name="M", status="done", text="x", prompt=True, **extra)
+        with pytest.raises(ValueError, match="text alone"):
+            asyncio.run(send_back.prepare_delivery(user_id="alice", to_session_id="src", parts=[part]))
+
+
+def test_prepare_for_a_step_that_reads_a_prompt_step_carries_its_answer(collect_client, stores, steps, prompted, table):
+    handoffs, _runs = stores
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    generalist, budget, summary = created["steps"]
+    handoffs.accept("alice", generalist["handoffId"], target_session_id="t0", context_edited=False, context_removed=False)
+    steps.target("t0", generalist["handoffId"], "Generalist · Review", [(1, "Strong aims.", "2026-01-01T00:00:00Z")])
+
+    waiting = _prepare(client, run_id, summary["stepId"])
+    assert waiting.status_code == 409
+    assert waiting.json()["detail"] == "Waiting for Generalist, Claude Haiku 5.5 to finish"
+
+    handoffs.transition("alice", generalist["handoffId"], "done")
+    _finish_prompt(table, budget["handoffId"], "Personnel 60%, travel 10%.")
+    resp = _prepare(client, run_id, summary["stepId"])
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert [(p["stepName"], p["agentName"], p["status"]) for p in data["parts"]] == [
+        ("generalist", "Generalist", "done"), ("budget", "Claude Haiku 5.5", "done"),
+    ]
+    first, second = data["readsBlock"].split("\n\n<handoff_context ")
+    assert first.startswith('<handoff_context from_conversation="Generalist · Review">')
+    assert second.startswith('from_conversation="Claude Haiku 5.5 · budget">')
+    assert "Personnel 60%, travel 10%." in second
+    assert data["message"] == f"{data['readsBlock']}\n\nSummarize the reviews"
+
+
+def test_a_stopped_prompt_step_is_named_by_its_model_and_step(collect_client, stores, steps, prompted, table):
+    from apis.shared.handoff.context import DELIVERY_PART_STATUS_NOTES
+
+    handoffs, _runs = stores
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    generalist, budget, summary = created["steps"]
+    handoffs.accept("alice", generalist["handoffId"], target_session_id="t0", context_edited=False, context_removed=False)
+    handoffs.transition("alice", generalist["handoffId"], "done")
+    steps.target("t0", generalist["handoffId"], "Generalist · Review", [(1, "Strong aims.", "2026-01-01T00:00:00Z")])
+    # The Runtime's claim (open → running), then its stop, as PR-D.6b writes them.
+    table.update_item(
+        Key={"PK": "USER#alice", "SK": f"HANDOFF#{budget['handoffId']}"},
+        UpdateExpression="SET #s = :running",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":running": "running"},
+    )
+    handoffs.transition("alice", budget["handoffId"], "stopped", stoppedReason="too_large")
+
+    data = _prepare(client, run_id, summary["stepId"]).json()
+
+    assert data["parts"][1]["status"] == "stopped"
+    second = data["readsBlock"].split("\n\n<handoff_context ")[1]
+    assert second.startswith('from_conversation="Claude Haiku 5.5 · budget">')
+    assert DELIVERY_PART_STATUS_NOTES["stopped"] in second
+
+
+def test_the_shared_renderer_is_what_prepare_sends_and_says_what_it_waits_on(collect_client, stores, steps, prompted, table):
+    """``run_reads.render_step_reads`` is the one renderer: prepare's block, and the Runtime's for a prompt step."""
+    import asyncio
+
+    from apis.shared.handoff.run_reads import StepReadsNotSettled, render_step_reads
+
+    handoffs, runs = stores
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    generalist, budget, summary = created["steps"]
+    run = runs.get("alice", run_id)
+    reader = next(s for s in run.steps if s.step_id == summary["stepId"])
+
+    with pytest.raises(StepReadsNotSettled) as waiting:
+        asyncio.run(render_step_reads("alice", "src", run, reader, store=handoffs))
+    assert waiting.value.waiting == ["Generalist", "Claude Haiku 5.5"]
+    assert str(waiting.value) == "Waiting for Generalist, Claude Haiku 5.5 to finish"
+
+    handoffs.accept("alice", generalist["handoffId"], target_session_id="t0", context_edited=False, context_removed=False)
+    handoffs.transition("alice", generalist["handoffId"], "done")
+    steps.target("t0", generalist["handoffId"], "Generalist · Review", [(1, "Strong aims.", "2026-01-01T00:00:00Z")])
+    _finish_prompt(table, budget["handoffId"], "Personnel 60%.")
+
+    block, parts = asyncio.run(render_step_reads("alice", "src", run, reader, store=handoffs))
+
+    assert block == _prepare(client, run_id, summary["stepId"]).json()["readsBlock"]
+    assert [(p.step_name, p.agent_name, p.status) for p in parts] == [
+        ("generalist", "Generalist", "done"), ("budget", "Claude Haiku 5.5", "done"),
+    ]
+    first_step = next(s for s in run.steps if s.step_id == generalist["stepId"])
+    assert asyncio.run(render_step_reads("alice", "src", run, first_step, store=handoffs)) == ("", [])
+
+
+def test_a_prompt_step_that_reads_nothing_stores_an_empty_set_and_gets_no_input(make_client, stores, prompted, skills):
+    skills.files["wf-key"] = PROMPT_FILE.replace(f"| budget     | prompt | {HAIKU}    | files                       |", f"| budget     | prompt | {HAIKU}    |                             |")
+    data = _start(make_client()).json()
+
+    stored = stores[1].get("alice", data["run"]["runId"])
+    budget = stored.steps[1]
+    assert budget.reads == []
+    assert (budget.reads_input("request"), budget.reads_input("files")) == (False, False)
+
+
+def test_a_prompt_steps_run_row_with_no_reads_reads_as_both_and_a_list_is_exact():
+    from apis.shared.handoff.runs import WorkflowRunStep
+
+    absent = WorkflowRunStep(step_id="s", handoff_id="h", kind="prompt", model_id=HAIKU)
+    assert (absent.reads_input("request"), absent.reads_input("files")) == (True, True)
+    steps_only = WorkflowRunStep(step_id="s", handoff_id="h", kind="prompt", model_id=HAIKU, reads=["generalist"])
+    assert (steps_only.reads_input("request"), steps_only.reads_input("files")) == (False, False)
+    agent = WorkflowRunStep(step_id="s", handoff_id="h", agent_id="a", reads=["generalist"])
+    assert (agent.reads_input("request"), agent.reads_input("files")) == (True, True)
+
+
+def test_the_input_names_in_a_prompt_steps_reads_never_read_as_steps(collect_client, stores, steps, prompted, table):
+    """``render_step_reads`` matches steps by name, and no step may be named ``request`` or ``files``."""
+    import asyncio
+
+    from apis.shared.handoff.run_reads import render_step_reads, steps_read_by
+
+    handoffs, runs = stores
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    run = runs.get("alice", run_id)
+    budget = next(s for s in run.steps if s.step_name == "budget")
+    summary = next(s for s in run.steps if s.step_name == "summary")
+
+    assert budget.reads == ["files"] and steps_read_by(run, budget) == []
+    assert asyncio.run(render_step_reads("alice", "src", run, budget, store=handoffs)) == ("", [])
+    assert [s.step_name for s in steps_read_by(run, summary)] == ["generalist", "budget"]

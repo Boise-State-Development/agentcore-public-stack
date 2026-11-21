@@ -26,6 +26,15 @@ step's ``reads``; the tab's queue starts such a step only once everything it rea
 steps' results as the same ``<handoff_context>`` part blocks a run result carries, then its
 request. That message is sent as the step's own text, so the Runtime and the turn path are
 unchanged, and nothing is rendered on a turn.
+
+**Prompt steps (workflow-designer §21.3, PR-D.6a).** A saved workflow's step may be one model call
+with no Agent and no conversation. Its row is a ``HANDOFF#`` row of kind ``prompt`` (never a
+mention, so no turn can accept it), created here and approved like any step; the Runtime's
+``workflow_prompt`` invocation claims and finishes it. Create refuses one while
+``PROMPT_STEPS_ENABLED`` is off, and one on a model the starter can't run, as sheet blockers.
+Its result is the row's ``outputText``: a text-only part, with no artifacts and no files, in
+collect and in a later step's ``prepare`` alike. ``runSteps`` counts only the steps that have a
+conversation, so the sidebar's count of a run's step conversations can still reach it.
 """
 
 from __future__ import annotations
@@ -34,8 +43,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -45,9 +53,8 @@ from apis.shared.feature_flags import workflow_runs_enabled, workflows_enabled
 from apis.shared.files.linked_files import HANDOFF_MAX_FILES
 from apis.shared.handoff import HandoffStore, HandoffStoreUnavailable, TurnsCovered, get_handoff_store
 from apis.shared.handoff.context import (
-    DeliveryPartBlock,
     build_handoff_message,
-    render_delivery_parts,
+    context_hash,
 )
 from apis.shared.files.linked_files import DELIVERY_MAX_FILES
 from apis.shared.handoff.delivery_turn import join_delivery_blocks
@@ -59,8 +66,15 @@ from apis.shared.handoff.delivery import (
     get_delivery_store,
 )
 from apis.shared.handoff.metrics import emit_workflow_run_metric
-from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, Handoff, HandoffView
+from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, KIND_PROMPT_STEP, Handoff, HandoffView
 from apis.shared.handoff.relay import load_relayed_prompts
+from apis.shared.handoff.run_reads import (
+    StepReadsNotSettled,
+    finished_by,
+    part_status,
+    prompt_part,
+    render_step_reads,
+)
 from apis.shared.handoff.runs import (
     WORKFLOW_RUN_MAX_STEPS,
     WORKFLOW_RUN_MIN_STEPS,
@@ -89,18 +103,23 @@ from apis.shared.workflows.format import (
     FILES_NONE,
     FILES_ONE,
     INPUT_READS,
+    KIND_PROMPT,
     RESULT_MERGE,
     Workflow,
     WorkflowError,
+    WorkflowStep,
     require_workflow_name,
     workflow_fingerprint,
 )
 from apis.shared.workflows.sheet import (
+    AgentView,
+    ModelView,
     WorkflowNotFound,
     WorkflowUnreadable,
     agent_views,
     load_workflow,
     merge_instruction,
+    model_views,
     sheet_for,
     step_model,
     without_steps,
@@ -179,14 +198,21 @@ class CreatedRunStep(BaseModel):
 
     step_id: str = Field(..., alias="stepId")
     handoff_id: str = Field(..., alias="handoffId")
-    agent_id: str = Field(..., alias="agentId")
-    agent_name: str = Field(..., alias="agentName")
+    kind: Optional[str] = Field(None, description="prompt for a prompt step (§21.3); absent for an Agent step")
+    agent_id: str = Field(..., alias="agentId", description="Empty on a prompt step")
+    agent_name: str = Field(..., alias="agentName", description="The Agent's name; a prompt step's model's name")
     request: str
-    prompt: str = Field(..., description="The full first message this step's Agent receives: contextBlock, then request")
+    prompt: str = Field(
+        ...,
+        description=(
+            "The full first message this step's Agent receives: contextBlock, then request. A prompt "
+            "step gets no card, so its prompt is its instruction alone; the run's files go before it"
+        ),
+    )
     model_id: Optional[str] = Field(
         None,
         alias="modelId",
-        description="The Agent's own model, after retirement redirects. None when the Agent names none: the step runs on the model the send names, as a single handoff does",
+        description="The Agent's own model, or a prompt step's, after retirement redirects. None when the Agent names none: the step runs on the model the send names, as a single handoff does",
     )
     input_price_per_million_tokens: Optional[float] = Field(
         None,
@@ -252,7 +278,19 @@ async def create_workflow_run(
     rows: List[Handoff] = list(
         await asyncio.gather(
             *(
-                handoff_routes._open_mention(
+                _open_prompt_step(
+                    store,
+                    user,
+                    session_id,
+                    source,
+                    card,
+                    step,
+                    request=_step_request(step.request, shared_request),
+                    run_id=run_id,
+                    step_id=step_id,
+                )
+                if step.kind == KIND_PROMPT
+                else handoff_routes._open_mention(
                     store,
                     user,
                     session_id,
@@ -280,12 +318,15 @@ async def create_workflow_run(
             WorkflowRunStep(
                 step_id=row.step_id or "",
                 handoff_id=row.handoff_id,
+                kind="prompt" if row.is_prompt_step else None,
                 agent_id=row.agent_id,
                 agent_name=row.agent_name,
+                model_id=row.model_id if row.is_prompt_step else None,
                 request=row.request,
                 step_name=step.step_name,
                 agent_version=step.agent_version,
-                reads=list(step.reads) or None,
+                # A prompt step keeps its whole set, even empty; an Agent step only the steps it reads.
+                reads=list(step.reads) if step.kind == KIND_PROMPT else (list(step.reads) or None),
             )
             for row, step in zip(rows, plan.steps)
         ],
@@ -303,7 +344,12 @@ async def create_workflow_run(
     emit_workflow_run_metric(
         "WorkflowRunCreated", session_id=session_id, run_id=run_id, step_count=len(rows), **source_kw
     )
-    first = handoff_routes._card_response(rows[0], card)
+    # Every Agent step gets the same card; a prompt step gets none, so the card is read off an Agent
+    # step's row, or rendered for a run of prompt steps alone exactly as it would be for one.
+    card_row = next((row for row in rows if not row.is_prompt_step), None) or rows[0].model_copy(
+        update={"excerpt_hash": context_hash(card.excerpt.text)}
+    )
+    first = handoff_routes._card_response(card_row, card)
     return CreateWorkflowRunResponse(
         run=WorkflowRunView.from_row(run, {row.handoff_id: HandoffView.from_row(row) for row in rows}),
         excerpt=first.excerpt,
@@ -317,10 +363,11 @@ async def create_workflow_run(
             CreatedRunStep(
                 step_id=row.step_id or "",
                 handoff_id=row.handoff_id,
+                kind="prompt" if row.is_prompt_step else None,
                 agent_id=row.agent_id,
                 agent_name=row.agent_name,
                 request=row.request,
-                prompt=build_handoff_message(first.context_block, row.request),
+                prompt=row.request if row.is_prompt_step else build_handoff_message(first.context_block, row.request),
                 model_id=step.model_id,
                 input_price_per_million_tokens=step.rate,
             )
@@ -331,7 +378,11 @@ async def create_workflow_run(
 
 @dataclass(frozen=True)
 class _PlannedStep:
-    """One step to open: its Agent as the caller sees it, its own request, and how to price it."""
+    """One step to open: its worker as the caller sees it, its own request, and how to price it.
+
+    A prompt step (``kind`` ``prompt``) has no Agent: ``agent_id`` is empty, ``agent_name`` is its
+    model's display name, and ``model_id`` / ``rate`` are that model's, from its catalog row.
+    """
 
     agent_id: str
     agent_name: str
@@ -340,8 +391,54 @@ class _PlannedStep:
     rate: Optional[float]
     step_name: Optional[str] = None
     agent_version: Optional[int] = None
-    #: The other steps this one reads, by name, in step order (PR-D.5a). Empty for a mention run.
+    #: What this one reads (PR-D.5a): the other steps by name, in step order, for an Agent step (empty
+    #: for a mention run); the whole set in canonical order, inputs included, for a prompt step (§21.3).
     reads: tuple = ()
+    kind: str = "agent"
+
+
+async def _open_prompt_step(
+    store: HandoffStore,
+    user: User,
+    session_id: str,
+    source: Any,
+    card: Any,
+    step: _PlannedStep,
+    *,
+    request: str,
+    run_id: str,
+    step_id: str,
+) -> Handoff:
+    """Write one ``open`` prompt step row (workflow-designer §21.3): no Agent, no card, no target.
+
+    It sits where the run's row sits in the thread, on the model its catalog row resolved to. Never
+    a ``mention``, so no turn's ``handoff_context`` can accept it (``HandoffTurn`` refuses the kind).
+    503 when the store isn't configured.
+    """
+    now = utc_now_iso()
+    row = Handoff(
+        handoff_id=str(uuid.uuid4()),
+        user_id=user.user_id,
+        session_id=session_id,
+        kind=KIND_PROMPT_STEP,
+        status="open",
+        agent_id="",
+        agent_name=step.agent_name,
+        request=request.strip(),
+        source_title=getattr(source, "title", None) or "",
+        source_message_index=card.last_index,
+        created_at=now,
+        updated_at=now,
+        run_id=run_id,
+        step_id=step_id,
+        model_id=step.model_id,
+    )
+    try:
+        await asyncio.to_thread(store.create, row)
+    except HandoffStoreUnavailable:
+        logger.error("Handoff store is not configured")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Handoffs are unavailable")
+    return row
 
 
 @dataclass(frozen=True)
@@ -404,8 +501,8 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
     trimmed, removed = without_steps(workflow, ref.removed_steps)
-    agents = await agent_views(trimmed, user)
-    sheet = sheet_for(trimmed, agents)
+    agents, models = await asyncio.gather(agent_views(trimmed, user), model_views(trimmed, user))
+    sheet = sheet_for(trimmed, agents, models)
     if sheet.blockers:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -418,19 +515,7 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
     shared = request.strip() or (workflow.request or "").strip()
     return _RunPlan(
         request=shared,
-        steps=[
-            _PlannedStep(
-                agent_id=step.agent_id,
-                agent_name=agents[step.agent_id].name or "",
-                request=step.request,
-                model_id=agents[step.agent_id].model_id,
-                rate=agents[step.agent_id].input_price_per_million_tokens,
-                step_name=step.name,
-                agent_version=agents[step.agent_id].published_version,
-                reads=tuple(read for read in step.reads if read not in INPUT_READS),
-            )
-            for step in trimmed.steps
-        ],
+        steps=[_planned_step(step, agents, models) for step in trimmed.steps],
         workflow=WorkflowRunSource(
             skill_id=skill.skill_id,
             name=workflow.name,
@@ -442,6 +527,38 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
             result_reads=list(trimmed.result.reads) if trimmed.result.reads is not None else None,
             **_result_merge(trimmed),
         ),
+    )
+
+
+def _planned_step(step: WorkflowStep, agents: Dict[str, AgentView], models: Dict[str, ModelView]) -> _PlannedStep:
+    """A saved workflow's step as the run opens it: its Agent, or a prompt step's model, as the caller.
+
+    An Agent step's reads drop the inputs, since every Agent step gets the request and the files. A
+    prompt step keeps them, in the file's canonical order (request, files, then steps), because it
+    gets the request or the documents only when it reads them, and the Runtime reads that here.
+    """
+    if step.is_prompt:
+        model = models[step.model_id or ""]
+        return _PlannedStep(
+            agent_id="",
+            agent_name=model.name or model.model_id,
+            request=step.request,
+            model_id=model.model_id,
+            rate=model.input_price_per_million_tokens,
+            step_name=step.name,
+            reads=tuple(step.reads),
+            kind=KIND_PROMPT,
+        )
+    agent = agents[step.agent_id]
+    return _PlannedStep(
+        agent_id=step.agent_id,
+        agent_name=agent.name or "",
+        request=step.request,
+        model_id=agent.model_id,
+        rate=agent.input_price_per_million_tokens,
+        step_name=step.name,
+        agent_version=agent.published_version,
+        reads=tuple(read for read in step.reads if read not in INPUT_READS),
     )
 
 
@@ -612,9 +729,12 @@ async def approve_workflow_run(
     if updated is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This run was already started or cancelled")
 
+    # The steps with a conversation, which is what the sidebar counts a run's step conversations
+    # against: a prompt step never has one (workflow-designer §21.3).
+    conversations = sum(1 for step in kept if not step.is_prompt)
     await asyncio.gather(
         *(
-            _settle_step(store, user, run_id, step, approved_at, edited_requests.get(step.step_id), len(kept))
+            _settle_step(store, user, run_id, step, approved_at, edited_requests.get(step.step_id), conversations)
             for step in approved
         )
     )
@@ -668,7 +788,9 @@ async def _settle_step(
 ) -> None:
     """Dismiss a removed step's row, or mark a kept one approved. A row that moved on is left alone.
 
-    A kept row also gets ``runSteps``, the run's kept count, which approval fixes for good.
+    A kept row also gets ``runSteps``, the run's kept count of steps with a conversation (Agent
+    steps; a prompt step has none), which approval fixes for good. A prompt step's row is settled
+    the same way: it waits ``open`` for the Runtime to claim it.
     """
     if step.removed:
         moved = await asyncio.to_thread(store.transition, user.user_id, step.handoff_id, "dismissed")
@@ -847,55 +969,23 @@ def _result_steps(run: WorkflowRun) -> List[WorkflowRunStep]:
     return named or kept
 
 
-#: A step row's status as its part reads it. ``open`` depends on the run (see ``_part_status``).
-_PART_STATUS: Dict[str, DeliveryPartStatus] = {
-    "done": "done",
-    "stopped": "stopped",
-    "needs_input": "needs_input",
-    "running": "running",
-    "dismissed": "stopped",
-    "abandoned": "stopped",
-}
+async def _part_for(user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff]) -> DeliveryPartRequest:
+    """One kept step as collect's part, before ``create_delivery``'s checks. Reads the step's answer only when done.
 
-
-def _part_status(run: WorkflowRun, row: Optional[Handoff]) -> DeliveryPartStatus:
-    """What a kept step's part says. A step that never started is still to come in an approved run
-    (the tab's queue), and will never start in a stopped one."""
-    if row is None or row.run_id != run.run_id:
-        return "stopped"
-    effective = row.effective_status()
-    if effective == "open":
-        return "running" if run.status == "approved" else "stopped"
-    if effective == "done" and not row.target_session_id:
-        return "stopped"
-    return _PART_STATUS.get(effective, "stopped")
-
-
-async def _part_for(
-    user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff], *, references: bool = True
-) -> DeliveryPartRequest:
-    """One kept step as its part, before ``create_delivery``'s checks. Reads the step's answer only when done.
-
-    ``references=False`` reads the answer alone, for a part that carries no artifact or file
-    (``…/prepare``'s): the two lookups for them would only be thrown away.
+    With the artifacts that answer made and the step conversation's own files, as Bring back result
+    picks them. A prompt step's part is its text alone (``run_reads.prompt_part``). A later step's
+    reads go through ``run_reads.render_step_reads`` instead, which carries text only.
     """
-    part_status = _part_status(run, row)
+    status_now = part_status(run, row)
+    if step.is_prompt:
+        return prompt_part(step, row, status_now)
     target = (row.target_session_id or "") if row is not None and row.run_id == run.run_id else ""
-    if part_status != "done":
+    if status_now != "done":
         return DeliveryPartRequest(
-            step_id=step.step_id, agent_name=step.agent_name, status=part_status, from_session_id=target
+            step_id=step.step_id, agent_name=step.agent_name, status=status_now, from_session_id=target
         )
     assert row is not None
-    finished_at = _finished_by(row.updated_at)
-    if not references:
-        found = await answer_message(target, user.user_id, at_or_before=finished_at)
-        return DeliveryPartRequest(
-            step_id=step.step_id,
-            agent_name=step.agent_name,
-            status="done",
-            from_session_id=target,
-            text=render_return_excerpt(found[0]) if found is not None else "",
-        )
+    finished_at = finished_by(row.updated_at)
     found, files = await asyncio.gather(
         answer_message(target, user.user_id, at_or_before=finished_at),
         asyncio.to_thread(offered_files, user.user_id, target, created_before=finished_at),
@@ -917,21 +1007,8 @@ async def _part_for(
     )
 
 
-#: How long after a step's ``done`` write its own answer may still be stamped. Memory may stamp the
-#: turn's events when it flushes them, just after the status write; the user's next turn in that
-#: conversation is human-paced, far later than this.
-_SETTLE_SLACK = timedelta(seconds=60)
-
-
-def _finished_by(updated_at: str) -> str:
-    """The cutoff for "the answer as it stood when the step first finished" (spec §8)."""
-    try:
-        at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-    except ValueError:
-        return updated_at
-    if at.tzinfo is None:
-        at = at.replace(tzinfo=timezone.utc)
-    return (at + _SETTLE_SLACK).isoformat()
+#: Kept under its old name for the tests that pin the cutoff (workflow-runs §8).
+_finished_by = finished_by
 
 
 def _within_run_file_cap(parts: List[DeliveryPartRequest]) -> List[DeliveryPartRequest]:
@@ -990,10 +1067,6 @@ class PrepareRunStepResponse(BaseModel):
     parts: List[PreparedPart] = Field(default_factory=list, description="The steps it reads, in step order")
 
 
-#: A read step has settled when its part reads one of these: it will give nothing more (§6.1).
-_SETTLED_PARTS = frozenset({"done", "stopped"})
-
-
 @router.post(
     "/{session_id}/workflow-runs/{run_id}/steps/{step_id}/prepare",
     response_model=PrepareRunStepResponse,
@@ -1010,8 +1083,10 @@ async def prepare_workflow_run_step(
 ) -> PrepareRunStepResponse:
     """The first message of a step that reads other steps, rendered before its send (PR-D.5a).
 
-    Each step it reads becomes a part exactly as ``…/collect`` makes one (``_part_for``: its answer
-    as it stood when it first finished, bounded at ``SEND_BACK_MAX_TOKENS``), checked by
+    Rendered by ``apis.shared.handoff.run_reads.render_step_reads``, which the Runtime also uses for
+    a prompt step's reads, so both build the same bytes. Each step it reads becomes a part as
+    ``…/collect`` makes one (its answer as it stood when it first finished, bounded at
+    ``SEND_BACK_MAX_TOKENS``; a prompt step's ``outputText``), checked by
     ``prepare_delivery`` against this conversation as a run result is, and wrapped by
     ``render_delivery_parts``, so the Agent reads the same ``<handoff_context>`` blocks a run result
     carries. A step that stopped is named by its block, as the result card names it.
@@ -1032,60 +1107,22 @@ async def prepare_workflow_run_step(
     if step.removed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This step was removed")
 
-    names = set(step.reads or [])
-    reads = [candidate for candidate in run.steps if candidate.step_name in names and candidate.step_id != step.step_id]
-    if not reads:
+    try:
+        block, parts = await render_step_reads(user.user_id, session_id, run, step, store=store)
+    except StepReadsNotSettled as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    except DeliveryRefused as exc:
+        raise handoff_routes._refused(exc)
+    if not parts:
         return PrepareRunStepResponse(step_id=step.step_id, message=step.request, reads_block="", parts=[])
-
-    rows = await asyncio.gather(*(asyncio.to_thread(store.get, user.user_id, read.handoff_id) for read in reads))
-    statuses = ["stopped" if read.removed else _part_status(run, row) for read, row in zip(reads, rows)]
-    waiting = [read.agent_name or read.step_name or "a step" for read, s in zip(reads, statuses) if s not in _SETTLED_PARTS]
-    if waiting:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=f"Waiting for {', '.join(waiting)} to finish"
-        )
-
-    parts = await asyncio.gather(
-        *(_read_part(user, run, read, row, part_status) for read, row, part_status in zip(reads, rows, statuses))
-    )
-    block = await _render_reads(user, session_id, run_id, list(parts))
     return PrepareRunStepResponse(
         step_id=step.step_id,
         message=join_delivery_blocks([block], step.request.strip()),
         reads_block=block,
         parts=[
-            PreparedPart(step_id=read.step_id, step_name=read.step_name, agent_name=read.agent_name, status=part.status)
-            for read, part in zip(reads, parts)
+            PreparedPart(step_id=p.step_id, step_name=p.step_name, agent_name=p.agent_name, status=p.status)
+            for p in parts
         ],
-    )
-
-
-async def _read_part(
-    user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff], part_status: str
-) -> DeliveryPartRequest:
-    """A read step as its part: ``_part_for``'s, text only, since the artifacts and files it names
-    are references into that step's conversation, which the reading step's can't open. So their
-    lookups are skipped, and the step's answer is the only read."""
-    if part_status != "done":
-        return DeliveryPartRequest(step_id=step.step_id, agent_name=step.agent_name, status="stopped")
-    return await _part_for(user, run, step, row, references=False)
-
-
-async def _render_reads(user: User, session_id: str, run_id: str, parts: List[DeliveryPartRequest]) -> str:
-    """The parts as the model reads a run result's, through the checks a result's parts pass."""
-    try:
-        row = await prepare_delivery(user_id=user.user_id, to_session_id=session_id, parts=parts, run_id=run_id)
-    except DeliveryRefused as exc:
-        if exc.reason != "empty":
-            raise handoff_routes._refused(exc)
-        # Nothing finished with text: each part is its status note, which needs no sender.
-        blocks = [DeliveryPartBlock(text="", agent_name=p.agent_name, from_title="", status=p.status) for p in parts]
-        return render_delivery_parts(blocks)
-    return render_delivery_parts(
-        [
-            DeliveryPartBlock(text=p.text, agent_name=p.agent_name, from_title=p.from_title, status=p.status)
-            for p in row.parts
-        ]
     )
 
 

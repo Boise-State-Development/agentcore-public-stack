@@ -443,7 +443,7 @@ class HandoffStore:
 
 def _from_item(item: Dict[str, Any]) -> Handoff:
     data = {k: v for k, v in item.items() if k not in _KEY_ATTRS}
-    for key in ("sourceMessageIndex", "excerptTokens", "runSteps"):
+    for key in ("sourceMessageIndex", "excerptTokens", "runSteps", "outputTokens"):
         if key in data:
             data[key] = int(data[key])
     turns = data.get("turnsCovered")
