@@ -5,6 +5,8 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { FileUploadService } from '../../../services/file-upload/file-upload.service';
 import { FEATURES } from '../../../services/features';
+import { WorkflowFilesRule } from '../../../services/workflows/workflow.models';
+import { WorkflowsApiService, definitionOf } from '../../../services/workflows/workflows-api.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ChatHttpService } from '../chat/chat-http.service';
 import { ChatRequestService } from '../chat/chat-request.service';
@@ -24,9 +26,11 @@ import {
   CreateWorkflowRunResponse,
   DEFAULT_RUN_CONCURRENCY,
   RunDraft,
+  RunDraftWorkflow,
   RunEnvelope,
   RunReview,
   RunReviewStep,
+  RunReviewWorkflowStep,
   RunShareableFile,
   RunStepLaunch,
   WorkflowRunCard,
@@ -68,11 +72,19 @@ export class WorkflowRunService {
   private readonly chatState = inject(ChatStateService);
   private readonly chatHttp = inject(ChatHttpService);
   private readonly sessions = inject(SessionService);
+  private readonly workflowsApi = inject(WorkflowsApiService);
 
-  /** Open the run sheet for a message that mentioned several Agents. Nothing is sent. */
+  /**
+   * Open the run sheet: for a message that mentioned several Agents, or for a saved workflow
+   * (`draft.workflow`, PR-D.2), whose run the server builds from the workflow's file. Nothing is
+   * sent. A saved workflow with a step the starter can't run opens `blocked`, listing the step and
+   * why; its run is created once every such step is removed. Anything else that blocks it is
+   * shown as the sheet's error.
+   */
   async open(sourceSessionId: string, draft: RunDraft): Promise<void> {
     const previous = this.state.reviewFor(sourceSessionId);
     if (previous) this.discard(sourceSessionId, previous);
+    const workflow = draft.workflow;
     this.state.setReview(sourceSessionId, {
       draft,
       phase: 'loading',
@@ -81,27 +93,54 @@ export class WorkflowRunService {
       card: '',
       cardRemoved: false,
       fileIds: [],
+      ...(workflow ? { workflow, removedSteps: [] } : {}),
     });
     void this.loadShareableFiles(sourceSessionId);
+    if (workflow) {
+      const blockers = workflow.document.sheet.blockers;
+      const hard = blockers.filter((blocker) => blocker.code !== 'step_unavailable');
+      if (hard.length) {
+        this.state.updateReview(sourceSessionId, { phase: 'error', error: blockerSentences(hard) });
+        return;
+      }
+      if (blockers.length) {
+        this.state.updateReview(sourceSessionId, { phase: 'blocked', steps: blockedSteps(workflow) });
+        return;
+      }
+    }
+    await this.createRun(sourceSessionId, draft);
+  }
+
+  /** Ask app-api for the run and its one card, and fill the sheet with them. */
+  private async createRun(sourceSessionId: string, draft: RunDraft): Promise<void> {
+    const opening = this.state.reviewFor(sourceSessionId);
+    const workflow = opening?.workflow;
+    const body = workflow
+      ? {
+          request: opening?.request ?? '',
+          workflow: { ...workflow.ref, removedSteps: opening?.removedSteps ?? [] },
+        }
+      : { request: draft.request, steps: draft.agents.map((agent) => ({ agentId: agent.agentId })) };
     try {
-      const created = await firstValueFrom(
-        this.http.post<CreateWorkflowRunResponse>(this.runsUrl(sourceSessionId), {
-          request: draft.request,
-          steps: draft.agents.map((agent) => ({ agentId: agent.agentId })),
-        }),
-      );
-      if (this.state.reviewFor(sourceSessionId)?.draft !== draft) {
+      const created = await firstValueFrom(this.http.post<CreateWorkflowRunResponse>(this.runsUrl(sourceSessionId), body));
+      const current = this.state.reviewFor(sourceSessionId);
+      if (current?.draft !== draft) {
         // Cancelled (or replaced) while the card was loading: dismiss what the server just opened.
         void this.dismiss(sourceSessionId, created.run.runId);
         return;
       }
-      const brief = this.features.handoffBrief && created.steps.length ? ({ status: 'writing', text: '' } as const) : undefined;
+      // No brief for a conversation with nothing in it yet (a workflow started in a new one).
+      const brief =
+        this.features.handoffBrief && created.steps.length && created.excerpt
+          ? ({ status: 'writing', text: '' } as const)
+          : undefined;
+      const fileRule = current.workflow?.document.workflow.files;
       this.state.updateReview(sourceSessionId, {
         phase: 'ready',
         created,
         request: created.run.request,
         steps: created.steps.map(
-          (step): RunReviewStep => ({
+          (step, index): RunReviewStep => ({
             stepId: step.stepId,
             handoffId: step.handoffId,
             agentId: step.agentId,
@@ -110,15 +149,62 @@ export class WorkflowRunService {
             removed: false,
             modelId: step.modelId,
             inputPricePerMillionTokens: step.inputPricePerMillionTokens,
+            workflowStep: workflowStepFor(current.workflow, created.run.steps[index]?.stepName),
           }),
         ),
         card: created.excerpt,
         brief: brief ? { ...brief } : undefined,
+        fileIds: withinFileRule(current.fileIds, fileRule),
       });
       if (brief) void this.requestBrief(sourceSessionId, created, draft);
     } catch (error) {
+      if (this.state.reviewFor(sourceSessionId)?.draft !== draft) return;
       this.state.updateReview(sourceSessionId, { phase: 'error', error: describeError(error) });
     }
+  }
+
+  /**
+   * Mark as reviewed (§10): the workflow's owner records the step Agent's current published
+   * version in the file, so the sheet stops saying it changed. One `PUT /workflows/…`; the run
+   * already opened is unchanged. Only offered to the owner, and the server refuses anyone else.
+   */
+  async markReviewed(sourceSessionId: string, stepName: string): Promise<void> {
+    const review = this.state.reviewFor(sourceSessionId);
+    const workflow = review?.workflow;
+    if (!review || !workflow?.document.workflow.isOwned || review.reviewingStep) return;
+    const view = workflow.document.workflow;
+    const step = view.steps.find((candidate) => candidate.name === stepName);
+    const version = step?.agent.publishedVersion;
+    if (!step || version === undefined) return;
+    this.state.updateReview(sourceSessionId, { reviewingStep: stepName });
+    const definition = definitionOf({
+      ...view,
+      steps: view.steps.map((candidate) => (candidate.name === stepName ? { ...candidate, agentVersion: version } : candidate)),
+    });
+    try {
+      const document = await this.workflowsApi.save(workflow.ref, definition);
+      const current = this.state.reviewFor(sourceSessionId);
+      if (current?.draft !== review.draft) return;
+      this.state.updateReview(sourceSessionId, {
+        reviewingStep: undefined,
+        workflow: { ref: workflow.ref, document },
+        steps: current.steps.map((candidate) =>
+          candidate.workflowStep?.name === stepName
+            ? { ...candidate, workflowStep: { ...candidate.workflowStep, changed: false } }
+            : candidate,
+        ),
+      });
+    } catch {
+      if (this.state.reviewFor(sourceSessionId)?.draft === review.draft) {
+        this.state.updateReview(sourceSessionId, { reviewingStep: undefined });
+      }
+      this.toast.error('The step couldn’t be marked as reviewed', 'Try again.');
+    }
+  }
+
+  /** List the conversation's files again, e.g. after attaching one for a workflow that needs one. */
+  refreshFiles(sourceSessionId: string): void {
+    void this.loadShareableFiles(sourceSessionId);
   }
 
   setRequest(sourceSessionId: string, request: string): void {
@@ -130,11 +216,32 @@ export class WorkflowRunService {
     this.updateStep(sourceSessionId, stepId, { ownRequest: request });
   }
 
-  /** Remove a step from the run. The last one stays: a run of one still starts (§20.1). */
+  /**
+   * Remove a step from the run. The last one stays: a run of one still starts (§20.1). On a saved
+   * workflow's blocked sheet, every step that reads the removed one goes with it, and once no step
+   * the starter can't run is left, the run is created without them.
+   */
   removeStep(sourceSessionId: string, stepId: string): void {
     const review = this.state.reviewFor(sourceSessionId);
     if (!review || keptSteps(review).length <= 1) return;
+    if (review.phase === 'blocked') {
+      this.removeBlockedStep(sourceSessionId, review, stepId);
+      return;
+    }
     this.updateStep(sourceSessionId, stepId, { removed: true });
+  }
+
+  private removeBlockedStep(sourceSessionId: string, review: RunReview, stepId: string): void {
+    const name = review.steps.find((step) => step.stepId === stepId)?.workflowStep?.name;
+    if (!name) return;
+    const gone = withReaders(review.steps, name);
+    const steps = review.steps.map((step) =>
+      step.workflowStep && gone.has(step.workflowStep.name) ? { ...step, removed: true } : step,
+    );
+    const removedSteps = [...(review.removedSteps ?? []), ...[...gone].filter((n) => !(review.removedSteps ?? []).includes(n))];
+    const blocked = steps.some((step) => !step.removed && step.workflowStep?.unavailable);
+    this.state.updateReview(sourceSessionId, { steps, removedSteps, ...(blocked ? {} : { phase: 'loading' as const }) });
+    if (!blocked) void this.createRun(sourceSessionId, review.draft);
   }
 
   setCard(sourceSessionId: string, card: string): void {
@@ -149,7 +256,10 @@ export class WorkflowRunService {
   setFileShared(sourceSessionId: string, uploadId: string, shared: boolean): void {
     const review = this.state.reviewFor(sourceSessionId);
     if (!review) return;
-    const rest = review.fileIds.filter((id) => id !== uploadId);
+    const rule = review.workflow?.document.workflow.files;
+    if (shared && rule === 'none') return;
+    // A workflow that takes exactly one file swaps the ticked one rather than adding a second.
+    const rest = rule === 'one' ? [] : review.fileIds.filter((id) => id !== uploadId);
     if (shared && rest.length >= MAX_SHARED_FILES) return;
     const order = (review.files ?? []).map((f) => f.uploadId);
     const next = shared ? [...rest, uploadId] : rest;
@@ -444,8 +554,12 @@ export class WorkflowRunService {
     const current = this.state.reviewFor(sourceSessionId);
     if (!current || current.draft !== review?.draft) return;
     const recent = recentlyAttachedIds(untracked(this.messageMap.getMessagesForSession(sourceSessionId)));
-    const ticked = files.filter((f) => recent.has(f.uploadId)).slice(0, MAX_SHARED_FILES);
-    this.state.updateReview(sourceSessionId, { files, fileIds: ticked.map((f) => f.uploadId) });
+    const ticked = files.filter((f) => recent.has(f.uploadId)).slice(0, MAX_SHARED_FILES).map((f) => f.uploadId);
+    const listed = new Set(files.map((f) => f.uploadId));
+    // A second listing (Look again) keeps what the user already ticked.
+    const kept = current.fileIds.filter((id) => listed.has(id));
+    const rule = current.workflow?.document.workflow.files;
+    this.state.updateReview(sourceSessionId, { files, fileIds: withinFileRule(kept.length ? kept : ticked, rule) });
   }
 
   private async dismiss(sourceSessionId: string, runId: string): Promise<void> {
@@ -481,8 +595,77 @@ export function stepRequest(review: RunReview, step: RunReviewStep): string {
 /** Start is allowed once the sheet is ready, the brief has settled and every kept step has a request. */
 export function canStart(review: RunReview): boolean {
   if (review.phase !== 'ready' || review.brief?.status === 'writing') return false;
+  if (!meetsFileRule(review)) return false;
   const kept = keptSteps(review);
   return kept.length > 0 && kept.every((step) => stepRequest(review, step).length > 0);
+}
+
+/** A saved workflow's `files` rule (none, exactly one, any) holds for the ticked files. */
+export function meetsFileRule(review: RunReview): boolean {
+  const rule = review.workflow?.document.workflow.files;
+  if (rule === 'none') return review.fileIds.length === 0;
+  if (rule === 'one') return review.fileIds.length === 1;
+  return true;
+}
+
+/** The ticked files cut to what a workflow's rule allows. */
+function withinFileRule(fileIds: string[], rule: WorkflowFilesRule | undefined): string[] {
+  if (rule === 'none') return [];
+  if (rule === 'one') return fileIds.slice(0, 1);
+  return fileIds;
+}
+
+/** A blocked workflow sheet's rows, before the run exists: one per step, keyed by its name. */
+function blockedSteps(workflow: RunDraftWorkflow): RunReviewStep[] {
+  return workflow.document.workflow.steps.map(
+    (step): RunReviewStep => ({
+      stepId: `workflow-step:${step.name}`,
+      handoffId: '',
+      agentId: step.agentId,
+      agentName: step.agent.name ?? '',
+      ownRequest: step.request ?? null,
+      removed: false,
+      modelId: step.agent.modelId,
+      inputPricePerMillionTokens: step.agent.inputPricePerMillionTokens,
+      workflowStep: workflowStepFor(workflow, step.name),
+    }),
+  );
+}
+
+/** What the sheet says about one saved step, from the workflow's document. */
+function workflowStepFor(workflow: RunDraftWorkflow | undefined, name: string | undefined): RunReviewWorkflowStep | undefined {
+  const step = name ? workflow?.document.workflow.steps.find((candidate) => candidate.name === name) : undefined;
+  if (!step) return undefined;
+  return {
+    name: step.name,
+    readsSteps: step.reads.filter((read) => read !== 'request' && read !== 'files'),
+    unavailable: !step.agent.canRun,
+    changed: step.agent.changed,
+    publishedVersion: step.agent.publishedVersion,
+    runsDraft: step.agent.runsDraft,
+  };
+}
+
+/** `name` and every step that reads it, directly or through another (§20.1). */
+function withReaders(steps: readonly RunReviewStep[], name: string): Set<string> {
+  const gone = new Set([name]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const step of steps) {
+      const saved = step.workflowStep;
+      if (saved && !gone.has(saved.name) && saved.readsSteps.some((read) => gone.has(read))) {
+        gone.add(saved.name);
+        grew = true;
+      }
+    }
+  }
+  return gone;
+}
+
+/** The server's blocker messages as sentences. */
+function blockerSentences(blockers: readonly { message: string }[]): string {
+  return blockers.map((blocker) => `${blocker.message}.`).join(' ');
 }
 
 /** The run row keeps the card as reviewed (PR-W.4b), so its unstarted steps can start anywhere. */
@@ -509,6 +692,11 @@ function recentlyAttachedIds(messages: readonly Message[]): Set<string> {
 }
 
 function describeError(error: unknown): string {
+  const detail: unknown = error instanceof HttpErrorResponse ? error.error?.detail : undefined;
+  if (detail && typeof detail === 'object' && typeof (detail as { message?: unknown }).message === 'string') {
+    // A saved workflow the server won't start: its sheet's own blockers.
+    return (detail as { message: string }).message;
+  }
   if (error instanceof HttpErrorResponse && error.status === 404) {
     return 'One of these Agents isn’t available to you, or the conversation can’t be found.';
   }
@@ -519,6 +707,9 @@ function describeError(error: unknown): string {
 }
 
 function describeApproveError(error: unknown): string {
+  if (error instanceof HttpErrorResponse && error.status === 422 && typeof error.error?.detail === 'string') {
+    return `${error.error.detail}.`;
+  }
   if (error instanceof HttpErrorResponse && error.status === 409) {
     return 'These Agents were already started or the handoff was cancelled.';
   }

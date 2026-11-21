@@ -240,6 +240,12 @@
             </div>
           }
 
+          <!-- A saved workflow started in a conversation with no turns yet opens its run sheet
+               here (workflow-designer spec §20.2). Renders only while one is open; a run of
+               mentions never opens one in an empty conversation. -->
+          @if (sessionId(); as sid) {
+            <app-workflow-run-sheet [sessionId]="sid" />
+          }
           <div class="relative">
             <app-chat-input
               [showAnnouncements]="showAnnouncements()"
