@@ -20,6 +20,7 @@ import { HandoffBriefService } from './handoff-brief.service';
 import { HandoffStateService } from './handoff-state.service';
 import { BriefFallbackReason, HandoffReview, MAX_SHARED_FILES, SHARED_FILES_RECENT_TURNS } from './handoff.models';
 import { WorkflowRunQueueService } from './workflow-run-queue.service';
+import { WorkflowRunRefreshService } from './workflow-run-refresh.service';
 import { WorkflowRunResultService } from './workflow-run-result.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
 import {
@@ -60,6 +61,8 @@ export class WorkflowRunService {
   private readonly config = inject(ConfigService);
   private readonly state = inject(WorkflowRunStateService);
   private readonly queue = inject(WorkflowRunQueueService);
+  /** Started with the run service, so a run row on screen keeps its steps' rows current after a reload. */
+  private readonly refresh = inject(WorkflowRunRefreshService);
   private readonly handoff = inject(AgentHandoffService);
   private readonly chatRequest = inject(ChatRequestService);
   private readonly briefs = inject(HandoffBriefService);

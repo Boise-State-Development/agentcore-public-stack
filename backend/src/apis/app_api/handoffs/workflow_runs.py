@@ -844,9 +844,13 @@ def _part_status(run: WorkflowRun, row: Optional[Handoff]) -> DeliveryPartStatus
 
 
 async def _part_for(
-    user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff]
+    user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff], *, references: bool = True
 ) -> DeliveryPartRequest:
-    """One kept step as its part, before ``create_delivery``'s checks. Reads the step's answer only when done."""
+    """One kept step as its part, before ``create_delivery``'s checks. Reads the step's answer only when done.
+
+    ``references=False`` reads the answer alone, for a part that carries no artifact or file
+    (``…/prepare``'s): the two lookups for them would only be thrown away.
+    """
     part_status = _part_status(run, row)
     target = (row.target_session_id or "") if row is not None and row.run_id == run.run_id else ""
     if part_status != "done":
@@ -855,6 +859,15 @@ async def _part_for(
         )
     assert row is not None
     finished_at = _finished_by(row.updated_at)
+    if not references:
+        found = await answer_message(target, user.user_id, at_or_before=finished_at)
+        return DeliveryPartRequest(
+            step_id=step.step_id,
+            agent_name=step.agent_name,
+            status="done",
+            from_session_id=target,
+            text=render_return_excerpt(found[0]) if found is not None else "",
+        )
     found, files = await asyncio.gather(
         answer_message(target, user.user_id, at_or_before=finished_at),
         asyncio.to_thread(offered_files, user.user_id, target, created_before=finished_at),
@@ -1023,11 +1036,11 @@ async def _read_part(
     user: User, run: WorkflowRun, step: WorkflowRunStep, row: Optional[Handoff], part_status: str
 ) -> DeliveryPartRequest:
     """A read step as its part: ``_part_for``'s, text only, since the artifacts and files it names
-    are references into that step's conversation, which the reading step's can't open."""
+    are references into that step's conversation, which the reading step's can't open. So their
+    lookups are skipped, and the step's answer is the only read."""
     if part_status != "done":
         return DeliveryPartRequest(step_id=step.step_id, agent_name=step.agent_name, status="stopped")
-    part = await _part_for(user, run, step, row)
-    return replace(part, artifact_ids=(), file_ids=())
+    return await _part_for(user, run, step, row, references=False)
 
 
 async def _render_reads(user: User, session_id: str, run_id: str, parts: List[DeliveryPartRequest]) -> str:

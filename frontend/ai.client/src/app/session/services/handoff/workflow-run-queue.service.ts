@@ -128,6 +128,11 @@ export class WorkflowRunQueueService {
     }
   }
 
+  /** The source conversations of every run with steps in this tab's queue. */
+  queuedSources(): string[] {
+    return [...new Set([...this.runs().values()].map((run) => run.envelope.sourceSessionId))];
+  }
+
   /** True while this run has steps in the tab's queue (queued or running). */
   isQueued(runId: string): boolean {
     return this.runs().has(runId);
