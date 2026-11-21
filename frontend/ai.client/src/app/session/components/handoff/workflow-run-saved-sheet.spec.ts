@@ -131,6 +131,17 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
   const buttons = (): HTMLButtonElement[] => [...el().querySelectorAll('button')];
   const start = (): HTMLButtonElement => buttons().find((b) => b.textContent?.includes('Start '))!;
 
+  it('scrolls its body between a fixed header and footer, so Start stays on screen', async () => {
+    await render(review());
+    const body = el().querySelector('[data-testid="run-sheet-body"]')!;
+    const footer = el().querySelector('[data-testid="run-sheet-footer"]')!;
+    expect(body.className).toContain('overflow-y-auto');
+    expect(body.contains(el().querySelector('h2'))).toBe(false);
+    expect(footer.contains(start())).toBe(true);
+    expect(body.contains(start())).toBe(false);
+    expect(body.querySelector('textarea')).not.toBeNull();
+  });
+
   it('is titled with the workflow’s name', async () => {
     await render(review());
     expect(el().querySelector('h2')?.textContent?.trim()).toBe('Proposal review');
