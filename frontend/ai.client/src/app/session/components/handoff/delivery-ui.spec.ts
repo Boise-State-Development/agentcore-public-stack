@@ -286,6 +286,44 @@ describe('delivery UI', () => {
       expect(el.querySelector('a[href="/artifacts/rubric"]')).not.toBeNull();
     });
 
+    describe('a workflow step’s first message that carries earlier results (PR-D.5a)', () => {
+      const reads = renderDeliveryParts([
+        { text: 'Strong aims; thin budget.', agentName: 'Generalist', fromTitle: 'Generalist · Review', status: 'done' },
+        { text: '', agentName: 'Colleague', fromTitle: '', status: 'stopped' },
+      ]);
+      const sent = joinDeliveryBlocks([reads], 'Summarize the reviews');
+      const card = '<handoff_context from_conversation="Proposal">\nThe user brought this context from another of their conversations.\nthe card\n</handoff_context>';
+
+      beforeEach(() =>
+        TestBed.inject(HandoffStateService).setSpawnedFrom('tgt', {
+          sessionId: 'src',
+          handoffId: 'h3',
+          sourceTitle: 'Proposal',
+          agentName: 'Summary',
+        }),
+      );
+
+      it('shows the results as cards and only the request in the bubble, live and stored', () => {
+        for (const message of [
+          { id: 'msg-tgt-0', role: 'user', content: [{ type: 'text', text: sent }] } as Message,
+          { id: 'msg-tgt-0', role: 'user', content: [{ type: 'text', text: `${card}\n\n${sent}` }], metadata: { displayText: sent } } as Message,
+        ]) {
+          const el = render(message);
+          expect(text(el)).toContain('From Generalist · Review');
+          expect(text(el)).toContain('From Colleague');
+          expect(text(el)).toContain('Summarize the reviews');
+          expect(text(el)).not.toContain('<handoff_context');
+        }
+      });
+
+      it('never reads the first result as the handoff’s context when the card was removed', () => {
+        const el = render({ id: 'msg-tgt-0', role: 'user', content: [{ type: 'text', text: sent }], metadata: { displayText: sent } } as Message);
+        expect(text(el)).not.toContain('Show context');
+        const withCard = render({ id: 'msg-tgt-0', role: 'user', content: [{ type: 'text', text: `${card}\n\n${sent}` }], metadata: { displayText: sent } } as Message);
+        expect(text(withCard)).toContain('Show context');
+      });
+    });
+
     it('shows a card’s result on request', () => {
       const fixture = TestBed.createComponent(UserMessageComponent);
       fixture.componentRef.setInput('message', stored('Reply with OK.'));

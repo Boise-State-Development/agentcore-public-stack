@@ -21,7 +21,7 @@ import { HandoffStateService } from '../../services/handoff/handoff-state.servic
 import { HandoffView } from '../../services/handoff/handoff.models';
 import { WorkflowRunQueueService } from '../../services/handoff/workflow-run-queue.service';
 import { WorkflowRunResultService } from '../../services/handoff/workflow-run-result.service';
-import { RunStepLine, RunStepState, runProgress } from '../../services/handoff/workflow-run-progress';
+import { RunStepLine, RunStepState, runProgress, waitingLabel } from '../../services/handoff/workflow-run-progress';
 import { WorkflowRunView } from '../../services/handoff/workflow-run.models';
 import { WorkflowRunService, agentsLabel, canResume } from '../../services/handoff/workflow-run.service';
 import { SessionService } from '../../services/session/session.service';
@@ -346,7 +346,14 @@ export class WorkflowRunRowComponent {
   private lineView(line: RunStepLine): StepLineView {
     const base = { handoffId: line.step.handoffId, agentName: line.step.agentName, state: line.state };
     if (line.state === 'queued' || line.state === 'not_started' || !line.row?.targetSessionId) {
-      const statusLine = line.state === 'queued' ? 'Queued' : line.state === 'not_started' ? 'Not started' : 'Didn’t start';
+      const statusLine =
+        line.waitingFor.length > 0
+          ? waitingLabel(line.waitingFor)
+          : line.state === 'queued'
+            ? 'Queued'
+            : line.state === 'not_started'
+              ? 'Not started'
+              : 'Didn’t start';
       return { ...base, statusLine, link: null, accessibleName: `${line.step.agentName}, ${statusLine}`, row: null };
     }
     const row = line.row;

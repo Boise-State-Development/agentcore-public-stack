@@ -193,6 +193,48 @@ describe('WorkflowRunService, for a saved workflow', () => {
     expect(state.reviewFor('src')?.phase).toBe('ready');
   });
 
+  it('on a ready sheet, removing a step removes every step that reads it, and approve sends them removed', async () => {
+    const document = doc([
+      savedStep('generalist', 'a1'),
+      savedStep('colleague', 'a2'),
+      savedStep('summary', 'a3', {}, ['request', 'generalist', 'colleague']),
+      savedStep('editor', 'a4', {}, ['summary']),
+    ]);
+    const opened = service.open('src', draftFor(document));
+    http.expectOne(RUNS).flush(
+      created([
+        { name: 'generalist', agentId: 'a1' },
+        { name: 'colleague', agentId: 'a2' },
+        { name: 'summary', agentId: 'a3' },
+        { name: 'editor', agentId: 'a4' },
+      ]),
+    );
+    await opened;
+
+    expect(service.removeStep('src', 's2')).toEqual(['s2', 's3', 's4']);
+    expect(state.reviewFor('src')!.steps.map((s) => s.removed)).toEqual([false, true, true, true]);
+
+    void service.start('src');
+    const approve = http.expectOne(`${RUNS}/run1/approve`);
+    expect(approve.request.body.steps).toEqual([
+      { stepId: 's1' },
+      { stepId: 's2', removed: true },
+      { stepId: 's3', removed: true },
+      { stepId: 's4', removed: true },
+    ]);
+    approve.flush({}, { status: 500, statusText: 'x' });
+  });
+
+  it('a step every other step reads stays, and a run of mentions removes one step at a time', async () => {
+    const document = doc([savedStep('generalist', 'a1'), savedStep('summary', 'a2', {}, ['generalist'])]);
+    const opened = service.open('src', draftFor(document));
+    http.expectOne(RUNS).flush(created([{ name: 'generalist', agentId: 'a1' }, { name: 'summary', agentId: 'a2' }]));
+    await opened;
+
+    expect(service.removeStep('src', 's1')).toEqual([]);
+    expect(service.removeStep('src', 's2')).toEqual(['s2']);
+  });
+
   it('anything else that blocks the workflow is the sheet’s error, and nothing is created', async () => {
     const document = doc([savedStep('generalist', 'a1')], {}, [{ code: 'too_few_steps', message: 'A workflow needs at least 2 steps to start' }]);
     await service.open('src', draftFor(document));

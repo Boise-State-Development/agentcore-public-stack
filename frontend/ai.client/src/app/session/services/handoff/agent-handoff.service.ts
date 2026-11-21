@@ -31,6 +31,7 @@ import { FolderAttachmentData } from '../models/message.model';
 import { HandoffBriefService } from './handoff-brief.service';
 import { HandoffNotificationService, answeredInSource } from './handoff-notification.service';
 import { HandoffStateService } from './handoff-state.service';
+import { PrepareRunStepResponse } from './workflow-run.models';
 
 /** How long to keep asking for a finished target's status: the Runtime writes it just after the stream. */
 const STATUS_REFRESH_ATTEMPTS = 6;
@@ -374,6 +375,18 @@ export class AgentHandoffService {
   }
 
   /**
+   * The first message of a run step that reads other steps (PR-D.5a): their results, rendered by
+   * app-api as a run result's blocks, then the step's request. Asked just before the step's send,
+   * never on a turn. Rejects with a 409 while a step it reads hasn't settled on the server.
+   */
+  prepareRunStep(sourceSessionId: string, runId: string, stepId: string): Promise<PrepareRunStepResponse> {
+    const url =
+      `${this.config.appApiUrl()}/sessions/${encodeURIComponent(sourceSessionId)}/workflow-runs/` +
+      `${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/prepare`;
+    return firstValueFrom(this.http.post<PrepareRunStepResponse>(url, {}));
+  }
+
+  /**
    * Add the handoff row and start the target's conversation in the background. The row goes in
    * first, so it is there the moment the sheet closes and its watcher sees the target start
    * streaming. `beforeSend` runs between the two, where `send` closes its sheet.
@@ -408,7 +421,7 @@ export class AgentHandoffService {
     const sent = this.chatRequest.submitHandoffRequest({
       targetSessionId,
       agentId: step.agentId,
-      message: step.request,
+      message: step.message ?? step.request,
       handoffId: step.handoffId,
       contextText: step.contextText,
       sharedFileIds: step.sharedFileIds,
@@ -607,6 +620,11 @@ export interface HandoffLaunch {
   agentId: string;
   agentName: string;
   request: string;
+  /**
+   * What the send carries as the user's text, when it isn't just `request`: a run step that reads
+   * other steps sends their results first (PR-D.5a). The row keeps `request` either way.
+   */
+  message?: string;
   sourceMessageIndex: number;
   excerptTokens: number;
   turnsCovered?: TurnsCovered;

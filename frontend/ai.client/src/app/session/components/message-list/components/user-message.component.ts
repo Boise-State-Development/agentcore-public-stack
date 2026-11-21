@@ -395,7 +395,26 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   protected readonly handoffContext = computed((): string | null => {
     if (!this.handoffOrigin()) return null;
     const text = this.message().content.find((block) => block.type === 'text' && block.text)?.text;
-    return text ? extractHandoffContext(text) : null;
+    if (!text) return null;
+    // A step sent with no card opens with the earlier steps' results, which are not its context.
+    const read = this.readResults();
+    if (read && text.startsWith(read.head.trimEnd())) return null;
+    return extractHandoffContext(text);
+  });
+
+  /**
+   * A workflow step's first message that carries earlier steps' results (PR-D.5a): the text it was
+   * sent with opens with their blocks, then its request. Read from what was sent (`displayText`
+   * once stored, the live text before), so the bubble shows cards and the request, never the tags.
+   */
+  private readonly readResults = computed((): { blocks: DeliveryBlock[]; rest: string; head: string } | null => {
+    if (!this.handoffOrigin()) return null;
+    const metadata = this.message().metadata;
+    const stored = typeof metadata?.['displayText'] === 'string' ? (metadata['displayText'] as string) : null;
+    const sent = stored ?? this.message().content.find((block) => block.type === 'text' && block.text)?.text;
+    if (!sent) return null;
+    const { blocks, rest } = extractDeliveryBlocks(sent);
+    return blocks.length ? { blocks, rest, head: sent.slice(0, sent.length - rest.length) } : null;
   });
 
   /**
@@ -404,7 +423,8 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
    * reloaded one show the same cards. Never on a handoff's first message, whose block is its context.
    */
   protected readonly deliveryBlocks = computed((): DeliveryBlock[] => {
-    if (this.handoffOrigin() || !this.message().metadata?.['displayText']) return [];
+    if (this.handoffOrigin()) return this.readResults()?.blocks ?? [];
+    if (!this.message().metadata?.['displayText']) return [];
     const text = this.message().content.find((block) => block.type === 'text' && block.text)?.text;
     return text ? extractDeliveryBlocks(text).blocks : [];
   });
@@ -449,6 +469,8 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
    * setting, which only changes what the bubble shows.
    */
   copyText = computed((): string => {
+    const read = this.readResults();
+    if (read?.rest.trim()) return read.rest;
     const display = this.message().metadata?.['displayText'];
     if (typeof display === 'string' && display.trim()) return display;
     return this.message()
@@ -550,6 +572,9 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   /** Original user message before prompt modification — skipped when debug output is enabled */
   displayText = computed((): string | null => {
     if (this.localSettings.showDebugOutput()) return null;
+    // A step's request without the earlier results it was sent with, which show as cards above.
+    const read = this.readResults();
+    if (read) return read.rest;
     const metadata = this.message().metadata;
     if (metadata && typeof metadata['displayText'] === 'string') {
       return metadata['displayText'];

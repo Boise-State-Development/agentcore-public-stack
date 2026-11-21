@@ -208,4 +208,39 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
     expect(el().textContent).not.toContain('notes.txt');
     expect(start().disabled).toBe(false);
   });
+
+  describe('removing a step that others read (PR-D.5a)', () => {
+    const staged = (): RunReview =>
+      review({
+        steps: [
+          step(1, 'generalist', 'Generalist'),
+          step(2, 'colleague', 'Colleague'),
+          step(3, 'summary', 'Summary', { readsSteps: ['generalist'] }),
+          step(4, 'editor', 'Editor', { readsSteps: ['summary'] }),
+        ],
+      });
+    const remove = (label: string): HTMLButtonElement => buttons().find((b) => b.getAttribute('aria-label') === label)!;
+
+    it('names the steps that go with it, on Remove and after', async () => {
+      await render(staged());
+
+      expect(remove('Remove Colleague')).toBeDefined();
+      expect(remove('Remove Summary and the step that reads it')).toBeDefined();
+      remove('Remove Generalist and the 2 steps that read it').click();
+      fixture.detectChanges();
+
+      expect(runs.removeStep).toHaveBeenCalledWith('src', 's1');
+      expect(el().textContent).toContain('Removed Generalist, and Summary and Editor, which read it.');
+    });
+
+    it('a step every other step reads can’t be removed, and says so', async () => {
+      await render(review({ steps: [step(1, 'generalist', 'Generalist'), step(2, 'summary', 'Summary', { readsSteps: ['generalist'] })] }));
+
+      remove('Remove Generalist and the step that reads it').click();
+      fixture.detectChanges();
+
+      expect(runs.removeStep).not.toHaveBeenCalled();
+      expect(el().textContent).toContain('Generalist can’t be removed: every other step reads it.');
+    });
+  });
 });
