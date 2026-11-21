@@ -935,6 +935,34 @@ def workflows_enabled() -> bool:
     return workflow_runs_enabled() and os.environ.get("WORKFLOWS_ENABLED", "").strip().lower() == "true"
 
 
+def prompt_steps_enabled() -> bool:
+    """Whether a saved workflow's prompt steps can run: one model call each, no Agent.
+
+    ``docs/specs/workflow-designer.md`` §21. On app-api, run create accepts a
+    workflow's prompt steps and opens a ``kind=prompt`` step row for each
+    (refused as a sheet blocker while off); on the AgentCore Runtime, a
+    ``workflow_prompt`` invocation runs them. **Opt-in while in development**:
+    only ``"true"`` enables it; an unset GitHub variable arrives as ``""`` and
+    is off. It needs ``WORKFLOWS_ENABLED`` (and so runs and handoffs) too.
+
+    CDK writes ``PROMPT_STEPS_ENABLED`` on both services only while the whole
+    chain is on (``promptStepsOn`` in ``infrastructure/lib/config.ts``). app-api
+    also has ``WORKFLOWS_ENABLED``, so there this needs ``workflows_enabled()``.
+    The Runtime has no copy of the workflow flags and gets none (it is near its
+    50-variable cap), so where ``WORKFLOWS_ENABLED`` is absent from the
+    environment this variable carries the chain by itself, behind
+    ``HANDOFFS_ENABLED``. The SPA's matching switch is ``features.promptSteps``.
+
+    A **feature switch** once finished: each step is a model call a run makes
+    with no Agent's governance around it, which a deployment may decline.
+    """
+    if os.environ.get("PROMPT_STEPS_ENABLED", "").strip().lower() != "true":
+        return False
+    if "WORKFLOWS_ENABLED" in os.environ:
+        return workflows_enabled()
+    return handoffs_enabled()
+
+
 def session_rewind_enabled() -> bool:
     """Whether a user can rewind a conversation to one of their earlier messages.
 

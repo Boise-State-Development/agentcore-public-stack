@@ -238,7 +238,7 @@ function allFlagsOn(base: AppConfig): AppConfig {
     awsLimits: { enabled: true },
     handoffs: { enabled: true, briefEnabled: true, suggestionsEnabled: true },
     workflowRuns: { enabled: true },
-    workflows: { enabled: true },
+    workflows: { enabled: true, promptStepsEnabled: true },
     sessionRewind: { enabled: true },
     sessionFork: { enabled: true },
     clientTurnTiming: { enabled: true },
