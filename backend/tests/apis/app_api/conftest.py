@@ -27,8 +27,24 @@ class PromptModels:
     retired: Dict[str, Optional[str]] = field(default_factory=dict)
     checks: list = field(default_factory=list)
 
-    def add(self, model_id: str, name: str, rate: float, *, allowed: bool = True) -> None:
-        self.catalog[model_id] = SimpleNamespace(model_id=model_id, model_name=name, input_price_per_million_tokens=rate)
+    def add(
+        self,
+        model_id: str,
+        name: str,
+        rate: float,
+        *,
+        allowed: bool = True,
+        inputs: tuple = ("TEXT", "IMAGE"),
+        outputs: tuple = ("TEXT",),
+    ) -> None:
+        self.catalog[model_id] = SimpleNamespace(
+            model_id=model_id,
+            model_name=name,
+            input_price_per_million_tokens=rate,
+            provider="bedrock",
+            input_modalities=list(inputs),
+            output_modalities=list(outputs),
+        )
         if allowed:
             self.allowed.add(model_id)
 

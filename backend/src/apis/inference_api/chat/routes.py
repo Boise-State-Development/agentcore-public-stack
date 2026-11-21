@@ -5733,9 +5733,20 @@ async def _handoff_target_description(agent_id: str, current_user: User) -> Opti
 
 
 async def _run_step_descriptions(run: "WorkflowRun", current_user: User) -> list[Optional[str]]:
-    """Each kept step's Agent description, read concurrently, in step order (workflow-runs.md §6.3)."""
+    """Each kept step's Agent description, read concurrently, in step order (workflow-runs.md §6.3).
+
+    A prompt step has no Agent to read, so its slot is ``None`` without a read.
+    """
+    async def _none() -> Optional[str]:
+        return None
+
     return list(
-        await asyncio.gather(*(_handoff_target_description(step.agent_id, current_user) for step in run.kept_steps()))
+        await asyncio.gather(
+            *(
+                _none() if step.is_prompt else _handoff_target_description(step.agent_id, current_user)
+                for step in run.kept_steps()
+            )
+        )
     )
 
 
@@ -5813,13 +5824,32 @@ def _is_open_run_step(run: Optional["WorkflowRun"], handoff_id: str, session_id:
     return any(step.handoff_id == handoff_id for step in run.kept_steps())
 
 
+def _workflow_prompt_invocation(request: InvocationRequest, current_user: User) -> StreamingResponse:
+    """A ``workflow_prompt`` invocation (workflow-designer.md §21.3): a run's prompt steps.
+
+    Never a turn and never ``_run_invocation``: no agent build, no history, no tools, no session
+    lease. ``inference_api/chat/workflow_prompt.py`` runs its own checks and claims each step; the
+    stream carries its frames and ``done``.
+    """
+    from apis.inference_api.chat.workflow_prompt import stream_workflow_prompt
+
+    return StreamingResponse(
+        stream_workflow_prompt(request.workflow_prompt, current_user, request.session_id),
+        media_type="text/event-stream",
+        headers=_sse_headers(request.session_id),
+    )
+
+
 @router.post("/invocations")
 async def invocations(request: InvocationRequest, current_user: User = Depends(get_current_user_trusted)):
-    """The AgentCore Runtime invocation endpoint: a conversation turn, or a handoff brief.
+    """The AgentCore Runtime invocation endpoint: a conversation turn, a handoff brief, or a run's prompt steps.
 
-    A ``handoff_brief`` request goes through ``_handoff_brief_invocation``; everything else is a
-    turn, ``_run_invocation``.
+    A ``workflow_prompt`` request goes through ``_workflow_prompt_invocation`` and a
+    ``handoff_brief`` request through ``_handoff_brief_invocation``; everything else is a turn,
+    ``_run_invocation``.
     """
+    if request.workflow_prompt is not None and not request.warm:
+        return _workflow_prompt_invocation(request, current_user)
     if request.handoff_brief is not None and not request.warm:
         return await _handoff_brief_invocation(request, current_user)
     return await _run_invocation(request, current_user)

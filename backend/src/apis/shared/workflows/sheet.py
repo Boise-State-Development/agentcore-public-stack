@@ -88,7 +88,7 @@ class AgentView(BaseModel):
     )
 
 
-ModelUnavailableReason = Literal["no_catalog_row", "no_access", "retired", "unavailable"]
+ModelUnavailableReason = Literal["no_catalog_row", "no_access", "retired", "unsupported", "unavailable"]
 
 
 class ModelView(BaseModel):
@@ -107,6 +107,24 @@ class ModelView(BaseModel):
     name: Optional[str] = Field(None, description="The catalog's display name")
     input_price_per_million_tokens: Optional[float] = Field(None, alias="inputPricePerMillionTokens")
     reason: Optional[ModelUnavailableReason] = None
+    reads_documents: bool = Field(
+        True,
+        exclude=True,
+        description="Whether the model takes the run's documents; never serialized (see model_for_step)",
+    )
+
+
+def model_for_step(model: "ModelView", step: Any) -> "ModelView":
+    """``model`` as one step can use it: a TEXT-only model can't run a step that reads ``files``.
+
+    The view is one per model; whether the step sends documents is the step's, so it is applied
+    here, by the rule the Runtime refuses with (``prompt_model_supported``).
+    """
+    from apis.shared.workflows.format import READ_FILES
+
+    if model.can_run and not model.reads_documents and READ_FILES in (getattr(step, "reads", None) or ()):
+        return model.model_copy(update={"can_run": False, "reason": "unsupported"})
+    return model
 
 
 class StepView(BaseModel):
@@ -326,10 +344,12 @@ async def prompt_model_view(model_id: str, user: User) -> ModelView:
     """A prompt step's model **as the caller**: retirement first, then the shared access rule.
 
     The id it runs on is the effective one (a retired model's successor). A retired model with no
-    successor, an id with no catalog row and one the caller's roles don't grant all read as
+    successor, an id with no catalog row, a model a prompt step can't run on
+    (``prompt_model_supported``, the Runtime's own rule) and one the caller's roles don't grant all read as
     ``canRun: false`` with their reason; the shared rule (``AppRoleService.can_access_model``,
     which delegates to ``grants_model_access``) is the only access check. Never raises.
     """
+    from apis.shared.handoff.prompt_models import prompt_model_supported
     from apis.shared.rbac.service import get_app_role_service
 
     try:
@@ -350,6 +370,10 @@ async def prompt_model_view(model_id: str, user: User) -> ModelView:
             return view.model_copy(update={"reason": "retired"})
         if effective.uncataloged:
             return view.model_copy(update={"reason": "no_catalog_row"})
+        if record is not None and not prompt_model_supported(record, reads_files=False):
+            # One rule with the Runtime, which would stop the step ``model_refused``.
+            return view.model_copy(update={"reason": "unsupported"})
+        view = view.model_copy(update={"reads_documents": prompt_model_supported(record, reads_files=True)})
         allowed = await get_app_role_service().can_access_model(
             user, effective.model_id, record=record, catalog_read=effective.catalog_read
         )
@@ -390,6 +414,7 @@ _MODEL_BLOCKER_MESSAGES: Dict[str, str] = {
     "no_catalog_row": "This step's model isn't offered on this platform. Remove the step, or choose another model",
     "no_access": "You can't use this step's model. Remove the step, or choose a model you can use",
     "retired": "This step's model has been retired. Remove the step, or choose another model",
+    "unsupported": "This step's model can't run a prompt step. Remove the step, or choose a text model that reads documents",
     "unavailable": "This step's model couldn't be checked. Remove the step, or try again",
 }
 
@@ -428,6 +453,8 @@ def sheet_for(
                 )
                 continue
             model = (models or {}).get(step.model_id or "")
+            if model is not None:
+                model = model_for_step(model, step)
             if model is None or not model.can_run:
                 reason = model.reason if model is not None and model.reason else "unavailable"
                 blockers.append(
@@ -529,6 +556,7 @@ def document_from(
             model = (models or {}).get(step.model_id or "") or ModelView(
                 can_run=False, model_id=step.model_id or "", reason="unavailable"
             )
+            model = model_for_step(model, step)
             agent = model_as_worker(model)
         else:
             agent = agents[step.agent_id].model_copy(update={"changed": step_changed(step, agents[step.agent_id])})
@@ -586,6 +614,7 @@ __all__ = [
     "load_workflow",
     "merge_instruction",
     "model_as_worker",
+    "model_for_step",
     "model_views",
     "prompt_model_view",
     "read_stored_workflow_text",

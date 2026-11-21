@@ -1464,12 +1464,15 @@ def test_prompt_steps_are_a_sheet_blocker_while_the_flag_is_off(make_client, sto
     ]
 
 
-@pytest.mark.parametrize("problem", ["no_access", "no_catalog_row", "retired"])
+@pytest.mark.parametrize("problem", ["no_access", "no_catalog_row", "retired", "unsupported"])
 def test_a_model_the_starter_cant_run_blocks_start_until_the_step_is_removed(make_client, stores, prompted, problem):
     if problem == "no_access":
         prompted.allowed.discard(HAIKU)
     elif problem == "no_catalog_row":
         del prompted.catalog[HAIKU]
+    elif problem == "unsupported":
+        # A model the Runtime would refuse (prompt_model_supported): a voice model's SPEECH output.
+        prompted.add(HAIKU, "Nova Sonic", 1.1, outputs=("TEXT", "SPEECH"))
     else:
         prompted.retired[HAIKU] = None
     client = make_client()
@@ -1480,10 +1483,22 @@ def test_a_model_the_starter_cant_run_blocks_start_until_the_step_is_removed(mak
 
     # Removing it takes the summary too, which reads it, and one step is too few to start.
     assert _start(client, removedSteps=["budget"]).json()["detail"]["blockers"][0]["code"] == "too_few_steps"
-    prompted.allowed.add(HAIKU)
-    prompted.catalog.setdefault(HAIKU, SimpleNamespace(model_name="Claude Haiku 5.5", input_price_per_million_tokens=1.1))
+    prompted.add(HAIKU, "Claude Haiku 5.5", 1.1)
     prompted.retired.pop(HAIKU, None)
     assert _start(client).status_code == 201
+
+
+def test_a_text_only_model_blocks_a_step_that_reads_files_and_runs_one_that_reads_only_steps(
+    make_client, stores, prompted
+):
+    """``budget`` reads the files and ``summary`` reads only steps: a TEXT-only model takes no document."""
+    prompted.add(HAIKU, "Nova Micro", 0.04, inputs=("TEXT",))
+    prompted.add(SONNET, "Nova Micro", 0.04, inputs=("TEXT",))
+
+    refused = _start(make_client())
+
+    assert refused.status_code == 422
+    assert [(b["code"], b["step"]) for b in refused.json()["detail"]["blockers"]] == [("model_unavailable", "budget")]
 
 
 def test_approve_settles_prompt_rows_like_agent_rows_and_counts_only_conversations(make_client, stores, prompted):
