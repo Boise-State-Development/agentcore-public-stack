@@ -7,15 +7,17 @@ the whole file into ``modify_word_document.python_code`` on every run, which is
 a 20K-token silent generation before the tool even starts. With it, the model
 names the file and the tool loads it into the sandbox by reference.
 
-**Where it runs.** Only inside AWS Bedrock Code Interpreter, and in a
-dedicated interpreter, not the one model-written python-docx code uses: the
-skill-script interpreter is created with ``networkMode: SANDBOX`` (no public
-internet), and a run is bounded by :data:`SKILL_SCRIPT_TIMEOUT_SECONDS`. Its id
-is service-generated, so it is not in the Runtime's environment (the V2
-budget); :func:`resolve_skill_script_interpreter_id` reads it from the SSM
-parameter ``/<PROJECT_PREFIX>/agentcore/skill-script-interpreter-id`` on the
-first run and keeps it for the process. If it cannot be resolved the tool
-refuses: a skill script never falls back to the public interpreter.
+**Where it runs.** Only inside AWS Bedrock Code Interpreter, in the stack's
+one interpreter, which has no network path out: ``VPC`` mode in an isolated
+VPC with no route, no security-group egress and DNS off
+(``code-interpreter-construct.ts``). A run is
+bounded by :data:`SKILL_SCRIPT_TIMEOUT_SECONDS` in a session of its own. The
+id reaches this module through the SSM parameter
+``/<PROJECT_PREFIX>/agentcore/skill-script-interpreter-id`` rather than the
+Runtime's environment (the V2 budget);
+:func:`resolve_skill_script_interpreter_id` reads it on the first run and
+keeps it for the process. If it cannot be resolved the tool refuses rather
+than guess at an interpreter.
 
 Nothing here imports, ``exec``s or ``compile``s the script on the Runtime host:
 this module reads its bytes from the skill-resources store and hands them to
@@ -300,7 +302,7 @@ def _read_interpreter_id_parameter(name: str) -> str:
 
 
 def resolve_skill_script_interpreter_id() -> Optional[str]:
-    """The no-network interpreter's id, or ``None`` when it cannot be found.
+    """The skill-script interpreter's id, or ``None`` when it cannot be found.
 
     Env override first (local development), then SSM, read once per process
     and kept. A failed read is not cached, so a parameter created after this
