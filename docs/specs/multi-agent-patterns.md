@@ -453,3 +453,7 @@ Nothing in this section is scheduled.
 - **Order for this collaboration.** First, host the pipeline as it is behind an external MCP tool (G5). Second,
   rebuild the audit lane as 15 field sets on dev and score it against the graph's own output, which is a ready
   baseline. Third, let that comparison decide which of G1 to G4 are worth building.
+- **Shape for an MVP (2026-11-21).** The graph fits saved workflows as they shipped in step 2. Stage 1 holds the
+  four reviewers and one auditor Agent, whose skill carries the audit field sets. The result is a merge whose
+  instruction does `review_summary` and `build_review` in the source conversation. The engine starts each step
+  from its own reads, so lanes need no new concept. What's left is G1, G2 and G4.
