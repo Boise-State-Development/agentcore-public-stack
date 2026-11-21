@@ -902,7 +902,6 @@ def test_removing_a_step_removes_every_step_that_reads_it():
 @pytest.mark.parametrize(
     "file_text, code",
     [
-        (REVIEW_FILE.replace("files: one", "files: one\nresult: merge"), "merge_result"),
         (REVIEW_FILE.replace("colleague @ 2", "generalist"), "same_agent_twice"),
     ],
 )
@@ -912,6 +911,50 @@ def test_what_step_one_cant_run_is_refused_at_create(make_client, stores, skills
     assert resp.status_code == 422
     assert code in [b["code"] for b in resp.json()["detail"]["blockers"]]
     assert stores[0].list_for_session("alice", "src") == []
+
+
+MERGE_FILE = REVIEW_FILE.replace("files: one", "files: one\nresult: merge") + """
+## Result
+
+Write one review that weighs every reviewer's points.
+"""
+
+
+def test_a_merged_result_starts_and_keeps_its_instruction(make_client, stores, skills):
+    """PR-D.5b: ``result: merge`` no longer blocks, and the row carries the mode and instruction."""
+    skills.files["wf-key"] = MERGE_FILE
+    resp = _start(make_client())
+
+    assert resp.status_code == 201, resp.text
+    run = stores[1].get("alice", resp.json()["run"]["runId"])
+    assert run.workflow.result_mode == "merge"
+    assert run.workflow.result_instruction == "Write one review that weighs every reviewer's points."
+    view = resp.json()["run"]["workflow"]
+    assert view["resultMode"] == "merge"
+    assert view["resultInstruction"] == "Write one review that weighs every reviewer's points."
+
+
+def test_a_merge_without_an_instruction_keeps_the_default(make_client, stores, skills):
+    from apis.shared.workflows.sheet import DEFAULT_MERGE_INSTRUCTION
+
+    skills.files["wf-key"] = REVIEW_FILE.replace("files: one", "files: one\nresult: merge")
+    resp = _start(make_client())
+
+    assert resp.status_code == 201, resp.text
+    run = stores[1].get("alice", resp.json()["run"]["runId"])
+    assert (run.workflow.result_mode, run.workflow.result_instruction) == ("merge", DEFAULT_MERGE_INSTRUCTION)
+
+
+def test_a_card_result_writes_no_merge_fields(make_client, stores, skills):
+    """A card run's row reads exactly as before: neither field is written."""
+    resp = _start(make_client())
+
+    assert resp.status_code == 201, resp.text
+    run = stores[1].get("alice", resp.json()["run"]["runId"])
+    assert run.workflow.result_mode is None and run.workflow.result_instruction is None
+    assert "resultMode" not in resp.json()["run"]["workflow"]
+    dumped = run.workflow.model_dump(by_alias=True, exclude_none=True)
+    assert "resultMode" not in dumped and "resultInstruction" not in dumped
 
 
 def test_too_few_steps_left_after_removal_is_refused(make_client, skills):
@@ -1079,7 +1122,7 @@ def test_the_sheet_no_longer_blocks_a_step_that_reads_another():
 
     workflow, _ = read_workflow_file(STAGED_FILE, name="review")
     agents = {s.agent_id: AgentView(can_run=True, name=s.agent_id) for s in workflow.steps}
-    assert sheet_for(workflow, agents).model_dump() == {"startable": True, "blockers": []}
+    assert sheet_for(workflow, agents).model_dump(exclude_none=True) == {"startable": True, "blockers": []}
 
 
 def test_a_mention_run_has_no_reads_and_its_row_is_unchanged(make_client, stores):
