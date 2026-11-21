@@ -153,6 +153,13 @@ jobs:
       # reverts to V1 if this variable is deleted. See
       # docs/specs/agentcore-runtime-v2.md.
       CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION: ${{ vars.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION }}
+      # AgentCore Runtime generation: unset by default. Setting it (e.g. `g2`)
+      # renames the Runtime, so this deploy creates a new one with no versions,
+      # repoints everything at it and deletes the old one. Live sessions and
+      # paused turns drop; conversations and connector tokens persist. For a
+      # Runtime at its 1,000-version quota. Runbook:
+      # docs/specs/agentcore-runtime-v2.md §11.
+      CDK_AGENTCORE_RUNTIME_GENERATION: ${{ vars.CDK_AGENTCORE_RUNTIME_GENERATION }}
       # Escape hatch for scripts/platform/check-runtime-env-contract.sh: set to
       # `true` only after confirming the live inference-api image derives its
       # resource names (docs/specs/agentcore-runtime-v2.md §8).

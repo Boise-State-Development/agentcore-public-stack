@@ -219,6 +219,58 @@ class TestScheduledRunsLeanImageIsImportable:
         )
 
 
+class TestInferenceApiImageBundlesOnlyRuntimePackages:
+    """The inference-api image carries only what the AgentCore Runtime runs.
+
+    ``backend/Dockerfile.inference-api`` copies ``agents``, ``apis/shared`` and
+    ``apis/inference_api`` and nothing else, and ``scripts/build/build-one.sh``
+    hashes the same three for the image tag. Copying all of ``backend/src``
+    made every app-api-only merge a new tag, and every new tag is a new
+    AgentCore Runtime version (12 of dev's 108 image versions between
+    2026-11-10 and 2026-11-21), against a quota of 1,000 per Runtime.
+
+    So: nothing in the three may import ``apis.app_api`` or ``lambdas`` (it
+    would be missing from the image), and the Dockerfile's COPY lines and the
+    hash inputs must name exactly these directories (a path copied but not
+    hashed ships stale code under an unchanged tag; a path hashed but not
+    copied makes versions for code the Runtime never has).
+    """
+
+    _BUNDLED_DIRS = ("agents", "apis/shared", "apis/inference_api")
+    _REPO = _BACKEND_SRC.parent.parent
+
+    def test_no_imports_outside_the_image(self):
+        violations: List[str] = []
+        for rel_dir in self._BUNDLED_DIRS:
+            violations += _find_violations(
+                _BACKEND_SRC / rel_dir,
+                {"apis.app_api", "lambdas"},
+                "inference-api image → package not in the image",
+            )
+        assert violations == [], (
+            "Runtime code imports a package the inference-api image does not carry:\n"
+            + "\n".join(violations)
+            + "\n\nMove what it needs into apis.shared."
+        )
+
+    def test_dockerfile_copies_exactly_the_bundled_dirs(self):
+        dockerfile = (self._REPO / "backend" / "Dockerfile.inference-api").read_text()
+        sources = [
+            line.split()[1]
+            for line in dockerfile.splitlines()
+            if line.startswith("COPY backend/src")
+        ]
+        expected = [f"backend/src/{d}" for d in self._BUNDLED_DIRS]
+        # Twice: the builder stage installs the project, the final stage runs it.
+        assert sources == expected * 2
+
+    def test_content_hash_covers_exactly_the_bundled_dirs(self):
+        build_one = (self._REPO / "scripts" / "build" / "build-one.sh").read_text()
+        block = build_one.split("    inference-api)\n", 1)[1].split(";;", 1)[0]
+        hashed = block.split("SOURCE_DIRS=(", 1)[1].split(")", 1)[0].split()
+        assert [h.strip('"') for h in hashed] == [f"backend/src/{d}" for d in self._BUNDLED_DIRS]
+
+
 class TestAppApiDoesNotImportInferenceApi:
     """app_api must not import from inference_api.
 

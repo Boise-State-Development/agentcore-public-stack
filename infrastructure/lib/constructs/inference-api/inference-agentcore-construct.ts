@@ -11,7 +11,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { Construct } from 'constructs';
-import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from '../../config';
+import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getAgentRuntimeName, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from '../../config';
 import { AlarmFactory } from '../observability/alarm-factory';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import {
@@ -159,10 +159,25 @@ export class InferenceAgentCoreConstruct extends Construct {
       value: bootstrapImage.assetHash,
     });
 
+    // A `{{resolve:ssm:…}}` dynamic reference, NOT valueForStringParameter.
+    // Both resolve the live URI whenever CloudFormation updates the Runtime.
+    // They differ on a stack update where nothing else about the Runtime
+    // changed. An `AWS::SSM::Parameter::Value<String>` template parameter is
+    // re-read on every stack update, and backend.yml rewrites it on every
+    // image push, so CloudFormation saw a "changed" ContainerUri on almost
+    // every platform.yml run and sent UpdateAgentRuntime with the image the
+    // Runtime was already running. Each such call is a new immutable Runtime
+    // version: 17 of dev's 129 versions between 2026-11-10 and 2026-11-21, and
+    // a Runtime stops accepting updates at its 1,000-version quota. A dynamic
+    // reference leaves the template text unchanged, so CloudFormation updates
+    // the Runtime only when one of its own properties changes, and then
+    // resolves the URI the pipeline wrote last. The app-api task definition
+    // keeps its template parameter: task definition revisions have no such
+    // quota.
     const inferenceApiImageTagSsmPath = `/${config.projectPrefix}/inference-api/image-tag`;
-    const inferenceApiImageUri = ssm.StringParameter.valueForStringParameter(
-      this, inferenceApiImageTagSsmPath,
-    );
+    const inferenceApiImageUri = new cdk.CfnDynamicReference(
+      cdk.CfnDynamicReferenceService.SSM, inferenceApiImageTagSsmPath,
+    ).toString();
 
     // The project's ECR repo (where the workflow ships real images
     // to). Imported for IAM grants only — CDK doesn't reference any
@@ -322,8 +337,11 @@ export class InferenceAgentCoreConstruct extends Construct {
     // ============================================================
 
     // Also the basis of the CloudWatch `Name` dimension on every runtime
-    // metric, so both derive from one expression.
-    const agentRuntimeName = getResourceName(config, 'agentcore_runtime').replace(/-/g, '_');
+    // metric and of the log-retention sweep's prefix, so all of them derive
+    // from one expression. `inferenceApi.runtimeGeneration` suffixes it, which
+    // replaces the Runtime (create new, repoint, delete old); unset, the name
+    // and the template are unchanged.
+    const agentRuntimeName = getAgentRuntimeName(config);
 
     this.runtime = new bedrock.CfnRuntime(this, 'AgentCoreRuntime', {
       agentRuntimeName,
