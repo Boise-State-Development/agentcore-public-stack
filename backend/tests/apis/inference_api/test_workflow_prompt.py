@@ -813,3 +813,72 @@ def test_the_run_request_follows_the_steps_own_reads_input():
     assert wp.run_request_for(run, _step(1, reads=["lens-0"])) == ""
     assert wp.run_request_for(run, _step(1, reads=["request", "lens-0"])) == "Focus on the budget"
     assert wp.run_request_for(run, _step(1, reads=[])) == ""
+
+
+@pytest.mark.asyncio
+async def test_too_large_stops_only_the_steps_that_send_the_files():
+    """A step that reads only earlier steps sends none of the documents, so it still runs."""
+    steps = StepStore({"h1": "open", "h2": "open"})
+    model = Model()
+    run = _run([_step(1, reads=["files"]), _step(2, reads=["request", "lens-1"])])
+
+    frames = await _drain(_work(run, steps, model, plan=_plan(document_budget=1_000)))
+
+    assert steps.rows["h1"]["stoppedReason"] == "too_large"
+    assert steps.rows["h2"]["status"] == "done"
+    assert len(model.calls) == 1
+    assert all("document" not in block for block in model.calls[0][0]["content"])
+    assert _statuses(frames) == {"s1": "stopped", "s2": "done"}
+
+
+# --- The output limit ----------------------------------------------------------------------------
+
+
+class CutOffModel(Model):
+    """A model that reaches the output limit mid-sentence on the step it is told to."""
+
+    def __init__(self, cut: int) -> None:
+        super().__init__()
+        self.cut = cut
+
+    async def __call__(self, model, messages, cancel):
+        result = await super().__call__(model, messages, cancel)
+        if len(self.calls) == self.cut:
+            result.stop_reason = "max_tokens"
+            result.text = "**Weaknesses**\n- The budget table and the justification disagree on the gra"
+            result.usage = {**result.usage, "outputTokens": wp.MAX_OUTPUT_TOKENS}
+        return result
+
+
+@pytest.mark.asyncio
+async def test_an_answer_cut_off_at_the_output_limit_is_kept_marked_and_recorded():
+    from apis.shared.handoff.prompt_steps import CUT_OFF_MARKER
+
+    steps = StepStore({"h1": "open", "h2": "open"})
+    meter = Meter()
+
+    frames = await _drain(_work(_run([_step(1), _step(2)]), steps, CutOffModel(cut=2), meter=meter))
+
+    assert _statuses(frames) == {"s1": "done", "s2": "done"}
+    assert steps.rows["h2"]["outputText"].endswith(f"on the gra\n\n{CUT_OFF_MARKER}")
+    assert not steps.rows["h1"]["outputText"].endswith(CUT_OFF_MARKER)
+    assert [c["attributes"].get("truncated") for c in meter.calls] == [None, True]
+
+
+def test_the_marker_survives_the_stored_answers_cap():
+    from apis.shared.handoff.delivery import SEND_BACK_MAX_CHARS, cap_delivery_text
+    from apis.shared.handoff.prompt_steps import CUT_OFF_MARKER, mark_cut_off
+
+    marked = mark_cut_off("A finding. " * 5_000)
+
+    assert len(marked) <= SEND_BACK_MAX_CHARS
+    assert marked.endswith(CUT_OFF_MARKER)
+    assert cap_delivery_text(marked) == marked
+
+
+def test_the_step_timeout_fits_the_cap_at_the_slowest_measured_rate():
+    """16,000 tokens at Sonnet 5.5's slowest measured rate on dev (116 tok/s), with margin; and a
+    run's longest shape (warm call, then two waves) inside the Runtime stream's 600 s."""
+    assert wp.MAX_OUTPUT_TOKENS == 16_000
+    assert wp.STEP_TIMEOUT_SECONDS >= wp.MAX_OUTPUT_TOKENS / 116
+    assert 3 * wp.STEP_TIMEOUT_SECONDS <= 600

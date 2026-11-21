@@ -49,7 +49,12 @@ from apis.shared.files.whole_document import WholeDocument, WholeDocumentError, 
 from apis.shared.feature_flags import prompt_steps_enabled
 from apis.shared.handoff.models import PromptStopReason
 from apis.shared.handoff.prompt_models import prompt_model_supported
-from apis.shared.handoff.prompt_steps import PromptStepStore, WorkflowPromptRequest, get_prompt_step_store
+from apis.shared.handoff.prompt_steps import (
+    PromptStepStore,
+    WorkflowPromptRequest,
+    get_prompt_step_store,
+    mark_cut_off,
+)
 from apis.shared.handoff.run_reads import StepReadsNotSettled, render_step_reads
 from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep, WorkflowRunStore, get_workflow_run_store
 from apis.shared.handoff.send_back import DeliveryRefused
@@ -62,10 +67,23 @@ logger = logging.getLogger(__name__)
 CALL_KIND = "workflow_prompt"
 
 #: Output tokens a step may write (§21.3). The stored answer is capped lower, at the delivery cap.
-MAX_OUTPUT_TOKENS = 4_000
+#:
+#: **Reasoning counts against it.** Haiku 5.5 and Sonnet 5.5 reason at their default effort, and at
+#: 4,000 three of ten NSF lens steps on dev were cut off mid-sentence: one Haiku step spent all
+#: 4,000 tokens for 653 characters of answer. 16,000 leaves room for the reasoning and an answer the
+#: system prompt keeps under 1,200 words. An answer that still reaches it is kept and marked
+#: (``mark_cut_off``), and its cost row says ``truncated``.
+MAX_OUTPUT_TOKENS = 16_000
 
-#: One step's call, from request to its last token.
-STEP_TIMEOUT_SECONDS = 120.0
+#: One step's call, from request to its last token, sized from the measured output rate.
+#:
+#: The slowest whole-call rate on dev was Sonnet 5.5's 116 output tokens a second (reasoning and the
+#: time to first token included; Haiku 5.5's slowest was 184). 16,000 tokens at that rate is 138 s,
+#: so 180 s with a 30% margin. That keeps a run's longest shape (8 steps on one model at the default
+#: concurrency of 4: the warm call, then two waves) at 540 s, inside the 600 s the Runtime stream
+#: allows. A run that takes longer still finishes: a closed stream does not cancel the work, and the
+#: run refresh reads the rows.
+STEP_TIMEOUT_SECONDS = 180.0
 
 #: How often a running invocation re-reads its run row for a stop.
 RUN_POLL_SECONDS = 2.0
@@ -543,14 +561,52 @@ def estimate_cancelled_usage(
     return usage, estimate
 
 
-def _fingerprint(messages: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def prefix_key(model_id: str, prefix: Sequence[Dict[str, Any]]) -> str:
+    """What a prompt step's cached prefix is made of: the model, the system prompt and the documents.
+
+    Every prompt-step call has the same ``toolConfigHash`` (no tools) and ``systemPromptHash`` (one
+    constant), so those two alone would make any earlier prompt-step row a step's predecessor: a
+    Sonnet group's warm write would read as a missed read of the Haiku group's entry, and a run
+    over a new document as a missed read of the last run's. Neither entry was there to read: each
+    model has its own cache, and a different document is a different prefix. This key is the
+    prefix the cache is keyed on, so only a row that wrote the same one can be a predecessor.
+
+    A document's bytes are hashed directly, never rendered into the key's JSON.
+    """
+    import hashlib
+
+    from apis.shared.observability.prompt_cache import fingerprint_canonical_json
+
+    parts: List[Dict[str, str]] = []
+    for block in prefix:
+        document = block.get("document") if isinstance(block, dict) else None
+        if isinstance(document, dict):
+            raw = (document.get("source") or {}).get("bytes") or b""
+            parts.append({"document": str(document.get("name") or ""), "sha256": hashlib.sha256(raw).hexdigest()})
+        else:
+            text = str(block.get("text") or "") if isinstance(block, dict) else ""
+            parts.append({"text": hashlib.sha256(text.encode("utf-8")).hexdigest()})
+    return fingerprint_canonical_json({"modelId": model_id, "system": SYSTEM_PROMPT, "prefix": parts})
+
+
+def _fingerprint(messages: List[Dict[str, Any]], key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """This call's prefix hashes, marked stateless (``extendsMessagesHashes``) with ``key``.
+
+    The stateless match is the one api-converse uses: a predecessor counts only if its
+    ``messagesHash`` is in this call's ``extendsMessagesHashes`` (``_derive_cache_observability``).
+    Here both are the call's ``prefix_key``, so a step's predecessor is a call that wrote its prefix.
+    """
     try:
         from agents.main_agent.session.hooks.prefix_fingerprint import compute_prefix_fingerprint
 
-        return compute_prefix_fingerprint([], [{"text": SYSTEM_PROMPT}], messages)
+        fingerprint = compute_prefix_fingerprint([], [{"text": SYSTEM_PROMPT}], messages)
     except Exception:  # noqa: BLE001 - a row without fingerprints falls back to the previous call
         logger.debug("workflow prompt: fingerprint failed", exc_info=True)
         return None
+    if key:
+        fingerprint["messagesHash"] = key
+        fingerprint["extendsMessagesHashes"] = [key]
+    return fingerprint
 
 
 # --- The run --------------------------------------------------------------------------------------
@@ -816,9 +872,13 @@ class PromptStepRun:
                 if not plans:
                     return
             if any(plan.reads_files for plan in plans) and too_large(documents, model_plan):
-                for plan in plans:
+                # Only the steps that send the documents are over the budget; a step that reads
+                # only earlier steps sends none of them, so it still runs.
+                for plan in [p for p in plans if p.reads_files]:
                     await self._stop(plan, "too_large")
-                return
+                plans = [p for p in plans if not p.reads_files]
+                if not plans:
+                    return
             await self._run_group(run, model_plan, documents, prefix, plans, limit=limit)
 
         outcomes = await asyncio.gather(
@@ -851,7 +911,12 @@ class PromptStepRun:
         """
         model = self._build_model(model_plan.model_id)
         doc_tokens = document_tokens(documents, model_plan.model_id)
-        warm: Dict[str, Optional[int]] = {"prefix": None}
+        # The group's two prefixes: with the documents, for a step that reads files, and without.
+        warm: Dict[str, Any] = {
+            "prefix": None,
+            "key": prefix_key(model_plan.model_id, prefix),
+            "bare_key": prefix_key(model_plan.model_id, []),
+        }
 
         # The warm call is a step that sends the documents, so the rest read them; a step that
         # reads no files has no shared prefix and only joins the fan-out.
@@ -879,7 +944,7 @@ class PromptStepRun:
         prefix: List[Dict[str, Any]],
         doc_tokens: int,
         plan: StepPlan,
-        warm: Dict[str, Optional[int]],
+        warm: Dict[str, Any],
     ) -> None:
         async with self._slots:
             await self._call_step(model, model_plan, prefix, doc_tokens, plan, warm)
@@ -891,7 +956,7 @@ class PromptStepRun:
         prefix: List[Dict[str, Any]],
         doc_tokens: int,
         plan: StepPlan,
-        warm: Dict[str, Optional[int]],
+        warm: Dict[str, Any],
     ) -> None:
         if self._stopped:
             await self._stop(plan, "user_stopped")
@@ -959,8 +1024,12 @@ class PromptStepRun:
                 metrics=result.metrics,
                 started=started,
                 ended=ended,
-                fingerprint=_fingerprint(messages),
-                attributes={"runId": self.run_id, "stepId": plan.step_id},
+                fingerprint=_fingerprint(messages, warm.get("key" if plan.reads_files else "bare_key")),
+                attributes={
+                    "runId": self.run_id,
+                    "stepId": plan.step_id,
+                    **({"truncated": True} if result.stop_reason == "max_tokens" else {}),
+                },
                 usage_estimate=estimate,
             )
 
@@ -974,6 +1043,9 @@ class PromptStepRun:
         if not text:
             await self._stop(plan, "error")
             return
+        if result.stop_reason == "max_tokens":
+            # Kept, not stopped: the answer so far is worth having, as long as it says it is cut.
+            text = mark_cut_off(text)
         await self._finish(plan, text, int((result.usage or {}).get("outputTokens") or 0))
 
 

@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover - exercised only without boto3
     ClientError = Exception  # type: ignore[assignment, misc]
 
 from apis.shared.handoff.context import context_hash
-from apis.shared.handoff.delivery import cap_delivery_text
+from apis.shared.handoff.delivery import SEND_BACK_MAX_CHARS, cap_delivery_text
 from apis.shared.handoff.models import (
     KIND_PROMPT_STEP,
     PROMPT_FIELD_OUTPUT_HASH,
@@ -51,6 +51,23 @@ logger = logging.getLogger(__name__)
 WORKFLOW_PROMPT_MAX_STEPS = 8
 
 _SK_PREFIX = "HANDOFF#"
+
+#: The last line of an answer the model was still writing when it reached the output limit, so a
+#: reader of the step, and a step or merge that reads it, can tell it is incomplete.
+CUT_OFF_MARKER = "[cut off at the output limit]"
+
+
+def mark_cut_off(text: str) -> str:
+    """``text`` capped as a stored answer is, with ``CUT_OFF_MARKER`` as its last line.
+
+    Room is kept for the marker inside ``SEND_BACK_MAX_CHARS``, so the cap ``finish`` applies (and
+    any later delivery cap) never cuts the marker off.
+    """
+    capped = cap_delivery_text(text)
+    room = SEND_BACK_MAX_CHARS - len(CUT_OFF_MARKER) - 2
+    if len(capped) > room:
+        capped = capped[:room].rstrip()
+    return f"{capped}\n\n{CUT_OFF_MARKER}"
 
 
 class WorkflowPromptRequest(BaseModel):
@@ -197,7 +214,9 @@ def get_prompt_step_store() -> PromptStepStore:
 
 
 __all__ = [
+    "CUT_OFF_MARKER",
     "PromptStepStore",
+    "mark_cut_off",
     "WORKFLOW_PROMPT_MAX_STEPS",
     "WorkflowPromptRequest",
     "get_prompt_step_store",

@@ -1177,7 +1177,11 @@ reads work as they do for Agent steps. The envelope is unchanged: 8 steps.
   which is 50K on Haiku 5.5 and keeps under its 100K 5× line. v1 does not truncate.
 
 **The output.**
-- `maxTokens` is 4,000, with the model's default effort.
+- `maxTokens` is 16,000, with the model's default effort. Reasoning counts against the limit on Haiku 5.5 and
+  Sonnet 5.5, and at the first plan's 4,000, 3 of 10 steps were cut off mid-sentence on dev (2026-11-21).
+  An answer that still reaches the limit is kept, ends with "[cut off at the output limit]", and its `C#` row
+  carries `truncated: true`. The step timeout is 180 s: 16,000 tokens at Sonnet 5.5's slowest measured rate
+  (116 tokens a second), with margin.
 - The answer is stored capped at `SEND_BACK_MAX_TOKENS` (2,000), as a delivery part is.
 - The model sees its own instruction, the documents and any earlier results it reads. It sees nothing else of the
   run.
@@ -1197,7 +1201,7 @@ reads work as they do for Agent steps. The envelope is unchanged: 8 steps.
 **Stop.**
 - The invocation re-reads the run row every 2 s. On `stopped` it cancels calls in flight and stops claimed steps
   with `user_stopped`.
-- Each step has a 120 s timeout.
+- Each step has a 180 s timeout (see the output, above).
 - A closed tab does not cancel. The calls finish and write their rows, and the run refresh picks them up.
 
 **Results.**
