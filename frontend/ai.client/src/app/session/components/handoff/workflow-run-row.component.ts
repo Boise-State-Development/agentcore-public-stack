@@ -267,12 +267,18 @@ export class WorkflowRunRowComponent {
 
   protected readonly headingId = computed(() => `run-row-${this.run().runId}`);
 
-  protected readonly title = computed(() => {
+  /** The source conversation's title, or null while it still has the placeholder. */
+  private readonly sourceTitle = computed(() => {
     const run = this.run();
-    const total = this.progress().total;
     const listed = this.sessions.mergedSessionsResource().sessions.find((s) => s.sessionId === run.sessionId);
     const source = listed?.title?.trim();
-    return source && source !== 'New Conversation' ? `${source} · ${agentsLabel(total)}` : `Handed off to ${agentsLabel(total)}`;
+    return source && source !== 'New Conversation' ? source : null;
+  });
+
+  protected readonly title = computed(() => {
+    const total = this.progress().total;
+    const source = this.sourceTitle();
+    return source ? `${source} · ${agentsLabel(total)}` : `Handed off to ${agentsLabel(total)}`;
   });
 
   private readonly notStarted = computed(() => this.progress().lines.filter((line) => line.state === 'not_started').length);
@@ -318,7 +324,9 @@ export class WorkflowRunRowComponent {
     this.savingWorkflow.set(true);
     this.saveWorkflowError.set(null);
     try {
-      const document = await this.workflows.create({ fromRun: { sessionId: run.sessionId, runId: run.runId } });
+      // Named after the conversation it came from; the server says "Untitled workflow" without one.
+      const title = this.sourceTitle() ?? undefined;
+      const document = await this.workflows.create({ title, fromRun: { sessionId: run.sessionId, runId: run.runId } });
       void this.router.navigate(designerLink(document.workflow));
     } catch (err) {
       this.saveWorkflowError.set(this.workflows.messageFor(err, 'It couldn’t be saved as a workflow.'));
