@@ -125,7 +125,6 @@ SheetBlockerCode = Literal[
     "too_few_steps",
     "step_unavailable",
     "same_agent_twice",
-    "merge_result",
 ]
 
 
@@ -144,6 +143,14 @@ class SheetView(BaseModel):
 
     startable: bool
     blockers: List[SheetBlocker]
+    merge_instruction: Optional[str] = Field(
+        None,
+        alias="mergeInstruction",
+        description=(
+            "A merged result only (PR-D.5b): what the one turn that merges will ask the source "
+            "conversation's model, the file's instruction or the default"
+        ),
+    )
 
 
 class WorkflowDocument(BaseModel):
@@ -288,10 +295,10 @@ def step_changed(step: WorkflowStep, agent: AgentView) -> bool:
 def sheet_for(workflow: Workflow, agents: Dict[str, AgentView]) -> SheetView:
     """What blocks Start today, each reason once, with the step it is about.
 
-    Step 1's engine is the bound: at least two steps, each Agent once, every step one the caller
-    can run (§20.1: a step the starter can't run blocks Start until it is removed), and a card
-    result until the merge (D.5b). A step that reads another step's result runs in a later stage
-    (PR-D.5a), so it no longer blocks.
+    Step 1's engine is the bound: at least two steps, each Agent once, and every step one the
+    caller can run (§20.1: a step the starter can't run blocks Start until it is removed). A step
+    that reads another step's result runs in a later stage (PR-D.5a), and a merged result starts
+    by itself once the run settles (PR-D.5b), so neither blocks.
     """
     blockers: List[SheetBlocker] = []
     seen: Dict[str, str] = {}
@@ -323,14 +330,22 @@ def sheet_for(workflow: Workflow, agents: Dict[str, AgentView]) -> SheetView:
                 message=f"A workflow needs at least {WORKFLOW_RUN_MIN_STEPS} steps to start",
             ),
         )
-    if workflow.result.mode == RESULT_MERGE:
-        blockers.append(
-            SheetBlocker(
-                code="merge_result",
-                message="A merged result isn't available yet; the result comes back as one card",
-            )
-        )
-    return SheetView(startable=not blockers, blockers=blockers)
+    return SheetView(startable=not blockers, blockers=blockers, merge_instruction=merge_instruction(workflow))
+
+
+#: What the one merge turn says when the file's ``## Result`` has no instruction of its own (PR-D.5b).
+DEFAULT_MERGE_INSTRUCTION = "Combine these results into one answer."
+
+
+def merge_instruction(workflow: Workflow) -> Optional[str]:
+    """The text of the turn that merges a run's results, or None for a card result (PR-D.5b).
+
+    The file's ``## Result`` instruction, else :data:`DEFAULT_MERGE_INSTRUCTION`, so the run row and
+    the sheet always name what the source conversation's model will be asked.
+    """
+    if workflow.result.mode != RESULT_MERGE:
+        return None
+    return (workflow.result.instruction or "").strip() or DEFAULT_MERGE_INSTRUCTION
 
 
 def without_steps(workflow: Workflow, removed: Iterable[str]) -> Tuple[Workflow, Tuple[str, ...]]:
@@ -411,6 +426,7 @@ def document_from(
 
 
 __all__ = [
+    "DEFAULT_MERGE_INSTRUCTION",
     "AgentView",
     "ResultView",
     "SheetBlocker",
@@ -425,6 +441,7 @@ __all__ = [
     "document_from",
     "is_active_skill",
     "load_workflow",
+    "merge_instruction",
     "read_stored_workflow_text",
     "readable_workflow_skill",
     "sheet_for",

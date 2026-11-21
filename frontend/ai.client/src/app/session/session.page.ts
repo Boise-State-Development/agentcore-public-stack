@@ -51,6 +51,7 @@ import {
 } from './services/chat/mention-routing';
 import { AgentHandoffService } from './services/handoff/agent-handoff.service';
 import { WorkflowRunService } from './services/handoff/workflow-run.service';
+import { WorkflowRunMergeService } from './services/handoff/workflow-run-merge.service';
 import { ToastService } from '../services/toast/toast.service';
 import { Agent, AgentRunnability } from '../agents/models/agent.model';
 import { ChatContainerComponent, ChatContainerConfig } from './components/chat-container/chat-container.component';
@@ -109,6 +110,7 @@ export class ConversationPage implements OnDestroy {
   private features = inject(FEATURES);
   private agentHandoff = inject(AgentHandoffService);
   private workflowRuns = inject(WorkflowRunService);
+  private readonly workflowMerge = inject(WorkflowRunMergeService);
   private projectApi = inject(ProjectApiService);
   /** Protected: the template hands the URL binding to the composer's voice control (#625). */
   protected readonly binding = inject(ConversationBindingService);
@@ -345,6 +347,16 @@ export class ConversationPage implements OnDestroy {
     // before the first message) counts as viewed too.
     effect(() => {
       this.chatStateService.setViewedSession(this.effectiveSessionId());
+    });
+
+    // A saved workflow's merge starts by itself only in the conversation on screen (PR-D.5b): it
+    // is sent here, as Send would send it, with this page's binding and its restored model. Not in
+    // a Shared Project, where workflows are never offered.
+    effect((onCleanup) => {
+      const sessionId = this.sessionId();
+      if (!sessionId || !this.features.workflows || this.binding.queryProjectId()) return;
+      const unregister = this.workflowMerge.register(sessionId, (text) => this.sendMergeTurn(sessionId, text));
+      onCleanup(unregister);
     });
 
     // Control header visibility based on whether there are messages
@@ -1019,6 +1031,15 @@ export class ConversationPage implements OnDestroy {
       .catch((error) => {
         console.error('Error continuing truncated turn:', error);
       });
+  }
+
+  /**
+   * The one turn that merges a saved workflow's results (PR-D.5b): its instruction as the text, with
+   * the run's card riding it from the composer, exactly as Try again sends a turn from this page.
+   */
+  private sendMergeTurn(sessionId: string, text: string): Promise<void> {
+    const assistantIdToUse = this.binding.boundAgentId() || this.assistant()?.assistantId || undefined;
+    return this.chatRequestService.submitChatRequest(text, sessionId, undefined, assistantIdToUse);
   }
 
   /**

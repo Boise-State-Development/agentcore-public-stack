@@ -74,7 +74,7 @@ export interface WorkflowView extends WorkflowRef {
   isOwned: boolean;
 }
 
-export type WorkflowSheetBlockerCode = 'too_few_steps' | 'step_unavailable' | 'same_agent_twice' | 'reads_step' | 'merge_result';
+export type WorkflowSheetBlockerCode = 'too_few_steps' | 'step_unavailable' | 'same_agent_twice' | 'reads_step';
 
 export interface WorkflowSheetBlocker {
   code: WorkflowSheetBlockerCode;
@@ -85,6 +85,8 @@ export interface WorkflowSheetBlocker {
 export interface WorkflowSheet {
   startable: boolean;
   blockers: WorkflowSheetBlocker[];
+  /** A merged Result only (PR-D.5b): what the one merge turn will ask, the file's instruction or the default. */
+  mergeInstruction?: string;
 }
 
 /** `GET`, `POST` and `PUT` on `/workflows` all answer with this. */

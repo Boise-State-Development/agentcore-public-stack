@@ -126,6 +126,19 @@ class WorkflowRunSource(BaseModel):
         alias="resultReads",
         description="The steps the result takes, by stepName (PR-D.5a); absent means every step",
     )
+    result_mode: Optional[str] = Field(
+        None,
+        alias="resultMode",
+        description="card | merge, from the file at create (PR-D.5b); absent reads as card",
+    )
+    result_instruction: Optional[str] = Field(
+        None,
+        alias="resultInstruction",
+        description=(
+            "The merge instruction from the file's ## Result, when resultMode is merge (PR-D.5b). The SPA "
+            "sends it as the user text of the one turn that merges, with the result card attached"
+        ),
+    )
 
 
 class WorkflowRunCard(BaseModel):

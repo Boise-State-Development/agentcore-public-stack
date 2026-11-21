@@ -89,6 +89,8 @@ from apis.shared.workflows.format import (
     FILES_NONE,
     FILES_ONE,
     INPUT_READS,
+    RESULT_MERGE,
+    Workflow,
     WorkflowError,
     require_workflow_name,
     workflow_fingerprint,
@@ -98,6 +100,7 @@ from apis.shared.workflows.sheet import (
     WorkflowUnreadable,
     agent_views,
     load_workflow,
+    merge_instruction,
     sheet_for,
     step_model,
     without_steps,
@@ -386,9 +389,9 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
     404 while ``WORKFLOWS_ENABLED`` is off, for a workflow the caller can't reach (another user's
     private one reads as absent), and for a bad name; 422 for a file that no longer parses, and
     with the sheet's own blockers while any applies (a step the caller can't run, the same Agent
-    twice, a merged result until the merge, fewer than two steps). ``removedSteps`` are taken out
-    first, with every step that reads them. Each step keeps the steps it reads (PR-D.5a), and the
-    run keeps the steps the result takes.
+    twice, fewer than two steps). ``removedSteps`` are taken out first, with every step that reads
+    them. Each step keeps the steps it reads (PR-D.5a), and the run keeps the steps the result
+    takes and, for a merged result, its mode and instruction (PR-D.5b).
     """
     if not workflows_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -437,8 +440,20 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
             files=workflow.files,
             removed_steps=list(removed) or None,
             result_reads=list(trimmed.result.reads) if trimmed.result.reads is not None else None,
+            **_result_merge(trimmed),
         ),
     )
+
+
+def _result_merge(workflow: Workflow) -> Dict[str, str]:
+    """``resultMode`` / ``resultInstruction`` for a merged result (PR-D.5b); nothing for a card.
+
+    Written only when the result merges, so a card run's row reads exactly as before.
+    """
+    instruction = merge_instruction(workflow)
+    if instruction is None:
+        return {}
+    return {"result_mode": RESULT_MERGE, "result_instruction": instruction}
 
 
 def _step_request(own: Optional[str], shared: str) -> str:

@@ -25,6 +25,10 @@ import { RunStepLine, RunStepState, runProgress, waitingLabel } from '../../serv
 import { WorkflowRunView } from '../../services/handoff/workflow-run.models';
 import { WorkflowRunService, agentsLabel, canResume } from '../../services/handoff/workflow-run.service';
 import { SessionService } from '../../services/session/session.service';
+import { WorkflowGraphComponent } from '../../../workflows/components/workflow-graph.component';
+import { MAX_WORKFLOW_STEPS } from '../../../workflows/workflow.models';
+import { runGraph } from '../../services/handoff/workflow-run-graph';
+import { WorkflowRunMergeService, mergeInstructionOf } from '../../services/handoff/workflow-run-merge.service';
 import { HandoffRelayComponent } from './handoff-relay.component';
 import { bringIntoView, handoffStatusLine, truncate } from './handoff-status-line';
 
@@ -73,7 +77,7 @@ const BAR_FILL: Record<RunStepState, string> = {
 @Component({
   selector: 'app-workflow-run-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, NgTemplateOutlet, RouterLink, HandoffRelayComponent],
+  imports: [NgIcon, NgTemplateOutlet, RouterLink, HandoffRelayComponent, WorkflowGraphComponent],
   providers: [provideIcons({ heroCheckCircle, heroChevronRight, heroExclamationCircle, heroMinusCircle, heroPauseCircle })],
   template: `
     <section
@@ -96,6 +100,12 @@ const BAR_FILL: Record<RunStepState, string> = {
           </span>
         }
       </h3>
+
+      @if (mergeInstruction(); as instruction) {
+        <p class="mt-0.5 line-clamp-2 text-xs/5 text-gray-600 dark:text-gray-400" data-testid="run-merge-instruction">
+          <span class="font-medium text-gray-700 dark:text-gray-300">Merge:</span> {{ instruction }}
+        </p>
+      }
 
       <div class="mt-2 flex gap-1" aria-hidden="true" data-testid="run-bar">
         @for (line of lines(); track line.handoffId) {
@@ -142,9 +152,26 @@ const BAR_FILL: Record<RunStepState, string> = {
           </li>
         }
       </ul>
+
+      @if (graphOpen()) {
+        <app-workflow-graph
+          [id]="graphId()"
+          class="-mx-1 mt-2 overflow-hidden rounded-xl border border-gray-200 md:h-72 dark:border-gray-700"
+          [stages]="graph().stages"
+          [edges]="graph().edges"
+          [start]="graph().start"
+          [result]="graph().result"
+          [stepCount]="graph().stepCount"
+          [maxSteps]="maxSteps"
+          label="Graph of this run"
+          mode="run"
+          [status]="graph().status"
+          [finished]="graph().finished"
+        />
+      }
     </section>
 
-    @if (offerStart() || offerBringBack() || onComposer() || offerStop() || startElsewhere() || offerSave()) {
+    @if (offerStart() || offerBringBack() || onComposer() || offerStop() || startElsewhere() || offerSave() || offerGraph()) {
       <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 px-4 text-xs/5">
         @if (offerStart()) {
           <button type="button" (click)="start()" class="rounded-md font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark">
@@ -158,6 +185,15 @@ const BAR_FILL: Record<RunStepState, string> = {
             <ng-icon name="heroCheckCircle" class="size-3.5" aria-hidden="true" />
             Added to your next message
           </span>
+          @if (offerMergeNow()) {
+            <button
+              type="button"
+              (click)="mergeNow()"
+              class="rounded-md font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:focus-visible:outline-primary-accessible-dark"
+            >
+              Merge now
+            </button>
+          }
         } @else if (offerBringBack()) {
           <button
             type="button"
@@ -171,6 +207,17 @@ const BAR_FILL: Record<RunStepState, string> = {
         @if (offerStop()) {
           <button type="button" (click)="stop()" class="rounded-md font-medium text-gray-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300">
             Stop run
+          </button>
+        }
+        @if (offerGraph()) {
+          <button
+            type="button"
+            (click)="graphOpen.set(!graphOpen())"
+            [attr.aria-expanded]="graphOpen()"
+            [attr.aria-controls]="graphOpen() ? graphId() : null"
+            class="rounded-md font-medium text-gray-700 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300 dark:focus-visible:outline-primary-accessible-dark"
+          >
+            {{ graphOpen() ? 'Hide graph' : 'View as graph' }}
           </button>
         }
         @if (offerSave()) {
@@ -232,6 +279,8 @@ export class WorkflowRunRowComponent {
   private readonly features = inject(FEATURES);
   private readonly workflows = inject(WorkflowsApiService);
   private readonly router = inject(Router);
+  private readonly merge = inject(WorkflowRunMergeService);
+  protected readonly maxSteps = MAX_WORKFLOW_STEPS;
 
   readonly run = input.required<WorkflowRunView>();
   /**
@@ -271,6 +320,19 @@ export class WorkflowRunRowComponent {
   protected readonly lines = computed<StepLineView[]>(() => this.progress().lines.map((line) => this.lineView(line)));
 
   protected readonly headingId = computed(() => `run-row-${this.run().runId}`);
+  protected readonly graphId = computed(() => `run-graph-${this.run().runId}`);
+
+  /**
+   * View as graph (PR-D.5b): the run on the designer's graph, in run mode. Closed by default. Not
+   * where the host turns Save as workflow off: that host is the designer's test run, whose canvas
+   * already draws this run.
+   */
+  protected readonly offerGraph = computed(() => this.features.workflows && this.offerSaveAsWorkflow());
+  protected readonly graphOpen = signal(false);
+  protected readonly graph = computed(() => runGraph(this.run(), this.progress(), (line) => this.lineView(line).statusLine));
+
+  /** A saved workflow's merge instruction (PR-D.5b), shown so the user knows what comes next. */
+  protected readonly mergeInstruction = computed(() => mergeInstructionOf(this.run()));
 
   /** The source conversation's title, or null while it still has the placeholder. */
   private readonly sourceTitle = computed(() => {
@@ -295,6 +357,17 @@ export class WorkflowRunRowComponent {
 
   protected readonly collecting = computed(() => this.results.isCollecting(this.run().runId));
   protected readonly onComposer = computed(() => this.results.isOnComposer(this.run()));
+
+  /**
+   * Merge now (PR-D.5b): the result of a merging workflow waits on the composer because the merge
+   * couldn't start by itself (the user was typing, or away). Offered only in the conversation on
+   * screen, while it is idle; a draft stays where it is.
+   */
+  protected readonly offerMergeNow = computed(() => {
+    const run = this.run();
+    if (!this.mergeInstruction()) return false;
+    return this.merge.holdFor(run, this.results.resultCardOf(run), { manual: true }) === null;
+  });
 
   /**
    * Offered until the run has its one result. The server fixes that result exactly once, so a step that
@@ -350,6 +423,11 @@ export class WorkflowRunRowComponent {
 
   protected bringBack(): void {
     void this.results.collect(this.run());
+  }
+
+  protected mergeNow(): void {
+    const run = this.run();
+    this.merge.startNow(run, this.results.resultCardOf(run));
   }
 
   protected stop(): void {

@@ -435,8 +435,16 @@ class TestWrite:
         assert [(b["code"], b.get("step")) for b in sheet["blockers"]] == [
             ("same_agent_twice", "b"),
             ("step_unavailable", "c"),
-            ("merge_result", None),
         ]
+        # A merge no longer blocks (PR-D.5b); the sheet names what the merge turn will ask.
+        assert sheet["mergeInstruction"] == "Combine these results into one answer."
+
+    def test_a_card_sheet_names_no_merge(self, client):
+        wf = _create(client)
+        sheet = client.put(
+            f"/workflows/{wf['skillId']}/{wf['name']}", json=DEFINITION, params={"validate": "true"}
+        ).json()["sheet"]
+        assert sheet.get("mergeInstruction") is None
 
     def test_a_hand_written_note_survives_a_structured_save(self, client, user_skill_service):
         skill_id = client.post("/skills/mine", json={"displayName": "Hand built", "description": "d"}).json()["skillId"]
