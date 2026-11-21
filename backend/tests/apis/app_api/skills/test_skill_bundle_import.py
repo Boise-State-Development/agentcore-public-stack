@@ -493,3 +493,18 @@ class TestFetch:
         from apis.app_api.web_sources.public_transport import PublicOnlyTransport
 
         assert github_source.PublicOnlyTransport is PublicOnlyTransport
+
+
+class TestWorkflowSkips:
+    """A saved workflow is checked on import beside a field set (workflow-designer §9.1)."""
+
+    def test_an_invalid_workflow_is_skipped_with_the_parser_message(self):
+        broken = "---\ntitle: T\n---\n\n| step | kind | worker | reads |\n|---|---|---|---|\n| a | agent | AST-1 | a |\n"
+        b = bundle_of({"SKILL.md": SKILL_MD, "references/workflow.review.md": broken})
+        assert skipped(b)["references/workflow.review.md"].startswith("invalid workflow:")
+
+    def test_a_valid_workflow_is_imported(self):
+        ok = "---\ntitle: T\n---\n\n| step | kind | worker | reads |\n|---|---|---|---|\n| a | agent | AST-1 | request |\n"
+        b = bundle_of({"SKILL.md": SKILL_MD, "references/workflow.review.md": ok})
+        assert "references/workflow.review.md" not in skipped(b)
+        assert [f.filename for f in b.files] == ["workflow.review.md"]

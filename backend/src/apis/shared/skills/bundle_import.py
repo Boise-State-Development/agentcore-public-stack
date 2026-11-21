@@ -27,6 +27,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from apis.shared.extraction.field_sets import validate_field_set_upload
+from apis.shared.workflows.format import validate_workflow_upload
 from apis.shared.skills.bundle import KIND_DIRS
 from apis.shared.skills.bundle_files import (
     MAX_RESOURCE_BYTES,
@@ -488,11 +489,16 @@ def _name_and_read(
             skipped.append(SkippedFile(rel, "empty file", 0))
             continue
         if kind == "reference" and len(segments) == 1:
-            # Only a top-level reference is read as a field set.
+            # Only a top-level reference is read as a field set or a workflow.
             try:
                 validate_field_set_upload(filename, content)
             except ValueError as e:
                 skipped.append(SkippedFile(rel, f"invalid field set: {e}", len(content)))
+                continue
+            try:
+                validate_workflow_upload(filename, content)
+            except ValueError as e:
+                skipped.append(SkippedFile(rel, f"invalid workflow: {e}", len(content)))
                 continue
         taken[resource_path] = rel
         files.append(
