@@ -8,12 +8,16 @@ import {
   blankDraft,
   chooseAgent,
   moveStep,
+  readersOf,
   removeStep,
+  resultSteps,
   sameDraft,
+  setResult,
   stagesOf,
   stepNameFor,
   templateDraft,
   toWrite,
+  toggleResultRead,
 } from './workflow-draft';
 import { MAX_WORKFLOW_STEPS, workflowNameFor } from './workflow.models';
 
@@ -119,6 +123,12 @@ describe('removeStep', () => {
     expect(next.steps[0].reads).toEqual(['request']);
     expect(next.result.reads).toEqual(['two']);
   });
+
+  it('gives the result every step again when it read only the removed one, since none is refused', () => {
+    const d = draft([step('a', 'one'), step('b', 'two')]);
+    const next = removeStep({ ...d, result: { ...d.result, reads: ['one'] } }, 'a');
+    expect(next.result.reads).toBeNull();
+  });
 });
 
 describe('addStep', () => {
@@ -128,6 +138,71 @@ describe('addStep', () => {
     expect(d.steps).toHaveLength(MAX_WORKFLOW_STEPS);
     expect(addStep(d)).toBeNull();
     expect(new Set(d.steps.map((s) => s.name)).size).toBe(MAX_WORKFLOW_STEPS);
+  });
+
+  it('adds to stage 1 reading the request and the files', () => {
+    const added = addStep(draft([step('a', 'one')]), 0)!;
+    expect(added.draft.steps.at(-1)!.reads).toEqual(['request', 'files']);
+    expect(stagesOf(added.draft.steps)).toEqual([['a', added.key]]);
+  });
+
+  it('adds to a later stage reading every step of the stage before, which is what puts it there', () => {
+    const d = draft([step('a', 'one'), step('b', 'two'), step('c', 'three', { reads: ['one'] })]);
+    const second = addStep(d, 1)!;
+    expect(second.draft.steps.at(-1)!.reads).toEqual(['request', 'files', 'one', 'two']);
+    expect(stagesOf(second.draft.steps)).toEqual([['a', 'b'], ['c', second.key]]);
+
+    // One past the last stage starts a new one, reading the last stage.
+    const third = addStep(d, 2)!;
+    expect(third.draft.steps.at(-1)!.reads).toEqual(['request', 'files', 'three']);
+    expect(stagesOf(third.draft.steps)).toEqual([['a', 'b'], ['c'], [third.key]]);
+  });
+});
+
+describe('readersOf', () => {
+  it('names every step that reads a step, directly or on the way, so none of them can be read back', () => {
+    const steps = [
+      step('a', 'one'),
+      step('b', 'two', { reads: ['one'] }),
+      step('c', 'three', { reads: ['two'] }),
+      step('d', 'four'),
+    ];
+    const readers = readersOf(steps, 'a');
+    expect([...readers.entries()]).toEqual([
+      ['b', null],
+      ['c', 'two'],
+    ]);
+    expect(readersOf(steps, 'd').size).toBe(0);
+    // A step is never its own reader: the tab never lists it at all.
+    expect(readersOf(steps, 'c').size).toBe(0);
+  });
+});
+
+describe('the result', () => {
+  it('takes every step while it names none, and only what it names otherwise, in step order', () => {
+    const d = draft([step('a', 'one'), step('b', 'two'), step('c', 'three')]);
+    expect(resultSteps(d)).toEqual(['one', 'two', 'three']);
+    expect(resultSteps({ ...d, result: { ...d.result, reads: ['three', 'one'] } })).toEqual(['one', 'three']);
+  });
+
+  it('leaves a step out, keeps at least one, and goes back to every step when all are ticked', () => {
+    let d = draft([step('a', 'one'), step('b', 'two')]);
+    d = toggleResultRead(d, 'one');
+    expect(d.result.reads).toEqual(['two']);
+    expect(toggleResultRead(d, 'two')).toBe(d);
+    d = toggleResultRead(d, 'one');
+    expect(d.result.reads).toBeNull();
+  });
+
+  it('sends the merge, its instruction and its reads, and a blank instruction as none', () => {
+    const d = setResult(draft([step('a', 'one'), step('b', 'two')]), { mode: 'merge', instruction: 'Write one report.' });
+    expect(toWrite({ ...d, result: { ...d.result, reads: ['two'] } })!.result).toEqual({
+      mode: 'merge',
+      reads: ['two'],
+      instruction: 'Write one report.',
+    });
+    expect(toWrite(setResult(d, { instruction: '   ' }))!.result.instruction).toBeNull();
+    expect(sameDraft(setResult(d, { instruction: '   ' }), setResult(d, { instruction: null }))).toBe(true);
   });
 });
 

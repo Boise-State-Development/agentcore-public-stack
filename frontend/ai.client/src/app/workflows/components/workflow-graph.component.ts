@@ -97,6 +97,10 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
  * cards' measured boxes and hidden (`aria-hidden`), since every edge is said on the card it ends
  * at. Below `md` the columns stack as headed sections and no connector is drawn.
  *
+ * In design mode each stage ends with Add step (`add` emits the stage's 0-based index), and a
+ * last column starts the next stage (`add` emits one past the last). A step added to stage N
+ * reads every step of stage N-1, which is what puts it there (PR-D.5b-1).
+ *
  * Moving around (§4.2): native scrolling in a focusable region, a drag on the empty grid pans it,
  * and Fit scales the whole graph to the canvas, never below 60%. No wheel or pinch zoom.
  *
@@ -110,6 +114,8 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
  * state is said in text, never by colour alone, and reduced motion stops the running pulse. The
  * columns come from `stages` either way, so a run with several stages draws as it will once D.5b
  * gives the canvas them.
+ *
+ * Its inputs only ever grow (additive): the run's row and the review sheet embed it too.
  */
 @Component({
   selector: 'app-workflow-graph',
@@ -277,22 +283,50 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                   </li>
                 }
               </ul>
-              @if (s === 0 && mode() === 'design') {
+              @if (mode() === 'design') {
                 <button
                   type="button"
-                  data-node-id="add"
+                  [attr.data-node-id]="addNodeId(s)"
                   (click)="add.emit(s)"
                   [disabled]="stepCount() >= maxSteps()"
-                  class="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-2xl border border-dashed border-gray-500 bg-white/40 px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition-colors hover:bg-white/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none dark:border-gray-400 dark:bg-gray-800/40 dark:text-gray-200 dark:hover:bg-gray-800/80"
-                  [attr.aria-describedby]="'wf-step-cap'"
+                  [attr.aria-label]="'Add step to stage ' + (s + 1)"
+                  [class]="addClass"
+                  aria-describedby="wf-step-cap"
                 >
                   <ng-icon name="heroPlus" class="size-3.5" aria-hidden="true" />
                   Add step
                 </button>
-                <p id="wf-step-cap" class="mt-1 text-center text-xs/5 text-gray-600 tabular-nums dark:text-gray-300">
-                  {{ stepCount() }} of {{ maxSteps() }} steps
-                </p>
+                @if (s === 0) {
+                  <p id="wf-step-cap" class="mt-1 text-center text-xs/5 text-gray-600 tabular-nums dark:text-gray-300">
+                    {{ stepCount() }} of {{ maxSteps() }} steps
+                  </p>
+                }
               }
+            </section>
+          }
+
+          <!-- The next stage: not a stage yet, only a way to start one (§4.1). -->
+          @if (mode() === 'design' && stepCount() > 0) {
+            <section class="relative md:w-60" role="group" aria-labelledby="wf-col-next">
+              <h2 id="wf-col-next" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">Stage {{ stages().length + 1 }}</h2>
+              <!-- Frosted like a card, so a connector passing behind it to Result stays behind it. -->
+              <button
+                type="button"
+                [attr.data-node-id]="addNodeId(stages().length)"
+                (click)="add.emit(stages().length)"
+                [disabled]="stepCount() >= maxSteps()"
+                [attr.aria-label]="'Add step to stage ' + (stages().length + 1) + ', a new stage'"
+                [class]="newStageClass"
+                aria-describedby="wf-next-help wf-step-cap"
+              >
+                <span class="flex items-center gap-1.5 text-xs/5 font-medium text-gray-700 dark:text-gray-200">
+                  <ng-icon name="heroPlus" class="size-3.5" aria-hidden="true" />
+                  Add step
+                </span>
+                <span id="wf-next-help" class="text-xs/5 font-normal text-gray-600 dark:text-gray-300">
+                  Runs after stage {{ stages().length }} and reads its results
+                </span>
+              </button>
             </section>
           }
 
@@ -404,6 +438,10 @@ export class WorkflowGraphComponent {
   /** A run card: the design card's frosted look, with nothing to press. */
   protected readonly runCardClass =
     'flex w-full items-center gap-2.5 rounded-2xl border border-gray-200 bg-white/80 px-3 py-2.5 text-left shadow-xs backdrop-blur-md dark:border-gray-600 dark:bg-gray-800/75';
+  protected readonly addClass =
+    'mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-2xl border border-dashed border-gray-500 bg-white/40 px-3 py-1.5 text-xs/5 font-medium text-gray-700 transition-colors hover:bg-white/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none dark:border-gray-400 dark:bg-gray-800/40 dark:text-gray-200 dark:hover:bg-gray-800/80';
+  protected readonly newStageClass =
+    'flex w-full flex-col items-center gap-0.5 rounded-2xl border border-dashed border-gray-500 bg-white/80 px-3 py-2 text-center shadow-xs backdrop-blur-md transition-colors hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none dark:border-gray-400 dark:bg-gray-800/75 dark:hover:bg-gray-800';
   protected readonly edgeClass =
     'stroke-gray-500 transition-[stroke] duration-300 motion-reduce:transition-none dark:stroke-gray-400';
   protected readonly edgeFinishedClass =
@@ -462,6 +500,11 @@ export class WorkflowGraphComponent {
 
   protected toggleFit(): void {
     this.fit.update((on) => !on);
+  }
+
+  /** Stage 1's Add step is `add`, as it always was; a later stage's is `add-<n>`. */
+  protected addNodeId(stage: number): string {
+    return stage === 0 ? 'add' : `add-${stage + 1}`;
   }
 
   /** A step's status in run mode; a step the run doesn't have reads "Not in this run". */

@@ -14,12 +14,16 @@ import {
   isComplete,
   moveStep,
   rekeyed,
+  readersOf,
   removeStep,
+  resultSteps,
   sameDraft,
+  setResult,
   stagesOf,
   stepReads,
   templateDraft,
   toWrite,
+  toggleResultRead,
   updateStep,
 } from './workflow-draft';
 import {
@@ -28,6 +32,7 @@ import {
   WorkflowDocument,
   WorkflowFiles,
   WorkflowRef,
+  WorkflowResultMode,
 } from './workflow.models';
 import { WorkflowsApiService } from '../services/workflows/workflows-api.service';
 
@@ -117,6 +122,8 @@ export class WorkflowDesignerStore {
   readonly stages = computed(() => stagesOf(this.draft().steps));
   readonly stepCount = computed(() => this.draft().steps.length);
   readonly atCap = computed(() => this.stepCount() >= MAX_WORKFLOW_STEPS);
+  /** The steps the Result takes, by name; every step while the Result names none. */
+  readonly resultSteps = computed(() => resultSteps(this.draft()));
 
   readonly selectedStep = computed<DraftStep | null>(
     () => this.draft().steps.find((step) => step.key === this.selected()) ?? null,
@@ -319,13 +326,19 @@ export class WorkflowDesignerStore {
     this.draft.update((d) => ({ ...d, request }));
   }
 
-  /** Add an Agent step to stage 1 and select it. Returns its key, or null at the cap. */
-  add(): string | null {
-    const added = addStep(this.draft());
+  /**
+   * Add an Agent step to `stage` (0-based; one past the last starts a new stage) and select it.
+   * Returns its key, or null at the cap.
+   */
+  add(stage = 0): string | null {
+    const added = addStep(this.draft(), stage);
     if (!added) return null;
     this.draft.set(added.draft);
     this.selected.set(added.key);
-    this.announcer.announce(`Step added to stage 1. ${this.stepCount()} of ${MAX_WORKFLOW_STEPS} steps`, 'polite');
+    this.announcer.announce(
+      `Step added to stage ${this.stageOf(added.key)}. ${this.stepCount()} of ${MAX_WORKFLOW_STEPS} steps`,
+      'polite',
+    );
     return added.key;
   }
 
@@ -361,8 +374,37 @@ export class WorkflowDesignerStore {
     this.draft.set(chooseAgent(this.draft(), key, agent.agentId, agent.name));
   }
 
+  /** Set what a step reads, and say so when that moves it to another stage (§4.4). */
   setReads(key: string, reads: string[]): void {
+    const before = this.stageOf(key);
     this.draft.set(updateStep(this.draft(), key, { reads }));
+    const after = this.stageOf(key);
+    if (after === before) return;
+    const step = this.draft().steps.find((s) => s.key === key);
+    this.announcer.announce(`${step ? this.stepLabel(step) : 'Step'} moved to stage ${after}`, 'polite');
+  }
+
+  /** The steps `key` can't read, because each already reads it, with the step it reads on the way. */
+  readersOf(key: string): Map<string, string | null> {
+    return readersOf(this.draft().steps, key);
+  }
+
+  setResultMode(mode: WorkflowResultMode): void {
+    this.draft.set(setResult(this.draft(), { mode }));
+  }
+
+  setResultInstruction(instruction: string): void {
+    this.draft.set(setResult(this.draft(), { instruction }));
+  }
+
+  /** Include or leave out one step's result; the last one can't be left out. */
+  toggleResultRead(name: string): void {
+    this.draft.set(toggleResultRead(this.draft(), name));
+  }
+
+  /** A step's stage, 1-based. */
+  stageOf(key: string): number {
+    return this.stages().findIndex((keys) => keys.includes(key)) + 1;
   }
 
   setOwnRequest(key: string, ownRequest: string | null): void {

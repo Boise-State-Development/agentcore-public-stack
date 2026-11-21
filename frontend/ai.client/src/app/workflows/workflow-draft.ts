@@ -135,7 +135,11 @@ export function toWrite(
       reads: [...step.reads],
       request: step.ownRequest !== null && step.ownRequest.trim() ? step.ownRequest : null,
     })),
-    result: { mode: draft.result.mode, reads: draft.result.reads, instruction: draft.result.instruction },
+    result: {
+      mode: draft.result.mode,
+      reads: draft.result.reads,
+      instruction: draft.result.instruction?.trim() ? draft.result.instruction : null,
+    },
   };
   if (expectedVersion !== undefined) body.expectedVersion = expectedVersion;
   return body;
@@ -154,7 +158,7 @@ export function sameDraft(a: WorkflowDraft, b: WorkflowDraft): boolean {
       reads: [...s.reads].sort(),
       ownRequest: s.ownRequest?.trim() || null,
     })),
-    result: d.result,
+    result: { mode: d.result.mode, reads: d.result.reads, instruction: d.result.instruction?.trim() || null },
   });
   return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
 }
@@ -237,9 +241,18 @@ export function stepNameFor(label: string, taken: readonly string[]): string {
   return candidate;
 }
 
-/** A new Agent step, reading the request and the files, appended to stage 1. Null at the cap. */
-export function addStep(draft: WorkflowDraft): { draft: WorkflowDraft; key: string } | null {
+/**
+ * A new Agent step, appended to stage `stage` (0-based), or null at the cap. In stage 1 it reads the
+ * request and the files; in a later stage it also reads every step of the stage before, which is
+ * what puts it there (§4.1), and the author unticks what it should not read. `stage` may be one
+ * past the last stage, which starts a new one.
+ */
+export function addStep(draft: WorkflowDraft, stage = 0): { draft: WorkflowDraft; key: string } | null {
   if (draft.steps.length >= MAX_WORKFLOW_STEPS) return null;
+  const stages = stagesOf(draft.steps);
+  const at = Math.max(0, Math.min(stage, stages.length));
+  const byKey = new Map(draft.steps.map((s) => [s.key, s.name]));
+  const before = at > 0 ? (stages[at - 1] ?? []).map((k) => byKey.get(k)!) : [];
   const key = nextKey();
   const step: DraftStep = {
     key,
@@ -247,10 +260,63 @@ export function addStep(draft: WorkflowDraft): { draft: WorkflowDraft; key: stri
     autoName: true,
     agentId: null,
     agentVersion: null,
-    reads: [...INPUT_READS],
+    reads: [...INPUT_READS, ...before],
     ownRequest: null,
   };
   return { draft: { ...draft, steps: [...draft.steps, step] }, key };
+}
+
+/**
+ * The steps that read `key`'s result, directly or through other steps, each with the step it
+ * reads on the way there (null when it reads `key` itself). Any of them is a read `key` can't take,
+ * because it would make a cycle, which the format refuses (§4.1).
+ */
+export function readersOf(steps: readonly DraftStep[], key: string): Map<string, string | null> {
+  const target = steps.find((s) => s.key === key);
+  const found = new Map<string, string | null>();
+  if (!target) return found;
+  let frontier = [target.name];
+  while (frontier.length) {
+    const next: string[] = [];
+    for (const name of frontier) {
+      for (const step of steps) {
+        if (step.key === key || found.has(step.key) || !step.reads.includes(name)) continue;
+        // A direct reader reads the target itself; one further on, through the step it reads.
+        found.set(step.key, name === target.name ? null : name);
+        next.push(step.name);
+      }
+    }
+    frontier = next;
+  }
+  return found;
+}
+
+/** The steps the Result takes, by name, in step order: every step while `reads` is null. */
+export function resultSteps(draft: WorkflowDraft): string[] {
+  const reads = draft.result.reads;
+  const names = draft.steps.map((s) => s.name);
+  return reads === null ? names : names.filter((n) => reads.includes(n));
+}
+
+/**
+ * Include or leave out one step's result. Every step ticked is stored as null, which the format
+ * writes as no `Reads:` line (the result takes every step, steps added later included). The last
+ * one can't be left out: the format refuses a result that reads no step.
+ */
+export function toggleResultRead(draft: WorkflowDraft, name: string): WorkflowDraft {
+  const current = resultSteps(draft);
+  const next = current.includes(name) ? current.filter((n) => n !== name) : [...current, name];
+  if (!next.length) return draft;
+  const ordered = draft.steps.map((s) => s.name).filter((n) => next.includes(n));
+  const reads = ordered.length === draft.steps.length ? null : ordered;
+  return { ...draft, result: { ...draft.result, reads } };
+}
+
+export function setResult(
+  draft: WorkflowDraft,
+  patch: Partial<Pick<WorkflowDraft['result'], 'mode' | 'instruction'>>,
+): WorkflowDraft {
+  return { ...draft, result: { ...draft.result, ...patch } };
 }
 
 /** Remove a step, and every read of it (other steps' and the result's). */
@@ -260,7 +326,9 @@ export function removeStep(draft: WorkflowDraft, key: string): WorkflowDraft {
   const steps = draft.steps
     .filter((s) => s.key !== key)
     .map((s) => ({ ...s, reads: s.reads.filter((r) => r !== gone.name) }));
-  const reads = draft.result.reads?.filter((r) => r !== gone.name) ?? null;
+  // A result left reading nothing takes every step again: the format refuses one that reads none.
+  const left = draft.result.reads?.filter((r) => r !== gone.name) ?? null;
+  const reads = left && left.length ? left : null;
   return { ...draft, steps, result: { ...draft.result, reads } };
 }
 
