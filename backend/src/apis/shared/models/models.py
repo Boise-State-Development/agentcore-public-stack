@@ -277,6 +277,30 @@ class ManagedModelCreate(BaseModel):
         ge=0,
         description="Price per million SPEECH output tokens (speech-to-speech models only)"
     )
+    # Long-context pricing. Some models bill a prompt over a token threshold on
+    # a second rate card: Claude Haiku 5.5 at 5x on every bucket above 100,000,
+    # the OpenAI family at 2x input / cache and 1.5x output above 272,000. The
+    # threshold counts input + cache read + cache write; the multipliers apply
+    # to the whole call. `CostCalculator.rates_for_call` is the one reader.
+    # Absent on a model with one rate card.
+    long_context_threshold_tokens: Optional[int] = Field(
+        None,
+        alias="longContextThresholdTokens",
+        ge=1,
+        description="Prompt tokens (input + cache read + cache write) above which the long-context rates apply"
+    )
+    long_context_input_multiplier: Optional[float] = Field(
+        None,
+        alias="longContextInputMultiplier",
+        ge=1,
+        description="Multiplier on the input, cache-read and cache-write rates above the threshold"
+    )
+    long_context_output_multiplier: Optional[float] = Field(
+        None,
+        alias="longContextOutputMultiplier",
+        ge=1,
+        description="Multiplier on the output rate above the threshold"
+    )
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: Optional[bool] = Field(
         None,
@@ -450,6 +474,30 @@ class ManagedModelUpdate(BaseModel):
         ge=0,
         description="Price per million SPEECH output tokens (speech-to-speech models only)"
     )
+    # Long-context pricing. Some models bill a prompt over a token threshold on
+    # a second rate card: Claude Haiku 5.5 at 5x on every bucket above 100,000,
+    # the OpenAI family at 2x input / cache and 1.5x output above 272,000. The
+    # threshold counts input + cache read + cache write; the multipliers apply
+    # to the whole call. `CostCalculator.rates_for_call` is the one reader.
+    # Absent on a model with one rate card.
+    long_context_threshold_tokens: Optional[int] = Field(
+        None,
+        alias="longContextThresholdTokens",
+        ge=1,
+        description="Prompt tokens (input + cache read + cache write) above which the long-context rates apply"
+    )
+    long_context_input_multiplier: Optional[float] = Field(
+        None,
+        alias="longContextInputMultiplier",
+        ge=1,
+        description="Multiplier on the input, cache-read and cache-write rates above the threshold"
+    )
+    long_context_output_multiplier: Optional[float] = Field(
+        None,
+        alias="longContextOutputMultiplier",
+        ge=1,
+        description="Multiplier on the output rate above the threshold"
+    )
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: Optional[bool] = Field(
         None,
@@ -606,6 +654,21 @@ class ManagedModel(BaseModel):
         None,
         alias="speechOutputPricePerMillionTokens",
         description="Price per million SPEECH output tokens (speech-to-speech models only)"
+    )
+    long_context_threshold_tokens: Optional[int] = Field(
+        None,
+        alias="longContextThresholdTokens",
+        description="Prompt tokens (input + cache read + cache write) above which the long-context rates apply"
+    )
+    long_context_input_multiplier: Optional[float] = Field(
+        None,
+        alias="longContextInputMultiplier",
+        description="Multiplier on the input, cache-read and cache-write rates above the threshold"
+    )
+    long_context_output_multiplier: Optional[float] = Field(
+        None,
+        alias="longContextOutputMultiplier",
+        description="Multiplier on the output rate above the threshold"
     )
     knowledge_cutoff_date: Optional[str] = Field(None, alias="knowledgeCutoffDate")
     supports_caching: bool = Field(

@@ -276,6 +276,9 @@ export interface MetadataEvent {
    *  the streaming coordinator alongside cost so the cost badge can compute
    *  "% of context used" without an extra round-trip. */
   contextWindow?: number;
+  /** Prompt tokens past which this turn's model bills on its long-context
+   *  row (Claude Haiku 5.5: 100,000). Absent on a model with one rate card. */
+  longContextThreshold?: number;
   /** Per-turn system / tools / messages token breakdown. */
   contextBreakdown?: ContextBreakdown;
   /**

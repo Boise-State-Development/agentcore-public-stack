@@ -40,6 +40,7 @@ describe('ContextMeterComponent', () => {
   let breakdown: ContextBreakdown | null;
   let contextTokens: number;
   let contextWindow: number;
+  let longContextThreshold: number;
 
   function build(): { c: Harness; el: HTMLElement; detect: () => void } {
     const chatStub = {
@@ -53,6 +54,8 @@ describe('ContextMeterComponent', () => {
       contextPctFor: () => (contextTokens / contextWindow) * 100,
       contextBreakdown: () => breakdown,
       contextBreakdownFor: () => breakdown,
+      longContextThreshold: () => longContextThreshold,
+      longContextThresholdFor: () => longContextThreshold,
     };
     const quotaStub = { status: { value: () => quotaValue } };
     TestBed.resetTestingModule();
@@ -76,6 +79,7 @@ describe('ContextMeterComponent', () => {
     breakdown = null;
     contextTokens = 20_000;
     contextWindow = 200_000;
+    longContextThreshold = 0;
   });
 
   afterEach(() => TestBed.resetTestingModule());
@@ -182,6 +186,57 @@ describe('ContextMeterComponent', () => {
       expect(build().c.triggerAriaLabel()).toBe(
         'Context window 10% full (20k of 200k tokens), conversation cost $0.4175. Show details',
       );
+    });
+  });
+
+  describe('long-context pricing', () => {
+    // Claude Haiku 5.5: a 100K pricing line, which is also its compaction window.
+    beforeEach(() => {
+      contextWindow = 100_000;
+      longContextThreshold = 100_000;
+    });
+
+    function panelText(): string {
+      const { c, el, detect } = build();
+      c.toggle();
+      detect();
+      return el.querySelector('#context-meter-panel')?.textContent ?? '';
+    }
+
+    it('names the pricing line instead of reading past 100% full', () => {
+      contextTokens = 119_700;
+      const text = panelText();
+      expect(text).toContain('(long-context pricing)');
+      expect(text).not.toContain('120%');
+      expect(text).toContain("This turn's prompt was over 100k tokens");
+    });
+
+    it('says the same to assistive tech', () => {
+      contextTokens = 119_700;
+      expect(build().c.triggerAriaLabel()).toBe(
+        'Context over long-context pricing (119.7k of 100k tokens), conversation cost $0.4175. Show details',
+      );
+    });
+
+    it('keeps the percentage under the line and says where the line is', () => {
+      contextTokens = 60_000;
+      const text = panelText();
+      expect(text).toContain('(60%)');
+      expect(text).toContain('Prompts over 100k tokens are billed at');
+      expect(text).not.toContain("This turn's prompt was over");
+    });
+
+    it('is still standard exactly at the line', () => {
+      contextTokens = 100_000;
+      expect(panelText()).not.toContain('(long-context pricing)');
+    });
+
+    it('says nothing about pricing on a model with one rate card', () => {
+      longContextThreshold = 0;
+      contextTokens = 119_700;
+      const text = panelText();
+      expect(text).not.toContain('long-context');
+      expect(text).toContain('(120%)');
     });
   });
 

@@ -766,6 +766,84 @@
             </div>
           </div>
 
+          <!--
+            Long-context pricing. Some models bill a prompt over a size threshold
+            on a second rate card (Claude Haiku 5.5 at 5x above 100,000 tokens,
+            the OpenAI family at 2x input / 1.5x output above 272,000). Cost
+            metering applies it per call; blank on a model with one rate card.
+          -->
+          <div class="space-y-4">
+            <h3 class="text-sm/6 font-semibold text-gray-900 dark:text-white">
+              Long-context pricing
+            </h3>
+            <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+              For models whose card has a "Long Context" row. A call whose prompt (input plus cache read and write)
+              exceeds the threshold is priced at the rates above times these multipliers, on every bucket.
+            </p>
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div>
+                <label for="longContextThresholdTokens" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Threshold (prompt tokens)
+                </label>
+                <input
+                  type="number"
+                  id="longContextThresholdTokens"
+                  formControlName="longContextThresholdTokens"
+                  step="1000"
+                  min="1"
+                  placeholder="e.g. 100000 (optional)"
+                  aria-describedby="longContextThresholdTokens-hint"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-state-danger-500]="modelForm.controls.longContextThresholdTokens.invalid && modelForm.controls.longContextThresholdTokens.touched"
+                />
+                <p id="longContextThresholdTokens-hint" class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">Exceeding this switches the call to long-context rates.</p>
+                @if (modelForm.controls.longContextThresholdTokens.invalid && modelForm.controls.longContextThresholdTokens.touched) {
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter a whole number above 0</p>
+                }
+              </div>
+              <div>
+                <label for="longContextInputMultiplier" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Input and cache multiplier
+                </label>
+                <input
+                  type="number"
+                  id="longContextInputMultiplier"
+                  formControlName="longContextInputMultiplier"
+                  step="0.1"
+                  min="1"
+                  placeholder="e.g. 5 (optional)"
+                  aria-describedby="longContextInputMultiplier-hint"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-state-danger-500]="modelForm.controls.longContextInputMultiplier.invalid && modelForm.controls.longContextInputMultiplier.touched"
+                />
+                <p id="longContextInputMultiplier-hint" class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">Applies to input, cache read and cache write.</p>
+                @if (modelForm.controls.longContextInputMultiplier.invalid && modelForm.controls.longContextInputMultiplier.touched) {
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter 1 or greater</p>
+                }
+              </div>
+              <div>
+                <label for="longContextOutputMultiplier" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                  Output multiplier
+                </label>
+                <input
+                  type="number"
+                  id="longContextOutputMultiplier"
+                  formControlName="longContextOutputMultiplier"
+                  step="0.1"
+                  min="1"
+                  placeholder="e.g. 5 (optional)"
+                  aria-describedby="longContextOutputMultiplier-hint"
+                  class="mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-500"
+                  [class.border-state-danger-500]="modelForm.controls.longContextOutputMultiplier.invalid && modelForm.controls.longContextOutputMultiplier.touched"
+                />
+                <p id="longContextOutputMultiplier-hint" class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">Applies to output.</p>
+                @if (modelForm.controls.longContextOutputMultiplier.invalid && modelForm.controls.longContextOutputMultiplier.touched) {
+                  <p class="mt-1 text-sm/6 text-state-danger-600 dark:text-state-danger-400">Enter 1 or greater</p>
+                }
+              </div>
+            </div>
+          </div>
+
           <!-- Prompt Caching (Bedrock Converse + bedrock-runtime Responses) -->
           @if (supportsCachingControls()) {
             <div class="space-y-4">
