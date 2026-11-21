@@ -144,12 +144,17 @@ class TestMapping:
         )
         names = {f.path: (f.resource_path, f.filename) for f in b.files}
         assert names == {
-            # Manifest names start with a letter or digit, so each segment is
-            # cleaned as a flat name always was.
-            "scripts/__init__.py": ("init__.py", "init__.py"),
-            "scripts/office/__init__.py": ("office/init__.py", "init__.py"),
+            # A package marker keeps its name, or the package stops importing
+            # (anthropics/skills' office helpers came in as "init__.py").
+            "scripts/__init__.py": ("__init__.py", "__init__.py"),
+            "scripts/office/__init__.py": ("office/__init__.py", "__init__.py"),
             "scripts/office/pack.py": ("office/pack.py", "pack.py"),
         }
+        assert b.skipped == []
+
+    def test_a_name_starting_with_a_dash_is_cleaned_not_kept(self):
+        b = bundle_of({"SKILL.md": SKILL_MD, "references/-rf.md": "x"})
+        assert [f.filename for f in b.files] == ["rf.md"]
 
     def test_hidden_files_and_macos_metadata_are_ignored(self):
         b = bundle_of(
