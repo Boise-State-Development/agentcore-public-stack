@@ -22,6 +22,7 @@ import {
   heroLink,
   heroPaperClip,
   heroPlus,
+  heroQueueList,
   heroSparkles,
   heroWrenchScrewdriver,
 } from '@ng-icons/heroicons/outline';
@@ -46,6 +47,9 @@ import { ConversationBindingService } from '../../services/session/conversation-
 import { SkillCommand, SkillCommandService } from '../../../services/skill/skill-command.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { Tool, ToolService, isRetiring } from '../../../services/tool/tool.service';
+import { WorkflowStartService } from '../../../services/workflows/workflow-start.service';
+import { WorkflowsApiService } from '../../../services/workflows/workflows-api.service';
+import { WorkflowSummary } from '../../../services/workflows/workflow.models';
 import { MenuKeepOpenItemDirective, MenuToggleItemDirective } from './menu-toggle-item.directive';
 
 /**
@@ -101,6 +105,7 @@ type ConnectorPhase = 'initiating' | 'awaiting' | 'blocked' | 'disconnecting';
       heroLink,
       heroPaperClip,
       heroPlus,
+      heroQueueList,
       heroSparkles,
       heroWrenchScrewdriver,
     }),
@@ -120,6 +125,8 @@ export class ComposerAddMenuComponent {
   private readonly consentService = inject(OAuthConsentService);
   private readonly binding = inject(ConversationBindingService);
   private readonly attachmentLimits = inject(AttachmentLimitsService);
+  private readonly workflowsApi = inject(WorkflowsApiService);
+  private readonly workflowStart = inject(WorkflowStartService);
 
   /** How many more files the message can take; zero disables the file rows. */
   readonly remainingFiles = input<number>(this.attachmentLimits.filesPerMessage());
@@ -133,6 +140,13 @@ export class ComposerAddMenuComponent {
   readonly showSkills = input<boolean>(true);
   /** The whole trigger, e.g. while dictating. */
   readonly disabled = input<boolean>(false);
+  /**
+   * Offer the Workflows submenu (workflow-designer.md §8.3): the composer decides, from
+   * `features.workflows` and where several Agents may be handed work. Off by default.
+   */
+  readonly showWorkflows = input<boolean>(false);
+  /** The conversation a picked workflow's sheet opens in; none starts a new conversation. */
+  readonly sessionId = input<string | null>(null);
 
   /** Open the device file picker (the composer owns the hidden input). */
   readonly pickFromDevice = output<void>();
@@ -171,6 +185,13 @@ export class ComposerAddMenuComponent {
 
   protected readonly skills = this.skillCommands.commands;
   protected readonly skillsLocked = this.skillCommands.agentLocked;
+
+  // --- Workflows --------------------------------------------------------------
+
+  /** Saved workflows the caller can start, theirs first, each that still parses. */
+  protected readonly workflows = signal<WorkflowSummary[]>([]);
+  protected readonly workflowsLoading = signal(false);
+  protected readonly workflowsFailed = signal(false);
 
   // --- Tools ------------------------------------------------------------------
 
@@ -263,6 +284,7 @@ export class ComposerAddMenuComponent {
     void this.skillCommands.load();
     void this.toolService.ensureLoaded();
     this.connectorsService.ensureLoaded();
+    if (this.showWorkflows()) void this.loadWorkflows();
   }
 
   protected onClosed(): void {
@@ -335,6 +357,30 @@ export class ComposerAddMenuComponent {
 
   protected pickSkill(command: SkillCommand): void {
     this.skillPicked.emit(command);
+  }
+
+  // --- Workflows --------------------------------------------------------------
+
+  /** Re-read on every open: a workflow saved in another tab, or just shared, shows at once. */
+  private async loadWorkflows(): Promise<void> {
+    this.workflowsLoading.set(true);
+    this.workflowsFailed.set(false);
+    try {
+      this.workflows.set((await this.workflowsApi.list()).filter((w) => !w.problem));
+    } catch {
+      this.workflowsFailed.set(true);
+    } finally {
+      this.workflowsLoading.set(false);
+    }
+  }
+
+  /** Open the workflow's sheet in this conversation (or a new one when there is none yet). */
+  protected pickWorkflow(workflow: WorkflowSummary): void {
+    const sessionId = this.sessionId();
+    void this.workflowStart.start(
+      { skillId: workflow.skillId, name: workflow.name },
+      sessionId ? { sessionId } : {},
+    );
   }
 
   // --- Tools ------------------------------------------------------------------

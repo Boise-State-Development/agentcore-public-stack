@@ -22,6 +22,7 @@ from apis.shared.handoff.runs import WorkflowRunStore
 from apis.shared.handoff.store import HandoffStore
 from apis.shared.models.retirement import EffectiveModel
 from apis.shared.sessions.models import MessageResponse, MessagesListResponse
+from apis.shared.workflows import sheet as workflow_sheet
 
 REGION = "us-west-2"
 TABLE = "test-sessions-metadata"
@@ -119,7 +120,7 @@ def world(monkeypatch) -> _World:
     monkeypatch.setattr(routes, "get_assistant_with_access_check", get_assistant_with_access_check)
     monkeypatch.setattr(routes, "get_messages", get_messages)
     monkeypatch.setattr(routes, "get_session_compaction", get_session_compaction)
-    monkeypatch.setattr(workflow_runs, "resolve_effective_model", resolve_effective_model)
+    monkeypatch.setattr(workflow_sheet, "resolve_effective_model", resolve_effective_model)
     return w
 
 
@@ -733,3 +734,289 @@ def test_an_answer_stamped_just_after_the_done_write_still_counts_as_the_steps_r
 
     assert cutoff == "2026-11-20T10:01:00+00:00"
     assert workflow_runs._finished_by("not a time") == "not a time"
+
+
+# ---------------------------------------------------------------- start a saved workflow (PR-D.2)
+
+REVIEW_FILE = """---
+title: Proposal review
+version: 3
+files: one
+---
+
+| step       | kind  | worker          | reads          |
+|------------|-------|-----------------|----------------|
+| generalist | agent | generalist @ 5  | request, files |
+| colleague  | agent | colleague @ 2   | request, files |
+| outsider   | agent | outsider        | request, files |
+
+## Request
+
+Review this proposal against the solicitation
+
+## Step: colleague
+
+Read it as a colleague would
+"""
+
+
+class _Skills:
+    """The skill catalog, as each user reaches it: an owner, a file, and who it is shared with."""
+
+    def __init__(self) -> None:
+        self.files: Dict[str, str] = {"wf-key": REVIEW_FILE}
+        self.skill = SimpleNamespace(
+            skill_id="skill-1",
+            owner_id="alice",
+            status="active",
+            resources=[SimpleNamespace(kind="reference", filename="workflow.review.md", path="workflow.review.md", s3_key="wf-key")],
+        )
+        self.shared_with: set = set()
+
+    async def get_skill(self, skill_id: str):
+        return self.skill if skill_id == self.skill.skill_id else None
+
+    async def accessible(self, user) -> List[str]:
+        return [self.skill.skill_id] if user.user_id in self.shared_with else []
+
+
+@pytest.fixture()
+def skills(monkeypatch, world) -> _Skills:
+    from apis.shared.workflows import sheet
+
+    s = _Skills()
+    store = SimpleNamespace(get=lambda key: s.files[key].encode("utf-8"))
+    service = SimpleNamespace(bundle_files=SimpleNamespace(resource_store=store))
+
+    async def lookup(assistant_id: str, user_id: str, user_email: str = None):
+        if (assistant_id, user_id) in world.agent_users:
+            return world.agents[assistant_id], "viewer"
+        return None, None
+
+    monkeypatch.setattr(sheet, "get_skill_catalog_repository", lambda: s)
+    monkeypatch.setattr(sheet, "resolve_accessible_skill_ids", s.accessible)
+    monkeypatch.setattr(sheet, "get_user_skill_service", lambda: service)
+    monkeypatch.setattr(sheet, "get_assistant_with_access_check", lambda **kw: lookup(**kw))
+    monkeypatch.setenv("WORKFLOWS_ENABLED", "true")
+    world.agents["generalist"].listing = SimpleNamespace(published_version=6)
+    world.agents["colleague"].listing = SimpleNamespace(published_version=2)
+    return s
+
+
+def _start(client: TestClient, **workflow: Any):
+    ref: Dict[str, Any] = {"skillId": "skill-1", "name": "review"}
+    ref.update(workflow)
+    return client.post("/sessions/src/workflow-runs", json={"workflow": ref})
+
+
+def test_a_saved_workflow_builds_the_files_steps_and_records_where_it_came_from(make_client, stores, skills, metrics):
+    from apis.shared.workflows.format import read_workflow_file, workflow_fingerprint
+
+    handoffs, runs = stores
+    resp = _start(make_client())
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert [s["agentName"] for s in data["steps"]] == ["Generalist", "Colleague", "Emotional outsider"]
+    shared = "Review this proposal against the solicitation"
+    assert [s["request"] for s in data["steps"]] == [shared, "Read it as a colleague would", shared]
+    assert data["run"]["request"] == shared
+    # Priced exactly as a run of mentions prices a step.
+    assert [(s.get("modelId"), s.get("inputPricePerMillionTokens")) for s in data["steps"]] == [
+        ("us.sonnet", 3.0),
+        ("us.haiku", 1.0),
+        (None, None),
+    ]
+
+    stored = runs.get("alice", data["run"]["runId"])
+    workflow, _ = read_workflow_file(REVIEW_FILE, name="review")
+    assert stored.workflow.model_dump(by_alias=True, exclude_none=True) == {
+        "skillId": "skill-1",
+        "name": "review",
+        "title": "Proposal review",
+        "fingerprint": workflow_fingerprint(workflow),
+        "version": 3,
+        "files": "one",
+    }
+    # Each step's name in the file, and the Agent version the run was started with (§10).
+    assert [(s.step_name, s.agent_version) for s in stored.steps] == [("generalist", 6), ("colleague", 2), ("outsider", None)]
+    assert data["run"]["workflow"]["title"] == "Proposal review"
+    assert [s.get("stepName") for s in data["run"]["steps"]] == ["generalist", "colleague", "outsider"]
+    for step in data["steps"]:
+        assert handoffs.get("alice", step["handoffId"]).run_id == stored.run_id
+    assert metrics[-1] == (
+        "WorkflowRunCreated",
+        {"session_id": "src", "run_id": stored.run_id, "step_count": 3, "run_source": "workflow"},
+    )
+
+
+def test_a_step_the_caller_cant_run_refuses_with_the_sheets_blocker_until_it_is_removed(make_client, stores, skills, world):
+    world.agent_users.discard(("outsider", "alice"))
+    client = make_client()
+
+    refused = _start(client)
+    assert refused.status_code == 422
+    detail = refused.json()["detail"]
+    assert detail["code"] == "workflow_blocked"
+    assert detail["blockers"] == [
+        {
+            "code": "step_unavailable",
+            "step": "outsider",
+            "message": "You can't use this step's Agent. Remove the step, or ask its owner to share it",
+        }
+    ]
+    assert detail["message"].startswith("You can't use this step's Agent")
+    assert stores[0].list_for_session("alice", "src") == []
+
+    started = _start(client, removedSteps=["outsider"])
+    assert started.status_code == 201
+    assert [s["agentName"] for s in started.json()["steps"]] == ["Generalist", "Colleague"]
+    assert started.json()["run"]["workflow"]["removedSteps"] == ["outsider"]
+
+
+def test_removing_a_step_removes_every_step_that_reads_it():
+    from apis.shared.workflows.format import WorkflowResult, Workflow, WorkflowStep
+    from apis.shared.workflows.sheet import without_steps
+
+    workflow = Workflow(
+        name="w",
+        title="W",
+        steps=(
+            WorkflowStep(name="a", agent_id="A"),
+            WorkflowStep(name="b", agent_id="B", reads=("request", "a")),
+            WorkflowStep(name="c", agent_id="C", reads=("b",)),
+            WorkflowStep(name="d", agent_id="D"),
+        ),
+        result=WorkflowResult(reads=("c", "d")),
+    )
+    trimmed, removed = without_steps(workflow, ["a", "nope"])
+
+    assert removed == ("a", "b", "c")
+    assert [s.name for s in trimmed.steps] == ["d"]
+    assert trimmed.result.reads == ("d",)
+
+
+@pytest.mark.parametrize(
+    "file_text, code",
+    [
+        (REVIEW_FILE.replace("| request, files |\n| outsider", "| request, generalist |\n| outsider"), "reads_step"),
+        (REVIEW_FILE.replace("files: one", "files: one\nresult: merge"), "merge_result"),
+        (REVIEW_FILE.replace("colleague @ 2", "generalist"), "same_agent_twice"),
+    ],
+)
+def test_what_step_one_cant_run_is_refused_at_create(make_client, stores, skills, file_text, code):
+    skills.files["wf-key"] = file_text
+    resp = _start(make_client())
+    assert resp.status_code == 422
+    assert code in [b["code"] for b in resp.json()["detail"]["blockers"]]
+    assert stores[0].list_for_session("alice", "src") == []
+
+
+def test_too_few_steps_left_after_removal_is_refused(make_client, skills):
+    resp = _start(make_client(), removedSteps=["colleague", "outsider"])
+    assert resp.status_code == 422
+    assert [b["code"] for b in resp.json()["detail"]["blockers"]] == ["too_few_steps"]
+
+
+def test_the_workflow_is_read_as_the_caller(make_client, world, skills):
+    """Another user's private workflow is a 404, as one that doesn't exist is; shared, it starts."""
+    world.sessions[("src", "bob")] = SimpleNamespace(title="Bob's thread", preferences=None)
+    world.agent_users |= {(a, "bob") for a in world.agents}
+
+    assert _start(make_client(BOB)).status_code == 404
+    assert _start(make_client(), name="no-such").status_code == 404
+    assert _start(make_client(), name="Bad Name").status_code == 404
+
+    skills.shared_with.add("bob")
+    assert _start(make_client(BOB)).status_code == 201
+
+
+def test_a_shared_workflow_judges_each_agent_as_the_starter(make_client, world, skills):
+    world.sessions[("src", "bob")] = SimpleNamespace(title="Bob's thread", preferences=None)
+    world.agent_users |= {("generalist", "bob"), ("colleague", "bob")}
+    skills.shared_with.add("bob")
+
+    resp = _start(make_client(BOB))
+    assert resp.status_code == 422
+    assert [(b["code"], b["step"]) for b in resp.json()["detail"]["blockers"]] == [("step_unavailable", "outsider")]
+
+
+def test_a_workflow_start_is_404_while_workflows_is_off(make_client, skills, monkeypatch):
+    monkeypatch.setenv("WORKFLOWS_ENABLED", "")
+    assert _start(make_client()).status_code == 404
+    # A run of mentions is step 1's, and does not need the flag.
+    assert _create(make_client()).status_code == 201
+
+
+def test_steps_and_a_workflow_together_are_422(make_client, skills):
+    resp = make_client().post(
+        "/sessions/src/workflow-runs",
+        json={"workflow": {"skillId": "skill-1", "name": "review"}, "steps": [{"agentId": "generalist"}]},
+    )
+    assert resp.status_code == 422
+
+
+def test_a_file_that_no_longer_parses_is_422(make_client, skills):
+    skills.files["wf-key"] = "not a workflow"
+    resp = _start(make_client())
+    assert resp.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "files, file_ids, ok",
+    [
+        ("one", [], False),
+        ("one", ["f1"], True),
+        ("one", ["f1", "f2"], False),
+        ("none", ["f1"], False),
+        ("none", [], True),
+        ("any", ["f1", "f2"], True),
+    ],
+)
+def test_the_files_rule_is_enforced_at_approve(make_client, skills, files, file_ids, ok):
+    skills.files["wf-key"] = REVIEW_FILE.replace("files: one", f"files: {files}")
+    client = make_client()
+    run_id = _start(client).json()["run"]["runId"]
+
+    resp = _approve(client, run_id, fileIds=file_ids)
+
+    assert resp.status_code == (200 if ok else 422), resp.text
+    if not ok:
+        # Refused before the write: the sheet can try again.
+        assert _approve(client, run_id, fileIds=["f1"] if files == "one" else []).status_code == 200
+
+
+def test_a_run_of_mentions_has_no_files_rule(make_client):
+    client = make_client()
+    run_id = _create(client).json()["run"]["runId"]
+    assert _approve(client, run_id, fileIds=[]).status_code == 200
+
+
+def test_a_run_row_without_the_workflow_fields_still_reads(table):
+    """Rows written before PR-D.2 carry no ``workflow`` and no step ``stepName``/``agentVersion``."""
+    from apis.shared.handoff.runs import WorkflowRunView
+
+    table.put_item(
+        Item={
+            "PK": "USER#alice",
+            "SK": "WFRUN#old",
+            "GSI_PK": "SESSION#src",
+            "GSI_SK": "WFRUN#2026-11-01T00:00:00+00:00",
+            "runId": "old",
+            "userId": "alice",
+            "sessionId": "src",
+            "status": "approved",
+            "request": "r",
+            "steps": [{"stepId": "s1", "handoffId": "h1", "agentId": "a1", "agentName": "A", "request": "r", "removed": False}],
+            "fileIds": [],
+            "limits": {"maxSteps": 8, "concurrency": 4},
+            "sourceMessageIndex": 1,
+            "createdAt": "2026-11-01T00:00:00+00:00",
+            "updatedAt": "2026-11-01T00:00:00+00:00",
+        }
+    )
+    run = WorkflowRunStore(table=table).get("alice", "old")
+
+    assert run.workflow is None and run.steps[0].step_name is None and run.steps[0].agent_version is None
+    view = WorkflowRunView.from_row(run).model_dump(by_alias=True, exclude_none=True)
+    assert "workflow" not in view and "stepName" not in view["steps"][0]

@@ -551,6 +551,19 @@ export class ChatInputComponent {
     () => this.showAgentMentions() && this.project() === null,
   );
 
+  /**
+   * The `+` menu's Workflows submenu (workflow-designer.md §8.3, PR-D.2): saved workflows start
+   * wherever several Agents could, so never in a Shared Project or an embedded preview. A pick
+   * opens the run sheet in this conversation, or a new one when there is none yet.
+   */
+  protected readonly workflowsOffered = computed(
+    () =>
+      this.agentMentionsOffered() &&
+      this.features.handoffs &&
+      this.features.workflowRuns &&
+      this.features.workflows,
+  );
+
   /** Several `@`-mentions in one message (workflow runs). Never without `agentMentionsOffered`. */
   protected readonly multipleMentionsOffered = computed(
     () =>

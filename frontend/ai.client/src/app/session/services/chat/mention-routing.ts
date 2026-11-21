@@ -96,3 +96,13 @@ export function stripMentions(content: string, agentNames: readonly string[]): s
 export function runMentionTargets(mentionAgentIds: readonly string[] | undefined, boundAssistantId?: string): string[] {
   return [...new Set(mentionAgentIds ?? [])].filter((id) => id !== boundAssistantId);
 }
+
+/**
+ * Whether a message's mentions open the run sheet (workflow-runs.md §20.1): two or more Agents,
+ * mid-thread only. A conversation with no turns yet sends them as before. A saved workflow's sheet
+ * (workflow-designer.md §20.2, PR-D.2) may open in an empty conversation, but it never comes
+ * through here: `WorkflowStartService` opens it directly, so this rule is step 1's, unchanged.
+ */
+export function mentionsOpenRunSheet(targetCount: number, sessionId: string | null | undefined, threadHasMessages: boolean): boolean {
+  return targetCount >= 2 && !!sessionId && threadHasMessages;
+}

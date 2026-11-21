@@ -24,15 +24,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apis.shared.auth import User, get_current_user_from_session
-from apis.shared.feature_flags import workflow_runs_enabled
+from apis.shared.feature_flags import workflow_runs_enabled, workflows_enabled
 from apis.shared.files.linked_files import HANDOFF_MAX_FILES
 from apis.shared.handoff import HandoffStore, HandoffStoreUnavailable, TurnsCovered, get_handoff_store
 from apis.shared.handoff.context import build_handoff_message
@@ -53,6 +53,7 @@ from apis.shared.handoff.runs import (
     WorkflowRun,
     WorkflowRunCard,
     WorkflowRunEdit,
+    WorkflowRunSource,
     WorkflowRunStep,
     WorkflowRunStore,
     WorkflowRunView,
@@ -69,8 +70,23 @@ from apis.shared.handoff.send_back import (
     write_delivery,
 )
 from apis.shared.handoff.turn import cap_context_text
-from apis.shared.models.retirement import resolve_effective_model
 from apis.shared.timestamps import utc_now_iso
+from apis.shared.workflows.format import (
+    FILES_NONE,
+    FILES_ONE,
+    WorkflowError,
+    require_workflow_name,
+    workflow_fingerprint,
+)
+from apis.shared.workflows.sheet import (
+    WorkflowNotFound,
+    WorkflowUnreadable,
+    agent_views,
+    load_workflow,
+    sheet_for,
+    step_model,
+    without_steps,
+)
 
 from apis.app_api.handoffs import routes as handoff_routes
 
@@ -101,11 +117,41 @@ class CreateRunStep(BaseModel):
     )
 
 
-class CreateWorkflowRunRequest(BaseModel):
+class CreateRunWorkflow(BaseModel):
+    """A saved workflow to start (``workflow-designer.md`` §9.2, PR-D.2)."""
+
     model_config = ConfigDict(populate_by_name=True)
 
-    request: str = Field("", max_length=HANDOFF_REQUEST_MAX_CHARS, description="What the user typed, minus the mentions")
-    steps: List[CreateRunStep] = Field(..., min_length=WORKFLOW_RUN_MIN_STEPS, max_length=WORKFLOW_RUN_MAX_STEPS)
+    skill_id: str = Field(..., alias="skillId", min_length=1, max_length=256)
+    name: str = Field(..., min_length=1, max_length=128)
+    removed_steps: List[str] = Field(
+        default_factory=list,
+        alias="removedSteps",
+        max_length=WORKFLOW_RUN_MAX_STEPS,
+        description="Steps the starter took out at the sheet before the run opened; every step that reads one goes too",
+    )
+
+
+class CreateWorkflowRunRequest(BaseModel):
+    """Either the Agents a message mentioned (``steps``), or a saved ``workflow`` whose file names them."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    request: str = Field(
+        "",
+        max_length=HANDOFF_REQUEST_MAX_CHARS,
+        description="What the user typed, minus the mentions. With a workflow, overrides the file's request when not blank",
+    )
+    steps: List[CreateRunStep] = Field(default_factory=list, max_length=WORKFLOW_RUN_MAX_STEPS)
+    workflow: Optional[CreateRunWorkflow] = None
+
+    @model_validator(mode="after")
+    def _one_source(self) -> "CreateWorkflowRunRequest":
+        if self.workflow is not None and self.steps:
+            raise ValueError("Send the steps or a workflow, not both")
+        if self.workflow is None and len(self.steps) < WORKFLOW_RUN_MIN_STEPS:
+            raise ValueError(f"A run needs at least {WORKFLOW_RUN_MIN_STEPS} steps")
+        return self
 
 
 class CreatedRunStep(BaseModel):
@@ -168,9 +214,10 @@ async def create_workflow_run(
     than 8 steps, or the same Agent twice; 409 for a Shared Project task (deliveries' rule, with
     their error); 404 when the conversation isn't the caller's or an Agent isn't theirs to use.
     """
-    agent_ids = [step.agent_id for step in body.steps]
-    if len(set(agent_ids)) != len(agent_ids):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Each Agent can be a step only once")
+    if body.workflow is not None:
+        plan = await _plan_from_workflow(body.workflow, body.request, user)
+    else:
+        plan = await _plan_from_mentions(body, user)
 
     source = await handoff_routes.get_session_metadata(session_id, user.user_id)
     if source is None:
@@ -180,25 +227,10 @@ async def create_workflow_run(
         # (spec §19), so a run is refused there with the deliveries' own error.
         raise handoff_routes._refused(DeliveryRefused("project_task"))
 
-    lookups = await asyncio.gather(
-        *(
-            handoff_routes.get_assistant_with_access_check(
-                assistant_id=agent_id, user_id=user.user_id, user_email=user.email
-            )
-            for agent_id in agent_ids
-        )
-    )
-    agents = [agent for agent, _permission in lookups]
-    if any(agent is None for agent in agents):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-
-    card, models = await asyncio.gather(
-        handoff_routes._render_source_card(session_id, user),
-        asyncio.gather(*(_step_model(agent) for agent in agents)),
-    )
-    shared_request = body.request.strip()
+    card = await handoff_routes._render_source_card(session_id, user)
+    shared_request = plan.request
     run_id = str(uuid.uuid4())
-    step_ids = [str(uuid.uuid4()) for _ in body.steps]
+    step_ids = [str(uuid.uuid4()) for _ in plan.steps]
     rows: List[Handoff] = list(
         await asyncio.gather(
             *(
@@ -209,12 +241,12 @@ async def create_workflow_run(
                     source,
                     card,
                     agent_id=step.agent_id,
-                    agent_name=agent.name or "",
+                    agent_name=step.agent_name,
                     request=_step_request(step.request, shared_request),
                     run_id=run_id,
                     step_id=step_id,
                 )
-                for step, agent, step_id in zip(body.steps, agents, step_ids)
+                for step, step_id in zip(plan.steps, step_ids)
             )
         )
     )
@@ -233,19 +265,25 @@ async def create_workflow_run(
                 agent_id=row.agent_id,
                 agent_name=row.agent_name,
                 request=row.request,
+                step_name=step.step_name,
+                agent_version=step.agent_version,
             )
-            for row in rows
+            for row, step in zip(rows, plan.steps)
         ],
         source_message_index=card.last_index,
         created_at=now,
         updated_at=now,
+        workflow=plan.workflow,
     )
     try:
         await asyncio.to_thread(runs.create, run)
     except HandoffStoreUnavailable:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Handoffs are unavailable")
 
-    emit_workflow_run_metric("WorkflowRunCreated", session_id=session_id, run_id=run_id, step_count=len(rows))
+    source_kw = {"run_source": "workflow"} if plan.workflow is not None else {}
+    emit_workflow_run_metric(
+        "WorkflowRunCreated", session_id=session_id, run_id=run_id, step_count=len(rows), **source_kw
+    )
     first = handoff_routes._card_response(rows[0], card)
     return CreateWorkflowRunResponse(
         run=WorkflowRunView.from_row(run, {row.handoff_id: HandoffView.from_row(row) for row in rows}),
@@ -264,11 +302,121 @@ async def create_workflow_run(
                 agent_name=row.agent_name,
                 request=row.request,
                 prompt=build_handoff_message(first.context_block, row.request),
-                model_id=model_id,
-                input_price_per_million_tokens=rate,
+                model_id=step.model_id,
+                input_price_per_million_tokens=step.rate,
             )
-            for row, (model_id, rate) in zip(rows, models)
+            for row, step in zip(rows, plan.steps)
         ],
+    )
+
+
+@dataclass(frozen=True)
+class _PlannedStep:
+    """One step to open: its Agent as the caller sees it, its own request, and how to price it."""
+
+    agent_id: str
+    agent_name: str
+    request: Optional[str]
+    model_id: Optional[str]
+    rate: Optional[float]
+    step_name: Optional[str] = None
+    agent_version: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class _RunPlan:
+    request: str
+    steps: List[_PlannedStep]
+    workflow: Optional[WorkflowRunSource] = None
+
+
+async def _plan_from_mentions(body: CreateWorkflowRunRequest, user: User) -> _RunPlan:
+    """Step 1's run: the mentioned Agents, each checked as the caller. 422 for an Agent twice; 404 for one they can't use."""
+    agent_ids = [step.agent_id for step in body.steps]
+    if len(set(agent_ids)) != len(agent_ids):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Each Agent can be a step only once")
+    lookups = await asyncio.gather(
+        *(
+            handoff_routes.get_assistant_with_access_check(
+                assistant_id=agent_id, user_id=user.user_id, user_email=user.email
+            )
+            for agent_id in agent_ids
+        )
+    )
+    agents = [agent for agent, _permission in lookups]
+    if any(agent is None for agent in agents):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    models = await asyncio.gather(*(step_model(agent) for agent in agents))
+    return _RunPlan(
+        request=body.request.strip(),
+        steps=[
+            _PlannedStep(
+                agent_id=step.agent_id,
+                agent_name=agent.name or "",
+                request=step.request,
+                model_id=model_id,
+                rate=rate,
+            )
+            for step, agent, (model_id, rate) in zip(body.steps, agents, models)
+        ],
+    )
+
+
+async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) -> _RunPlan:
+    """A saved workflow's run: the file's steps, read with the skill's access rules, as the caller.
+
+    404 while ``WORKFLOWS_ENABLED`` is off, for a workflow the caller can't reach (another user's
+    private one reads as absent), and for a bad name; 422 for a file that no longer parses, and
+    with the sheet's own blockers while any applies (a step the caller can't run, the same Agent
+    twice, a step that reads another step until stages, a merged result until the merge, fewer
+    than two steps). ``removedSteps`` are taken out first, with every step that reads them.
+    """
+    if not workflows_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    try:
+        name = require_workflow_name(ref.name)
+        skill, workflow = await load_workflow(ref.skill_id, name, user)
+    except (WorkflowError, WorkflowNotFound):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+    except WorkflowUnreadable as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+    trimmed, removed = without_steps(workflow, ref.removed_steps)
+    agents = await agent_views(trimmed, user)
+    sheet = sheet_for(trimmed, agents)
+    if sheet.blockers:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "workflow_blocked",
+                "message": " ".join(f"{b.message}." for b in sheet.blockers),
+                "blockers": [b.model_dump(by_alias=True, exclude_none=True) for b in sheet.blockers],
+            },
+        )
+    shared = request.strip() or (workflow.request or "").strip()
+    return _RunPlan(
+        request=shared,
+        steps=[
+            _PlannedStep(
+                agent_id=step.agent_id,
+                agent_name=agents[step.agent_id].name or "",
+                request=step.request,
+                model_id=agents[step.agent_id].model_id,
+                rate=agents[step.agent_id].input_price_per_million_tokens,
+                step_name=step.name,
+                agent_version=agents[step.agent_id].published_version,
+            )
+            for step in trimmed.steps
+        ],
+        workflow=WorkflowRunSource(
+            skill_id=skill.skill_id,
+            name=workflow.name,
+            title=workflow.title,
+            fingerprint=workflow_fingerprint(workflow),
+            version=workflow.version,
+            files=workflow.files,
+            removed_steps=list(removed) or None,
+        ),
     )
 
 
@@ -276,28 +424,6 @@ def _step_request(own: Optional[str], shared: str) -> str:
     """A step's request: its own when it has one, else the shared one."""
     own = (own or "").strip()
     return own or shared
-
-
-async def _step_model(agent: Any) -> Tuple[Optional[str], Optional[float]]:
-    """``(modelId, input rate)`` for a step's Agent, from its ``modelConfig`` and the catalog.
-
-    The Agent's governed model wins over the request on the turn path, so it is what the step runs
-    on; an Agent with none runs on the model the send names, which the SPA already knows. Never
-    raises: an estimate that can't be priced shows less, and the run still opens.
-    """
-    settings = getattr(agent, "model_settings", None)
-    model_id = getattr(settings, "model_id", None)
-    if not model_id:
-        return None, None
-    try:
-        effective = await resolve_effective_model(model_id)
-    except Exception:  # noqa: BLE001 - the estimate is display only
-        logger.warning("Workflow run: model lookup failed", exc_info=True)
-        return model_id, None
-    if effective is None:
-        return model_id, None
-    record = effective.record
-    return effective.model_id, (float(record.input_price_per_million_tokens) if record is not None else None)
 
 
 # --- Read -----------------------------------------------------------------------------------------
@@ -431,6 +557,9 @@ async def approve_workflow_run(
     if body.files_unticked:
         edits.append("file_unticked")
 
+    file_ids = list(dict.fromkeys(f for f in body.file_ids if f))
+    _check_files_rule(run, file_ids)
+
     approved_at = utc_now_iso()
     updated = await asyncio.to_thread(
         runs.approve,
@@ -438,7 +567,7 @@ async def approve_workflow_run(
         run_id,
         request=shared_request,
         steps=approved,
-        file_ids=list(dict.fromkeys(f for f in body.file_ids if f)),
+        file_ids=file_ids,
         edits=edits,
         approved_at=approved_at,
         card=body.card.stored() if body.card is not None else None,
@@ -453,6 +582,21 @@ async def approve_workflow_run(
     for edit in edits:
         emit_workflow_run_metric("WorkflowRunEdited", session_id=session_id, run_id=run_id, detail=edit)
     return await _run_view(store, user, updated, relay=False)
+
+
+def _check_files_rule(run: WorkflowRun, file_ids: List[str]) -> None:
+    """A saved workflow's ``files`` rule (§3.1): none, exactly one, or any. 422 when the sheet broke it.
+
+    Read from the run row, as the file said when the run was created, so an edit to the workflow
+    since never changes what an open sheet may approve. A run of mentions has no rule.
+    """
+    rule = run.workflow.files if run.workflow is not None else None
+    if rule == FILES_NONE and file_ids:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="This workflow takes no files")
+    if rule == FILES_ONE and len(file_ids) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="This workflow takes exactly one file"
+        )
 
 
 async def _settle_step(

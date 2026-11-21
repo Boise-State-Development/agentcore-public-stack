@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { routeMention, stripMention } from './mention-routing';
+import { mentionsOpenRunSheet, routeMention, stripMention } from './mention-routing';
 
 /**
  * The SPA half of the `@`-mention binding rule, and the mirror of the backend's
@@ -135,5 +135,21 @@ describe('stripMention (handoffs review sheet request)', () => {
 
   it('leaves text without the token as typed', () => {
     expect(stripMention('  draft a rubric  ', 'Rubric Builder')).toBe('draft a rubric');
+  });
+});
+
+describe('mentionsOpenRunSheet (workflow runs, step 1’s rule)', () => {
+  it('opens the run sheet for two or more Agents mid-thread', () => {
+    expect(mentionsOpenRunSheet(2, 'sess-1', true)).toBe(true);
+    expect(mentionsOpenRunSheet(8, 'sess-1', true)).toBe(true);
+  });
+
+  it('never in a conversation with no turns: a saved workflow is the only run that starts there (PR-D.2)', () => {
+    expect(mentionsOpenRunSheet(3, 'sess-1', false)).toBe(false);
+  });
+
+  it('never for one Agent, or without a conversation', () => {
+    expect(mentionsOpenRunSheet(1, 'sess-1', true)).toBe(false);
+    expect(mentionsOpenRunSheet(3, null, true)).toBe(false);
   });
 });

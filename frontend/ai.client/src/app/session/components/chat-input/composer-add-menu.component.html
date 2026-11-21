@@ -81,6 +81,21 @@
       </button>
     }
 
+    @if (showWorkflows()) {
+      <button
+        cdkMenuItem
+        type="button"
+        [cdkMenuTriggerFor]="workflowsMenu"
+        [cdkMenuPosition]="submenuPositions"
+        class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+        data-testid="composer-add-workflows"
+      >
+        <ng-icon name="heroQueueList" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
+        <span class="flex-1 text-left">Workflows</span>
+        <ng-icon name="heroChevronRight" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+      </button>
+    }
+
     <button
       cdkMenuItem
       type="button"
@@ -159,6 +174,47 @@
       <ng-icon name="heroCog6Tooth" class="size-4 shrink-0 text-gray-500 dark:text-gray-400" aria-hidden="true" />
       <span class="flex-1 text-left">{{ project() ? 'Project skills' : 'Manage skills' }}</span>
     </button>
+  </div>
+</ng-template>
+
+<!-- Workflows: saved ones the user can start, theirs first. A pick opens the run sheet; nothing runs until Start. -->
+<ng-template #workflowsMenu>
+  <div
+    cdkMenu
+    class="composer-add-submenu w-64 rounded-xl bg-white p-1.5 shadow-lg ring-1 ring-black/5 focus:outline-hidden dark:bg-gray-800 dark:ring-white/10"
+    aria-label="Workflows"
+    data-testid="composer-workflows-menu"
+  >
+    <div class="max-h-72 overflow-y-auto">
+      @if (workflows().length === 0) {
+        <p class="px-2.5 py-2 text-sm/5 text-gray-500 dark:text-gray-400" role="status">
+          @if (workflowsLoading()) {
+            Loading workflows…
+          } @else if (workflowsFailed()) {
+            Workflows couldn't be loaded.
+          } @else {
+            No saved workflows yet.
+          }
+        </p>
+      }
+      @for (workflow of workflows(); track workflow.skillId + '/' + workflow.name) {
+        <button
+          cdkMenuItem
+          type="button"
+          (cdkMenuItemTriggered)="pickWorkflow(workflow)"
+          class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm/5 text-gray-700 outline-hidden hover:bg-gray-50 focus:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+          [attr.data-workflow]="workflow.skillId + '/' + workflow.name"
+        >
+          <ng-icon name="heroQueueList" class="size-4 shrink-0 text-gray-400 dark:text-gray-500" aria-hidden="true" />
+          <span class="flex min-w-0 flex-1 flex-col text-left">
+            <span class="truncate">{{ workflow.title || workflow.name }}</span>
+            <span class="truncate text-xs/4 text-gray-500 dark:text-gray-400">
+              {{ workflow.stepCount }} {{ workflow.stepCount === 1 ? 'step' : 'steps' }}@if (!workflow.isOwned) { · Shared with you }
+            </span>
+          </span>
+        </button>
+      }
+    </div>
   </div>
 </ng-template>
 

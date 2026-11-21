@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import replace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import JSONResponse
@@ -33,9 +33,9 @@ from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.blocking_io import run_blocking
 from apis.shared.feature_flags import workflows_enabled
 from apis.shared.handoff import HandoffStoreUnavailable
-from apis.shared.handoff.runs import WORKFLOW_RUN_MIN_STEPS, WorkflowRun, get_workflow_run_store
+from apis.shared.handoff.runs import WorkflowRun, get_workflow_run_store
 from apis.shared.skills.access import resolve_accessible_skill_ids
-from apis.shared.skills.models import SkillDefinition, SkillResourceRef, SkillStatus
+from apis.shared.skills.models import SkillDefinition, SkillResourceRef
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.skills.resource_store import compute_content_hash
 from apis.shared.skills.user_service import (
@@ -46,7 +46,6 @@ from apis.shared.skills.user_service import (
 )
 from apis.shared.workflows.format import (
     INPUT_READS,
-    RESULT_MERGE,
     Workflow,
     WorkflowError,
     WorkflowStep,
@@ -58,24 +57,25 @@ from apis.shared.workflows.format import (
     slug_for_title,
     step_name_for,
     workflow_filename,
-    workflow_fingerprint,
     workflow_name_of_ref,
 )
 
-from apis.app_api.handoffs.workflow_runs import _step_model as step_model
+from apis.shared.workflows.sheet import (
+    WorkflowNotFound,
+    WorkflowUnreadable,
+    is_active_skill,
+    read_stored_workflow_text,
+    readable_workflow_skill,
+    workflow_document,
+    workflow_ref,
+)
 
 from .models import (
-    AgentView,
     CreateWorkflowRequest,
-    ResultView,
-    SheetBlocker,
-    SheetView,
-    StepView,
     WorkflowDefinitionModel,
     WorkflowDocument,
     WorkflowListResponse,
     WorkflowSummary,
-    WorkflowView,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,181 +115,30 @@ def _skill_error(e: UserSkillError) -> HTTPException:
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-def _workflow_ref(skill: SkillDefinition, name: str) -> Optional[SkillResourceRef]:
-    return next((r for r in skill.resources if workflow_name_of_ref(r) == name), None)
-
-
-def _is_active(skill: SkillDefinition) -> bool:
-    return str(getattr(skill.status, "value", skill.status)) == SkillStatus.ACTIVE.value
+def _not_found(e: WorkflowNotFound) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
 async def _readable_skill(skill_id: str, user: User) -> SkillDefinition:
-    """A skill the caller owns, or one they can use (``resolve_accessible_skill_ids``), else 404.
-
-    The skill's own ownership, visibility and grants decide, so a skill nobody shared with the
-    caller and a skill that does not exist read the same.
-    """
-    skill = await get_skill_catalog_repository().get_skill(skill_id)
-    if skill is not None and skill.owner_id == user.user_id:
-        return skill
-    if skill is not None and _is_active(skill) and skill_id in set(await resolve_accessible_skill_ids(user)):
-        return skill
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+    try:
+        return await readable_workflow_skill(skill_id, user)
+    except WorkflowNotFound as e:
+        raise _not_found(e)
 
 
 async def _read_stored(skill: SkillDefinition, name: str) -> Tuple[SkillResourceRef, str]:
-    ref = _workflow_ref(skill, name)
-    if ref is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
-    store = get_user_skill_service().bundle_files.resource_store
-    content = await run_blocking(store.get, ref.s3_key)
     try:
-        return ref, content.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"workflow '{name}' is not UTF-8 text")
-
-
-# --- The sheet ------------------------------------------------------------------------------------
-
-
-async def _agent_views(workflow: Workflow, user: User) -> Dict[str, AgentView]:
-    """Each step's Agent, looked up **as the caller** (one read each, issued together)."""
-    agent_ids = sorted({step.agent_id for step in workflow.steps})
-
-    async def one(agent_id: str) -> Tuple[str, Optional[Any]]:
-        try:
-            agent, _permission = await get_assistant_with_access_check(
-                assistant_id=agent_id, user_id=user.user_id, user_email=user.email
-            )
-        except Exception:  # noqa: BLE001 - an unreadable Agent is an unavailable step
-            logger.warning("Workflow: Agent lookup failed", exc_info=True)
-            agent = None
-        return agent_id, agent
-
-    agents = dict(await asyncio.gather(*(one(agent_id) for agent_id in agent_ids)))
-    usable = [agent_id for agent_id in agent_ids if agents.get(agent_id) is not None]
-    models = dict(zip(usable, await asyncio.gather(*(step_model(agents[a]) for a in usable))))
-
-    views: Dict[str, AgentView] = {}
-    for agent_id in agent_ids:
-        agent = agents.get(agent_id)
-        if agent is None:
-            views[agent_id] = AgentView(can_run=False)
-            continue
-        listing = getattr(agent, "listing", None)
-        published = getattr(listing, "published_version", None) if listing is not None else None
-        model_id, rate = models[agent_id]
-        views[agent_id] = AgentView(
-            can_run=True,
-            name=agent.name or "",
-            emoji=getattr(agent, "emoji", None),
-            image_url=getattr(agent, "image_url", None),
-            has_icon=bool(getattr(agent, "icon_key", None)),
-            model_id=model_id,
-            input_price_per_million_tokens=rate,
-            published_version=published,
-            runs_draft=getattr(agent, "owner_id", None) == user.user_id,
-        )
-    return views
-
-
-def _changed(step: WorkflowStep, agent: AgentView) -> bool:
-    """The Agent has a published version other than the one the step recorded (§10, D6)."""
-    return agent.can_run and agent.published_version is not None and agent.published_version != step.agent_version
-
-
-def _sheet(workflow: Workflow, agents: Dict[str, AgentView]) -> SheetView:
-    """What blocks Start today, each reason once, with the step it is about.
-
-    Step 1's engine is the bound: at least two steps, each Agent once, every step one the caller
-    can run (§20.1: a step the starter can't run blocks Start until it is removed), no step that
-    reads another's result until stages (D.5a), and a card result until the merge (D.5b).
-    """
-    blockers: List[SheetBlocker] = []
-    seen: Dict[str, str] = {}
-    for step in workflow.steps:
-        agent = agents[step.agent_id]
-        if not agent.can_run:
-            blockers.append(
-                SheetBlocker(
-                    code="step_unavailable",
-                    step=step.name,
-                    message="You can't use this step's Agent. Remove the step, or ask its owner to share it",
-                )
-            )
-        if step.agent_id in seen:
-            blockers.append(
-                SheetBlocker(
-                    code="same_agent_twice",
-                    step=step.name,
-                    message=f"This Agent is already the '{seen[step.agent_id]}' step; each Agent can be a step only once",
-                )
-            )
-        else:
-            seen[step.agent_id] = step.name
-        if any(read not in INPUT_READS for read in step.reads):
-            blockers.append(
-                SheetBlocker(
-                    code="reads_step",
-                    step=step.name,
-                    message="A step that reads another step's result needs stages, which aren't available yet",
-                )
-            )
-    if len(workflow.steps) < WORKFLOW_RUN_MIN_STEPS:
-        blockers.insert(
-            0,
-            SheetBlocker(
-                code="too_few_steps",
-                message=f"A workflow needs at least {WORKFLOW_RUN_MIN_STEPS} steps to start",
-            ),
-        )
-    if workflow.result.mode == RESULT_MERGE:
-        blockers.append(
-            SheetBlocker(
-                code="merge_result",
-                message="A merged result isn't available yet; the result comes back as one card",
-            )
-        )
-    return SheetView(startable=not blockers, blockers=blockers)
+        return await read_stored_workflow_text(skill, name)
+    except WorkflowNotFound as e:
+        raise _not_found(e)
+    except WorkflowUnreadable as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 async def _document(
     skill: SkillDefinition, workflow: Workflow, user: User, *, written: Optional[bool] = None
 ) -> WorkflowDocument:
-    agents = await _agent_views(workflow, user)
-    steps = []
-    for step in workflow.steps:
-        agent = agents[step.agent_id].model_copy(update={"changed": _changed(step, agents[step.agent_id])})
-        steps.append(
-            StepView(
-                name=step.name,
-                kind=step.kind,
-                agent_id=step.agent_id,
-                agent_version=step.agent_version,
-                reads=list(step.reads),
-                request=step.request,
-                effective_request=step.request or workflow.request or "",
-                agent=agent,
-            )
-        )
-    view = WorkflowView(
-        skill_id=skill.skill_id,
-        name=workflow.name,
-        title=workflow.title,
-        version=workflow.version,
-        files=workflow.files,
-        request=workflow.request,
-        steps=steps,
-        result=ResultView(
-            mode=workflow.result.mode,
-            reads=list(workflow.result.reads) if workflow.result.reads is not None else None,
-            steps=list(workflow.result_steps),
-            instruction=workflow.result.instruction,
-        ),
-        fingerprint=workflow_fingerprint(workflow),
-        is_owned=skill.owner_id == user.user_id,
-    )
-    return WorkflowDocument(workflow=view, sheet=_sheet(workflow, agents), written=written)
+    return await workflow_document(skill, workflow, user, written=written)
 
 
 # --- List -----------------------------------------------------------------------------------------
@@ -306,7 +155,7 @@ async def list_workflows(user: User = Depends(get_current_user_from_session)) ->
     found = [
         (skill, name)
         for skill in records
-        if _is_active(skill)
+        if is_active_skill(skill)
         for name in sorted(filter(None, (workflow_name_of_ref(r) for r in skill.resources)))
     ]
     store = get_user_skill_service().bundle_files.resource_store
@@ -320,7 +169,7 @@ async def list_workflows(user: User = Depends(get_current_user_from_session)) ->
             designer_made=skill.kind == WORKFLOW_SKILL_KIND,
         )
         try:
-            ref = _workflow_ref(skill, name)
+            ref = workflow_ref(skill, name)
             content = await run_blocking(store.get, ref.s3_key)  # type: ignore[union-attr]
             workflow, _layout = read_workflow_file(content.decode("utf-8"), name=name)
         except (WorkflowError, UnicodeDecodeError) as e:
@@ -571,7 +420,7 @@ async def delete_workflow(
         skill = await service.require_owned(skill_id, user)
     except UserSkillError as e:
         raise _skill_error(e)
-    ref = _workflow_ref(skill, name)
+    ref = workflow_ref(skill, name)
     if ref is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
     try:
