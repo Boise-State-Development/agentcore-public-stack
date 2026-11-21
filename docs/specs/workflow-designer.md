@@ -812,7 +812,7 @@ what it settled:
   `size-*` class on an `<ng-icon>` never applies anywhere in the SPA: the icon inherits its parent's colour
   and is `1em`. The run row's and the canvas's status marks render in the text colour, not green or amber.
   The state is still said in words, so nothing relies on the colour, but the marks don't look as designed.
-  Filed as its own fix.
+  Filed as its own fix (#2232).
 
 **Order.** D.1 first. Then D.2 and D.3 at once (D.2 touches the sheet, the composer and the run service; D.3 is
 new pages and the graph, so their files do not overlap). D.4 after both. D.5a after D.2 and can run beside D.4.
