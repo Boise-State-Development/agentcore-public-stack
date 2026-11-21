@@ -520,6 +520,20 @@ async def test_a_model_the_caller_cannot_use_is_refused():
     assert plan.cache_point is True and plan.document_budget and plan.pdf_page_limit
 
 
+@pytest.mark.asyncio
+async def test_a_text_only_model_runs_a_step_that_reads_only_steps_and_refuses_one_that_reads_files():
+    steps = StepStore({"h1": "open", "h2": "open"})
+    model = Model()
+    run = _run([_step(1, reads=["files"]), _step(2, reads=["request", "lens-1"])])
+
+    frames = await _drain(_work(run, steps, model, plan=_plan(reads_documents=False, cache_point=False)))
+
+    assert steps.rows["h1"]["stoppedReason"] == "model_refused"
+    assert steps.rows["h2"]["status"] == "done"
+    assert len(model.calls) == 1 and "document" not in model.calls[0][0]["content"][0]
+    assert _statuses(frames) == {"s1": "stopped", "s2": "done"}
+
+
 # --- Stop and timeout ----------------------------------------------------------------------------
 
 

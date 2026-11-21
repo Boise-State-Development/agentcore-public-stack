@@ -297,6 +297,9 @@ class ModelPlan:
     document_budget: Optional[int] = None
     pdf_page_limit: Optional[int] = None
     cache_point: bool = False
+    #: False for a TEXT-only model: it runs a step that reads only earlier steps, never one that
+    #: sends the documents (``prompt_model_supported(reads_files=True)``).
+    reads_documents: bool = True
 
 
 async def resolve_model_plan(user: User, model_id: str) -> ModelPlan:
@@ -324,7 +327,7 @@ async def resolve_model_plan(user: User, model_id: str) -> ModelPlan:
     )
     if not allowed:
         return ModelPlan(model_id=effective.model_id, refusal="model_refused")
-    if not prompt_model_supported(record):
+    if not prompt_model_supported(record, reads_files=False):
         return ModelPlan(model_id=effective.model_id, refusal="model_refused")
 
     context_window = int(record.max_input_tokens) if record.max_input_tokens else None
@@ -337,6 +340,7 @@ async def resolve_model_plan(user: User, model_id: str) -> ModelPlan:
         document_budget=document_budget(facts, profile),
         pdf_page_limit=pdf_page_limit(facts),
         cache_point=bedrock_cache_points_supported(effective.model_id),
+        reads_documents=prompt_model_supported(record, reads_files=True),
     )
 
 
@@ -805,6 +809,12 @@ class PromptStepRun:
                 for plan in plans:
                     await self._stop(plan, model_plan.refusal)
                 return
+            if not model_plan.reads_documents:
+                for plan in [p for p in plans if p.reads_files]:
+                    await self._stop(plan, "model_refused")
+                plans = [p for p in plans if not p.reads_files]
+                if not plans:
+                    return
             if any(plan.reads_files for plan in plans) and too_large(documents, model_plan):
                 for plan in plans:
                     await self._stop(plan, "too_large")

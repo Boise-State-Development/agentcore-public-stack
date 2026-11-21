@@ -28,14 +28,21 @@ class PromptModels:
     checks: list = field(default_factory=list)
 
     def add(
-        self, model_id: str, name: str, rate: float, *, allowed: bool = True, outputs: tuple = ("TEXT",)
+        self,
+        model_id: str,
+        name: str,
+        rate: float,
+        *,
+        allowed: bool = True,
+        inputs: tuple = ("TEXT", "IMAGE"),
+        outputs: tuple = ("TEXT",),
     ) -> None:
         self.catalog[model_id] = SimpleNamespace(
             model_id=model_id,
             model_name=name,
             input_price_per_million_tokens=rate,
             provider="bedrock",
-            input_modalities=["TEXT", "IMAGE"],
+            input_modalities=list(inputs),
             output_modalities=list(outputs),
         )
         if allowed:
