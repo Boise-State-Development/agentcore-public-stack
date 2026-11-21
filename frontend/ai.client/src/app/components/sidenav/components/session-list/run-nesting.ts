@@ -9,6 +9,15 @@ export interface SessionRunGroup {
   steps: SessionMetadata[];
 }
 
+/**
+ * Every listed step of the run is done, as the list itself says (`spawnedFrom.settled`, set once a
+ * step's handoff is done, which is final). Such a run is not read for its line; a step still
+ * going, stopped, or known only from this tab's live rows makes it unsettled.
+ */
+export function isRunSettled(group: SessionRunGroup): boolean {
+  return group.steps.length > 0 && group.steps.every((step) => step.spawnedFrom?.settled === true);
+}
+
 export interface NestedBucket {
   /** The bucket's conversations with its nested steps taken out, in the list's order. */
   sessions: SessionMetadata[];

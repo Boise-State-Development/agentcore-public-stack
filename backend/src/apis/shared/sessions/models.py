@@ -750,13 +750,18 @@ class SessionSpawnedFromLink(BaseModel):
 
     Read from ``spawnedFrom`` on the row the list already loaded (handoffs spec §4.2), so it costs
     no read. ``runId`` is set on a workflow run's step (workflow-runs spec §19 PR-W.4c), which the
-    sidebar nests under its source. The row's own bookkeeping (``settled``) stays off the wire.
+    sidebar nests under its source. ``settled`` is set once the handoff is done (a ``done`` row is
+    frozen), so the sidebar can count a run whose listed steps all settled without reading the run.
     """
 
     model_config = ConfigDict(populate_by_name=True)
     session_id: str = Field(..., alias="sessionId", description="The source conversation")
     handoff_id: Optional[str] = Field(None, alias="handoffId", description="The source's HANDOFF# row")
     run_id: Optional[str] = Field(None, alias="runId", description="Set on a workflow run's step")
+    settled: Optional[bool] = Field(
+        None,
+        description="True once this conversation's handoff is done; absent until then",
+    )
 
 
 class SessionMetadataResponse(BaseModel):
@@ -851,7 +856,7 @@ class SessionMetadataResponse(BaseModel):
     spawned_from: Optional[SessionSpawnedFromLink] = Field(
         default=None,
         alias="spawnedFrom",
-        description="Set on a handoff's target conversation: {sessionId, handoffId, runId?}, from the row already loaded. A workflow run's step carries runId, and the sidebar nests it under its source (workflow-runs spec §20.4)",
+        description="Set on a handoff's target conversation: {sessionId, handoffId, runId?, settled?}, from the row already loaded. A workflow run's step carries runId, and the sidebar nests it under its source (workflow-runs spec §20.4); settled is true once the handoff is done, so the sidebar reads no finished run",
     )
 
     @field_validator("spawned_from", mode="before")
@@ -860,7 +865,10 @@ class SessionMetadataResponse(BaseModel):
         """A malformed link on one row drops the link, never the whole list."""
         if not isinstance(value, dict) or not isinstance(value.get("sessionId"), str):
             return None
-        return {key: value[key] for key in ("sessionId", "handoffId", "runId") if isinstance(value.get(key), str)}
+        link = {key: value[key] for key in ("sessionId", "handoffId", "runId") if isinstance(value.get(key), str)}
+        if value.get("settled") is True:
+            link["settled"] = True
+        return link
 
     @model_validator(mode="before")
     @classmethod

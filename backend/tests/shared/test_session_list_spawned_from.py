@@ -50,8 +50,9 @@ async def test_a_run_step_lists_with_its_source_and_run(sessions_metadata_table)
     sessions, _ = await list_user_sessions("u1")
     listed = _listed(sessions)
 
-    assert listed["step"]["spawnedFrom"] == {"sessionId": "src", "handoffId": "h1", "runId": "r1"}
-    # A handoff of its own has no runId; the row's own bookkeeping (settled) stays off the wire.
+    # A done step says so, so the sidebar can count its run without reading it.
+    assert listed["step"]["spawnedFrom"] == {"sessionId": "src", "handoffId": "h1", "runId": "r1", "settled": True}
+    # A handoff of its own has no runId; one still going carries no settled.
     assert listed["single"]["spawnedFrom"] == {"sessionId": "src", "handoffId": "h2"}
     assert "spawnedFrom" not in listed["src"]
 
@@ -63,6 +64,18 @@ def test_the_stored_link_keeps_runid_next_to_what_it_already_held(sessions_metad
     set_session_spawned_from("step", "u1", "src", "h1", "r1")
     item = sessions_metadata_table.get_item(Key={"PK": "USER#u1", "SK": "S#step"})["Item"]
     assert item["spawnedFrom"] == {"sessionId": "src", "handoffId": "h1", "runId": "r1"}
+
+
+@pytest.mark.parametrize("settled", [False, "true", 1, None])
+def test_only_a_literal_true_reads_as_settled(settled):
+    response = SessionMetadataResponse.model_validate(
+        {
+            "sessionId": "s", "title": "T", "status": "active", "createdAt": "2026-01-01T00:00:00Z",
+            "lastMessageAt": "2026-01-01T00:00:00Z", "messageCount": 1,
+            "spawnedFrom": {"sessionId": "src", "runId": "r1", "settled": settled},
+        }
+    )
+    assert response.model_dump(by_alias=True, exclude_none=True)["spawnedFrom"] == {"sessionId": "src", "runId": "r1"}
 
 
 @pytest.mark.parametrize("bad", ["src", {"handoffId": "h1"}, {"sessionId": 3}, ["src"]])

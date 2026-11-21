@@ -201,6 +201,80 @@ describe('SessionList: a run\'s step conversations', () => {
     expect(text(line(fixture.nativeElement))).toBe('1 Agent');
   });
 
+  /** Run `r`'s `count` step conversations under source `src{r}`, each settled (done) unless `running` names it. */
+  function runOf(r: number, count: number, running: number[] = []): SessionMetadata[] {
+    const steps = Array.from({ length: count }, (_, i) => session(`r${r}t${i + 1}`, {
+      spawnedFrom: { sessionId: `src${r}`, handoffId: `r${r}h${i + 1}`, runId: `run${r}`, ...(running.includes(i) ? {} : { settled: true }) },
+    }));
+    return [session(`src${r}`), ...steps];
+  }
+  const anyRunReads = () => TestBed.inject(HttpTestingController).match((req) => /\/workflow-runs\//.test(req.url));
+  const lines = (el: HTMLElement) => [...el.querySelectorAll<HTMLButtonElement>('button[data-run-line]')].map((b) => text(b));
+
+  it('reads nothing on a page load whose runs are all finished, and counts them from the list', () => {
+    sessions.set({ sessions: [...runOf(1, 4), ...runOf(2, 3), ...runOf(3, 1), ...runOf(4, 2), ...runOf(5, 5)], nextToken: null });
+    const fixture = render();
+    expect(anyRunReads()).toEqual([]);
+    expect(lines(fixture.nativeElement)).toEqual([
+      '4 Agents · 4 of 4 finished',
+      '3 Agents · 3 of 3 finished',
+      '1 Agent · 1 of 1 finished',
+      '2 Agents · 2 of 2 finished',
+      '5 Agents · 5 of 5 finished',
+    ]);
+
+    // The list loading again, or a finished step getting a later message, still reads nothing.
+    sessions.set({ sessions: [...runOf(1, 4), ...runOf(2, 3), ...runOf(3, 1), ...runOf(4, 2), ...runOf(5, 5)].map((s) => ({ ...s, lastMessageAt: new Date(Date.now() + 1000).toISOString() })), nextToken: null });
+    fixture.detectChanges();
+    expect(anyRunReads()).toEqual([]);
+  });
+
+  it('reads only the run still going on a page load with finished ones beside it', async () => {
+    sessions.set({ sessions: [...runOf(1, 4), ...runOf(2, 3, [1]), ...runOf(3, 2)], nextToken: null });
+    const fixture = render();
+    const reads = anyRunReads();
+    expect(reads.map((r) => r.request.url.replace(/.*\/sessions\//, ''))).toEqual(['src2/workflow-runs/run2']);
+    expect(lines(fixture.nativeElement)[1]).toBe('3 Agents');
+
+    // The running run keeps today's behaviour: counted from its read, read again when a step moves on.
+    reads[0].flush({ ...run(['done', 'running', 'done']), runId: 'run2', sessionId: 'src2' });
+    await new Promise((resolve) => setTimeout(resolve));
+    fixture.detectChanges();
+    expect(lines(fixture.nativeElement)[1]).toBe('3 Agents · 2 of 3 finished');
+
+    const moved = runOf(2, 3, [1]).map((s) => (s.sessionId === 'r2t2' ? { ...s, lastMessageAt: new Date(Date.now() + 1000).toISOString() } : s));
+    sessions.set({ sessions: [...runOf(1, 4), ...moved, ...runOf(3, 2)], nextToken: null });
+    fixture.detectChanges();
+    const again = anyRunReads();
+    expect(again.map((r) => r.request.url.replace(/.*\/sessions\//, ''))).toEqual(['src2/workflow-runs/run2']);
+    again[0].flush({ ...run(['done', 'done', 'done']), runId: 'run2', sessionId: 'src2' });
+    await new Promise((resolve) => setTimeout(resolve));
+    fixture.detectChanges();
+    expect(lines(fixture.nativeElement)[1]).toBe('3 Agents · 3 of 3 finished');
+  });
+
+  it('reads a finished run once, when its line is opened, for the step order', async () => {
+    sessions.set({ sessions: [session('src'), step(1, { spawnedFrom: { sessionId: 'src', handoffId: 'h2', runId: 'run1', settled: true } }), step(0, { spawnedFrom: { sessionId: 'src', handoffId: 'h1', runId: 'run1', settled: true } })], nextToken: null });
+    const fixture = render();
+    expect(runReads()).toEqual([]);
+    const button = line(fixture.nativeElement)!;
+    expect(text(button)).toBe('2 Agents · 2 of 2 finished');
+
+    button.click();
+    fixture.detectChanges();
+    oneRead().flush(run(['done', 'done']));
+    await new Promise((resolve) => setTimeout(resolve));
+    fixture.detectChanges();
+    expect(titles(fixture.nativeElement)).toEqual(['Title src', 'Title t1', 'Title t2']);
+
+    // Closed and opened again: nothing it holds can change, so no second read.
+    button.click();
+    fixture.detectChanges();
+    button.click();
+    fixture.detectChanges();
+    expect(runReads()).toEqual([]);
+  });
+
   it('reads a run this tab does not hold once per change in its steps, and counts from it', async () => {
     sessions.set({ sessions: [session('src'), step(0), step(1)], nextToken: null });
     const fixture = render();
