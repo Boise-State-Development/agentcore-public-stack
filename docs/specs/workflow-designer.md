@@ -894,6 +894,40 @@ what it settled:
   streams. That also clears step 1's stale "Working on" line after a reload. Prepare measured 1.2–1.6 s on dev
   (it is not on a turn's path); it now skips the artifact and file lookups its text-only blocks throw away.
 
+*Built (PR-D.5b-1).* Stages in the designer, SPA only, in `frontend/ai.client/src/app/workflows/`. D.5b was split:
+this half is the designer, and D.5b-2 is the run side (View as graph, the small graph on the sheet, the merge that
+starts by itself). Where it differs from the plan, and what it settled:
+
+- **Reads.** The Step tab lists every other step's result with its stage. A step that already reads this one,
+  directly or on the way (`readersOf`), is disabled and says why ("Reads this step, so this step can't read it",
+  or "Reads *X*, which reads this step"), so the form can't make the cycle the format refuses. A step never lists
+  itself. A line under the list keeps the rules in view: a step runs in the stage after the latest step it reads,
+  it can't read itself or a step that reads it, and "*n* of 8 steps". A change that moves the step says so
+  politely ("Colleague moved to stage 2"), and focus stays on the checkbox. The server's `PUT` still decides: a
+  refusal shows its message in the header's alert, as any save error does.
+- **Columns.** Still `stagesOf` over the draft, so nothing about the graph's inputs changed. Every stage ends
+  with Add step (`add` emits the stage's 0-based index, as it always did for stage 1), and a last column, shown
+  only in design mode once there is a step, starts the next stage. A step added to stage *N* reads the request,
+  the files and every step of stage *N*−1, which is what puts it there (§4.1); the author unticks the rest.
+  That column is one frosted box like a card, so a connector from an earlier stage to the Result passes behind
+  it rather than through its text. Connectors follow reads in both modes, and a step connects to the Result only
+  when the Result takes it.
+- **The Result.** Card or merge (`result: merge`), the merge instruction (shown in merge mode, focused when
+  merge is picked; a blank one is sent as none), and which steps' results it includes. All ticked is stored as
+  no `Reads:` line, so steps added later are included too; the last one can't be unticked, because the format
+  refuses a result that reads no step; and removing the only step the Result named gives it every step again for
+  the same reason. The canvas card counts what the Result reads ("Starts by itself · 3 results", "Back to chat ·
+  1 result"), not every step, and a merge is titled "A merge". Until D.5b-2 lifts the sheet's `merge_result`
+  blocker, a saved merge workflow shows that blocker on the Preview tab.
+- **`WorkflowGraphComponent`'s inputs are unchanged** (the new controls only render in design mode), so the run
+  row and the review sheet can embed it with a run's `stages`, `status` and `finished`.
+- **Measured before merge** on the running SPA, both themes, against the canvas or panel and the strongest blob:
+  the Reads hints 7.23:1 light / 6.82:1 dark; the new-stage box's text 10.22:1 / 12.51:1 (5.68:1 / 9.18:1 for
+  its hint over a blob); its dashed border 4.63:1 / 6.82:1; the Result card's count 7.49:1 / 10.52:1. Every new
+  control's focus ring has the dark pair `primary-accessible-dark` (4.53:1 on the panel, 3.93:1 on a card), where
+  the app's `primary-500` would be 1.67:1. At 375 px the columns stack, the new-stage box with them, and nothing
+  scrolls sideways.
+
 **Order.** D.1 first. Then D.2 and D.3 at once (D.2 touches the sheet, the composer and the run service; D.3 is
 new pages and the graph, so their files do not overlap). D.4 after both. D.5a after D.2 and can run beside D.4.
 D.5b last. At most three writing sessions at a time.
