@@ -203,13 +203,17 @@
         </div>
       </div>
     } @else {
-      <!-- No assistant: show greeting with inline input -->
+      <!-- No assistant: show greeting with inline input. While a saved workflow's run sheet is open
+           here, the column sits at the bottom like the thread's footer and the greeting steps
+           aside, so the sheet can size itself against the composer (PR-D.5b, 375 px). -->
       <div
         class="chat-container-empty full-page"
         [class.sidenav-expanded]="!isSidenavCollapsed()"
-      [class.artifact-pane-open]="artifactPanelOpen()">
-        <div class="w-full max-w-[720px] animate-fade-in px-4 -mt-20 relative">
-          <div class="mb-8 flex items-center justify-center gap-4 relative" data-testid="greeting-message">
+      [class.artifact-pane-open]="artifactPanelOpen()"
+        [style.align-items]="runSheetOpen() ? 'flex-end' : null"
+        [style.padding-bottom]="runSheetOpen() ? '1rem' : null">
+        <div class="w-full max-w-[720px] animate-fade-in px-4 relative" [class.-mt-20]="!runSheetOpen()">
+          <div class="mb-8 flex items-center justify-center gap-4 relative" data-testid="greeting-message" [style.display]="runSheetOpen() ? 'none' : null">
             @if (!logoLoadFailed()) {
               <img
                 [src]="branding.logo.light"
@@ -244,7 +248,7 @@
                here (workflow-designer spec §20.2). Renders only while one is open; a run of
                mentions never opens one in an empty conversation. -->
           @if (sessionId(); as sid) {
-            <app-workflow-run-sheet [sessionId]="sid" />
+            <app-workflow-run-sheet [sessionId]="sid" [fitAbove]="true" />
           }
           <div class="relative">
             <app-chat-input
@@ -369,7 +373,7 @@
             <!-- Several mentioned Agents' one review sheet (workflow-runs spec §20.1). Renders only
                  while one is open. An approved run's unstarted steps are started from its row in
                  the thread (§20.2). -->
-            <app-workflow-run-sheet [sessionId]="sid" />
+            <app-workflow-run-sheet [sessionId]="sid" [fitAbove]="true" />
             <!-- Send to {title}'s review, in a conversation a handoff started (§4.3), and the
                  results waiting to ride this conversation's next send (§4.8). Each renders
                  only while it has something to show. -->

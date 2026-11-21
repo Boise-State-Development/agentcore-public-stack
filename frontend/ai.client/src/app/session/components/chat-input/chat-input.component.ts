@@ -1567,6 +1567,17 @@ export class ChatInputComponent {
       });
     });
 
+    // A saved workflow's run started with files from this composer, and they went to the run
+    // (`releaseAttachments`): take those cards down and leave the rest of the draft as it is.
+    effect(() => {
+      const released = this.draftStorage.released();
+      if (!released) return;
+      untracked(() => {
+        if (released.key !== this.mirroredDraftKey) return;
+        for (const uploadId of released.uploadIds) this.onFileRemove(uploadId);
+      });
+    });
+
     // Picking a project after an `@`-mention un-hands the turn: the `@Name`
     // stays in the text as prose, but the send must not carry the Agent past
     // a project that offers no mentions.

@@ -13,6 +13,8 @@ import { ChatRequestService } from '../chat/chat-request.service';
 import { ChatStateService } from '../chat/chat-state.service';
 import { Message } from '../models/message.model';
 import { ComposerDraftService } from '../session/composer-draft.service';
+import { ComposerDraftStorageService } from '../session/composer-draft-storage.service';
+import { ComposerEmptyService } from '../session/composer-empty.service';
 import { MessageMapService } from '../session/message-map.service';
 import { SessionService } from '../session/session.service';
 import { AgentHandoffService } from './agent-handoff.service';
@@ -77,6 +79,8 @@ export class WorkflowRunService {
   private readonly chatHttp = inject(ChatHttpService);
   private readonly sessions = inject(SessionService);
   private readonly workflowsApi = inject(WorkflowsApiService);
+  private readonly draftStorage = inject(ComposerDraftStorageService);
+  private readonly composerEmpty = inject(ComposerEmptyService);
 
   /**
    * Open the run sheet: for a message that mentioned several Agents, or for a saved workflow
@@ -401,9 +405,24 @@ export class WorkflowRunService {
 
     this.state.upsertRun(approved);
     this.state.clearReview(sourceSessionId);
+    if (review.workflow) this.releaseRunFiles(sourceSessionId, envelope.fileIds);
     this.queue.enqueue(envelope, steps);
     this.results.watch(approved);
     this.toast.info(`Handed off to ${agentsLabel(steps.length)}`);
+  }
+
+  /**
+   * A saved workflow's file was attached with + for its sheet and has now gone to the run, so it
+   * comes off the source's composer and the user's next message doesn't carry it again (the
+   * developer's call after #2256's dev check). Only the run's own files: typed text, a queued
+   * follow-up, folders, any other file and the result cards stay. The stored draft and the
+   * composer-empty signal both follow, so a reload doesn't bring it back. The draft's key is the
+   * conversation's id: a saved workflow's sheet always opens in a conversation that has one (D.2).
+   */
+  private releaseRunFiles(sourceSessionId: string, fileIds: readonly string[]): void {
+    if (fileIds.length === 0) return;
+    this.draftStorage.releaseAttachments(sourceSessionId, fileIds);
+    this.composerEmpty.note(sourceSessionId, this.draftStorage.read(sourceSessionId));
   }
 
   /**

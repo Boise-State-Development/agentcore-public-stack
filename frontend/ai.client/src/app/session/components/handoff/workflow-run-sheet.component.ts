@@ -2,6 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  DestroyRef,
   Injector,
   afterNextRender,
   computed,
@@ -70,6 +71,7 @@ interface StepRow {
         role="region"
         [attr.aria-label]="title()"
         tabindex="-1"
+        [style.max-height.px]="fitMaxHeight()"
         class="mb-2 flex max-h-[min(42rem,calc(100dvh-14rem))] flex-col rounded-2xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900"
       >
         <div class="shrink-0 border-b border-gray-200 px-4 pt-4 pb-3 dark:border-gray-700">
@@ -430,6 +432,13 @@ export class WorkflowRunSheetComponent {
 
   /** The source conversation: the one being viewed. */
   readonly sessionId = input.required<string>();
+  /**
+   * Size the sheet to the room left above what shares its column (the composer, with its file
+   * cards or a long draft), measured, rather than a fixed reserve. For a host that pins that
+   * column to the bottom of the viewport: the chat page's footer and its empty state while a
+   * sheet is open. Off (the designer's panel), only the CSS cap applies.
+   */
+  readonly fitAbove = input(false);
 
   private static nextId = 0;
   private readonly uid = WorkflowRunSheetComponent.nextId++;
@@ -454,6 +463,10 @@ export class WorkflowRunSheetComponent {
   protected readonly previewStep = signal<string | null>(null);
 
   private readonly sheet = viewChild<ElementRef<HTMLElement>>('sheet');
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+
+  /** `fitAbove`'s measured cap in px, or null for the CSS cap alone. */
+  protected readonly fitMaxHeight = signal<number | null>(null);
 
   protected readonly review = computed(() => this.state.reviewFor(this.sessionId()));
 
@@ -585,6 +598,8 @@ export class WorkflowRunSheetComponent {
   );
 
   constructor() {
+    this.fitToColumn();
+
     // Move focus into the sheet when it opens, so Esc and the keyboard land here and a screen
     // reader hears the region's name.
     let focusedFor: string | undefined;
@@ -611,6 +626,53 @@ export class WorkflowRunSheetComponent {
         this.removalNote.set('');
         this.graphOpen.set(false);
       }
+    });
+  }
+
+  /**
+   * `fitAbove`: the room above everything else in the sheet's column, kept current as the composer
+   * grows or shrinks and as the viewport changes. The column is pinned to the bottom, so its
+   * bottom edge doesn't move with the sheet's own height and the cap can't feed back on itself.
+   */
+  private fitToColumn(): void {
+    const destroyRef = inject(DestroyRef);
+    afterNextRender(() => {
+      if (typeof window === 'undefined') return;
+      let column: HTMLElement | null = null;
+      let observer: ResizeObserver | null = null;
+      const measure = () => {
+        const sheet = this.sheet()?.nativeElement;
+        const parent = this.host.nativeElement.parentElement;
+        if (!this.fitAbove() || !sheet || !parent) {
+          this.fitMaxHeight.set(null);
+          return;
+        }
+        if (parent !== column && typeof ResizeObserver !== 'undefined') {
+          observer?.disconnect();
+          observer = new ResizeObserver(measure);
+          observer.observe(parent);
+          column = parent;
+        }
+        const columnBox = parent.getBoundingClientRect();
+        const others = columnBox.height - sheet.getBoundingClientRect().height - SHEET_GAP_PX;
+        const room = Math.floor(columnBox.bottom - others - SHEET_TOP_RESERVE_PX);
+        this.fitMaxHeight.set(Math.max(SHEET_MIN_HEIGHT_PX, Math.min(SHEET_MAX_HEIGHT_PX, room)));
+      };
+      const onResize = () => measure();
+      window.addEventListener('resize', onResize);
+      destroyRef.onDestroy(() => {
+        window.removeEventListener('resize', onResize);
+        observer?.disconnect();
+      });
+      // A sheet that opens after the page renders is drawn by `review()`; measure once it is.
+      effect(
+        () => {
+          this.review();
+          this.fitAbove();
+          afterNextRender(measure, { injector: this.injector });
+        },
+        { injector: this.injector },
+      );
     });
   }
 
@@ -687,6 +749,15 @@ export class WorkflowRunSheetComponent {
     if (row.stepName) void this.runs.markReviewed(this.sessionId(), row.stepName);
   }
 }
+
+/** Room kept above the sheet for the page's top bar, so its title is never under it. */
+const SHEET_TOP_RESERVE_PX = 72;
+/** The sheet's own bottom margin (`mb-2`), which sits between it and the rest of its column. */
+const SHEET_GAP_PX = 8;
+/** The CSS cap's 42rem; the measured cap never exceeds it. */
+const SHEET_MAX_HEIGHT_PX = 672;
+/** Below this the header, a little of the body and the footer still fit; the page scrolls past it. */
+const SHEET_MIN_HEIGHT_PX = 240;
 
 /**
  * §10's line for a saved step whose Agent published a newer version since it was added. There is
