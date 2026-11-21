@@ -143,6 +143,27 @@ describe('buildAppApiEnvironment — workflow runs', () => {
   });
 });
 
+describe('buildAppApiEnvironment — workflows', () => {
+  const handoffsOn = { enabled: true, briefEnabled: false, suggestionsEnabled: false };
+
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).WORKFLOWS_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(
+      createMockConfig({ handoffs: handoffsOn, workflowRuns: { enabled: true }, workflows: { enabled: true } }),
+      stubParams(),
+    );
+    expect(on.WORKFLOWS_ENABLED).toBe('true');
+  });
+
+  it('stays off while workflow runs are off', () => {
+    const env = buildAppApiEnvironment(
+      createMockConfig({ handoffs: handoffsOn, workflows: { enabled: true } }),
+      stubParams(),
+    );
+    expect(env.WORKFLOWS_ENABLED).toBe('false');
+  });
+});
+
 describe('buildAppApiEnvironment — session rewind', () => {
   it('forwards the flag either way', () => {
     const on = buildAppApiEnvironment(createMockConfig({ sessionRewind: { enabled: true } }), stubParams());

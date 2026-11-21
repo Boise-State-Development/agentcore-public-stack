@@ -895,6 +895,26 @@ def workflow_runs_enabled() -> bool:
     return handoffs_enabled() and os.environ.get("WORKFLOW_RUNS_ENABLED", "").strip().lower() == "true"
 
 
+def workflows_enabled() -> bool:
+    """Whether a user can save, read and edit workflows: a run's shape, kept to start again.
+
+    ``docs/specs/workflow-designer.md`` §13. Gates app-api's ``/workflows``
+    routes (404 after authentication while off). A workflow is a
+    ``references/workflow.<name>.md`` file in a skill, and the check that such a
+    file parses runs on every skill-file write whether or not this is on. A
+    saved workflow runs as a workflow run, so this needs
+    ``WORKFLOW_RUNS_ENABLED`` (and so ``HANDOFFS_ENABLED``) too. **Opt-in while
+    in development**: only ``"true"`` enables it; an unset GitHub variable
+    arrives as ``""`` and is off. CDK sets it on app-api from
+    ``config.workflows.enabled``; the Runtime needs no copy. The SPA's matching
+    switch is ``features.workflows``.
+
+    The spec recommends folding it into ``WORKFLOW_RUNS_ENABLED`` once finished
+    rather than keeping a second permanent switch (§13, open question 5).
+    """
+    return workflow_runs_enabled() and os.environ.get("WORKFLOWS_ENABLED", "").strip().lower() == "true"
+
+
 def session_rewind_enabled() -> bool:
     """Whether a user can rewind a conversation to one of their earlier messages.
 

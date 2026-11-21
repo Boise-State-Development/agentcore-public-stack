@@ -170,6 +170,14 @@ export interface FeatureFlags {
   workflowRuns: boolean;
 
   /**
+   * Saved workflows (docs/specs/workflow-designer.md): a run's shape kept to
+   * start again, designed on the Workflows page. Only meaningful with
+   * `workflowRuns`. Backend: WORKFLOWS_ENABLED (app-api serves `/workflows`).
+   * In development, so `false` unless the environment has turned the backend on.
+   */
+  workflows: boolean;
+
+  /**
    * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
    * user message offers "Rewind to here", which hides it and everything after
    * it and puts its text back in the composer to edit and resend. Backend:
