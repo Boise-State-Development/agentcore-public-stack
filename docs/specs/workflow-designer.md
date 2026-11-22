@@ -1,6 +1,6 @@
 # Workflow Designer: authoring a saved workflow on a canvas
 
-**Status:** Step 2 (D.1 to D.5) built and dev-validated, 2026-11-21, behind `WORKFLOWS_ENABLED` and `WORKFLOW_RUNS_ENABLED` (on in `development` only). §20 is its delivery plan and §20.5 what it showed. Prompt and checklist steps (D.6, D.7) and pinning (D.8) are decided later. It is the authoring half of step 2 in
+**Status:** Step 2 (D.1 to D.5) built and dev-validated, 2026-11-21, behind `WORKFLOWS_ENABLED` and `WORKFLOW_RUNS_ENABLED` (on in `development` only). §20 is its delivery plan and §20.5 what it showed. Prompt steps (D.6, §21) built and dev-validated 2026-11-22 behind `PROMPT_STEPS_ENABLED`; checklist steps (D.7) planned in §22; pinning (D.8) is decided later. It is the authoring half of step 2 in
 `docs/specs/workflow-runs.md` §14, and it replaces that spec's §10 editor (step cards in a list) with a canvas.
 **Targets branch:** `develop`
 **Tracking:** #2218 (step 2)
@@ -1303,3 +1303,166 @@ source's prefix is never touched: a prompt step's answer reaches it as a deliver
   rows lead with the step (above). A stopped prompt step's line in the run's row wraps, so its reason is readable on
   a phone. The graph's "*N* at once" counts only Agent steps, and the sheet's file hint talks about steps once a
   prompt step is in the run.
+
+### 21.5 Step 3 outcome (2026-11-22)
+
+D.6a (#2272), D.6b (#2273, with its follow-up #2277) and D.6c (#2279) are merged and passed their dev checks. Two
+SPA follow-ups came out of D.6c's check: #2284, merged, and a second polish PR for the stopped prompt part's note
+and rendering an answer's Markdown.
+
+**Measured on dev:**
+
+- **The NSF panel as six prompt steps** (five reviewers over the 4-page sample PDF, then a summary that reads them)
+  finished about 110 s after Start.
+- **The cache.** On each model the first step wrote the 9,878-token document prefix (`first_write`), and every
+  later step on that model read it (`hit`). The summary sends no document. `wastedUsd` was 0 on every row, with no
+  `miss_avoidable`.
+- **Output.** Three Haiku 5.5 answers ran past the first plan's 4,000 tokens and finished whole under 16,000;
+  none reached 16,000. The slowest step took 30 s.
+- **Stop, `too_large` and the sheet's blocker** each worked as §21.3 says. A `too_large` step made no model call,
+  and a step that read only the request still ran beside it.
+- **Cost of the checks.** $0.42 across D.6b's two checks and about $0.20 for D.6c's.
+
+## 22. Delivery plan, step 4: checklist steps (D.7)
+
+A checklist step runs named field sets over the run's files, one call per field set, and returns typed values,
+each with its quote and a `source_provenance` state. It is the audit lane of the worked example
+(`multi-agent-patterns.md` §11.3). It runs on D.6's path: the same invocation, the same claim, the same request
+layout with the documents first, so a run's checklist calls share one cached document per model.
+
+### 22.1 What was measured (2026-11-22)
+
+Direct Converse calls on dev, extending §21.1's harness:
+
+- **The fixture:** four checklist branches over the NSF sample PDF (about 10–12k tokens of prefix). Three of
+  them are verdict sets (`pass` / `fail` / `cant_tell`) taken from the compliance auditor's criteria, and one is a
+  set of 10 budget values. All four are scored against the answer key.
+- **The calls:** documents first, a cachePoint after them, one warm call, then the other three at once.
+- **The runs:** two trials on Haiku 5.5 and on Sonnet 5.5. Every layout sent the same instruction, the field list
+  as `extractor._prompt` writes it.
+- **Cost:** $0.92.
+
+| Layout | Later branches reading the document | Sonnet 5.5, $ a run of 4 | Haiku 5.5, $ a run | Accuracy |
+|---|---|---|---|---|
+| Each branch's own strict tool (`document_extract`'s shape) | 0 / 12 | 0.162 | 0.0091 | 79/80 |
+| Each branch's own schema as native output (`outputConfig`) | 0 / 12 | 0.151 | 0.0095 | 79/80 |
+| One generic strict tool, the same for every branch | 12 / 12 | 0.061 | 0.0042 | 79/80 |
+| JSON written in the reply, checked afterwards | 12 / 12 | 0.059 | 0.0043 | 80/80 |
+| All four sets' schemas in one constant tool list | Refused | — | — | — |
+
+- **Anything per branch ahead of the messages ends the sharing.** A tool schema sits in `toolConfig`, and the
+  native output schema behaves the same way, so every branch writes the whole document again. An audit of 15 sets
+  would pay 15 writes instead of one.
+- **One tool list holding every set's schema is refused:** "The compiled grammar is too large", at 20 fields in
+  all.
+- **Accuracy doesn't separate the layouts on this fixture.** The three misses in 160 calls were Haiku's
+  `cant_tell` on graduate mentoring, twice, and one empty equipment cost. None of the 40 JSON replies failed to
+  parse. Ranking the layouts on quality needs a harder fixture, such as the real 114-criterion audit.
+- **Forced tool choice:** Bedrock accepts it on Haiku 5.5 and refuses it on Sonnet 5.5 ("tool_choice: type tool
+  and any are not supported"). Every layout above used `auto`.
+
+### 22.2 Settled with the developer
+
+- **A checklist call carries one generic strict tool**, constant per deployment, with the field list in the
+  instruction (§22.1's third row). Bedrock guarantees the shape of the reply, and Python checks each value's type
+  afterwards, as `document_extract` already does after its call.
+- **The price** is that the tool list sits ahead of the documents. On one model, a run's checklist calls share one
+  write and its prompt steps another, so a run that mixes them on one model writes the document twice. JSON in the
+  reply would share one write, but nothing would guarantee its shape.
+
+### 22.3 The design
+
+**The step.** A checklist step is a `HANDOFF#` row of kind `checklist`, with no Agent and no conversation, like a
+prompt step.
+
+- **Fields:** the prompt step's fields (§21.3), plus `fieldSets`, the names it runs in authored order.
+- **Statuses and stop reasons:** the prompt step's, with one difference: a field set that fails on its own doesn't
+  stop the step (see the output, below).
+- **The claim:** `open → running`, one conditional update, so a step never runs twice.
+
+**The format.** The kind is `checklist`, so `RESERVED_KINDS` drops it, and `worker` is a model id, as for a
+prompt step.
+
+- **The section** `## Step: <name>` opens with a `Field sets:` line naming one or more field sets. Any further
+  text in the section is guidance, appended to every call's instruction.
+- **The parser** refuses:
+  - a field set that isn't `references/field-set.<name>.md` in the same skill;
+  - a name listed twice;
+  - more than 16 sets on one step.
+- **Why several sets on one step:** the audit is 15 sets, and the envelope is 8 steps. This answers
+  `multi-agent-patterns.md` §11.4 G1 without a change to `document_extract`.
+- **Reads** must name `files`. They may also name earlier steps, whose results go after the cachePoint.
+- **Parse checks:** the parser accepts `checklist` whatever the flag, like every parse check. Run create refuses a
+  checklist step while the flag is off, and the sheet shows it as a blocker.
+
+**The invocation.** The same `workflow_prompt` invocation, with the same frames and checks. The Runtime branches
+on the row's kind, and `workflow_prompt_step` gains an additive `kind`.
+
+- **One call per field set.** A step of 15 sets is 15 calls.
+- **The calls in an invocation** are grouped by model. The first call on each model warms its prefix, and the
+  rest go through `run_bounded` under the run's `limits.concurrency`, every model's group side by side, as prompt
+  steps do today.
+
+**The request layout:**
+
+- **`toolConfig`:** one constant `record_checklist` tool, `strict: true`, with `toolChoice: auto`. Its input is
+  `{fields: [{name, value, quote}]}`, where `value` is a string or null. The forced choice is refused on Sonnet 5.5
+  (§22.1).
+- **`system`:** one constant checklist frame per deployment.
+- **`messages`:** `[documents…, cachePoint, earlier results (if read), instruction]`. The instruction is the field
+  list, as `extractor._prompt` writes it, plus the step's guidance and "call `record_checklist` once".
+- **The documents** follow §21.3's rules exactly: native PDF, text otherwise, and `too_large` over the budget.
+
+**The output.**
+
+- **Each reply is checked** against the field set in Python: `build_model(field_set)` after coercing each string
+  by the field's type (number, currency, date, boolean, enum).
+  - A missing field becomes null with an empty quote. A value that doesn't coerce becomes null.
+  - An unknown name is dropped, and a name given twice keeps its first entry.
+- **`list` fields:** a string can't carry a list without a convention. D.7a measures `value` as a union of string
+  and array of strings before choosing; until then the parser refuses `list` fields on a checklist step.
+- **No tool call** gets one retry, which costs a cache read. A second miss marks that set `error`. A set that
+  fails doesn't stop the step's other sets.
+- **Provenance:** every value goes through `source_provenance` against the document, so each one has a state,
+  exactly as in `document_extract`.
+- **The model-facing result** is values and states only, rendered as one table per set and capped at
+  `SEND_BACK_MAX_TOKENS`, as `document_extract`'s turn result is bounded. This is what collect and `prepare` carry
+  as the step's text part.
+- **The display rows** keep the quote, the locator and the method, on `WFCHK#<runId>#<stepId>#<set>` rows in
+  sessions-metadata. The rows use the `SessionLookupIndex` GSI, as `EXTR#` rows do, with no new infra.
+
+**Metering.** One `C#` row per call, with `callKind: "workflow_checklist"` (added to `CALL_KINDS` and the admin
+cost mapping) and `{runId, stepId, fieldSet}`. Its prefix fingerprint is stateless, as §21.3's is, with the tool
+hash in the key.
+
+**The SPA.**
+
+- **The designer:** Add step offers Checklist. Its Step tab picks a model, as for a prompt step, and one or more
+  field sets from this workflow's skill. Under `features.fieldSetAuthoring`, it links to the field-set editor.
+- **The sheet:** names the sets and prices the step at the catalog rate, one call per set, with the documents
+  counted once per model.
+- **The run row:** shows the step's table, using `DocumentExtractionComponent` read from the `WFCHK#` rows.
+
+**The flag.** `CHECKLIST_STEPS_ENABLED` / `CDK_CHECKLIST_STEPS_ENABLED`, on app-api and the Runtime, with
+`features.checklistSteps`.
+
+- It is in development: only `"true"` enables.
+- It works only with prompt steps on, since it runs on their invocation.
+- The Runtime copy is written only while on, so the default spends none of the V2 environment budget.
+
+**Cost and TTFT.** Nothing new runs on a turn's path, and no turn's `toolConfig` or system prompt changes. The
+generic tool compiles one grammar per account and model, shared by every checklist call.
+
+### 22.4 The PRs
+
+| PR | Side | Needs | What it ships |
+|---|---|---|---|
+| D.7a | Backend (shared, app-api), infra | — | The format's `checklist` kind and its `Field sets:` line. The `checklist` `HANDOFF#` kind and `fieldSets`. Create, approve and the sheet: blockers for a missing set, the model and the flag, and the estimate. Collect and prepare with the text part. The flag: reader, CDK on both services, `platform.yml`, docs-site row. The `list`-value measurement |
+| D.7b | Runtime | D.7a merged first | The checklist branch in `workflow_prompt.py`, the generic tool and frame, coercion and provenance, the `WFCHK#` rows, `workflow_checklist` in `CALL_KINDS` and the admin mapping, the frame's `kind`, and the SSE table row |
+| D.7c | SPA | D.7a, D.7b merged | `features.checklistSteps`, the designer's Checklist kind with the set picker, the sheet, the queue (checklist steps ride the prompt branch), and the run row's table |
+
+- **D.7a and D.7b run in parallel**, split by file ownership as D.6a and D.6b were (§21.4).
+- **Dev check:** each PR's own session validates it after merge. D.7c's check is the end-to-end one: the NSF
+  panel's five reviewers as prompt steps plus one checklist step of the compliance sets, over the sample proposal.
+  It is scored against the answer key, and the `C#` rows must show one write per model for each group, then reads.
+  If the 114-criterion audit is available by then, it replaces the compliance sets.

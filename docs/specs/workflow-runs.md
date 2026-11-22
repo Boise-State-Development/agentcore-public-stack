@@ -217,6 +217,9 @@ They are also the cheaper kind of step where no follow-up conversation is wanted
 *2026-11-21:* prompt steps are being built this way, as a new Runtime invocation with no session lease and one
 `HANDOFF#` row of kind `prompt` per step (`workflow-designer.md` §21). Checklist steps are decided after them.
 
+*2026-11-22:* prompt steps are built and dev-validated. Checklist steps are planned on the same invocation, with
+one generic strict tool so their calls share the cached document (`workflow-designer.md` §22).
+
 ## 7. Results
 
 **Decision: a run returns one result, not one per step.**

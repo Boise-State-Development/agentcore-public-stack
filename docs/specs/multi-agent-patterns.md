@@ -412,6 +412,8 @@ Nothing in this section is scheduled.
   `CONCURRENT_TOOL_EXECUTION_ENABLED` on, because `document_extract` is not in `PARALLEL_SAFE_TOOLS`
   (`agents/main_agent/core/tool_concurrency.py`), and each call writes its own artifact and workbook. Merging the
   sets is not an option: 114 fields is far past the 14 Bedrock will compile.
+  *2026-11-22:* `workflow-designer.md` §22 plans checklist steps that run several field sets on one step, one call
+  per set over a shared cached document, which answers this for workflows without changing `document_extract`.
 - **G2. A verdict needs a third answer.** An audit criterion is pass, fail or "cannot tell", with evidence. A
   `boolean` field has no way to decline, and its provenance state is `unassessed` by construction, since a yes/no
   cannot be matched against a passage. `Uncertain` in `decision-primitive.md` is the right answer, but that spec
