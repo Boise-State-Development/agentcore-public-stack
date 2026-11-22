@@ -14,10 +14,10 @@ documents), so the first call on each model is made alone and the rest read it; 
 of 12 later sets reading it with this layout, against 0 of 12 with a per-set schema. A run's prompt
 steps on the same model write a second entry, since their tool list (none) differs.
 
-Each reply's values arrive as strings, so they are coerced by type and validated with the set's own
-model (``checklist.read_answers``), then judged by ``source_provenance`` against the run's
-documents. A set that fails on its own (it is gone from the skill, it now holds a ``list`` field, or the
-model twice recorded no answer) is that set's ``error`` row and a line in the answer; it never stops the other sets. Every
+Each reply's values arrive as strings (an array of strings for a ``list`` field), so they are coerced
+by type and validated with the set's own model (``checklist.read_answers``), then judged by
+``source_provenance`` against the run's documents. A set that fails on its own (it is gone from the
+skill, or the model twice recorded no answer) is that set's ``error`` row and a line in the answer; it never stops the other sets. Every
 set's ``WFCHK#`` row is written **before** the step's ``done``, so a reader that sees ``done`` finds
 them all. A step whose every set failed stops ``error``.
 
@@ -253,16 +253,13 @@ class ChecklistBranch:
         if not tallies:
             return
 
-        # Sets that can't run end first, with no call: one that is gone, and one edited since the run
-        # was created to hold a field a checklist call can't fill (a ``list``). A step with none to run
-        # settles here.
+        # Sets that can't run end first, with no call: one that is gone from the skill, or no longer
+        # parses. A step with none to run settles here.
         runnable: List[Any] = []
         for tally in tallies:
             for job in tally.jobs:
                 if job.field_set is None:
                     await self._settle(tally, job, SetOutcome(status="error", error="field_set_missing"))
-                elif checklist_call.unsupported_fields(job.field_set):
-                    await self._settle(tally, job, SetOutcome(status="error", error="unsupported_field"))
                 else:
                     runnable.append((tally, job))
             if not tally.jobs:

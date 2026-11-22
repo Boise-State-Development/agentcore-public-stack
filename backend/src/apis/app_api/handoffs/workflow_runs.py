@@ -41,7 +41,7 @@ sets over the run's files, one model call per set, on the same invocation as pro
 is a ``HANDOFF#`` row of kind ``checklist`` carrying ``fieldSets``, created and approved exactly as
 a prompt step's; its ``request`` is the step's own guidance alone, never the shared request. Create
 refuses one while ``CHECKLIST_STEPS_ENABLED`` is off, on a model the starter can't run, and when a
-set is no longer in the workflow's skill (or holds a ``list`` field), as sheet blockers. Its result
+set is no longer in the workflow's skill, as sheet blockers. Its result
 is the row's ``outputText`` (values and states), a text-only part like a prompt step's; the run read
 attaches its ``WFCHK#`` display rows (``apis.shared.handoff.checklist_rows``) to the step.
 """

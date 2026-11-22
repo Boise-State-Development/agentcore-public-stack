@@ -582,9 +582,10 @@ class TestWorkflowSkips:
         assert reason.startswith("invalid workflow:")
         assert "the field set 'budget' is not in this skill" in reason
 
-    def test_a_checklist_steps_set_with_a_list_field_is_skipped(self):
+    def test_a_checklist_steps_set_with_a_list_field_is_imported(self):
         listed = self._BUDGET.replace("| cap | Cap | currency |", "| cap | Cap | list |")
+        assert listed != self._BUDGET
         b = bundle_of(
             {"SKILL.md": SKILL_MD, "references/workflow.review.md": self._CHECKLIST, "references/field-set.budget.md": listed}
         )
-        assert "has a list field" in skipped(b)["references/workflow.review.md"]
+        assert "references/workflow.review.md" not in skipped(b)

@@ -15,7 +15,6 @@ import pytest
 from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS
 from apis.shared.handoff.runs import WORKFLOW_RUN_MAX_STEPS
 from apis.shared.workflows.format import (
-    CHECKLIST_REFUSED_FIELD_TYPE,
     MAX_REQUEST_CHARS,
     MAX_STEPS,
     Workflow,
@@ -503,11 +502,13 @@ class TestChecklistFieldSetRefs:
         with pytest.raises(WorkflowError, match="step 'audit': the field set 'budget-caps' is not in this skill"):
             check_field_set_refs(workflow, {"compliance": _field_set("compliance", "enum")})
 
-    def test_a_set_with_a_list_field_is_refused(self):
+    def test_a_set_with_a_list_field_is_accepted(self):
+        """``record_checklist``'s value carries an array since 2026-11-22 (§22.3), so a list runs."""
         workflow = parse_workflow(CHECKLIST_FILE, name="audit")
         sets = {"budget-caps": _field_set("budget-caps", "string", "list"), "compliance": _field_set("compliance", "enum")}
-        with pytest.raises(WorkflowError, match="the field set 'budget-caps' has a list field, 'f1'"):
-            check_field_set_refs(workflow, sets)
+
+        check_field_set_refs(workflow, sets)
+        assert validate_workflow_upload("workflow.audit.md", CHECKLIST_FILE.encode(), field_sets=sets) is not None
 
     def test_the_upload_check_refuses_with_the_skills_sets(self):
         with pytest.raises(WorkflowError, match="is not in this skill"):
@@ -519,7 +520,6 @@ class TestChecklistFieldSetRefs:
     def test_the_constants_match_the_field_set_parsers(self):
         from apis.shared.extraction import field_sets as fs
 
-        assert CHECKLIST_REFUSED_FIELD_TYPE == fs.TYPE_LIST
         for name in ("budget-caps", "a", "x9-y"):
             assert fs.field_set_name_for(f"field-set.{name}.md") == name
         for bad in ("Budget", "a_b", "-a", "a-"):

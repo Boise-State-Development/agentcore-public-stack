@@ -806,14 +806,13 @@ class TestChecklistSteps:
             assert resp.status_code == 400
             assert "the field set 'budget-caps' is not in this skill" in resp.json()["detail"]
 
-    def test_a_set_with_a_list_field_is_refused(self, client):
+    def test_a_set_with_a_list_field_is_accepted(self, client):
         wf = _create(client)
         _add_field_set(client, wf["skillId"], "budget-caps", "string", "list")
         _add_field_set(client, wf["skillId"], "compliance", "enum")
         resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST)
 
-        assert resp.status_code == 400
-        assert "has a list field, 'f1'" in resp.json()["detail"]
+        assert resp.status_code == 200, resp.text
 
     def test_the_generic_upload_checks_the_sets_whatever_the_flag(self, client, monkeypatch):
         monkeypatch.setenv("CHECKLIST_STEPS_ENABLED", "")

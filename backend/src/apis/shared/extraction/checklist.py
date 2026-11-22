@@ -18,7 +18,8 @@ So the request carries :data:`TOOL_SPEC`, ``record_checklist {fields: [{name, va
 the same for every set, every run and every deployment, with ``strict: true`` so Bedrock guarantees
 the reply's *shape*; the field list travels in the instruction (:func:`instruction`), written exactly
 as ``extractor._prompt`` writes it. What strict mode can no longer guarantee, the *types*, is checked
-here: every value arrives as a string and :func:`read_answers` coerces it by the field's declared type
+here: every value arrives as a string, or as an array of strings for a ``list`` field, and
+:func:`read_answers` coerces it by the field's declared type
 and validates the result with the set's own generated model (``schema.model_for_field_set``). A value
 that does not coerce becomes null; it is never guessed into shape.
 
@@ -57,7 +58,7 @@ from .field_sets import (
     Field,
     FieldSet,
 )
-from .rows import Row, build_rows, event_fields, model_facing_result
+from .rows import MAX_VALUE_CHARS, Row, build_rows, event_fields, model_facing_result
 from .schema import model_for_field_set
 
 logger = logging.getLogger(__name__)
@@ -65,10 +66,13 @@ logger = logging.getLogger(__name__)
 #: The one tool every checklist call carries.
 TOOL_NAME = "record_checklist"
 
-#: ``record_checklist``, exactly as §22.1 measured it: a list of ``{name, value, quote}``, ``value``
-#: a string or null, every property required, ``additionalProperties: false``. Already in strict
-#: mode's subset, so ``ensure_strict_json_schema`` leaves it as it is (pinned by a test). Constant:
-#: its bytes are part of every checklist call's cached prefix, and a change rewrites it once.
+#: ``record_checklist``: a list of ``{name, value, quote}``, ``value`` a string, an array of strings
+#: or null, every property required, ``additionalProperties: false``. The union is the one PR-D.7a
+#: measured on dev (§22.3, "The ``list``-value measurement"): it compiles on Haiku 5.5 and Sonnet 5.5,
+#: every list came back as an array (one item as ``["…"]``, an absent list as ``null``, never ``[]``)
+#: and every scalar as a string. Already in strict mode's subset, so ``ensure_strict_json_schema``
+#: leaves it as it is (pinned by a test). Constant: its bytes are part of every checklist call's
+#: cached prefix, and a change rewrites it once, at deploy (the 2026-11-22 widening was one).
 TOOL_SPEC: Dict[str, Any] = {
     "name": TOOL_NAME,
     "description": "Record one checklist's values: one entry per field asked for.",
@@ -87,9 +91,14 @@ TOOL_SPEC: Dict[str, Any] = {
                         "properties": {
                             "name": {"type": "string", "description": "The field's name, exactly as listed."},
                             "value": {
-                                "anyOf": [{"type": "string"}, {"type": "null"}],
+                                "anyOf": [
+                                    {"type": "string"},
+                                    {"type": "array", "items": {"type": "string"}},
+                                    {"type": "null"},
+                                ],
                                 "description": (
                                     "The value, or null if the document does not state it. "
+                                    "For a list field: an array of strings, one per item. "
                                     "For a verdict: pass, fail or cant_tell."
                                 ),
                             },
@@ -124,7 +133,8 @@ SYSTEM_PROMPT = (
     "4. Quote the shortest passage that actually carries the value, ideally the sentence containing it.\n"
     "5. Give the value as the document expresses it, as text: keep currency symbols and thousands "
     "separators as written, give a yes-or-no field as yes or no, and give a field with listed answers "
-    "as exactly one of them.\n\n"
+    "as exactly one of them. Give a list field as an array of strings, one per item, and quote the "
+    "passage that holds the items.\n\n"
     f"Answer by calling the {TOOL_NAME} tool once, with one entry per field, each named exactly as "
     "the checklist lists it. Do not answer in prose."
 )
@@ -134,8 +144,9 @@ GUIDANCE_HEADING = "Guidance for this checklist:"
 
 #: The instruction's last line.
 CALL_ONCE = (
-    f"Call {TOOL_NAME} once, with one entry per field above: its value as text (null if the documents "
-    "do not state it) and the exact passage it comes from, copied verbatim (empty if none)."
+    f"Call {TOOL_NAME} once, with one entry per field above: its value as text, or as an array of "
+    "strings for a list field (null if the documents do not state it), and the exact passage it comes "
+    "from, copied verbatim (empty if none)."
 )
 
 
@@ -220,8 +231,22 @@ def _as_date(text: str) -> Optional[str]:
     return None
 
 
+def _as_list(raw: Any) -> Optional[List[str]]:
+    """A ``list`` field's items: an array as given, a lone string as one item.
+
+    Each item is stripped, and an empty item or one that names its own absence is dropped. No items
+    left is null, never ``[]``: the document not stating a list is the same answer however the
+    model wrote it. A string is never split on commas or semicolons, because an item may hold one
+    ("Smith, Jane").
+    """
+    items = raw if isinstance(raw, list) else [raw]
+    kept = [str(item).strip() for item in items if item is not None and not isinstance(item, (dict, list))]
+    kept = [item for item in kept if item.casefold() not in _ABSENT]
+    return kept or None
+
+
 def coerce_value(field: Field, raw: Any) -> Any:
-    """``raw`` (a reply's string) as ``field``'s type, or ``None`` when it does not coerce.
+    """``raw`` (a reply's string, or array of strings) as ``field``'s type, or ``None`` when it does not coerce.
 
     - **number**: the one number the string states (``"15 pages"`` → ``15.0``); none or several → null.
     - **currency**: the string as written (structured-extraction D6), when it states a number.
@@ -229,13 +254,23 @@ def coerce_value(field: Field, raw: Any) -> Any:
     - **boolean**: yes/no, true/false.
     - **enum**: one of the set's answers, matched exactly, then ignoring case and punctuation
       (``"Can't tell"`` → ``cant_tell``).
+    - **list**: an array of its items, a lone string as one item (:func:`_as_list`).
     - **string**: as written.
 
-    A ``list`` field is never coerced: a string can't carry a list without a convention, so a set
-    holding one is never called (:func:`unsupported_fields`).
+    A non-list field given an array takes its **first** item and coerces that, so ``["15 pages"]`` on
+    a number field is ``15.0``; an empty array is null. The schema lets any field carry either shape,
+    and a one-item array is the likeliest way a model gets it wrong, so the first item keeps the
+    value it meant rather than throwing it away. Later items are dropped, never joined into the value.
     """
     if raw is None:
         return None
+    if field.type == TYPE_LIST:
+        return _as_list(raw)
+    if isinstance(raw, list):
+        first = next((item for item in raw if item is not None), None)
+        if first is None or isinstance(first, (dict, list)):
+            return None
+        raw = first
     text = str(raw).strip()
     if text.casefold() in _ABSENT:
         return None
@@ -259,12 +294,6 @@ def coerce_value(field: Field, raw: Any) -> Any:
         matches = [member for member in field.enum if _enum_key(member) == key]
         return matches[0] if len(matches) == 1 else None
     return text
-
-
-def unsupported_fields(field_set: FieldSet) -> List[str]:
-    """The fields a checklist call can't fill: ``list`` fields, which the format refuses on a checklist
-    step. A set edited to hold one after the run was created is that set's ``error``, never a call."""
-    return [field.name for field in field_set.fields if field.type == TYPE_LIST]
 
 
 def read_answers(field_set: FieldSet, tool_input: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -341,10 +370,30 @@ def verified_rows(
     return picked
 
 
+#: Between a list's items wherever a checklist shows one as text. Not ``document_extract``'s ", ",
+#: because an item may hold a comma ("Smith, Jane"). The same length as ", ", so a list's text is
+#: exactly as long as ``rows.model_facing_result`` measured it, and every bound holds unchanged.
+LIST_SEPARATOR = "; "
+
+
+def list_text(value: Any) -> Optional[str]:
+    """A list value as one line, ``"a; b; c"``, or ``None`` when ``value`` is not a list."""
+    if not isinstance(value, list):
+        return None
+    return LIST_SEPARATOR.join(str(item) for item in value if item is not None)
+
+
 def row_fields(rows: Sequence[Row]) -> List[Dict[str, Any]]:
-    """The rows as a ``WFCHK#`` row's ``fields``: a value not found is null, never ``""``."""
+    """The rows as a ``WFCHK#`` row's ``fields``: a value not found is null, never ``""``.
+
+    A list is one string with its items separated by :data:`LIST_SEPARATOR`, so the run row's table
+    reads it as ``document_extract``'s rows are read (a string ``value``); the store clamps it.
+    """
     fields = event_fields(rows)
-    for item in fields:
+    for row, item in zip(rows, fields):
+        listed = list_text(row.value)
+        if listed is not None:
+            item["value"] = listed
         if item.get("value") == "":
             item["value"] = None
     return fields
@@ -365,7 +414,6 @@ class SetResult:
 #: A set's ``error`` code, as the step's answer says it.
 ERROR_TEXT = {
     "field_set_missing": "the field set is no longer in the workflow's skill, or could not be read",
-    "unsupported_field": "the field set now holds a list field, which a checklist step can't fill",
     "no_tool_call": "the model did not record an answer, twice",
     "timeout": "the call ran out of time",
     "cut_off": "the answer reached the output limit before it was recorded",
@@ -396,9 +444,14 @@ def render_set(result: SetResult) -> str:
         lines += [f"| {_cell(titles.get(f['name'], f['name']))} | {f['state']} |" for f in payload["fields"]]
         lines += ["", "(Values left out to keep this short; the step's table has them.)"]
         return "\n".join(lines)
+    listed = {row.field.name: list_text(row.value) for row in result.rows}
     lines = [heading, "", "| Field | Value | State |", "|---|---|---|"]
     for item in payload["fields"]:
         value = item.get("value")
+        as_list = listed.get(item["name"])
+        if value and as_list:
+            # The bounded text with the checklist's separator: the same length, cut the same way.
+            value = as_list if len(as_list) <= MAX_VALUE_CHARS else as_list[: MAX_VALUE_CHARS - 1].rstrip() + "…"
         lines.append(
             f"| {_cell(titles.get(item['name'], item['name']))} | {_cell(value) if value else 'not found'} | {item['state']} |"
         )
@@ -436,6 +489,8 @@ def build_checklist_model(model_id: str, *, max_tokens: int, read_timeout: int) 
 
 __all__ = [
     "CALL_ONCE",
+    "LIST_SEPARATOR",
+    "list_text",
     "ERROR_TEXT",
     "SetResult",
     "render_answer",
@@ -452,5 +507,4 @@ __all__ = [
     "instruction",
     "read_answers",
     "tool_input_of",
-    "unsupported_fields",
 ]

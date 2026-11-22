@@ -89,8 +89,9 @@ file cannot collect quietly.
 What a checklist step's sets *are* is a fact about the skill, not the file, so
 it is checked by :func:`check_field_set_refs` against the skill's own field sets,
 which the write paths hand it: each set must be
-``references/field-set.<name>.md`` in the same skill, and none may hold a
-``list`` field (§22.3: ``record_checklist``'s ``value`` is a string or null).
+``references/field-set.<name>.md`` in the same skill. A set may hold ``list``
+fields: ``record_checklist``'s ``value`` is a string, an array of strings or null
+(§22.3, lifted 2026-11-22).
 
 PURITY
 ------
@@ -140,10 +141,6 @@ RESERVED_KINDS: frozenset = frozenset()
 #: The most field sets one checklist step runs (§22.3). The compliance audit is
 #: 15 sets and the envelope is 8 steps, so several sets share one step.
 MAX_CHECKLIST_FIELD_SETS = 16
-#: The field type a checklist step can't carry yet (§22.3): ``record_checklist``'s
-#: ``value`` is a string or null. Equal to ``extraction.field_sets.TYPE_LIST``
-#: (pinned by a test).
-CHECKLIST_REFUSED_FIELD_TYPE = "list"
 
 READ_REQUEST = "request"
 READ_FILES = "files"
@@ -573,22 +570,15 @@ def checklist_field_set_names(workflow: Workflow) -> Tuple[str, ...]:
 def field_set_ref_problem(set_name: str, field_set: Any) -> Optional[str]:
     """Why a checklist step can't run ``field_set``, or ``None`` when it can.
 
-    ``field_set`` is the skill's parsed set of that name (anything with ``.fields``,
-    each with ``.name`` and ``.type``), or ``None`` when the skill has none. The
-    sentence names the set and, for a ``list`` field, the field.
+    ``field_set`` is the skill's parsed set of that name, or ``None`` when the
+    skill has none. Every field type can run, ``list`` included (§22.3), so the
+    one problem is a set the skill doesn't have.
     """
     if field_set is None:
         return (
             f"the field set '{set_name}' is not in this skill. Add "
             f"'references/field-set.{set_name}.md' to the skill, or name another set"
         )
-    for field in getattr(field_set, "fields", ()) or ():
-        if getattr(field, "type", None) == CHECKLIST_REFUSED_FIELD_TYPE:
-            return (
-                f"the field set '{set_name}' has a list field, '{getattr(field, 'name', '')}', "
-                "which a checklist step can't fill yet. Change its type, or run the set "
-                "another way"
-            )
     return None
 
 
@@ -1245,7 +1235,6 @@ __all__ = [
     "KIND_AGENT",
     "KIND_CHECKLIST",
     "KIND_PROMPT",
-    "CHECKLIST_REFUSED_FIELD_TYPE",
     "MAX_CHECKLIST_FIELD_SETS",
     "MAX_REQUEST_CHARS",
     "MAX_STEPS",

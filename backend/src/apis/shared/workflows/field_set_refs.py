@@ -1,8 +1,8 @@
 """The field sets a workflow's checklist steps name, read from the skill that holds them.
 
 ``docs/specs/workflow-designer.md`` §22.3. A checklist step names field sets by name, and each
-must be ``references/field-set.<name>.md`` in the **same** skill as the workflow, with no
-``list`` field. The format can't check that on its own (it is handed one file), so this module
+must be ``references/field-set.<name>.md`` in the **same** skill as the workflow (any field type,
+``list`` included, since 2026-11-22). The format can't check that on its own (it is handed one file), so this module
 reads the skill's sets and hands them to :func:`~apis.shared.workflows.format.check_field_set_refs`:
 
 - **On every skill-file write**, whatever the flags say: a single upload checks against the
