@@ -90,6 +90,29 @@ def test_the_claim_refuses_anything_but_this_runs_open_prompt_step(table, store,
     assert store.claim(claimant, "h1", run_id=run_id) is False
 
 
+def test_a_checklist_step_is_claimed_as_a_checklist_step(table, store):
+    """workflow-designer.md §22.3: the same claim, held to the row's own kind."""
+    _put(table, kind="checklist")
+
+    assert store.claim("user-a", "h1", run_id="r1") is False  # not as a prompt step
+    assert store.claim("user-a", "h1", run_id="r1", kind="checklist") is True
+    assert _row(table)["status"] == "running"
+    assert store.finish("user-a", "h1", output_text="### Budget", output_tokens=40) is True
+    assert _row(table)["status"] == "done"
+
+
+def test_a_prompt_step_is_never_claimed_as_a_checklist_step(table, store):
+    _put(table)
+
+    assert store.claim("user-a", "h1", run_id="r1", kind="checklist") is False
+    assert _row(table)["status"] == "open"
+
+
+def test_the_claim_takes_only_a_model_step_kind(store):
+    with pytest.raises(ValueError):
+        store.claim("user-a", "h1", run_id="r1", kind="mention")
+
+
 def test_the_claim_is_one_conditioned_write():
     """The guard lives in the write: one ``update_item`` conditioned on ``open`` and ``prompt``, no read."""
     calls = []

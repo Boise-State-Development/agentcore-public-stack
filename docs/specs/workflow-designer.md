@@ -1510,3 +1510,57 @@ five trials per cell.
 - **The fixture is easy**, so it shows the union works, not that it beats the joined string. The `list` refusal stays.
   Lifting it means the union in D.7b's constant tool (one deliberate prefix rewrite) and coercion of `list` values in
   Python, so it is its own change. The cost was $0.10 ($0.006 Haiku, $0.095 Sonnet).
+
+#### Built (PR-D.7b)
+
+- **The branch.** `PromptStepRun` (`inference_api/chat/workflow_prompt.py`) runs a request's checklist steps beside
+  its prompt steps while `checklist_steps_enabled()`; while off, a checklist step is skipped unclaimed as
+  `not_prompt`. The claim holds the row to its own kind (`PromptStepStore.claim(kind=…)`), so neither kind is ever
+  claimed as the other. Every `workflow_prompt_step` frame carries `kind`, except a `not_in_run` skip.
+- **Groups.** Calls group by (kind, model), every group side by side under the run's one semaphore. A checklist
+  group (`inference_api/chat/workflow_checklist.py`) makes its first runnable set's call alone, then the rest through
+  `run_bounded`. The model is resolved once per invocation, however many groups use it.
+- **The sets** are read once per invocation, before any call, from the run row's `workflow.skillId` with D.7a's
+  `read_skill_field_sets`, and only while that skill is still the caller's to use (their own, or an active one
+  `resolve_accessible_skill_ids` reaches). A set that is gone or no longer parses is its own `error` row
+  (`field_set_missing`), with no call. So is a set edited since the run was created to hold a `list` field
+  (`unsupported_field`); its value is never coerced.
+- **The request** (`apis/shared/extraction/checklist.py`): `TOOL_SPEC` is §22.1's measured schema, already in strict
+  mode's subset (pinned with `SYSTEM_PROMPT` by digest), on a dedicated `BedrockModel(strict_tools=True)`; the
+  architecture test that keeps `strict_tools` off chat agents allows this module beside the extractor. The
+  instruction is `field_list` (pinned to `extractor._prompt`'s lines), the step's guidance under its own heading,
+  and the call to make.
+- **The reply.** `read_answers` coerces each string by type: one number, currency as written, ISO dates, yes/no,
+  and an enum answer matched ignoring case and punctuation. It then validates with
+  `model_for_field_set`. A reply with no `record_checklist` call is sent once more, unchanged, so the retry reads
+  the cache. Codes for a set that fails on its own: `no_tool_call`, `timeout`, `cut_off` (the output limit was
+  reached first) and `model_error`.
+- **Provenance.** A call reads every run file, so each value is verified against each document's text
+  (`document_provenance_units`, read once per invocation), and keeps the verdict of the first document where its
+  quote is located (`verified_rows`). No verdict is made or lifted here.
+- **The answer** is one Markdown table per set, `| Field | Value | State |`, bounded per set by `model_facing_result`
+  and capped by the finish write. A failed set is one line saying why. Every set's `WFCHK#` row is written
+  before `finish`, and a step whose every set failed stops `error` (`timeout` when every call ran out of time).
+- **Metering.** `callKind: "workflow_checklist"` with `{runId, stepId, fieldSet}`. The prefix key adds the tool and
+  the frame to the prompt step's; a prompt step's key is unchanged. `CALL_KINDS` lists the kind.
+
+**Checked before merge (2026-11-22).** This branch's Runtime path against dev Bedrock (`us.*` ids), with the stores in
+memory and the real meter and cache classifier. One invocation ran a checklist step of four sets (§22.1's fixture:
+three verdict sets and ten budget values) on Haiku 5.5, the same step on Sonnet 5.5, and one prompt step on Haiku
+5.5, over the compact NSF sample PDF.
+
+| | Calls | Cache | Fields right | Cost |
+|---|---|---|---|---|
+| Checklist, Haiku 5.5 | 4 | 1 `first_write` (10,731 tokens), 3 `hit` | 19/20 | $0.0044 |
+| Checklist, Sonnet 5.5 | 4 | 1 `first_write` (10,731 tokens), 3 `hit` | 20/20 | $0.0549 |
+| Prompt step, Haiku 5.5 | 1 | 1 `first_write` (9,881 tokens), its own entry | — | $0.0015 |
+
+- **One write per group, then reads.** `wastedUsd` was 0 on every row, with no `miss_avoidable`. The prompt step on
+  Haiku wrote an entry of its own beside the checklist's, as §22.2 priced it; the tool and frame add about 850
+  tokens to the prefix.
+- **Accuracy matches §22.1.** Haiku's one miss was `cant_tell` on graduate mentoring, as in the measurement. Every
+  reply was a tool call, so nothing was retried.
+- **Provenance:** 9 of 10 budget values `supported` on each model, and the verdicts `unassessed`, as they should be.
+  One right value read `quote_unsupported`: "2" against "Two domestic conferences per year". The value check
+  doesn't read number words, which is a `source_provenance` limit, not this branch's.
+- **Time:** 15.7 s for all nine calls. Haiku 5.5 wrote 900 to 1,350 output tokens a set, mostly reasoning.

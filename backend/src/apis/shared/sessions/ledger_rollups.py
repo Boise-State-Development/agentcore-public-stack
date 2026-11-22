@@ -86,7 +86,7 @@ OUTCOME_COUNTERS = {
 
 #: The kinds a call is classified into. ``callKind`` on the row wins; the rest
 #: are recognised by the id shapes their writers use.
-CALL_KINDS = ("chat", "handoff_brief", "workflow_prompt", "voice", "api_converse", "document_extract", "other")
+CALL_KINDS = ("chat", "handoff_brief", "workflow_prompt", "workflow_checklist", "voice", "api_converse", "document_extract", "other")
 _KIND_PATTERN = re.compile(r"^[a-z0-9_]{1,32}$")
 
 #: What one character of a tool result costs as input, in tokens (D4). An

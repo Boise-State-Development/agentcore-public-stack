@@ -5735,7 +5735,7 @@ async def _handoff_target_description(agent_id: str, current_user: User) -> Opti
 async def _run_step_descriptions(run: "WorkflowRun", current_user: User) -> list[Optional[str]]:
     """Each kept step's Agent description, read concurrently, in step order (workflow-runs.md §6.3).
 
-    A prompt step has no Agent to read, so its slot is ``None`` without a read.
+    A prompt or checklist step has no Agent to read, so its slot is ``None`` without a read.
     """
     async def _none() -> Optional[str]:
         return None
@@ -5743,7 +5743,7 @@ async def _run_step_descriptions(run: "WorkflowRun", current_user: User) -> list
     return list(
         await asyncio.gather(
             *(
-                _none() if step.is_prompt else _handoff_target_description(step.agent_id, current_user)
+                _none() if step.is_model_step else _handoff_target_description(step.agent_id, current_user)
                 for step in run.kept_steps()
             )
         )
