@@ -7,8 +7,8 @@
  * the file picker can filter and a rejected file produces an immediate,
  * specific message instead of a failed round-trip.
  *
- * Web-document extensions (`.html`, `.htm`, `.xhtml`, `.xml`, `.svg`) are
- * absent deliberately. A skill resource is uploaded by one user and downloaded
+ * Web-document extensions (`.html`, `.htm`, `.xhtml`, `.svg`) are absent
+ * deliberately. A skill resource is uploaded by one user and downloaded
  * by others from **this app's own origin**, so a resource a browser renders as
  * a document could execute script inside a reader's authenticated session.
  * Source-code extensions are allowed but are stored and served as plain text.
@@ -21,8 +21,9 @@ export const ALLOWED_RESOURCE_EXTENSIONS: readonly string[] = [
   // Prose / structured text
   'md', 'markdown', 'txt', 'text', 'csv', 'tsv', 'json', 'jsonl', 'yaml', 'yml',
   'toml', 'ini', 'cfg', 'env', 'log', 'rst', 'tex',
-  // XML Schema — stored and served as inert plain text, never as XML
-  'xsd',
+  // OOXML part templates and schemas — stored and served as inert plain text,
+  // never as an XML type
+  'xml', 'xsd',
   // Example / helper code — stored and served as inert plain text
   'py', 'sh', 'bash', 'zsh', 'ps1', 'rb', 'pl', 'r', 'js', 'mjs', 'cjs', 'ts',
   'jsx', 'tsx', 'css', 'sql', 'graphql', 'java', 'kt', 'go', 'rs', 'c', 'h',

@@ -32,16 +32,20 @@ already-uploaded payloads are neutralized without a data migration.
 No entry in the allowlist is a media type a browser will execute as script in
 the page's origin. Notably absent:
 
-* ``.html`` / ``.htm`` / ``.xhtml`` / ``.xml`` / ``.svg`` — parsed as documents
-  and can carry inline script. SVG is on this list for the same reason as HTML:
+* ``.html`` / ``.htm`` / ``.xhtml`` / ``.svg`` — parsed as documents and can
+  carry inline script. SVG is on this list for the same reason as HTML:
   ``image/svg+xml`` navigated to top-level is a scriptable document.
 * ``.js`` / ``.mjs`` / ``.css`` as *active* types — the extensions are allowed
   (a skill may legitimately ship example code) but map to ``text/plain``, so
   the bytes are readable and inert. This matches spec D5: ``script`` resources
   are stored, listed, and never executed.
-* ``.xsd`` as an XML type — allowed, because Office skills ship the OOXML
-  schemas their validators read, but stored and served as ``text/plain``, never
-  as ``application/xml``, for the reason ``.xml`` is absent.
+* ``.xml`` / ``.xsd`` as an XML type — allowed, because Office skills ship the
+  OOXML part templates their scripts copy into a package (``comments.xml``,
+  ``people.xml``) and the schemas their validators read, but stored and served
+  as ``text/plain``, never as ``application/xml`` / ``text/xml``. An XML type
+  navigated to top-level is a document that can carry XHTML or SVG script;
+  ``text/plain`` with ``nosniff`` is never parsed as markup, whatever the bytes
+  say.
 
 Both tiers (admin catalog and user-authored "My Skills") and the runtime's
 authoring tools funnel their writes through ``SkillBundleFiles.add_resource``
@@ -79,8 +83,10 @@ SAFE_EXTENSION_CONTENT_TYPES: Final[Dict[str, str]] = {
     "log": "text/plain",
     "rst": "text/plain",
     "tex": "text/plain",
-    # XML Schema (anthropics/skills' docx/pptx/xlsx validators). Inert text,
-    # never an XML type: see the module docstring.
+    # OOXML part templates and schemas (anthropics/skills' docx/pptx/xlsx
+    # scripts and validators). Inert text, never an XML type: see the module
+    # docstring.
+    "xml": "text/plain",
     "xsd": "text/plain",
     # Example / helper code. Stored inert (D5): text/plain, not an active type.
     "py": "text/plain",
@@ -236,7 +242,7 @@ def resolve_upload_content_type(filename: str) -> str:
         raise SkillResourceTypeError(
             f"File type not allowed for skill resources ({sent}). "
             "Skill files must be documents, data, images, or plain-text code — "
-            "web documents such as .html, .htm, .xhtml, .xml and .svg are not "
+            "web documents such as .html, .htm, .xhtml and .svg are not "
             "accepted because they can execute script in a reader's browser. "
             f"Allowed extensions: {', '.join(sorted(SAFE_EXTENSION_CONTENT_TYPES))}."
         )
