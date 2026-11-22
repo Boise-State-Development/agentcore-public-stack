@@ -90,6 +90,7 @@ export interface AppConfig {
   handoffs: HandoffsConfig;
   workflowRuns: WorkflowRunsConfig;
   workflows: WorkflowsConfig;
+  agentVersionPinning: AgentVersionPinningConfig;
   sessionRewind: SessionRewindConfig;
   sessionFork: SessionForkConfig;
   quotaRequests: QuotaRequestsConfig;
@@ -595,6 +596,21 @@ export interface WorkflowsConfig {
    * No new resources (`WFCHK#` rows in sessions-metadata).
    */
   checklistStepsEnabled: boolean;
+}
+
+/**
+ * Agent version pinning for saved workflows (docs/specs/workflow-designer.md §23):
+ * an Agent step runs the version its file records (`@ <n>`), for everyone who
+ * starts it, the Agent's owner included, while that version may still run.
+ * **Opt-in while in development**: off unless CDK_AGENT_VERSION_PINNING_ENABLED=true
+ * (or an `agentVersionPinning.enabled: true` cdk.json context), and it needs saved
+ * workflows (and so workflow runs and handoffs) too. Sets
+ * AGENT_VERSION_PINNING_ENABLED on **app-api** always, and on the **AgentCore
+ * Runtime** only while the whole chain is on (`agentVersionPinningOn`), so the
+ * default spends none of the V2 environment budget. No new resources.
+ */
+export interface AgentVersionPinningConfig {
+  enabled: boolean;
 }
 
 /**
@@ -2081,6 +2097,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_CHECKLIST_STEPS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('workflows')?.checklistStepsEnabled ?? false,
     },
+    agentVersionPinning: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_AGENT_VERSION_PINNING_ENABLED
+        ? process.env.CDK_AGENT_VERSION_PINNING_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('agentVersionPinning')?.enabled ?? false,
+    },
     sessionRewind: {
       // Default ON with a kill switch, same parsing as projects above.
       enabled: process.env.CDK_SESSION_REWIND_ENABLED
@@ -3344,6 +3366,23 @@ export function promptStepsOn(config: Pick<AppConfig, 'handoffs' | 'workflowRuns
  */
 export function checklistStepsOn(config: Pick<AppConfig, 'handoffs' | 'workflowRuns' | 'workflows'>): boolean {
   return promptStepsOn(config) && config.workflows.checklistStepsEnabled;
+}
+
+/**
+ * Whether Agent version pinning is on for this deployment: its own switch and every
+ * flag it needs (saved workflows, workflow runs, handoffs). The Runtime has no copy
+ * of the workflow flags, so its copy of AGENT_VERSION_PINNING_ENABLED is written from
+ * this alone; app-api gets the switch as set and checks WORKFLOWS_ENABLED itself.
+ */
+export function agentVersionPinningOn(
+  config: Pick<AppConfig, 'handoffs' | 'workflowRuns' | 'workflows' | 'agentVersionPinning'>,
+): boolean {
+  return (
+    config.handoffs.enabled &&
+    config.workflowRuns.enabled &&
+    config.workflows.enabled &&
+    config.agentVersionPinning.enabled
+  );
 }
 
 export function buildCorsOrigins(config: AppConfig, additionalOrigins?: string): string[] {

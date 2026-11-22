@@ -330,6 +330,12 @@ jobs:
       # "true" to turn it on. Needs CDK_PROMPT_STEPS_ENABLED (and its whole
       # chain) too. app-api, and the AgentCore Runtime only while on.
       CDK_CHECKLIST_STEPS_ENABLED: ${{ vars.CDK_CHECKLIST_STEPS_ENABLED }}
+      # Agent version pinning: a saved workflow's Agent step runs the version its
+      # file records, for everyone who starts it (docs/specs/workflow-designer.md
+      # §23). Opt-in while in development; set `CDK_AGENT_VERSION_PINNING_ENABLED`
+      # to "true" to turn it on. Needs CDK_WORKFLOWS_ENABLED (and so workflow runs
+      # and handoffs) too. app-api, and the AgentCore Runtime only while on.
+      CDK_AGENT_VERSION_PINNING_ENABLED: ${{ vars.CDK_AGENT_VERSION_PINNING_ENABLED }}
       # Conversation rewind: "Rewind to here" on a user message
       # (docs/specs/conversation-rewind-and-fork.md §4). Default ON with a kill
       # switch: set `CDK_SESSION_REWIND_ENABLED` to "false" in an environment to

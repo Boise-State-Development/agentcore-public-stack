@@ -208,6 +208,29 @@ describe('buildAppApiEnvironment — checklist steps', () => {
   });
 });
 
+describe('buildAppApiEnvironment — agent version pinning', () => {
+  const handoffsOn = { enabled: true, briefEnabled: false, suggestionsEnabled: false };
+  const workflowsOn = { enabled: true, promptStepsEnabled: false, checklistStepsEnabled: false };
+  const chain = { handoffs: handoffsOn, workflowRuns: { enabled: true }, workflows: workflowsOn };
+
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).AGENT_VERSION_PINNING_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(
+      createMockConfig({ ...chain, agentVersionPinning: { enabled: true } }),
+      stubParams(),
+    );
+    expect(on.AGENT_VERSION_PINNING_ENABLED).toBe('true');
+  });
+
+  it('stays off while saved workflows are off', () => {
+    const env = buildAppApiEnvironment(
+      createMockConfig({ ...chain, workflows: { ...workflowsOn, enabled: false }, agentVersionPinning: { enabled: true } }),
+      stubParams(),
+    );
+    expect(env.AGENT_VERSION_PINNING_ENABLED).toBe('false');
+  });
+});
+
 describe('buildAppApiEnvironment — session rewind', () => {
   it('forwards the flag either way', () => {
     const on = buildAppApiEnvironment(createMockConfig({ sessionRewind: { enabled: true } }), stubParams());
