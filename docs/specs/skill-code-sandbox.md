@@ -63,12 +63,13 @@ One tool, `run_code`, gated by its own catalog row (§7). One tool rather than t
 
 ```
 run_code(
-  code: str | None = None,          # Python the model wrote; exactly one of code / path
+  code: str | None = None,          # a program the model wrote; exactly one of code / path
   skill_name: str | None = None,    # a skill bound to this turn (as read_skill_file takes it)
-  path: str | None = None,          # a scripts/*.py file in that skill's manifest
+  path: str | None = None,          # a scripts/*.py, .js, .cjs or .mjs file in that skill's manifest
   argv: list[str] = [],             # command-line arguments for the script
   files: list[str] = [],            # this conversation's files to copy into inputs/, by name or upload id
   show_images: list[str] = [],      # up to 4 image paths to return to the model
+  language: str | None = None,      # code's language: "python" (default) or "javascript" (D2, #2311)
 ) -> result
 ```
 
@@ -84,7 +85,7 @@ Files persist between calls in the same turn, because the sandbox does. The next
 
 ### 4.2 Running a script
 
-The tool resolves `skill_name` + `path` through `resolve_skill_script` exactly as the Word tools do: bound skills only, strict manifest lookup, kind `script`, `.py`, at most 1 MiB. A fixed entry then runs it:
+The tool resolves `skill_name` + `path` through `resolve_skill_script` exactly as the Word tools do: bound skills only, strict manifest lookup, kind `script`, at most 1 MiB. The one difference is the extension: the Word tools take `.py` only, and `run_code` also takes `.js`, `.cjs` and `.mjs` (D2). A fixed entry then runs a Python script like this:
 
 ```python
 import runpy, sys
@@ -95,6 +96,8 @@ try:
 except SystemExit as e:
     ...                                         # exit code comes back as the call's status
 ```
+
+A JavaScript target, whether a skill's script or `code` sent with `language: "javascript"` (written to `.run_code/snippet.js`), replaces the entry's process with `node <path> <argv…>` (`os.execvp`). The exit code, the output and `timeout`'s signal are then Node's own. `require('./x')` resolves beside the file, and the office mount's `NODE_PATH` applies. Timeouts, the output cap, `outputs/` collection and image previews are the same for both languages.
 
 `argv` is passed as data in a JSON file, never pasted into the entry's source, the same way the Word tools pass `params`. It is capped at 4 KB.
 
@@ -164,7 +167,7 @@ All seven recommendations were accepted on 2026-11-20. D4 reverses the conforman
 | # | Decision | Accepted |
 |---|---|---|
 | **D1** | Should `run_code` accept model-written `code`, or only skill scripts? | **Both.** The PDF skill needs both, in the same working directory. Without `code`, its snippets still get retyped into a tool that can't run them |
-| **D2** | Which languages? | **Python only in v1**, as §6.6 item 2 says. Without network, shell and Node are no riskier than Python (Python can spawn processes), so adding `.js` and `.sh` later is a question of demand, not safety. Anthropic's `pptx` skill uses Node |
+| **D2** (revised 2026-11-22, #2311) | Which languages? | **Python and Node.** v1 was Python only, as §6.6 item 2 says. Without network, shell and Node are no riskier than Python, since Python can already spawn processes, so adding `.js` was a question of demand, not safety. The demand came with docx-js on the office mount (#2302). On its dev validation turn, the model sent the docx skill's JavaScript as `code` twice and got a `SyntaxError` both times, before it wrapped the script in Python and called `node`. The pptx skill also ships `scripts/apply_theme.js`. So a skill's `scripts/*.js`, `.cjs` or `.mjs` runs with `node` by `skill_name` + `path`, under the same resolution, sha256, audit and D4 owner rule as `.py`, and `code` takes an optional `language` (`"python"`, the default and v1's behaviour, or `"javascript"`). The spec grew from 811 to 886 tokens (+75, CountTokens on Haiku 4.5), one `toolConfig` prefix rewrite at deploy. There is no flag of its own: it is an optional argument whose default is v1, gated by `CODE_SANDBOX_ENABLED`. Shell (`.sh`) is still refused, since no bundled skill needs it yet. The Word tools stay `.py` only |
 | **D3** | Should the sandbox last one turn or the whole conversation? | **One turn.** Outputs become conversation files, so a later turn re-stages them in a second or two. A conversation-long sandbox bills while the user thinks and needs its own reaper |
 | **D4** | Consent for scripts by other authors (§6.6 item 3) | **An approval card on the first run of each `(skill, path, sha256)` in a conversation, for skills the invoker does not own.** Own skills run without one. Network isolation removes the exfiltration case, so the card guards integrity only. The conformance plan listed this as "out of plan by decision", so it needs a fresh yes |
 | **D5** | Only pinned versions across a trust boundary (§6.6 item 4)? | **Defer.** With D4's hash in the consent, a changed script asks again. Pinning adds little on top and depends on how a project binds skills |

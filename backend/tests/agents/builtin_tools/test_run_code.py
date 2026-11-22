@@ -16,6 +16,7 @@ import io
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -161,6 +162,7 @@ def _call(holder: TurnSkillRecords | None = None, **kwargs: Any) -> Dict[str, An
         rc._run(
             SESSION, USER, holder or TurnSkillRecords(), kwargs.get("code"), kwargs.get("skill_name"),
             kwargs.get("path"), kwargs.get("argv"), kwargs.get("files"), kwargs.get("show_images"),
+            kwargs.get("language"),
         )
     )
 
@@ -253,6 +255,123 @@ def test_a_reference_file_cannot_run(sandbox, saved, audits, skill_store):
     result = _call(holder, skill_name="pdf", path="references/notes.md")
     assert result["status"] == "error"
     assert "not a script" in _text(result)
+
+
+# ---------------------------------------------------------------------------
+# JavaScript (spec D2): a skill's .js/.cjs/.mjs and `language: "javascript"`
+# ---------------------------------------------------------------------------
+
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+
+
+def test_code_defaults_to_python_and_audits_its_language(sandbox, saved, audits):
+    result = _call(code="print('still python')")
+    assert result["status"] == "success"
+    assert not (sandbox.root / ".run_code" / "snippet.js").exists()
+    assert audits[0][1][5] == "python"
+
+
+@needs_node
+def test_javascript_code_runs_with_node_and_saves_its_outputs(sandbox, saved, audits):
+    code = (
+        "const fs = require('fs');\n"
+        "fs.writeFileSync('outputs/hello.txt', 'from node ' + process.argv[1].split('/').pop());\n"
+        "console.log('node', process.version);\n"
+    )
+    result = _call(code=code, language="javascript")
+    assert result["status"] == "success", _text(result)
+    assert "node v" in _text(result)
+    assert (sandbox.root / ".run_code" / "snippet.js").read_text() == code
+    assert saved == [{"filename": "hello.txt", "bytes": b"from node snippet.js", "mime": "text/plain"}]
+    kind, args = audits[0]
+    assert kind == "code" and args[5] == "javascript"
+
+
+@needs_node
+def test_javascript_errors_and_exit_codes_come_back(sandbox, saved, audits):
+    result = _call(code="throw new Error('bad js input')", language="JavaScript")
+    assert result["status"] == "error"
+    assert "failed (exit code 1)" in _text(result)
+    assert "bad js input" in _text(result)
+    result = _call(code="process.exit(3)", language="javascript")
+    assert "exit code 3" in _text(result)
+
+
+def test_an_unknown_language_is_refused_before_any_sandbox(sandbox, saved, audits):
+    result = _call(code="print('x')", language="ruby")
+    assert result["status"] == "error"
+    assert '"python" (the default) or "javascript"' in _text(result)
+    assert sandbox.commands == [] and audits == []
+
+
+@needs_node
+@pytest.mark.parametrize("name", ["build.js", "build.cjs"])
+def test_a_skill_js_script_runs_with_argv_and_sibling_requires(sandbox, saved, audits, skill_store, name):
+    files = {
+        "scripts/helper.js": b"module.exports = (s) => s.toUpperCase();\n",
+        f"scripts/{name}": (
+            b"const fs = require('fs');\nconst shout = require('./helper.js');\n"
+            b"const [src, dst] = process.argv.slice(2);\n"
+            b"fs.writeFileSync(dst, shout(fs.readFileSync(src, 'utf8')));\n"
+            b"console.log('wrote', dst);\n"
+        ),
+    }
+    holder = _bind(_skill(files=files), skill_store, files)
+    (sandbox.root / "inputs").mkdir()
+    (sandbox.root / "inputs" / "in.txt").write_text("quiet words")
+    result = _call(holder, skill_name="pdf", path=f"scripts/{name}", argv=["inputs/in.txt", "outputs/out.txt"])
+    assert result["status"] == "success", _text(result)
+    assert f"Ran skills/pdf/scripts/{name}" in _text(result)
+    assert (sandbox.root / "outputs" / "out.txt").read_text() == "QUIET WORDS"
+    kind, args = audits[0]
+    assert kind == "script"
+    assert args[2] == f"scripts/{name}"
+    assert args[3] == hashlib.sha256(files[f"scripts/{name}"]).hexdigest()
+    assert args[4] == "ok"
+
+
+@needs_node
+def test_a_skill_mjs_script_runs_as_a_module_and_its_exit_code_comes_back(sandbox, saved, audits, skill_store):
+    files = {"scripts/check.mjs": b"import fs from 'fs';\nconsole.log('usage: check.mjs', fs.existsSync('inputs'));\nprocess.exit(2);\n"}
+    holder = _bind(_skill(files=files), skill_store, files)
+    result = _call(holder, skill_name="pdf", path="scripts/check.mjs")
+    assert result["status"] == "error"
+    assert "exit code 2" in _text(result)
+    assert "usage: check.mjs true" in _text(result)
+    assert audits[0][1][4] == "error"
+
+
+def test_a_script_that_is_neither_python_nor_javascript_is_refused(sandbox, saved, audits, skill_store):
+    files = {"scripts/run.sh": b"echo no\n"}
+    holder = _bind(_skill(files=files), skill_store, files)
+    result = _call(holder, skill_name="pdf", path="scripts/run.sh")
+    assert result["status"] == "error"
+    assert "Only .py, .js, .cjs and .mjs scripts can be run" in _text(result)
+    assert sandbox.commands == [] and audits == []
+
+
+def test_a_javascript_reference_is_refused_with_a_js_fix(sandbox, saved, audits, skill_store):
+    files = {"references/theme.js": b"console.log('no')\n"}
+    holder = _bind(_skill(files=files), skill_store, files)
+    result = _call(holder, skill_name="pdf", path="references/theme.js")
+    assert result["status"] == "error"
+    assert "not a script" in _text(result)
+    assert "scripts/theme.js" in _text(result)
+    assert sandbox.commands == []
+
+
+def test_a_js_skill_by_another_user_waits_for_the_approval_card(sandbox, saved, audits, skill_store):
+    files = {"scripts/x.js": b"console.log(1)\n"}
+    holder = _bind(_skill(owner="someone-else", files=files), skill_store, files)
+    result = _call(holder, skill_name="pdf", path="scripts/x.js")
+    assert "another user" in _text(result)
+    assert sandbox.commands == [] and audits == []
+
+
+def test_the_entry_program_sends_exactly_the_node_extensions_to_node():
+    literal = ", ".join(f'"{ext}"' for ext in rc.programs.NODE_EXTENSIONS)
+    assert f"in ({literal}):" in rc.programs.ENTRY_PY
+    assert rc.SCRIPT_EXTENSIONS == (".py", ".js", ".cjs", ".mjs")
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +503,7 @@ def test_the_run_command_times_out_inside_the_sandbox():
 # The spec, the flag and the notice
 # ---------------------------------------------------------------------------
 
-RUN_CODE_SPEC_DIGEST = "ef18f56db60e566b18cd13d8c6beecff5ec5423f313c4bc819f6f23e59c07d26"
+RUN_CODE_SPEC_DIGEST = "299c379606eb30b36420e146558732f5fa1112d9857facca69f7ad64c6d8e317"
 
 
 def test_spec_is_pinned_and_says_there_is_no_network():
@@ -392,7 +511,7 @@ def test_spec_is_pinned_and_says_there_is_no_network():
     assert spec["name"] == "run_code"
     assert "NO network access" in spec["description"]
     props = spec["inputSchema"]["json"]["properties"]
-    assert set(props) == {"code", "skill_name", "path", "argv", "files", "show_images"}
+    assert set(props) == {"code", "skill_name", "path", "argv", "files", "show_images", "language"}
     digest = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
     assert digest == RUN_CODE_SPEC_DIGEST
 
