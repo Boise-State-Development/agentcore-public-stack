@@ -1819,3 +1819,26 @@ is a per-step override on create that may name only the current `P`.
 - **Dev check:** each PR's own session validates it after merge. D.8c's is the end-to-end one: a workflow pinned to
   a superseded version of one of the NSF reviewer Agents, run by a second user, with §23.4's three checks, then a
   takedown that blocks the step and a rollback that blocks a step pinned above it.
+
+#### Built (PR-D.8a)
+
+- **The flag.** `agent_version_pinning_enabled()` reads `AGENT_VERSION_PINNING_ENABLED` (only `"true"`). On app-api it
+  also needs `workflows_enabled()`; on the Runtime, which has no workflow flags, its own copy carries the chain behind
+  `HANDOFFS_ENABLED`, as prompt steps' does. CDK config is a top-level `agentVersionPinning.enabled`, and
+  `agentVersionPinningOn` gates both services' copies, so the Runtime gets the variable only with the whole chain on.
+- **`publishedAt`.** `set_version_index` adds `publishedAt = if_not_exists(publishedAt, :now)` to every write of store
+  keys and never removes it. A new version row is written without the attribute rather than NULL, because
+  `if_not_exists` reads a stored NULL as set. The stamp is written whatever the flag says.
+- **The rule.** `version_pins.pin_refusal(number, published, row)` checks `unpublished`, then `above_published`, then
+  `missing` (no row), then `never_published`. `pin_row_needed` says when the row matters (n ≤ P). The resolver reads
+  the one row only then, and a project harness is refused `unpublished` with no special case.
+- **The sheet.** `StepView.pin` is `{version, canRun, reason?, offerVersion?}`. It appears only while the flag is on,
+  on an Agent step that records a version and whose Agent the caller can use. `offerVersion` is P whenever P exists
+  and differs from the pin. A refused pin is the `agent_version_unavailable` blocker, a pinned step's `runsDraft` is
+  false, and the rows come from one `BatchGetItem` (`version_repository.get_versions`, through `run_blocking`). A
+  failed read counts as `missing`, so the step blocks.
+- **Run create.** `workflow.useVersions: {stepName: n}` may name only the current P (otherwise 422
+  `use_version_refused`). It is applied before the sheet's rule, so it clears the blocker it answers. While the flag is
+  on, the run step's `agentVersion`, the `HANDOFF#` row's `agentVersion` and the create response's
+  `steps[].agentVersion` are the pin (absent for a step that records none). While off, the run step keeps the current
+  published version as a label, and the row has none. An editor's Use version N is the existing workflow PUT.
