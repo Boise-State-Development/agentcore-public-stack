@@ -1,4 +1,4 @@
-"""Install LibreOffice and docx-js onto the code sandbox's office file system (spec D9).
+"""Install LibreOffice and the Office skills' Node packages onto the code sandbox's office file system (spec D9).
 
 ``run_code``'s sessions mount that file system read-only at ``/mnt/office`` and
 run with ``/mnt/office/current/program`` first on ``PATH`` and
@@ -16,22 +16,27 @@ What it does, all of it re-runnable:
 2. Unpacks the RPMs it needs (core, Writer, Calc, Impress, Draw, Math, en-US,
    fonts and filters: about 550 MB) into a tree, with the two libraries in
    ``program/``, where LibreOffice's ``$ORIGIN`` rpath finds them.
-3. Installs the Node package Anthropic's docx skill loads (``docx``, that is
-   docx-js) into the tree's ``node/node_modules`` with ``npm ci`` from the
-   committed lockfile in ``code_sandbox_office_node/``, so every package is the
-   locked version and npm checks each one's ``integrity`` hash. The sandbox has
-   no network, so this runs here, and only pure-JavaScript packages are
-   accepted: a native addon, ``binding.gyp`` or install script is refused,
-   since nothing built on this machine would run on the sandbox's aarch64.
+3. Installs the Node packages Anthropic's docx and pptx skills load (``docx``,
+   that is docx-js; ``pptxgenjs`` and its ``jszip``; and the pptx skill's icon
+   recipe: ``react-icons``, ``react``, ``react-dom`` and ``sharp``) into the
+   tree's ``node/node_modules`` with ``npm ci`` from the committed lockfile in
+   ``code_sandbox_office_node/``, so every package is the locked version and
+   npm checks each one's ``integrity`` hash. The sandbox has no network, so
+   this runs here, and only JavaScript and WebAssembly are accepted: a native
+   addon, ``binding.gyp`` or install script is refused, since nothing built on
+   this machine would run on the sandbox's aarch64. ``sharp`` qualifies because
+   its native platform packages are optional and skipped (``--omit=optional``),
+   so it loads its WebAssembly build, ``@img/sharp-wasm32``, which the lockfile
+   names directly; its unbuilt C++ sources are removed.
 4. Copies the tree's archive into the seeding session in chunks, unpacks it to
    a release folder of its own, checks that ``soffice --version`` runs and that
-   ``require('docx')`` writes a document from there, and points ``current`` at
+   :data:`NODE_CHECK_JS` passes from there, and points ``current`` at
    it with one atomic rename, so a session that starts mid-upgrade sees the old
    build or the new one, never half of either.
 
 Run it once after the deploy that turns ``CDK_CODE_SANDBOX_OFFICE_ENABLED`` on,
-and again for each LibreOffice or docx-js upgrade (bump the pins below, or the
-version in ``code_sandbox_office_node/package.json`` and its lockfile). It
+and again for each LibreOffice or Node package upgrade (bump the pins below, or
+the versions in ``code_sandbox_office_node/package.json`` and its lockfile). It
 takes about five minutes, most of it the unpack over NFS. Needs credentials for
 the deployment's account (SSM read, Code Interpreter sessions on the seeding
 interpreter), ``npm`` for step 3 and, for step 2, ``bsdtar`` (macOS ``tar``) or
@@ -117,14 +122,40 @@ NPM_REGISTRY = "https://registry.npmjs.org/"
 OFFICE_MOUNT_SSM_SUFFIX = "agentcore/code-sandbox-office-mount"
 MOUNT_PATH = "/mnt/office"
 
-#: Writes a one-paragraph document with docx-js and prints its size, so the
-#: check is a real ``Packer`` run, not just a ``require``.
-DOCX_CHECK_JS = (
-    "const d=require('docx');"
-    "const doc=new d.Document({sections:[{children:[new d.Paragraph({children:[new d.TextRun('seed check')]})]}]});"
-    "d.Packer.toBuffer(doc).then(b=>{if(b.length<1000||b[0]!==0x50)throw new Error('not a docx');"
-    "console.log('docx ok '+b.length)}).catch(e=>{console.error(e);process.exit(1)});"
-)
+#: Packages under ``node_modules`` that ship sources only a native build reads.
+#: Nothing builds them (``--ignore-scripts``, no compiler on the sandbox), and
+#: the native check would refuse their ``binding.gyp``, so they are removed.
+UNBUILT_SOURCES = ("sharp/src",)
+
+#: Does what the skills do, from ``NODE_PATH`` alone, so the check is real
+#: work, not just a ``require``: docx-js writes a document; sharp, which must
+#: have loaded its WebAssembly build (only that build reports ``emscripten``),
+#: rasterizes a react-icons SVG the way the pptx skill's icon recipe does; and
+#: pptxgenjs writes a deck holding that PNG, opened with the jszip beside it,
+#: which is how the pptx skill's ``apply_theme.js`` finds jszip.
+NODE_CHECK_JS = "\n".join([
+    "const d=require('docx'),P=require('pptxgenjs'),sharp=require('sharp');",
+    "const R=require('react'),S=require('react-dom/server'),{FaCheck}=require('react-icons/fa');",
+    "const JSZip=require(require.resolve('jszip',{paths:[require.resolve('pptxgenjs')]}));",
+    "(async()=>{",
+    "const b=await d.Packer.toBuffer(new d.Document({sections:[{children:[new d.Paragraph({children:[new d.TextRun('seed check')]})]}]}));",
+    "if(b.length<1000||b[0]!==0x50)throw new Error('not a docx');",
+    "console.log('docx ok '+b.length);",
+    "if(!sharp.versions.emscripten)throw new Error('sharp did not load its WebAssembly build');",
+    "const svg=S.renderToStaticMarkup(R.createElement(FaCheck,{size:256,color:'#1F4E79'}));",
+    "const png=await sharp(Buffer.from(svg)).png().toBuffer();",
+    "const m=await sharp(png).metadata();",
+    "if(m.format!=='png'||m.width!==256)throw new Error('the icon was not rasterized');",
+    "console.log('sharp wasm ok '+png.length);",
+    "const p=new P();const s=p.addSlide();s.addText('seed check',{x:1,y:1,w:6,h:1});",
+    "s.addImage({data:'image/png;base64,'+png.toString('base64'),x:1,y:2,w:1,h:1});",
+    "const z=await JSZip.loadAsync(await p.write({outputType:'nodebuffer'}));",
+    "if(!z.file('ppt/theme/theme1.xml')||!Object.keys(z.files).some(f=>f.startsWith('ppt/media/')))throw new Error('not a deck with an image');",
+    "console.log('pptx ok '+Object.keys(z.files).length+' parts');",
+    "})().catch(e=>{console.error(e);process.exit(1)});",
+])
+#: What :data:`NODE_CHECK_JS` prints when every part of it passed.
+NODE_CHECK_MARKERS = ("docx ok", "sharp wasm ok", "pptx ok")
 
 #: Bytes per ``writeFiles`` call; 24 MB calls worked on dev.
 CHUNK_BYTES = 24 * 1024 * 1024
@@ -233,11 +264,13 @@ def build_tree(cache: Path, work: Path) -> Path:
 
 
 def check_lockfile(lock: Dict[str, Any]) -> Dict[str, str]:
-    """``{package path: version}`` for every locked package; raises unless each is pinned and hashed.
+    """``{package path: version}`` for every package installed; raises unless each is pinned and hashed.
 
     Every entry must come from :data:`NPM_REGISTRY` with an ``integrity`` hash
     (npm checks the download against it), and none may need an install script
-    or ship a native addon, which could not run on the sandbox.
+    or ship a native addon, which could not run on the sandbox. Optional
+    entries (sharp's native platform packages) are held to the same rules but
+    left out of the result, since ``npm ci --omit=optional`` never installs them.
     """
     if lock.get("lockfileVersion") != 3:
         raise SystemExit("code_sandbox_office_node/package-lock.json must be lockfileVersion 3")
@@ -256,7 +289,9 @@ def check_lockfile(lock: Dict[str, Any]) -> Dict[str, str]:
         if not resolved.startswith(NPM_REGISTRY) or not integrity.startswith("sha512-"):
             raise SystemExit(f"{path} is not locked to a hashed npm registry tarball")
         if entry.get("hasInstallScript") or entry.get("gypfile"):
-            raise SystemExit(f"{path} needs an install script, so it is not pure JavaScript; refusing it")
+            raise SystemExit(f"{path} needs an install script, so it is not JavaScript or WebAssembly; refusing it")
+        if entry.get("optional"):
+            continue
         locked[path] = str(entry["version"])
     if not locked:
         raise SystemExit("the lockfile locks no packages")
@@ -266,9 +301,10 @@ def check_lockfile(lock: Dict[str, Any]) -> Dict[str, str]:
 def build_node_modules(into: Path) -> Dict[str, str]:
     """``npm ci`` the committed lockfile into ``into/node_modules``; returns what it installed.
 
-    Install scripts are never run, and the installed tree is refused if any
-    package carries a native addon or a ``binding.gyp``. Then docx-js writes a
-    document here, so a broken tree never reaches the file system.
+    Install scripts and optional packages are never installed, and the tree is
+    refused if any package carries a native addon or a ``binding.gyp`` once
+    :data:`UNBUILT_SOURCES` are gone. Then :data:`NODE_CHECK_JS` runs here, so
+    a broken tree never reaches the file system.
     """
     npm = shutil.which("npm")
     node = shutil.which("node")
@@ -281,11 +317,16 @@ def build_node_modules(into: Path) -> Dict[str, str]:
     for name in ("package.json", "package-lock.json"):
         shutil.copy2(NODE_MANIFEST_DIR / name, into / name)
     subprocess.run(
-        [npm, "ci", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund",
+        [npm, "ci", "--ignore-scripts", "--omit=dev", "--omit=optional", "--no-audit", "--no-fund",
          "--registry", NPM_REGISTRY],
         cwd=into, check=True, stdout=subprocess.DEVNULL,
     )
     modules = into / "node_modules"
+    for source in UNBUILT_SOURCES:
+        shutil.rmtree(modules / source, ignore_errors=True)
+    skipped = [p for p, e in lock["packages"].items() if p and e.get("optional") and (into / p).exists()]
+    if skipped:
+        raise SystemExit(f"optional packages were installed: {skipped[:5]}")
     native = [p for p in modules.rglob("*") if p.suffix == ".node" or p.name == "binding.gyp"]
     if native:
         raise SystemExit(f"native code in the Node packages: {[str(p.relative_to(into)) for p in native[:5]]}")
@@ -298,12 +339,17 @@ def build_node_modules(into: Path) -> Dict[str, str]:
     shutil.rmtree(modules / ".bin", ignore_errors=True)
 
     check = subprocess.run(
-        [node, "-e", DOCX_CHECK_JS], cwd=into.parent, capture_output=True, text=True,
+        [node, "-e", NODE_CHECK_JS], cwd=into.parent, capture_output=True, text=True,
         env={"PATH": str(Path(node).parent), "NODE_PATH": str(modules)},
     )
-    if check.returncode != 0 or "docx ok" not in check.stdout:
-        raise SystemExit(f"docx-js did not write a document here:\n{check.stdout}{check.stderr}")
+    if check.returncode != 0 or not node_check_passed(check.stdout):
+        raise SystemExit(f"the Node packages failed their check here:\n{check.stdout}{check.stderr}")
     return locked
+
+
+def node_check_passed(output: str) -> bool:
+    """Whether :data:`NODE_CHECK_JS` printed every one of :data:`NODE_CHECK_MARKERS`."""
+    return all(marker in output for marker in NODE_CHECK_MARKERS)
 
 
 def pack(tree: Path, work: Path) -> Path:
@@ -415,9 +461,9 @@ def install(seeder: Seeder, archive: Path, expected_sha256: str) -> str:
     version = seeder.run(f"SAL_USE_VCLPLUGIN=svp {folder}/program/soffice --headless --version")
     if LIBREOFFICE_VERSION not in version:
         raise SystemExit(f"soffice did not report {LIBREOFFICE_VERSION}: {version}")
-    docx = seeder.run(_docx_check_command(f"{folder}/{NODE_DIR}/node_modules"))
-    if "docx ok" not in docx:
-        raise SystemExit(f"docx-js did not write a document on the sandbox: {docx}")
+    node = seeder.run(_node_check_command(f"{folder}/{NODE_DIR}/node_modules"))
+    if not node_check_passed(node):
+        raise SystemExit(f"the Node packages failed their check on the sandbox: {node}")
 
     previous = seeder.run(f"readlink {MOUNT_PATH}/current || true").rsplit("/", 1)[-1]
     seeder.run(
@@ -430,15 +476,15 @@ def install(seeder: Seeder, archive: Path, expected_sha256: str) -> str:
         + "*) rm -rf \"$r\" ;; esac; done"
     )
     version = seeder.run(f"SAL_USE_VCLPLUGIN=svp {MOUNT_PATH}/current/program/soffice --headless --version")
-    docx = seeder.run(_docx_check_command(f"{MOUNT_PATH}/current/{NODE_DIR}/node_modules"))
-    return f"{version}; {docx}"
+    node = seeder.run(_node_check_command(f"{MOUNT_PATH}/current/{NODE_DIR}/node_modules"))
+    return f"{version}; {' '.join(node.split())}"
 
 
-def _docx_check_command(node_modules: str) -> str:
-    """Run :data:`DOCX_CHECK_JS` from a scratch folder, so only ``NODE_PATH`` can find docx."""
+def _node_check_command(node_modules: str) -> str:
+    """Run :data:`NODE_CHECK_JS` from a scratch folder, so only ``NODE_PATH`` can find the packages."""
     return (
         f"cd \"$(mktemp -d)\" && NODE_PATH={shlex.quote(node_modules)} "
-        f"node -e {shlex.quote(DOCX_CHECK_JS)}"
+        f"node -e {shlex.quote(NODE_CHECK_JS)}"
     )
 
 

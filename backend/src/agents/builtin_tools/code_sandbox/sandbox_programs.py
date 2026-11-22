@@ -176,8 +176,8 @@ def run_command(
     ``office_program_dir`` puts a mounted LibreOffice first on the run's
     ``PATH`` (``office_mount.py``), with the headless VCL plugin its own
     ``soffice.py`` wrappers set too. ``office_node_modules`` puts the mount's
-    pinned Node packages (docx-js) first on ``NODE_PATH``, so a script's
-    ``require('docx')`` resolves; anything the sandbox already had on
+    pinned Node packages (docx-js, pptxgenjs, …) first on ``NODE_PATH``, so a
+    script's ``require('docx')`` or ``require('pptxgenjs')`` resolves; anything the sandbox already had on
     ``NODE_PATH`` stays after it.
     """
     office = ""
