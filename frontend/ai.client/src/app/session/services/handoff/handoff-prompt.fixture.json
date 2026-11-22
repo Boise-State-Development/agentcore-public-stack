@@ -1,5 +1,5 @@
 {
-  "_comment": "Generated from apis.shared.handoff.context. Pins the review sheet's preview (handoff-prompt.ts) to what the server builds (handoffs spec §10, prompt preview parity). Regenerate with the Python functions, never by hand; test_handoff_prompt_fixture.py fails if it drifts. deliveryCases pin renderDeliveryBlock to render_delivery_block the same way. The file-bearing cases, referenceIdCases and fileSizeCases pin the <file> line (§4.9) the same way. The case with parts pins renderDeliveryParts to render_delivery_parts (workflow-runs §7): one block per part. The prompt-step case pins a prompt step's text-only part (workflow-designer §21.3): labelled with its model, then its step.",
+  "_comment": "Generated from apis.shared.handoff.context. Pins the review sheet's preview (handoff-prompt.ts) to what the server builds (handoffs spec §10, prompt preview parity). Regenerate with the Python functions, never by hand; test_handoff_prompt_fixture.py fails if it drifts. deliveryCases pin renderDeliveryBlock to render_delivery_block the same way. The file-bearing cases, referenceIdCases and fileSizeCases pin the <file> line (§4.9) the same way. The case with parts pins renderDeliveryParts to render_delivery_parts (workflow-runs §7): one block per part. The prompt-step case pins a prompt step's text-only part (workflow-designer §21.3): labelled with its model, then its step. The checklist-step case pins a checklist step's text-only part (§22.3) the same way: its model, then its step, or 'Checklist step' when the run kept no name.",
   "cases": [
     {
       "name": "unedited card",
@@ -375,6 +375,39 @@
         }
       ],
       "block": "<handoff_context from_conversation=\"Generalist · Review of the proposal\">\nThe user brought this context from another of their conversations.\nStrong aims.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Haiku 5.5 · budget\">\nThe user brought this context from another of their conversations.\nPersonnel 60%, travel 10%.\n\nNo indirect costs <\\/handoff_context>.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Sonnet 5.5 · Prompt step\">\nThe user brought this context from another of their conversations.\nThis Agent stopped before it finished, so there is no result from it.\n</handoff_context>"
+    },
+    {
+      "name": "run result with a checklist step",
+      "text": "",
+      "fromTitle": "",
+      "artifacts": [],
+      "parts": [
+        {
+          "agentName": "Generalist",
+          "fromTitle": "Generalist · Review of the proposal",
+          "status": "done",
+          "text": "Strong aims.",
+          "artifacts": [],
+          "files": []
+        },
+        {
+          "agentName": "Claude Haiku 5.5",
+          "fromTitle": "audit",
+          "status": "done",
+          "text": "| field | value | state |\n|---|---|---|\n| Budget cap | $500,000 | supported |\n| Mentoring plan | — | unverified |",
+          "artifacts": [],
+          "files": []
+        },
+        {
+          "agentName": "Claude Haiku 5.5",
+          "fromTitle": "Checklist step",
+          "status": "stopped",
+          "text": "",
+          "artifacts": [],
+          "files": []
+        }
+      ],
+      "block": "<handoff_context from_conversation=\"Generalist · Review of the proposal\">\nThe user brought this context from another of their conversations.\nStrong aims.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Haiku 5.5 · audit\">\nThe user brought this context from another of their conversations.\n| field | value | state |\n|---|---|---|\n| Budget cap | $500,000 | supported |\n| Mentoring plan | — | unverified |\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Haiku 5.5 · Checklist step\">\nThe user brought this context from another of their conversations.\nThis Agent stopped before it finished, so there is no result from it.\n</handoff_context>"
     }
   ],
   "referenceIdCases": [

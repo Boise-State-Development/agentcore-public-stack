@@ -52,6 +52,8 @@ from apis.shared.workflows.format import (
     WorkflowError,
     WorkflowStep,
     carry_layout,
+    check_field_set_refs,
+    checklist_field_set_names,
     read_workflow_file,
     require_workflow_name,
     same_definition,
@@ -62,6 +64,7 @@ from apis.shared.workflows.format import (
     workflow_name_of_ref,
 )
 
+from apis.shared.workflows.field_set_refs import parsed_field_sets, read_skill_field_sets, unreadable_sets
 from apis.shared.workflows.sheet import (
     WorkflowNotFound,
     WorkflowUnreadable,
@@ -196,8 +199,20 @@ async def _steps_from_run(user: User, run: WorkflowRun) -> Tuple[Optional[str], 
 
     A prompt step (workflow-designer §21.3) is kept as one, on the model it ran on, named by its
     step name when it has one; it has no Agent to look up.
+
+    A run with a checklist step (§22.3) is refused (409): its field sets live in the skill of the
+    workflow it started from, and a new carrying skill would hold none of them, so the step could
+    never run. That workflow is the one to open.
     """
     kept = run.kept_steps()
+    if any(s.is_checklist for s in kept):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This run has a checklist step, and its field sets live in the workflow it started from. "
+                "Open that workflow to change or start it again"
+            ),
+        )
     agent_steps = [s for s in kept if not s.is_prompt]
     lookups = await asyncio.gather(
         *(
@@ -450,6 +465,11 @@ async def write_workflow(
         carried = carry_layout(layout, stored, target) if (layout is not None and stored is not None) else None
         content = serialize_workflow(target, layout=carried).encode("utf-8")
         target, _ = read_workflow_file(content.decode("utf-8"), name=name)
+        if not unchanged:
+            # What the write would refuse, ?validate=true refuses too: a checklist step's sets must
+            # be this skill's own, with no list field (§22.3). A no-op save checks nothing, so a set
+            # that changed since shows as the sheet's blocker instead.
+            await _check_field_sets(service, skill, target)
     except WorkflowError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -468,6 +488,23 @@ async def write_workflow(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     logger.info("Wrote a saved workflow", extra={"event": "workflow_written", "skill_id": skill_id})
     return await _document(skill, target, user, written=True)
+
+
+async def _check_field_sets(service, skill: SkillDefinition, workflow: Workflow) -> None:
+    """:class:`WorkflowError` when a checklist step names a set the skill can't run (§22.3).
+
+    The skill-file write (``SkillBundleFiles.add_resource``) runs the same check, so this only lets
+    ``?validate=true`` refuse what the save would. Reads only the named sets; none for a workflow
+    with no checklist step.
+    """
+    names = checklist_field_set_names(workflow)
+    if not names:
+        return
+    lookups = await read_skill_field_sets(skill.resources, names, read=service.bundle_files.resource_store.get)
+    unreadable = unreadable_sets(lookups)
+    if unreadable:
+        raise WorkflowError(f"workflow '{workflow.name}': the field set '{unreadable[0]}' couldn't be read. Try again")
+    check_field_set_refs(workflow, parsed_field_sets(lookups))
 
 
 # --- Delete ---------------------------------------------------------------------------------------

@@ -15,6 +15,7 @@ from apis.shared.workflows.format import (
     FILES_ANY,
     INPUT_READS,
     KIND_AGENT,
+    MAX_CHECKLIST_FIELD_SETS,
     MAX_REQUEST_CHARS,
     MAX_STEPS,
     RESULT_CARD,
@@ -44,9 +45,14 @@ class WorkflowStepModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str = Field(..., min_length=1, max_length=64)
-    kind: str = Field(KIND_AGENT, description="agent, or prompt: one model call with no Agent (§21.3)")
+    kind: str = Field(
+        KIND_AGENT,
+        description=(
+            "agent; prompt, one model call with no Agent (§21.3); or checklist, one model call per field set (§22.3)"
+        ),
+    )
     agent_id: str = Field(
-        "", alias="agentId", max_length=256, description="An Agent step's Agent; empty on a prompt step"
+        "", alias="agentId", max_length=256, description="An Agent step's Agent; empty on a prompt or checklist step"
     )
     agent_version: Optional[int] = Field(
         None,
@@ -54,10 +60,19 @@ class WorkflowStepModel(BaseModel):
         description="The Agent's published version when the step was added or last reviewed (D6)",
     )
     model_id: Optional[str] = Field(
-        None, alias="modelId", max_length=512, description="A prompt step's model; absent on an Agent step"
+        None, alias="modelId", max_length=512, description="A prompt or checklist step's model; absent on an Agent step"
     )
     reads: List[str] = Field(default_factory=lambda: list(INPUT_READS), max_length=MAX_STEPS + 2)
-    request: Optional[str] = Field(None, max_length=MAX_REQUEST_CHARS, description="This step's own request")
+    request: Optional[str] = Field(
+        None, max_length=MAX_REQUEST_CHARS, description="This step's own request; a checklist step's guidance"
+    )
+    field_sets: List[str] = Field(
+        default_factory=list,
+        alias="fieldSets",
+        # One past the limit, so the envelope's own sentence refuses a 17th rather than a schema error.
+        max_length=MAX_CHECKLIST_FIELD_SETS + 1,
+        description="A checklist step's field sets, in the order it runs them; empty on every other kind",
+    )
 
 
 class WorkflowResultModel(BaseModel):
@@ -105,6 +120,7 @@ class WorkflowDefinitionModel(BaseModel):
                     request=step.request,
                     kind=step.kind,
                     model_id=step.model_id,
+                    field_sets=tuple(step.field_sets),
                 )
                 for step in self.steps
             ),

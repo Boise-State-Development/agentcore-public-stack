@@ -20,6 +20,13 @@ reader that joins a step on ``handoffId`` keeps working, and it moves only along
 a ``targetSessionId``. The Runtime writes those moves (``apis.shared.handoff.prompt_steps``) by
 the field names below (``PROMPT_STEP_FIELDS``); nothing here writes them.
 
+A **checklist step** (``kind="checklist"``, ``docs/specs/workflow-designer.md`` §22.3) is the same
+kind of row: model calls with no Agent and no conversation, one per named field set, on the same
+invocation. It carries the prompt step's fields plus ``fieldSets`` (``CHECKLIST_STEP_FIELDS``), moves
+along the same transitions and stops for the same reasons. Its ``request`` is the step's own
+guidance only, possibly empty. Both kinds are ``MODEL_STEP_KINDS``: every reader that means "a step
+with no conversation" asks ``Handoff.is_model_step``.
+
 Status writes after acceptance happen after the target's ``done`` block (PR-0.2), which is why a
 ``needs_input`` row can go straight to ``done`` or ``stopped``: the intermediate ``running`` is
 live state in the SPA, not a write. Once ``done``, the target conversation is the user's own and
@@ -35,9 +42,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.sessions.models import PendingInterrupt
 
-HandoffKind = Literal["mention", "suggested", "send_back", "prompt"]
+HandoffKind = Literal["mention", "suggested", "send_back", "prompt", "checklist"]
 #: A workflow run's prompt step (§21.3): one model call, no Agent, no conversation.
 KIND_PROMPT_STEP = "prompt"
+#: A workflow run's checklist step (§22.3): one model call per field set, no Agent, no conversation.
+KIND_CHECKLIST_STEP = "checklist"
+#: The steps that are model calls on the Runtime, with no Agent and no conversation.
+MODEL_STEP_KINDS: FrozenSet[str] = frozenset({KIND_PROMPT_STEP, KIND_CHECKLIST_STEP})
 WaitingKind = Literal["oauth_consent", "tool_approval", "user_question", "browser_login"]
 HandoffStatus = Literal["open", "running", "needs_input", "done", "stopped", "dismissed"]
 EffectiveHandoffStatus = Literal["open", "running", "needs_input", "done", "stopped", "dismissed", "abandoned"]
@@ -105,6 +116,18 @@ PROMPT_STEP_FIELDS = (
     PROMPT_FIELD_STOPPED_REASON,
     PROMPT_FIELD_UPDATED_AT,
 )
+
+# A checklist step's row (workflow-designer §22.3): a prompt step's, plus the sets it runs. The
+# contract with the Runtime's writes (PR-D.7b), as ``PROMPT_STEP_FIELDS`` is for D.6b.
+#: The field-set names the step runs, in authored order. Written at create; the Runtime only reads it.
+CHECKLIST_FIELD_FIELD_SETS = "fieldSets"
+CHECKLIST_STEP_FIELDS = PROMPT_STEP_FIELDS + (CHECKLIST_FIELD_FIELD_SETS,)
+#: A checklist step moves exactly as a prompt step does. A field set that fails on its own does not
+#: stop the step: the step's answer says so, and its ``WFCHK#`` row is ``error``.
+CHECKLIST_TRANSITIONS: Dict[str, FrozenSet[str]] = PROMPT_TRANSITIONS
+#: Why a checklist step stopped: a prompt step's reasons.
+ChecklistStopReason = PromptStopReason
+CHECKLIST_STOP_REASONS: FrozenSet[str] = PROMPT_STOP_REASONS
 
 
 def sources_of(status: str) -> FrozenSet[str]:
@@ -247,10 +270,24 @@ class Handoff(BaseModel):
     )
     output_hash: Optional[str] = Field(None, alias=PROMPT_FIELD_OUTPUT_HASH)
     output_tokens: Optional[int] = Field(None, alias=PROMPT_FIELD_OUTPUT_TOKENS)
+    # A checklist step (workflow-designer §22.3); absent on every other kind.
+    field_sets: Optional[List[str]] = Field(
+        None, alias=CHECKLIST_FIELD_FIELD_SETS, description="A checklist step's field sets, in the order it runs them"
+    )
 
     @property
     def is_prompt_step(self) -> bool:
+        """Exactly a prompt step. A reader that means "no conversation" asks :attr:`is_model_step`."""
         return self.kind == KIND_PROMPT_STEP
+
+    @property
+    def is_checklist_step(self) -> bool:
+        return self.kind == KIND_CHECKLIST_STEP
+
+    @property
+    def is_model_step(self) -> bool:
+        """A prompt or checklist step: model calls on the Runtime, with no Agent and no conversation."""
+        return self.kind in MODEL_STEP_KINDS
 
     def effective_status(self, now: Optional[datetime] = None) -> EffectiveHandoffStatus:
         """The status as read: an ``open`` row past ``ABANDON_AFTER`` is ``abandoned``.
@@ -313,6 +350,7 @@ class HandoffView(BaseModel):
     model_id: Optional[str] = Field(None, alias="modelId", description="A prompt step's model")
     output_text: Optional[str] = Field(None, alias="outputText", description="A done prompt step's answer")
     output_tokens: Optional[int] = Field(None, alias="outputTokens")
+    field_sets: Optional[List[str]] = Field(None, alias="fieldSets", description="A checklist step's field sets")
 
     @classmethod
     def from_row(cls, row: Handoff) -> "HandoffView":
@@ -342,6 +380,7 @@ class HandoffView(BaseModel):
             model_id=row.model_id,
             output_text=row.output_text,
             output_tokens=row.output_tokens,
+            field_sets=row.field_sets,
         )
 
 
@@ -354,7 +393,14 @@ __all__ = [
     "HandoffView",
     "HandoffKind",
     "HandoffStatus",
+    "CHECKLIST_FIELD_FIELD_SETS",
+    "CHECKLIST_STEP_FIELDS",
+    "CHECKLIST_STOP_REASONS",
+    "CHECKLIST_TRANSITIONS",
+    "ChecklistStopReason",
+    "KIND_CHECKLIST_STEP",
     "KIND_PROMPT_STEP",
+    "MODEL_STEP_KINDS",
     "PROMPT_FIELD_MODEL_ID",
     "PROMPT_FIELD_OUTPUT_HASH",
     "PROMPT_FIELD_OUTPUT_TEXT",
