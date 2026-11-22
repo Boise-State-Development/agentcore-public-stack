@@ -1574,3 +1574,55 @@ three verdict sets and ten budget values) on Haiku 5.5, the same step on Sonnet 
   One right value read `quote_unsupported`: "2" against "Two domestic conferences per year". The value check
   doesn't read number words, which is a `source_provenance` limit, not this branch's.
 - **Time:** 15.7 s for all nine calls. Haiku 5.5 wrote 900 to 1,350 output tokens a set, mostly reasoning.
+
+#### Built (PR-D.7c)
+
+- **The flag.** `features.checklistSteps`: off in `environment.ts` and `environment.production.ts`, on in
+  `environment.development.ts`, where the `development` environment has the backend on. The designer offers the kind
+  only while `features.promptSteps` is on too.
+- **The designer.** The Step tab's Kind choice gains **Checklist step**. It picks its model by the prompt step's rule
+  (`workflows/prompt-models.ts`), so a TEXT-only model is listed and disabled, since a checklist step always reads the
+  run's files. The files read is ticked and locked, with a line that says it is required.
+  - **The sets.** The step picks its field sets from the workflow's skill, listed by filename (`field-set.<name>.md`
+    at the top level), never by parsing one. They are kept in authored order, moved with Move up / Move down (focus
+    stays on the control, as for steps), and capped at 16. The server's `?validate=true` answer gives each chosen set
+    its title, its field count and whether it can run, and the tab says why one can't.
+  - **Links.** Under `features.fieldSetAuthoring`, each set has an Edit link and the list a New field set link. Both
+    open in a new tab, so the unsaved draft stays, and **Refresh the list** reads the skill again.
+  - **A new workflow** has no skill until it is saved, and a checklist step with no sets can't be saved. So the set
+    list offers **Create the workflow now**: the first save's `POST /workflows` alone. The draft stays unsaved, and
+    the URL follows the new workflow.
+  - **The card** says "Checklist · *model* · *N* field sets". The Preview tab names and prices it like the sheet.
+    Mark as reviewed's `definitionOf` writes a checklist step's model and sets back.
+- **The sheet.** Each row leads with the step's name, then "Checklist · *model* · *N* field sets", and that line wraps
+  on a phone. Every blocker a step carries (`checklist_steps_off`, `model_unavailable`, `field_set_unavailable`) is
+  said once, in the sheet's words. Edit is "Edit the guidance for *step*", and an empty guidance doesn't hold Start
+  back.
+  - **The estimate** is one call per set. Each call pays the constant tool and frame (~850 tokens, D.7b's
+    measurement) and its field list. The documents are counted in full on a model's first checklist call and at the
+    cache-read rate (0.1×) on the rest, as D.7b measured: one write per (kind, model), then reads. Prompt steps keep
+    D.6c's upper bound.
+- **The queue.** Checklist steps ride the prompt branch on the same `workflow_prompt` invocation, take no Agent slots,
+  and keep D.6c's rules (one invocation in flight per run, the bounded `reads_pending` retries). Each settles from its
+  frame, which carries `kind`. Its row is then read, and so is the run (`GET …/workflow-runs/{runId}`), from which
+  only that step's `checklist` is taken.
+- **The run row.** A checklist step has no link. Its line reads "*Step* · Checklist · *model* · *N* field sets ·
+  *status*" and wraps. Once done, **Results** opens one block per set, in the order the sets ran:
+  - **A set that ran** shows `DocumentExtractionComponent` (values, states, quotes, hedged locators, the
+    "unconfirmed" count). It is headed by the set's title and names no document, since one call read every run file.
+  - **A set with `status: error`** says why in plain words (`checklistSetErrorLine`).
+  - **A step whose set rows can't be read** falls back to its answer's text.
+  - **Save as workflow** isn't offered on such a run, because the server refuses it.
+- **Labels.** A checklist step is "*Step* · Checklist · *model*" on the sheet, the row, the graph card, the composer
+  card and the sent bubble. `groupRunResults` matches a checklist part by its "*model* · *step*" label, with
+  "Checklist step" as the fallback when the run kept no name (`RunResultAgents.checklistSteps`).
+- **Provenance methods.** The SPA maps no method to a label: the extraction table reads only `no_quote`, and the
+  `source_provenance` view reads none. So `number_word` (#2298) never shows as a raw string, and nothing changed.
+- **Checked before merge** on a local stack: this branch's app-api and inference-api against dev's tables and Bedrock,
+  with `SKIP_AUTH`, and the SPA on 4301 through a proxy. The workflow had a Haiku 5.5 prompt step and a Haiku 5.5
+  checklist step of two sets (five compliance verdicts and six budget values from the NSF answer key).
+  - **Designed, saved and started** from a conversation holding the compact sample PDF.
+  - **The results:** budget values 6/6 right and `supported`, and verdicts 4/5. The miss was Haiku's known `cant_tell`
+    on graduate mentoring (§22.1).
+  - **Also checked:** the tables after a reload, the sent bubble's label, a stopped run (both lines "Stopped"), and
+    both themes at 375 px with no sideways scroll.
