@@ -33,7 +33,7 @@ State for the `kaizen-research` skill's standing watches: what is tracked, what 
    | `build_prompt_cache_key()` in `bedrock_responses.py` | `strands/models/_openai_cache.py::apply_cache_config` — **already on upstream main**, maps `CacheConfig.cache_key` → `prompt_cache_key`. **Keep ours; do not adopt this as a swap.** Ours is derived from the system-prompt and tool-spec fingerprints, so same-prefix requests from *different* conversations route to one cache. Upstream's default key is `strands-<session_id>` (#4083), so a swap makes every new GPT conversation's first call write the static prefix instead of reading it (`scoping/strands-1-55-to-1-63-adoption-audit.md` ▸ #3; the 1.65.0 readout's row 7 agrees). Passing our own key as `cache_key` would keep the routing, but that only moves the same line, and it buys the next hazard: ⚠️ **(checked on the 1.65.0 bump)** since 1.64.0 (#5418) any `cache_config` on `OpenAIResponsesModel` also places `prompt_cache_breakpoint` checkpoints through the history on GPT-5.6, the end-of-history placement measured at +11.8%. So any future `cache_config` on that path needs `messages_ttl=False` and a green `TestNoUpstreamMessageCheckpoints`. |
    | `apply_explicit_prompt_cache()` (breakpoints) | No upstream equivalent yet — `apply_cache_config` emits no `prompt_cache_breakpoint`. Ours is OFF by default (measured 57% worse); don't re-enable without re-running the probe. |
    | `cache_ttl_seconds_for()` in `observability/prompt_cache.py` | A model-derived TTL upstream. Note `apply_cache_config` maps ttl to `prompt_cache_retention` (`in_memory`/`24h`), *not* GPT-5.6's `prompt_cache_options.ttl: "30m"` — so these are not yet the same concept. |
-   | `bedrock_cache_points_supported()` + the hand-placed system cachePoint | **NOTHING upstream can retire this — settled by measurement 2026-09-11, do not re-propose.** `format_request` copies `system_prompt_content` verbatim and `_apply_system_cache_ttl` never removes a point, so the block reaches Bedrock, which answers `AccessDeniedException` on a model that can't cache. The rejection is Bedrock's, not the SDK's. Only its `tools_ttl` half is redundant (upstream applies the same test at `bedrock.py:579`). |
+   | `bedrock_cache_points_supported()` + the hand-placed system cachePoint | **NOTHING upstream can retire this — settled by measurement 2026-09-11, do not re-propose.** `format_request` copies `system_prompt_content` verbatim and `_apply_system_cache_ttl` never removes a point, so the block reaches Bedrock, which answers `AccessDeniedException` on a model that can't cache. The rejection is Bedrock's, not the SDK's. Only its `tools_ttl` half is redundant (upstream applies the same test at `bedrock.py:579`). ⚠️ **(2026-11-20)** upstream main (#6149/#6292, not yet released) now places Nova *message* cache points under `strategy="auto"`, with no tools point and no TTL. Since `model_config.py:689` passes `auto` for every Bedrock model and `cache_points.py:19` still refuses Nova its system point, a cataloged Nova model would get message points with no system point ahead of them. On the 1.66 bump, probe Nova and decide whether to widen `cache_points.py` (system point only). |
 
    ⚠️ **harness-sdk#4618 (tracked from 2026-09-25) inverts our convention. It is a
    pin-bump hazard, not a subtraction.** #4618 proposes one canonical `Usage`
@@ -85,6 +85,11 @@ State for the `kaizen-research` skill's standing watches: what is tracked, what 
      SDK half alone after a pin bump.
    - Movement on #3546 / #4617 / #4618, and whether #4193 has reached a release.
      All of them change what our cost math may assume.
+   - **Status 2026-11-20:** #4618 still open (updated 11-18), no PR; the cost-estimation design
+     (#6298/#6399) explicitly defers to it. `_total_prompt_tokens` still at `telemetry/metrics.py:184`
+     on main, so no bump gate. #3546/#4617 closed 09-28. GPT-6.2 (Sol/Astra, GA 11-17) caches its
+     system prompt over Responses only as a `developer` message, never as `instructions` (#6396;
+     opencode measured ~14k → 3 uncached tokens a step). Probe it before curating.
 
    ⚠️ Never adopt an upstream caching default on inspection alone. This stack has
    already shipped one caching change whose premise was wrong and cost ~57% more
@@ -104,7 +109,7 @@ State for the `kaizen-research` skill's standing watches: what is tracked, what 
 
    This is strategic: composing agents (agents as tools, Swarm, Graph, messages
    between conversations, and eventually a drag-and-drop canvas in the Agent
-   Designer) is where the platform is headed. Two living specs carry the plan,
+   Designer) is where the platform is headed. Three living specs carry the plan,
    and this watch keeps them true:
 
    - `docs/specs/multi-agent-patterns.md`: the pattern map, the shared sub-agent
@@ -112,8 +117,11 @@ State for the `kaizen-research` skill's standing watches: what is tracked, what 
      composition model (§6), the sequence (§8)
    - `docs/specs/agent-handoffs-and-consults.md`: handoffs (Phase 0), deliveries
      (§4.8), consults (Phase 1), messages between conversations (Phase 2)
+   - `docs/specs/workflow-runs.md` (added 2026-11-20): several Agents handed work
+     under one approval, returned as one delivery with parts (step 1 built through
+     W.4a behind `WORKFLOW_RUNS_ENABLED`, off)
 
-   Read both before scanning. Lens (b), **capability unlock**, usually dominates
+   Read all three before scanning. Lens (b), **capability unlock**, usually dominates
    here, but subtraction matters too: each upstream release that ships a piece of
    §4's substrate (nested interrupts, multi-agent session persistence, per-node
    metering, nested streaming) is a piece we shouldn't build.
@@ -143,7 +151,7 @@ State for the `kaizen-research` skill's standing watches: what is tracked, what 
    - **Did our own code move?** `git log origin/develop --since="7 days ago"` plus a grep for
      the names the specs promise: `HANDOFF#`, `DELIVERY#`, `apis.shared.handoff`,
      `resolve_turn_agent`, `send_to_conversation`, `consult-`, `strands.multiagent`,
-     `Binding.kind` `'agent'`. A landed PR means a spec's **Status** line, phase
+     `Binding.kind` `'agent'`, `WFRUN#`, `workflow_runs_enabled`, `suggest_handoff`. A landed PR means a spec's **Status** line, phase
      table or "what already exists" section is now stale.
    - **Does any claim in either spec no longer hold?** A pinned version, a parameter
      name, a "not used in `backend/src`", a cost figure, a gate assumption.
@@ -154,3 +162,9 @@ State for the `kaizen-research` skill's standing watches: what is tracked, what 
    item with **Surface: docs**. This skill still never edits the specs; the sync lands
    in its own small PR after review, like every other idea. An empty week says
    "no drift found" explicitly, so silence is distinguishable from not checking.
+
+   **Upstream signals to track (2026-11-20):** harness-sdk#6088 (the harness adopting the vended
+   `subagent` tool, which bears on §9 Q5's builder leaning) and #6281 (the default builder passes
+   neither hooks nor plugins to a child). #5933 adds `Agent(sort_tools=…)` default `False`; a later
+   default flip would rewrite every live session's prefix once, so treat it as a bump gate
+   (`test_tool_config_order.py` guards the order today).
