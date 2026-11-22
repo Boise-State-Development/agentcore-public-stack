@@ -1430,7 +1430,8 @@ on the row's kind, and `workflow_prompt_step` gains an additive `kind`.
   - A missing field becomes null with an empty quote. A value that doesn't coerce becomes null.
   - An unknown name is dropped, and a name given twice keeps its first entry.
 - **`list` fields:** a string can't carry a list without a convention. D.7a measures `value` as a union of string
-  and array of strings before choosing; until then the parser refuses `list` fields on a checklist step.
+  and array of strings before choosing; until then the parser refuses `list` fields on a checklist step. *Lifted
+  2026-11-22: see "`list` fields run (2026-11-22)" after PR-D.7b.*
 - **No tool call** gets one retry, which costs a cache read. A second miss marks that set `error`. A set that
   fails doesn't stop the step's other sets.
 - **Provenance:** every value goes through `source_provenance` against the document, so each one has a state,
@@ -1574,3 +1575,51 @@ three verdict sets and ten budget values) on Haiku 5.5, the same step on Sonnet 
   One right value read `quote_unsupported`: "2" against "Two domestic conferences per year". The value check
   doesn't read number words, which is a `source_provenance` limit, not this branch's.
 - **Time:** 15.7 s for all nine calls. Haiku 5.5 wrote 900 to 1,350 output tokens a set, mostly reasoning.
+
+#### `list` fields run (2026-11-22)
+
+A checklist step now runs a field set that holds `list` fields. D.7a's measurement showed the widened value type
+compiles and fills on both models, so the refusal went.
+
+- **The tool.** `record_checklist`'s `value` is `string | array of strings | null`, D.7a's measured schema, still in
+  strict mode's subset. The frame and the instruction's last line say to give a list as an array, one item each. The
+  tool is constant per deployment, so this is **one deliberate rewrite of every checklist call's prefix**, at deploy:
+  CountTokens puts the tool and frame at +54 tokens (Haiku 4.5 tokenizer, which the 5.5 models refuse), and the
+  NSF sample's first write went from 10,731 to 10,795 tokens (+64) on both 5.5 models. No turn's `toolConfig` or
+  system prompt changes, and nothing runs before a turn's first token.
+- **Coercion** (`checklist.coerce_value`):
+  - A `list` field takes the array. A lone string is one item, never split on commas, because an item may hold one.
+  - Empty items and items that name their own absence are dropped, and no items left is null, never `[]`.
+  - A scalar field given an array takes its **first** item and coerces that, so `["15 pages"]` on a number field is
+    15. Later items are dropped, never joined, and an empty array is null.
+  - The answer is then validated with `model_for_field_set`, as before.
+- **Provenance** is `document_extract`'s rule, unchanged. A list is one claim, its quote is located, and
+  `source_provenance` calls the value `non_scalar`, so a located list reads `unassessed` and an unlocated one
+  `unverified`. No per-item verdict is made or combined here: that would be a new rule, and verdicts belong to
+  `source_provenance` alone.
+- **Display.** On the `WFCHK#` row and in the step's `outputText` table, a list is one string with its items
+  separated by `; `, not `document_extract`'s `, `, so an item holding a comma stays readable. The two separators
+  are the same length, so `model_facing_result`'s bounds hold unchanged: 200 characters a value, then names and
+  states past 2,000, and the store's 1,000-character clamp.
+- **Lifted:** the parse check on every skill-file write (`field_set_ref_problem`), the sheet's `list_field` blocker
+  (`FieldSetView.reason` is now `missing` or `unreadable`), and the Runtime's `unsupported_field` error. A
+  `WFCHK#` row written before this keeps its stored `unsupported_field` code, and its step keeps the answer it
+  stored then.
+- **No new flag:** this extends what `CHECKLIST_STEPS_ENABLED` already gates.
+
+**Checked before merge (2026-11-22).** The Runtime path on this branch against dev Bedrock (`us.*` ids), with the
+stores in memory and the real meter and cache classifier, as D.7b's check was. Three sets over the compact NSF
+sample, run on Haiku 5.5 and on Sonnet 5.5: 9 `list` fields (two of them absent from the document, one with a
+single item), two scalars and one verdict.
+
+| | Calls | Cache | Fields right | Cost |
+|---|---|---|---|---|
+| Checklist, Haiku 5.5 | 3 | 1 `first_write` (10,795 tokens), 2 `hit` | 12/12 | $0.0038 |
+| Checklist, Sonnet 5.5 | 3 | 1 `first_write` (10,795 tokens), 2 `hit` | 12/12 | $0.0438 |
+
+- **Every list came back as an array**: the one-item list as `["…"]`, both absent lists as `null`, and every scalar
+  as a string. Nothing was coerced from a string, and nothing was retried.
+- **`wastedUsd` was 0 on every row.** A second run inside the cache window read the prefix on all six calls, for
+  $0.0176. Both runs cost $0.065.
+- **States:** every list `unassessed` (`non_scalar`), the duration and the hour count `supported`, and the absent
+  lists and the verdict `unverified` (no quote), as the rule says.
