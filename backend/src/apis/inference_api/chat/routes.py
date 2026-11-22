@@ -34,7 +34,8 @@ from apis.shared.errors import (
 from apis.inference_api.runtime_health import ping_payload
 from apis.shared.handoff.context import build_handoff_message
 from apis.shared.handoff.delivery_turn import DeliveryTurn, join_delivery_blocks
-from apis.shared.handoff.turn import HandoffTurn
+from apis.shared.handoff.turn import HANDOFF_VERSION_MISMATCH_MESSAGE, HandoffTurn
+from apis.shared.handoff.version_pin import turn_pinned_version
 from apis.shared.feature_flags import (
     agent_build_shared_session_enabled,
     kb_search_ahead_enabled,
@@ -3093,6 +3094,24 @@ def _refuse_turn(
     )
 
 
+def _forbidden_stream(
+    input_data: InvocationRequest, user_id: str, message: str
+) -> AsyncGenerator[str, None]:
+    """``_forbidden_turn``'s frames, for a refusal decided once the stream has opened."""
+    return stream_conversational_message(
+        message=message,
+        stop_reason="error",
+        metadata_event=ConversationalErrorEvent(
+            code=ErrorCode.FORBIDDEN, message=message, recoverable=False
+        ),
+        session_id=input_data.session_id,
+        user_id=user_id,
+        user_input=input_data.message,
+        memory_mode="off" if input_data.rag_assistant_id else "on",
+        incognito_requested=bool(input_data.incognito),
+    )
+
+
 def _forbidden_turn(
     input_data: InvocationRequest, user_id: str, message: str, *, persist: bool = True
 ) -> StreamingResponse:
@@ -5202,6 +5221,7 @@ async def resolve_turn_agent(
     is_continuation: bool,
     record_use: bool = True,
     kb_budget_tokens: Optional[int] = None,
+    pinned_version: Optional[int] = None,
 ) -> Union[StreamingResponse, ResolvedTurnAgent]:
     """Resolve the Agent a turn runs, for this caller (route step 8, the ``rag`` stage's first half).
 
@@ -5218,12 +5238,18 @@ async def resolve_turn_agent(
     the Agent. A turn that must not run gets its conversational refusal back instead, to
     stream as is. ``kb_budget_tokens`` replaces the full-context budget: voice mode (#625)
     has no retrieval, so it asks for the whole knowledge base under its own ceiling.
+
+    ``pinned_version`` is a saved workflow step's pin (workflow-designer §23.3), from
+    ``turn_pinned_version``: that version runs for everyone, the owner included, while the pin
+    rule allows it, and a refused pin is answered in the conversation. ``None`` takes exactly
+    the unpinned path. A reviewer preview never pins.
     """
     from apis.shared.assistants.kb_access import granted
     from apis.shared.assistants.service import (
         get_assistant_with_access_check,
         mark_share_as_interacted,
     )
+    from apis.shared.assistants.version_pins import AgentPinRefusedError, pin_refusal_message
     from apis.shared.assistants.version_resolution import (
         AgentVersionUnavailableError,
         resolve_invocation_agent,
@@ -5369,7 +5395,19 @@ async def resolve_turn_agent(
             # disagree about what is under review.
             assistant, resolved_version = await resolve_review_agent(assistant)
         else:
-            assistant, resolved_version = await resolve_invocation_agent(assistant, user_id)
+            assistant, resolved_version = await resolve_invocation_agent(
+                assistant, user_id, pinned_version=pinned_version
+            )
+    except AgentPinRefusedError as refused:
+        # A decision, not an outage: the step's version may no longer run (a takedown, a
+        # rollback below it, a version never published). Said in the conversation, never a 503,
+        # and never a fall forward to the draft (workflow-designer §23.2).
+        logger.warning("Pinned Agent version refused for this turn: %s", refused.reason)
+        return _forbidden_turn(
+            input_data,
+            user_id,
+            pin_refusal_message(refused.reason, refused.number, refused.published),
+        )
     except AgentVersionUnavailableError as unavailable:
         # A published Agent whose snapshot is missing fails the turn rather than
         # falling back to the draft — the fallback would serve unreviewed instructions
@@ -6493,6 +6531,16 @@ async def _run_invocation(
             # the Agent, so the share and last-used writes are skipped.
             is_continuation=is_continuation or is_brief,
             record_use=not is_brief,
+            # A saved workflow step's version (workflow-designer §23.3): the step's first
+            # turn's request, held to the run's record by acceptance, or the pin on the row
+            # B1 already read. No IO.
+            pinned_version=turn_pinned_version(
+                handoff_turn=handoff_turn,
+                handoff_context=input_data.handoff_context,
+                session_row=session_meta.row,
+                agent_id=input_data.rag_assistant_id,
+                is_agent_mention=is_agent_mention,
+            ),
         )
         if isinstance(resolved_agent, StreamingResponse):
             return resolved_agent
@@ -7091,6 +7139,18 @@ async def _run_invocation(
                     "title": generated_title,
                 }
                 return f"event: session_title\ndata: {json.dumps(payload)}\n\n"
+
+            # A workflow step's first turn whose version isn't the one its run recorded
+            # (workflow-designer §23.3): the agent was built on the request's version, so the
+            # turn ends here, before any model call. Awaits only the acceptance the message
+            # assembly below awaits anyway, and only while pinning is on and the turn takes
+            # a handoff; every other turn answers False without waiting.
+            if handoff_turn is not None and await handoff_turn.version_refused():
+                async for frame in _forbidden_stream(
+                    input_data, user_id, HANDOFF_VERSION_MISMATCH_MESSAGE
+                ):
+                    yield frame
+                return
 
             # Yield quota warning event first if applicable
             if quota_warning_event:

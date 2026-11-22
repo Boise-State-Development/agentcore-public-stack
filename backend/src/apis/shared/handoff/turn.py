@@ -50,7 +50,7 @@ from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Set, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.files.file_kinds import KIND_DOCUMENT, FileKindHints, file_kinds
-from apis.shared.feature_flags import handoffs_enabled
+from apis.shared.feature_flags import agent_version_pinning_enabled, handoffs_enabled
 from apis.shared.files.linked_files import (
     HANDOFF_MAX_FILES,
     OriginalRef,
@@ -107,6 +107,18 @@ class HandoffContextRequest(BaseModel):
     file_ids: List[str] = Field(default_factory=list, alias="fileIds", max_length=20)
     #: Files the review sheet listed and the user left unticked, for ``HandoffFilesUnticked``.
     files_unticked: int = Field(0, alias="filesUnticked", ge=0, le=1000)
+    #: The Agent version a saved workflow's step runs (workflow-designer §23.3), sent on the step's
+    #: first turn. Honoured only while ``AGENT_VERSION_PINNING_ENABLED`` is on, and only if it is
+    #: the version the run recorded on the ``HANDOFF#`` row; otherwise ignored with a warning.
+    agent_version: Optional[int] = Field(None, alias="agentVersion", ge=1)
+
+
+#: What a step conversation says when the version its first turn asked for is not the one the run
+#: recorded (§23.3): the client can't pick a version, so the turn ends before any model call.
+HANDOFF_VERSION_MISMATCH_MESSAGE = (
+    "This workflow step couldn't start: the Agent version it asked for isn't the one the run "
+    "recorded. Start the run again from the conversation it came from."
+)
 
 
 def cap_context_text(text: str) -> str:
@@ -195,6 +207,10 @@ class HandoffTurn:
     target_is_project_task: bool = False
     #: Set by ``start``, so a waiter (``run_step_agent_name``) never starts acceptance itself.
     _started: asyncio.Event = field(default_factory=asyncio.Event)
+    #: ``AGENT_VERSION_PINNING_ENABLED``, read once in ``for_turn`` (workflow-designer §23).
+    pinning: bool = False
+    #: Set by acceptance when this turn's pin is not the run's (``version_refused``).
+    _version_refused: bool = False
 
     @classmethod
     def for_turn(
@@ -234,6 +250,9 @@ class HandoffTurn:
             # Already a handoff's target: a second card would be a second, conflicting context.
             logger.warning("handoff_context ignored: this conversation already took a handoff")
             request = None
+        pinning = agent_version_pinning_enabled()
+        if request is not None and request.agent_version is not None and not pinning:
+            logger.warning("handoff_context.agentVersion ignored: AGENT_VERSION_PINNING_ENABLED is off")
         if request is None and linked is None:
             return None
         turn = cls(
@@ -244,6 +263,7 @@ class HandoffTurn:
             linked_handoff_id=linked,
             user_email=user_email or None,
             target_is_project_task=bool(_project_of(session_row)),
+            pinning=pinning,
         )
         if store is not None:
             turn.store = store
@@ -252,6 +272,36 @@ class HandoffTurn:
     @property
     def handoff_id(self) -> Optional[str]:
         return self.request.handoff_id if self.request is not None else self.linked_handoff_id
+
+    @property
+    def requested_version(self) -> Optional[int]:
+        """The version this turn's request pins the Agent to, or ``None`` (§23.3).
+
+        Only a turn that takes a handoff carries one, and only while pinning is on. Acceptance then
+        holds it to the run's record: see ``version_refused``.
+        """
+        if not self.pinning or self.request is None:
+            return None
+        return self.request.agent_version
+
+    async def version_refused(self) -> bool:
+        """Whether this turn must end before any model call because its pin isn't the run's.
+
+        Awaits acceptance (already awaited by ``context_block`` where the route asks). True when
+        pinning is on and the ``HANDOFF#`` row's ``agentVersion`` differs from the request's, one
+        side absent included, or when the request named a version and no handoff was taken at
+        all: the version the agent was built on must be one a run recorded, never the client's.
+        """
+        if not self.pinning or self.request is None:
+            return False
+        self.start()
+        try:
+            accepted, _ = await self._acceptance  # type: ignore[misc]
+        except Exception:  # noqa: BLE001 - logged where context_block awaited it
+            accepted = None
+        if self._version_refused:
+            return True
+        return accepted is None and self.request.agent_version is not None
 
     def _file_ids(self) -> List[str]:
         if self.request is None:
@@ -407,6 +457,15 @@ class HandoffTurn:
         if row.agent_id != self.agent_id:
             logger.warning("handoff_context ignored: the handoff is for a different Agent")
             return None, ""
+        if self.pinning and row.agent_version != request.agent_version:
+            # Before the conditional accept, so a refused step stays ``open`` for a correct send.
+            logger.warning(
+                "handoff_context refused: agentVersion %s is not the run's %s",
+                request.agent_version,
+                row.agent_version,
+            )
+            self._version_refused = True
+            return None, ""
         text = cap_context_text(request.text or "")
         removed = not text
         # The card the SPA offered: the brief when one was written for this handoff, else the excerpt.
@@ -464,7 +523,7 @@ class HandoffTurn:
     def _link_target(self, accepted: Handoff) -> None:
         from apis.shared.sessions.metadata import set_session_spawned_from
 
-        args = [self.session_id, self.user_id, accepted.session_id, accepted.handoff_id]
+        args: List[Any] = [self.session_id, self.user_id, accepted.session_id, accepted.handoff_id]
         if accepted.run_id:
             # A run's step (workflow-runs spec §19 PR-W.4c): the sidebar nests it under its source.
             # Same background write, after acceptance, so nothing moves onto the first-token path.
@@ -472,6 +531,11 @@ class HandoffTurn:
             args.append(accepted.run_id)
             if accepted.run_steps:
                 args.append(accepted.run_steps)
+        if self.pinning and accepted.agent_version is not None:
+            # The step's pin (workflow-designer §23.3), from the row acceptance just matched to the
+            # request, in the same write, so every later turn finds it on the row it already reads.
+            set_session_spawned_from(*args, pinned_agent_version=accepted.agent_version)
+            return
         set_session_spawned_from(*args)
 
     async def _write_status(self, outcome: TurnOutcome) -> None:

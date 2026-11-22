@@ -39,11 +39,17 @@ def client(make_user):
 
 
 class _FakeHandoffTurn:
-    def __init__(self, log: List[str], block: str = BLOCK) -> None:
+    def __init__(self, log: List[str], block: str = BLOCK, *, refuse_version: bool = False) -> None:
         self.log = log
         self.block = block
+        self.refuse_version = refuse_version
+        self.request = None
         self.observed: List[str] = []
         self.status_calls: List[bool] = []
+
+    async def version_refused(self) -> bool:
+        self.log.append("handoff.version_refused")
+        return self.refuse_version
 
     def prefetch(self) -> None:
         self.log.append("handoff.prefetch")
@@ -108,7 +114,37 @@ def test_acceptance_starts_before_the_build_and_is_awaited_after_it(client):
     assert resp.status_code == 200
     # The read-only prefetch (§4.9) comes first, before the lease; acceptance still starts beside
     # the build and is awaited after it.
-    assert turn.log == ["handoff.prefetch", "handoff.start", "agent.build", "handoff.context_block"]
+    assert turn.log == [
+        "handoff.prefetch",
+        "handoff.start",
+        "agent.build",
+        "handoff.version_refused",
+        "handoff.context_block",
+    ]
+
+
+def test_a_version_the_run_did_not_record_ends_the_turn_before_the_model_call(client):
+    """workflow-designer §23.3: the agent was built on the request's version, so nothing reaches it."""
+    handoff = _FakeHandoffTurn([], refuse_version=True)
+    turn = _Turn(handoff)
+
+    with patch.object(routes_module, "stream_conversational_message", _canned_refusal):
+        resp = turn.post(client, {"handoff_context": {"handoffId": "h1", "text": "ctx", "agentVersion": 3}})
+
+    assert resp.status_code == 200
+    assert routes_module.HANDOFF_VERSION_MISMATCH_MESSAGE in resp.text
+    assert turn.final_message is None and turn.stream_kwargs == {}
+    assert "handoff.context_block" not in turn.log
+    # The status write still runs, and the real one reports nothing for a handoff it never took.
+    assert handoff.status_calls == [False]
+
+
+def _canned_refusal(*, message: str, **_kwargs: Any):
+    async def frames():
+        yield f"event: stream_error\ndata: {{\"message\": \"{message}\"}}\n\n"
+        yield "event: done\ndata: {}\n\n"
+
+    return frames()
 
 
 def test_the_block_is_prepended_and_the_bubble_shows_only_what_was_typed(client):

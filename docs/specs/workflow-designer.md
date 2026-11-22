@@ -1876,3 +1876,38 @@ is a per-step override on create that may name only the current `P`.
   on, the run step's `agentVersion`, the `HANDOFF#` row's `agentVersion` and the create response's
   `steps[].agentVersion` are the pin (absent for a step that records none). While off, the run step keeps the current
   published version as a label, and the row has none. An editor's Use version N is the existing workflow PUT.
+
+#### Built (PR-D.8b)
+
+- **The request.** `HandoffContextRequest.agent_version` (`agentVersion`, an int ≥ 1, optional). `HandoffTurn.for_turn`
+  reads the flag once; with it off the field is ignored with a warning and acceptance compares nothing, so flag-off
+  turns are as before.
+- **Which pin a turn resolves with** is `apis/shared/handoff/version_pin.turn_pinned_version`, pure, called in the
+  route's argument list to `resolve_turn_agent(…, pinned_version=)`. The conversation's `pinnedAgentVersion` wins
+  and the request's is then ignored with a warning; otherwise a turn that takes a handoff uses the request's;
+  otherwise nothing. The `META` pin applies only to the Agent the conversation is bound to
+  (`preferences.assistantId`), so an `@`-mention of another Agent in a step conversation runs unpinned. A resume
+  never reaches it. A handoff brief started from a step conversation resolves through the same call, so it builds
+  the pinned agent its turns build.
+- **A refused pin** (`AgentPinRefusedError`) is `_forbidden_turn` with `pin_refusal_message`, persisted like the
+  other Agent refusals. Before the lease and before acceptance starts, so nothing is taken.
+- **Acceptance.** `_accept` compares the `HANDOFF#` row's `agentVersion` with the request's after the Agent check and
+  before the conditional accept, so a refused step stays `open` for a correct send. `HandoffTurn.version_refused()`
+  is also true when the request named a version and no handoff was taken at all (already sent, dismissed, another
+  Agent's), because the agent was built on the request's number and no run vouches for it. The route asks at the
+  head of `stream_with_quota_warning`, before any frame, and ends the turn with `_forbidden_stream`
+  (`HANDOFF_VERSION_MISMATCH_MESSAGE`); `agent.stream_async` is never called. It awaits only the acceptance the
+  message assembly awaits anyway, after the build, and answers at once on every turn that isn't pinning a handoff,
+  so nothing new waits before the first token.
+- **`pinnedAgentVersion`** is a top-level attribute written by `set_session_spawned_from(…, pinned_agent_version=)`
+  in the same `UpdateItem` as `spawnedFrom`, from the accepted row (so it is the run's number, not the client's).
+  Top level, so `settle_session_spawned_from` (`SET spawnedFrom.settled`) can't touch it.
+- **The cache key** has no new element. Tests: an unpinned turn's `_create_cache_key` is byte-identical with the flag
+  on and off; pinned v3 and current v5 differ only in the prompt hash, and two v3 turns share a key; a paused pinned
+  turn resumes onto the agent it paused, and a resume request in a pinned conversation calls neither
+  `turn_pinned_version` nor `resolve_turn_agent`.
+- **The replay.** `GET /messages`' `spawnedFrom` gains `agentVersion` from the `HANDOFF#` row `_spawned_from` already
+  reads, only when that row carries one, so a step conversation opened after a reload can show its version and an
+  unpinned step's JSON is unchanged.
+- **Not pinned:** voice mode, which resolves through `resolve_turn_agent` without a pin, so a voice turn in a step
+  conversation runs the current version. Left for a follow-up if voice in step conversations matters.

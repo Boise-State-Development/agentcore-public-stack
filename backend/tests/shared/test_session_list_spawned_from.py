@@ -101,3 +101,25 @@ def test_a_malformed_link_drops_the_link_not_the_list(bad):
         }
     )
     assert response.spawned_from is None
+
+
+def test_a_pinned_step_keeps_its_version_through_settling(sessions_metadata_table):
+    """workflow-designer §23.3: ``pinnedAgentVersion`` rides the ``spawnedFrom`` write and outlives settle."""
+    from apis.shared.sessions.metadata import set_session_spawned_from, settle_session_spawned_from
+
+    _put_migrated_row(sessions_metadata_table, "step", "2026-01-02T00:00:00Z")
+    assert set_session_spawned_from("step", "u1", "src", "h1", "r1", 3, pinned_agent_version=3)
+    settle_session_spawned_from("step", "u1")
+
+    item = sessions_metadata_table.get_item(Key={"PK": "USER#u1", "SK": "S#step"})["Item"]
+    assert item["pinnedAgentVersion"] == 3
+    assert item["spawnedFrom"]["settled"] is True
+
+
+def test_an_unpinned_link_writes_no_version(sessions_metadata_table):
+    from apis.shared.sessions.metadata import set_session_spawned_from
+
+    _put_migrated_row(sessions_metadata_table, "step", "2026-01-02T00:00:00Z")
+    set_session_spawned_from("step", "u1", "src", "h1", "r1")
+    item = sessions_metadata_table.get_item(Key={"PK": "USER#u1", "SK": "S#step"})["Item"]
+    assert "pinnedAgentVersion" not in item
