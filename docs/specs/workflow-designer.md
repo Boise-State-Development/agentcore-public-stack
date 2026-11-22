@@ -1508,7 +1508,8 @@ generic tool compiles one grammar per account and model, shared by every checkli
   a checklist step's rows as `steps[].checklist`, ordered by `setIndex`, and query only for a run that has a
   checklist step. The session delete cascade removes them.
 - **Save as workflow** from a run with a checklist step is refused (409). Its sets live in the skill of the workflow
-  it started from, and a new carrying skill would hold none of them.
+  it started from, and a new carrying skill would hold none of them. *Lifted 2026-11-22: the sets are copied, see
+  "Save as workflow copies the sets" below.*
 
 **The `list`-value measurement (2026-11-22).** Direct Converse calls on dev, `us.*` ids, with the generic
 `record_checklist` tool (`strict: true`, `toolChoice: auto`). The fixture was a fictional ~1k-token proposal summary
@@ -1623,7 +1624,8 @@ three verdict sets and ten budget values) on Haiku 5.5, the same step on Sonnet 
     "unconfirmed" count). It is headed by the set's title and names no document, since one call read every run file.
   - **A set with `status: error`** says why in plain words (`checklistSetErrorLine`).
   - **A step whose set rows can't be read** falls back to its answer's text.
-  - **Save as workflow** isn't offered on such a run, because the server refuses it.
+  - **Save as workflow** isn't offered on such a run, because the server refuses it. *Offered again 2026-11-22,
+    once the server copies the sets (below).*
 - **Labels.** A checklist step is "*Step* · Checklist · *model*" on the sheet, the row, the graph card, the composer
   card and the sent bubble. `groupRunResults` matches a checklist part by its "*model* · *step*" label, with
   "Checklist step" as the fallback when the run kept no name (`RunResultAgents.checklistSteps`).
@@ -1686,6 +1688,38 @@ single item), two scalars and one verdict.
   $0.0176. Both runs cost $0.065.
 - **States:** every list `unassessed` (`non_scalar`), the duration and the hour count `supported`, and the absent
   lists and the verdict `unverified` (no quote), as the rule says.
+
+#### Save as workflow copies the sets (2026-11-22)
+
+**Save as workflow** now works on a run with a checklist step. `POST /workflows` with `fromRun` copies each field
+set the run's kept checklist steps name into the new carrying skill, so the saved workflow can run.
+
+- **Where from.** The sets come from the skill of the workflow the run started from (`run.workflow.skillId`), under
+  the same names, as `references/field-set.<name>.md`. Each file is copied as that skill holds it now, not as it
+  was when the run ran.
+- **Access.** A set is copied only from a skill the caller can still use: its owner, or one
+  `resolve_accessible_skill_ids` reaches. That is `readable_workflow_skill`, the rule the sheet and run create
+  already use.
+- **How it is written.** The sets go through the skill-file writer (`add_resource`) before the workflow file, so
+  each is parse-checked, and the workflow's own write finds them in the same skill (§22.3).
+- **What it refuses (409), naming the set:**
+  - a set the source skill no longer has;
+  - a set that can't be read or no longer parses;
+  - a source skill the caller can no longer use;
+  - a run with a checklist step but no saved workflow behind it.
+
+  Nothing is created on a refusal: the sets are read before the carrying skill is made. If a write fails after
+  that, the carrier is deleted, as before.
+- **The step.** It keeps its model, its sets in order, its own guidance (never the shared request) and the inputs
+  it read (always the files). Other steps' reads are dropped, as for every step `fromRun` keeps.
+- **The copy is the caller's own.** The original skill and its sets are untouched, and editing a copied set never
+  reaches the original.
+- **The SPA** shows Save as workflow on a checklist run again. The 409's message shows under the button, as any
+  refusal does.
+- **No new flag.** This stays behind `WORKFLOWS_ENABLED` and `CHECKLIST_STEPS_ENABLED`, and nothing on a turn's
+  path changes.
+- **Still open:** saving a run that a saved workflow started makes a duplicate workflow (§20.5), now with copies of
+  its sets too. That is unchanged here.
 
 ## 23. Delivery plan, step 5: version pinning (D.8)
 
