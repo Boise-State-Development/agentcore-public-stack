@@ -538,12 +538,12 @@ export class WorkflowRunRowComponent {
    * Save as workflow (docs/specs/workflow-designer.md §8.2): on a run that was started and has
    * finished, it keeps the run's steps as a saved workflow and opens it in the designer. The server
    * takes a run that is `approved` or `stopped`; a run still going is offered it once it settles.
+   * A checklist step's field sets are copied into the new workflow's skill by the server (§22.3);
+   * when one can't be (gone, or a skill the user can no longer use), its 409 names the set and
+   * shows under the button.
    */
   protected readonly offerSave = computed(() => {
     if (!this.features.workflows || !this.offerSaveAsWorkflow()) return false;
-    // A checklist step's field sets live in the skill of the workflow the run started from, and a
-    // new carrying skill would hold none of them, so the server refuses this run (§22.3).
-    if (this.run().steps.some((step) => isChecklistRunStep(step))) return false;
     const status = this.run().status;
     return status === 'stopped' || (status === 'approved' && this.progress().settled);
   });

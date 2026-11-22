@@ -214,6 +214,8 @@ class TestCreate:
             ("fiscal_reader", "AST-fis", 4, ["request", "files"], "Check the budget"),
         ]
         assert all(s["agent"]["changed"] is False for s in wf["steps"])
+        # No checklist step: nothing but the workflow file is written.
+        assert [r["filename"] for r in _resources(client, wf["skillId"])] == ["workflow.from-a-run.md"]
 
     def test_from_run_is_the_callers_own(self, client, world, other_user):
         world.runs["run-2"] = WorkflowRun(
@@ -875,31 +877,133 @@ class TestChecklistSteps:
 
         assert [(b["code"], b["step"]) for b in sheet["blockers"]] == [("model_unavailable", "audit")]
 
-    def test_save_as_workflow_from_a_run_with_a_checklist_step_is_409(self, client, world, author_user):
-        from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep
+    def _checklist_run(self, world, user, source: Optional[dict], *, sets=("budget-caps", "compliance"), run_id="run-2"):
+        from apis.shared.handoff.runs import WorkflowRunSource
 
-        world.runs["run-2"] = WorkflowRun(
-            run_id="run-2",
-            user_id=author_user.user_id,
+        world.runs[run_id] = WorkflowRun(
+            run_id=run_id,
+            user_id=user.user_id,
             session_id="sess-1",
             status="approved",
-            request="Review this",
+            request="Review this proposal",
             steps=[
-                WorkflowRunStep(step_id="s1", handoff_id="h1", agent_id="AST-gen", agent_name="Generalist", request="Review this"),
+                WorkflowRunStep(
+                    step_id="s1", handoff_id="h1", agent_id="AST-gen", agent_name="Generalist", request="Review this proposal"
+                ),
                 WorkflowRunStep(
                     step_id="s2",
                     handoff_id="h2",
                     kind="checklist",
                     model_id=HAIKU,
                     agent_name="Claude Haiku 5.5",
-                    field_sets=["compliance"],
+                    field_sets=list(sets),
+                    request="Treat a missing page as cant_tell",
+                    reads=["files"],
                     step_name="audit",
                 ),
             ],
-            created_at="2026-11-21T00:00:00+00:00",
-            updated_at="2026-11-21T00:00:00+00:00",
+            workflow=WorkflowRunSource(skill_id=source["skillId"], name=source["name"]) if source else None,
+            created_at="2026-11-22T00:00:00+00:00",
+            updated_at="2026-11-22T00:00:00+00:00",
         )
-        resp = client.post("/workflows", json={"fromRun": {"sessionId": "sess-1", "runId": "run-2"}})
+        return {"fromRun": {"sessionId": "sess-1", "runId": run_id}}
+
+    def _saved_source(self, client) -> dict:
+        wf = self._with_sets(client)
+        assert client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST).status_code == 200
+        return wf
+
+    def test_save_as_workflow_copies_the_field_sets_into_the_new_skill(self, client, world, author_user):
+        source = self._saved_source(client)
+        before = _resources(client, source["skillId"])
+
+        resp = client.post("/workflows", json={"title": "Copy", **self._checklist_run(world, author_user, source)})
+
+        assert resp.status_code == 201, resp.text
+        doc = resp.json()
+        copy_id = doc["workflow"]["skillId"]
+        assert copy_id != source["skillId"]
+        audit = doc["workflow"]["steps"][1]
+        assert (audit["name"], audit["kind"], audit["modelId"]) == ("audit", "checklist", HAIKU)
+        assert audit["reads"] == ["files"]
+        assert audit["request"] == "Treat a missing page as cant_tell"
+        assert [(f["name"], f["canRun"]) for f in audit["fieldSets"]] == [("budget-caps", True), ("compliance", True)]
+        assert doc["sheet"] == {"startable": True, "blockers": []}
+        # The same bytes, under the same names, beside the workflow file.
+        hashes = {r["filename"]: r["contentHash"] for r in before}
+        copied = {r["filename"]: r["contentHash"] for r in _resources(client, copy_id)}
+        for filename in ("field-set.budget-caps.md", "field-set.compliance.md"):
+            assert copied[filename] == hashes[filename]
+        assert "workflow.copy.md" in copied
+        # The original is untouched.
+        assert _resources(client, source["skillId"]) == before
+
+    def test_a_set_is_copied_as_it_is_now(self, client, world, author_user):
+        source = self._saved_source(client)
+        body = self._checklist_run(world, author_user, source)
+        assert _add_field_set(client, source["skillId"], "compliance", "enum", "string").status_code == 200
+
+        copy_id = client.post("/workflows", json=body).json()["workflow"]["skillId"]
+
+        fresh = {r["filename"]: r["contentHash"] for r in _resources(client, source["skillId"])}
+        copied = {r["filename"]: r["contentHash"] for r in _resources(client, copy_id)}
+        assert copied["field-set.compliance.md"] == fresh["field-set.compliance.md"]
+
+    def test_a_set_that_is_gone_is_refused_by_name_and_nothing_is_created(self, client, world, author_user):
+        source = self._saved_source(client)
+        body = self._checklist_run(world, author_user, source, sets=("budget-caps", "ghost"))
+        skills_before = len(client.get("/skills/mine").json()["skills"])
+
+        resp = client.post("/workflows", json=body)
 
         assert resp.status_code == 409
-        assert "checklist step" in resp.json()["detail"]
+        assert "'ghost' is no longer in the workflow this run started from" in resp.json()["detail"]
+        assert len(client.get("/skills/mine").json()["skills"]) == skills_before
+
+    def test_a_set_that_no_longer_parses_is_refused_by_name(self, client, world, author_user, user_skill_service):
+        source = self._saved_source(client)
+        body = self._checklist_run(world, author_user, source)
+        import asyncio
+
+        stored = asyncio.run(user_skill_service.repository.get_skill(source["skillId"]))
+        ref = next(r for r in stored.resources if r.path == "field-set.compliance.md")
+        store = user_skill_service.bundle_files.resource_store
+        store._s3.put_object(Bucket=store.bucket_name, Key=ref.s3_key, Body=b"not a field set")
+
+        resp = client.post("/workflows", json=body)
+
+        assert resp.status_code == 409
+        assert "'compliance'" in resp.json()["detail"]
+
+    def test_a_skill_shared_with_the_caller_is_copied_from(self, world, author_user, other_user, monkeypatch, prompt_models):
+        _flags(monkeypatch)
+        world.agents[author_user.user_id] = {"AST-gen": _agent("Generalist", published=2, model="us.model-a")}
+        world.agents[other_user.user_id] = dict(world.agents[author_user.user_id])
+        with TestClient(_app(other_user)) as owner:
+            source = self._saved_source(owner)
+        world.shared[author_user.user_id] = [source["skillId"]]
+        with TestClient(_app(author_user)) as caller:
+            resp = caller.post("/workflows", json=self._checklist_run(world, author_user, source))
+            assert resp.status_code == 201, resp.text
+            names = {r["filename"] for r in _resources(caller, resp.json()["workflow"]["skillId"])}
+        assert {"field-set.budget-caps.md", "field-set.compliance.md"} <= names
+
+    def test_a_skill_the_caller_cant_use_is_refused_and_nothing_is_created(
+        self, world, author_user, other_user, monkeypatch, prompt_models
+    ):
+        _flags(monkeypatch)
+        world.agents[author_user.user_id] = {"AST-gen": _agent("Generalist", published=2, model="us.model-a")}
+        world.agents[other_user.user_id] = dict(world.agents[author_user.user_id])
+        with TestClient(_app(other_user)) as owner:
+            source = self._saved_source(owner)
+        with TestClient(_app(author_user)) as caller:
+            resp = caller.post("/workflows", json=self._checklist_run(world, author_user, source))
+            assert resp.status_code == 409
+            assert "no longer one you can use" in resp.json()["detail"]
+            assert caller.get("/skills/mine").json()["skills"] == []
+
+    def test_a_checklist_run_with_no_saved_workflow_is_refused(self, client, world, author_user):
+        resp = client.post("/workflows", json=self._checklist_run(world, author_user, None))
+
+        assert resp.status_code == 409
+        assert "didn't start from a saved workflow" in resp.json()["detail"]

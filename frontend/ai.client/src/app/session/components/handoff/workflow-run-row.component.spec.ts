@@ -317,6 +317,24 @@ describe('WorkflowRunRowComponent', () => {
       expect(buttons(el)).not.toContain('Save as workflow');
     });
 
+    it('shows the server’s reason when a checklist run’s field set can’t be copied', async () => {
+      features.workflows = true;
+      const refusal = { status: 409, error: { detail: "The field set 'compliance' is no longer in the workflow this run started from, so a saved copy couldn't run its checklist step" } };
+      workflows.create.mockRejectedValue(refusal);
+      const messageFor = vi.spyOn(workflows, 'messageFor').mockImplementation((err: unknown) => (err as typeof refusal).error.detail);
+      const value = run([stepRow(0, 'done'), { ...stepRow(1, 'done'), kind: 'checklist', agentId: '', agentName: 'Haiku 5.5', targetSessionId: undefined }]);
+      value.steps = value.steps.map((step, i) => (i === 1 ? { ...step, kind: 'checklist', fieldSets: ['compliance'], reads: ['files'] } : step));
+      const { el, detect } = render(value);
+
+      [...el.querySelectorAll('button')].find((b) => text(b) === 'Save as workflow')!.click();
+      await new Promise((resolve) => setTimeout(resolve));
+      detect();
+
+      expect(workflows.create).toHaveBeenCalledWith({ title: 'Proposal review', fromRun: { sessionId: 'src', runId: 'run1' } });
+      expect(text(el.querySelector('[role="alert"]'))).toContain("The field set 'compliance' is no longer in the workflow");
+      messageFor.mockRestore();
+    });
+
     it('says why when the save is refused', async () => {
       features.workflows = true;
       workflows.create.mockRejectedValue(new Error('nope'));
@@ -493,9 +511,8 @@ describe('WorkflowRunRowComponent', () => {
       'Budget audit · Checklist · Haiku 5.5 · 1 field set · Stopped · something went wrong',
       'Mentoring · Checklist · Haiku 5.5 · 1 field set · Finished Answer',
     ]);
-    // No Save as workflow: the server refuses a run with a checklist step (its sets live in the
-    // workflow it started from), so the row doesn't offer what would fail.
-    expect([...el.querySelectorAll('button')].some((b) => text(b).startsWith('Save as workflow'))).toBe(false);
+    // Save as workflow is offered: the server copies the checklist step's sets into the new skill.
+    expect([...el.querySelectorAll('button')].some((b) => text(b) === 'Save as workflow')).toBe(true);
     // A checklist line names its model and sets, so it wraps on a phone rather than cut them off.
     const spans = [...el.querySelectorAll('[data-handoff-id] > span.flex-1')];
     expect(spans.every((span) => span.classList.contains('break-words') && !span.classList.contains('truncate'))).toBe(true);
