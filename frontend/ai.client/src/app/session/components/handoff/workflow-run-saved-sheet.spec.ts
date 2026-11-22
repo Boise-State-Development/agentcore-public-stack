@@ -208,7 +208,7 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
     expect(runs.removeStep).toHaveBeenCalledWith('src', 's2');
   });
 
-  it('labels a prompt step by its model, prices it with no card and only the files it reads (PR-D.6c)', async () => {
+  it('names a prompt step by its step, then its model, and prices it with no card and only the files it reads (PR-D.6c)', async () => {
     const files = [
       { uploadId: 'f1', filename: 'proposal.pdf', mimeType: 'application/pdf', sizeBytes: 1, estimatedTokens: 10_000 },
     ];
@@ -228,10 +228,18 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
       }),
     );
     const text = el().textContent ?? '';
-    expect(text).toContain('Prompt · Haiku 5.5');
-    expect(text).toContain('Lens a · One model call · reads the files');
-    expect(text).toContain('Prompt · Sonnet 5.5');
-    expect(text).toContain('Summary · One model call · reads 1 result');
+    const titles = Array.from(el().querySelectorAll('li p.font-medium')).map((p) => p.textContent?.trim());
+    expect(titles).toEqual(['Lens a', 'Summary']);
+    expect(text).toContain('Prompt · Haiku 5.5 · reads the files');
+    expect(text).toContain('Prompt · Sonnet 5.5 · reads 1 result');
+    // Two steps on one model are told apart: each button is named for its step.
+    const labels = buttons().map((b) => b.getAttribute('aria-label'));
+    expect(labels).toContain('Edit the request for Lens a');
+    expect(labels).toContain('Remove Lens a and the step that reads it');
+    expect(labels).toContain('Remove Summary');
+    // The files hint talks about steps, not Agents, on a run with prompt steps.
+    expect(text).toContain('Every step that reads the files gets the ones you tick.');
+    expect(text).not.toContain('Every Agent can open');
     expect(start().textContent).toContain('Start 2 steps');
     // No step is sent the card, so the sheet neither shows it nor talks about Agents.
     expect(text).toContain('Each prompt step is one model call, in the background. You stay here.');
@@ -255,8 +263,12 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
         ],
       }),
     );
+    // A blocked prompt step still says which step it is, and on which model.
+    const titles = Array.from(el().querySelectorAll('li p.font-medium')).map((p) => p.textContent?.trim());
+    expect(titles).toEqual(['Generalist', 'Budget']);
     expect(el().textContent).toContain('Prompt · Haiku 5.5');
     expect(el().textContent).toContain('You can’t use this step’s model. Remove the step to start.');
+    expect(buttons().some((b) => b.getAttribute('aria-label') === 'Remove Budget')).toBe(true);
   });
 
   it('a workflow that takes one file keeps Start off until exactly one is ticked', async () => {

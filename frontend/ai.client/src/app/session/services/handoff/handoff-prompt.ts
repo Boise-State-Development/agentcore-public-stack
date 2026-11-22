@@ -290,6 +290,12 @@ function restoreDefusedTags(text: string): string {
 export interface RunResultAgents {
   runId: string;
   agentNames: readonly string[];
+  /**
+   * Per step, in the same order: a prompt step's name, or `null` for an Agent step. A prompt
+   * step's block is labelled "{model} · {step}" (`prompt_part_names`), so it is matched on that
+   * whole label, never on the model alone, which several prompt steps can share (§21.3).
+   */
+  promptSteps?: readonly (string | null)[];
 }
 
 /** One part of a run result read back for a sent bubble. */
@@ -298,6 +304,8 @@ export interface RunResultPartBlock {
   /** `done` for an answer; else the status whose note the block holds (it was not included). */
   status: DeliveryPartStatus;
   block: DeliveryBlock;
+  /** A prompt step's part: the step's name. Its `agentName` is then the model's name. */
+  promptStep?: string;
 }
 
 /** What a sent bubble shows for its delivery blocks: separate cards, and any run result as one. */
@@ -305,11 +313,13 @@ export type BubbleDelivery = { kind: 'card'; block: DeliveryBlock } | { kind: 'r
 
 /**
  * Group a message's delivery blocks (`extractDeliveryBlocks`) for its bubble (workflow-runs spec
- * §20.3): a run result's blocks, which the model reads one per part, show as one "From *N* Agents".
+ * §20.3): a run result's blocks, which the model reads one per part, show as one "From *N* Agents"
+ * ("*N* steps" once one is a prompt step).
  *
  * The stored text carries no run marker, so a run's blocks are recognised by what
  * `renderDeliveryParts` writes: consecutive blocks each labelled for the next of one run's step
- * Agents in step order (`deliveryPartLabel`: the Agent, or "Agent · title"). A finished part the
+ * Agents in step order (`deliveryPartLabel`: the Agent, or "Agent · title"; a prompt step's whole
+ * "model · step" label, since its model alone can't tell it from another step on that model). A finished part the
  * user emptied gave no block, so steps may be skipped, never reordered. A lone block is grouped
  * only for a run of one, so an ordinary card from a conversation named like an Agent stays a card.
  * Anything not matched is a card, as before.
@@ -320,7 +330,7 @@ export function groupRunResults(blocks: readonly DeliveryBlock[], runs: readonly
   while (i < blocks.length) {
     let best: { runId: string; parts: RunResultPartBlock[] } | null = null;
     for (const run of runs) {
-      const parts = matchRun(blocks, i, run.agentNames);
+      const parts = matchRun(blocks, i, run.agentNames, run.promptSteps ?? []);
       const minimum = Math.min(2, run.agentNames.length);
       if (parts.length >= minimum && parts.length > (best?.parts.length ?? 0)) best = { runId: run.runId, parts };
     }
@@ -335,24 +345,42 @@ export function groupRunResults(blocks: readonly DeliveryBlock[], runs: readonly
   return out;
 }
 
-function matchRun(blocks: readonly DeliveryBlock[], start: number, agentNames: readonly string[]): RunResultPartBlock[] {
+function matchRun(
+  blocks: readonly DeliveryBlock[],
+  start: number,
+  agentNames: readonly string[],
+  promptSteps: readonly (string | null)[],
+): RunResultPartBlock[] {
   const parts: RunResultPartBlock[] = [];
   let step = 0;
   for (let j = start; j < blocks.length && step < agentNames.length; j++) {
     const label = blocks[j].fromTitle;
     let found = -1;
     for (let k = step; k < agentNames.length; k++) {
-      const agent = agentNames[k].trim();
-      if (agent && (label === agent || label.startsWith(`${agent} · `))) {
+      if (labelMatchesStep(label, agentNames[k].trim(), promptSteps[k] ?? null)) {
         found = k;
         break;
       }
     }
     if (found < 0) break;
-    parts.push({ agentName: agentNames[found], status: partStatusOf(blocks[j]), block: blocks[j] });
+    const promptStep = promptSteps[found];
+    parts.push({
+      agentName: agentNames[found],
+      status: partStatusOf(blocks[j]),
+      block: blocks[j],
+      ...(promptStep != null ? { promptStep } : {}),
+    });
     step = found + 1;
   }
   return parts;
+}
+
+/** A prompt step's block when the run kept no step name for it (`PROMPT_STEP_FALLBACK_NAME`). */
+const PROMPT_STEP_FALLBACK_NAME = 'Prompt step';
+
+function labelMatchesStep(label: string, agent: string, promptStep: string | null): boolean {
+  if (promptStep !== null) return label === deliveryPartLabel(agent, promptStep.trim() || PROMPT_STEP_FALLBACK_NAME);
+  return !!agent && (label === agent || label.startsWith(`${agent} · `));
 }
 
 function partStatusOf(block: DeliveryBlock): DeliveryPartStatus {

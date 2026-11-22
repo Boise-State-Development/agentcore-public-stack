@@ -414,6 +414,37 @@ describe('delivery UI', () => {
       expect(text(list)).toContain('Fiscal outsider · Stopped, not included');
     });
 
+    it('calls a run with prompt steps “From N steps”, and each prompt part by its step and model (§21.3)', () => {
+      const run = runOf(['Sonnet 5.5', 'Sonnet 5.5', 'Haiku 5.5']);
+      run.steps = run.steps.map((step, i) => ({ ...step, kind: 'prompt', agentId: '', stepName: ['generalist', 'fiscal_outsider', 'summary'][i] }));
+      TestBed.inject(WorkflowRunStateService).hydrate('src', [run]);
+      const blocks = renderDeliveryParts([
+        { text: 'Strong aims.', agentName: 'Sonnet 5.5', fromTitle: 'generalist', status: 'done' },
+        { text: '', agentName: 'Sonnet 5.5', fromTitle: 'fiscal_outsider', status: 'stopped' },
+        { text: 'Competitive.', agentName: 'Haiku 5.5', fromTitle: 'summary', status: 'done' },
+      ]);
+      const fixture = TestBed.createComponent(UserMessageComponent);
+      fixture.componentRef.setInput('message', {
+        id: 'msg-src-9',
+        role: 'user',
+        content: [{ type: 'text', text: joinDeliveryBlocks([blocks], 'What first?') }],
+        metadata: { displayText: 'What first?' },
+      } as Message);
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+
+      expect(text(el)).toContain('From 3 steps');
+      expect(text(el)).not.toContain('Agents');
+      button(el, 'Show results').click();
+      fixture.detectChanges();
+      const list = el.querySelector('[aria-label="Results from 3 steps"]') as HTMLElement;
+      expect(text(list)).toContain('Generalist · Prompt · Sonnet 5.5');
+      expect(text(list)).not.toContain('Sonnet 5.5 · generalist');
+      expect(el.querySelector('[aria-label="Result from Generalist"]')?.textContent).toBe('Strong aims.');
+      expect(el.querySelector('[aria-label="Result from Summary"]')?.textContent).toBe('Competitive.');
+      expect(text(list)).toContain('Fiscal outsider · Stopped, not included');
+    });
+
     it('never reads a card out of a message the user typed', () => {
       const el = render({
         id: 'msg-src-2',

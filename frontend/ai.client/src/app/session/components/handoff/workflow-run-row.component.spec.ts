@@ -415,6 +415,10 @@ describe('WorkflowRunRowComponent', () => {
       'Fiscal outsider · Prompt · Haiku 5.5 · Stopped · the documents are too large for Haiku 5.5',
       'Summary · Prompt · Sonnet 5.5 · Waiting for Colleague',
     ]);
+    // A stopped prompt step's line wraps, so its reason is never cut off on a phone; the rest stay one line.
+    const spans = [...el.querySelectorAll('[data-handoff-id] > span.flex-1')];
+    expect(spans.map((span) => span.classList.contains('truncate'))).toEqual([true, true, false, true]);
+    expect(spans[2].classList.contains('break-words')).toBe(true);
 
     const toggle = [...el.querySelectorAll('button')].find((b) => text(b) === 'Answer')!;
     expect(toggle.getAttribute('aria-expanded')).toBe('false');

@@ -27,7 +27,7 @@ const CARD: GraphStepCard = { key: 'a', title: 'Generalist', meta: 'Agent', agen
 class TwoGraphs {
   labels: (string | null)[] = [null, null];
   mode: 'design' | 'run' = 'design';
-  readonly stages: GraphStepCard[][] = [[CARD], [{ ...CARD, key: 'b', title: 'Summary' }]];
+  stages: GraphStepCard[][] = [[CARD], [{ ...CARD, key: 'b', title: 'Summary' }]];
   readonly edges: GraphEdge[] = [['start', 'a'], ['a', 'b'], ['b', 'result']];
 }
 
@@ -55,6 +55,20 @@ describe('WorkflowGraphComponent', () => {
       g.querySelector(`#${g.querySelector('[role="group"]')!.getAttribute('aria-labelledby')}`)!.textContent!.trim(),
     );
     expect(headings).toEqual(['Stage 1', 'Stage 1']);
+  });
+
+  it('says a stage runs "4 at once" only for its Agent steps, which a prompt step never takes a slot from', () => {
+    const five = (kind?: 'prompt'): GraphStepCard[] =>
+      Array.from({ length: 5 }, (_, i) => ({ ...CARD, key: `s${i}`, title: `Step ${i}`, ...(kind ? { kind } : {}) }));
+    const heading = (el: HTMLElement): string =>
+      el.querySelector(`#${el.querySelector('[role="group"]')!.getAttribute('aria-labelledby')}`)!.textContent!.replace(/\s+/g, ' ').trim();
+
+    expect(heading(render((host) => (host.stages = [five()])))).toBe('Stage 1 · 4 at once');
+    expect(heading(render((host) => (host.stages = [five('prompt')])))).toBe('Stage 1');
+    // Five Agent steps beside prompt steps still share four slots.
+    expect(heading(render((host) => (host.stages = [[...five(), ...five('prompt').map((c) => ({ ...c, key: `p${c.key}` }))]])))).toBe(
+      'Stage 1 · 4 at once',
+    );
   });
 
   it('names its scroll region from the label input, else by its mode', () => {

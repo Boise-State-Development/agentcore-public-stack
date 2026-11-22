@@ -28,9 +28,15 @@ import { ConversationForkService } from '../../../services/session/conversation-
 import { TooltipDirective } from '../../../../components/tooltip';
 import { parseIso } from '../../../../utils/date';
 import { HandoffStateService } from '../../../services/handoff/handoff-state.service';
-import { BubbleDelivery, extractDeliveryBlocks, extractHandoffContext, groupRunResults } from '../../../services/handoff/handoff-prompt';
+import {
+  BubbleDelivery,
+  extractDeliveryBlocks,
+  extractHandoffContext,
+  groupRunResults,
+  RunResultPartBlock,
+} from '../../../services/handoff/handoff-prompt';
 import { WorkflowRunStateService } from '../../../services/handoff/workflow-run-state.service';
-import { agentsLabel } from '../../../services/handoff/workflow-run.service';
+import { promptWorkerLabel, stepNameLabel, stepsLabel } from '../../../services/handoff/workflow-run-progress';
 import { DeliveryBlock } from '../../../services/handoff/handoff.models';
 import { DeliveryArtifactChipsComponent } from '../../handoff/delivery-artifact-chips.component';
 import { DeliveryFileChipsComponent } from '../../handoff/delivery-file-chips.component';
@@ -101,7 +107,7 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
             <div class="flex max-w-[80%] flex-col items-end gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
               <span class="flex items-center gap-1">
                 <ng-icon name="heroArrowUturnLeft" class="size-3.5" aria-hidden="true" />
-                From <span class="font-medium text-gray-700 dark:text-gray-300">{{ agentsLabel(item.parts.length) }}</span>
+                From <span class="font-medium text-gray-700 dark:text-gray-300">{{ runPartsLabel(item.parts) }}</span>
                 <span aria-hidden="true">·</span>
                 <button
                   type="button"
@@ -113,23 +119,23 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
                 </button>
               </span>
               @if (openDelivery() === i) {
-                <ul role="list" [attr.aria-label]="'Results from ' + agentsLabel(item.parts.length)" class="w-full divide-y divide-gray-200 rounded-lg bg-gray-100 text-left dark:divide-white/10 dark:bg-white/5">
+                <ul role="list" [attr.aria-label]="'Results from ' + runPartsLabel(item.parts)" class="w-full divide-y divide-gray-200 rounded-lg bg-gray-100 text-left dark:divide-white/10 dark:bg-white/5">
                   @for (part of item.parts; track $index) {
                     <li class="p-2">
                       @if (part.status === 'done') {
-                        <p class="font-medium text-gray-800 dark:text-gray-200">{{ part.block.fromTitle }}</p>
+                        <p class="font-medium text-gray-800 dark:text-gray-200">{{ partTitle(part) }}</p>
                         @if (part.block.text) {
-                          <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + part.agentName" class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-200">{{ part.block.text }}</pre>
+                          <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + partName(part)" class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-200">{{ part.block.text }}</pre>
                         }
                         @if (part.block.artifacts.length > 0) {
-                          <div class="mt-1"><app-delivery-artifact-chips [artifacts]="part.block.artifacts" [label]="'Artifacts from ' + part.agentName" /></div>
+                          <div class="mt-1"><app-delivery-artifact-chips [artifacts]="part.block.artifacts" [label]="'Artifacts from ' + partName(part)" /></div>
                         }
                         @if (part.block.files.length > 0) {
-                          <div class="mt-1"><app-delivery-file-chips [files]="part.block.files" [label]="'Files from ' + part.agentName" /></div>
+                          <div class="mt-1"><app-delivery-file-chips [files]="part.block.files" [label]="'Files from ' + partName(part)" /></div>
                         }
                       } @else {
                         <p class="text-gray-600 dark:text-gray-400">
-                          {{ part.agentName }} · {{ part.status === 'stopped' ? 'Stopped, not included' : 'Still waiting, not included' }}
+                          {{ partName(part) }} · {{ part.status === 'stopped' ? 'Stopped, not included' : 'Still waiting, not included' }}
                         </p>
                       }
                     </li>
@@ -430,7 +436,25 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   });
 
   private readonly workflowRuns = inject(WorkflowRunStateService);
-  protected readonly agentsLabel = agentsLabel;
+
+  /** "From 6 Agents", or "From 6 steps" once a part is a prompt step's, which has no Agent (§21.3). */
+  protected runPartsLabel(parts: readonly RunResultPartBlock[]): string {
+    return stepsLabel(parts.length, parts.some((part) => part.promptStep !== undefined));
+  }
+
+  /** What a part is called: its Agent, or a prompt step's own name (several can share one model). */
+  protected partName(part: RunResultPartBlock): string {
+    if (part.promptStep === undefined) return part.agentName;
+    return stepNameLabel(part.promptStep) || promptWorkerLabel(part.agentName);
+  }
+
+  /** A finished part's heading: as its block names it, or "Generalist · Prompt · Sonnet 5.5". */
+  protected partTitle(part: RunResultPartBlock): string {
+    if (part.promptStep === undefined) return part.block.fromTitle;
+    const name = stepNameLabel(part.promptStep);
+    const worker = promptWorkerLabel(part.agentName);
+    return name ? `${name} · ${worker}` : worker;
+  }
 
   /**
    * The delivery blocks as the bubble shows them: a workflow run's result (one block per part) as
@@ -445,6 +469,7 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
     const runs = this.workflowRuns.runsFor(sessionId).map((run) => ({
       runId: run.runId,
       agentNames: run.steps.filter((step) => !step.removed).map((step) => step.agentName),
+      promptSteps: run.steps.filter((step) => !step.removed).map((step) => (step.kind === 'prompt' ? (step.stepName ?? '') : null)),
     }));
     return groupRunResults(blocks, runs);
   });

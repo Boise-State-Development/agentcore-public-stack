@@ -129,6 +129,39 @@ describe('delivery blocks', () => {
     ]);
   });
 
+  it('groups prompt steps’ parts by their whole "model · step" label, never by the model alone (§21.3)', () => {
+    // Two lenses on one model and a summary on another, as `renderDeliveryParts` writes them.
+    const text = renderDeliveryParts([
+      { text: 'A.', agentName: 'Sonnet 5.5', fromTitle: 'generalist', status: 'done' },
+      { text: '', agentName: 'Sonnet 5.5', fromTitle: 'colleague', status: 'stopped' },
+      { text: 'S.', agentName: 'Haiku 5.5', fromTitle: 'summary', status: 'done' },
+    ]);
+    const { blocks } = extractDeliveryBlocks(joinDeliveryBlocks([text], 'x'));
+    const run = {
+      runId: 'r',
+      agentNames: ['Sonnet 5.5', 'Sonnet 5.5', 'Haiku 5.5'],
+      promptSteps: ['generalist', 'colleague', 'summary'],
+    };
+
+    const grouped = groupRunResults(blocks, [run]);
+
+    expect(grouped.map((g) => g.kind)).toEqual(['run']);
+    const parts = (grouped[0] as Extract<BubbleDelivery, { kind: 'run' }>).parts;
+    expect(parts.map((p) => [p.promptStep, p.agentName, p.status])).toEqual([
+      ['generalist', 'Sonnet 5.5', 'done'],
+      ['colleague', 'Sonnet 5.5', 'stopped'],
+      ['summary', 'Haiku 5.5', 'done'],
+    ]);
+    // A part the user emptied gave no block: the next block is matched to its own step, not to
+    // the first later step on the same model.
+    const skipped = extractDeliveryBlocks(joinDeliveryBlocks([blocks[1], blocks[2]].map((b) => renderDeliveryBlock(b.text, b.fromTitle)), 'x')).blocks;
+    const again = (groupRunResults(skipped, [run])[0] as Extract<BubbleDelivery, { kind: 'run' }>).parts;
+    expect(again.map((p) => p.promptStep)).toEqual(['colleague', 'summary']);
+    // A step the run kept no name for is labelled with the server's fallback.
+    const unnamed = extractDeliveryBlocks(joinDeliveryBlocks([renderDeliveryBlock('U.', 'Haiku 5.5 · Prompt step')], 'x')).blocks;
+    expect(groupRunResults(unnamed, [{ runId: 'u', agentNames: ['Haiku 5.5'], promptSteps: [''] }]).map((g) => g.kind)).toEqual(['run']);
+  });
+
   it('leaves ordinary cards alone, and a lone block grouped only for a run of one', () => {
     const one = renderDeliveryBlock('A result.', 'Colleague · Review');
     const { blocks } = extractDeliveryBlocks(joinDeliveryBlocks([one], 'x'));
