@@ -246,7 +246,8 @@ source is idle and its composer is empty. Otherwise the card waits.
 - **A step pauses:** its prompt is relayed under its row in the source, as today. The run reads `needs_input`.
   Answering resumes that step only.
 - **Stop:** stopping the run stops every running step with the cooperative cancel each already has, and no queued
-  step starts. A step can also be stopped alone.
+  step starts. The cancel is armed server-side on each step conversation's lease, so it reaches a step wherever it
+  streams. A step can also be stopped alone.
 - **A step fails:** the run continues. The result names the failure.
 - **The source is deleted:** steps are conversations of their own and are not deleted with it. Today's cascade
   (`delete_session_handoffs`) removes the source's `HANDOFF#` and `DELIVERY#` rows and leaves the targets. The run
@@ -470,8 +471,8 @@ changes a tool spec or the system prompt.
     `POST /sessions/{id}/workflow-runs` `{steps: [{agentId, request}], request}` writes the run and one `open`
     mention row per step, and returns each step's card exactly as the mention create does, plus the run;
     `…/{runId}/approve` `{steps: [{stepId, request?, removed?}], fileIds}` fixes the envelope, conditioned on
-    `open`; `GET …/{runId}`; `…/{runId}/stop` (marks the run stopped so no queued step starts; the running steps
-    are stopped by the SPA's existing cancel); `…/{runId}/dismiss` (dismisses every `open` step).
+    `open`; `GET …/{runId}`; `…/{runId}/stop` (marks the run stopped so no queued step starts, then arms each
+    running Agent step's lease cancel; see Stop run under PR-W.4b); `…/{runId}/dismiss` (dismisses every `open` step).
   - The estimate (§4, §11): the create response carries what the sheet needs to price a run's first turns
     without another call: each step's model id and its catalog input rate, and the card's tokens. The SPA adds
     the ticked files' tokens. ⚠️ **Verify first:** whether `GET /files` gives a file's token count; if not, add
@@ -724,9 +725,17 @@ changes a tool spec or the system prompt.
       steps are ever routinely resumed.
     - **Stop run** posts `…/stop`, closes this tab's queue (no pending step starts) and calls each step's own
       cooperative cancel (`ChatHttpService.cancelChatRequest`) for every step streaming in this tab, exactly as
-      Stop in that conversation would. A step close to its end can still finish (its row goes to `done`, not
-      `stopped`), so Stop run promises no running step stops. A step running in another tab stops only from there.
-      No confirmation. A 409 (never approved) is ignored; any other failure says the steps here were stopped and
+      Stop in that conversation would, because that is the quickest feedback. The route itself, once the run row
+      is `stopped`, arms the same owner-scoped lease cancel a conversation's own Stop arms
+      (`arm_session_cancel` in `apis/shared/sessions/session_lease.py`) on every kept Agent step whose row has a
+      conversation and isn't `done`. It reads each step's row from the caller's partition and stamps only the
+      caller's `(session, user)` lease, so a step streaming in another tab, or in no tab after a reload, stops
+      on its next heartbeat (about 10 s). That turn ends `user_stopped`, so its row settles `stopped` through the
+      existing refresh and no `handoff_stopped` inbox entry is written. A step with no live lease is a no-op; a
+      second Stop returns before arming anything; nothing waits on a turn. Prompt and checklist steps stop from
+      the run row, which the Runtime polls. A step close to its end can still finish (its row goes to `done`, not
+      `stopped`), so Stop run promises no running step stops. *(2026-11-22: the server-side cancel replaced "A
+      step running in another tab stops only from there.")* No confirmation. A 409 (never approved) is ignored; any other failure says the steps here were stopped and
       to try again.
     - **When the result comes back.** A run started or resumed in this tab is watched (`WorkflowRunResultService`)
       until every kept step is `done` or `stopped`. Then it toasts "*k* Agents finished · Open", where *k* is the
@@ -862,6 +871,8 @@ tool-using answers. Feedback rows from before the fix are not backfilled.
   step-2 candidate.
 - **Stop run** stops the queue and the steps streaming in this tab. It can't reach a step running server-side
   after a reload, and a short step can finish before the Stop lands (the handoff Stop path reacts after the fact).
+  *(Fixed 2026-11-22: the stop route arms each running step's lease cancel, so it reaches every tab and none. A
+  short step can still finish first.)*
 - **No bell entry for a finished run** (`workflow_run_done`). It needs an app-api or Runtime write.
 - **A step started from "Not started"** carries the card and the request, but not the mention's attachments,
   skills or folders.

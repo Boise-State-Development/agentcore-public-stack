@@ -1072,8 +1072,9 @@ Seven fixes came out of the dev checks, each merged and checked on dev:
   which were never published. A draft edit showed its marker in the review.
 - **A run's sidebar line** refreshes only when the session list reloads, not in place.
 - **Prepare carries text only:** an earlier step's artifacts and files don't reach the later step.
-- **From step 1, still open:** one result per run, Stop run reaching only steps streaming in this tab, no bell
-  entry for a finished run, and a resumed step without the mention's attachments (§19.1 in `workflow-runs.md`).
+- **From step 1, still open:** one result per run, no bell entry for a finished run, and a resumed step without
+  the mention's attachments (§19.1 in `workflow-runs.md`). *(2026-11-22: Stop run now reaches steps streaming in
+  other tabs too, through each step's lease cancel.)*
 - **Focus rings** that predate this work still have no dark pair, and `<ng-icon>` ignores `text-*` and `size-*`
   app-wide (#2232).
 
