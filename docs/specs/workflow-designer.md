@@ -1303,6 +1303,16 @@ source's prefix is never touched: a prompt step's answer reaches it as a deliver
   rows lead with the step (above). A stopped prompt step's line in the run's row wraps, so its reason is readable on
   a phone. The graph's "*N* at once" counts only Agent steps, and the sheet's file hint talks about steps once a
   prompt step is in the run.
+- **And the rest of that dev check's list:**
+  - A prompt or checklist part with no result is noted as a step's: "This step stopped before it finished…"
+    (`PROMPT_PART_STATUS_NOTES`, chosen by `DeliveryPartBlock.prompt` when the part's `kind` is in
+    `MODEL_STEP_KINDS`, in `context.py` and `handoff-prompt.ts` alike, and pinned by the shared fixture's prompt and
+    checklist cases). An Agent part's note is unchanged, and so is every label.
+  - The note is text the model reads, but only in a new user message. It never touches a cached prefix,
+    `toolConfig` or the system prompt.
+  - A message sent before this still groups: the bubble reads a prompt part's old Agent note as the same status.
+  - A prompt step's answer renders as Markdown through the assistant message's renderer (`StreamingTextComponent`:
+    ngx-markdown, sanitizer on), not a `<pre>`.
 
 ### 21.5 Step 3 outcome (2026-11-22)
 

@@ -1652,7 +1652,7 @@ def test_prepare_for_a_step_that_reads_a_prompt_step_carries_its_answer(collect_
 
 
 def test_a_stopped_prompt_step_is_named_by_its_model_and_step(collect_client, stores, steps, prompted, table):
-    from apis.shared.handoff.context import DELIVERY_PART_STATUS_NOTES
+    from apis.shared.handoff.context import DELIVERY_PART_STATUS_NOTES, PROMPT_PART_STATUS_NOTES
 
     handoffs, _runs = stores
     client = collect_client()
@@ -1677,7 +1677,8 @@ def test_a_stopped_prompt_step_is_named_by_its_model_and_step(collect_client, st
     assert data["parts"][1]["status"] == "stopped"
     second = data["readsBlock"].split("\n\n<handoff_context ")[1]
     assert second.startswith('from_conversation="Claude Haiku 5.5 · budget">')
-    assert DELIVERY_PART_STATUS_NOTES["stopped"] in second
+    assert PROMPT_PART_STATUS_NOTES["stopped"] in second
+    assert DELIVERY_PART_STATUS_NOTES["stopped"] not in second
 
 
 def test_the_shared_renderer_is_what_prepare_sends_and_says_what_it_waits_on(collect_client, stores, steps, prompted, table):
@@ -2020,6 +2021,33 @@ def test_prepare_for_a_step_that_reads_a_checklist_step_carries_its_values(colle
     assert [(p["stepName"], p["agentName"], p["status"]) for p in data["parts"]] == [("audit", "Claude Haiku 5.5", "done")]
     assert data["readsBlock"].startswith('<handoff_context from_conversation="Claude Haiku 5.5 · audit">')
     assert "cap: $500,000 (supported)" in data["readsBlock"]
+
+
+def test_a_stopped_checklist_step_is_noted_as_a_step_not_an_agent(collect_client, stores, steps, checklisted, table):
+    """A checklist part with no result gets the step note, as a prompt part does; its label is unchanged."""
+    from apis.shared.handoff.context import DELIVERY_PART_STATUS_NOTES, PROMPT_PART_STATUS_NOTES
+
+    handoffs, _runs = stores
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    _generalist, audit, summary = created["steps"]
+    # The Runtime's claim (open → running), then its stop.
+    table.update_item(
+        Key={"PK": "USER#alice", "SK": f"HANDOFF#{audit['handoffId']}"},
+        UpdateExpression="SET #s = :running",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":running": "running"},
+    )
+    handoffs.transition("alice", audit["handoffId"], "stopped", stoppedReason="too_large")
+
+    data = _prepare(client, run_id, summary["stepId"]).json()
+
+    assert [(p["stepName"], p["status"]) for p in data["parts"]] == [("audit", "stopped")]
+    assert data["readsBlock"].startswith('<handoff_context from_conversation="Claude Haiku 5.5 · audit">')
+    assert PROMPT_PART_STATUS_NOTES["stopped"] in data["readsBlock"]
+    assert DELIVERY_PART_STATUS_NOTES["stopped"] not in data["readsBlock"]
 
 
 def test_a_checklist_part_with_no_step_name_is_named_as_a_checklist_step():

@@ -169,6 +169,15 @@ DELIVERY_PART_STATUS_NOTES = {
     "running": "This Agent was still working when the results were brought back, so there is no result from it yet.",
 }
 
+#: The same notes for a prompt step's part (workflow-designer §21.3), which has no Agent. Constant,
+#: and in the TypeScript copy (``PROMPT_PART_STATUS_NOTES``). A prompt step never waits on the user,
+#: so ``needs_input`` is here only so every status has a note.
+PROMPT_PART_STATUS_NOTES = {
+    "stopped": "This step stopped before it finished, so there is no result from it.",
+    "needs_input": "This step is still waiting on the user, so there is no result from it yet.",
+    "running": "This step was still working when the results were brought back, so there is no result from it yet.",
+}
+
 
 @dataclass(frozen=True)
 class DeliveryPartBlock:
@@ -180,6 +189,9 @@ class DeliveryPartBlock:
     status: str
     artifacts: Sequence[DeliveryArtifactLine] = ()
     files: Sequence[FileLine] = ()
+    #: A prompt step's part: its status note names a step, not an Agent (``PROMPT_PART_STATUS_NOTES``).
+    #: Its label is built as any part's is, from ``prompt_part_names``.
+    prompt: bool = False
 
 
 #: Between an Agent's name and the rest, in a run step's title and in a run result's part label.
@@ -269,7 +281,8 @@ def render_delivery_parts(parts: Sequence[DeliveryPartBlock]) -> str:
         )
         if part.status == "done"
         else render_delivery_block(
-            DELIVERY_PART_STATUS_NOTES.get(part.status, ""), delivery_part_label(part.agent_name, part.from_title)
+            (PROMPT_PART_STATUS_NOTES if part.prompt else DELIVERY_PART_STATUS_NOTES).get(part.status, ""),
+            delivery_part_label(part.agent_name, part.from_title),
         )
         for part in parts
     ]
@@ -310,6 +323,7 @@ __all__ = [
     "FileLine",
     "HANDOFF_CONTEXT_TAG",
     "CHECKLIST_STEP_FALLBACK_NAME",
+    "PROMPT_PART_STATUS_NOTES",
     "PROMPT_STEP_FALLBACK_NAME",
     "build_handoff_message",
     "context_hash",

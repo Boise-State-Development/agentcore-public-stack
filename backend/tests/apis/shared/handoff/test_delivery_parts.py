@@ -424,6 +424,36 @@ def test_a_send_without_parts_attaches_the_stored_parts(store, sessions, artifac
     assert "Strong aims; weak budget." in block and "Section 4 is thin." in block
 
 
+def test_a_model_steps_part_attaches_with_the_step_note(store):
+    """A stored prompt or checklist part with no result is noted as a step's; an Agent part keeps its note."""
+    from apis.shared.handoff.context import PROMPT_PART_STATUS_NOTES
+
+    done = "Thin budget."
+    row = Delivery(
+        delivery_id="d1", user_id="alice", to_session_id="src", from_session_id="", run_id="r1",
+        created_at=NOW, updated_at=NOW,
+        parts=[
+            DeliveryPart(step_id="s1", agent_name="Claude Haiku 5.5", from_title="budget", status="done", text=done,
+                         text_hash=context_hash(done), kind="prompt"),
+            DeliveryPart(step_id="s2", agent_name="Claude Haiku 5.5", from_title="audit", status="stopped", kind="checklist"),
+            DeliveryPart(step_id="s3", agent_name="Claude Sonnet 5.5", from_title="summary", status="stopped", kind="prompt"),
+            DeliveryPart(step_id="s4", agent_name="Colleague", status="stopped"),
+        ],
+    )
+    store.create(row)
+
+    [block] = asyncio.run(_turn(store, DeliveryAttachRequest(delivery_id="d1")).blocks())
+
+    assert block == "\n\n".join(
+        [
+            render_delivery_block(done, "Claude Haiku 5.5 · budget"),
+            render_delivery_block(PROMPT_PART_STATUS_NOTES["stopped"], "Claude Haiku 5.5 · audit"),
+            render_delivery_block(PROMPT_PART_STATUS_NOTES["stopped"], "Claude Sonnet 5.5 · summary"),
+            render_delivery_block(DELIVERY_PART_STATUS_NOTES["stopped"], "Colleague"),
+        ]
+    )
+
+
 def test_parts_on_a_plain_card_are_ignored(store):
     plain = Delivery(
         delivery_id="d1", user_id="alice", to_session_id="src", from_session_id="tgt", from_title="Rubric",
@@ -601,3 +631,23 @@ class TestRunStepTitle:
 
         assert run_step_title("  ", "Proposal review") == "Proposal review"
         assert run_step_title("Budget reader", "Budget reader · Proposal review") == "Budget reader · Proposal review"
+
+
+def test_a_prompt_parts_note_names_a_step_and_its_label_is_unchanged():
+    """A prompt part with no result is noted as a step's (it has no Agent); an Agent part's note is as before."""
+    from apis.shared.handoff.context import PROMPT_PART_STATUS_NOTES
+
+    assert render_delivery_parts(
+        [
+            DeliveryPartBlock("", "Claude Haiku 5.5", "summary", "stopped", prompt=True),
+            DeliveryPartBlock("", "Claude Haiku 5.5", "budget", "running", prompt=True),
+            DeliveryPartBlock("", "Colleague", "Review", "stopped"),
+        ]
+    ) == "\n\n".join(
+        [
+            render_delivery_block(PROMPT_PART_STATUS_NOTES["stopped"], "Claude Haiku 5.5 · summary"),
+            render_delivery_block(PROMPT_PART_STATUS_NOTES["running"], "Claude Haiku 5.5 · budget"),
+            render_delivery_block(DELIVERY_PART_STATUS_NOTES["stopped"], "Colleague · Review"),
+        ]
+    )
+    assert "Agent" not in "".join(PROMPT_PART_STATUS_NOTES.values())

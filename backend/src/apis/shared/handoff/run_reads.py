@@ -42,7 +42,7 @@ from apis.shared.handoff.context import (
     render_delivery_parts,
 )
 from apis.shared.handoff.delivery import DeliveryPartStatus
-from apis.shared.handoff.models import Handoff
+from apis.shared.handoff.models import MODEL_STEP_KINDS, Handoff
 from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep
 from apis.shared.handoff.send_back import (
     DeliveryPartRequest,
@@ -240,14 +240,24 @@ async def _render(user_id: str, session_id: str, run_id: str, parts: List[Delive
         # Nothing finished with text: each part is its status note, which needs no sender.
         blocks = [
             DeliveryPartBlock(
-                text="", agent_name=p.agent_name, from_title=p.from_title if p.prompt else "", status=p.status
+                text="",
+                agent_name=p.agent_name,
+                from_title=p.from_title if p.prompt else "",
+                status=p.status,
+                prompt=p.prompt,
             )
             for p in parts
         ]
         return render_delivery_parts(blocks)
     return render_delivery_parts(
         [
-            DeliveryPartBlock(text=p.text, agent_name=p.agent_name, from_title=p.from_title, status=p.status)
+            DeliveryPartBlock(
+                text=p.text,
+                agent_name=p.agent_name,
+                from_title=p.from_title,
+                status=p.status,
+                prompt=p.kind in MODEL_STEP_KINDS,
+            )
             for p in row.parts
         ]
     )

@@ -40,6 +40,7 @@ import { MAX_WORKFLOW_STEPS } from '../../../workflows/workflow.models';
 import { runGraph } from '../../services/handoff/workflow-run-graph';
 import { WorkflowRunMergeService, mergeInstructionOf } from '../../services/handoff/workflow-run-merge.service';
 import { HandoffRelayComponent } from './handoff-relay.component';
+import { StreamingTextComponent } from '../message-list/components/streaming-text.component';
 import { bringIntoView, handoffStatusLine, truncate } from './handoff-status-line';
 
 /** One step line as the template draws it. */
@@ -94,7 +95,7 @@ const BAR_FILL: Record<RunStepState, string> = {
 @Component({
   selector: 'app-workflow-run-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, NgTemplateOutlet, RouterLink, HandoffRelayComponent, WorkflowGraphComponent],
+  imports: [NgIcon, NgTemplateOutlet, RouterLink, HandoffRelayComponent, StreamingTextComponent, WorkflowGraphComponent],
   providers: [provideIcons({ heroCheckCircle, heroChevronRight, heroExclamationCircle, heroMinusCircle, heroPauseCircle })],
   template: `
     <section
@@ -180,14 +181,17 @@ const BAR_FILL: Record<RunStepState, string> = {
                 }
               </div>
               @if (line.answer && openAnswer() === line.handoffId) {
-                <!-- Scrollable, so focusable: keyboard users scroll it with the arrow keys (axe scrollable-region-focusable). -->
-                <pre
+                <!-- Scrollable, so focusable: keyboard users scroll it with the arrow keys (axe scrollable-region-focusable).
+                     The answer is the model's Markdown, rendered (and sanitized) as an assistant message is. -->
+                <div
                   [id]="answerId(line.handoffId)"
                   tabindex="0"
                   role="region"
                   [attr.aria-label]="line.agentName + '’s answer'"
-                  class="mx-2 mt-1 mb-1.5 max-h-72 overflow-auto rounded-lg bg-gray-50 p-2 font-sans text-sm/6 whitespace-pre-wrap text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200"
-                >{{ line.answer }}</pre>
+                  class="message-block mx-2 mt-1 mb-1.5 max-h-72 overflow-auto rounded-lg bg-gray-50 px-3 py-2 text-sm/6 text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200"
+                >
+                  <app-streaming-text [text]="line.answer" />
+                </div>
               }
             }
             @if (line.row) {

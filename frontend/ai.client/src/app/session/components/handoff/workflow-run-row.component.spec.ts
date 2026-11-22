@@ -4,6 +4,7 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
+import { MarkdownService, provideMarkdown } from 'ngx-markdown';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FEATURES } from '../../../services/features';
@@ -103,6 +104,7 @@ describe('WorkflowRunRowComponent', () => {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([]),
+        provideMarkdown(),
         { provide: FEATURES, useValue: features },
         { provide: WorkflowsApiService, useValue: workflows },
         {
@@ -379,7 +381,7 @@ describe('WorkflowRunRowComponent', () => {
     });
   });
 
-  it('draws a prompt step as a line with no link, named by its step and model, its answer behind a disclosure', () => {
+  it('draws a prompt step as a line with no link, named by its step and model, its answer behind a disclosure', async () => {
     const prompt = (i: number, name: string, status: HandoffStatus, extra: Partial<HandoffView> = {}): HandoffView => ({
       ...stepRow(i, status),
       kind: 'prompt',
@@ -391,7 +393,7 @@ describe('WorkflowRunRowComponent', () => {
       request: name,
     });
     const rows = [
-      prompt(0, 'generalist', 'done', { outputText: 'Strong aims.\n\n[cut off at the output limit]' }),
+      prompt(0, 'generalist', 'done', { outputText: '**Strong** aims.\n\n[cut off at the output limit]' }),
       prompt(1, 'colleague', 'running'),
       prompt(2, 'fiscal', 'stopped', { stoppedReason: 'too_large' }),
       prompt(3, 'summary', 'open'),
@@ -404,6 +406,8 @@ describe('WorkflowRunRowComponent', () => {
       ...(i === 3 ? { reads: ['generalist', 'colleague'] } : { reads: ['request', 'files'] }),
     }));
     pending.add('h4');
+    // Parse the Markdown for real, but skip the post-render plugins (Mermaid, KaTeX), which tests don't load.
+    TestBed.inject(MarkdownService).render = () => Promise.resolve();
     const { el, detect } = render(value);
 
     expect(text(el.querySelector('h3'))).toBe('Proposal review · 4 steps, 1 of 4 finished');
@@ -428,7 +432,13 @@ describe('WorkflowRunRowComponent', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     const answer = el.querySelector(`#${toggle.getAttribute('aria-controls')}`)!;
     expect(answer.getAttribute('role')).toBe('region');
-    // The cut-off marker is shown as the step wrote it.
+    // The answer is the model's Markdown, rendered as an assistant message's is; the cut-off
+    // marker is shown as the step wrote it.
+    await new Promise((resolve) => setTimeout(resolve));
+    detect();
+    expect(answer.tagName).not.toBe('PRE');
+    expect(answer.querySelector('strong')?.textContent).toBe('Strong');
+    expect(answer.textContent).not.toContain('**');
     expect(answer.textContent).toContain('[cut off at the output limit]');
   });
 });
