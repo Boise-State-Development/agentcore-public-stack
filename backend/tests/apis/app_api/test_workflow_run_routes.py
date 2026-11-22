@@ -1754,3 +1754,297 @@ def test_the_input_names_in_a_prompt_steps_reads_never_read_as_steps(collect_cli
     assert budget.reads == ["files"] and steps_read_by(run, budget) == []
     assert asyncio.run(render_step_reads("alice", "src", run, budget, store=handoffs)) == ("", [])
     assert [s.step_name for s in steps_read_by(run, summary)] == ["generalist", "budget"]
+
+
+# --- Checklist steps (workflow-designer §22.3, PR-D.7a) ----------------------------------------
+
+CHECKLIST_FILE = f"""---
+title: Audit
+version: 1
+---
+
+| step       | kind      | worker     | reads                 |
+|------------|-----------|------------|-----------------------|
+| generalist | agent     | generalist | request, files        |
+| audit      | checklist | {HAIKU}    | files                 |
+| summary    | prompt    | {SONNET}   | request, audit        |
+
+## Request
+
+Review this proposal
+
+## Step: audit
+
+Field sets: budget-caps, compliance
+
+Treat a missing page as cant_tell
+
+## Step: summary
+
+Summarize the audit
+"""
+
+
+def _field_set_text(name: str, *types: str) -> str:
+    rows = "".join(f"| f{i} | F{i} | {t} | the value | {'a, b' if t == 'enum' else ''} | |\n" for i, t in enumerate(types))
+    return (
+        f"---\ntitle: {name.title()}\nversion: 3\n---\n\n| name | title | type | find | enum | optional |\n"
+        f"|---|---|---|---|---|---|\n{rows}"
+    )
+
+
+def _add_set(skills, name: str, *types: str) -> None:
+    key = f"fs-{name}"
+    skills.files[key] = _field_set_text(name, *types)
+    skills.skill.resources = [r for r in skills.skill.resources if r.filename != f"field-set.{name}.md"] + [
+        SimpleNamespace(kind="reference", filename=f"field-set.{name}.md", path=f"field-set.{name}.md", s3_key=key)
+    ]
+
+
+@pytest.fixture()
+def checklisted(skills, prompt_models, monkeypatch, table):
+    """A saved workflow of an Agent step, a checklist step of two sets, and a prompt step that reads it."""
+    from apis.shared.handoff.checklist_rows import ChecklistRowStore
+
+    skills.files["wf-key"] = CHECKLIST_FILE
+    _add_set(skills, "budget-caps", "currency", "number")
+    _add_set(skills, "compliance", "enum")
+    monkeypatch.setenv("PROMPT_STEPS_ENABLED", "true")
+    monkeypatch.setenv("CHECKLIST_STEPS_ENABLED", "true")
+    rows = ChecklistRowStore(table=table)
+    monkeypatch.setattr(workflow_runs, "get_checklist_row_store", lambda: rows)
+    monkeypatch.setattr("apis.shared.handoff.replay.get_checklist_row_store", lambda: rows)
+    prompt_models.rows = rows  # type: ignore[attr-defined]
+    return prompt_models
+
+
+def test_a_checklist_step_opens_a_checklist_row_with_its_sets_and_guidance(make_client, stores, checklisted):
+    handoffs, runs = stores
+    resp = _start(make_client())
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    generalist, audit, summary = data["steps"]
+    assert (audit["kind"], audit["agentId"], audit["agentName"], audit["modelId"]) == ("checklist", "", "Claude Haiku 5.5", HAIKU)
+    assert audit["inputPricePerMillionTokens"] == 1.1
+    # The estimate's inputs: one call per set, each with its field count; a prompt step makes one.
+    assert audit["calls"] == 2 and summary["calls"] == 1 and "calls" not in generalist
+    assert [(s["name"], s["fieldCount"]) for s in audit["fieldSets"]] == [("budget-caps", 2), ("compliance", 1)]
+    # Its text is its own guidance, never the shared request, and it gets no card.
+    assert audit["request"] == audit["prompt"] == "Treat a missing page as cant_tell"
+
+    row = handoffs.get("alice", audit["handoffId"])
+    assert (row.kind, row.status, row.agent_id, row.model_id) == ("checklist", "open", "", HAIKU)
+    assert row.field_sets == ["budget-caps", "compliance"]
+    assert row.is_checklist_step and row.is_model_step and not row.is_prompt_step
+    assert row.target_session_id is None
+
+    stored = runs.get("alice", data["run"]["runId"])
+    step = stored.steps[1]
+    assert (step.kind, step.model_id, step.field_sets, step.reads, step.step_name) == (
+        "checklist", HAIKU, ["budget-caps", "compliance"], ["files"], "audit",
+    )
+    assert (step.reads_input("request"), step.reads_input("files")) == (False, True)
+    run_step = data["run"]["steps"][1]
+    assert run_step["kind"] == "checklist" and run_step["fieldSets"] == ["budget-caps", "compliance"]
+    assert run_step["checklist"] == [] and run_step["handoff"]["fieldSets"] == ["budget-caps", "compliance"]
+    assert "checklist" not in data["run"]["steps"][0]
+
+
+def test_a_checklist_step_with_no_guidance_stores_none(make_client, stores, checklisted, skills):
+    skills.files["wf-key"] = CHECKLIST_FILE.replace("\nTreat a missing page as cant_tell\n", "")
+    handoffs, _runs = stores
+    data = _start(make_client()).json()
+
+    assert handoffs.get("alice", data["steps"][1]["handoffId"]).request == ""
+
+
+def test_checklist_steps_are_a_sheet_blocker_while_the_flag_is_off(make_client, stores, checklisted, monkeypatch):
+    handoffs, _runs = stores
+    monkeypatch.setenv("CHECKLIST_STEPS_ENABLED", "")
+    refused = _start(make_client())
+
+    assert refused.status_code == 422
+    assert [(b["code"], b["step"]) for b in refused.json()["detail"]["blockers"]] == [("checklist_steps_off", "audit")]
+    assert handoffs.list_for_session("alice", "src") == []
+    # Removing it takes the step that reads it too; what is left blocks only on its own size.
+    rest = _start(make_client(), removedSteps=["audit"])
+    assert [b["code"] for b in rest.json()["detail"]["blockers"]] == ["too_few_steps"]
+
+
+@pytest.mark.parametrize(
+    "change, reason",
+    [
+        ("missing", "is no longer in the workflow's skill"),
+        ("list", "has a list field"),
+    ],
+)
+def test_a_set_the_skill_no_longer_runs_blocks_start(make_client, stores, checklisted, skills, change, reason):
+    if change == "missing":
+        skills.skill.resources = [r for r in skills.skill.resources if r.filename != "field-set.compliance.md"]
+    else:
+        _add_set(skills, "compliance", "list")
+    refused = _start(make_client())
+
+    assert refused.status_code == 422
+    blockers = refused.json()["detail"]["blockers"]
+    assert [(b["code"], b["step"]) for b in blockers] == [("field_set_unavailable", "audit")]
+    assert reason in blockers[0]["message"] and "'compliance'" in blockers[0]["message"]
+
+
+def test_a_checklist_steps_model_the_starter_cant_run_blocks_start(make_client, stores, checklisted):
+    checklisted.allowed.discard(HAIKU)
+    refused = _start(make_client())
+
+    assert refused.status_code == 422
+    assert [(b["code"], b["step"]) for b in refused.json()["detail"]["blockers"]] == [("model_unavailable", "audit")]
+
+
+def test_approve_keeps_a_checklist_steps_guidance_its_own(make_client, stores, checklisted):
+    handoffs, _runs = stores
+    client = make_client()
+    created = _start(client).json()
+    audit = created["steps"][1]
+
+    view = _approve(client, created["run"]["runId"], request="A new shared request").json()
+
+    rows = [handoffs.get("alice", s["handoffId"]) for s in created["steps"]]
+    assert rows[1].request == "Treat a missing page as cant_tell"
+    assert rows[0].run_steps == 1  # only the Agent step has a conversation
+    assert view["steps"][1]["handoff"]["status"] == "open"
+
+    client2 = make_client()
+    created2 = _start(client2).json()
+    _approve(client2, created2["run"]["runId"], steps=[{"stepId": created2["steps"][1]["stepId"], "request": "  Be strict  "}])
+    assert handoffs.get("alice", created2["steps"][1]["handoffId"]).request == "Be strict"
+    assert audit["stepId"] != created2["steps"][1]["stepId"]
+
+
+def test_the_run_read_attaches_each_sets_display_row_in_authored_order(make_client, stores, checklisted, table):
+    from apis.shared.handoff.checklist_rows import ChecklistField, put_checklist_set
+
+    client = make_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    audit = created["steps"][1]
+    for index, name in reversed(list(enumerate(["budget-caps", "compliance"]))):
+        assert put_checklist_set(
+            user_id="alice",
+            session_id="src",
+            run_id=run_id,
+            step_id=audit["stepId"],
+            field_set=name,
+            set_index=index,
+            field_set_version="3",
+            status="done" if index == 0 else "error",
+            error=None if index == 0 else "no_tool_call",
+            model_id=HAIKU,
+            fields=[
+                ChecklistField(
+                    name="f0", title="F0", type="currency", value="$500,000", state="supported", method="exact",
+                    quote="not to exceed $500,000", locator={"kind": "page", "value": 3, "precision": "exact"},
+                )
+            ]
+            if index == 0
+            else [],
+            store=checklisted.rows,
+        )
+    # Another user's row on the same session id never shows.
+    put_checklist_set(
+        user_id="mallory", session_id="src", run_id=run_id, step_id=audit["stepId"], field_set="budget-caps",
+        set_index=0, field_set_version="3", status="done", fields=[], store=checklisted.rows,
+    )
+
+    view = client.get(f"/sessions/src/workflow-runs/{run_id}").json()
+
+    table_rows = view["steps"][1]["checklist"]
+    assert [(r["fieldSet"], r["setIndex"], r["status"]) for r in table_rows] == [("budget-caps", 0, "done"), ("compliance", 1, "error")]
+    assert table_rows[1]["error"] == "no_tool_call"
+    assert table_rows[0]["fields"] == [
+        {
+            "name": "f0", "title": "F0", "type": "currency", "value": "$500,000", "state": "supported",
+            "method": "exact", "quote": "not to exceed $500,000", "locator": {"kind": "page", "value": 3, "precision": "exact"},
+        }
+    ]
+
+    from apis.shared.handoff.replay import load_workflow_run_replay
+
+    import asyncio
+
+    handoffs, runs = stores
+    replay = asyncio.run(
+        load_workflow_run_replay("src", "alice", run_store=runs, handoff_store=handoffs, checklist_store=checklisted.rows)
+    )
+    assert [r["fieldSet"] for r in replay[0]["steps"][1]["checklist"]] == ["budget-caps", "compliance"]
+    assert "checklist" not in replay[0]["steps"][0]
+
+
+def test_collect_carries_a_done_checklist_step_as_a_text_only_part(collect_client, stores, steps, checklisted, table):
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    _generalist, audit, _summary = created["steps"]
+    _finish_prompt(table, audit["handoffId"], "| field | value | state |\n| cap | $500,000 | supported |")
+
+    resp = _collect_run(client, run_id)
+
+    assert resp.status_code == 200, resp.text
+    parts = resp.json()["delivery"]["parts"]
+    assert [(p["agentName"], p["fromTitle"], p["status"], p.get("kind")) for p in parts] == [
+        ("Generalist", "", "running", None),
+        ("Claude Haiku 5.5", "audit", "done", "checklist"),
+        ("Claude Sonnet 5.5", "summary", "running", "prompt"),
+    ]
+    assert parts[1]["text"].endswith("| cap | $500,000 | supported |")
+    assert (parts[1]["fromSessionId"], parts[1]["artifacts"], parts[1]["files"]) == ("", [], [])
+
+
+def test_prepare_for_a_step_that_reads_a_checklist_step_carries_its_values(collect_client, stores, steps, checklisted, table):
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    _generalist, audit, summary = created["steps"]
+
+    waiting = _prepare(client, run_id, summary["stepId"])
+    assert waiting.status_code == 409
+    assert waiting.json()["detail"] == "Waiting for Claude Haiku 5.5 to finish"
+
+    _finish_prompt(table, audit["handoffId"], "cap: $500,000 (supported)")
+    resp = _prepare(client, run_id, summary["stepId"])
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert [(p["stepName"], p["agentName"], p["status"]) for p in data["parts"]] == [("audit", "Claude Haiku 5.5", "done")]
+    assert data["readsBlock"].startswith('<handoff_context from_conversation="Claude Haiku 5.5 · audit">')
+    assert "cap: $500,000 (supported)" in data["readsBlock"]
+
+
+def test_a_checklist_part_with_no_step_name_is_named_as_a_checklist_step():
+    from apis.shared.handoff.models import Handoff
+    from apis.shared.handoff.run_reads import prompt_part
+    from apis.shared.handoff.runs import WorkflowRunStep
+
+    step = WorkflowRunStep(step_id="s", handoff_id="h", kind="checklist", model_id=HAIKU, agent_name="Haiku", field_sets=["x"])
+    row = Handoff(
+        handoff_id="h", user_id="alice", session_id="src", kind="checklist", status="done", created_at="t", updated_at="t",
+        output_text="values", field_sets=["x"],
+    )
+    part = prompt_part(step, row, "done")
+    assert (part.agent_name, part.from_title, part.text, part.model_kind, part.prompt) == ("Haiku", "Checklist step", "values", "checklist", True)
+    # A prompt row where the run holds a checklist step is never read as its answer.
+    wrong = row.model_copy(update={"kind": "prompt"})
+    assert prompt_part(step, wrong, "done").status == "stopped"
+
+
+def test_a_checklist_run_step_names_a_model_and_its_sets():
+    from apis.shared.handoff.runs import WorkflowRunStep
+
+    with pytest.raises(ValueError, match="names its field sets"):
+        WorkflowRunStep(step_id="s", handoff_id="h", kind="checklist", model_id=HAIKU)
+    with pytest.raises(ValueError, match="names a model and no Agent"):
+        WorkflowRunStep(step_id="s", handoff_id="h", kind="checklist", agent_id="a", field_sets=["x"])
+    with pytest.raises(ValueError, match="only a checklist step runs field sets"):
+        WorkflowRunStep(step_id="s", handoff_id="h", kind="prompt", model_id=HAIKU, field_sets=["x"])

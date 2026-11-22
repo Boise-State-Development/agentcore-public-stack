@@ -7,7 +7,7 @@
  * objects it can pass to the task definition and IAM grants module.
  */
 
-import { AppConfig, buildCorsOrigins, promptStepsOn } from '../../config';
+import { AppConfig, buildCorsOrigins, checklistStepsOn, promptStepsOn } from '../../config';
 import { managedKbMetricNamespace } from '../managed-kb/managed-kb-role-construct';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 
@@ -410,6 +410,10 @@ export function buildAppApiEnvironment(
     // prompt steps, and only while saved workflows (and so runs and handoffs) are
     // on too. The Runtime gets its own copy (inference-agentcore-construct.ts).
     PROMPT_STEPS_ENABLED: promptStepsOn(config) ? 'true' : 'false',
+    // Checklist steps (opt-in while in development): run create accepts a
+    // workflow's checklist steps, only while prompt steps (and their chain) are on.
+    // The Runtime gets its own copy (inference-agentcore-construct.ts).
+    CHECKLIST_STEPS_ENABLED: checklistStepsOn(config) ? 'true' : 'false',
     // Conversation rewind (default on): gates
     // POST /sessions/{id}/rewind and GET /messages' hiding of rewound turns.
     SESSION_REWIND_ENABLED: config.sessionRewind.enabled ? 'true' : 'false',

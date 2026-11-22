@@ -1466,3 +1466,47 @@ generic tool compiles one grammar per account and model, shared by every checkli
   panel's five reviewers as prompt steps plus one checklist step of the compliance sets, over the sample proposal.
   It is scored against the answer key, and the `C#` rows must show one write per model for each group, then reads.
   If the 114-criterion audit is available by then, it replaces the compliance sets.
+
+#### Built (PR-D.7a)
+
+- **The format.** `checklist` is a step kind. Its section opens with `Field sets: a, b`, and the rest is guidance. The
+  parser refuses more than 16 sets, a duplicate, a bad set name, and a step that doesn't read `files`. Every
+  skill-file write, whatever the flag, also refuses a set that isn't `references/field-set.<name>.md` in the same
+  skill, or that holds a `list` field. That covers a single upload against the skill's stored sets, and a bundle
+  import against its own files (`check_field_set_refs`, `workflows/field_set_refs.py`). `?validate=true` refuses the
+  same. A no-op save checks nothing, so a set that changed since shows on the sheet instead.
+- **The row.** A `checklist` `HANDOFF#` row has the prompt step's fields plus `fieldSets` (`CHECKLIST_STEP_FIELDS`).
+  Its `request` is the step's own guidance only, never the shared request, and approve never makes it follow the
+  shared request. `is_model_step` (on `Handoff` and on `WorkflowRunStep`) is the test for "no Agent, no
+  conversation"; `is_prompt_step` and `is_prompt` stay exact.
+- **The sheet.** It blocks on `checklist_steps_off`, on `model_unavailable` (D.6a's rule), and on
+  `field_set_unavailable` (`missing`, `list_field` or `unreadable`). The sets are re-read from the workflow's skill on
+  every sheet, one GET per named set. A step view carries `fieldSets: [{name, canRun, title, version, fieldCount,
+  reason?}]` and `calls` (one per set; 1 on a prompt step). The create response carries the same per step, for the
+  estimate.
+- **Results.** A `done` row's `outputText` is a text-only part with `kind: "checklist"`, labelled by its model and
+  step, or "Checklist step" when the run kept no name. The shared fixture has a parity case for it.
+- **Display rows.** `WFCHK#<runId>#<stepId>#<set>` rows are written by `checklist_rows.put_checklist_set` and read by
+  `read_checklist_sets`, with the GSI sort key leading with the run. The run read and the `workflowRuns` replay attach
+  a checklist step's rows as `steps[].checklist`, ordered by `setIndex`, and query only for a run that has a
+  checklist step. The session delete cascade removes them.
+- **Save as workflow** from a run with a checklist step is refused (409). Its sets live in the skill of the workflow
+  it started from, and a new carrying skill would hold none of them.
+
+**The `list`-value measurement (2026-11-22).** Direct Converse calls on dev, `us.*` ids, with the generic
+`record_checklist` tool (`strict: true`, `toolChoice: auto`). The fixture was a fictional ~1k-token proposal summary
+with eight fields: six lists (one absent, one with a single item, one written in prose) and two scalars. There were
+five trials per cell.
+
+| `value` schema | Compiled | Fields right, Haiku 5.5 | Sonnet 5.5 | Median call, Haiku / Sonnet |
+|---|---|---|---|---|
+| `string \| null`, lists as one `; `-joined string (today's tool) | yes | 40/40 | 40/40 | 4.6 s / 4.0 s |
+| `string \| array of strings \| null` | yes | 40/40 | 40/40 | 4.3 s / 4.0 s |
+
+- **The union compiles on both models**, with no visible grammar-compile delay. The tool's schema is one item shape,
+  whatever the field count, so the 16-union-parameter cap (`structured-extraction.md` §16.9) doesn't apply.
+- **Under the union, every list came back as an array**: the single-item list was `["…"]`, never a bare string, and the
+  absent list was `null` in all 10 calls, never `[]`. Every scalar came back as a string.
+- **The fixture is easy**, so it shows the union works, not that it beats the joined string. The `list` refusal stays.
+  Lifting it means the union in D.7b's constant tool (one deliberate prefix rewrite) and coercion of `list` values in
+  Python, so it is its own change. The cost was $0.10 ($0.006 Haiku, $0.095 Sonnet).

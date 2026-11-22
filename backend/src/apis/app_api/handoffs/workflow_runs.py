@@ -35,6 +35,15 @@ mention, so no turn can accept it), created here and approved like any step; the
 Its result is the row's ``outputText``: a text-only part, with no artifacts and no files, in
 collect and in a later step's ``prepare`` alike. ``runSteps`` counts only the steps that have a
 conversation, so the sidebar's count of a run's step conversations can still reach it.
+
+**Checklist steps (workflow-designer §22.3, PR-D.7a).** A saved workflow's step may run named field
+sets over the run's files, one model call per set, on the same invocation as prompt steps. Its row
+is a ``HANDOFF#`` row of kind ``checklist`` carrying ``fieldSets``, created and approved exactly as
+a prompt step's; its ``request`` is the step's own guidance alone, never the shared request. Create
+refuses one while ``CHECKLIST_STEPS_ENABLED`` is off, on a model the starter can't run, and when a
+set is no longer in the workflow's skill (or holds a ``list`` field), as sheet blockers. Its result
+is the row's ``outputText`` (values and states), a text-only part like a prompt step's; the run read
+attaches its ``WFCHK#`` display rows (``apis.shared.handoff.checklist_rows``) to the step.
 """
 
 from __future__ import annotations
@@ -66,7 +75,15 @@ from apis.shared.handoff.delivery import (
     get_delivery_store,
 )
 from apis.shared.handoff.metrics import emit_workflow_run_metric
-from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, KIND_PROMPT_STEP, Handoff, HandoffView
+from apis.shared.handoff.checklist_rows import get_checklist_row_store, rows_by_step
+from apis.shared.handoff.models import (
+    HANDOFF_REQUEST_MAX_CHARS,
+    KIND_CHECKLIST_STEP,
+    KIND_PROMPT_STEP,
+    MODEL_STEP_KINDS,
+    Handoff,
+    HandoffView,
+)
 from apis.shared.handoff.relay import load_relayed_prompts
 from apis.shared.handoff.run_reads import (
     StepReadsNotSettled,
@@ -103,7 +120,7 @@ from apis.shared.workflows.format import (
     FILES_NONE,
     FILES_ONE,
     INPUT_READS,
-    KIND_PROMPT,
+    KIND_CHECKLIST,
     RESULT_MERGE,
     Workflow,
     WorkflowError,
@@ -113,14 +130,17 @@ from apis.shared.workflows.format import (
 )
 from apis.shared.workflows.sheet import (
     AgentView,
+    FieldSetView,
     ModelView,
     WorkflowNotFound,
     WorkflowUnreadable,
     agent_views,
+    field_set_views,
     load_workflow,
     merge_instruction,
     model_views,
     sheet_for,
+    step_calls,
     step_model,
     without_steps,
 )
@@ -198,15 +218,18 @@ class CreatedRunStep(BaseModel):
 
     step_id: str = Field(..., alias="stepId")
     handoff_id: str = Field(..., alias="handoffId")
-    kind: Optional[str] = Field(None, description="prompt for a prompt step (§21.3); absent for an Agent step")
-    agent_id: str = Field(..., alias="agentId", description="Empty on a prompt step")
+    kind: Optional[str] = Field(
+        None, description="prompt for a prompt step (§21.3), checklist for a checklist step (§22.3); absent for an Agent step"
+    )
+    agent_id: str = Field(..., alias="agentId", description="Empty on a prompt or checklist step")
     agent_name: str = Field(..., alias="agentName", description="The Agent's name; a prompt step's model's name")
     request: str
     prompt: str = Field(
         ...,
         description=(
             "The full first message this step's Agent receives: contextBlock, then request. A prompt "
-            "step gets no card, so its prompt is its instruction alone; the run's files go before it"
+            "step gets no card, so its prompt is its instruction alone; the run's files go before it. "
+            "A checklist step's is its guidance, which goes after each set's field list"
         ),
     )
     model_id: Optional[str] = Field(
@@ -218,6 +241,19 @@ class CreatedRunStep(BaseModel):
         None,
         alias="inputPricePerMillionTokens",
         description="modelId's catalog input rate (USD per million tokens); None without a modelId or a catalog row",
+    )
+    field_sets: Optional[List[FieldSetView]] = Field(
+        None,
+        alias="fieldSets",
+        description="A checklist step's field sets, in the order it runs them, each with its fieldCount",
+    )
+    calls: Optional[int] = Field(
+        None,
+        description=(
+            "Model calls the step makes, for the estimate: one per field set on a checklist step, one on a "
+            "prompt step, absent on an Agent step. The steps on one model share one cached copy of the "
+            "documents (§22.3), so the sheet counts the documents once per model"
+        ),
     )
 
 
@@ -285,11 +321,11 @@ async def create_workflow_run(
                     source,
                     card,
                     step,
-                    request=_step_request(step.request, shared_request),
+                    request=_model_step_request(step, shared_request),
                     run_id=run_id,
                     step_id=step_id,
                 )
-                if step.kind == KIND_PROMPT
+                if step.kind in MODEL_STEP_KINDS
                 else handoff_routes._open_mention(
                     store,
                     user,
@@ -318,15 +354,16 @@ async def create_workflow_run(
             WorkflowRunStep(
                 step_id=row.step_id or "",
                 handoff_id=row.handoff_id,
-                kind="prompt" if row.is_prompt_step else None,
+                kind=row.kind if row.is_model_step else None,
                 agent_id=row.agent_id,
                 agent_name=row.agent_name,
-                model_id=row.model_id if row.is_prompt_step else None,
+                model_id=row.model_id if row.is_model_step else None,
+                field_sets=list(row.field_sets) if row.is_checklist_step and row.field_sets else None,
                 request=row.request,
                 step_name=step.step_name,
                 agent_version=step.agent_version,
-                # A prompt step keeps its whole set, even empty; an Agent step only the steps it reads.
-                reads=list(step.reads) if step.kind == KIND_PROMPT else (list(step.reads) or None),
+                # A model step keeps its whole set, even empty; an Agent step only the steps it reads.
+                reads=list(step.reads) if step.kind in MODEL_STEP_KINDS else (list(step.reads) or None),
             )
             for row, step in zip(rows, plan.steps)
         ],
@@ -344,9 +381,9 @@ async def create_workflow_run(
     emit_workflow_run_metric(
         "WorkflowRunCreated", session_id=session_id, run_id=run_id, step_count=len(rows), **source_kw
     )
-    # Every Agent step gets the same card; a prompt step gets none, so the card is read off an Agent
-    # step's row, or rendered for a run of prompt steps alone exactly as it would be for one.
-    card_row = next((row for row in rows if not row.is_prompt_step), None) or rows[0].model_copy(
+    # Every Agent step gets the same card; a prompt or checklist step gets none, so the card is read off
+    # an Agent step's row, or rendered for a run of model steps alone exactly as it would be for one.
+    card_row = next((row for row in rows if not row.is_model_step), None) or rows[0].model_copy(
         update={"excerpt_hash": context_hash(card.excerpt.text)}
     )
     first = handoff_routes._card_response(card_row, card)
@@ -363,13 +400,15 @@ async def create_workflow_run(
             CreatedRunStep(
                 step_id=row.step_id or "",
                 handoff_id=row.handoff_id,
-                kind="prompt" if row.is_prompt_step else None,
+                kind=row.kind if row.is_model_step else None,
                 agent_id=row.agent_id,
                 agent_name=row.agent_name,
                 request=row.request,
-                prompt=row.request if row.is_prompt_step else build_handoff_message(first.context_block, row.request),
+                prompt=row.request if row.is_model_step else build_handoff_message(first.context_block, row.request),
                 model_id=step.model_id,
                 input_price_per_million_tokens=step.rate,
+                field_sets=list(step.field_set_views) if step.kind == KIND_CHECKLIST else None,
+                calls=step.calls,
             )
             for row, step in zip(rows, plan.steps)
         ],
@@ -381,7 +420,8 @@ class _PlannedStep:
     """One step to open: its worker as the caller sees it, its own request, and how to price it.
 
     A prompt step (``kind`` ``prompt``) has no Agent: ``agent_id`` is empty, ``agent_name`` is its
-    model's display name, and ``model_id`` / ``rate`` are that model's, from its catalog row.
+    model's display name, and ``model_id`` / ``rate`` are that model's, from its catalog row. A
+    checklist step (``kind`` ``checklist``) is the same, with the sets it runs.
     """
 
     agent_id: str
@@ -395,6 +435,22 @@ class _PlannedStep:
     #: for a mention run); the whole set in canonical order, inputs included, for a prompt step (§21.3).
     reads: tuple = ()
     kind: str = "agent"
+    #: A checklist step's field-set names, in authored order, and each as the skill holds it.
+    field_sets: tuple = ()
+    field_set_views: tuple = ()
+    #: Model calls the step makes (``sheet.step_calls``); ``None`` for an Agent step.
+    calls: Optional[int] = None
+
+
+def _model_step_request(step: _PlannedStep, shared: str) -> str:
+    """A prompt step's instruction (its own, else the shared request), or a checklist step's guidance.
+
+    A checklist step's own text is guidance appended to each set's call (§22.3); it never falls back
+    to the shared request, which reaches the call only when the step reads ``request``.
+    """
+    if step.kind == KIND_CHECKLIST:
+        return (step.request or "").strip()
+    return _step_request(step.request, shared)
 
 
 async def _open_prompt_step(
@@ -409,18 +465,19 @@ async def _open_prompt_step(
     run_id: str,
     step_id: str,
 ) -> Handoff:
-    """Write one ``open`` prompt step row (workflow-designer §21.3): no Agent, no card, no target.
+    """Write one ``open`` prompt or checklist step row (workflow-designer §21.3, §22.3): no Agent, no
+    card, no target.
 
-    It sits where the run's row sits in the thread, on the model its catalog row resolved to. Never
-    a ``mention``, so no turn's ``handoff_context`` can accept it (``HandoffTurn`` refuses the kind).
-    503 when the store isn't configured.
+    It sits where the run's row sits in the thread, on the model its catalog row resolved to; a
+    checklist step's carries its ``fieldSets``. Never a ``mention``, so no turn's ``handoff_context``
+    can accept it (``HandoffTurn`` refuses the kinds). 503 when the store isn't configured.
     """
     now = utc_now_iso()
     row = Handoff(
         handoff_id=str(uuid.uuid4()),
         user_id=user.user_id,
         session_id=session_id,
-        kind=KIND_PROMPT_STEP,
+        kind=KIND_CHECKLIST_STEP if step.kind == KIND_CHECKLIST else KIND_PROMPT_STEP,
         status="open",
         agent_id="",
         agent_name=step.agent_name,
@@ -432,6 +489,7 @@ async def _open_prompt_step(
         run_id=run_id,
         step_id=step_id,
         model_id=step.model_id,
+        field_sets=list(step.field_sets) if step.kind == KIND_CHECKLIST else None,
     )
     try:
         await asyncio.to_thread(store.create, row)
@@ -501,8 +559,10 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
     trimmed, removed = without_steps(workflow, ref.removed_steps)
-    agents, models = await asyncio.gather(agent_views(trimmed, user), model_views(trimmed, user))
-    sheet = sheet_for(trimmed, agents, models)
+    agents, models, sets = await asyncio.gather(
+        agent_views(trimmed, user), model_views(trimmed, user), field_set_views(skill, trimmed)
+    )
+    sheet = sheet_for(trimmed, agents, models, sets)
     if sheet.blockers:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -515,7 +575,7 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
     shared = request.strip() or (workflow.request or "").strip()
     return _RunPlan(
         request=shared,
-        steps=[_planned_step(step, agents, models) for step in trimmed.steps],
+        steps=[_planned_step(step, agents, models, sets) for step in trimmed.steps],
         workflow=WorkflowRunSource(
             skill_id=skill.skill_id,
             name=workflow.name,
@@ -530,15 +590,22 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
     )
 
 
-def _planned_step(step: WorkflowStep, agents: Dict[str, AgentView], models: Dict[str, ModelView]) -> _PlannedStep:
-    """A saved workflow's step as the run opens it: its Agent, or a prompt step's model, as the caller.
+def _planned_step(
+    step: WorkflowStep,
+    agents: Dict[str, AgentView],
+    models: Dict[str, ModelView],
+    field_sets: Optional[Dict[str, FieldSetView]] = None,
+) -> _PlannedStep:
+    """A saved workflow's step as the run opens it: its Agent, or a model step's model, as the caller.
 
     An Agent step's reads drop the inputs, since every Agent step gets the request and the files. A
-    prompt step keeps them, in the file's canonical order (request, files, then steps), because it
-    gets the request or the documents only when it reads them, and the Runtime reads that here.
+    prompt or checklist step keeps them, in the file's canonical order (request, files, then steps),
+    because it gets the request or the documents only when it reads them, and the Runtime reads that
+    here. A checklist step also carries its sets, each as the skill holds it, for the estimate.
     """
-    if step.is_prompt:
+    if step.is_model_step:
         model = models[step.model_id or ""]
+        views = tuple((field_sets or {})[name] for name in step.field_sets) if step.is_checklist else ()
         return _PlannedStep(
             agent_id="",
             agent_name=model.name or model.model_id,
@@ -547,7 +614,10 @@ def _planned_step(step: WorkflowStep, agents: Dict[str, AgentView], models: Dict
             rate=model.input_price_per_million_tokens,
             step_name=step.name,
             reads=tuple(step.reads),
-            kind=KIND_PROMPT,
+            kind=step.kind,
+            field_sets=tuple(step.field_sets),
+            field_set_views=views,
+            calls=step_calls(step),
         )
     agent = agents[step.agent_id]
     return _PlannedStep(
@@ -692,7 +762,12 @@ async def approve_workflow_run(
         change = changes.get(step.step_id)
         removed = bool(change and change.removed)
         request = step.request
-        if change is not None and change.request is not None:
+        if step.is_checklist:
+            # A checklist step's text is its own guidance (§22.3): edited only directly, never
+            # filled from the shared request, and never following it.
+            if change is not None and change.request is not None:
+                request = change.request.strip()
+        elif change is not None and change.request is not None:
             request = _step_request(change.request, shared_request)
         elif body.request is not None and step.request == run.request:
             # A step still on the shared request follows the edited one.
@@ -730,8 +805,8 @@ async def approve_workflow_run(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This run was already started or cancelled")
 
     # The steps with a conversation, which is what the sidebar counts a run's step conversations
-    # against: a prompt step never has one (workflow-designer §21.3).
-    conversations = sum(1 for step in kept if not step.is_prompt)
+    # against: a prompt or checklist step never has one (workflow-designer §21.3, §22.3).
+    conversations = sum(1 for step in kept if not step.is_model_step)
     await asyncio.gather(
         *(
             _settle_step(store, user, run_id, step, approved_at, edited_requests.get(step.step_id), conversations)
@@ -977,7 +1052,7 @@ async def _part_for(user: User, run: WorkflowRun, step: WorkflowRunStep, row: Op
     reads go through ``run_reads.render_step_reads`` instead, which carries text only.
     """
     status_now = part_status(run, row)
-    if step.is_prompt:
+    if step.is_model_step:
         return prompt_part(step, row, status_now)
     target = (row.target_session_id or "") if row is not None and row.run_id == run.run_id else ""
     if status_now != "done":
@@ -1140,10 +1215,22 @@ async def _owned_run(runs: WorkflowRunStore, user: User, session_id: str, run_id
 
 
 async def _run_view(store: HandoffStore, user: User, run: WorkflowRun, *, relay: bool) -> WorkflowRunView:
-    """The run with each step's row read now (one ``GetItem`` each, issued together)."""
-    rows = await asyncio.gather(
-        *(asyncio.to_thread(store.get, user.user_id, step.handoff_id) for step in run.steps)
+    """The run with each step's row read now (one ``GetItem`` each, issued together).
+
+    A run with a checklist step also reads its ``WFCHK#`` rows (one query, beside the rows), for
+    each such step's table (§22.3).
+    """
+    checklist_read = (
+        asyncio.to_thread(
+            get_checklist_row_store().read, user_id=user.user_id, session_id=run.session_id, run_id=run.run_id
+        )
+        if run.has_checklist_step
+        else _none_read()
     )
+    rows_and_sets = await asyncio.gather(
+        *(asyncio.to_thread(store.get, user.user_id, step.handoff_id) for step in run.steps), checklist_read
+    )
+    rows, checklist_rows = list(rows_and_sets[:-1]), rows_and_sets[-1]
     views = {
         row.handoff_id: HandoffView.from_row(row)
         for row in rows
@@ -1151,7 +1238,11 @@ async def _run_view(store: HandoffStore, user: User, run: WorkflowRun, *, relay:
     }
     if relay and views:
         await load_relayed_prompts(list(views.values()), user.user_id)
-    return WorkflowRunView.from_row(run, views)
+    return WorkflowRunView.from_row(run, views, rows_by_step(checklist_rows))
+
+
+async def _none_read() -> List[Any]:
+    return []
 
 
 __all__ = ["require_workflow_runs_user", "router"]

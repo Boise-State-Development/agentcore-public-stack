@@ -15,6 +15,8 @@ The Runtime may not import app-api, so the renderer lives here, in ``apis.shared
 - **An Agent step:** its answer as it stood when it first finished, bounded at
   ``SEND_BACK_MAX_TOKENS``.
 - **A prompt step:** its row's ``outputText``.
+- **A checklist step** (workflow-designer §22.3): its row's ``outputText`` too, the values and
+  states the Runtime wrote, one table per field set.
 - **A step that stopped:** named by its status note.
 
 Each part is checked by ``prepare_delivery`` against the receiving conversation, as a run result is,
@@ -33,7 +35,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from apis.shared.handoff.context import DeliveryPartBlock, prompt_part_names, render_delivery_parts
+from apis.shared.handoff.context import (
+    CHECKLIST_STEP_FALLBACK_NAME,
+    DeliveryPartBlock,
+    prompt_part_names,
+    render_delivery_parts,
+)
 from apis.shared.handoff.delivery import DeliveryPartStatus
 from apis.shared.handoff.models import Handoff
 from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep
@@ -93,15 +100,15 @@ def part_status(run: WorkflowRun, row: Optional[Handoff]) -> DeliveryPartStatus:
 
     - A step that never started is still to come in an approved run (the tab's queue, or the
       Runtime for a prompt step), and will never start in a stopped one.
-    - A ``done`` Agent step with no conversation never ran, so it reads ``stopped``. A prompt step
-      has no conversation by design (§21.3), so its ``done`` stands.
+    - A ``done`` Agent step with no conversation never ran, so it reads ``stopped``. A prompt or
+      checklist step has no conversation by design (§21.3, §22.3), so its ``done`` stands.
     """
     if row is None or row.run_id != run.run_id:
         return "stopped"
     effective = row.effective_status()
     if effective == "open":
         return "running" if run.status == "approved" else "stopped"
-    if effective == "done" and not row.target_session_id and not row.is_prompt_step:
+    if effective == "done" and not row.target_session_id and not row.is_model_step:
         return "stopped"
     return PART_STATUS.get(effective, "stopped")
 
@@ -118,22 +125,29 @@ def finished_by(updated_at: str) -> str:
 
 
 def prompt_part(step: WorkflowRunStep, row: Optional[Handoff], status: DeliveryPartStatus) -> DeliveryPartRequest:
-    """A prompt step's part (§21.3): text alone, named by its model and its step.
+    """A prompt or checklist step's part (§21.3, §22.3): text alone, named by its model and its step.
 
-    When the step is done, the text is its row's ``outputText``. It has no conversation, so nothing
-    is read beyond the row already in hand: no answer lookup, no artifacts, no files. The Runtime
-    capped the text when it wrote it, and ``prepare_delivery`` caps it again, as it does every part.
+    When the step is done, the text is its row's ``outputText``: a prompt step's answer, or a
+    checklist step's values and states. It has no conversation, so nothing is read beyond the row
+    already in hand: no answer lookup, no artifacts, no files, and no ``WFCHK#`` row (the quotes are
+    display, never model input). The Runtime capped the text when it wrote it, and
+    ``prepare_delivery`` caps it again, as it does every part. A row of another kind than the step's
+    reads ``stopped``, with no text.
     """
-    agent_name, from_title = prompt_part_names(step.agent_name or (row.agent_name if row else ""), step.step_name)
-    is_prompt_row = row is not None and row.is_prompt_step
-    text = (row.output_text or "") if status == "done" and is_prompt_row else ""
+    fallback = {"fallback": CHECKLIST_STEP_FALLBACK_NAME} if step.is_checklist else {}
+    agent_name, from_title = prompt_part_names(
+        step.agent_name or (row.agent_name if row else ""), step.step_name, **fallback
+    )
+    is_own_row = row is not None and row.is_model_step and row.kind == (step.kind or "agent")
+    text = (row.output_text or "") if status == "done" and is_own_row else ""
     return DeliveryPartRequest(
         step_id=step.step_id,
         agent_name=agent_name,
-        status=status if row is None or is_prompt_row else "stopped",
+        status=status if row is None or is_own_row else "stopped",
         text=text,
         prompt=True,
         from_title=from_title,
+        model_kind="checklist" if step.is_checklist else "prompt",
     )
 
 
@@ -145,7 +159,7 @@ async def read_part(
     An Agent step's text is its answer as it stood when it first finished. It names no artifact or
     file, so neither is looked up, and the answer is the only read.
     """
-    if step.is_prompt:
+    if step.is_model_step:
         return prompt_part(step, row, status if status == "done" else "stopped")
     if status != "done" or row is None:
         return DeliveryPartRequest(step_id=step.step_id, agent_name=step.agent_name, status="stopped")

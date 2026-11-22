@@ -225,7 +225,8 @@ def delivery_part_label(agent_name: str, from_title: str) -> str:
 
     A prompt step's part (workflow-designer §21.3) has no conversation, so it is labelled with its
     model's name in place of the Agent's and its step's name in place of the title
-    (``prompt_part_names``): ``"{model} · {step}"``.
+    (``prompt_part_names``): ``"{model} · {step}"``. A checklist step's part (§22.3) is labelled the
+    same way.
     """
     agent, title = agent_name.strip(), from_title.strip()
     if not agent or not title:
@@ -237,16 +238,21 @@ def delivery_part_label(agent_name: str, from_title: str) -> str:
 
 #: A prompt step's block names its step by this when the run kept no step name for it.
 PROMPT_STEP_FALLBACK_NAME = "Prompt step"
+#: A checklist step's block names its step by this when the run kept no step name for it (§22.3).
+CHECKLIST_STEP_FALLBACK_NAME = "Checklist step"
 
 
-def prompt_part_names(model_name: str, step_name: Optional[str]) -> Tuple[str, str]:
-    """``(agent_name, from_title)`` for a prompt step's part: its model, then its step (§21.3).
+def prompt_part_names(
+    model_name: str, step_name: Optional[str], *, fallback: str = PROMPT_STEP_FALLBACK_NAME
+) -> Tuple[str, str]:
+    """``(agent_name, from_title)`` for a prompt or checklist step's part: its model, then its step.
 
-    A prompt step has no Agent and no conversation, so the two names a part's label is built from
-    (``delivery_part_label``) are the model's display name and the step's name. Feeding them
-    through the same fields keeps the rendered block, and its TypeScript twin, unchanged.
+    A prompt step (§21.3) and a checklist step (§22.3) have no Agent and no conversation, so the two
+    names a part's label is built from (``delivery_part_label``) are the model's display name and
+    the step's name. Feeding them through the same fields keeps the rendered block, and its
+    TypeScript twin, unchanged. ``fallback`` names a step the run kept no name for.
     """
-    return model_name.strip(), (step_name or "").strip() or PROMPT_STEP_FALLBACK_NAME
+    return model_name.strip(), (step_name or "").strip() or fallback
 
 
 def render_delivery_parts(parts: Sequence[DeliveryPartBlock]) -> str:
@@ -303,6 +309,7 @@ __all__ = [
     "FILE_TAG",
     "FileLine",
     "HANDOFF_CONTEXT_TAG",
+    "CHECKLIST_STEP_FALLBACK_NAME",
     "PROMPT_STEP_FALLBACK_NAME",
     "build_handoff_message",
     "context_hash",

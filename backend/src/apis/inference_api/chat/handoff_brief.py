@@ -243,16 +243,18 @@ async def _run_steps(
             found = []
     steps: List[RunBriefStep] = []
     for index, step in enumerate(kept):
-        if step.is_prompt:
-            # A prompt row's agentName is its model's display name.
-            name = step.step_name or "Prompt step"
+        if step.is_model_step:
+            # A prompt or checklist row's agentName is its model's display name.
+            name = step.step_name or ("Checklist step" if step.is_checklist else "Prompt step")
             if step.agent_name:
                 name = f"{name} ({step.agent_name})"
             steps.append(
                 RunBriefStep(
                     agent_name=name,
                     request=step.request,
-                    agent_description=PROMPT_STEP_BRIEF_DESCRIPTION,
+                    agent_description=(
+                        CHECKLIST_STEP_BRIEF_DESCRIPTION if step.is_checklist else PROMPT_STEP_BRIEF_DESCRIPTION
+                    ),
                 )
             )
             continue
@@ -270,6 +272,12 @@ async def _run_steps(
 PROMPT_STEP_BRIEF_DESCRIPTION = (
     "A prompt step, not an agent: one model call over the shared files and its own instruction. "
     "It does not read this brief."
+)
+
+#: How the run brief describes a checklist step (workflow-designer §22.3), which has no Agent either.
+CHECKLIST_STEP_BRIEF_DESCRIPTION = (
+    "A checklist step, not an agent: fills named field sets from the shared files, one model call "
+    "per set. It does not read this brief."
 )
 
 

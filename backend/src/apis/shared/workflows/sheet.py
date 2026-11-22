@@ -14,6 +14,10 @@ Workflows page calls startable is one run create accepts.
   §21.3): it needs a catalog row and the shared model-access rule, after retirement.
 - **The sheet's blockers** are step 1's engine limits (:func:`sheet_for`), plus a prompt step
   while ``PROMPT_STEPS_ENABLED`` is off, or on a model the caller can't run.
+- **A checklist step** (workflow-designer §22.3) is judged like a prompt step, on its model, and
+  also on its field sets (:func:`field_set_views`): each must still be in the workflow's skill and
+  hold no ``list`` field, since a set can change after the workflow is saved. It blocks while
+  ``CHECKLIST_STEPS_ENABLED`` is off too.
 
 Nothing here runs on a turn. Each lookup raises a plain exception the routes map to HTTP.
 """
@@ -30,18 +34,21 @@ from pydantic import BaseModel, ConfigDict, Field
 from apis.shared.assistants.service import get_assistant_with_access_check
 from apis.shared.auth import User
 from apis.shared.blocking_io import run_blocking
-from apis.shared.feature_flags import prompt_steps_enabled
+from apis.shared.feature_flags import checklist_steps_enabled, prompt_steps_enabled
 from apis.shared.handoff.runs import WORKFLOW_RUN_MIN_STEPS
 from apis.shared.models.retirement import resolve_effective_model
 from apis.shared.skills.access import resolve_accessible_skill_ids
 from apis.shared.skills.models import SkillDefinition, SkillResourceRef, SkillStatus
 from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.skills.user_service import get_user_skill_service
+from apis.shared.workflows.field_set_refs import FieldSetLookup, read_skill_field_sets
 from apis.shared.workflows.format import (
+    CHECKLIST_REFUSED_FIELD_TYPE,
     RESULT_MERGE,
     Workflow,
     WorkflowError,
     WorkflowStep,
+    checklist_field_set_names,
     read_workflow_file,
     workflow_fingerprint,
     workflow_name_of_ref,
@@ -127,17 +134,44 @@ def model_for_step(model: "ModelView", step: Any) -> "ModelView":
     return model
 
 
+FieldSetUnavailableReason = Literal["missing", "list_field", "unreadable"]
+
+
+class FieldSetView(BaseModel):
+    """One field set a checklist step runs, as the workflow's skill holds it now (§22.3).
+
+    ``canRun`` is false when the skill no longer has the set (``missing``), it holds a ``list``
+    field (``list_field``), or it couldn't be read (``unreadable``). ``fieldCount`` is how many
+    fields the step's call for it asks for, which the sheet's estimate reads.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    can_run: bool = Field(..., alias="canRun")
+    title: Optional[str] = None
+    version: Optional[str] = None
+    field_count: Optional[int] = Field(None, alias="fieldCount")
+    reason: Optional[FieldSetUnavailableReason] = None
+
+
 class StepView(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str
     kind: str
-    agent_id: str = Field(..., alias="agentId", description="Empty on a prompt step")
+    agent_id: str = Field(..., alias="agentId", description="Empty on a prompt or checklist step")
     agent_version: Optional[int] = Field(None, alias="agentVersion")
-    model_id: Optional[str] = Field(None, alias="modelId", description="A prompt step's model, as the file names it")
+    model_id: Optional[str] = Field(
+        None, alias="modelId", description="A prompt or checklist step's model, as the file names it"
+    )
     reads: List[str]
     request: Optional[str] = None
-    effective_request: str = Field(..., alias="effectiveRequest", description="Its own request, else the shared one")
+    effective_request: str = Field(
+        ...,
+        alias="effectiveRequest",
+        description="Its own request, else the shared one; a checklist step's guidance alone, possibly empty",
+    )
     agent: AgentView = Field(
         ...,
         description=(
@@ -145,7 +179,19 @@ class StepView(BaseModel):
             "shape (name, modelId, rate, canRun), so a reader that names a step's worker still can"
         ),
     )
-    model: Optional[ModelView] = Field(None, description="A prompt step's model as the caller sees it")
+    model: Optional[ModelView] = Field(None, description="A prompt or checklist step's model as the caller sees it")
+    field_sets: Optional[List[FieldSetView]] = Field(
+        None,
+        alias="fieldSets",
+        description="A checklist step's field sets, in the order it runs them, each as the skill holds it now",
+    )
+    calls: Optional[int] = Field(
+        None,
+        description=(
+            "How many model calls the step makes: one per field set on a checklist step (§22.3), one on a "
+            "prompt step; absent on an Agent step, whose turn makes as many as it needs"
+        ),
+    )
 
 
 class ResultView(BaseModel):
@@ -178,6 +224,8 @@ SheetBlockerCode = Literal[
     "same_agent_twice",
     "prompt_steps_off",
     "model_unavailable",
+    "checklist_steps_off",
+    "field_set_unavailable",
 ]
 
 
@@ -301,7 +349,7 @@ async def agent_views(workflow: Workflow, user: User) -> Dict[str, AgentView]:
 
     A prompt step has no Agent, so its model id is never looked up as one (:func:`model_views`).
     """
-    agent_ids = sorted({step.agent_id for step in workflow.steps if not step.is_prompt})
+    agent_ids = sorted({step.agent_id for step in workflow.steps if not step.is_model_step})
 
     async def one(agent_id: str) -> Tuple[str, Optional[Any]]:
         try:
@@ -384,8 +432,8 @@ async def prompt_model_view(model_id: str, user: User) -> ModelView:
 
 
 async def model_views(workflow: Workflow, user: User) -> Dict[str, ModelView]:
-    """Each prompt step's model as the caller, keyed by the file's id (one check each, issued together)."""
-    model_ids = sorted({step.model_id for step in workflow.steps if step.is_prompt and step.model_id})
+    """Each prompt or checklist step's model as the caller, keyed by the file's id (one check each, together)."""
+    model_ids = sorted({step.model_id for step in workflow.steps if step.is_model_step and step.model_id})
     views = await asyncio.gather(*(prompt_model_view(model_id, user) for model_id in model_ids))
     return dict(zip(model_ids, views))
 
@@ -400,9 +448,52 @@ def model_as_worker(model: ModelView) -> AgentView:
     )
 
 
+async def field_set_views(skill: SkillDefinition, workflow: Workflow) -> Dict[str, FieldSetView]:
+    """Each field set the workflow's checklist steps run, as its skill holds it now (§22.3).
+
+    One GET per named set, issued together; a workflow with no checklist step reads nothing. The
+    sets are read from the workflow's own skill, whoever is looking, since that is where a step
+    resolves them. Never raises.
+    """
+    names = checklist_field_set_names(workflow)
+    if not names:
+        return {}
+    # The store the workflow file itself is read from (``read_stored_workflow_text``).
+    store = get_user_skill_service().bundle_files.resource_store
+    lookups = await read_skill_field_sets(skill.resources, names, read=store.get)
+    return {name: field_set_view(lookup) for name, lookup in lookups.items()}
+
+
+def field_set_view(lookup: FieldSetLookup) -> FieldSetView:
+    """A looked-up set as the sheet shows it, by the format's own rule (``field_set_ref_problem``)."""
+    if lookup.unreadable:
+        return FieldSetView(name=lookup.name, can_run=False, reason="unreadable")
+    field_set = lookup.field_set
+    if field_set is None:
+        return FieldSetView(name=lookup.name, can_run=False, reason="missing")
+    listed = any(field.type == CHECKLIST_REFUSED_FIELD_TYPE for field in field_set.fields)
+    return FieldSetView(
+        name=lookup.name,
+        can_run=not listed,
+        title=field_set.title,
+        version=field_set.version,
+        field_count=len(field_set.fields),
+        reason="list_field" if listed else None,
+    )
+
+
+def step_calls(step: WorkflowStep) -> Optional[int]:
+    """How many model calls a step makes, for the estimate: one per set, one, or ``None`` for an Agent."""
+    if step.is_checklist:
+        return len(step.field_sets)
+    if step.is_prompt:
+        return 1
+    return None
+
+
 def step_changed(step: WorkflowStep, agent: AgentView) -> bool:
     """The Agent has a published version other than the one the step recorded (§10, D6)."""
-    if step.is_prompt:
+    if step.is_model_step:
         return False
     return agent.can_run and agent.published_version is not None and agent.published_version != step.agent_version
 
@@ -418,13 +509,21 @@ _MODEL_BLOCKER_MESSAGES: Dict[str, str] = {
     "unavailable": "This step's model couldn't be checked. Remove the step, or try again",
 }
 
+_FIELD_SET_BLOCKER_MESSAGES: Dict[str, str] = {
+    "missing": "This step's field set '{name}' is no longer in the workflow's skill. Remove the step, or add the set back",
+    "list_field": "This step's field set '{name}' has a list field, which a checklist step can't fill yet. Remove the step, or change the field's type",
+    "unreadable": "This step's field set '{name}' couldn't be read. Remove the step, or try again",
+}
+
 
 def sheet_for(
     workflow: Workflow,
     agents: Dict[str, AgentView],
     models: Optional[Dict[str, ModelView]] = None,
+    field_sets: Optional[Dict[str, FieldSetView]] = None,
     *,
     prompt_steps: Optional[bool] = None,
+    checklist_steps: Optional[bool] = None,
 ) -> SheetView:
     """What blocks Start today, each reason once, with the step it is about.
 
@@ -437,11 +536,47 @@ def sheet_for(
     ``PROMPT_STEPS_ENABLED`` is off (``prompt_steps`` overrides the flag), and while its model
     (``models``, keyed by the file's id) is one the caller can't run: no catalog row, no access,
     or retired.
+
+    A checklist step (§22.3) blocks while ``CHECKLIST_STEPS_ENABLED`` is off (``checklist_steps``
+    overrides the flag), on its model by the prompt step's rule, and on each field set
+    (``field_sets``, by name) the skill no longer has, or holds a ``list`` field in.
     """
     blockers: List[SheetBlocker] = []
     seen: Dict[str, str] = {}
     prompts_on = prompt_steps_enabled() if prompt_steps is None else prompt_steps
+    checklists_on = checklist_steps_enabled() if checklist_steps is None else checklist_steps
     for step in workflow.steps:
+        if step.is_checklist:
+            if not checklists_on:
+                blockers.append(
+                    SheetBlocker(
+                        code="checklist_steps_off",
+                        step=step.name,
+                        message="Checklist steps aren't available here yet. Remove the step to start",
+                    )
+                )
+                continue
+            model = (models or {}).get(step.model_id or "")
+            if model is not None:
+                model = model_for_step(model, step)
+            if model is None or not model.can_run:
+                reason = model.reason if model is not None and model.reason else "unavailable"
+                blockers.append(
+                    SheetBlocker(code="model_unavailable", step=step.name, message=_MODEL_BLOCKER_MESSAGES[reason])
+                )
+            for set_name in step.field_sets:
+                view = (field_sets or {}).get(set_name)
+                if view is not None and view.can_run:
+                    continue
+                reason = view.reason if view is not None and view.reason else "unreadable"
+                blockers.append(
+                    SheetBlocker(
+                        code="field_set_unavailable",
+                        step=step.name,
+                        message=_FIELD_SET_BLOCKER_MESSAGES[reason].format(name=set_name),
+                    )
+                )
+            continue
         if step.is_prompt:
             if not prompts_on:
                 blockers.append(
@@ -535,8 +670,10 @@ async def workflow_document(
     skill: SkillDefinition, workflow: Workflow, user: User, *, written: Optional[bool] = None
 ) -> WorkflowDocument:
     """The workflow with each step's worker as the caller sees it, and the sheet it would open."""
-    agents, models = await asyncio.gather(agent_views(workflow, user), model_views(workflow, user))
-    return document_from(skill, workflow, user, agents, models, written=written)
+    agents, models, sets = await asyncio.gather(
+        agent_views(workflow, user), model_views(workflow, user), field_set_views(skill, workflow)
+    )
+    return document_from(skill, workflow, user, agents, models, sets, written=written)
 
 
 def document_from(
@@ -545,6 +682,7 @@ def document_from(
     user: User,
     agents: Dict[str, AgentView],
     models: Optional[Dict[str, ModelView]] = None,
+    field_sets: Optional[Dict[str, FieldSetView]] = None,
     *,
     written: Optional[bool] = None,
 ) -> WorkflowDocument:
@@ -552,7 +690,13 @@ def document_from(
     steps = []
     for step in workflow.steps:
         model: Optional[ModelView] = None
-        if step.is_prompt:
+        sets: Optional[List[FieldSetView]] = None
+        if step.is_checklist:
+            sets = [
+                (field_sets or {}).get(name) or FieldSetView(name=name, can_run=False, reason="unreadable")
+                for name in step.field_sets
+            ]
+        if step.is_model_step:
             model = (models or {}).get(step.model_id or "") or ModelView(
                 can_run=False, model_id=step.model_id or "", reason="unavailable"
             )
@@ -569,9 +713,12 @@ def document_from(
                 model_id=step.model_id,
                 reads=list(step.reads),
                 request=step.request,
-                effective_request=step.request or workflow.request or "",
+                # A checklist step's own text is guidance, never the shared request (§22.3).
+                effective_request=(step.request or "") if step.is_checklist else (step.request or workflow.request or ""),
                 agent=agent,
                 model=model,
+                field_sets=sets,
+                calls=step_calls(step),
             )
         )
     view = WorkflowView(
@@ -591,12 +738,14 @@ def document_from(
         fingerprint=workflow_fingerprint(workflow),
         is_owned=skill.owner_id == user.user_id,
     )
-    return WorkflowDocument(workflow=view, sheet=sheet_for(workflow, agents, models), written=written)
+    return WorkflowDocument(workflow=view, sheet=sheet_for(workflow, agents, models, field_sets), written=written)
 
 
 __all__ = [
     "DEFAULT_MERGE_INSTRUCTION",
     "AgentView",
+    "FieldSetUnavailableReason",
+    "FieldSetView",
     "ModelUnavailableReason",
     "ModelView",
     "ResultView",
@@ -610,6 +759,8 @@ __all__ = [
     "WorkflowView",
     "agent_views",
     "document_from",
+    "field_set_view",
+    "field_set_views",
     "is_active_skill",
     "load_workflow",
     "merge_instruction",
@@ -620,6 +771,7 @@ __all__ = [
     "read_stored_workflow_text",
     "readable_workflow_skill",
     "sheet_for",
+    "step_calls",
     "step_changed",
     "step_model",
     "without_steps",

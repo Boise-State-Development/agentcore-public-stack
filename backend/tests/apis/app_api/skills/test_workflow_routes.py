@@ -411,12 +411,12 @@ class TestWrite:
         assert resp.status_code == 400
         assert "reads its own result" in resp.json()["detail"]
 
-    def test_checklist_is_still_reserved(self, client):
+    def test_a_checklist_step_that_names_an_agent_is_refused(self, client):
         wf = _create(client)
-        bad = dict(DEFINITION, steps=[{"name": "a", "kind": "checklist", "agentId": "m"}])
+        bad = dict(DEFINITION, steps=[{"name": "a", "kind": "checklist", "agentId": "m", "fieldSets": ["x"], "reads": ["files"]}])
         resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=bad)
         assert resp.status_code == 400
-        assert "'checklist' steps are not available yet" in resp.json()["detail"]
+        assert "a checklist step has no Agent" in resp.json()["detail"]
 
     def test_the_sheet_names_what_blocks_start(self, client):
         wf = _create(client)
@@ -720,3 +720,187 @@ class TestPromptSteps:
         assert [(s["name"], s["kind"]) for s in steps] == [("generalist", "agent"), ("budget", "prompt")]
         assert steps[1]["modelId"] == HAIKU
         assert steps[1]["request"] == "List the budget lines"
+
+
+def _field_set_md(name: str, *types: str) -> bytes:
+    rows = "".join(f"| f{i} | F{i} | {t} | the value | {'a, b' if t == 'enum' else ''} | |\n" for i, t in enumerate(types))
+    return (
+        f"---\ntitle: {name.title()}\nversion: 2\n---\n\n| name | title | type | find | enum | optional |\n"
+        f"|---|---|---|---|---|---|\n{rows}"
+    ).encode()
+
+
+def _add_field_set(client, skill_id: str, name: str, *types: str):
+    return client.post(
+        f"/skills/mine/{skill_id}/resources",
+        files={"file": (f"field-set.{name}.md", _field_set_md(name, *types), "text/markdown")},
+        data={"kind": "reference"},
+    )
+
+
+WITH_CHECKLIST = dict(
+    DEFINITION,
+    steps=[
+        *DEFINITION["steps"],
+        {
+            "name": "audit",
+            "kind": "checklist",
+            "modelId": HAIKU,
+            "reads": ["files"],
+            "fieldSets": ["budget-caps", "compliance"],
+            "request": "Treat a missing page as cant_tell",
+        },
+    ],
+)
+
+
+class TestChecklistSteps:
+    """A checklist step (workflow-designer §22.3): a model, and field sets from the same skill."""
+
+    @pytest.fixture(autouse=True)
+    def _on(self, monkeypatch, prompt_models):
+        monkeypatch.setenv("PROMPT_STEPS_ENABLED", "true")
+        monkeypatch.setenv("CHECKLIST_STEPS_ENABLED", "true")
+        self.models = prompt_models
+
+    def _with_sets(self, client) -> dict:
+        wf = _create(client)
+        assert _add_field_set(client, wf["skillId"], "budget-caps", "currency", "number").status_code == 200
+        assert _add_field_set(client, wf["skillId"], "compliance", "enum").status_code == 200
+        return wf
+
+    def test_a_checklist_step_saves_and_reads_back_with_its_sets(self, client):
+        wf = self._with_sets(client)
+        resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST)
+
+        assert resp.status_code == 200, resp.text
+        doc = resp.json()
+        audit = doc["workflow"]["steps"][2]
+        assert audit["kind"] == "checklist"
+        assert audit["modelId"] == HAIKU and audit["agentId"] == ""
+        assert audit["request"] == "Treat a missing page as cant_tell"
+        # Guidance only: a checklist step never takes the shared request as its own.
+        assert audit["effectiveRequest"] == "Treat a missing page as cant_tell"
+        assert audit["calls"] == 2
+        assert audit["fieldSets"] == [
+            {"name": "budget-caps", "canRun": True, "title": "Budget-Caps", "version": "2", "fieldCount": 2},
+            {"name": "compliance", "canRun": True, "title": "Compliance", "version": "2", "fieldCount": 1},
+        ]
+        assert audit["agent"]["name"] == "Claude Haiku 5.5"
+        assert doc["sheet"] == {"startable": True, "blockers": []}
+        assert doc["workflow"]["steps"][0].get("calls") is None
+
+    def test_saving_it_again_writes_nothing(self, client):
+        wf = self._with_sets(client)
+        first = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST).json()
+        again = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST).json()
+
+        assert again["written"] is False
+        assert again["workflow"]["version"] == first["workflow"]["version"]
+
+    def test_a_set_missing_from_the_skill_is_refused_on_save_and_on_validate(self, client):
+        wf = _create(client)
+        _add_field_set(client, wf["skillId"], "compliance", "enum")
+        for params in ({}, {"validate": "true"}):
+            resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST, params=params)
+            assert resp.status_code == 400
+            assert "the field set 'budget-caps' is not in this skill" in resp.json()["detail"]
+
+    def test_a_set_with_a_list_field_is_refused(self, client):
+        wf = _create(client)
+        _add_field_set(client, wf["skillId"], "budget-caps", "string", "list")
+        _add_field_set(client, wf["skillId"], "compliance", "enum")
+        resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST)
+
+        assert resp.status_code == 400
+        assert "has a list field, 'f1'" in resp.json()["detail"]
+
+    def test_the_generic_upload_checks_the_sets_whatever_the_flag(self, client, monkeypatch):
+        monkeypatch.setenv("CHECKLIST_STEPS_ENABLED", "")
+        monkeypatch.setenv("WORKFLOWS_ENABLED", "")
+        skill_id = client.post("/skills/mine", json={"displayName": "Hand built", "description": "d"}).json()["skillId"]
+        text = (
+            f"---\ntitle: T\nversion: 1\n---\n\n| step | kind | worker | reads |\n|---|---|---|---|\n"
+            f"| a | checklist | {HAIKU} | files |\n\n## Step: a\n\nField sets: ghost\n"
+        ).encode()
+        resp = client.post(
+            f"/skills/mine/{skill_id}/resources",
+            files={"file": ("workflow.review.md", text, "text/markdown")},
+            data={"kind": "reference"},
+        )
+        assert resp.status_code == 400
+        assert "the field set 'ghost' is not in this skill" in resp.json()["detail"]
+        assert _add_field_set(client, skill_id, "ghost", "string").status_code == 200
+        ok = client.post(
+            f"/skills/mine/{skill_id}/resources",
+            files={"file": ("workflow.review.md", text, "text/markdown")},
+            data={"kind": "reference"},
+        )
+        assert ok.status_code == 200, ok.text
+
+    def test_a_set_that_goes_after_the_save_blocks_start(self, client):
+        wf = self._with_sets(client)
+        client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST)
+        refs = _resources(client, wf["skillId"])
+        compliance = next(r for r in refs if r["filename"] == "field-set.compliance.md")
+        assert client.delete(f"/skills/mine/{wf['skillId']}/resources/{compliance['path']}").status_code in (200, 204)
+
+        doc = client.get(f"/workflows/{wf['skillId']}/{wf['name']}").json()
+
+        assert doc["sheet"]["startable"] is False
+        assert [(b["code"], b["step"]) for b in doc["sheet"]["blockers"]] == [("field_set_unavailable", "audit")]
+        assert "'compliance' is no longer in the workflow's skill" in doc["sheet"]["blockers"][0]["message"]
+        assert doc["workflow"]["steps"][2]["fieldSets"][1] == {"name": "compliance", "canRun": False, "reason": "missing"}
+
+    def test_it_is_saved_while_the_flag_is_off_and_the_sheet_says_so(self, client, monkeypatch):
+        monkeypatch.setenv("CHECKLIST_STEPS_ENABLED", "")
+        wf = self._with_sets(client)
+        resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST)
+
+        assert resp.status_code == 200
+        assert [(b["code"], b["step"]) for b in resp.json()["sheet"]["blockers"]] == [("checklist_steps_off", "audit")]
+
+    def test_it_needs_prompt_steps_on_too(self, client, monkeypatch):
+        monkeypatch.setenv("PROMPT_STEPS_ENABLED", "")
+        wf = self._with_sets(client)
+        resp = client.put(f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST)
+
+        assert [b["code"] for b in resp.json()["sheet"]["blockers"]] == ["checklist_steps_off"]
+
+    def test_a_model_the_caller_cant_use_blocks_start(self, client):
+        self.models.allowed.discard(HAIKU)
+        wf = self._with_sets(client)
+        sheet = client.put(
+            f"/workflows/{wf['skillId']}/{wf['name']}", json=WITH_CHECKLIST, params={"validate": "true"}
+        ).json()["sheet"]
+
+        assert [(b["code"], b["step"]) for b in sheet["blockers"]] == [("model_unavailable", "audit")]
+
+    def test_save_as_workflow_from_a_run_with_a_checklist_step_is_409(self, client, world, author_user):
+        from apis.shared.handoff.runs import WorkflowRun, WorkflowRunStep
+
+        world.runs["run-2"] = WorkflowRun(
+            run_id="run-2",
+            user_id=author_user.user_id,
+            session_id="sess-1",
+            status="approved",
+            request="Review this",
+            steps=[
+                WorkflowRunStep(step_id="s1", handoff_id="h1", agent_id="AST-gen", agent_name="Generalist", request="Review this"),
+                WorkflowRunStep(
+                    step_id="s2",
+                    handoff_id="h2",
+                    kind="checklist",
+                    model_id=HAIKU,
+                    agent_name="Claude Haiku 5.5",
+                    field_sets=["compliance"],
+                    step_name="audit",
+                ),
+            ],
+            created_at="2026-11-21T00:00:00+00:00",
+            updated_at="2026-11-21T00:00:00+00:00",
+        )
+        resp = client.post("/workflows", json={"fromRun": {"sessionId": "sess-1", "runId": "run-2"}})
+
+        assert resp.status_code == 409
+        assert "checklist step" in resp.json()["detail"]

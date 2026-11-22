@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover - exercised only without boto3
     Key = None  # type: ignore[assignment]
     ClientError = Exception  # type: ignore[assignment, misc]
 
+from apis.shared.handoff.checklist_rows import ChecklistSetRow
 from apis.shared.handoff.models import ABANDON_AFTER, HandoffView
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,9 @@ class WorkflowRunLimits(BaseModel):
     concurrency: int = WORKFLOW_RUN_CONCURRENCY
 
 
-WorkflowRunStepKind = Literal["agent", "prompt"]
+WorkflowRunStepKind = Literal["agent", "prompt", "checklist"]
+#: Step kinds that are model calls with no Agent and no conversation (``models.MODEL_STEP_KINDS``).
+_MODEL_STEP_KINDS = frozenset({"prompt", "checklist"})
 
 
 class WorkflowRunStep(BaseModel):
@@ -84,6 +87,8 @@ class WorkflowRunStep(BaseModel):
     Agent. A prompt step (``kind`` ``prompt``, workflow-designer §21.3) has no Agent: its
     ``agentId`` is empty, ``modelId`` names the model, ``agentName`` is that model's display name
     (so every reader that names a step's worker names it), and ``request`` is its instruction.
+    A checklist step (``kind`` ``checklist``, §22.3) is the same, with ``fieldSets`` naming the
+    sets it runs and ``request`` its own guidance alone (possibly empty).
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -91,11 +96,17 @@ class WorkflowRunStep(BaseModel):
     step_id: str = Field(..., alias="stepId")
     handoff_id: str = Field(..., alias="handoffId")
     kind: Optional[WorkflowRunStepKind] = Field(
-        None, description="agent or prompt; absent reads as agent, so rows written before it read as before"
+        None,
+        description="agent, prompt or checklist; absent reads as agent, so rows written before it read as before",
     )
-    agent_id: str = Field("", alias="agentId", description="Empty only on a prompt step")
+    agent_id: str = Field("", alias="agentId", description="Empty only on a prompt or checklist step")
     agent_name: str = Field("", alias="agentName")
-    model_id: Optional[str] = Field(None, alias="modelId", description="A prompt step's model; absent on an Agent step")
+    model_id: Optional[str] = Field(
+        None, alias="modelId", description="A prompt or checklist step's model; absent on an Agent step"
+    )
+    field_sets: Optional[List[str]] = Field(
+        None, alias="fieldSets", description="A checklist step's field sets, in the order it runs them"
+    )
     request: str = ""
     removed: bool = False
     step_name: Optional[str] = Field(
@@ -114,32 +125,47 @@ class WorkflowRunStep(BaseModel):
             "it is absent on a mention run and on a step that reads no step. On a prompt step "
             "(workflow-designer §21.3), the whole set in canonical order (request, files, then steps), "
             "always written, even empty: a prompt step gets the request or the files only when it reads "
-            "them. A prompt step's row with no reads at all (absent) reads as both"
+            "them. A prompt step's row with no reads at all (absent) reads as both. A checklist step's is "
+            "written as a prompt step's, and always names files"
         ),
     )
 
     @property
     def is_prompt(self) -> bool:
+        """Exactly a prompt step. A reader that means "no conversation" asks :attr:`is_model_step`."""
         return self.kind == "prompt"
+
+    @property
+    def is_checklist(self) -> bool:
+        return self.kind == "checklist"
+
+    @property
+    def is_model_step(self) -> bool:
+        """A prompt or checklist step: model calls with no Agent and no conversation."""
+        return self.kind in _MODEL_STEP_KINDS
 
     def reads_input(self, name: str) -> bool:
         """Whether the step gets the run's ``request`` or ``files`` (``name``).
 
-        Every Agent step does. A prompt step does only when its ``reads`` names it; its ``reads`` is
-        always written at create, even empty, so an absent one (a row from before inputs were kept)
-        reads as both. No prompt row was written before then outside development.
+        Every Agent step does. A prompt or checklist step does only when its ``reads`` names it; its
+        ``reads`` is always written at create, even empty, so an absent one (a row from before inputs
+        were kept) reads as both. No prompt row was written before then outside development.
         """
-        if not self.is_prompt or self.reads is None:
+        if not self.is_model_step or self.reads is None:
             return True
         return name in self.reads
 
     @model_validator(mode="after")
     def _worker(self) -> "WorkflowRunStep":
-        if self.is_prompt:
+        if self.is_model_step:
             if self.agent_id or not self.model_id:
-                raise ValueError("a prompt step names a model and no Agent")
+                raise ValueError(f"a {self.kind} step names a model and no Agent")
+            if self.is_checklist and not self.field_sets:
+                raise ValueError("a checklist step names its field sets")
         elif not self.agent_id:
             raise ValueError("an Agent step names its Agent")
+        if self.field_sets and not self.is_checklist:
+            raise ValueError("only a checklist step runs field sets")
         return self
 
 
@@ -234,6 +260,11 @@ class WorkflowRun(BaseModel):
         None, description="The saved workflow this run was started from (PR-D.2); absent for a mention run"
     )
 
+    @property
+    def has_checklist_step(self) -> bool:
+        """Whether any step is a checklist step, so a reader knows to read its ``WFCHK#`` rows."""
+        return any(step.is_checklist for step in self.steps)
+
     def kept_steps(self) -> List["WorkflowRunStep"]:
         """The steps the run will start: every step not removed at the sheet, in order."""
         return [step for step in self.steps if not step.removed]
@@ -264,16 +295,26 @@ class WorkflowRunStepView(BaseModel):
 
     step_id: str = Field(..., alias="stepId")
     handoff_id: str = Field(..., alias="handoffId")
-    kind: Optional[str] = Field(None, description="agent or prompt; absent on runs written before prompt steps")
+    kind: Optional[str] = Field(
+        None, description="agent, prompt or checklist; absent on runs written before prompt steps"
+    )
     agent_id: str = Field(..., alias="agentId")
     agent_name: str = Field(..., alias="agentName")
     model_id: Optional[str] = Field(None, alias="modelId")
+    field_sets: Optional[List[str]] = Field(None, alias="fieldSets", description="A checklist step's field sets")
     request: str
     removed: bool
     step_name: Optional[str] = Field(None, alias="stepName")
     agent_version: Optional[int] = Field(None, alias="agentVersion")
     reads: Optional[List[str]] = None
     handoff: Optional[HandoffView] = None
+    checklist: Optional[List[ChecklistSetRow]] = Field(
+        None,
+        description=(
+            "A checklist step's WFCHK# rows (workflow-designer §22.3), one per field set it has run, in its "
+            "authored order, with each value's quote, locator and state. Absent on every other kind"
+        ),
+    )
 
 
 class WorkflowRunView(BaseModel):
@@ -297,9 +338,19 @@ class WorkflowRunView(BaseModel):
     workflow: Optional[WorkflowRunSource] = Field(None, description="The saved workflow it started from, if any")
 
     @classmethod
-    def from_row(cls, run: WorkflowRun, handoffs: Optional[Dict[str, HandoffView]] = None) -> "WorkflowRunView":
-        """``handoffs`` maps a handoff id to its row's view; a step whose row is missing has none."""
+    def from_row(
+        cls,
+        run: WorkflowRun,
+        handoffs: Optional[Dict[str, HandoffView]] = None,
+        checklists: Optional[Dict[str, List[ChecklistSetRow]]] = None,
+    ) -> "WorkflowRunView":
+        """``handoffs`` maps a handoff id to its row's view; a step whose row is missing has none.
+
+        ``checklists`` maps a checklist step's id to its ``WFCHK#`` rows; a checklist step with none
+        yet reads ``[]``, so the SPA can tell "nothing found yet" from "not a checklist step".
+        """
         views = handoffs or {}
+        tables = checklists or {}
         return cls(
             run_id=run.run_id,
             session_id=run.session_id,
@@ -313,12 +364,14 @@ class WorkflowRunView(BaseModel):
                     agent_id=step.agent_id,
                     agent_name=step.agent_name,
                     model_id=step.model_id,
+                    field_sets=step.field_sets,
                     request=step.request,
                     removed=step.removed,
                     step_name=step.step_name,
                     agent_version=step.agent_version,
                     reads=step.reads,
                     handoff=views.get(step.handoff_id),
+                    checklist=list(tables.get(step.step_id, [])) if step.is_checklist else None,
                 )
                 for step in run.steps
             ],

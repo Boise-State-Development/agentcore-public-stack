@@ -26,7 +26,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from apis.shared.feature_flags import handoffs_enabled, workflow_runs_enabled
 from apis.shared.handoff.delivery import DeliveryStore, DeliveryView, get_delivery_store
-from apis.shared.handoff.models import Handoff, HandoffView
+from apis.shared.handoff.checklist_rows import ChecklistRowStore, get_checklist_row_store, rows_by_step
+from apis.shared.handoff.models import MODEL_STEP_KINDS, Handoff, HandoffView
 from apis.shared.handoff.relay import MetaLoader, load_relayed_prompts
 from apis.shared.handoff.runs import WorkflowRunStore, WorkflowRunView, get_workflow_run_store
 from apis.shared.handoff.store import HandoffStore, get_handoff_store
@@ -91,36 +92,57 @@ async def load_workflow_run_replay(
     user_id: str,
     run_store: Optional[WorkflowRunStore] = None,
     handoff_store: Optional[HandoffStore] = None,
+    checklist_store: Optional[ChecklistRowStore] = None,
 ) -> List[Dict[str, Any]]:
     """This conversation's workflow runs, oldest first, each with its steps' rows (spec §9). Never raises.
 
     Every run, whatever its status: the SPA decides what an open, dismissed or abandoned run shows.
     A conversation with no runs costs one query; only one with runs reads its handoff rows too, for
     the steps' current views. Those views carry no ``relayedPrompts``: a step that was sent is in
-    ``handoffs`` as well, with them. Nothing while ``WORKFLOW_RUNS_ENABLED`` is off.
+    ``handoffs`` as well, with them. A conversation with a checklist step (workflow-designer §22.3)
+    also reads its ``WFCHK#`` rows, one query beside the handoff rows', for each such step's table;
+    one without reads none. Nothing while ``WORKFLOW_RUNS_ENABLED`` is off.
     """
     if not workflow_runs_enabled():
         return []
     run_store = run_store or get_workflow_run_store()
     handoff_store = handoff_store or get_handoff_store()
+    checklist_store = checklist_store or get_checklist_row_store()
     try:
         runs = await asyncio.to_thread(run_store.list_for_session, user_id, session_id)
         if not runs:
             return []
-        rows = await asyncio.to_thread(handoff_store.list_for_session, user_id, session_id)
+        checklist_read = (
+            asyncio.to_thread(checklist_store.read, user_id=user_id, session_id=session_id)
+            if any(run.has_checklist_step for run in runs)
+            else _no_rows()
+        )
+        rows, checklist_rows = await asyncio.gather(
+            asyncio.to_thread(handoff_store.list_for_session, user_id, session_id), checklist_read
+        )
     except Exception:  # noqa: BLE001 - a replay that fails costs only the runs, never the thread
         logger.warning("Workflow run replay failed", exc_info=True)
         return []
     views = {row.handoff_id: HandoffView.from_row(row) for row in rows if row.run_id}
+    by_run: Dict[str, List[Any]] = {}
+    for row in checklist_rows:
+        by_run.setdefault(row.run_id, []).append(row)
     return [
-        WorkflowRunView.from_row(run, views).model_dump(by_alias=True, exclude_none=True) for run in runs
+        WorkflowRunView.from_row(run, views, rows_by_step(by_run.get(run.run_id, []))).model_dump(
+            by_alias=True, exclude_none=True
+        )
+        for run in runs
     ]
+
+
+async def _no_rows() -> List[Any]:
+    return []
 
 
 def _replayed(row: Handoff) -> bool:
     """A handoff that was sent (its row), or a suggestion still waiting on the user (its chip)."""
-    if row.kind in ("send_back", "prompt"):
-        # A prompt step has no conversation to link to; its run's replay carries it.
+    if row.kind == "send_back" or row.kind in MODEL_STEP_KINDS:
+        # A prompt or checklist step has no conversation to link to; its run's replay carries it.
         return False
     if row.target_session_id:
         return True

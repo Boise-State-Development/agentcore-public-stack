@@ -31,7 +31,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 from apis.shared.handoff.context import context_hash
 from apis.shared.files.linked_files import DELIVERY_MAX_FILES, linkable_refusal, original_of
@@ -82,7 +82,9 @@ class DeliveryPartRequest:
     A prompt step's part (``prompt=True``, workflow-designer §21.3) has no conversation at all: it
     is text alone, the step's own answer, with no sender to check, no artifacts and no files.
     ``from_title`` is what its block names beside ``agent_name`` (the step, beside the model);
-    an Agent step's comes from its conversation's title instead, and this is ignored.
+    an Agent step's comes from its conversation's title instead, and this is ignored. A checklist
+    step's part (§22.3) is the same text-only part, with ``model_kind="checklist"`` so the stored
+    part says which kind of step made it.
     """
 
     step_id: str
@@ -94,6 +96,7 @@ class DeliveryPartRequest:
     file_ids: Sequence[str] = ()
     prompt: bool = False
     from_title: str = ""
+    model_kind: Literal["prompt", "checklist"] = "prompt"
 
 
 def render_return_excerpt(message: Mapping[str, Any]) -> str:
@@ -428,7 +431,7 @@ async def _prepare_run_result(
             text_hash=context_hash(body) if body else "",
             artifacts=artifacts,
             files=files,
-            kind="prompt" if part.prompt else None,
+            kind=part.model_kind if part.prompt else None,
         )
         for part, (body, artifacts, files) in zip(parts, contents)
     ]

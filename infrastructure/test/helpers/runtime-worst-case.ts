@@ -33,7 +33,7 @@ export function synthWorstCasePlatformStack(overrides: Partial<AppConfig> = {}):
     // Prompt steps write the Runtime's only workflow flag, and only with the
     // whole workflow chain on.
     workflowRuns: { enabled: true },
-    workflows: { enabled: true, promptStepsEnabled: true },
+    workflows: { enabled: true, promptStepsEnabled: true, checklistStepsEnabled: true },
     // Rewind and fork are default on and write their Runtime variable only
     // while OFF, so the worst case is off (the mock config's default).
     sessionRewind: { enabled: false },
