@@ -110,8 +110,12 @@ export class WorkflowsApiService {
     }
   }
 
-  async remove(ref: WorkflowRef): Promise<void> {
-    await firstValueFrom(this.http.delete(this.url(ref), { context: quiet() }));
+  /**
+   * Delete a workflow, and its carrying skill when the designer made it and it holds nothing else.
+   * `keepalive` lets the request outlive the page, for a delete sent as the tab closes.
+   */
+  async remove(ref: WorkflowRef, options: { keepalive?: boolean } = {}): Promise<void> {
+    await firstValueFrom(this.http.delete(this.url(ref), { context: quiet(), keepalive: options.keepalive }));
   }
 
   /** The backend's own message (`detail`), so a parser refusal reads as written. */

@@ -672,7 +672,7 @@ describe('WorkflowDesignerPage', () => {
       TestBed.overrideProvider(MySkillService, { useValue: { getSkill } });
     }
 
-    function checklistDoc(sets: { name: string; canRun?: boolean; title?: string; fieldCount?: number; reason?: 'missing' | 'list_field' }[]): WorkflowDocument {
+    function checklistDoc(sets: { name: string; canRun?: boolean; title?: string; fieldCount?: number; reason?: 'missing' | 'unreadable' }[]): WorkflowDocument {
       return doc({
         steps: [
           ...view().steps,
@@ -800,11 +800,72 @@ describe('WorkflowDesignerPage', () => {
       expect(el.querySelector('[data-testid="wf-skill-sets"] button[aria-label="Add the field set budget"]')).not.toBeNull();
     });
 
+    /** A new workflow with a checklist step whose carrier Create the workflow now made. */
+    async function createCarrier(): Promise<void> {
+      on({ checklistSteps: true });
+      TestBed.overrideProvider(Location, { useValue: { replaceState, path: () => '/workflows/new' } });
+      service.create.mockResolvedValue(doc({ skillId: 'SKL-new', name: 'untitled', version: 1, steps: [], request: '' }));
+      service.remove.mockResolvedValue(undefined);
+      await open({});
+      button('Add step to stage 1').click();
+      await settle();
+      (el.querySelector('#wf-kind-checklist') as HTMLInputElement).click();
+      await settle();
+      button('Create the workflow now').click();
+      await settle();
+    }
+
+    it('deletes the workflow Create the workflow now made when the designer is left unsaved', async () => {
+      await createCarrier();
+      expect(service.remove).not.toHaveBeenCalled();
+      fixture.destroy();
+      expect(service.remove).toHaveBeenCalledTimes(1);
+      expect(service.remove).toHaveBeenCalledWith({ skillId: 'SKL-new', name: 'untitled' }, {});
+    });
+
+    it('deletes it with keepalive when the tab closes, and puts the URL back to a new workflow', async () => {
+      await createCarrier();
+      replaceState.mockClear();
+      window.dispatchEvent(new Event('pagehide'));
+      expect(service.remove).toHaveBeenCalledWith({ skillId: 'SKL-new', name: 'untitled' }, { keepalive: true });
+      expect(replaceState).toHaveBeenCalledWith('/workflows/new');
+      await settle();
+      // The draft is still here, unsaved, and the next Save makes a new workflow.
+      expect(el.textContent).toContain('Not saved yet');
+      // Only once: leaving afterwards has nothing left to delete.
+      fixture.destroy();
+      expect(service.remove).toHaveBeenCalledTimes(1);
+    });
+
+    it('never deletes it once a save has kept it', async () => {
+      await createCarrier();
+      button('Add the field set budget').click();
+      await settle();
+      ([...el.querySelectorAll<HTMLInputElement>('input[name="wf-model"]')].find((input) => input.value === 'us.model-a')!).click();
+      await settle();
+      const saved = checklistDoc([{ name: 'budget', title: 'Budget', fieldCount: 3 }]);
+      service.write.mockResolvedValue({ ok: true, document: { ...saved, workflow: { ...saved.workflow, skillId: 'SKL-new', name: 'untitled' } } });
+      button('Save workflow').click();
+      await settle();
+      expect(service.write).toHaveBeenCalled();
+      window.dispatchEvent(new Event('pagehide'));
+      fixture.destroy();
+      expect(service.remove).not.toHaveBeenCalled();
+    });
+
+    it('never deletes a saved workflow it opened', async () => {
+      on({ checklistSteps: true });
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      window.dispatchEvent(new Event('pagehide'));
+      fixture.destroy();
+      expect(service.remove).not.toHaveBeenCalled();
+    });
+
     it('opens a saved checklist step with its sets as the server read them, and says what can’t run', async () => {
       on({ checklistSteps: true });
       const saved = checklistDoc([
         { name: 'compliance', title: 'Compliance', fieldCount: 6 },
-        { name: 'budget', canRun: false, reason: 'list_field' },
+        { name: 'budget', canRun: false, reason: 'unreadable' },
       ]);
       service.read.mockResolvedValue({ ok: true, document: saved });
       service.validate.mockResolvedValue(saved);
@@ -817,7 +878,7 @@ describe('WorkflowDesignerPage', () => {
       const chosen = [...el.querySelectorAll('[data-testid="wf-chosen-sets"] li')].map((li) => li.textContent!.replace(/\s+/g, ' ').trim());
       expect(chosen[0]).toContain('Compliance');
       expect(chosen[0]).toContain('6 fields');
-      expect(chosen[1]).toContain('Has a list field, which a checklist step can’t fill yet.');
+      expect(chosen[1]).toContain('Couldn’t be read. Try again, or remove it.');
       // No field-set editor link while its own flag is off.
       expect(el.querySelector('[data-testid="wf-chosen-sets"] a')).toBeNull();
       // Every set the skill holds is already on the step.

@@ -67,7 +67,7 @@ export interface WorkflowModelView {
 export type WorkflowStepKind = 'agent' | 'prompt' | 'checklist';
 
 /** Why a checklist step's field set can't run (`FieldSetView.reason`). */
-export type WorkflowFieldSetUnavailableReason = 'missing' | 'list_field' | 'unreadable';
+export type WorkflowFieldSetUnavailableReason = 'missing' | 'unreadable';
 
 /**
  * One field set a checklist step runs, as the workflow's skill holds it now (`FieldSetView`,

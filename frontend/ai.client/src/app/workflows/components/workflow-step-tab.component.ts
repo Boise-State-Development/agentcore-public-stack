@@ -30,8 +30,6 @@ export function fieldSetReasonCopy(reason: string | undefined): string {
   switch (reason) {
     case 'missing':
       return 'No longer in this workflow’s skill. Remove it, or add it back to the skill.';
-    case 'list_field':
-      return 'Has a list field, which a checklist step can’t fill yet. Remove it, or change the field’s type.';
     default:
       return 'Couldn’t be read. Try again, or remove it.';
   }

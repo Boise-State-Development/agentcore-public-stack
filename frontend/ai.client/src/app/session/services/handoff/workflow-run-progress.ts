@@ -165,14 +165,14 @@ export function fieldSetsLabel(count: number): string {
 
 /**
  * Why one of a checklist step's field sets has no table (`error` on its `WFCHK#` row, §22.3), in
- * plain words. A set that fails alone never stops the step's other sets.
+ * plain words. A set that fails alone never stops the step's other sets. A code this doesn't know
+ * reads as the generic line, including `unsupported_field`, which only rows written before list
+ * fields could be filled carry.
  */
 export function checklistSetErrorLine(code: string | null | undefined): string {
   switch (code) {
     case 'field_set_missing':
       return 'The field set is no longer in the workflow’s skill, so it wasn’t run.';
-    case 'unsupported_field':
-      return 'The field set now has a list field, which a checklist step can’t fill yet, so it wasn’t run.';
     case 'no_tool_call':
       return 'The model answered without filling in the fields, twice.';
     case 'timeout':
@@ -182,7 +182,7 @@ export function checklistSetErrorLine(code: string | null | undefined): string {
     case 'model_error':
       return 'The model call failed.';
     default:
-      return 'Something went wrong, so it wasn’t filled in.';
+      return 'This field set couldn’t run.';
   }
 }
 

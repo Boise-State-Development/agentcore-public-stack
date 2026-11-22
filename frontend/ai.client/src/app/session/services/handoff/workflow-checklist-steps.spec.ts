@@ -40,6 +40,9 @@ describe('checklist step labels', () => {
       expect(line.endsWith('.')).toBe(true);
     }
     expect(checklistSetErrorLine('timeout')).toBe('It took too long, so it was stopped.');
+    // A row written before list fields could be filled still names its set's failure, generically.
+    expect(checklistSetErrorLine('unsupported_field')).toBe('This field set couldn’t run.');
+    expect(checklistSetErrorLine('something_new')).toBe('This field set couldn’t run.');
   });
 });
 
@@ -94,8 +97,8 @@ describe('a checklist step on the sheet', () => {
   it('says its blockers in the sheet’s words', () => {
     expect(stepBlockerCopy({ code: 'checklist_steps_off', message: 'x' })).toBe('Checklist steps aren’t available here yet. Remove the step to start.');
     expect(
-      stepBlockerCopy({ code: 'field_set_unavailable', message: "This step's field set 'budget' has a list field, which a checklist step can't fill yet. Remove the step, or change the field's type" }),
-    ).toBe("This step's field set 'budget' has a list field, which a checklist step can't fill yet. Remove the step, or change the field's type.");
+      stepBlockerCopy({ code: 'field_set_unavailable', message: "This step's field set 'budget' is no longer in the workflow's skill. Remove the step, or add the set back" }),
+    ).toBe("This step's field set 'budget' is no longer in the workflow's skill. Remove the step, or add the set back.");
   });
 });
 

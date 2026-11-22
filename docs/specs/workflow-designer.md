@@ -1593,7 +1593,11 @@ three verdict sets and ten budget values) on Haiku 5.5, the same step on Sonnet 
     open in a new tab, so the unsaved draft stays, and **Refresh the list** reads the skill again.
   - **A new workflow** has no skill until it is saved, and a checklist step with no sets can't be saved. So the set
     list offers **Create the workflow now**: the first save's `POST /workflows` alone. The draft stays unsaved, and
-    the URL follows the new workflow.
+    the URL follows the new workflow. If the designer is left (a route change, or the tab closing, sent with
+    `keepalive`) before any save keeps that workflow, it is deleted with `DELETE /workflows/{skillId}/{name}`, best
+    effort, so no empty carrier is left behind. That route removes the carrying skill only while it holds nothing
+    else, so a field set added to it meanwhile keeps the skill and only the empty workflow file goes. A workflow saved
+    even once, or one the designer opened rather than made, is never deleted this way.
   - **The card** says "Checklist · *model* · *N* field sets". The Preview tab names and prices it like the sheet.
     Mark as reviewed's `definitionOf` writes a checklist step's model and sets back.
 - **The sheet.** Each row leads with the step's name, then "Checklist · *model* · *N* field sets", and that line wraps
@@ -1657,7 +1661,8 @@ compiles and fills on both models, so the refusal went.
 - **Lifted:** the parse check on every skill-file write (`field_set_ref_problem`), the sheet's `list_field` blocker
   (`FieldSetView.reason` is now `missing` or `unreadable`), and the Runtime's `unsupported_field` error. A
   `WFCHK#` row written before this keeps its stored `unsupported_field` code, and its step keeps the answer it
-  stored then.
+  stored then. The SPA has no copy of its own for either code any more: such a row's set reads the generic "This
+  field set couldn't run."
 - **No new flag:** this extends what `CHECKLIST_STEPS_ENABLED` already gates.
 
 **Checked before merge (2026-11-22).** The Runtime path on this branch against dev Bedrock (`us.*` ids), with the
