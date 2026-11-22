@@ -40,6 +40,27 @@ same Pydantic validation on return — and the run is marked
 and the artifact header, because a reviewer has to be able to tell types that
 were guaranteed from types that were merely requested.
 
+A MODEL THAT CANNOT BE FORCED GOES TO AUTO, NOT TO NATIVE OUTPUT
+----------------------------------------------------------------
+Strands 1.65 tries ``forced → native → auto`` and skips a step its
+``model_info`` rules out without sending it. Every 5.x Claude is listed
+``forcedToolChoice: false`` (Bedrock really refuses it on Sonnet 5.5 and Opus
+5.5), so the forced strict tool is never tried there. **Native output is
+skipped here too**, because Strands sends it *beside* the strict tool rather
+than instead of it, and Bedrock compiles both: a 14-field set that compiles as
+either one alone is refused as "compiled grammar is too large" when they
+arrive together (measured on dev 2026-11-22, §16.13). Field sets with an
+``enum`` never reached native anyway (Strands reads an enum with ``null`` as
+untyped). So on such a model the call is **auto tool choice with the same
+strict tool**, the grammar §16.9 measured, and the schema is enforced exactly
+when the model answers by calling it.
+
+**``schema_enforced`` is read from the answer, not assumed from the request.**
+On auto the model may answer in text instead; Strands then parses that text as
+JSON and returns it as though the tool had been called. Pydantic still
+validates it, but no grammar did, so such a run is marked
+``schema_enforced=False`` without a retry, the same marker D11 uses.
+
 NO TURN-SCOPED STATE
 --------------------
 :func:`extract_fields` is a function of ``(document text, field set)`` and
@@ -117,7 +138,8 @@ class ExtractionResult:
 
     #: ``{field_name: {"value": …, "quote": …}}`` in the field set's order.
     rows: Dict[str, Dict[str, Any]]
-    #: False when the run fell back to an unenforced request (D11).
+    #: False when the run fell back to an unenforced request (D11), or when
+    #: the model answered in text instead of through the strict tool.
     schema_enforced: bool
     model_id: str
     #: Token usage for the metering row (D12), empty when the SDK reported none.
@@ -130,14 +152,22 @@ def _build_model(model_id: str, *, strict: bool):
     Imported lazily so this module stays importable (and the parser and schema
     builder stay unit-testable) without Strands or boto on the path.
     """
-    from strands.models import BedrockModel
+    from strands.models import BedrockModel, ModelCapabilities, ModelInfo
 
+    no_native_output = ModelInfo(capabilities=ModelCapabilities(native_structured_output=False))
     # max_tokens=None: omit maxTokens and take Bedrock's per-model maximum,
     # not the strands-agents 1.63.0 default from its model_info.json, which
     # overstates some Claude limits (see ModelConfig.to_bedrock_config).
-    return BedrockModel(model_id=model_id, max_tokens=None, strict_tools=True) if strict else BedrockModel(
-        model_id=model_id, max_tokens=None
-    )
+    #
+    # model_info: no native output, so a model that refuses forced tool choice
+    # falls to auto with the strict tool instead of to native output sent
+    # beside it, which Bedrock refuses at 14 fields (module docstring). A model
+    # that accepts forcing (Haiku 4.5) still takes the forced call first.
+    if strict:
+        return BedrockModel(
+            model_id=model_id, max_tokens=None, strict_tools=True, model_info=no_native_output
+        )
+    return BedrockModel(model_id=model_id, max_tokens=None, model_info=no_native_output)
 
 
 def _prompt(field_set: FieldSet, document_text: str, filename: str) -> List[Dict[str, Any]]:
@@ -229,17 +259,36 @@ def _usage_from(event: Dict[str, Any]) -> Dict[str, int]:
     return {}
 
 
+def _answered_by_tool(event: Dict[str, Any]) -> Optional[bool]:
+    """Whether a ``stop`` event's answer was a tool call, or ``None`` if not a stop.
+
+    Strands' ``structured_output`` returns a result from either a call to the
+    output tool (``stop_reason == "tool_use"``) or a text answer it parsed as
+    JSON (``"end_turn"``). Only the first went through the strict grammar here,
+    because native output is never requested (:func:`_build_model`).
+    """
+    stop = event.get("stop")
+    if not isinstance(stop, (tuple, list)) or not stop:
+        return None
+    return stop[0] == "tool_use"
+
+
 async def _run_once(
     model: Any,
     output_model: Type[BaseModel],
     prompt: List[Dict[str, Any]],
     timeout: float,
-) -> Tuple[BaseModel, Dict[str, int]]:
-    """One ``structured_output`` pass. Returns the validated model and usage."""
+) -> Tuple[BaseModel, Dict[str, int], bool]:
+    """One ``structured_output`` pass.
 
-    async def _drive() -> Tuple[BaseModel, Dict[str, int]]:
+    Returns the validated model, the usage, and whether the answer arrived as
+    a tool call (False when it was text, or when no stop event was seen).
+    """
+
+    async def _drive() -> Tuple[BaseModel, Dict[str, int], bool]:
         output: Optional[BaseModel] = None
         usage: Dict[str, int] = {}
+        by_tool = False
         async for event in model.structured_output(
             output_model, prompt, system_prompt=_SYSTEM_PROMPT
         ):
@@ -250,11 +299,14 @@ async def _run_once(
             reading = _usage_from(event)
             if reading:
                 usage = reading
+            answered = _answered_by_tool(event)
+            if answered is not None:
+                by_tool = answered
             if "output" in event:
                 output = event["output"]
         if output is None:
             raise ExtractionError("the extraction call produced no structured output")
-        return output, usage
+        return output, usage, by_tool
 
     return await asyncio.wait_for(_drive(), timeout=timeout)
 
@@ -369,13 +421,23 @@ async def extract_fields(
     prompt = _prompt(field_set, text, filename)
 
     try:
-        output, usage = await _run_once(
+        output, usage, by_tool = await _run_once(
             _build_model(model_id, strict=True),
             output_model,
             prompt,
             STRICT_TIMEOUT_SECONDS,
         )
-        enforced = True
+        # Enforced only if the strict tool carried the answer. A text answer
+        # (possible on auto tool choice, which a model that refuses forcing
+        # gets) was validated by Pydantic but constrained by no grammar.
+        enforced = by_tool
+        if not by_tool:
+            logger.warning(
+                "document_extract: model %s answered field set %r in text rather "
+                "than through the strict tool; marking the run unenforced",
+                model_id,
+                field_set.name,
+            )
     except asyncio.CancelledError:
         raise
     except Exception as exc:  # noqa: BLE001 - classified by _should_fall_back
@@ -396,7 +458,7 @@ async def extract_fields(
             exc,
         )
         try:
-            output, usage = await _run_once(
+            output, usage, _ = await _run_once(
                 _build_model(model_id, strict=False),
                 output_model,
                 prompt,
