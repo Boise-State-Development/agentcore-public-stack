@@ -486,8 +486,13 @@ jobs:
       # Code sandbox (run_code): a skill's scripts, or Python the model writes,
       # run in the isolated Code Interpreter. In development, so only "true"
       # enables. Sets the flag on the AgentCore Runtime only, and only while
-      # on; no resources.
+      # on, and puts a DNS Firewall (4 resources) on the sandbox VPC.
       CDK_CODE_SANDBOX_ENABLED: ${{ vars.CDK_CODE_SANDBOX_ENABLED }}
+      # LibreOffice for run_code (in development, off unless "true"; needs the
+      # code sandbox on): a read-only EFS mount in the sandbox, with the VPC's
+      # DNS on behind the DNS Firewall. Turn it on in a deploy AFTER the one that
+      # turned the code sandbox on, so the firewall is already associated.
+      CDK_CODE_SANDBOX_OFFICE_ENABLED: ${{ vars.CDK_CODE_SANDBOX_OFFICE_ENABLED }}
       # Documents as text on Converse: non-PDF attachments (docx, txt, md, csv,
       # html) reach a Bedrock Converse model as rendered text instead of
       # document blocks; PDFs stay native. In development, so only "true"

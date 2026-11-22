@@ -286,6 +286,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     codeSandbox: {
       enabled: false,
     },
+    codeSandboxOffice: {
+      enabled: false,
+    },
     converseDocumentsAsText: {
       enabled: false,
     },

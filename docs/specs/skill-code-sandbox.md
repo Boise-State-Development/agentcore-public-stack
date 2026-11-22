@@ -1,6 +1,6 @@
 # Skill code sandbox: running a skill's scripts, and the code its instructions ask for, with no network
 
-**Status:** Approved 2026-11-20, with every §9 recommendation accepted. **PR-0 (D8) is merged (#2245) and validated on dev (2026-11-21):** one `VPC`-mode interpreter in an isolated VPC replaced both the `PUBLIC` and `SANDBOX` ones. Every Code Interpreter tool ran on it with every network probe failing. Production verification waits for the next release. **PR-1 (`run_code`) is in progress (#2252).**
+**Status:** Approved 2026-11-20, with every §9 recommendation accepted. **PR-0 (D8) is merged (#2245) and validated on dev (2026-11-21):** one `VPC`-mode interpreter in an isolated VPC replaced both the `PUBLIC` and `SANDBOX` ones. Every Code Interpreter tool ran on it with every network probe failing. Production verification waits for the next release. **PR-1 (`run_code`) is in progress (#2252).** **D9 (LibreOffice from a read-only mount, with DNS back on behind a DNS Firewall) was accepted 2026-11-22 after a dev spike; its PR is open (#2280).**
 **Author:** Phil Merrell (with Claude Code)
 **Date:** 2026-11-20
 **Targets:** `develop`
@@ -48,7 +48,8 @@ So this tool does **not** use the AST allowlist in `apis/shared/security/python_
 
 | Threat | Control | Residual risk |
 |---|---|---|
-| Sending a staged document out (to the internet or S3) | An interpreter in `VPC` mode in subnets with no route out and a security group with no egress rules, in a VPC with DNS support off (D8). No fallback; the tool refuses if the interpreter id cannot be resolved | Rests on the VPC configuration, which dev validation proved with raw-socket and DNS probes (§10.1, §11) |
+| Sending a staged document out (to the internet or S3) | An interpreter in `VPC` mode in subnets with no route out and a security group with no egress rules, in a VPC with DNS support off (D8). With the office mount on (D9), DNS is on behind a DNS Firewall that answers only the file system's own name, and the only egress is NFS to its mount targets. No fallback; the tool refuses if the interpreter id cannot be resolved | Rests on the VPC configuration, which dev validation proved with raw-socket and DNS probes (§10.1, §11, §10.2). With D9 it also rests on the firewall's association staying on the VPC, which CDK pins but nothing re-checks at run time |
+| A user's script changing what the next user's run executes | The office file system is mounted read-only: the run-time role has no `ClientWrite`, the file-system policy denies writes and root access to every principal but the seeding role, and the read-only access point's POSIX user doesn't own the tree (D9) | Rests on IAM and EFS's enforcement of it, which the spike proved (`Read-only file system`, §10.2) |
 | Reaching AWS data | Logs-only execution role | None known |
 | Another user's or another conversation's files | Files resolved only from the caller's own conversation, matched on `user_id`; references go through `readable_view`. One sandbox per `(session, user)`, never per session alone, and stopped at turn end | None known |
 | A script by someone else (a shared Agent's or project's skill) that corrupts outputs or misreports what it did | Outputs are always new files; originals are never overwritten. Approval card on the first run of each `(skill, path, sha256)` in a conversation (D4) | A user who approves a bad script gets bad output. They can't lose data they hadn't staged |
@@ -146,6 +147,7 @@ It is chosen per deployment, so a session never sees it change. The skill's own 
 ## 7. Flags and gating
 
 - **`CODE_SANDBOX_ENABLED` / `CDK_CODE_SANDBOX_ENABLED`.** AgentCore Runtime only, written to the Runtime only while on, in development (only `"true"` enables). A **feature switch** once finished: it runs code users can steer, which some deployments will not want.
+- **`CODE_SANDBOX_OFFICE_ENABLED` / `CDK_CODE_SANDBOX_OFFICE_ENABLED` (D9).** LibreOffice on a read-only mount for `run_code`'s sessions. AgentCore Runtime only, written only while on, in development, and synth refuses it without the code sandbox. A **feature switch** once finished: it adds resources and turns the sandbox's DNS on behind its firewall.
 - **No SPA flag.** Download cards, images in tool results and the approval card all exist already.
 - **Catalog row `run_code`.** `enabledByDefault: false`, so a role has to be granted it. RBAC granularity is one `tool_id`, as with `request_user_login`.
 - **`WORD_SKILL_SCRIPTS_ENABLED` stays as it is.** Its scripts use a Word-specific contract and need no change. Folding it into this tool later is a separate decision.
@@ -169,6 +171,7 @@ All seven recommendations were accepted on 2026-11-20. D4 reverses the conforman
 | **D6** | Should the tool be offered whenever granted, or only when a bound skill has scripts? | **Whenever granted.** Tying it to the skills on the turn would change `toolConfig` when a user switches a skill on mid-conversation, rewriting the cached prefix. A role grant is constant per deployment and user |
 | **D7** | Could a skill ship pure-Python wheels for packages that aren't preinstalled? | **Not in v1.** A skill needing a missing package fails with a clear message naming it |
 | **D8** (accepted 2026-11-20, added after §10) | How is the interpreter isolated, given that AWS documents `SANDBOX` as allowing S3 access? | **One interpreter in `VPC` mode in its own VPC, replacing both the `PUBLIC` and `SANDBOX` ones.** No caller needs a network: the Word, Excel and PowerPoint `python_code` tools, `generate_diagram_and_validate`, `analyze_spreadsheet` and skill scripts all work on files copied in through the API (the Office egress assessment found the same). The VPC has two `PRIVATE_ISOLATED` subnets (no gateway, NAT, endpoint or route), a security group with `allowAllOutbound: false`, and **DNS support off**. Security groups don't filter the VPC's DNS resolver, and with it on, public names resolved from the spike (§10.1), so a lookup could carry data out. Turning DNS off needs a VPC of its own, because app-api's tasks need DNS. That's simpler than a DNS Firewall and leaves nothing to allowlist. Net +8 resources: the VPC, 2 subnets, 2 route tables, 2 associations, the security group and CDK's default-SG restriction, less the two old interpreters |
+| **D9** (accepted 2026-11-22, after §10.2) | Can `run_code` have LibreOffice, so the xlsx skill's `recalc.py` and docx/pptx → PDF run as written? | **Yes: a LibreOffice build on an EFS file system, mounted read-only at `/mnt/office` when `run_code` starts a session, with `/mnt/office/current/program` first on the run's `PATH`.** Code Interpreter has no custom images, but `StartCodeInterpreterSession` can mount an EFS access point in `VPC` mode. AgentCore mounts EFS by its DNS name, so this **reverses D8's DNS-off**: DNS support and hostnames come back on, and a Route 53 Resolver DNS Firewall answers the file system's exact name and NXDOMAIN for everything else (no wildcard, so no `<data>.allowed-name` channel; it fails closed). The firewall exists wherever the code sandbox does, DNS on or off, so it is associated before a later deploy turns DNS on; CloudFormation updates the VPC before creating anything that references it, so turning both on in one deploy would leave about a minute of public DNS. Only a separate seeding interpreter on its own role may write the file system (`backend/scripts/seed_code_sandbox_office.py`). A failed mount falls back to a session without it. Behind `CODE_SANDBOX_OFFICE_ENABLED` / `CDK_CODE_SANDBOX_OFFICE_ENABLED` (in development, needs the code sandbox). Nothing reaches the prompt or `toolConfig`. About +14 resources while on, +4 (the firewall) with the code sandbox alone |
 
 ## 10. Dev checks (run 2026-11-20)
 
@@ -210,6 +213,22 @@ The spike was a throwaway VPC on dev (`10.250.0.0/24`): two subnets with no rout
 
 The instance metadata address answers 401 in every mode. It's AWS's host, not our network; its IMDSv2 token was not requested. It's worth asking AWS what it would hand out.
 
+### 10.2 Spike: LibreOffice from a read-only EFS mount (2026-11-21)
+
+Throwaway resources on dev (their own role, security groups and interpreters; the real ones untouched), all deleted afterwards.
+
+| Check | Result |
+|---|---|
+| Mount in the sandbox VPC as built by D8 (DNS off) | **Fails at session start:** `EFS mount failed: resource not found`. Same with DNS support on and hostnames off |
+| Why | AgentCore mounts through the file system's DNS name (a local TLS tunnel at `127.0.0.1`, NFS 4.1). The name exists only with `enableDnsSupport` **and** `enableDnsHostnames` on, and only for mount targets created after hostnames are on |
+| DNS on, behind a DNS Firewall allowing only `fs-….efs.<region>.amazonaws.com` | Mount works. `example.com`, S3, STS, `compute.internal` and even the AZ-prefixed form of the file system's name all NXDOMAIN in ~10 ms (DNS-off waits 162 s per lookup) |
+| Read-only | `touch` / `mkdir` anywhere under `/mnt/office` → `Read-only file system` |
+| Raw network from a mounted session | Only TCP 2049 to the mount target connects; public addresses, S3 and port 53 over TCP and UDP time out |
+| Session start | 1.4–1.7 s without the mount, 2.5–2.6 s with it (the first two mounted starts: 6.9 s and 4.2 s) |
+| LibreOffice 26.8.3 aarch64 (official RPMs; `libXinerama` and `libXrandr` from AL2023 added to `program/`) | `soffice --version` 1.2 s cold. docx → PDF 4.0 s first, 1.2 s after; pptx → PDF 1.4 s |
+| The xlsx skill's `recalc.py`, unchanged, with only `PATH` set | 2.6 s, values cached, a planted `#DIV/0!` reported, and a real `#NAME?` the test file had by accident (`TEXTJOIN` written without `_xlfn.`) |
+| Seeding through a write-access-point session | `writeFiles` in 24 MB chunks plus `tar -x` onto EFS: about 5 minutes |
+
 ## 11. PR plan
 
 0. **PR-0, isolation (D8). Merged (#2245), validated on dev 2026-11-21.** On dev, the deployed interpreter was in `VPC` mode with DNS off and only the VPC's local route. DNS lookups and TCP connections from it all failed. Word, Excel, PowerPoint, the diagram tool, spreadsheet analysis and the Contract Redline skill script all ran on it (17 real turns). Production verification follows the next release.
@@ -239,3 +258,9 @@ The instance metadata address answers 401 in every mode. It's AWS's host, not ou
    - Run the PDF skill end to end: a fillable form, a non-fillable form with annotations, merge and split, and table extraction.
    - Repeat the §10 network checks.
    - Measure the spec's tokens and a form fill's total tokens against a run with scripts inert.
+4. **LibreOffice (D9, #2280).**
+   - `code-sandbox-office-construct.ts`: the DNS Firewall (with the code sandbox), and with `codeSandboxOffice` the EFS file system, its mount targets and two access points, the mount-target security group and NFS-only egress, the seeding interpreter and role, and the mount's SSM parameter. DNS support and hostnames on. Pinned by `infrastructure/test/code-sandbox-office.test.ts`.
+   - `run_code` starts its session with the read-only mount (`code_sandbox/office_mount.py`), replacing a session `analyze_spreadsheet` started without it, and runs with LibreOffice first on `PATH`. A failed mount falls back to no mount, skipped for 5 minutes.
+   - `backend/scripts/seed_code_sandbox_office.py` installs a pinned, checksummed build into a release folder of its own and switches `current` with one rename.
+   - **Rollout:** deploy with the code sandbox on first (the firewall associates while DNS is still off), then turn `CDK_CODE_SANDBOX_OFFICE_ENABLED` on in a later deploy, then run the seeding script.
+   - Dev validation: `recalc.py` and a docx → PDF in a real `run_code` turn; public names still NXDOMAIN from the sandbox; a write under `/mnt/office` still fails.

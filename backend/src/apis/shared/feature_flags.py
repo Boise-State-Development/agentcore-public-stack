@@ -128,6 +128,27 @@ def code_sandbox_enabled() -> bool:
     return os.environ.get("CODE_SANDBOX_ENABLED", "").strip().lower() == "true"
 
 
+def code_sandbox_office_enabled() -> bool:
+    """Whether ``run_code``'s sessions mount LibreOffice read-only at ``/mnt/office``
+    (``docs/specs/skill-code-sandbox.md`` D9).
+
+    On, a ``run_code`` session is started with the read-only EFS access point
+    named in ``/<PROJECT_PREFIX>/agentcore/code-sandbox-office-mount`` and runs
+    with LibreOffice's ``program/`` folder first on ``PATH``, so a skill's own
+    ``soffice`` steps (the xlsx skill's ``recalc.py``, conversion to PDF) work as
+    written. A mount that fails falls back to a session without it. Nothing
+    reaches the prompt or ``toolConfig``.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it. CDK writes it to the AgentCore
+    Runtime only while ``config.codeSandboxOffice.enabled``, which also builds
+    the file system and turns the sandbox VPC's DNS on behind its DNS Firewall.
+    A **feature switch** once finished: it adds resources and turns DNS on in
+    the sandbox, which a deployment may not want.
+    """
+    return os.environ.get("CODE_SANDBOX_OFFICE_ENABLED", "").strip().lower() == "true"
+
+
 def assistant_kb_full_context_enabled() -> bool:
     """Whether a small assistant knowledge base reaches the model whole
     (``apis/shared/assistants/kb_full_context.py``).

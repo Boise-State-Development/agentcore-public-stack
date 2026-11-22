@@ -887,6 +887,36 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Code sandbox office mount flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CODE_SANDBOX_ENABLED;
+      delete process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED;
+      expect(loadConfig(app).codeSandboxOffice.enabled).toBe(false);
+      process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED = '';
+      expect(loadConfig(app).codeSandboxOffice.enabled).toBe(false);
+    });
+
+    test('only "true" enables it, with the code sandbox on', () => {
+      process.env.CDK_CODE_SANDBOX_ENABLED = 'true';
+      process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED = 'True';
+      expect(loadConfig(app).codeSandboxOffice.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED = value;
+        expect(loadConfig(app).codeSandboxOffice.enabled).toBe(false);
+      }
+    });
+
+    test('refuses to synthesize without the code sandbox, whose DNS Firewall it relies on', () => {
+      delete process.env.CDK_CODE_SANDBOX_ENABLED;
+      process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED = 'true';
+      expect(() => loadConfig(app)).toThrow(/requires CDK_CODE_SANDBOX_ENABLED=true/);
+    });
+  });
+
   describe('Code sandbox feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_CODE_SANDBOX_ENABLED;
