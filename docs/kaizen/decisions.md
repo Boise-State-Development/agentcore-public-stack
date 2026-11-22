@@ -74,3 +74,21 @@ the new context would have to be to re-open it.
 - **Decision**: **Decline as scoped.** GPT-6 Astra stays registered at `maxInputTokens: 272_000`.
 - **Reasoning**: the cap is load-bearing pricing, and `curated-models.ts` says so in the comment above the Mantle Responses rows. AWS prices these models on two cards (above 272K input tokens, input costs 2× and output 1.5×), while `CuratedModel` holds one flat rate per bucket. Raising the cap without a tier field silently opens the second price card and under-charges every long turn. The tier-boundary field half of the entry never shipped (see the resolved [2026-09-11] Astra entry).
 - **Re-open only if**: it comes together with a per-tier rate field on `CuratedModel` that the cost calculator reads. With that in place, the 1M window is the natural follow-on.
+
+### [2026-10-09] Declined — derive `missCause` from the fingerprint that flipped
+- **Origin**: review-queue.md ▸ [2026-09-04] "Derive `missCause` from the fingerprint that flipped"; drafted in reviews/2026-10-09.md ▸ Retirement Candidates and carried unmarked through reviews/2026-11-03.md and reviews/2026-11-13.md, which said the next prep would log it unless Phil objected. **Logged by default in reviews/2026-11-20.md**, not by a mark from Phil; revert this entry to re-open it.
+- **Decision**: **Decline.**
+- **Reasoning**: the per-call hashes on `C#` rows already name the cache-buster when a human looks (`CLAUDE.md` Debugging). A derived label never earned a build across six reviews.
+- **Re-open only if**: a cost incident the hashes failed to explain.
+
+### [2026-10-09] Declined as scoped — compaction v2's frozen-segment engine
+- **Origin**: review-queue.md ▸ [2026-09-16] "Compaction v2 (#835) go/no-go"; recommended Decline in reviews/2026-10-02.md, drafted in reviews/2026-10-09.md ▸ Carried Over, carried unmarked to reviews/2026-11-13.md. **Logged by default in reviews/2026-11-20.md**; revert this entry to re-open it.
+- **Decision**: **Decline as scoped.**
+- **Reasoning**: the model-relative stack plus extract-then-compress cleared the quality veto on v1 machinery. A hand-built second engine is the wrong shape.
+- **Re-open only if**: alongside adopting Strands' first-party context manager (see [2026-05-18] for why that is blocked today), never as a hand-built engine.
+
+### [2026-10-09] Declined — enforce platform-before-backend on a `develop` push
+- **Origin**: review-queue.md ▸ [2026-09-04] "Enforce platform-before-backend on a develop push"; recommended Decline in reviews/2026-10-02.md, drafted in reviews/2026-10-09.md ▸ Carried Over, carried unmarked to reviews/2026-11-13.md. **Logged by default in reviews/2026-11-20.md**; revert this entry to re-open it.
+- **Decision**: **Decline.**
+- **Reasoning**: zero failures of the "runtime may not exist yet" class across the release weeks since. The convention stays in `CLAUDE.md`.
+- **Re-open only if**: the next such failure.

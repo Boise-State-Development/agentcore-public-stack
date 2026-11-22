@@ -107,40 +107,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Notes**: "The handoffs spec is not edited by this proposal." → "Accepted for step 1. Each built step updates the handoffs spec in the same PR: W.1 run steps (§4.3), W.2 parts (§4.8), W.3 run brief (§4.5)."
 - **Status**: open
 
-### [2026-11-14] Spike concurrent tool execution, serializing only the tools that can't run in parallel
-- **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #1; public middleware (harness-sdk#4976, 1.62)
-- **Surface**: backend (`agents/main_agent/core/agent_factory.py:372-385`, a new `ExecuteToolStage` middleware beside `integrations/mcp_elicitation.py`)
-- **Effort × Impact**: M × M–H
-- **Subtracts**: yes: a stale constraint. `SequentialToolExecutor` was chosen "to prevent concurrent browser operations … Playwright errors with NovaAct". NovaAct and Playwright are gone, the browser is raw CDP, and `browser/session_pool.py:107` already locks per session
-- **Unlocks**:
-  - a tool batch of N independent calls takes ≈ max d instead of Σd (a three-read fan-out saves ≈ 3 s; prod session `aecd387d` ran 18 calls in series)
-- **Notes**: TTFT 0 (after the first token), 0 tokens, `toolConfig` unchanged. Results land in completion order but are appended once and persisted, so history stays byte-stable. Serialize anything that writes a shared resource (browser, Code Interpreter, the Office writers, artifacts, `my_skill_*`) behind one per-session lock, and allowlist the parallel-safe reads. Settle first: harness-sdk#4713 (open: `ConcurrentToolExecutor` swallows a `BaseException`, so check `_CooperativeStopSignal` and `CancelledError`), two interrupts raised in one batch, and `agent_status` / `ui_resource` frame order. Behind a rollout switch. Measure turn duration on a dev fan-out, and the multi-tool-batch share of prod turns from the ledger's `#TOOL#` rows
-- **Status**: built 2026-11-14 behind the in-development `CONCURRENT_TOOL_EXECUTION_ENABLED` (off everywhere), in the PR that adds `core/tool_concurrency.py`. The policy fails closed: only `PARALLEL_SAFE_TOOLS`, `___WebSearch`, and MCP tools with `readOnlyHint` (not `destructiveHint`) overlap. Settled in tests against a real Strands agent: #4713 is guarded (a stray `BaseException` becomes an error result, and a real cancel still re-raises); interrupts pause and resume without re-running the batch's other calls; results keep toolUse order (after a resume, the pre-pause results come first). Abandoning the stream lets the batch finish under either executor, which is today's behaviour. `CDK_CONCURRENT_TOOL_EXECUTION_ENABLED=true` set on the `development` GitHub environment 2026-11-14. Left: a three-read fan-out on dev and the turn-duration delta
-
-### [2026-11-14] Pass a per-turn `cancel_signal` and stop clearing Strands' private `_cancel_signal`
-- **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #2; `agent.cancel` docstring (harness-sdk#4833, 1.62): "for cancellation driven from outside the agent … pass a `cancel_signal` into the invocation instead"
-- **Surface**: backend (`apis/inference_api/chat/routes.py:221-248`, `agents/main_agent/streaming/stream_coordinator.py:221-248` and `:709`)
-- **Effort × Impact**: L × M
-- **Subtracts**: yes: the `_cancel_signal` half of `reset_cancellation_state`, a write to a private SDK attribute, and with it the sticky-Stop class (#741/#751) for that signal
-- **Notes**: create a `threading.Event` per turn, pass `cancel_signal=` to `stream_async`, and have `_mark_session_cancelled` set it instead of calling `agent.cancel()`. Strands mirrors it onto the internal signal, in-flight MCP calls included. An event scoped to one invocation cannot leak onto the cached agent. Keep `session_manager.cancelled` and its reset (`StopHook` and the coordinator read it). Cost 0; one watcher task per turn
-- **Status**: built 2026-11-14, PR 2091. It turned out to be a bug fix too: `_mark_session_cancelled` got the `ChatAgent` wrapper, which has no `cancel()`, so Stop had never reached Strands in production. Left: the dev smoke `stop_mid_answer` row and a Stop during a slow MCP call
-
-### [2026-11-14] Docs sync after the Strands 1.55 → 1.63 adoption audit
-- **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #3, #4, #5, #7
-- **Surface**: docs (`docs/kaizen/standing-watches.md` §2a rows 1 and 3; `docs/kaizen/decisions.md` 2026-05-18; this file's [2026-07-17] `Limits` entry)
-- **Effort × Impact**: L × M
-- **Subtracts**: yes: two stale instructions, one of which would ship a cost regression if followed
-- **Notes**: (a) Row 1 (`usage_normalization` cache-write shim) retired in #1683; strike it. (b) Row 3 says to adopt `apply_cache_config` and retire `build_prompt_cache_key`. Ours is prefix-derived and shared across conversations (`bedrock_responses.py:274-294`); upstream's is `strands-<session_id>` (#4083), so a swap makes every new GPT conversation's first call write the static prefix instead of reading it. Since 1.64 a `cache_config` also turns on the +11.8% checkpoint. Rewrite the row as "keep ours", with `probe_gpt56_cache_rates.py` as the gate. The 1.63 → 1.65 readout (PR #2080, its row 7) reaches the same verdict independently. Cite it for the 1.64 half. (c) Add to decisions.md 2026-05-18's re-open condition: since 1.63 (#5446) a Strands `context_manager` raises on any `RepositorySessionManager`, and `AgentCoreMemorySessionManager` is one. (d) Note on [2026-07-17] that #5288 makes limits and usage request-wide across nested agents (`InvocationContext`), and that the interactive lane has no `limits=` today
-- **Status**: done 2026-11-14 for (a), (b) and (c), plus a correction note on research/ and reviews/2026-09-25 that `requestTimeout` (#4408) is TypeScript-only. (d) was already written onto the [2026-07-17] entry in the audit PR. Close at review.
-
-### [2026-11-13] Escalation: delete the orphaned ALB access-log bucket and make the nightly self-heal (10 red nights)
-- **Source**: research/2026-11-13.md ▸ Top 5 #1; nightly runs 41804576559 → 43398420487
-- **Surface**: CI (`scripts/nightly/teardown.sh`, `scripts/nightly/clear-failed-stack.sh`)
-- **Effort × Impact**: L × H
-- **Subtracts**: yes: red nightlies every night 11-04 → 11-13 (135 PRs merged without the nightly pass) and every future manual unstick
-- **Notes**: **Supersedes [2026-11-06] "Nightly: delete the orphaned ALB access-log bucket…"**, which was never reviewed because no review-prep ran for the 11-06 research. Every deploy fails at change-set validation: "`nightly-develop-alb-access-logs` already exists". Delete the bucket by hand once. Then have `clear-failed-stack.sh` delete a fixed-name bucket that exists without a stack, and have `teardown.sh` re-empty the bucket before deleting it.
-- **Status**: open
-
 ### [2026-11-13] Curate Claude Fable 5.2 (Global-first, 0.025× cache read now double-sourced)
 - **Source**: research/2026-11-13.md ▸ Top 5 #2; https://www.anthropic.com/claude-fable-and-mythos-5-2; https://github.com/anthropics/claude-code/releases/tag/v2.1.321; https://github.com/pydantic/pydantic-ai/pull/13037
 - **Surface**: catalog (`curated-models.ts`) + backend (`interrupted_usage.py:85-88`)
@@ -171,28 +137,12 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Notes**: `InvokeWebSearch` costs $7/1K (the same as the Gateway connector), is in six regions including us-west-2, and has no Gateway charge. The SDK's `WebSearchClient` needs bedrock-agentcore 1.26.0 and boto3 ≥ 1.43.127. A new tool name means a one-time `toolConfig` re-write and an RBAC catalog entry, so price both.
 - **Status**: open
 
-### [2026-11-13] Pre-bump gate for Strands 1.65: refuse a null interrupt response at the route; pin tool-spec order
-- **Source**: research/2026-11-13.md ▸ Top 5 #5; https://github.com/strands-agents/harness-sdk/pull/4471; https://github.com/strands-agents/harness-sdk/issues/5700
-- **Surface**: backend (`apis/inference_api/chat/models.py:42`, resume route, tests) + CLAUDE.md interrupt rows
-- **Effort × Impact**: L × M
-- **Subtracts**: yes: a silent forever-pause today, and stale "re-raise forever" wording in three CLAUDE.md rows after the bump
-- **Notes**: with #4471, `resume()` raises `ValueError` on `None`. #5654 validates restored interrupts (run the smoke interrupt/resume rows on the bump). #5700 may sort tool specs by name by default, so a test that records whether our order already matches turns that into a known no-op or a known one-time re-write.
-- **Status**: open
-
 ### [2026-11-13] Spec sync: agent-handoffs-and-consults.md header (Phase 0 built through PR-0.4a)
 - **Source**: research/2026-11-13.md ▸ Spec sync S1
 - **Surface**: docs
 - **Effort × Impact**: L × L
 - **Subtracts**: yes: a stale status line
 - **Notes**: `:3` still says "Draft proposal. Not scheduled." PR-0.4 (`06e58c670`, `c86b6abe6`) and PR-0.4a (`817c739b9`, `fe4db1d44`) merged 2026-11-12. Supersedes the [2026-11-06] header row.
-- **Status**: open
-
-### [2026-11-13] Spec sync: agent-handoffs-and-consults.md §2 phase table (0a built, 0b built)
-- **Source**: research/2026-11-13.md ▸ Spec sync S2
-- **Surface**: docs
-- **Effort × Impact**: L × L
-- **Subtracts**: yes: stale phase status
-- **Notes**: `:101` "In progress: PR-0.1–0.3 built" → "Built: PR-0.1–0.3c"; `:104` "Proposed" → "Built: PR-0.3b–0.4a; dev check of files by reference pending (#2033)".
 - **Status**: open
 
 ### [2026-11-13] Spec sync: agent-handoffs-and-consults.md §3 (`resolve_turn_agent` is extracted)
@@ -259,14 +209,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Effort × Impact**: L × L
 - **Subtracts**: yes: five releases of lag, and the risk of landing on releases whose span flush hangs streams in VPC mode
 - **Notes**: 1.25.4 also preserves guardrail redactions in Memory. Run the smoke turn matrix once on dev for stream close and TTFT.
-- **Status**: open
-
-### [2026-11-06] Spec sync: multi-agent-patterns.md §3, §4.2 and staleness table (pin is 1.63.0)
-- **Source**: research/2026-11-06.md ▸ Spec sync row 1
-- **Surface**: docs
-- **Effort × Impact**: L × L
-- **Subtracts**: yes: stale version claims
-- **Notes**: `:57`, `:126`, `:274` say 1.57.2; `backend/pyproject.toml:73` is 1.63.0 (`aff220f63`). Supersedes [2026-11-03] *Spec sync: … (pin is 1.61.1, not 1.57.2)*.
 - **Status**: open
 
 ### [2026-11-06] Spec sync: multi-agent-patterns.md §3 (`strands-agents-tools` deprecated; tools moved to `strands.vended_tools`)
@@ -568,6 +510,7 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - **Gated on something else**: `AGENT_BUILD_SHARED_SESSION_ENABLED` (Runtime V2 plus a clean snapshot restore, see the V2 entries below), `COMPACTION_SUMMARY_EXTRACT_ENABLED` (prod quality readout), `DOCUMENT_OFFLOAD_ENABLED` / `_REHYDRATE_` / `_DIGEST_` (the quality check waived in `docs/specs/document-offload-evaluation.md`, see [2026-09-21] *The cheap quality veto does not exist*).
 - **Status 2026-10-16 (review)**: no pass yet. All four eligible readers are still in `feature_flags.py` (:439, :471, :554, :644). 1.28.0 (#1628) is the third release since #1420 without the cleanup. reviews/2026-10-16.md ▸ #6.
 - **Status 2026-11-03 (review)**: no pass yet. All four eligible readers are still in `feature_flags.py` (:494, :527, :600, :716). No retirement in 1.28.0 → 1.32.0. reviews/2026-11-03.md ▸ #1 asks for Ship or an explicit decline of the rule; no further defer.
+- **Status 2026-11-20 (review)**: **first pass shipped** in `ec3be085e` (#2081, 2026-11-14): the four eligible switches retired, readers, off paths and tests deleted, CHANGELOG `Removed` entries written. Next eligible: the five 1.2x-era switches in the second bullet, once their two prod weeks are confirmed. reviews/2026-11-20.md.
 
 ### [2026-10-02] Headless runs never pause for a human: withhold interactive tools or classify the pause
 - **Source**: research/2026-10-02.md
@@ -932,13 +875,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Subtracts**: no
 - **Status**: open — housekeeping; do when touching those files.
 
-### [2026-09-16] Compaction v2 (#835) go/no-go — re-evaluate once the model-relative stack has a week of data
-- **Source**: `docs/specs/compaction-v2-versioned-prefix.md` §7 (gate criteria) vs the stack just built, which implements v2's I3 (hysteresis/floor) and I4 (paid-when-free) as policy on the v1 machinery.
-- **Surface**: backend — `TurnBasedSessionManager` vs Strands `SummarizingConversationManager` + `compression/` helpers (the engine swap v2 proposes); upstream `main` is also growing a first-party context-manager/offloading stack (#4254 et al., noted 2026-09-11) that would collide with a hand-built engine.
-- **Effort × Impact**: L × M (if go) — the policy layer maps onto v2 unchanged, so the remaining value of v2 is the frozen-segment engine (I1/I2/I6), i.e. removing custody of slice/summary/restore-derivation code.
-- **Subtracts**: yes, if go — `_apply_compaction`'s slicing, `_retrieve_session_summaries`, `_prepend_summary_to_first_message`.
-- **Status**: open — **defer until the stack's metrics exist.** v2's own go criteria (over-threshold sessions > ~3% of active or > ~15% of spend; or `partial_miss` waste from compaction-state mutation > ~$50/month post-fixes) are now measurable from `CompactionForced`, `CompactionApplied` and the ledger. Decide with numbers, and weigh against adopting upstream's context manager when it ships rather than v2's hand-built engine.
-
 ### [2026-09-11] ✅ ANSWERED: `bedrock_cache_points_supported()` STAYS — and it is wrong in the opposite direction from the one we suspected
 - **Source**: measured, not read — `backend/scripts/probe_bedrock_cache_point_support.py` (added by this entry) against the pinned strands-agents 1.55.0 and live `bedrock-runtime` in dev-ai/us-west-2, 2026-09-11. **Answers check (d)** of the [2026-09-11] "Retire the hand-placed system `cachePoint`" entry below, and **narrows (c)** of the [2026-09-11] `ClientSession` monkeypatch entry. Does **not** close either — (a), (b) and the `tools_ttl` mixed-TTL evaluation are untouched.
 - **Surface**: backend — `core/model_config.py` (`bedrock_cache_points_supported`, the cachePoint-budget comment), `core/agent_factory.py` (the hand-placed system block), `backend/scripts/probe_bedrock_cache_point_support.py`.
@@ -1032,13 +968,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Scope is all cacheable families, not just GPT.** Anthropic, OpenAI, and any newly cacheable Bedrock model. For each new one, confirm *which API surface* serves caching before assuming it works — GPT-5.6 caches **only** over the Responses API and not at all over Converse, and that distinction was worth an entire transport.
 - ⚠️ **Never adopt an upstream caching default on inspection alone.** This stack shipped one caching change whose premise was wrong and measured **57% more expensive** live (#954 → reverted by #956). `backend/scripts/probe_gpt56_cache_rates.py --mode both --grow-history` is the gate: beat the current arm, measured, before switching.
 
-### [2026-09-04] Enforce platform-before-backend on a develop push
-- **Source**: reviews/2026-09-04.md ▸ Proposal #4 — direct observation by `kaizen-review-prep`; **not** in research/2026-09-04.md, which reported zero CI failures in the window. Run [33559336336](https://github.com/Boise-State-Development/agentcore-public-stack/actions/runs/33559336336).
-- **Surface**: CI — `.github/workflows/backend.yml` (the `Deploy inference-api image to AgentCore Runtime` job) and/or a shared concurrency group with `platform.yml`. No application code.
-- **Effort × Impact**: L–M × M–H
-- **Subtracts**: yes — an unenforced deploy-order convention that lives only in `CLAUDE.md` prose, plus one class of red develop build that presents as a flake and self-heals on the next push.
-- **Status**: open — **the only CI failure in the 7-day window, and it was a real one.** `[inference-api] Failed to get-agent-runtime — runtime may not exist yet.` → `exit 3` at 2026-09-01T21:17Z. **Platform Stack** and **Backend Deploy** were both triggered by the same develop push at `21:07:5x` (the #904 merge); Platform Stack succeeded, the runtime step did not — consistent with `get-agent-runtime` being called while CFN was mid-replace on the Runtime resource. Fix: serialize the two workflows, or gate the inference-api job on platform completion, and make the read retry instead of exiting 3. ⚠️ Check against the known GSI deploy-ordering trap first — a shared concurrency group has previously **cancelled** a run rather than queueing it, which is a worse failure than the one being fixed.
-
 ### [2026-09-04] Migrate the MCP Apps host off `initialize` to `server/discover` — FastMCP 4.0 made it real
 - **Source**: research/2026-09-04.md ▸ Top 5 #2 — https://modelcontextprotocol.io/specification/2026-07-28/changelog (SEP-2567/2575) + https://github.com/jlowin/fastmcp/releases (4.0.0, 2026-08-31) + Strands 1.53.0 MCP-client changes. **Supersedes and upgrades the [2026-08-14] entry of the same name** — merge them at review.
 - **Surface**: backend — `integrations/mcp_apps.py` (the `ClientSession` symbol patch at lines 23–32; the `serverInfo` capture at line 673), `external_mcp_client.py`, `gateway_mcp_client.py`, the mcp-sandbox proxy origin, and the OAuth pre-flight path (PR #872)
@@ -1049,14 +978,6 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
   - **A pre-flight that doesn't 401** — `server/discover` reads capabilities *before* `tools/list`, the exact call whose 401 permanently dropped a tool until PR #872 worked around it three wrappers down.
   - **SEP-2549 cache hints** (directly on-thesis for tool-listing token cost) and **SEP-2243 routable headers** (`Mcp-Method`/`Mcp-Name`, for AgentCore Gateway target routing) become reachable.
 - **Status**: open — **what changed this week is that the servers shipped it.** The 2026-08-14 entry was queued off the spec alone; FastMCP 4.0.0 (2026-08-31, breaking) is what our Lambda-backed MCP servers actually run on, so this stopped being a docs migration. ⚠️ Two gates before estimating: does AgentCore Gateway speak `server/discover` at all, and does Strands' MCP client expose it? Both answerable in an afternoon. ⚠️ Also: the spec details came from **search summaries, not a first-hand changelog read** — verify first. Note we *do* currently negotiate the Apps extension (verified: `mcp_apps.py` advertises `capabilities.extensions["io.modelcontextprotocol/ui"]` on every outbound `initialize`) — the open question is what that negotiation hangs on once there is no `initialize`.
-
-### [2026-09-04] Derive `missCause` from the fingerprint that flipped
-- **Source**: research/2026-09-04.md ▸ Top 5 #3 — https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md (2.1.260, 2.1.251) + https://github.com/GautamTalksDev/mcp-pin/blob/main/docs/findings/2026-09-03-schema-drift.md
-- **Surface**: backend — `apis/shared/observability/prompt_cache.py` (where `cacheStatus` is derived), `agents/main_agent/session/hooks/prefix_fingerprint.py` (where the three hashes are computed), `GET /admin/costs/sessions/{id}/calls`, the admin cost-anatomy page, and the debugging quick-reference in `CLAUDE.md`
-- **Effort × Impact**: L–M × H
-- **Subtracts**: yes — the manual hash-diff ritual `CLAUDE.md` currently instructs a human to perform on every cost-spike investigation ("the hash that changed between consecutive calls names the cache-buster"). Everything needed is already stored; nobody has written the comparison.
-- **Unlocks**: naming a cause we currently **cannot see at all**. An external MCP server that edits a tool's `inputSchema` between turns re-writes our cacheable prefix with no deploy of ours and no description change for a human to spot — measured in the wild at **17 schema/annotation-only changes across 248 servers in 27 hours**. Verified locally that `toolConfigHash` hashes `get_all_tool_specs()` (full specs *including* `inputSchema`), so we already **detect** this class; a `tools_changed` label on a row with no deploy is the first time we could **attribute** it.
-- **Status**: open — cheapest high-leverage item after #1. Labels available essentially for free: `tools_changed`, `system_prompt_changed`, `history_changed`, `agent_switched` (the `agentSwitched` flag already exists), `ttl_expired`, `cold_start`. Claude Code shipped exactly this in 2.1.260 ("a likely cause for prompt-cache misses"), which is corroboration the ergonomics are worth it.
 
 ### [2026-08-28] Port the reference repo's context-overflow hardening
 - **Source**: research/2026-08-28.md ▸ Top 5 #5 — https://github.com/aws-samples/sample-strands-agent-with-agentcore/pull/260 (`fix(agent): harden context overflow recovery`, 2026-08-18)
@@ -1182,6 +1103,116 @@ Items added by `kaizen-research`, consumed by `kaizen-review-prep`.
 - **Status**: open — deferred 4 weeks in reviews/2026-05-15.md (revisit 2026-06-12). Earns its keep when an A2A construct lands.
 
 ## Resolved
+
+### [2026-09-16] Compaction v2 (#835) go/no-go — re-evaluate once the model-relative stack has a week of data → RESOLVED — **DECLINED**
+- **Decision**: decisions.md ▸ [2026-10-09] Declined as scoped — compaction v2's frozen-segment engine.
+- **Reasoning**: drafted 2026-10-09; reviews/2026-11-13.md said the next prep would log it unless Phil objected, and no objection came.
+- **Reviewed in**: reviews/2026-11-20.md (logged by default after six unmarked weeks; see decisions.md)
+- **Source**: `docs/specs/compaction-v2-versioned-prefix.md` §7 (gate criteria) vs the stack just built, which implements v2's I3 (hysteresis/floor) and I4 (paid-when-free) as policy on the v1 machinery.
+- **Surface**: backend — `TurnBasedSessionManager` vs Strands `SummarizingConversationManager` + `compression/` helpers (the engine swap v2 proposes); upstream `main` is also growing a first-party context-manager/offloading stack (#4254 et al., noted 2026-09-11) that would collide with a hand-built engine.
+- **Effort × Impact**: L × M (if go) — the policy layer maps onto v2 unchanged, so the remaining value of v2 is the frozen-segment engine (I1/I2/I6), i.e. removing custody of slice/summary/restore-derivation code.
+- **Subtracts**: yes, if go — `_apply_compaction`'s slicing, `_retrieve_session_summaries`, `_prepend_summary_to_first_message`.
+- **Status**: open — **defer until the stack's metrics exist.** v2's own go criteria (over-threshold sessions > ~3% of active or > ~15% of spend; or `partial_miss` waste from compaction-state mutation > ~$50/month post-fixes) are now measurable from `CompactionForced`, `CompactionApplied` and the ledger. Decide with numbers, and weigh against adopting upstream's context manager when it ships rather than v2's hand-built engine.
+
+### [2026-09-04] Enforce platform-before-backend on a develop push → RESOLVED — **DECLINED**
+- **Decision**: decisions.md ▸ [2026-10-09] Declined — enforce platform-before-backend on a `develop` push.
+- **Reasoning**: drafted 2026-10-09; reviews/2026-11-13.md said the next prep would log it unless Phil objected, and no objection came.
+- **Reviewed in**: reviews/2026-11-20.md (logged by default after six unmarked weeks; see decisions.md)
+- **Source**: reviews/2026-09-04.md ▸ Proposal #4 — direct observation by `kaizen-review-prep`; **not** in research/2026-09-04.md, which reported zero CI failures in the window. Run [33559336336](https://github.com/Boise-State-Development/agentcore-public-stack/actions/runs/33559336336).
+- **Surface**: CI — `.github/workflows/backend.yml` (the `Deploy inference-api image to AgentCore Runtime` job) and/or a shared concurrency group with `platform.yml`. No application code.
+- **Effort × Impact**: L–M × M–H
+- **Subtracts**: yes — an unenforced deploy-order convention that lives only in `CLAUDE.md` prose, plus one class of red develop build that presents as a flake and self-heals on the next push.
+- **Status**: open — **the only CI failure in the 7-day window, and it was a real one.** `[inference-api] Failed to get-agent-runtime — runtime may not exist yet.` → `exit 3` at 2026-09-01T21:17Z. **Platform Stack** and **Backend Deploy** were both triggered by the same develop push at `21:07:5x` (the #904 merge); Platform Stack succeeded, the runtime step did not — consistent with `get-agent-runtime` being called while CFN was mid-replace on the Runtime resource. Fix: serialize the two workflows, or gate the inference-api job on platform completion, and make the read retry instead of exiting 3. ⚠️ Check against the known GSI deploy-ordering trap first — a shared concurrency group has previously **cancelled** a run rather than queueing it, which is a worse failure than the one being fixed.
+
+### [2026-09-04] Derive `missCause` from the fingerprint that flipped → RESOLVED — **DECLINED**
+- **Decision**: decisions.md ▸ [2026-10-09] Declined — derive `missCause` from the fingerprint that flipped.
+- **Reasoning**: drafted 2026-10-09; reviews/2026-11-13.md said the next prep would log it unless Phil objected, and no objection came.
+- **Reviewed in**: reviews/2026-11-20.md (logged by default after six unmarked weeks; see decisions.md)
+- **Source**: research/2026-09-04.md ▸ Top 5 #3 — https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md (2.1.260, 2.1.251) + https://github.com/GautamTalksDev/mcp-pin/blob/main/docs/findings/2026-09-03-schema-drift.md
+- **Surface**: backend — `apis/shared/observability/prompt_cache.py` (where `cacheStatus` is derived), `agents/main_agent/session/hooks/prefix_fingerprint.py` (where the three hashes are computed), `GET /admin/costs/sessions/{id}/calls`, the admin cost-anatomy page, and the debugging quick-reference in `CLAUDE.md`
+- **Effort × Impact**: L–M × H
+- **Subtracts**: yes — the manual hash-diff ritual `CLAUDE.md` currently instructs a human to perform on every cost-spike investigation ("the hash that changed between consecutive calls names the cache-buster"). Everything needed is already stored; nobody has written the comparison.
+- **Unlocks**: naming a cause we currently **cannot see at all**. An external MCP server that edits a tool's `inputSchema` between turns re-writes our cacheable prefix with no deploy of ours and no description change for a human to spot — measured in the wild at **17 schema/annotation-only changes across 248 servers in 27 hours**. Verified locally that `toolConfigHash` hashes `get_all_tool_specs()` (full specs *including* `inputSchema`), so we already **detect** this class; a `tools_changed` label on a row with no deploy is the first time we could **attribute** it.
+- **Status**: open — cheapest high-leverage item after #1. Labels available essentially for free: `tools_changed`, `system_prompt_changed`, `history_changed`, `agent_switched` (the `agentSwitched` flag already exists), `ttl_expired`, `cold_start`. Claude Code shipped exactly this in 2.1.260 ("a likely cause for prompt-cache misses"), which is corroboration the ergonomics are worth it.
+
+### [2026-11-14] Spike concurrent tool execution, serializing only the tools that can't run in parallel → RESOLVED — **SHIPPED**
+- **Decision**: Built behind the in-development `CONCURRENT_TOOL_EXECUTION_ENABLED` in `763db2779`; on in the `development` GitHub environment since 2026-11-14.
+- **Reasoning**: The spike became the build. The dev fan-out timing it lists as left belongs to the flag's promotion, not to this entry.
+- **Reviewed in**: reviews/2026-11-20.md (checked against `origin/develop` and git history)
+- **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #1; public middleware (harness-sdk#4976, 1.62)
+- **Surface**: backend (`agents/main_agent/core/agent_factory.py:372-385`, a new `ExecuteToolStage` middleware beside `integrations/mcp_elicitation.py`)
+- **Effort × Impact**: M × M–H
+- **Subtracts**: yes: a stale constraint. `SequentialToolExecutor` was chosen "to prevent concurrent browser operations … Playwright errors with NovaAct". NovaAct and Playwright are gone, the browser is raw CDP, and `browser/session_pool.py:107` already locks per session
+- **Unlocks**:
+  - a tool batch of N independent calls takes ≈ max d instead of Σd (a three-read fan-out saves ≈ 3 s; prod session `aecd387d` ran 18 calls in series)
+- **Notes**: TTFT 0 (after the first token), 0 tokens, `toolConfig` unchanged. Results land in completion order but are appended once and persisted, so history stays byte-stable. Serialize anything that writes a shared resource (browser, Code Interpreter, the Office writers, artifacts, `my_skill_*`) behind one per-session lock, and allowlist the parallel-safe reads. Settle first: harness-sdk#4713 (open: `ConcurrentToolExecutor` swallows a `BaseException`, so check `_CooperativeStopSignal` and `CancelledError`), two interrupts raised in one batch, and `agent_status` / `ui_resource` frame order. Behind a rollout switch. Measure turn duration on a dev fan-out, and the multi-tool-batch share of prod turns from the ledger's `#TOOL#` rows
+- **Status**: built 2026-11-14 behind the in-development `CONCURRENT_TOOL_EXECUTION_ENABLED` (off everywhere), in the PR that adds `core/tool_concurrency.py`. The policy fails closed: only `PARALLEL_SAFE_TOOLS`, `___WebSearch`, and MCP tools with `readOnlyHint` (not `destructiveHint`) overlap. Settled in tests against a real Strands agent: #4713 is guarded (a stray `BaseException` becomes an error result, and a real cancel still re-raises); interrupts pause and resume without re-running the batch's other calls; results keep toolUse order (after a resume, the pre-pause results come first). Abandoning the stream lets the batch finish under either executor, which is today's behaviour. `CDK_CONCURRENT_TOOL_EXECUTION_ENABLED=true` set on the `development` GitHub environment 2026-11-14. Left: a three-read fan-out on dev and the turn-duration delta
+
+### [2026-11-14] Pass a per-turn `cancel_signal` and stop clearing Strands' private `_cancel_signal` → RESOLVED — **SHIPPED**
+- **Decision**: `b49d7af91` (PR 2091).
+- **Reasoning**: Built, and found Stop had never reached Strands in production. The smoke `stop_mid_answer` row covers what's left.
+- **Reviewed in**: reviews/2026-11-20.md (checked against `origin/develop` and git history)
+- **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #2; `agent.cancel` docstring (harness-sdk#4833, 1.62): "for cancellation driven from outside the agent … pass a `cancel_signal` into the invocation instead"
+- **Surface**: backend (`apis/inference_api/chat/routes.py:221-248`, `agents/main_agent/streaming/stream_coordinator.py:221-248` and `:709`)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: the `_cancel_signal` half of `reset_cancellation_state`, a write to a private SDK attribute, and with it the sticky-Stop class (#741/#751) for that signal
+- **Notes**: create a `threading.Event` per turn, pass `cancel_signal=` to `stream_async`, and have `_mark_session_cancelled` set it instead of calling `agent.cancel()`. Strands mirrors it onto the internal signal, in-flight MCP calls included. An event scoped to one invocation cannot leak onto the cached agent. Keep `session_manager.cancelled` and its reset (`StopHook` and the coordinator read it). Cost 0; one watcher task per turn
+- **Status**: built 2026-11-14, PR 2091. It turned out to be a bug fix too: `_mark_session_cancelled` got the `ChatAgent` wrapper, which has no `cancel()`, so Stop had never reached Strands in production. Left: the dev smoke `stop_mid_answer` row and a Stop during a slow MCP call
+
+### [2026-11-14] Docs sync after the Strands 1.55 → 1.63 adoption audit → RESOLVED — **SHIPPED**
+- **Decision**: `bd5dd7bb7` (2026-11-14).
+- **Reasoning**: The entry's own status says to close it at review.
+- **Reviewed in**: reviews/2026-11-20.md (checked against `origin/develop` and git history)
+- **Source**: scoping/strands-1-55-to-1-63-adoption-audit.md ▸ #3, #4, #5, #7
+- **Surface**: docs (`docs/kaizen/standing-watches.md` §2a rows 1 and 3; `docs/kaizen/decisions.md` 2026-05-18; this file's [2026-07-17] `Limits` entry)
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: two stale instructions, one of which would ship a cost regression if followed
+- **Notes**: (a) Row 1 (`usage_normalization` cache-write shim) retired in #1683; strike it. (b) Row 3 says to adopt `apply_cache_config` and retire `build_prompt_cache_key`. Ours is prefix-derived and shared across conversations (`bedrock_responses.py:274-294`); upstream's is `strands-<session_id>` (#4083), so a swap makes every new GPT conversation's first call write the static prefix instead of reading it. Since 1.64 a `cache_config` also turns on the +11.8% checkpoint. Rewrite the row as "keep ours", with `probe_gpt56_cache_rates.py` as the gate. The 1.63 → 1.65 readout (PR #2080, its row 7) reaches the same verdict independently. Cite it for the 1.64 half. (c) Add to decisions.md 2026-05-18's re-open condition: since 1.63 (#5446) a Strands `context_manager` raises on any `RepositorySessionManager`, and `AgentCoreMemorySessionManager` is one. (d) Note on [2026-07-17] that #5288 makes limits and usage request-wide across nested agents (`InvocationContext`), and that the interactive lane has no `limits=` today
+- **Status**: done 2026-11-14 for (a), (b) and (c), plus a correction note on research/ and reviews/2026-09-25 that `requestTimeout` (#4408) is TypeScript-only. (d) was already written onto the [2026-07-17] entry in the audit PR. Close at review.
+
+### [2026-11-13] Escalation: delete the orphaned ALB access-log bucket and make the nightly self-heal (10 red nights) → RESOLVED — **SHIPPED**
+- **Decision**: `8ace78f5f` (2026-11-14).
+- **Reasoning**: Nightly Build & Test has been green every night from 2026-11-15 through 2026-11-20.
+- **Reviewed in**: reviews/2026-11-20.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-13.md ▸ Top 5 #1; nightly runs 41804576559 → 43398420487
+- **Surface**: CI (`scripts/nightly/teardown.sh`, `scripts/nightly/clear-failed-stack.sh`)
+- **Effort × Impact**: L × H
+- **Subtracts**: yes: red nightlies every night 11-04 → 11-13 (135 PRs merged without the nightly pass) and every future manual unstick
+- **Notes**: **Supersedes [2026-11-06] "Nightly: delete the orphaned ALB access-log bucket…"**, which was never reviewed because no review-prep ran for the 11-06 research. Every deploy fails at change-set validation: "`nightly-develop-alb-access-logs` already exists". Delete the bucket by hand once. Then have `clear-failed-stack.sh` delete a fixed-name bucket that exists without a stack, and have `teardown.sh` re-empty the bucket before deleting it.
+- **Status**: resolved (shipped)
+
+### [2026-11-13] Pre-bump gate for Strands 1.65: refuse a null interrupt response at the route; pin tool-spec order → RESOLVED — **SHIPPED**
+- **Decision**: `8a8ba4f02` (#2082), then the bump in `2d03e7ccd`.
+- **Reasoning**: Null responses are refused before the lease; the order test turned #5700 into a known quantity (now tracked as #5933 `sort_tools`).
+- **Reviewed in**: reviews/2026-11-20.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-13.md ▸ Top 5 #5; https://github.com/strands-agents/harness-sdk/pull/4471; https://github.com/strands-agents/harness-sdk/issues/5700
+- **Surface**: backend (`apis/inference_api/chat/models.py:42`, resume route, tests) + CLAUDE.md interrupt rows
+- **Effort × Impact**: L × M
+- **Subtracts**: yes: a silent forever-pause today, and stale "re-raise forever" wording in three CLAUDE.md rows after the bump
+- **Notes**: with #4471, `resume()` raises `ValueError` on `None`. #5654 validates restored interrupts (run the smoke interrupt/resume rows on the bump). #5700 may sort tool specs by name by default, so a test that records whether our order already matches turns that into a known no-op or a known one-time re-write.
+- **Status**: resolved (shipped)
+
+### [2026-11-13] Spec sync: agent-handoffs-and-consults.md §2 phase table (0a built, 0b built) → RESOLVED — **SHIPPED**
+- **Decision**: `919ce5009` (PR-0.5 backend).
+- **Reasoning**: Rows 0a and 0b now read "Built and dev-validated" on `develop`.
+- **Reviewed in**: reviews/2026-11-20.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-13.md ▸ Spec sync S2
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: stale phase status
+- **Notes**: `:101` "In progress: PR-0.1–0.3 built" → "Built: PR-0.1–0.3c"; `:104` "Proposed" → "Built: PR-0.3b–0.4a; dev check of files by reference pending (#2033)".
+- **Status**: resolved (shipped)
+
+### [2026-11-06] Spec sync: multi-agent-patterns.md §3, §4.2 and staleness table (pin is 1.63.0) → RESOLVED — **SUPERSEDED**
+- **Decision**: The pin rows now say 1.65.0 (`bd5dd7bb7` and the 1.65 bump).
+- **Reasoning**: The doc was synced past the version this entry asked for.
+- **Reviewed in**: reviews/2026-11-20.md (checked against `origin/develop` and git history)
+- **Source**: research/2026-11-06.md ▸ Spec sync row 1
+- **Surface**: docs
+- **Effort × Impact**: L × L
+- **Subtracts**: yes: stale version claims
+- **Notes**: `:57`, `:126`, `:274` say 1.57.2; `backend/pyproject.toml:73` is 1.63.0 (`aff220f63`). Supersedes [2026-11-03] *Spec sync: … (pin is 1.61.1, not 1.57.2)*.
+- **Status**: resolved (superseded)
 
 ### [2026-11-06] Nightly: delete the orphaned ALB access-log bucket that last week's teardown fix leaves behind → RESOLVED — **SUPERSEDED**
 - **Decision**: by [2026-11-13] *Escalation: delete the orphaned ALB access-log bucket and make the nightly self-heal*.
