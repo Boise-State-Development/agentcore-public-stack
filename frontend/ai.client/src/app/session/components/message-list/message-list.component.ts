@@ -23,7 +23,7 @@ import { HandoffStateService } from '../../services/handoff/handoff-state.servic
 import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
 import { showsInThread } from '../../services/handoff/workflow-run-progress';
 import { WorkflowRunView } from '../../services/handoff/workflow-run.models';
-import { HandoffView, isPromptStep, isSuggestionChip } from '../../services/handoff/handoff.models';
+import { HandoffView, isModelStep, isSuggestionChip } from '../../services/handoff/handoff.models';
 import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
 import { FilePreviewPanelComponent } from './components/file-preview/file-preview-panel.component';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
@@ -880,7 +880,7 @@ export class MessageListComponent {
     return this.handoffState
       .rowsFor(this.sessionId())
       // A prompt step (§21.3) has no conversation to open: it only ever draws in its run's row.
-      .filter((row) => !isSuggestionChip(row) && !isPromptStep(row) && !inRuns.has(row.handoffId));
+      .filter((row) => !isSuggestionChip(row) && !isModelStep(row) && !inRuns.has(row.handoffId));
   });
 
   // Workflow runs (workflow-runs spec §20.2): one row per approved run, anchored like a handoff row

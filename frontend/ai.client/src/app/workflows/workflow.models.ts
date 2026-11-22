@@ -8,6 +8,7 @@ import { WorkflowFilesRule, WorkflowRef } from '../services/workflows/workflow.m
 
 export type {
   WorkflowAgentView,
+  WorkflowFieldSetView,
   WorkflowDocument,
   WorkflowModelView,
   WorkflowRef,

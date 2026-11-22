@@ -24,7 +24,10 @@ import { WorkflowRunResultService } from '../../services/handoff/workflow-run-re
 import {
   RunStepLine,
   RunStepState,
-  isPromptRunStep,
+  checklistSetErrorLine,
+  fieldSetsLabel,
+  isChecklistRunStep,
+  isModelRunStep,
   promptStatusLine,
   promptWorkerLabel,
   runProgress,
@@ -32,7 +35,10 @@ import {
   stepsLabel,
   waitingLabel,
 } from '../../services/handoff/workflow-run-progress';
-import { WorkflowRunView } from '../../services/handoff/workflow-run.models';
+import { ChecklistSetView, WorkflowRunView } from '../../services/handoff/workflow-run.models';
+import { DocumentExtractionComponent } from '../message-list/components/document-extraction/document-extraction.component';
+import { normalizeDocumentExtractionRun } from '../../../shared/utils/stream-parser/stream-parser-core';
+import type { DocumentExtractionRun } from '../../../shared/utils/stream-parser/stream-parser-types';
 import { WorkflowRunService, canResume } from '../../services/handoff/workflow-run.service';
 import { SessionService } from '../../services/session/session.service';
 import { WorkflowGraphComponent } from '../../../workflows/components/workflow-graph.component';
@@ -52,6 +58,8 @@ interface StepLineView {
   worker?: string;
   /** A done prompt step's answer, as stored: it has no conversation to open instead. */
   answer?: string;
+  /** A checklist step's results (§22.3): one table per field set, in the order it ran them. */
+  tables?: ChecklistTable[];
   /** Wrap the line rather than truncate it: a stopped prompt step's reason must stay readable. */
   wrap?: boolean;
   state: RunStepState;
@@ -61,6 +69,40 @@ interface StepLineView {
   accessibleName: string;
   /** The row the relay reads, for a step with a conversation. */
   row: HandoffView | null;
+}
+
+/** One field set's block under a checklist step's line: its table, or why it has none. */
+interface ChecklistTable {
+  key: string;
+  title: string;
+  /** The set's values as `DocumentExtractionComponent` reads them; null when the set failed. */
+  runs: DocumentExtractionRun[] | null;
+  /** Why the set has no table, in plain words. */
+  error?: string;
+}
+
+/**
+ * A checklist step's set row as the extraction table reads it (§22.3). One call read every run
+ * file, so the table names no document: its heading is the set's title, and each value's verdict is
+ * the document where its quote was found. The line above already names the model.
+ */
+export function checklistTable(row: ChecklistSetView): ChecklistTable {
+  const title = row.fieldSetTitle?.trim() || row.fieldSet;
+  const key = `${row.stepId}:${row.fieldSet}`;
+  if (row.status === 'error') return { key, title, runs: null, error: checklistSetErrorLine(row.error) };
+  const run = normalizeDocumentExtractionRun({
+    toolUseId: key,
+    fieldSet: row.fieldSet,
+    fieldSetVersion: row.fieldSetVersion ?? '',
+    uploadId: key,
+    filename: '',
+    modelId: '',
+    // The step's one tool is strict: Bedrock guaranteed the reply's shape (§22.2).
+    schemaEnforced: true,
+    quotesOmitted: row.quotesOmitted === true,
+    fields: row.fields.map((field) => ({ ...field, value: field.value ?? '' })),
+  });
+  return run ? { key, title, runs: [run] } : { key, title, runs: null, error: 'It found no fields to show.' };
 }
 
 /**
@@ -95,7 +137,15 @@ const BAR_FILL: Record<RunStepState, string> = {
 @Component({
   selector: 'app-workflow-run-row',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, NgTemplateOutlet, RouterLink, HandoffRelayComponent, StreamingTextComponent, WorkflowGraphComponent],
+  imports: [
+    NgIcon,
+    NgTemplateOutlet,
+    RouterLink,
+    HandoffRelayComponent,
+    StreamingTextComponent,
+    WorkflowGraphComponent,
+    DocumentExtractionComponent,
+  ],
   providers: [provideIcons({ heroCheckCircle, heroChevronRight, heroExclamationCircle, heroMinusCircle, heroPauseCircle })],
   template: `
     <section
@@ -167,7 +217,18 @@ const BAR_FILL: Record<RunStepState, string> = {
                   @if (line.worker) { · {{ line.worker }} }
                   · {{ line.statusLine }}
                 </span>
-                @if (line.answer) {
+                @if (line.tables?.length) {
+                  <button
+                    type="button"
+                    (click)="toggleAnswer(line.handoffId)"
+                    [attr.aria-expanded]="openAnswer() === line.handoffId"
+                    [attr.aria-controls]="answerId(line.handoffId)"
+                    [attr.aria-label]="(openAnswer() === line.handoffId ? 'Hide ' : 'Show ') + line.agentName + '’s results'"
+                    class="shrink-0 rounded-md text-xs/5 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:focus-visible:outline-primary-accessible-dark"
+                  >
+                    {{ openAnswer() === line.handoffId ? 'Hide results' : 'Results' }}
+                  </button>
+                } @else if (line.answer) {
                   <button
                     type="button"
                     (click)="toggleAnswer(line.handoffId)"
@@ -180,6 +241,28 @@ const BAR_FILL: Record<RunStepState, string> = {
                   </button>
                 }
               </div>
+              @if (line.tables?.length && openAnswer() === line.handoffId) {
+                <!-- A checklist step's results: one block per field set, in the order it ran them,
+                     each the extraction table (values, states, quotes, locators), or why it has none. -->
+                <div
+                  [id]="answerId(line.handoffId)"
+                  role="region"
+                  [attr.aria-label]="line.agentName + '’s results'"
+                  class="message-block mx-2 mt-1 mb-1.5 space-y-2 rounded-lg bg-gray-50 px-3 py-2 text-sm/6 text-gray-800 dark:bg-white/5 dark:text-gray-200"
+                  data-testid="checklist-results"
+                >
+                  @for (table of line.tables; track table.key) {
+                    @if (table.runs; as runs) {
+                      <app-document-extraction [runs]="runs" [heading]="table.title" />
+                    } @else {
+                      <p class="mt-2 text-xs/5 break-words" data-testid="checklist-set-error">
+                        <span class="font-medium text-gray-900 dark:text-white">{{ table.title }}</span>
+                        <span class="text-state-warning-700 dark:text-state-warning-300"> · Not filled in. {{ table.error }}</span>
+                      </p>
+                    }
+                  }
+                </div>
+              }
               @if (line.answer && openAnswer() === line.handoffId) {
                 <!-- Scrollable, so focusable: keyboard users scroll it with the arrow keys (axe scrollable-region-focusable).
                      The answer is the model's Markdown, rendered (and sanitized) as an assistant message is. -->
@@ -393,8 +476,8 @@ export class WorkflowRunRowComponent {
     return source && source !== 'New Conversation' ? source : null;
   });
 
-  /** The run has a prompt step (§21.3): it is "6 steps", since a prompt step has no Agent. */
-  private readonly hasPromptSteps = computed(() => this.progress().lines.some((line) => isPromptRunStep(line.step)));
+  /** The run has a prompt or checklist step (§21.3, §22.3): it is "6 steps", since neither has an Agent. */
+  private readonly hasPromptSteps = computed(() => this.progress().lines.some((line) => isModelRunStep(line.step)));
 
   protected readonly title = computed(() => {
     const total = stepsLabel(this.progress().total, this.hasPromptSteps());
@@ -403,7 +486,7 @@ export class WorkflowRunRowComponent {
     return this.hasPromptSteps() ? `Started ${total}` : `Handed off to ${total}`;
   });
 
-  /** The prompt step whose answer is open, by handoff id; one at a time keeps the row short. */
+  /** The prompt step whose answer (or checklist step whose results) is open, by handoff id; one at a time keeps the row short. */
   protected readonly openAnswer = signal<string | null>(null);
 
   protected toggleAnswer(handoffId: string): void {
@@ -420,7 +503,7 @@ export class WorkflowRunRowComponent {
   /** An approved run from before the card was kept on its row: nothing here can start it. */
   protected readonly startElsewhere = computed(() => this.notStarted() > 0 && !canResume(this.run()));
   protected readonly notStartedLabel = computed(() =>
-    stepsLabel(this.notStarted(), this.progress().lines.some((line) => line.state === 'not_started' && isPromptRunStep(line.step))),
+    stepsLabel(this.notStarted(), this.progress().lines.some((line) => line.state === 'not_started' && isModelRunStep(line.step))),
   );
 
   protected readonly collecting = computed(() => this.results.isCollecting(this.run().runId));
@@ -458,6 +541,9 @@ export class WorkflowRunRowComponent {
    */
   protected readonly offerSave = computed(() => {
     if (!this.features.workflows || !this.offerSaveAsWorkflow()) return false;
+    // A checklist step's field sets live in the skill of the workflow the run started from, and a
+    // new carrying skill would hold none of them, so the server refuses this run (§22.3).
+    if (this.run().steps.some((step) => isChecklistRunStep(step))) return false;
     const status = this.run().status;
     return status === 'stopped' || (status === 'approved' && this.progress().settled);
   });
@@ -503,7 +589,7 @@ export class WorkflowRunRowComponent {
   }
 
   private lineView(line: RunStepLine): StepLineView {
-    if (isPromptRunStep(line.step)) return this.promptLineView(line);
+    if (isModelRunStep(line.step)) return this.promptLineView(line);
     const base = { handoffId: line.step.handoffId, agentName: line.step.agentName, state: line.state };
     if (line.state === 'queued' || line.state === 'not_started' || !line.row?.targetSessionId) {
       const statusLine =
@@ -532,21 +618,30 @@ export class WorkflowRunRowComponent {
   }
 
   /**
-   * A prompt step's line (§21.3): no conversation, so no link and no relay. It is named by its
-   * step (several can share a model), says its model, and once done holds its answer.
+   * A prompt or checklist step's line (§21.3, §22.3): no conversation, so no link and no relay. It
+   * is named by its step (several can share a model) and says its kind and model. Once done, a
+   * prompt step holds its answer and a checklist step its tables, one per field set; a checklist
+   * step whose set rows couldn't be read falls back to its answer's text, which has the values too.
    */
   private promptLineView(line: RunStepLine): StepLineView {
     const model = line.row?.agentName || line.step.agentName;
-    const worker = promptWorkerLabel(model);
-    const name = stepNameLabel(line.step.stepName) || worker;
+    const checklist = isChecklistRunStep(line.step);
+    const base = promptWorkerLabel(model, line.step.kind);
+    const sets = line.step.fieldSets?.length ?? 0;
+    const worker = checklist && sets ? `${base} · ${fieldSetsLabel(sets)}` : base;
+    const name = stepNameLabel(line.step.stepName) || base;
     const statusLine = promptStatusLine(line);
-    const answer = line.state === 'done' ? line.row?.outputText?.trim() || undefined : undefined;
+    const done = line.state === 'done';
+    const tables = done && checklist ? (line.step.checklist ?? []).map(checklistTable) : undefined;
+    const answer = done && !tables?.length ? line.row?.outputText?.trim() || undefined : undefined;
     return {
       handoffId: line.step.handoffId,
       agentName: name,
-      worker: name === worker ? undefined : worker,
+      worker: name === base ? (checklist && sets ? fieldSetsLabel(sets) : undefined) : worker,
       answer,
-      wrap: line.state === 'stopped',
+      ...(tables?.length ? { tables } : {}),
+      // A checklist line also names its sets, so it wraps rather than cut its model off on a phone.
+      wrap: line.state === 'stopped' || checklist,
       state: line.state,
       statusLine,
       link: null,

@@ -15,7 +15,7 @@ import type {
   GraphStepCard,
   GraphStepStatus,
 } from '../../../workflows/components/workflow-graph.component';
-import { RunProgress, RunStepLine, promptWorkerLabel, stepNameLabel } from './workflow-run-progress';
+import { RunProgress, RunStepLine, fieldSetsLabel, isModelStepKind, promptWorkerLabel, stepNameLabel } from './workflow-run-progress';
 import { RunReview, WorkflowRunView } from './workflow-run.models';
 
 export const GRAPH_START = 'start';
@@ -82,10 +82,21 @@ export function runReadsLabel(hasFiles: boolean, results: number, hasRequest = t
   return `reads ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`}`;
 }
 
-/** A prompt step's card: titled by its step's name, since several can share a model; the meta names the model. */
-function promptCard(key: string, stepName: string | undefined, modelName: string, readsLabel: string): GraphStepCard {
-  const worker = promptWorkerLabel(modelName);
-  return { key, kind: 'prompt', title: stepNameLabel(stepName) || worker, meta: worker, agentId: null, readsLabel };
+/**
+ * A prompt or checklist step's card: titled by its step's name, since several can share a model;
+ * the meta names its kind and model, and a checklist step's how many sets it runs.
+ */
+function promptCard(
+  key: string,
+  stepName: string | undefined,
+  modelName: string,
+  readsLabel: string,
+  kind: 'prompt' | 'checklist' = 'prompt',
+  sets = 0,
+): GraphStepCard {
+  const worker = promptWorkerLabel(modelName, kind);
+  const meta = kind === 'checklist' && sets ? `${worker} · ${fieldSetsLabel(sets)}` : worker;
+  return { key, kind, title: stepNameLabel(stepName) || worker, meta, agentId: null, readsLabel };
 }
 
 /** "1m 04s", from the run's approval to the step's row settling, as the designer's test run says it. */
@@ -136,13 +147,15 @@ export function runGraph(run: WorkflowRunView, progress: RunProgress, phrase: (l
     const reads = (line.step.reads ?? []).filter((name) => progress.lines.some((other) => other.step.stepName === name));
     const own = line.step.reads;
     const card: GraphStepCard =
-      line.step.kind === 'prompt'
+      isModelStepKind(line.step.kind)
         ? promptCard(
             line.step.stepId,
             line.step.stepName,
             line.step.agentName,
             // A prompt row's reads keep its inputs; one written without any reads both (§21.3).
             runReadsLabel(hasFiles && (!own || own.includes('files')), reads.length, !own || own.includes('request')),
+            line.step.kind,
+            line.step.fieldSets?.length ?? 0,
           )
         : {
             key: line.step.stepId,
@@ -190,12 +203,14 @@ export function reviewGraph(review: RunReview, modelName: (stepId: string) => st
   const nodes = kept.map((step): GraphNode => {
     const reads = (step.workflowStep?.readsSteps ?? []).filter((name) => keptNames.has(name));
     const card: GraphStepCard =
-      step.kind === 'prompt'
+      isModelStepKind(step.kind)
         ? promptCard(
             step.stepId,
             step.workflowStep?.name,
             step.agentName,
             runReadsLabel(hasFiles && (step.workflowStep?.readsFiles ?? true), reads.length, readsRequest(review, step.workflowStep?.name)),
+            step.kind,
+            step.fieldSets?.length ?? 0,
           )
         : {
             key: step.stepId,
@@ -212,7 +227,7 @@ export function reviewGraph(review: RunReview, modelName: (stepId: string) => st
   const agentOf = new Map(
     kept.map((step) => [
       step.workflowStep?.name ?? step.stepId,
-      step.kind === 'prompt' ? stepNameLabel(step.workflowStep?.name) || step.agentName : step.agentName,
+      isModelStepKind(step.kind) ? stepNameLabel(step.workflowStep?.name) || step.agentName : step.agentName,
     ]),
   );
   const status = new Map<string, GraphStepStatus>();
@@ -238,7 +253,7 @@ export function reviewGraph(review: RunReview, modelName: (stepId: string) => st
 /** A saved prompt step reads the run's request only when its reads name it; an Agent step always does. */
 function readsRequest(review: RunReview, name: string | undefined): boolean {
   const step = name ? review.workflow?.document.workflow.steps.find((candidate) => candidate.name === name) : undefined;
-  return !step || step.kind !== 'prompt' || step.reads.includes('request');
+  return !step || !isModelStepKind(step.kind) || step.reads.includes('request');
 }
 
 /** "A", "A and B", "A, B and C". */

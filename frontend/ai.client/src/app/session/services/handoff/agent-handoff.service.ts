@@ -31,7 +31,7 @@ import { FolderAttachmentData } from '../models/message.model';
 import { HandoffBriefService } from './handoff-brief.service';
 import { HandoffNotificationService, answeredInSource } from './handoff-notification.service';
 import { HandoffStateService } from './handoff-state.service';
-import { PrepareRunStepResponse } from './workflow-run.models';
+import { PrepareRunStepResponse, WorkflowRunView } from './workflow-run.models';
 
 /** How long to keep asking for a finished target's status: the Runtime writes it just after the stream. */
 const STATUS_REFRESH_ATTEMPTS = 6;
@@ -384,6 +384,20 @@ export class AgentHandoffService {
       `${this.config.appApiUrl()}/sessions/${encodeURIComponent(sourceSessionId)}/workflow-runs/` +
       `${encodeURIComponent(runId)}/steps/${encodeURIComponent(stepId)}/prepare`;
     return firstValueFrom(this.http.post<PrepareRunStepResponse>(url, {}));
+  }
+
+  /**
+   * A workflow run as the server has it now (`GET …/workflow-runs/{runId}`), or null when it can't
+   * be read. For a checklist step (§22.3), read once its frame says it settled: the run carries
+   * the step's `WFCHK#` rows as `steps[].checklist`.
+   */
+  async readRun(sourceSessionId: string, runId: string): Promise<WorkflowRunView | null> {
+    const url = `${this.config.appApiUrl()}/sessions/${encodeURIComponent(sourceSessionId)}/workflow-runs/${encodeURIComponent(runId)}`;
+    try {
+      return await firstValueFrom(this.http.get<WorkflowRunView>(url));
+    } catch {
+      return null;
+    }
   }
 
   /**

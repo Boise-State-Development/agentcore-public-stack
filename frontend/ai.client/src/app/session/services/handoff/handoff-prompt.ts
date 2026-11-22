@@ -308,6 +308,12 @@ export interface RunResultAgents {
    * whole label, never on the model alone, which several prompt steps can share (§21.3).
    */
   promptSteps?: readonly (string | null)[];
+  /**
+   * Per step, in the same order: true for a checklist step (§22.3). Its block is labelled like a
+   * prompt step's, by its model and its step, but "Checklist step" when the run kept no name
+   * (`CHECKLIST_STEP_FALLBACK_NAME`). Its name belongs in `promptSteps` too.
+   */
+  checklistSteps?: readonly boolean[];
 }
 
 /** One part of a run result read back for a sent bubble. */
@@ -316,8 +322,10 @@ export interface RunResultPartBlock {
   /** `done` for an answer; else the status whose note the block holds (it was not included). */
   status: DeliveryPartStatus;
   block: DeliveryBlock;
-  /** A prompt step's part: the step's name. Its `agentName` is then the model's name. */
+  /** A prompt or checklist step's part: the step's name. Its `agentName` is then the model's name. */
   promptStep?: string;
+  /** A checklist step's part (§22.3), named "{step} · Checklist · {model}". */
+  checklist?: boolean;
 }
 
 /** What a sent bubble shows for its delivery blocks: separate cards, and any run result as one. */
@@ -342,7 +350,7 @@ export function groupRunResults(blocks: readonly DeliveryBlock[], runs: readonly
   while (i < blocks.length) {
     let best: { runId: string; parts: RunResultPartBlock[] } | null = null;
     for (const run of runs) {
-      const parts = matchRun(blocks, i, run.agentNames, run.promptSteps ?? []);
+      const parts = matchRun(blocks, i, run.agentNames, run.promptSteps ?? [], run.checklistSteps ?? []);
       const minimum = Math.min(2, run.agentNames.length);
       if (parts.length >= minimum && parts.length > (best?.parts.length ?? 0)) best = { runId: run.runId, parts };
     }
@@ -362,6 +370,7 @@ function matchRun(
   start: number,
   agentNames: readonly string[],
   promptSteps: readonly (string | null)[],
+  checklistSteps: readonly boolean[],
 ): RunResultPartBlock[] {
   const parts: RunResultPartBlock[] = [];
   let step = 0;
@@ -369,7 +378,7 @@ function matchRun(
     const label = blocks[j].fromTitle;
     let found = -1;
     for (let k = step; k < agentNames.length; k++) {
-      if (labelMatchesStep(label, agentNames[k].trim(), promptSteps[k] ?? null)) {
+      if (labelMatchesStep(label, agentNames[k].trim(), promptSteps[k] ?? null, !!checklistSteps[k])) {
         found = k;
         break;
       }
@@ -381,6 +390,7 @@ function matchRun(
       status: partStatusOf(blocks[j], promptStep != null),
       block: blocks[j],
       ...(promptStep != null ? { promptStep } : {}),
+      ...(promptStep != null && checklistSteps[found] ? { checklist: true } : {}),
     });
     step = found + 1;
   }
@@ -389,9 +399,14 @@ function matchRun(
 
 /** A prompt step's block when the run kept no step name for it (`PROMPT_STEP_FALLBACK_NAME`). */
 const PROMPT_STEP_FALLBACK_NAME = 'Prompt step';
+/** A checklist step's block when the run kept no step name for it (`CHECKLIST_STEP_FALLBACK_NAME`). */
+const CHECKLIST_STEP_FALLBACK_NAME = 'Checklist step';
 
-function labelMatchesStep(label: string, agent: string, promptStep: string | null): boolean {
-  if (promptStep !== null) return label === deliveryPartLabel(agent, promptStep.trim() || PROMPT_STEP_FALLBACK_NAME);
+function labelMatchesStep(label: string, agent: string, promptStep: string | null, checklist: boolean): boolean {
+  if (promptStep !== null) {
+    const fallback = checklist ? CHECKLIST_STEP_FALLBACK_NAME : PROMPT_STEP_FALLBACK_NAME;
+    return label === deliveryPartLabel(agent, promptStep.trim() || fallback);
+  }
   return !!agent && (label === agent || label.startsWith(`${agent} · `));
 }
 

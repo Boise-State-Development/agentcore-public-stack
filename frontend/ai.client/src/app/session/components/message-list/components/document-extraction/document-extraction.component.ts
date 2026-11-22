@@ -348,6 +348,11 @@ let nextExtractionTable = 0;
 })
 export class DocumentExtractionComponent {
   runs = input.required<readonly DocumentExtractionRun[]>();
+  /**
+   * What the table is of, when its caller knows better than "Extracted": a workflow checklist
+   * step's field-set title (workflow-designer §22.3), whose one call read every run file.
+   */
+  heading = input('');
 
   private readonly artifactState = inject(ArtifactStateService);
 
@@ -390,6 +395,8 @@ export class DocumentExtractionComponent {
   protected readonly headline = computed(() => {
     const fields = this.columns().length;
     const what = fields === 1 ? '1 field' : `${fields} fields`;
+    const heading = this.heading().trim();
+    if (heading) return `${heading} · ${what}`;
     const one = this.single();
     if (one) {
       return one.filename ? `Extracted ${what} from ${one.filename}` : `Extracted ${what}`;

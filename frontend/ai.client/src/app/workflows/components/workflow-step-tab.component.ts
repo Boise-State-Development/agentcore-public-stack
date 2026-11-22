@@ -1,10 +1,11 @@
 import { ChangeDetectionStrategy, Component, Injector, afterNextRender, computed, inject, output, signal } from '@angular/core';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArrowDown, heroArrowUp, heroExclamationTriangle, heroMagnifyingGlass, heroTrash } from '@ng-icons/heroicons/outline';
+import { RouterLink } from '@angular/router';
+import { heroArrowDown, heroArrowUp, heroExclamationTriangle, heroMagnifyingGlass, heroPlus, heroTrash } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../agents/components/agent-icon.component';
 import { MentionableAgent } from '../../agents/services/agent-mention.service';
-import { DraftStep } from '../workflow-draft';
+import { DraftStep, MAX_CHECKLIST_FIELD_SETS, isModelDraftStep } from '../workflow-draft';
 import { RESULT_NODE, START_NODE, WorkflowDesignerStore } from '../workflow-designer.store';
 import { MAX_WORKFLOW_STEPS, WorkflowFiles } from '../workflow.models';
 
@@ -18,9 +19,21 @@ export function modelReasonCopy(reason: string | undefined): string {
     case 'retired':
       return 'This model has been retired. Choose another.';
     case 'unsupported':
-      return 'This model can’t run this prompt step. Choose a text model that reads documents.';
+      return 'This model can’t run this step. Choose a text model that reads documents.';
     default:
       return 'This model couldn’t be checked. Try again, or choose another.';
+  }
+}
+
+/** Why the server says a checklist step's field set can't run (`FieldSetView.reason`). */
+export function fieldSetReasonCopy(reason: string | undefined): string {
+  switch (reason) {
+    case 'missing':
+      return 'No longer in this workflow’s skill. Remove it, or add it back to the skill.';
+    case 'list_field':
+      return 'Has a list field, which a checklist step can’t fill yet. Remove it, or change the field’s type.';
+    default:
+      return 'Couldn’t be read. Try again, or remove it.';
   }
 }
 
@@ -32,7 +45,14 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
 
 /**
  * The Step tab (docs/specs/workflow-designer.md §5): edits the selected card. Agent steps, prompt
- * steps (§21.3, behind `features.promptSteps`) and the two fixed cards; checklist steps are D.7.
+ * steps (§21.3, behind `features.promptSteps`), checklist steps (§22.3, behind
+ * `features.checklistSteps`) and the two fixed cards.
+ *
+ * A checklist step picks its model as a prompt step does, and one or more field sets from this
+ * workflow's skill, in the order it runs them (Move up / Move down, as the field-set editor moves
+ * fields). It always reads the run's files, since its sets are filled in from them. Its text is
+ * guidance added to every set's call, never the run's request. The sets are listed by filename
+ * from the skill; the server reads and judges them on every preview.
  *
  * A prompt step is one model call with no Agent: it has a name of its own (several can share a
  * model), a model from the ones this user can use that run a prompt step (`promptModelChoices`),
@@ -49,8 +69,8 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
 @Component({
   selector: 'app-workflow-step-tab',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, AgentIconComponent],
-  providers: [provideIcons({ heroArrowDown, heroArrowUp, heroExclamationTriangle, heroMagnifyingGlass, heroTrash })],
+  imports: [NgIcon, AgentIconComponent, RouterLink],
+  providers: [provideIcons({ heroArrowDown, heroArrowUp, heroExclamationTriangle, heroMagnifyingGlass, heroPlus, heroTrash })],
   template: `
     @switch (kind()) {
       @case ('start') {
@@ -208,12 +228,12 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
               <div class="min-w-0">
                 <h2 id="wf-step-heading" class="truncate text-base/7 font-semibold text-gray-900 dark:text-white">{{ store.stepLabel(step) }}</h2>
                 <p class="text-xs/5 text-gray-600 dark:text-gray-400">
-                  {{ step.kind === 'prompt' ? 'Prompt step' : 'Agent step' }} · stage {{ stageNumber() }}@if (model()) { · {{ model() }} }
+                  {{ kindLabel(step) }} · stage {{ stageNumber() }}@if (model()) { · {{ model() }} }
                 </p>
               </div>
             </div>
 
-            @if (store.promptStepsOn || step.kind === 'prompt') {
+            @if (store.promptStepsOn || isModelStep(step)) {
               <fieldset>
                 <legend class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Kind</legend>
                 <div class="mt-2 space-y-2">
@@ -222,7 +242,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                       id="wf-kind-agent"
                       type="radio"
                       name="wf-step-kind"
-                      [checked]="step.kind !== 'prompt'"
+                      [checked]="step.kind === 'agent'"
                       [disabled]="!editable()"
                       (change)="store.setStepKind(step.key, 'agent')"
                       [class]="radioClass"
@@ -247,11 +267,30 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                       <span class="block text-xs/5 text-gray-600 dark:text-gray-400">One model call over what it reads. No Agent, no tools, no conversation.</span>
                     </span>
                   </label>
+                  @if (store.checklistStepsOn || step.kind === 'checklist') {
+                    <label class="flex items-start gap-3 text-sm/6 text-gray-900 dark:text-white">
+                      <input
+                        id="wf-kind-checklist"
+                        type="radio"
+                        name="wf-step-kind"
+                        [checked]="step.kind === 'checklist'"
+                        [disabled]="!editable() || !store.checklistStepsOn"
+                        (change)="store.setStepKind(step.key, 'checklist')"
+                        [class]="radioClass"
+                      />
+                      <span>
+                        Checklist step
+                        <span class="block text-xs/5 text-gray-600 dark:text-gray-400">
+                          Fills in field sets from the run’s files, one model call each, with a quote for every value.
+                        </span>
+                      </span>
+                    </label>
+                  }
                 </div>
               </fieldset>
             }
 
-            @if (step.kind === 'prompt') {
+            @if (isModelStep(step)) {
               <div>
                 <label for="wf-step-name" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Name</label>
                 <input
@@ -307,11 +346,173 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                       </span>
                     </label>
                   } @empty {
-                    <p class="px-3 py-3 text-sm/6 text-gray-600 dark:text-gray-400">No model you can use runs a prompt step.</p>
+                    <p class="px-3 py-3 text-sm/6 text-gray-600 dark:text-gray-400">No model you can use runs a {{ step.kind === 'checklist' ? 'checklist' : 'prompt' }} step.</p>
                   }
                 </div>
               </fieldset>
 
+              @if (step.kind === 'checklist') {
+                <fieldset aria-describedby="wf-sets-help">
+                  <legend class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Field sets</legend>
+                  <p id="wf-sets-help" class="text-xs/5 text-gray-600 dark:text-gray-400">
+                    From this workflow’s skill. Each set is one model call, in this order. Up to {{ maxSets }}.
+                  </p>
+                  @if (!step.fieldSets.length) {
+                    <p class="mt-1 flex items-center gap-1.5 text-xs/5 font-medium text-state-warning-700 dark:text-state-warning-300">
+                      <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0" aria-hidden="true" />
+                      Choose at least one field set.
+                    </p>
+                  } @else {
+                    <ol role="list" class="mt-2 divide-y divide-gray-100 rounded-2xl border border-gray-200 bg-white dark:divide-white/5 dark:border-gray-700 dark:bg-gray-800" data-testid="wf-chosen-sets">
+                      @for (name of step.fieldSets; track name; let i = $index, first = $first, last = $last) {
+                        @let judged = store.fieldSetView(name);
+                        <li class="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2">
+                          <span class="min-w-0 flex-1">
+                            <span class="block truncate text-sm/6 font-medium text-gray-900 dark:text-white">
+                              <span class="sr-only">{{ i + 1 }}. </span>{{ store.fieldSetTitle(name) }}
+                            </span>
+                            @if (judged && !judged.canRun) {
+                              <span class="flex items-start gap-1 text-xs/5 font-medium text-state-warning-700 dark:text-state-warning-300">
+                                <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                                {{ setReason(judged.reason) }}
+                              </span>
+                            } @else {
+                              <span class="block truncate text-xs/5 text-gray-600 dark:text-gray-400">
+                                {{ name }}@if (judged?.fieldCount; as count) { · {{ count }} {{ count === 1 ? 'field' : 'fields' }} }
+                              </span>
+                            }
+                          </span>
+                          <span class="flex shrink-0 items-center gap-1">
+                            @if (store.fieldSetAuthoringOn && editable() && skillId()) {
+                              <!-- A new tab, so the draft stays as it is; Refresh the list reads the skill again. -->
+                              <a
+                                [routerLink]="['/customize/skills', skillId(), 'field-sets', name]"
+                                target="_blank"
+                                rel="noopener"
+                                [attr.aria-label]="'Edit the field set ' + store.fieldSetTitle(name) + ' (opens in a new tab)'"
+                                class="rounded-md px-1.5 text-xs/5 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:focus-visible:outline-primary-accessible-dark"
+                              >
+                                Edit
+                              </a>
+                            }
+                            @if (editable()) {
+                              <button
+                                type="button"
+                                [id]="setControlId('up', name)"
+                                (click)="moveSet(step, name, -1)"
+                                [disabled]="first"
+                                [attr.aria-label]="'Move ' + store.fieldSetTitle(name) + ' up'"
+                                [class]="iconButtonClass"
+                              >
+                                <ng-icon name="heroArrowUp" class="size-4" aria-hidden="true" />
+                              </button>
+                              <button
+                                type="button"
+                                [id]="setControlId('down', name)"
+                                (click)="moveSet(step, name, 1)"
+                                [disabled]="last"
+                                [attr.aria-label]="'Move ' + store.fieldSetTitle(name) + ' down'"
+                                [class]="iconButtonClass"
+                              >
+                                <ng-icon name="heroArrowDown" class="size-4" aria-hidden="true" />
+                              </button>
+                              <button
+                                type="button"
+                                [id]="setControlId('remove', name)"
+                                (click)="removeSet(step, name)"
+                                [attr.aria-label]="'Remove ' + store.fieldSetTitle(name) + ' from this step'"
+                                [class]="iconButtonClass + ' text-state-danger-700 dark:text-state-danger-400'"
+                              >
+                                <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+                              </button>
+                            }
+                          </span>
+                        </li>
+                      }
+                    </ol>
+                  }
+
+                  @if (editable()) {
+                    <div class="mt-3" data-testid="wf-skill-sets">
+                      @if (!skillId()) {
+                        <p class="text-xs/5 text-gray-600 dark:text-gray-400">
+                          A checklist step’s field sets live in this workflow’s skill, which isn’t made until the workflow is.
+                          <button type="button" (click)="createCarrier()" [disabled]="store.saving()" [class]="linkButtonClass + ' disabled:opacity-60'">
+                            {{ store.saving() ? 'Creating…' : 'Create the workflow now' }}
+                          </button>
+                        </p>
+                      } @else {
+                        @switch (skillSets().state) {
+                          @case ('loading') {
+                            <p class="text-xs/5 text-gray-600 dark:text-gray-400" role="status">Reading this workflow’s field sets…</p>
+                          }
+                          @case ('error') {
+                            <p class="text-xs/5 text-state-danger-700 dark:text-state-danger-300" role="alert">
+                              This workflow’s field sets couldn’t be read.
+                              <button type="button" (click)="store.loadSkillFieldSets()" [class]="linkButtonClass">Try again</button>
+                            </p>
+                          }
+                          @case ('ready') {
+                            @if (addableSets().length) {
+                              <p class="text-xs/5 font-medium text-gray-700 dark:text-gray-300">Add from this workflow’s skill</p>
+                              <ul role="list" class="mt-1 flex flex-wrap gap-2">
+                                @for (name of addableSets(); track name) {
+                                  <li>
+                                    <button
+                                      type="button"
+                                      (click)="addSet(step, name)"
+                                      [disabled]="step.fieldSets.length >= maxSets"
+                                      [attr.aria-label]="'Add the field set ' + store.fieldSetTitle(name)"
+                                      class="inline-flex items-center gap-1 rounded-2xl border border-gray-300 bg-white px-2.5 py-1 text-xs/5 font-medium text-gray-700 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus-visible:outline-primary-accessible-dark"
+                                    >
+                                      <ng-icon name="heroPlus" class="size-3.5" aria-hidden="true" />
+                                      {{ store.fieldSetTitle(name) }}
+                                    </button>
+                                  </li>
+                                }
+                              </ul>
+                            } @else if (!skillSetNames().length) {
+                              <p class="text-xs/5 text-gray-600 dark:text-gray-400">This workflow’s skill has no field sets yet.</p>
+                            } @else {
+                              <p class="text-xs/5 text-gray-600 dark:text-gray-400">Every field set in this workflow’s skill is on this step.</p>
+                            }
+                            <p class="mt-2 flex flex-wrap gap-x-3 text-xs/5">
+                              @if (store.fieldSetAuthoringOn) {
+                                <a
+                                  [routerLink]="['/customize/skills', skillId(), 'field-sets', 'new']"
+                                  target="_blank"
+                                  rel="noopener"
+                                  [class]="linkButtonClass"
+                                >
+                                  New field set<span class="sr-only"> (opens in a new tab)</span>
+                                </a>
+                              }
+                              <button type="button" (click)="store.loadSkillFieldSets()" [class]="linkButtonClass">Refresh the list</button>
+                            </p>
+                          }
+                        }
+                      }
+                    </div>
+                  }
+                </fieldset>
+
+                <div>
+                  <label for="wf-guidance" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Guidance (optional)</label>
+                  <textarea
+                    id="wf-guidance"
+                    rows="4"
+                    [value]="step.ownRequest ?? ''"
+                    [readOnly]="!editable()"
+                    (input)="setInstruction(step, $event)"
+                    placeholder="Answer from the budget justification first. Treat a missing section as a fail."
+                    aria-describedby="wf-guidance-help"
+                    [class]="textareaClass"
+                  ></textarea>
+                  <p id="wf-guidance-help" class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
+                    Added to every set’s call, after its fields. It never takes the run’s request.
+                  </p>
+                </div>
+              } @else {
               <div>
                 <label for="wf-instruction" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Instruction</label>
                 <textarea
@@ -328,6 +529,7 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                   What this one call is asked, after the files and results it reads. Left blank, it is asked the run’s request.
                 </p>
               </div>
+              }
             } @else {
 
             @if (view()?.runsDraft) {
@@ -445,11 +647,30 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
               <div class="mt-2 space-y-1.5">
                 <label class="flex items-center gap-3 text-sm/6 text-gray-900 dark:text-white">
                   <input type="checkbox" [checked]="step.reads.includes('request')" [disabled]="!editable()" (change)="toggleRead(step, 'request')" [class]="checkboxClass" />
-                  {{ step.kind === 'prompt' ? 'The run’s request' : 'The request' }}
+                  {{ isModelStep(step) ? 'The run’s request' : 'The request' }}
                 </label>
-                <label class="flex items-center gap-3 text-sm/6 text-gray-900 dark:text-white">
-                  <input type="checkbox" [checked]="step.reads.includes('files')" [disabled]="!editable()" (change)="toggleRead(step, 'files')" [class]="checkboxClass" />
-                  The run’s files
+                @let filesRequired = step.kind === 'checklist' && step.reads.includes('files');
+                <label class="flex items-start gap-3 text-sm/6 text-gray-900 dark:text-white">
+                  <input
+                    type="checkbox"
+                    [checked]="step.reads.includes('files')"
+                    [disabled]="!editable() || filesRequired"
+                    (change)="toggleRead(step, 'files')"
+                    [attr.aria-describedby]="step.kind === 'checklist' ? 'wf-files-required' : null"
+                    [class]="checkboxClass + ' mt-1'"
+                  />
+                  <span>
+                    The run’s files
+                    @if (step.kind === 'checklist') {
+                      <span
+                        id="wf-files-required"
+                        class="block text-xs/5"
+                        [class]="step.reads.includes('files') ? 'text-gray-600 dark:text-gray-400' : 'font-medium text-state-warning-700 dark:text-state-warning-300'"
+                      >
+                        Required: a checklist step fills its sets in from the run’s files.
+                      </span>
+                    }
+                  </span>
                 </label>
                 @for (other of otherSteps(); track other.key) {
                   @let blocked = readers().has(other.key);
@@ -542,7 +763,25 @@ export class WorkflowStepTabComponent {
   protected readonly inputClass =
     'mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-400';
   protected readonly maxSteps = MAX_WORKFLOW_STEPS;
+  protected readonly maxSets = MAX_CHECKLIST_FIELD_SETS;
+  protected readonly iconButtonClass =
+    'rounded-lg p-1 text-gray-600 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus-visible:outline-primary-accessible-dark';
+  protected readonly linkButtonClass =
+    'rounded-md font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:focus-visible:outline-primary-accessible-dark';
   protected readonly filter = signal('');
+
+  /** The workflow's skill, which holds its field sets; null until the first save makes it. */
+  protected readonly skillId = computed(() => this.store.ref()?.skillId ?? null);
+  protected readonly skillSets = this.store.skillFieldSets;
+  protected readonly skillSetNames = computed(() => {
+    const sets = this.skillSets();
+    return sets.state === 'ready' ? sets.names : [];
+  });
+  /** The skill's sets this checklist step doesn't run yet, by name. */
+  protected readonly addableSets = computed(() => {
+    const chosen = new Set(this.step()?.fieldSets ?? []);
+    return this.skillSetNames().filter((name) => !chosen.has(name));
+  });
 
   protected readonly draft = this.store.draft;
   protected readonly editable = this.store.isOwned;
@@ -609,7 +848,7 @@ export class WorkflowStepTabComponent {
    */
   protected readonly modelProblem = computed(() => {
     const step = this.step();
-    if (!step || step.kind !== 'prompt') return null;
+    if (!step || !isModelDraftStep(step)) return null;
     if (!step.modelId) return 'Choose the model this step runs on.';
     const listed = this.store.promptModels().find((choice) => choice.modelId === step.modelId);
     if (listed && !listed.readsDocuments && step.reads.includes('files')) {
@@ -620,6 +859,64 @@ export class WorkflowStepTabComponent {
     if (!listed && this.store.promptModels().length) return 'This step’s model isn’t one you can choose. Choose another.';
     return null;
   });
+
+  protected isModelStep(step: DraftStep): boolean {
+    return isModelDraftStep(step);
+  }
+
+  protected kindLabel(step: DraftStep): string {
+    return step.kind === 'checklist' ? 'Checklist step' : step.kind === 'prompt' ? 'Prompt step' : 'Agent step';
+  }
+
+  protected setReason(reason: string | undefined): string {
+    return fieldSetReasonCopy(reason);
+  }
+
+  protected setControlId(direction: 'up' | 'down' | 'remove', name: string): string {
+    return `wf-set-${direction}-${name}`;
+  }
+
+  /** Make the workflow's skill, so its field sets can be added; the page takes the new URL. */
+  protected async createCarrier(): Promise<void> {
+    if (await this.store.createCarrier()) {
+      afterNextRender(() => document.querySelector<HTMLElement>('[data-testid="wf-skill-sets"] a, [data-testid="wf-skill-sets"] button')?.focus(), {
+        injector: this.injector,
+      });
+    }
+  }
+
+  protected addSet(step: DraftStep, name: string): void {
+    this.store.toggleFieldSet(step.key, name);
+  }
+
+  /** Remove a set, then put focus on the next set's Remove (or the one before), else on the guidance. */
+  protected removeSet(step: DraftStep, name: string): void {
+    const at = step.fieldSets.indexOf(name);
+    this.store.toggleFieldSet(step.key, name);
+    afterNextRender(
+      () => {
+        const rest = this.step()?.fieldSets ?? [];
+        const next = rest[Math.min(at, rest.length - 1)];
+        (next ? document.getElementById(this.setControlId('remove', next)) : document.getElementById('wf-guidance'))?.focus();
+      },
+      { injector: this.injector },
+    );
+  }
+
+  /** Move a set, keeping focus on the control that moved it, or the other one at an end (§4.4). */
+  protected moveSet(step: DraftStep, name: string, delta: -1 | 1): void {
+    this.store.moveFieldSet(step.key, name, delta);
+    afterNextRender(
+      () => {
+        const sets = this.step()?.fieldSets ?? [];
+        const at = sets.indexOf(name);
+        const atEnd = delta < 0 ? at === 0 : at === sets.length - 1;
+        const direction = (delta < 0) !== atEnd ? 'up' : 'down';
+        document.getElementById(this.setControlId(direction, name))?.focus();
+      },
+      { injector: this.injector },
+    );
+  }
 
   /** A step's name as the author reads it: "budget_check" → "Budget check", as the card says it. */
   protected nameOf(step: DraftStep): string {

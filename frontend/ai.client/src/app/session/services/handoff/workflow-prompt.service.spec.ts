@@ -84,6 +84,24 @@ describe('WorkflowPromptService', () => {
     ]);
   });
 
+  it('carries a frame’s kind, so a checklist step settles as one (PR-D.7c)', async () => {
+    const frames: PromptStepFrame[] = [];
+    script = async (options) => {
+      options.onmessage?.(message('workflow_prompt_step', { runId: 'run1', stepId: 's1', status: 'done', kind: 'checklist' }));
+      options.onmessage?.(message('workflow_prompt_step', { runId: 'run1', stepId: 's2', status: 'stopped', stoppedReason: 'error', kind: 'checklist' }));
+      options.onmessage?.(message('workflow_prompt_step', { runId: 'run1', stepId: 's3', status: 'skipped', reason: 'not_prompt', kind: 'checklist' }));
+      // A kind this build doesn't know is left off rather than guessed.
+      options.onmessage?.(message('workflow_prompt_step', { runId: 'run1', stepId: 's4', status: 'done', kind: 'survey' }));
+    };
+    await service.run('src', 'run1', ['s1', 's2', 's3', 's4'], { onStep: (f) => frames.push(f), onRefused: () => undefined });
+    expect(frames).toEqual([
+      { stepId: 's1', status: 'done', kind: 'checklist' },
+      { stepId: 's2', status: 'stopped', stoppedReason: 'error', kind: 'checklist' },
+      { stepId: 's3', status: 'skipped', reason: 'not_prompt', kind: 'checklist' },
+      { stepId: 's4', status: 'done' },
+    ]);
+  });
+
   it('reports a refused request and nothing after it', async () => {
     const onRefused = vi.fn();
     const onStep = vi.fn();

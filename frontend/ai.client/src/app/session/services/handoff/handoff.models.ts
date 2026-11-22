@@ -55,8 +55,11 @@ export interface TurnsCovered {
 export interface HandoffView {
   handoffId: string;
   sessionId: string;
-  /** `prompt` is a workflow run's prompt step (workflow-designer §21.3): no Agent, no conversation. */
-  kind: 'mention' | 'suggested' | 'send_back' | 'prompt';
+  /**
+   * `prompt` is a workflow run's prompt step (workflow-designer §21.3), `checklist` its checklist
+   * step (§22.3): no Agent, no conversation.
+   */
+  kind: 'mention' | 'suggested' | 'send_back' | 'prompt' | 'checklist';
   status: HandoffStatus;
   agentId: string;
   agentName: string;
@@ -84,8 +87,10 @@ export interface HandoffView {
   agentHint?: string;
   /** The `suggest_handoff` call, which places the chip under the message holding it. */
   toolUseId?: string;
-  /** A prompt step's model (§21.3). Its `agentName` is the model's display name and `agentId` is empty. */
+  /** A prompt or checklist step's model (§21.3). Its `agentName` is the model's display name and `agentId` is empty. */
   modelId?: string;
+  /** A checklist step's field sets, in the order it runs them (§22.3). */
+  fieldSets?: string[];
   /** A done prompt step's answer, as stored (capped at write, with the cut-off marker when cut). */
   outputText?: string;
   outputTokens?: number;
@@ -94,9 +99,12 @@ export interface HandoffView {
 /** Why a prompt step stopped (`stoppedReason` on its row, workflow-designer §21.3). */
 export type PromptStopReason = 'user_stopped' | 'too_large' | 'model_refused' | 'quota' | 'timeout' | 'error';
 
-/** A workflow run's prompt step: one model call, with no Agent and no conversation (§21.3). */
-export function isPromptStep(row: Pick<HandoffView, 'kind'> | null | undefined): boolean {
-  return row?.kind === 'prompt';
+/**
+ * A workflow run's model step: a prompt step (one model call, §21.3) or a checklist step (one call
+ * per field set, §22.3), each with no Agent and no conversation.
+ */
+export function isModelStep(row: Pick<HandoffView, 'kind'> | null | undefined): boolean {
+  return row?.kind === 'prompt' || row?.kind === 'checklist';
 }
 
 /**

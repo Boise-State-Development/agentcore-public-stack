@@ -42,6 +42,7 @@ export const environment = {
         workflowRuns: false,
         workflows: false,
         promptSteps: false,
+        checklistSteps: false,
         sessionRewind: true,
         sessionFork: true,
         quotaRequests: false,

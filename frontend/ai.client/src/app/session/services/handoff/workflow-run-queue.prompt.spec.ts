@@ -115,12 +115,16 @@ describe('WorkflowRunQueueService with prompt steps (PR-D.6c)', () => {
   let sends: HandoffLaunch[];
   let serverRows: Map<string, HandoffView>;
   let reads: string[];
+  let runReads: string[];
+  let serverRun: WorkflowRunView | null;
   let toast: { error: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     calls = [];
     sends = [];
     reads = [];
+    runReads = [];
+    serverRun = null;
     serverRows = new Map();
     toast = { error: vi.fn() };
     TestBed.configureTestingModule({
@@ -144,6 +148,10 @@ describe('WorkflowRunQueueService with prompt steps (PR-D.6c)', () => {
             },
             prepareRunStep: (_s: string, _r: string, stepId: string) =>
               Promise.resolve({ stepId, message: 'blocks', readsBlock: 'blocks', parts: [] }),
+            readRun: (_s: string, runId: string) => {
+              runReads.push(runId);
+              return Promise.resolve(serverRun);
+            },
             readRow: (_s: string, handoffId: string) => {
               reads.push(handoffId);
               return Promise.resolve(serverRows.get(handoffId) ?? null);
@@ -285,6 +293,33 @@ describe('WorkflowRunQueueService with prompt steps (PR-D.6c)', () => {
     queue.stop('run1');
     frame(calls[0], { stepId: 's1', status: 'stopped', stoppedReason: 'user_stopped' });
     expect(handoffState.rowsFor('src').find((r) => r.handoffId === 'h1')?.stoppedReason).toBe('user_stopped');
+  });
+
+  it('sends a checklist step on the same invocation, and reads its set rows from the run once it settles (PR-D.7c)', async () => {
+    const view = run();
+    view.steps[2] = { ...view.steps[2], kind: 'checklist', fieldSets: ['budget', 'compliance'], stepName: 'audit', reads: ['files'] };
+    runState.upsertRun(view);
+    const launched = launches(view);
+    expect(launched[2]).toMatchObject({ kind: 'checklist', modelId: 'us.anthropic.claude-haiku-5-5' });
+    queue.enqueue(ENVELOPE, launched);
+    // Prompt and checklist steps ride one invocation together; the Agent step takes its slot.
+    expect(calls[0].stepIds).toEqual(['s1', 's2', 's3']);
+    expect(sends.map((s) => s.handoffId)).toEqual(['ha']);
+
+    const sets = [
+      { runId: 'run1', stepId: 's3', fieldSet: 'budget', setIndex: 0, status: 'done' as const, fields: [{ name: 'cap', state: 'supported', value: '$600,000' }] },
+      { runId: 'run1', stepId: 's3', fieldSet: 'compliance', setIndex: 1, status: 'error' as const, error: 'timeout', fields: [] },
+    ];
+    serverRun = { ...view, steps: view.steps.map((step) => (step.stepId === 's3' ? { ...step, checklist: sets } : step)) };
+    serverRows.set('h3', row('h3', 'done', { kind: 'checklist', outputText: '### Budget' }));
+    // A prompt step's frame reads only its row; a checklist step's also reads the run.
+    frame(calls[0], { stepId: 's1', status: 'done', kind: 'prompt' });
+    frame(calls[0], { stepId: 's3', status: 'done', kind: 'checklist' });
+    await vi.waitFor(() => expect(runState.runsFor('src')[0].steps[2].checklist).toEqual(sets));
+    expect(runReads).toEqual(['run1']);
+    expect(reads).toEqual(['h1', 'h3']);
+    // Nothing else on the run this tab holds was replaced by the read.
+    expect(runState.runsFor('src')[0].steps[0].checklist).toBeUndefined();
   });
 
   it('offers a never-started prompt step as unstarted, with its kind and model', () => {
