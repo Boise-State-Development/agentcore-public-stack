@@ -219,7 +219,7 @@ passage that genuinely occupies two.
 
 ### 6.4 The value check
 
-Deliberately strict. Only three things count, and a literal match must sit on value
+Deliberately strict. Only four things count, and a literal match must sit on value
 boundaries:
 
 * **Literal** — the normalized value occurs in the normalized quote as a whole value.
@@ -235,7 +235,38 @@ boundaries:
   compared quantity, never the bare number. Thousands groups are matched only in
   thousands position — a permissive `[\d,]*` swallows "1, 2 and 3" as one token which
   then parses as `123`.
+* **Number word** (method `number_word`, added 2026-11-22) — a whole-number value the
+  passage writes as a word. See the note below.
 * **Date** — equal as dates across the common written forms.
+
+**Numbers written as words (2026-11-22).** On dev a workflow checklist step
+(`workflow-designer.md` §22) returned `2` with the quote "Two domestic conferences per
+year", and the check read it `quote_unsupported`. That is the hallucination signal, and
+the SPA opens it by itself, yet the value was right. It was 1 of 10 correct budget values
+in that measurement. `document_extract` and `verify_sources` had the same false alarm, so
+the fix lives here, not in any one caller. A whole-number value now also matches its
+English word form in the quote: zero to nineteen, the tens, compounds written with a
+hyphen or a space ("twenty-five"), in any case, plus "a dozen" (12) and "half a dozen"
+(6). A percent value needs "percent", "per cent" or `%` after the word, the same way the
+digit check treats the percent sign. This is looser than the digit check, so it has its
+own method and every guard points the strict way:
+
+* A compound is read whole. "Twenty-five" supports 25, never 20 or 5.
+* A word is void when the words around it make a quantity this reader does not parse.
+  That means a scale or fraction word after it ("two hundred", "two-thirds", "two point
+  five", "two and a half"), or a scale or number word before it ("one hundred and two",
+  "nineteen ninety-five"). It is also void when a digit touches it.
+* "One" as a pronoun is not a count: "no one", "each one", "one another", "one's".
+* Ordinals are not read. "The fifth year" and "one fifth" spell the same word, and
+  "second" is a unit of time.
+* A word only supports a value. "Two" in a quote never supports `12`. A value that is
+  not a whole number has no word form.
+
+A described value whose number the passage spells out ("2 conferences" against "Two
+domestic conferences") reads `value_not_bare`, which, as below, never promotes. Words
+are only read on the quote side. A value the model writes as a word ("two") is still
+matched literally, so it is supported by "two" and not by "2". Nothing here reaches a
+turn's system prompt or `toolConfig`, because the value check is a pure function.
 
 The question is **not asked** (state `unassessed`) when: there is no quote; the quote
 is over 4,000 characters (a quote is a passage, not a document — and the date scan

@@ -353,6 +353,10 @@ METHOD_ENUM_FIELD = "enum_field"
 METHOD_NON_SCALAR = "non_scalar"
 METHOD_LITERAL = "literal"
 METHOD_NUMERIC = "numeric"
+#: A whole number the passage writes as a word: "2" against "Two domestic
+#: conferences per year". Its own method so its share is readable apart from
+#: ``numeric``, since it is the looser of the two.
+METHOD_NUMBER_WORD = "number_word"
 METHOD_DATE = "date"
 METHOD_NO_MATCH = "no_match"
 #: Still ``quote_unsupported``: the value as stated is not in the passage. But
@@ -443,6 +447,148 @@ def _numbers_outside_dates(text: str) -> set:
     return found
 
 
+# ---------------------------------------------------------------------------
+# Numbers written as words
+# ---------------------------------------------------------------------------
+
+_UNIT_WORDS = {
+    word: n
+    for n, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen "
+        "fourteen fifteen sixteen seventeen eighteen nineteen".split()
+    )
+}
+_TENS_WORDS = {
+    word: 10 * n
+    for n, word in enumerate(
+        "twenty thirty forty fifty sixty seventy eighty ninety".split(), start=2
+    )
+}
+_NUMBER_WORDS = frozenset(_UNIT_WORDS) | frozenset(_TENS_WORDS)
+
+#: Words that scale a number into a quantity this reader does not parse. "two
+#: hundred" is not 2, so the "two" in it must not count as one.
+_SCALE_WORDS = frozenset({
+    "hundred", "hundreds", "thousand", "thousands", "million", "millions",
+    "billion", "billions", "trillion", "trillions", "dozen", "dozens", "score",
+})
+
+#: Words after a number that make it a fraction or a decimal: "two-thirds",
+#: "three quarters", "two point five". Ordinals from third up double as
+#: fraction denominators, which is also why ordinals are not read as numbers at
+#: all: "the fifth year" and "one fifth" spell the same word.
+_ORDINAL_WORDS = frozenset(
+    "third fourth fifth sixth seventh eighth ninth tenth eleventh twelfth thirteenth "
+    "fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth twentieth "
+    "thirtieth fortieth fiftieth sixtieth seventieth eightieth ninetieth "
+    "hundredth thousandth".split()
+)
+_FRACTION_WORDS = (
+    _ORDINAL_WORDS
+    | {w + "s" for w in _ORDINAL_WORDS}
+    | {"half", "halves", "quarter", "quarters", "point"}
+)
+
+#: "One" as a pronoun rather than a count: "no one", "each one", "this one".
+_PRONOUN_ONE_BEFORE = frozenset({
+    "no", "any", "each", "every", "some", "the", "this", "that", "which", "another",
+})
+
+_WORD_RE = re.compile(r"[a-z]+")
+
+
+def _number_words_in(norm_quote: str) -> set:
+    """``(number, is_percent)`` for each whole number *norm_quote* spells out.
+
+    Reads zero to ninety-nine ("twenty-five", "twenty five") plus "a dozen" and
+    "half a dozen", and nothing larger. Narrow on purpose: this is the looser
+    of the number checks, so a word counts only when nothing around it could
+    make it a different quantity. Each guard is a way a word could otherwise
+    lift a value the passage does not state:
+
+    * a compound is read whole, so "twenty-five" supports 25 and neither 20
+      nor 5, as a digit boundary keeps 5 out of 25;
+    * a scale or fraction word after it ("two hundred", "two-thirds", "two
+      point five", "two and a half") and a scale or number word before it
+      ("one hundred and two", "nineteen ninety") void it, since those are
+      numbers this does not parse;
+    * a digit touching it voids it;
+    * "one" as a pronoun ("no one", "one another", "one's") is not a count.
+
+    Words are adjacent only across spaces and hyphens, so a comma or a digit
+    between two of them breaks a compound as it would in prose.
+    """
+    tokens = [(m.group(), m.start(), m.end()) for m in _WORD_RE.finditer(norm_quote)]
+
+    def joined(left: int) -> bool:
+        """Whether token *left* and the next are one phrase."""
+        if left < 0 or left + 1 >= len(tokens):
+            return False
+        gap = norm_quote[tokens[left][2]:tokens[left + 1][1]]
+        return bool(gap) and not gap.strip(" -")
+
+    def word(index: int) -> str:
+        return tokens[index][0] if 0 <= index < len(tokens) else ""
+
+    def before(start: int, steps: int = 1) -> str:
+        """The word *steps* back from *start*, if every step is joined."""
+        for k in range(1, steps + 1):
+            if not joined(start - k):
+                return ""
+        return word(start - steps)
+
+    def after(end: int, steps: int = 1) -> str:
+        for k in range(steps):
+            if not joined(end + k):
+                return ""
+        return word(end + steps)
+
+    found = set()
+    i = 0
+    while i < len(tokens):
+        text = tokens[i][0]
+        if text == "dozen" and before(i) in ("a", "one") and after(i) not in _SCALE_WORDS:
+            found.add((6 if before(i, 2) == "half" else 12, False))
+            i += 1
+            continue
+        if text in _TENS_WORDS:
+            value, end = _TENS_WORDS[text], i
+            unit = after(i)
+            if 1 <= _UNIT_WORDS.get(unit, 0) <= 9:
+                value, end = value + _UNIT_WORDS[unit], i + 1
+        elif text in _UNIT_WORDS:
+            value, end = _UNIT_WORDS[text], i
+        else:
+            i += 1
+            continue
+        start, i = i, end + 1
+
+        left_char = norm_quote[tokens[start][1] - 1] if tokens[start][1] > 0 else ""
+        right_char = norm_quote[tokens[end][2]] if tokens[end][2] < len(norm_quote) else ""
+        if left_char.isdigit() or right_char.isdigit():
+            continue
+        prev, nxt = before(start), after(end)
+        if nxt in _NUMBER_WORDS or nxt in _SCALE_WORDS or nxt in _FRACTION_WORDS:
+            continue
+        if nxt == "and" and after(end, 3) in _FRACTION_WORDS:
+            continue
+        if prev in _NUMBER_WORDS or prev in _SCALE_WORDS or prev in ("minus", "negative"):
+            continue
+        if prev == "and" and before(start, 2) in _SCALE_WORDS:
+            continue
+        if start == end and text == "one" and (
+            prev in _PRONOUN_ONE_BEFORE or nxt == "another" or right_char == "'"
+        ):
+            continue
+        is_percent = (
+            right_char == "%"
+            or nxt == "percent"
+            or (nxt == "per" and after(end, 2) == "cent")
+        )
+        found.add((value, is_percent))
+    return found
+
+
 def _value_is_described(value_str: str, quote: str) -> bool:
     """Whether a value that failed the check carries a date or number the
     passage does: the value is in there, wrapped in words that are not.
@@ -452,7 +598,11 @@ def _value_is_described(value_str: str, quote: str) -> bool:
     """
     if _dates_in(value_str) & _dates_in(quote):
         return True
-    return bool(_numbers_outside_dates(value_str) & _numbers_outside_dates(quote))
+    value_numbers = _numbers_outside_dates(value_str)
+    if value_numbers & _numbers_outside_dates(quote):
+        return True
+    norm_quote, _ = normalize_with_map(quote)
+    return bool(value_numbers & _number_words_in(norm_quote))
 
 
 def _on_value_boundaries(quote: str, start: int, end: int, *, numeric: bool) -> bool:
@@ -498,8 +648,8 @@ def _value_in_quote(value: Any, quote: str, *, enum_field: bool) -> Tuple[Option
     ``supported`` is ``None`` when the question does not apply, which is what
     separates :data:`STATE_UNASSESSED` from :data:`STATE_QUOTE_UNSUPPORTED`.
 
-    Deliberately strict: only literal, numeric and date equivalence count, and
-    a literal match must sit on value boundaries. A multi-part value assembled
+    Deliberately strict: only literal, numeric, number-word and date
+    equivalence count, and a literal match must sit on value boundaries. A multi-part value assembled
     from a sentence ("Jane Smith, Chemistry") reads as unsupported — the
     conservative direction while the state is new. If the measured distribution
     shows it dominates, a partial-coverage rule can be added with evidence
@@ -538,6 +688,12 @@ def _value_in_quote(value: Any, quote: str, *, enum_field: bool) -> Tuple[Option
         return True, METHOD_LITERAL
     if number is not None and number in _numbers_in(quote):
         return True, METHOD_NUMERIC
+    if (
+        number is not None
+        and number[0].is_integer()
+        and number in _number_words_in(norm_quote)
+    ):
+        return True, METHOD_NUMBER_WORD
 
     parsed_date = _as_date(value_str)
     if parsed_date is not None and parsed_date in _dates_in(quote):
@@ -647,6 +803,7 @@ __all__ = [
     "METHOD_NON_SCALAR",
     "METHOD_LITERAL",
     "METHOD_NUMERIC",
+    "METHOD_NUMBER_WORD",
     "METHOD_DATE",
     "METHOD_NO_MATCH",
     "METHOD_VALUE_NOT_BARE",

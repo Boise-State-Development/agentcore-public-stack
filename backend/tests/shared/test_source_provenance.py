@@ -20,6 +20,7 @@ from apis.shared.files.source_provenance import (
     METHOD_NO_MATCH,
     METHOD_NO_QUOTE,
     METHOD_NON_SCALAR,
+    METHOD_NUMBER_WORD,
     METHOD_NUMERIC,
     METHOD_QUOTE_NOT_LOCATED,
     METHOD_QUOTE_TOO_LONG,
@@ -420,6 +421,106 @@ class TestNumericAndDateEquivalence:
             award_letter(),
         )
         assert result.state == STATE_QUOTE_UNSUPPORTED
+
+
+class TestNumberWords:
+    """A whole number the passage spells out. Dev, 2026-11-22: a checklist step
+    returned "2" for "Two domestic conferences per year" and the correct value
+    read as the hallucination signal."""
+
+    def _verdict(self, value, passage):
+        return verify_claim(claim(value, passage), document_units("txt", [passage]))
+
+    def test_the_dev_example_is_supported(self):
+        result = self._verdict("2", "Two domestic conferences per year")
+        assert result.state == STATE_SUPPORTED
+        assert result.method == METHOD_NUMBER_WORD
+
+    def test_an_int_value_is_supported(self):
+        assert self._verdict(2, "Two domestic conferences per year").state == STATE_SUPPORTED
+
+    @pytest.mark.parametrize(
+        ("value", "passage"),
+        [
+            (0, "Zero carry-forward is permitted."),
+            (11, "Eleven sites will participate."),
+            (20, "Up to twenty participants."),
+            (90, "Reports are due within ninety days."),
+            (25, "Twenty-five students per cohort."),
+            (25, "twenty five students per cohort."),
+            (25, "TWENTY‑FIVE students per cohort."),  # non-breaking hyphen, upper case
+            (47, "forty-seven letters of support"),
+            (3, "a three-year award"),
+            (12, "a dozen site visits"),
+            (6, "half a dozen site visits"),
+            ("$5", "a fee of five dollars"),
+            ("1", "Only one PI may be named."),
+        ],
+    )
+    def test_spelled_numbers_support(self, value, passage):
+        result = self._verdict(value, passage)
+        assert result.state == STATE_SUPPORTED, (value, passage)
+        assert result.method == METHOD_NUMBER_WORD
+
+    def test_a_percentage_word_travels_with_its_unit(self):
+        passage = "Indirect costs are capped at ten percent of direct costs."
+        assert self._verdict("10%", passage).state == STATE_SUPPORTED
+        assert self._verdict("10", passage).state == STATE_QUOTE_UNSUPPORTED
+        assert self._verdict("10%", "ten per cent of direct costs").state == STATE_SUPPORTED
+        assert self._verdict("10%", "Ten reviewers per panel").state == STATE_QUOTE_UNSUPPORTED
+
+    @pytest.mark.parametrize(
+        ("value", "passage"),
+        [
+            # The near-miss: a word that is in the passage is not every number.
+            ("12", "Two domestic conferences per year"),
+            (2, "Twelve domestic conferences per year"),
+            # A compound is read whole, as a digit boundary keeps 5 out of 25.
+            (5, "Twenty-five students per cohort."),
+            (20, "Twenty-five students per cohort."),
+            # Scales and fractions make a different quantity.
+            (2, "two hundred dollars in travel"),
+            (2, "a budget of two thousand dollars"),
+            (2, "two-thirds of the effort"),
+            (3, "three quarters of the award"),
+            (2, "two point five FTE"),
+            (2, "two and a half years"),
+            (2, "two dozen participants"),
+            (12, "two dozen participants"),
+            (2, "one hundred and two participants"),
+            (19, "founded in nineteen ninety-five"),
+            (95, "founded in nineteen ninety-five"),
+            # "One" as a pronoun is not a count.
+            (1, "No one may serve on two panels."),
+            (1, "Reviewers consult one another."),
+            (1, "on one's own institution"),
+            # A digit touching the word.
+            (2, "Form two5 applies"),
+            (2, "Form 5two applies"),
+            # Ordinals are not read: "fifth" is also a fraction.
+            (5, "The fifth year is a no-cost extension."),
+            # A non-integer value has no word form here.
+            (2.5, "Two domestic conferences per year"),
+            (-2, "minus two points"),
+            (2, "minus two points"),
+        ],
+    )
+    def test_a_word_does_not_lift_a_number_that_is_not_there(self, value, passage):
+        result = self._verdict(value, passage)
+        assert result.state == STATE_QUOTE_UNSUPPORTED, (value, passage)
+        assert result.method != METHOD_NUMBER_WORD
+
+    def test_a_comma_breaks_a_compound(self):
+        passage = "Sections twenty, five and six apply."
+        assert self._verdict(25, passage).state == STATE_QUOTE_UNSUPPORTED
+        assert self._verdict(20, passage).state == STATE_SUPPORTED
+        assert self._verdict(5, passage).state == STATE_SUPPORTED
+
+    def test_a_described_value_with_a_spelled_number_is_not_bare(self):
+        """Never a promotion: it only names which way the value failed."""
+        result = self._verdict("2 conferences", "Two domestic conferences per year")
+        assert result.state == STATE_QUOTE_UNSUPPORTED
+        assert result.method == METHOD_VALUE_NOT_BARE
 
 
 class TestUnassessedReasons:
