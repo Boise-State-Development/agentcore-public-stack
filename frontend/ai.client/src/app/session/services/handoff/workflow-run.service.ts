@@ -22,7 +22,7 @@ import { HandoffBriefService } from './handoff-brief.service';
 import { HandoffStateService } from './handoff-state.service';
 import { BriefFallbackReason, HandoffReview, MAX_SHARED_FILES, SHARED_FILES_RECENT_TURNS } from './handoff.models';
 import { WorkflowRunQueueService, launchOf } from './workflow-run-queue.service';
-import { agentsLabel, isModelStepKind, stepsLabel } from './workflow-run-progress';
+import { agentsLabel, isModelStepKind, isVersionNumber, stepsLabel } from './workflow-run-progress';
 import { WorkflowRunRefreshService } from './workflow-run-refresh.service';
 import { WorkflowRunResultService } from './workflow-run-result.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
@@ -114,21 +114,30 @@ export class WorkflowRunService {
         return;
       }
       if (blockers.length) {
-        this.state.updateReview(sourceSessionId, { phase: 'blocked', steps: blockedSteps(workflow) });
+        this.state.updateReview(sourceSessionId, { phase: 'blocked', steps: blockedSteps(workflow, this.pinOptions()) });
         return;
       }
     }
     await this.createRun(sourceSessionId, draft);
   }
 
-  /** Ask app-api for the run and its one card, and fill the sheet with them. */
-  private async createRun(sourceSessionId: string, draft: RunDraft): Promise<void> {
+  /**
+   * Ask app-api for the run and its one card, and fill the sheet with them. `kept` is the sheet a
+   * Use version replaced the run of (§23.2): its edits (each step's request, what was removed,
+   * the card and its brief) carry over to the new run, so only the version moves.
+   */
+  private async createRun(sourceSessionId: string, draft: RunDraft, kept?: RunReview): Promise<void> {
     const opening = this.state.reviewFor(sourceSessionId);
     const workflow = opening?.workflow;
+    const useVersions = this.features.agentVersionPinning ? opening?.useVersions : undefined;
     const body = workflow
       ? {
           request: opening?.request ?? '',
-          workflow: { ...workflow.ref, removedSteps: opening?.removedSteps ?? [] },
+          workflow: {
+            ...workflow.ref,
+            removedSteps: opening?.removedSteps ?? [],
+            ...(useVersions && Object.keys(useVersions).length ? { useVersions } : {}),
+          },
         }
       : { request: draft.request, steps: draft.agents.map((agent) => ({ agentId: agent.agentId })) };
     try {
@@ -142,17 +151,21 @@ export class WorkflowRunService {
       // No brief for a conversation with nothing in it yet (a workflow started in a new one), nor
       // for a run of prompt steps alone: none of them is sent the card (§21.3), so it is a model
       // call nobody reads.
+      // A replaced run keeps the card as the user left it, and the brief already written into it.
+      const keptCard = kept && kept.brief?.status !== 'writing' ? kept : undefined;
       const brief =
-        this.features.handoffBrief && created.steps.some((step) => !isModelStepKind(step.kind)) && created.excerpt
+        !keptCard && this.features.handoffBrief && created.steps.some((step) => !isModelStepKind(step.kind)) && created.excerpt
           ? ({ status: 'writing', text: '' } as const)
           : undefined;
       const fileRule = current.workflow?.document.workflow.files;
+      const before = new Map((kept?.steps ?? []).flatMap((step) => (step.workflowStep ? [[step.workflowStep.name, step] as const] : [])));
+      const pins = this.pinOptions(current.useVersions);
       this.state.updateReview(sourceSessionId, {
         phase: 'ready',
         created,
         request: created.run.request,
         steps: created.steps.map(
-          (step, index): RunReviewStep => ({
+          (step, index): RunReviewStep => keptEdits(before.get(created.run.steps[index]?.stepName ?? ''), {
             stepId: step.stepId,
             handoffId: step.handoffId,
             ...(isModelStepKind(step.kind) ? { kind: step.kind } : {}),
@@ -164,11 +177,11 @@ export class WorkflowRunService {
             modelId: step.modelId,
             inputPricePerMillionTokens: step.inputPricePerMillionTokens,
             ...(step.kind === 'checklist' ? { fieldSets: step.fieldSets ?? [] } : {}),
-            workflowStep: workflowStepFor(current.workflow, created.run.steps[index]?.stepName, created.run.steps[index]?.reads),
+            workflowStep: workflowStepFor(current.workflow, created.run.steps[index]?.stepName, created.run.steps[index]?.reads, pins),
           }),
         ),
-        card: created.excerpt,
-        brief: brief ? { ...brief } : undefined,
+        card: keptCard ? keptCard.card : created.excerpt,
+        brief: keptCard ? keptCard.brief : brief ? { ...brief } : undefined,
         fileIds: withinFileRule(current.fileIds, fileRule),
       });
       if (brief) void this.requestBrief(sourceSessionId, created, draft);
@@ -215,6 +228,79 @@ export class WorkflowRunService {
       }
       this.toast.error('The step couldn’t be marked as reviewed', 'Try again.');
     }
+  }
+
+  /**
+   * Use version P (workflow-designer §23.2): move a pinned step to its Agent's current published
+   * version. Someone who can edit the workflow writes the file, as Mark as reviewed does; anyone
+   * else gets it for this run only (`useVersions` on run create). A run already opened recorded
+   * the old version on its rows, so it is replaced, keeping the sheet's edits. On a blocked sheet
+   * the step's blocker clears, and the run is created once nothing blocks it.
+   */
+  async useVersion(sourceSessionId: string, stepName: string): Promise<void> {
+    if (!this.features.agentVersionPinning) return;
+    const review = this.state.reviewFor(sourceSessionId);
+    const workflow = review?.workflow;
+    if (!review || !workflow || review.reviewingStep || (review.phase !== 'ready' && review.phase !== 'blocked')) return;
+    const view = workflow.document.workflow;
+    const step = view.steps.find((candidate) => candidate.name === stepName);
+    const offer = step?.pin?.offerVersion;
+    if (!step || offer === undefined || review.useVersions?.[stepName] === offer) return;
+    if (!view.isOwned) {
+      this.state.updateReview(sourceSessionId, { useVersions: { ...review.useVersions, [stepName]: offer } });
+      await this.afterVersionChange(sourceSessionId);
+      return;
+    }
+    this.state.updateReview(sourceSessionId, { reviewingStep: stepName });
+    const definition = definitionOf({
+      ...view,
+      steps: view.steps.map((candidate) => (candidate.name === stepName ? { ...candidate, agentVersion: offer } : candidate)),
+    });
+    try {
+      const document = await this.workflowsApi.save(workflow.ref, definition);
+      if (this.state.reviewFor(sourceSessionId)?.draft !== review.draft) return;
+      this.state.updateReview(sourceSessionId, { reviewingStep: undefined, workflow: { ref: workflow.ref, document } });
+    } catch {
+      if (this.state.reviewFor(sourceSessionId)?.draft === review.draft) {
+        this.state.updateReview(sourceSessionId, { reviewingStep: undefined });
+      }
+      this.toast.error(`The step couldn’t be moved to version ${offer}`, 'Try again.');
+      return;
+    }
+    await this.afterVersionChange(sourceSessionId);
+  }
+
+  /** A step's version moved: judge the blocked sheet again, or replace the run already opened. */
+  private async afterVersionChange(sourceSessionId: string): Promise<void> {
+    const review = this.state.reviewFor(sourceSessionId);
+    const workflow = review?.workflow;
+    if (!review || !workflow) return;
+    if (review.phase === 'blocked') {
+      const hard = workflow.document.sheet.blockers.filter((blocker) => !STEP_BLOCKER_CODES.has(blocker.code));
+      if (hard.length) {
+        this.state.updateReview(sourceSessionId, { phase: 'error', error: blockerSentences(hard) });
+        return;
+      }
+      const gone = new Set(review.removedSteps ?? []);
+      const steps = blockedSteps(workflow, this.pinOptions(review.useVersions)).map((step) =>
+        step.workflowStep && gone.has(step.workflowStep.name) ? { ...step, removed: true } : step,
+      );
+      const blocked = steps.some((step) => !step.removed && step.workflowStep?.unavailable);
+      this.state.updateReview(sourceSessionId, { steps, ...(blocked ? {} : { phase: 'loading' as const }) });
+      if (!blocked) await this.createRun(sourceSessionId, review.draft);
+      return;
+    }
+    if (review.phase !== 'ready' || !review.created) return;
+    // The old run's rows hold the old version: dismiss it, and stop a brief still writing for it.
+    if (review.brief?.status === 'writing') void this.briefs.preempt(sourceSessionId);
+    void this.dismiss(sourceSessionId, review.created.run.runId);
+    this.state.updateReview(sourceSessionId, { phase: 'loading', created: undefined });
+    await this.createRun(sourceSessionId, review.draft, review);
+  }
+
+  /** What the sheet says about pins: nothing while the flag is off, else the server's, with this run's Use version. */
+  private pinOptions(useVersions?: Record<string, number>): PinOptions {
+    return this.features.agentVersionPinning ? { enabled: true, useVersions } : NO_PINS;
   }
 
   /** List the conversation's files again, e.g. after attaching one for a workflow that needs one. */
@@ -402,7 +488,10 @@ export class WorkflowRunService {
     // The approved row is the truth for each step's request and whether it was kept.
     // A step that reads others waits for them in the queue (PR-D.5a); a mention run has none. A
     // prompt step goes on the run's prompt invocation instead of a handoff's send (PR-D.6c).
-    const steps: RunStepLaunch[] = approved.steps.filter((step) => !step.removed).map((step) => launchOf(approved, step));
+    // A pinned step's first turn sends the version the create recorded on its row (§23.3).
+    const steps: RunStepLaunch[] = approved.steps
+      .filter((step) => !step.removed)
+      .map((step) => withCreatedVersion(launchOf(approved, step), created));
 
     this.state.upsertRun(approved);
     this.state.clearReview(sourceSessionId);
@@ -622,6 +711,19 @@ export class WorkflowRunService {
   }
 }
 
+/**
+ * A step as the create response recorded it: its `agentVersion` is exactly the `HANDOFF#` row's
+ * (§23.3), so it wins over the run row's, and its absence means the step is unpinned.
+ */
+export function withCreatedVersion(launch: RunStepLaunch, created: CreateWorkflowRunResponse): RunStepLaunch {
+  const recorded = created.steps.find((step) => step.handoffId === launch.handoffId);
+  if (!recorded) return launch;
+  const next: RunStepLaunch = { ...launch };
+  delete next.agentVersion;
+  if (isVersionNumber(recorded.agentVersion) && !isModelStepKind(launch.kind)) next.agentVersion = recorded.agentVersion;
+  return next;
+}
+
 /** The steps still in the run. */
 export function keptSteps(review: RunReview): RunReviewStep[] {
   return review.steps.filter((step) => !step.removed);
@@ -677,7 +779,7 @@ function withinFileRule(fileIds: string[], rule: WorkflowFilesRule | undefined):
 }
 
 /** A blocked workflow sheet's rows, before the run exists: one per step, keyed by its name. */
-function blockedSteps(workflow: RunDraftWorkflow): RunReviewStep[] {
+function blockedSteps(workflow: RunDraftWorkflow, pins: PinOptions = NO_PINS): RunReviewStep[] {
   return workflow.document.workflow.steps.map((step): RunReviewStep => {
     const kind = step.kind === 'prompt' || step.kind === 'checklist' ? step.kind : null;
     const prompt = kind !== null;
@@ -693,9 +795,22 @@ function blockedSteps(workflow: RunDraftWorkflow): RunReviewStep[] {
       removed: false,
       modelId: prompt ? (step.model?.modelId ?? step.modelId) : step.agent.modelId,
       inputPricePerMillionTokens: prompt ? step.model?.inputPricePerMillionTokens : step.agent.inputPricePerMillionTokens,
-      workflowStep: workflowStepFor(workflow, step.name),
+      workflowStep: workflowStepFor(workflow, step.name, undefined, pins),
     };
   });
+}
+
+/** Whether the sheet shows pins (`features.agentVersionPinning`), and this run's Use version choices. */
+export interface PinOptions {
+  enabled: boolean;
+  useVersions?: Record<string, number>;
+}
+
+const NO_PINS: PinOptions = { enabled: false };
+
+/** A new run's step with the edits its earlier run's step had on the sheet: its own request, and whether it was removed. */
+function keptEdits(before: RunReviewStep | undefined, step: RunReviewStep): RunReviewStep {
+  return before ? { ...step, ownRequest: before.ownRequest, removed: before.removed } : step;
 }
 
 /**
@@ -706,13 +821,20 @@ function workflowStepFor(
   workflow: RunDraftWorkflow | undefined,
   name: string | undefined,
   runReads?: readonly string[],
+  pins: PinOptions = NO_PINS,
 ): RunReviewWorkflowStep | undefined {
   const step = name ? workflow?.document.workflow.steps.find((candidate) => candidate.name === name) : undefined;
   if (!step) return undefined;
   const prompt = step.kind === 'prompt' || step.kind === 'checklist';
   const reads = runReads ?? step.reads;
+  // This run's Use version names the Agent's current published version, so the server's refusal of
+  // the file's version no longer applies to it (run create checks it again).
+  const override = pins.enabled && step.pin ? pins.useVersions?.[step.name] : undefined;
+  const pin = !pins.enabled || !step.pin ? undefined : override !== undefined ? { version: override, canRun: true } : step.pin;
   // A checklist step can carry several (its model, and each set it can't run): each is said once.
-  const blockers = (workflow?.document.sheet.blockers ?? []).filter((b) => b.step === step.name && STEP_BLOCKER_CODES.has(b.code));
+  const blockers = (workflow?.document.sheet.blockers ?? []).filter(
+    (b) => b.step === step.name && STEP_BLOCKER_CODES.has(b.code) && !(override !== undefined && b.code === 'agent_version_unavailable'),
+  );
   const reasons = [...new Set(blockers.map((blocker) => stepBlockerCopy(blocker, step.model?.reason)))];
   return {
     name: step.name,
@@ -725,6 +847,8 @@ function workflowStepFor(
     changed: !prompt && step.agent.changed,
     publishedVersion: step.agent.publishedVersion,
     runsDraft: !prompt && step.agent.runsDraft,
+    ...(pin ? { pin } : {}),
+    ...(override !== undefined ? { pinForThisRun: true } : {}),
   };
 }
 

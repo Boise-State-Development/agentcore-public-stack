@@ -77,7 +77,7 @@ export class HandoffStateService {
       return new Map(map).set(sessionId, merged);
     });
     if (spawnedFrom) {
-      this.spawnedByTarget.update((map) => new Map(map).set(sessionId, spawnedFrom));
+      this.spawnedByTarget.update((map) => new Map(map).set(sessionId, withKnownVersion(spawnedFrom, map.get(sessionId))));
     }
   }
 
@@ -168,4 +168,13 @@ function isNewer(candidate: HandoffView, current: HandoffView): boolean {
   const held = Date.parse(current.updatedAt);
   if (Number.isNaN(next)) return false;
   return Number.isNaN(held) || next > held;
+}
+
+/**
+ * The server's link, keeping the pinned version this tab sent the step's first turn with when the
+ * replay doesn't carry one (workflow-designer §23.3): it is the same handoff, so the same version.
+ */
+function withKnownVersion(server: SpawnedFrom, known: SpawnedFrom | undefined): SpawnedFrom {
+  if (server.agentVersion !== undefined || known?.agentVersion === undefined || known.handoffId !== server.handoffId) return server;
+  return { ...server, agentVersion: known.agentVersion };
 }

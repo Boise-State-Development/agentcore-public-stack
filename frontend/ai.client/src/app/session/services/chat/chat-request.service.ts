@@ -434,6 +434,8 @@ export class ChatRequestService implements OnDestroy {
     fileUploadIds?: string[];
     invokedSkillIds?: string[];
     folders?: FolderAttachmentData[];
+    /** A pinned workflow step's Agent version (workflow-designer §23.3); absent while unpinned. */
+    agentVersion?: number;
   }): Promise<void> {
     const { targetSessionId, agentId, message, handoffId, contextText, fileUploadIds, invokedSkillIds, folders } =
       options;
@@ -460,12 +462,13 @@ export class ChatRequestService implements OnDestroy {
         invokedSkillIds,
         (folders ?? []).flatMap((folder) => (folder.folderAttachId ? [folder.folderAttachId] : [])),
       );
-      const sharing =
-        options.sharedFileIds?.length || options.filesUnticked
-          ? { fileIds: options.sharedFileIds ?? [], filesUnticked: options.filesUnticked ?? 0 }
-          : {};
-      requestObject['handoff_context'] =
-        contextText === undefined ? { handoffId, ...sharing } : { handoffId, text: contextText, ...sharing };
+      requestObject['handoff_context'] = handoffContextOf({
+        handoffId,
+        contextText,
+        sharedFileIds: options.sharedFileIds,
+        filesUnticked: options.filesUnticked,
+        agentVersion: options.agentVersion,
+      });
       this.turnTiming.describe(targetSessionId, {
         modelId: this.modelService.getSelectedModel()?.modelId ?? null,
         hasAgent: true,
@@ -1066,4 +1069,25 @@ function renderComposerCard(card: ComposerCard, sessionId: string): string {
     card.artifacts,
     (card.files ?? []).map((f) => fileLineFor(f, sessionId, card.deliveryId)),
   );
+}
+
+/**
+ * A handoff send's `handoff_context`: the handoff, the card as sent (absent when removed), the
+ * files shared by reference, and a pinned workflow step's Agent version (workflow-designer §23.3),
+ * which only its first turn carries. Every field but `handoffId` is left out when it has nothing.
+ */
+export function handoffContextOf(options: {
+  handoffId: string;
+  contextText?: string;
+  sharedFileIds?: string[];
+  filesUnticked?: number;
+  agentVersion?: number;
+}): Record<string, unknown> {
+  const sharing =
+    options.sharedFileIds?.length || options.filesUnticked
+      ? { fileIds: options.sharedFileIds ?? [], filesUnticked: options.filesUnticked ?? 0 }
+      : {};
+  const pinned = options.agentVersion !== undefined ? { agentVersion: options.agentVersion } : {};
+  const text = options.contextText === undefined ? {} : { text: options.contextText };
+  return { handoffId: options.handoffId, ...text, ...sharing, ...pinned };
 }

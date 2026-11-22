@@ -40,8 +40,27 @@ export interface WorkflowAgentView {
   publishedVersion?: number;
   /** The Agent's published version moved since the step recorded it (§10). */
   changed: boolean;
-  /** The caller owns the Agent, so their run uses its draft (§10). */
+  /**
+   * The caller owns the Agent, so their run uses its draft (§10). False on a pinned step: the
+   * pin runs for everyone, its owner included (§23.2).
+   */
   runsDraft: boolean;
+}
+
+/** Why a pinned version can't run (`PinView.reason`, §23.2). */
+export type WorkflowPinRefusalReason = 'unpublished' | 'above_published' | 'never_published' | 'missing';
+
+/**
+ * An Agent step's pinned version as the rule judges it now (`PinView`, workflow-designer §23.3).
+ * Present only while version pinning is on, on an Agent step that records a version and whose
+ * Agent the caller can use. `offerVersion` is the Agent's current published version when it differs
+ * from `version`: what Use version moves the step to.
+ */
+export interface WorkflowStepPin {
+  version: number;
+  canRun: boolean;
+  reason?: WorkflowPinRefusalReason;
+  offerVersion?: number;
 }
 
 /** Why the caller can't run a prompt step's model (`ModelView.reason`). */
@@ -103,6 +122,8 @@ export interface WorkflowStepView {
   fieldSets?: WorkflowFieldSetView[];
   /** Model calls the step makes: one per field set on a checklist step, one on a prompt step. */
   calls?: number;
+  /** The version the step runs for everyone, while version pinning is on (§23.3). */
+  pin?: WorkflowStepPin;
 }
 
 export interface WorkflowResultView {
@@ -135,7 +156,9 @@ export type WorkflowSheetBlockerCode =
   /** A checklist step while `CHECKLIST_STEPS_ENABLED` is off. */
   | 'checklist_steps_off'
   /** A checklist step naming a set the skill no longer has, or one with a `list` field. */
-  | 'field_set_unavailable';
+  | 'field_set_unavailable'
+  /** A pinned version the rule refuses (§23.2): its step's `pin` says why, and what Use version offers. */
+  | 'agent_version_unavailable';
 
 /** The blockers a step carries that its removal clears: the run starts without it (§20.1). */
 export const STEP_BLOCKER_CODES: ReadonlySet<WorkflowSheetBlockerCode> = new Set([
@@ -144,6 +167,7 @@ export const STEP_BLOCKER_CODES: ReadonlySet<WorkflowSheetBlockerCode> = new Set
   'model_unavailable',
   'checklist_steps_off',
   'field_set_unavailable',
+  'agent_version_unavailable',
 ]);
 
 export interface WorkflowSheetBlocker {

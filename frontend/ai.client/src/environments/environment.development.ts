@@ -43,6 +43,8 @@ export const environment = {
         promptSteps: true,
         // The `development` GitHub environment sets CDK_CHECKLIST_STEPS_ENABLED=true.
         checklistSteps: true,
+        // The `development` GitHub environment sets CDK_AGENT_VERSION_PINNING_ENABLED=true.
+        agentVersionPinning: true,
         // Default on, matching CDK_SESSION_REWIND_ENABLED / CDK_SESSION_FORK_ENABLED.
         sessionRewind: true,
         sessionFork: true,

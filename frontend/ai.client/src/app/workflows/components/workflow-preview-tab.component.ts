@@ -12,6 +12,8 @@ import { WorkflowStartService } from '../../services/workflows/workflow-start.se
 import { WorkflowTestRunService } from '../workflow-test-run.service';
 import { checklistEstimate, estimateRunInputUsd, formatEstimateUsd } from '../../session/services/handoff/workflow-run-estimate';
 import { WorkflowDesignerStore } from '../workflow-designer.store';
+import { FEATURES } from '../../services/features';
+import { pinnedVersionLine } from '../../services/workflows/workflow-pins';
 import { WorkflowFiles, WorkflowStepView } from '../workflow.models';
 
 const FILES_LINE: Record<WorkflowFiles, string> = {
@@ -33,6 +35,10 @@ interface PreviewRow {
   rate: string | null;
   emoji?: string;
   iconUrl?: string;
+  /** A runnable pinned step's line (§23.2); a refused one is in the blockers below. */
+  pinLine?: string;
+  /** The step is pinned (§23.3), so §10's "a run uses its published version" no longer holds. */
+  pinned: boolean;
 }
 
 /**
@@ -105,7 +111,9 @@ interface PreviewRow {
                     <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">
                       {{ row.model }}@if (row.step.request) { · {{ row.checklist ? 'Guidance' : 'Own request' }} }
                     </p>
-                    @if (row.step.agent.changed && !row.prompt) {
+                    @if (row.pinLine) {
+                      <p class="text-xs/5 text-gray-700 dark:text-gray-300">{{ row.pinLine }}</p>
+                    } @else if (row.step.agent.changed && !row.prompt && !row.pinned) {
                       <p class="text-xs/5 text-gray-700 dark:text-gray-300">
                         This Agent has changed since it was added. A run uses its published version, now version {{ row.step.agent.publishedVersion }}.
                       </p>
@@ -212,6 +220,7 @@ export class WorkflowPreviewTabComponent {
   private readonly models = inject(ModelService);
   private readonly starter = inject(WorkflowStartService);
   private readonly testRuns = inject(WorkflowTestRunService);
+  private readonly features = inject(FEATURES);
 
   /** The test run's sheet is up in the panel: the designer switches to its Test run tab. */
   readonly testRunOpened = output<void>();
@@ -280,6 +289,10 @@ export class WorkflowPreviewTabComponent {
         rate: typeof rate === 'number' && rate > 0 ? `$${rate.toFixed(2)} / M input tokens` : null,
         emoji: mention?.emoji ?? agent.emoji,
         iconUrl: mention?.iconUrl,
+        pinned: this.features.agentVersionPinning && !prompt && !!step.pin,
+        ...(this.features.agentVersionPinning && !prompt && step.pin?.canRun
+          ? { pinLine: pinnedVersionLine(step.pin, mention?.group === 'own') }
+          : {}),
       };
     });
   });

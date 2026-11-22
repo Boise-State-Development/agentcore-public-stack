@@ -8,7 +8,7 @@
 
 import { WorkflowDocument, WorkflowRef, WorkflowRunSource } from '../../../services/workflows/workflow.models';
 import { FolderAttachmentData } from '../models/message.model';
-import { WorkflowFieldSetView } from '../../../services/workflows/workflow.models';
+import { WorkflowFieldSetView, WorkflowStepPin } from '../../../services/workflows/workflow.models';
 import { HandoffBrief, HandoffView, ShareableFile, TurnsCovered } from './handoff.models';
 
 /** Agents in one run (`WORKFLOW_RUN_MAX_STEPS`). The composer refuses a ninth mention. */
@@ -95,7 +95,11 @@ export interface WorkflowRunStepView {
   removed: boolean;
   /** The saved workflow's name for this step (PR-D.2); absent for a run of mentions. */
   stepName?: string;
-  /** The Agent's published version when a saved workflow's run was created (PR-D.2). */
+  /**
+   * A saved workflow's Agent step: with version pinning on, the version the step runs for
+   * everyone (workflow-designer §23.3), absent when the step records none; with it off, the
+   * Agent's published version when the run was created, a label only (PR-D.2).
+   */
   agentVersion?: number;
   /**
    * The other steps this step reads, by `stepName` (PR-D.5a). It starts once each has settled, and
@@ -170,6 +174,11 @@ export interface CreatedRunStep {
   modelId?: string;
   /** `modelId`'s catalog input rate, USD per million tokens. */
   inputPricePerMillionTokens?: number;
+  /**
+   * The version a pinned step runs (workflow-designer §23.3), exactly its `HANDOFF#` row's: what
+   * its first turn sends as `handoff_context.agentVersion`. Absent while unpinned.
+   */
+  agentVersion?: number;
 }
 
 /** `POST /sessions/{id}/workflow-runs`: the run, the one card every step gets, and each step. */
@@ -255,6 +264,14 @@ export interface RunReviewWorkflowStep {
   publishedVersion?: number;
   /** The starter owns the Agent, so their run uses its draft. */
   runsDraft: boolean;
+  /**
+   * The version the step runs for everyone (workflow-designer §23.3), while
+   * `features.agentVersionPinning` is on and the server judged one. A Use version for this run
+   * only shows here as the version it chose, runnable and with nothing more to offer.
+   */
+  pin?: WorkflowStepPin;
+  /** The pin is the starter's Use version for this run only, not the file's. */
+  pinForThisRun?: boolean;
 }
 
 /**
@@ -282,8 +299,14 @@ export interface RunReview {
   workflow?: RunDraftWorkflow;
   /** Steps of the saved workflow removed before its run was created, with what read them. */
   removedSteps?: string[];
-  /** The step whose Mark as reviewed is being saved. */
+  /** The step whose Mark as reviewed (or Use version) is being saved. */
   reviewingStep?: string;
+  /**
+   * Use version for this run only (§23.2), by step name: someone who can't edit the workflow
+   * moves a pinned step to the Agent's current published version. Sent as run create's
+   * `workflow.useVersions`; never written to the file.
+   */
+  useVersions?: Record<string, number>;
 }
 
 /** A file the run sheet lists, with the token count `GET /files` gives a prepared document. */
@@ -333,6 +356,8 @@ export interface RunStepLaunch {
    * settled, and sends the message `…/prepare` renders. Empty or absent: it starts as step 1's do.
    */
   reads?: string[];
+  /** A pinned Agent step's version (workflow-designer §23.3), sent on its first turn. */
+  agentVersion?: number;
 }
 
 /** `POST …/workflow-runs/{runId}/steps/{stepId}/prepare` (PR-D.5a). */

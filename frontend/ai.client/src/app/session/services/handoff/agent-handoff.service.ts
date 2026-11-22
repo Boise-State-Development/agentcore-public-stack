@@ -441,6 +441,7 @@ export class AgentHandoffService {
       handoffId: step.handoffId,
       sourceTitle: step.sourceTitle,
       agentName: step.agentName,
+      ...(step.agentVersion !== undefined ? { agentVersion: step.agentVersion } : {}),
     });
     beforeSend?.();
 
@@ -455,6 +456,7 @@ export class AgentHandoffService {
       fileUploadIds: step.fileUploadIds,
       invokedSkillIds: step.invokedSkillIds,
       folders: step.folders,
+      ...(step.agentVersion !== undefined ? { agentVersion: step.agentVersion } : {}),
     });
     return { targetSessionId, sent };
   }
@@ -665,6 +667,8 @@ export interface HandoffLaunch {
   /** Set for a workflow run's step (workflow-runs spec §3.1). */
   runId?: string;
   stepId?: string;
+  /** A pinned workflow step's version (workflow-designer §23.3): its first turn runs it. */
+  agentVersion?: number;
 }
 
 function delay(ms: number): Promise<void> {

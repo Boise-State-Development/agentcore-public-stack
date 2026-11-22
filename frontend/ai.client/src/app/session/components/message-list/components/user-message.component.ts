@@ -28,6 +28,7 @@ import { ConversationForkService } from '../../../services/session/conversation-
 import { TooltipDirective } from '../../../../components/tooltip';
 import { parseIso } from '../../../../utils/date';
 import { HandoffStateService } from '../../../services/handoff/handoff-state.service';
+import { isVersionNumber, pinnedVersionOf } from '../../../services/handoff/workflow-run-progress';
 import {
   BubbleDelivery,
   extractDeliveryBlocks,
@@ -75,13 +76,16 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
         -->
         @if (handoffOrigin(); as origin) {
           <div class="flex max-w-[80%] flex-col items-end gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
-            <span class="flex items-center gap-1">
+            <span class="flex items-center gap-1" [class.flex-wrap]="!!origin.agentVersion" [class.justify-end]="!!origin.agentVersion">
               <ng-icon name="heroArrowUturnLeft" class="size-3.5" aria-hidden="true" />
               Context from
               <a
                 [routerLink]="['/s', origin.sessionId]"
                 class="font-medium text-gray-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300"
               >{{ origin.title }}</a>
+              @if (origin.agentVersion) {
+                <span class="whitespace-nowrap"><span aria-hidden="true">· </span><span class="font-medium text-gray-700 dark:text-gray-300">Version {{ origin.agentVersion }}</span></span>
+              }
               @if (handoffContext()) {
                 <span aria-hidden="true">·</span>
                 <button
@@ -376,6 +380,8 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   protected readonly attachmentCards = inject(FEATURES).attachmentCards;
   private failedSends = inject(FailedSendService);
   private handoffState = inject(HandoffStateService);
+  /** "Version 3" beside a pinned step's "Context from" line (`features.agentVersionPinning`). */
+  private readonly pinning = inject(FEATURES).agentVersionPinning;
   private sessions = inject(SessionService);
 
   protected readonly contextOpen = signal(false);
@@ -384,7 +390,7 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
    * Set on the first message of a conversation a handoff started: the source to link back to,
    * titled as the sidenav titles it now (falling back to the title the context was sent under).
    */
-  protected readonly handoffOrigin = computed((): { sessionId: string; title: string } | null => {
+  protected readonly handoffOrigin = computed((): { sessionId: string; title: string; agentVersion?: number } | null => {
     const id = this.message().id;
     const dash = id.lastIndexOf('-');
     if (!id.startsWith('msg-') || dash < 0 || id.slice(dash + 1) !== '0') return null;
@@ -394,8 +400,19 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
       .mergedSessionsResource()
       .sessions.find((s) => s.sessionId === spawned.sessionId)
       ?.title?.trim();
-    return { sessionId: spawned.sessionId, title: listed || spawned.sourceTitle || 'another conversation' };
+    const title = listed || spawned.sourceTitle || 'another conversation';
+    const agentVersion = this.pinning ? (spawned.agentVersion ?? this.runStepVersion(spawned.sessionId, spawned.handoffId)) : undefined;
+    return { sessionId: spawned.sessionId, title, ...(isVersionNumber(agentVersion) ? { agentVersion } : {}) };
   });
+
+  /** A pinned step's version from its run, when the source's runs are loaded (workflow-designer §23.3). */
+  private runStepVersion(sourceSessionId: string, handoffId: string): number | undefined {
+    for (const run of this.workflowRuns.runsFor(sourceSessionId)) {
+      const step = run.steps.find((candidate) => candidate.handoffId === handoffId);
+      if (step) return pinnedVersionOf(run, step);
+    }
+    return undefined;
+  }
 
   /** The context card this message carried, when the persisted message has it (after a reload). */
   protected readonly handoffContext = computed((): string | null => {

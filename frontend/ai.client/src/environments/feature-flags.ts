@@ -198,6 +198,16 @@ export interface FeatureFlags {
   checklistSteps: boolean;
 
   /**
+   * Agent version pinning (docs/specs/workflow-designer.md §23, PR-D.8c): a saved workflow's
+   * Agent step runs the version its file records, for everyone, its owner included. The sheet and
+   * the designer say "Uses version N", offer Use version P when a newer one is published, and
+   * show a refused pin as a blocker; a step's first turn sends `handoff_context.agentVersion`.
+   * Backend: AGENT_VERSION_PINNING_ENABLED (app-api and the AgentCore Runtime). In development,
+   * so `false` unless the environment has turned the backend on.
+   */
+  agentVersionPinning: boolean;
+
+  /**
    * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
    * user message offers "Rewind to here", which hides it and everything after
    * it and puts its text back in the composer to edit and resend. Backend:
