@@ -183,9 +183,12 @@ class TestResolution:
         assert "is a reference file, not a script" in message
         assert "scripts/Engine.py" in message
 
-    def test_a_script_that_is_not_python_is_refused(self):
+    @pytest.mark.parametrize("name", ["run.sh", "build.js"])
+    def test_a_script_that_is_not_python_is_refused(self, name):
+        # The Word tools run Python only; run_code alone also passes the Node extensions.
+        record = _record(resources=[_ref(name, "script")])
         with pytest.raises(SkillScriptError, match="not a Python file"):
-            resolve_skill_script([_record()], "contract-redliner", "scripts/run.sh")
+            resolve_skill_script([record], "contract-redliner", f"scripts/{name}")
 
     def test_a_script_over_the_bundle_limit_is_refused_from_the_manifest(self):
         record = _record(resources=[_ref("engine.py", "script", size=MAX_RESOURCE_BYTES + 1)])

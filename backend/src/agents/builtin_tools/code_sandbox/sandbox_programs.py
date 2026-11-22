@@ -12,9 +12,12 @@ One call is a single ``executeCommand``::
 
 * ``snapshot.py`` records what is in ``outputs/`` before the run, so ``finish``
   can tell which files this call wrote.
-* ``entry.py`` runs the script (``runpy`` as ``__main__`` with ``sys.argv`` set
-  and its folder first on ``sys.path``, so sibling imports work) or the
-  model's code. It is a child process of the command, so a script's
+* ``entry.py`` runs the script or the model's code, chosen by the target's
+  extension. Python runs by ``runpy`` as ``__main__`` with ``sys.argv`` set and
+  its folder first on ``sys.path``, so sibling imports work. JavaScript
+  (``.js``/``.cjs``/``.mjs``) replaces the process with ``node <target> <argv…>``
+  (``os.execvp``), so its exit code, its output and ``timeout``'s signal are
+  Node's own, and its ``require('./x')`` resolves beside the file as usual. It is a child process of the command, so a script's
   ``sys.exit``, ``os.chdir`` or module state ends with it. Its output goes to a
   file because the command channel merges stdout into stderr when a command
   fails.
@@ -54,6 +57,9 @@ with open(".run_code/before.json", "w") as f:
     json.dump(seen, f)
 '''
 
+#: Targets ``entry.py`` hands to ``node`` instead of ``runpy``.
+NODE_EXTENSIONS = (".js", ".cjs", ".mjs")
+
 ENTRY_PY = r'''
 import json, os, runpy, sys
 with open(".run_code/request.json", encoding="utf-8") as f:
@@ -61,6 +67,14 @@ with open(".run_code/request.json", encoding="utf-8") as f:
 for d in ("inputs", "outputs"):
     os.makedirs(d, exist_ok=True)
 target = req["target"]
+if os.path.splitext(target)[1].lower() in (".js", ".cjs", ".mjs"):
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        os.execvp("node", ["node", target, *req.get("argv", [])])
+    except OSError as exc:
+        print("node could not be started: %s" % exc, file=sys.stderr)
+        sys.exit(127)
 sys.argv = [target, *req.get("argv", [])]
 sys.path.insert(0, os.path.dirname(os.path.abspath(target)))
 runpy.run_path(target, run_name="__main__")

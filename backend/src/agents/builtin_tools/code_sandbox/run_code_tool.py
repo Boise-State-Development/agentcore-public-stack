@@ -1,4 +1,4 @@
-"""``run_code``: a skill's scripts, or Python the model writes, in the isolated sandbox.
+"""``run_code``: a skill's scripts, or Python or JavaScript the model writes, in the isolated sandbox.
 
 Spec: ``docs/specs/skill-code-sandbox.md``. Behind ``CODE_SANDBOX_ENABLED`` and its
 own catalog row (``run_code``, ``enabledByDefault: false``).
@@ -23,8 +23,9 @@ a private sandbox that it stops itself.
 ``sys.exit``, ``chdir`` or module state cannot reach the next call
 (``sandbox_programs.py``).
 
-**Whose scripts.** A ``scripts/*.py`` file of a skill bound to the turn, by the
-same strict lookup the Word tools use (``resolve_skill_script``). Until the
+**Whose scripts.** A ``scripts/*.py`` file of a skill bound to the turn, or a
+``.js``/``.cjs``/``.mjs`` one run by Node (spec D2), by the same strict lookup
+the Word tools use (``resolve_skill_script``, which keeps them to ``.py``). Until the
 approval card for other authors' scripts exists (spec D4, PR-2), a script runs
 only from a skill the user owns or an admin-catalog skill; anything else is
 refused with a message that says why.
@@ -57,6 +58,7 @@ from agents.builtin_tools.office._storage import (
 )
 from agents.builtin_tools.spreadsheet_analysis import sandbox_pool
 from agents.main_agent.skills.skill_scripts import (
+    PYTHON_SCRIPT_EXTENSIONS,
     SkillScriptError,
     TurnSkillRecords,
     attach_turn_skill_records,
@@ -80,6 +82,14 @@ CALL_TIMEOUT_SECONDS = 120
 #: Covers staging, the run and ``finish.py``.
 CALL_GUARD_SECONDS = CALL_TIMEOUT_SECONDS + 45
 MAX_CODE_BYTES = 64 * 1024
+#: A skill script run_code can start, by extension: Python by ``runpy``, the
+#: rest by ``node`` (``sandbox_programs.ENTRY_PY``).
+SCRIPT_EXTENSIONS = PYTHON_SCRIPT_EXTENSIONS + programs.NODE_EXTENSIONS
+#: ``language`` for ``code``, and the file each is written to in the sandbox.
+SNIPPET_TARGETS = {
+    "python": f"{programs.CONTROL_DIR}/snippet.py",
+    "javascript": f"{programs.CONTROL_DIR}/snippet.js",
+}
 MAX_ARGV_BYTES = 4 * 1024
 MAX_CALLS_PER_TURN = 20
 MAX_INPUT_FILES_PER_TURN = 10
@@ -308,15 +318,23 @@ def _check_arguments(
     argv: Optional[List[str]],
     files: Optional[List[str]],
     show_images: Optional[List[str]],
-) -> Tuple[List[str], List[str], List[str]]:
-    """Validate and normalize; raises :class:`RunCodeError` with a fix."""
+    language: Optional[str] = None,
+) -> Tuple[List[str], List[str], List[str], str]:
+    """Validate and normalize; raises :class:`RunCodeError` with a fix.
+
+    Returns ``(argv, files, show_images, language)``; ``language`` is only
+    read with ``code`` (a skill script's comes from its extension).
+    """
     has_code = bool(code and code.strip())
     has_script = bool(skill_name or path)
     if has_code == has_script:
         raise RunCodeError(
-            "Pass exactly one of `code` (Python you wrote) or `skill_name` + `path` "
+            "Pass exactly one of `code` (a program you wrote) or `skill_name` + `path` "
             "(a script that ships with an active skill)."
         )
+    lang = (language or "python").strip().lower()
+    if has_code and lang not in SNIPPET_TARGETS:
+        raise RunCodeError('`language` is "python" (the default) or "javascript".')
     if has_script and not (skill_name and path):
         raise RunCodeError("A skill script needs both `skill_name` and `path`.")
     if has_code and len(code.encode("utf-8")) > MAX_CODE_BYTES:
@@ -332,7 +350,7 @@ def _check_arguments(
     image_list = [str(p).strip() for p in (show_images or []) if str(p).strip()]
     if len(image_list) > MAX_IMAGES:
         raise RunCodeError(f"`show_images` takes at most {MAX_IMAGES} paths. Ask only for the pages you need to see.")
-    return argv_list, file_list, image_list
+    return argv_list, file_list, image_list, lang
 
 
 # ---------------------------------------------------------------------------
@@ -529,7 +547,9 @@ def _audit_script_run(user_id: str, record: Any, script_path: str, sha256: str, 
         logger.exception("run_code: skill.script_run audit record could not be written")
 
 
-def _audit_code_run(user_id: str, session_id: str, code: str, exit_code: Optional[int], duration_ms: int) -> None:
+def _audit_code_run(
+    user_id: str, session_id: str, code: str, exit_code: Optional[int], duration_ms: int, language: str = "python"
+) -> None:
     """``sandbox.code_run``: ids, sizes and a hash; never the code. Blocking; never raises."""
     try:
         from apis.shared.audit.models import TARGET_CONVERSATION, AuditAction
@@ -546,6 +566,7 @@ def _audit_code_run(user_id: str, session_id: str, code: str, exit_code: Optiona
             after={
                 "codeSha256": hashlib.sha256(data).hexdigest(),
                 "codeBytes": len(data),
+                "language": language,
                 "exitCode": exit_code,
                 "durationMs": duration_ms,
             },
@@ -583,9 +604,12 @@ async def _run(
     argv: Optional[List[str]],
     files: Optional[List[str]],
     show_images: Optional[List[str]],
+    language: Optional[str] = None,
 ) -> Dict[str, Any]:
     try:
-        argv_list, file_list, image_list = _check_arguments(code, skill_name, path, argv, files, show_images)
+        argv_list, file_list, image_list, lang = _check_arguments(
+            code, skill_name, path, argv, files, show_images, language
+        )
     except RunCodeError as exc:
         return _error(str(exc))
 
@@ -594,7 +618,7 @@ async def _run(
     if skill_name:
         slug = skill_name.strip()
         try:
-            script_ref = resolve_skill_script(skill_records.records, slug, path or "")
+            script_ref = resolve_skill_script(skill_records.records, slug, path or "", SCRIPT_EXTENSIONS)
         except SkillScriptError as exc:
             return _error(str(exc))
         record = _record_for(skill_records.records, slug)
@@ -629,7 +653,7 @@ async def _run(
                 return await asyncio.wait_for(
                     _run_in_sandbox(
                         entry, state, run, interpreter_id, session_id, user_id, record, script_ref,
-                        code, argv_list, file_list, image_list,
+                        code, argv_list, file_list, image_list, lang,
                     ),
                     timeout=CALL_GUARD_SECONDS,
                 )
@@ -654,7 +678,7 @@ async def _run(
                 _audit_script_run, user_id, record, _manifest_path(script_ref), run.sha256, run.outcome
             )
         elif run.attempted and code:
-            await asyncio.to_thread(_audit_code_run, user_id, session_id, code, run.exit_code, duration_ms)
+            await asyncio.to_thread(_audit_code_run, user_id, session_id, code, run.exit_code, duration_ms, lang)
 
 
 async def _start_sandbox(entry: Any, state: _SandboxState, interpreter_id: str) -> bool:
@@ -697,6 +721,7 @@ async def _run_in_sandbox(
     argv_list: List[str],
     file_list: List[str],
     image_list: List[str],
+    lang: str = "python",
 ) -> Dict[str, Any]:
     office = await _start_sandbox(entry, state, interpreter_id)
 
@@ -718,7 +743,7 @@ async def _run_in_sandbox(
         run.sha256 = state.hashes.get(target, "")
         ran = f"Ran {target}" + (f" with argv {json.dumps(argv_list)}" if argv_list else "")
     else:
-        target = f"{programs.CONTROL_DIR}/snippet.py"
+        target = SNIPPET_TARGETS[lang]
         await _write_text(entry, [(target, code or "")])
         ran = "Ran your code"
 
@@ -808,8 +833,9 @@ def make_run_code_tool(session_id: str, user_id: str, skill_records: TurnSkillRe
         argv: Optional[List[str]] = None,
         files: Optional[List[str]] = None,
         show_images: Optional[List[str]] = None,
+        language: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Run Python in an isolated sandbox: a script that ships with an active skill, or code you write.
+        """Run Python or Node in an isolated sandbox: a script that ships with an active skill, or code you write.
 
         Use it when a skill's instructions say to run one of its scripts (for
         example `python scripts/fill_fillable_fields.py in.pdf fields.json out.pdf`)
@@ -820,8 +846,8 @@ def make_run_code_tool(session_id: str, user_id: str, skill_records: TurnSkillRe
         (subprocess, runpy, import).
 
         The sandbox has NO network access and cannot install packages. Python
-        3.12; poppler's pdftoppm/pdftotext are available, qpdf/pdftk/tesseract
-        are not. Each call is a fresh process; files persist for the rest of
+        3.12 and node; poppler's pdftoppm/pdftotext are available,
+        qpdf/pdftk/tesseract are not. Each call is a fresh process; files persist for the rest of
         this turn only. Working folder layout:
           inputs/          the conversation files you name in `files`
           skills/<name>/   a skill's whole folder (scripts/, references/, assets/),
@@ -832,12 +858,14 @@ def make_run_code_tool(session_id: str, user_id: str, skill_records: TurnSkillRe
                            md, html and images)
 
         Args:
-            code: Python you wrote, run as a script from the working folder.
+            code: A program you wrote, run as a script from the working folder.
                 Exactly one of `code` or `skill_name` + `path`.
+            language: The language of `code`: "python" (the default) or
+                "javascript", run with node (e.g. a skill's docx-js example).
             skill_name: An active skill's name (as in <available_skills>), to
                 run one of its scripts.
             path: The script's path in that skill, e.g. "scripts/fill_fillable_fields.py".
-                Only Python files under scripts/ can run.
+                Only .py, .js, .cjs and .mjs files under scripts/ can run.
             argv: Command-line arguments for the script, as the skill's
                 instructions give them, with paths relative to the working
                 folder, e.g. ["inputs/form.pdf", "outputs/fields.json"].
@@ -852,6 +880,8 @@ def make_run_code_tool(session_id: str, user_id: str, skill_records: TurnSkillRe
             4,000 characters), the files saved from outputs/, and any images
             asked for.
         """
-        return await _run(session_id, user_id, skill_records, code, skill_name, path, argv, files, show_images)
+        return await _run(
+            session_id, user_id, skill_records, code, skill_name, path, argv, files, show_images, language
+        )
 
     return attach_turn_skill_records(run_code, skill_records)
