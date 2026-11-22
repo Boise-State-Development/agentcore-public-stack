@@ -154,6 +154,43 @@ def test_bundled_files_unknown_kind_listed_under_references():
     assert "### Scripts" not in section and "### Assets" not in section
 
 
+def _nested(path, *, kind="script"):
+    ref = _ref(path.rsplit("/", 1)[-1], kind=kind, content_type="text/plain")
+    ref.path = path
+    return ref
+
+
+def test_xml_schemas_collapse_to_one_line_where_the_first_sits():
+    """anthropics/skills' Office bundles: 39 schemas the scripts read from disk."""
+    rec = _record(
+        resources=[
+            _nested("office/validate.py"),
+            _nested("office/schemas/ISO-IEC29500-4_2016/sml.xsd"),
+            _nested("office/schemas/ecma/fouth-edition/opc-relationships.xsd"),
+            _nested("office/schemas/microsoft/wml-2010.xsd"),
+            _nested("recalc.py"),
+        ]
+    )
+    assert "### Scripts\n" + "\n".join(
+        [
+            "- scripts/office/validate.py",
+            "- scripts/office/schemas/ holds 3 XML schemas (.xsd) that the scripts read; not listed one by one",
+            "- scripts/recalc.py",
+        ]
+    ) in sm._reference_files_section(rec)
+
+
+def test_a_lone_schema_keeps_its_own_line():
+    rec = _record(resources=[_nested("check.py"), _nested("schema.xsd")])
+    assert "### Scripts\n- scripts/check.py\n- scripts/schema.xsd" in sm._reference_files_section(rec)
+
+
+def test_schemas_still_resolve_by_path_when_not_listed():
+    """Collapsing is display only: every file stays in the manifest and readable."""
+    rec = _record(resources=[_nested("office/schemas/a.xsd"), _nested("office/schemas/b.xsd")])
+    assert sm._manifest_paths(rec) == ["scripts/office/schemas/a.xsd", "scripts/office/schemas/b.xsd"]
+
+
 def test_bundled_files_nothing_for_a_skill_with_no_files():
     assert sm._reference_files_section(_record()) == ""
     assert sm._reference_files_section(_record(resources=None)) == ""
