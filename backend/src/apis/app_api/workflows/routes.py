@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse
 from apis.shared.assistants.service import get_assistant_with_access_check
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.blocking_io import run_blocking
+from apis.shared.extraction.field_sets import FIELD_SET_PREFIX, FIELD_SET_SUFFIX, FieldSetError, parse_field_set
 from apis.shared.feature_flags import workflows_enabled
 from apis.shared.handoff import HandoffStoreUnavailable
 from apis.shared.handoff.runs import WorkflowRun, get_workflow_run_store
@@ -47,7 +48,9 @@ from apis.shared.skills.user_service import (
 )
 from apis.shared.workflows.format import (
     INPUT_READS,
+    KIND_CHECKLIST,
     KIND_PROMPT,
+    READ_FILES,
     Workflow,
     WorkflowError,
     WorkflowStep,
@@ -64,7 +67,12 @@ from apis.shared.workflows.format import (
     workflow_name_of_ref,
 )
 
-from apis.shared.workflows.field_set_refs import parsed_field_sets, read_skill_field_sets, unreadable_sets
+from apis.shared.workflows.field_set_refs import (
+    parsed_field_sets,
+    read_skill_field_sets,
+    skill_field_set_refs,
+    unreadable_sets,
+)
 from apis.shared.workflows.sheet import (
     WorkflowNotFound,
     WorkflowUnreadable,
@@ -198,22 +206,13 @@ async def _steps_from_run(user: User, run: WorkflowRun) -> Tuple[Optional[str], 
     """``(request, steps)`` from a run's kept steps, each Agent's current published version recorded.
 
     A prompt step (workflow-designer §21.3) is kept as one, on the model it ran on, named by its
-    step name when it has one; it has no Agent to look up.
-
-    A run with a checklist step (§22.3) is refused (409): its field sets live in the skill of the
-    workflow it started from, and a new carrying skill would hold none of them, so the step could
-    never run. That workflow is the one to open.
+    step name when it has one; it has no Agent to look up. A checklist step (§22.3) is kept the
+    same way, with its field sets and its own guidance, and reads the inputs it read in the run
+    (always the files). Its sets are copied into the new carrying skill by
+    :func:`_field_sets_from_run`, so the saved workflow can run it.
     """
     kept = run.kept_steps()
-    if any(s.is_checklist for s in kept):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "This run has a checklist step, and its field sets live in the workflow it started from. "
-                "Open that workflow to change or start it again"
-            ),
-        )
-    agent_steps = [s for s in kept if not s.is_prompt]
+    agent_steps = [s for s in kept if not s.is_model_step]
     lookups = await asyncio.gather(
         *(
             get_assistant_with_access_check(assistant_id=s.agent_id, user_id=user.user_id, user_email=user.email)
@@ -227,6 +226,23 @@ async def _steps_from_run(user: User, run: WorkflowRun) -> Tuple[Optional[str], 
     for run_step in kept:
         own = (run_step.request or "").strip()
         request = own if own and own != shared else None
+        if run_step.is_checklist:
+            name = step_name_for(run_step.step_name or run_step.agent_name or "checklist", taken=taken)
+            taken.append(name)
+            steps.append(
+                WorkflowStep(
+                    name=name,
+                    agent_id="",
+                    kind=KIND_CHECKLIST,
+                    model_id=run_step.model_id,
+                    reads=tuple(r for r in INPUT_READS if r == READ_FILES or run_step.reads_input(r)),
+                    # Its guidance alone, never the shared request (§22.3), so it is kept even when
+                    # it reads the same as the shared one.
+                    request=own or None,
+                    field_sets=tuple(run_step.field_sets or ()),
+                )
+            )
+            continue
         if run_step.is_prompt:
             name = step_name_for(run_step.step_name or run_step.agent_name or "prompt", taken=taken)
             taken.append(name)
@@ -257,6 +273,70 @@ async def _steps_from_run(user: User, run: WorkflowRun) -> Tuple[Optional[str], 
     return shared, tuple(steps)
 
 
+def _field_set_filename(name: str) -> str:
+    return f"{FIELD_SET_PREFIX}{name}{FIELD_SET_SUFFIX}"
+
+
+def _copy_refused(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
+async def _field_sets_from_run(user: User, run: WorkflowRun) -> List[Tuple[str, bytes]]:
+    """``[(name, bytes)]`` for every field set the run's kept checklist steps name, in first-named order.
+
+    Read from the skill of the workflow the run started from (``run.workflow.skillId``), as each
+    file is there **now**, and only from a skill the caller can still use: its owner, or one
+    ``resolve_accessible_skill_ids`` reaches (:func:`readable_workflow_skill`, the rule the sheet
+    and the Runtime share). Nothing is written here, so a refusal leaves nothing behind.
+
+    409, naming the set, when one is gone or can't be read or parsed: a saved workflow whose
+    checklist step can't run is never written. A run with no checklist step reads nothing.
+    """
+    names = list(dict.fromkeys(name for s in run.kept_steps() if s.is_checklist for name in (s.field_sets or ())))
+    if not names:
+        return []
+    if run.workflow is None:
+        raise _copy_refused(
+            "This run's checklist step didn't start from a saved workflow, so there are no field sets to copy"
+        )
+    try:
+        source = await readable_workflow_skill(run.workflow.skill_id, user)
+    except WorkflowNotFound:
+        raise _copy_refused(
+            "This run has a checklist step, and the workflow it started from is no longer one you can use, "
+            "so its field sets can't be copied"
+        )
+    refs = skill_field_set_refs(source.resources)
+    missing = [name for name in names if name not in refs]
+    if missing:
+        raise _copy_refused(
+            f"The field set '{missing[0]}' is no longer in the workflow this run started from, "
+            "so a saved copy couldn't run its checklist step"
+        )
+    store = get_user_skill_service().bundle_files.resource_store
+
+    async def read(name: str) -> bytes:
+        return await run_blocking(store.get, refs[name].s3_key)
+
+    found = await asyncio.gather(*(read(name) for name in names), return_exceptions=True)
+    copies: List[Tuple[str, bytes]] = []
+    for name, raw in zip(names, found):
+        if isinstance(raw, BaseException):
+            logger.warning("Save as workflow: a field set couldn't be read", exc_info=raw)
+            raise _copy_refused(
+                f"The field set '{name}' in the workflow this run started from couldn't be read. Try again"
+            )
+        try:
+            parse_field_set(raw.decode("utf-8"), name=name)
+        except (FieldSetError, UnicodeDecodeError):
+            raise _copy_refused(
+                f"The field set '{name}' in the workflow this run started from no longer reads as a field set. "
+                "Fix it there, then save this run again"
+            )
+        copies.append((name, raw))
+    return copies
+
+
 @router.post(
     "",
     response_model=WorkflowDocument,
@@ -274,11 +354,16 @@ async def create_workflow(
     authors. ``fromRun`` takes a run that was started (approved or stopped) from the caller's own
     conversation: its kept steps, in order, each reading the request and the files, and its shared
     request. 404 for a run that isn't the caller's; 409 for one never started, or at the skill cap.
+
+    A run with a checklist step also gets the field sets it names, copied from the workflow it
+    started from under the same names (:func:`_field_sets_from_run`), so the new workflow is the
+    caller's own copy and the original skill is untouched. 409 when one can't be copied.
     """
     _require_workflows()
     title = (body.title or "").strip() or DEFAULT_TITLE
     request: Optional[str] = None
     steps: Tuple[WorkflowStep, ...] = ()
+    field_sets: List[Tuple[str, bytes]] = []
     if body.from_run is not None:
         try:
             run = await asyncio.to_thread(get_workflow_run_store().get, user.user_id, body.from_run.run_id)
@@ -289,6 +374,7 @@ async def create_workflow(
         if run.status not in ("approved", "stopped"):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only a run that was started can be saved")
         request, steps = await _steps_from_run(user, run)
+        field_sets = await _field_sets_from_run(user, run)
 
     name = slug_for_title(title)
     workflow = Workflow(name=name, title=title, request=request, steps=steps)
@@ -309,6 +395,17 @@ async def create_workflow(
     except UserSkillError as e:
         raise _skill_error(e)
     try:
+        # The sets first, through the skill-file writer, so each is parse-checked and the
+        # workflow's own write finds them in the same skill (§22.3).
+        for set_name, raw in field_sets:
+            await service.add_resource(
+                skill.skill_id,
+                filename=_field_set_filename(set_name),
+                content=raw,
+                content_type="text/markdown",
+                user=user,
+                kind="reference",
+            )
         refs = await service.add_resource(
             skill.skill_id,
             filename=workflow_filename(name),
@@ -318,12 +415,15 @@ async def create_workflow(
             kind="reference",
         )
     except (UserSkillError, ValueError) as e:
-        # Never leave a carrier with no workflow in it.
+        # Never leave a carrier with no workflow in it (nor with only the copied sets).
         await service.delete_my_skill(skill.skill_id, user)
         if isinstance(e, UserSkillError):
             raise _skill_error(e)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    logger.info("Created a saved workflow", extra={"event": "workflow_created", "from_run": body.from_run is not None})
+    logger.info(
+        "Created a saved workflow",
+        extra={"event": "workflow_created", "from_run": body.from_run is not None, "field_sets_copied": len(field_sets)},
+    )
     skill = skill.model_copy(update={"resources": refs})
     return await _document(skill, workflow, user)
 
