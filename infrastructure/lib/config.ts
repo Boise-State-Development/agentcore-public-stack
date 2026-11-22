@@ -122,6 +122,7 @@ export interface AppConfig {
   concurrentToolExecution: ConcurrentToolExecutionConfig;
   wordSkillScripts: WordSkillScriptsConfig;
   codeSandbox: CodeSandboxConfig;
+  codeSandboxOffice: CodeSandboxOfficeConfig;
   converseDocumentsAsText: ConverseDocumentsAsTextConfig;
   projectFileReadiness: ProjectFileReadinessConfig;
   agents: AgentsConfig;
@@ -1112,10 +1113,35 @@ export interface WordSkillScriptsConfig {
  * development**: off unless CDK_CODE_SANDBOX_ENABLED=true (or a
  * `codeSandbox.enabled: true` cdk.json context). Sets CODE_SANDBOX_ENABLED on
  * the AgentCore Runtime only, and **only while on**, so the default spends none
- * of the V2 payload budget. No resources and no IAM: the Runtime already runs
- * sessions on the interpreter and reads skill resources and user files.
+ * of the V2 payload budget. No IAM: the Runtime already runs sessions on the
+ * interpreter and reads skill resources and user files. Adds a DNS Firewall
+ * (4 resources) on the sandbox VPC that answers no name while DNS is off and
+ * only the office file system's name once `codeSandboxOffice` turns it on, so
+ * it is in place before DNS ever is.
  */
 export interface CodeSandboxConfig {
+  enabled: boolean;
+}
+
+/**
+ * LibreOffice for the code sandbox. On, `run_code`'s sessions mount a
+ * read-only EFS access point holding a LibreOffice build at `/mnt/office`, so
+ * a skill's own checks (the xlsx skill's `recalc.py`, docx/pptx → PDF) run as
+ * written (docs/specs/skill-code-sandbox.md D9). AgentCore mounts EFS by its
+ * DNS name, so this turns the sandbox VPC's DNS support and hostnames on,
+ * behind the DNS Firewall the code sandbox always carries, which answers only
+ * the file system's own name. **Opt-in while in development**: off unless
+ * CDK_CODE_SANDBOX_OFFICE_ENABLED=true (or a `codeSandboxOffice.enabled: true`
+ * cdk.json context), and it requires CDK_CODE_SANDBOX_ENABLED. **Turn it on in
+ * a deploy after the one that turned the code sandbox on**: CloudFormation
+ * updates the VPC before it creates the firewall's association, so turning
+ * both on at once leaves the sandbox with public DNS for about a minute.
+ * Adds ~14 resources (file system, 2 mount targets, 2 access points, a
+ * mount-target security group and its 2 rules, the seeding interpreter, its
+ * role and policy, the mount parameter, the firewall's allow list), and
+ * CODE_SANDBOX_OFFICE_ENABLED on the AgentCore Runtime only while on.
+ */
+export interface CodeSandboxOfficeConfig {
   enabled: boolean;
 }
 
@@ -2234,6 +2260,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_CODE_SANDBOX_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('codeSandbox')?.enabled ?? false,
     },
+    codeSandboxOffice: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED
+        ? process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('codeSandboxOffice')?.enabled ?? false,
+    },
     converseDocumentsAsText: {
       // In development: only "true" enables, and an unset GitHub variable
       // arrives as "" rather than undefined.
@@ -2940,6 +2973,15 @@ export function validateAwsRegion(region: string): void {
  * Validate configuration values
  */
 function validateConfig(config: AppConfig): void {
+  // The office mount turns the sandbox VPC's DNS on, which is safe only behind
+  // the DNS Firewall the code sandbox carries.
+  if (config.codeSandboxOffice.enabled && !config.codeSandbox.enabled) {
+    throw new Error(
+      'CDK_CODE_SANDBOX_OFFICE_ENABLED=true requires CDK_CODE_SANDBOX_ENABLED=true: '
+      + 'LibreOffice is mounted for run_code, and the DNS Firewall that keeps the sandbox closed '
+      + 'once its DNS is on exists only while the code sandbox does.',
+    );
+  }
   // The attachments KB rides the large-document pipeline (its queue and Lambda).
   if (config.attachmentKb.enabled && !config.largeDocumentAttachments.enabled) {
     throw new Error(

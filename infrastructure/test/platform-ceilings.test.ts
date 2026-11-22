@@ -289,6 +289,9 @@ function allFlagsOn(base: AppConfig): AppConfig {
     wordSkillScripts: { enabled: true },
     // Code sandbox (run_code): one Runtime variable, written only while on.
     codeSandbox: { enabled: true },
+    // LibreOffice for run_code: ~14 resources plus the firewall's allow list,
+    // one Runtime variable and one SSM read on the Runtime role.
+    codeSandboxOffice: { enabled: true },
     // Documents as text: one Runtime variable, written only while on.
     converseDocumentsAsText: { enabled: true },
     // Project file readiness: one Runtime variable, written only while on.

@@ -54,6 +54,12 @@ export interface InferenceAgentCoreConstructProps {
    */
   skillScriptInterpreterIdParameterArn: string;
   /**
+   * ARN of the SSM parameter naming the code sandbox's LibreOffice mount
+   * (file system and read-only access point). Present only while
+   * `codeSandboxOffice` is on.
+   */
+  officeMountParameterArn?: string;
+  /**
    * AgentCore Browser ARN. Sourced from PlatformStack as a typed
    * typed construct ref (Browser hoisted to Platform).
    */
@@ -245,7 +251,11 @@ export class InferenceAgentCoreConstruct extends Construct {
       sid: 'SkillScriptInterpreterIdRead',
       effect: iam.Effect.ALLOW,
       actions: ['ssm:GetParameter'],
-      resources: [props.skillScriptInterpreterIdParameterArn],
+      resources: [
+        props.skillScriptInterpreterIdParameterArn,
+        // run_code's read-only LibreOffice mount, only while it exists.
+        ...(props.officeMountParameterArn ? [props.officeMountParameterArn] : []),
+      ],
     }));
 
     // Grant Runtime permission to use Browser.
@@ -494,6 +504,8 @@ export class InferenceAgentCoreConstruct extends Construct {
         // the default costs nothing against the V2 payload budget.
         ...(config.wordSkillScripts.enabled ? { WORD_SKILL_SCRIPTS_ENABLED: 'true' } : {}),
         ...(config.codeSandbox.enabled ? { CODE_SANDBOX_ENABLED: 'true' } : {}),
+        // run_code mounts LibreOffice read-only. Written only while ON.
+        ...(config.codeSandboxOffice.enabled ? { CODE_SANDBOX_OFFICE_ENABLED: 'true' } : {}),
         // Documents as text: non-PDF attachments reach a Converse model as
         // rendered text, not document blocks. Written only while ON, so the
         // default costs nothing against the V2 payload budget.

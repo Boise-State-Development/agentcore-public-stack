@@ -25,6 +25,9 @@ One call is a single ``executeCommand``::
 
 from __future__ import annotations
 
+import shlex
+from typing import Optional
+
 # Folder, relative to the sandbox's working directory, holding the programs,
 # the request and the run's output. Hidden so it does not crowd a listing.
 CONTROL_DIR = ".run_code"
@@ -149,11 +152,21 @@ print(len(pairs))
 '''
 
 
-def run_command(timeout_seconds: int) -> str:
-    """The one shell command a call runs (see the module docstring)."""
+def run_command(timeout_seconds: int, office_program_dir: Optional[str] = None) -> str:
+    """The one shell command a call runs (see the module docstring).
+
+    ``office_program_dir`` puts a mounted LibreOffice first on the run's
+    ``PATH`` (``office_mount.py``), with the headless VCL plugin its own
+    ``soffice.py`` wrappers set too.
+    """
+    office = (
+        f'PATH={shlex.quote(office_program_dir)}:"$PATH" SAL_USE_VCLPLUGIN=svp '
+        if office_program_dir
+        else ""
+    )
     return (
         f"python3 {CONTROL_DIR}/snapshot.py; "
-        f"timeout -k 5 {int(timeout_seconds)} python3 {CONTROL_DIR}/entry.py "
+        f"{office}timeout -k 5 {int(timeout_seconds)} python3 {CONTROL_DIR}/entry.py "
         f"> {CONTROL_DIR}/output.txt 2>&1; "
         f"python3 {CONTROL_DIR}/finish.py $?"
     )

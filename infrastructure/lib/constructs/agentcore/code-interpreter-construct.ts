@@ -6,6 +6,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
+import { CodeSandboxDnsFirewall, CodeSandboxOfficeMount } from './code-sandbox-office-construct';
 
 /**
  * SSM parameter (under `/<prefix>/`) holding the interpreter id skill scripts
@@ -45,6 +46,14 @@ export interface AgentCoreCodeInterpreterConstructProps {
  *   - DNS support off. Security groups do not filter the VPC's Amazon DNS
  *     resolver, and with it on, public names resolved from the sandbox, so a
  *     lookup of a name an attacker's server answers could carry data out.
+ *     Wherever the code sandbox is on, a DNS Firewall answering no name also
+ *     sits on the VPC, so it is in place before DNS is ever turned on.
+ *
+ * With the office mount on (`codeSandboxOffice`, spec D9), DNS support and
+ * hostnames are on, because AgentCore mounts EFS by its DNS name; the
+ * firewall then answers that one name and nothing else, and the security
+ * group's only egress is NFS to the file system's mount targets
+ * (code-sandbox-office-construct.ts).
  *
  * Replaces the PUBLIC interpreter (model-written code) and the SANDBOX one
  * (skill scripts). The new interpreter has its own name because both old
@@ -65,11 +74,15 @@ export class AgentCoreCodeInterpreterConstruct extends Construct {
   public readonly skillScriptInterpreterIdParameter: ssm.StringParameter;
   public readonly vpc: ec2.Vpc;
   public readonly securityGroup: ec2.SecurityGroup;
+  public readonly dnsFirewall?: CodeSandboxDnsFirewall;
+  public readonly officeMount?: CodeSandboxOfficeMount;
 
   constructor(scope: Construct, id: string, props: AgentCoreCodeInterpreterConstructProps) {
     super(scope, id);
 
     const { config } = props;
+    // AgentCore mounts EFS by its DNS name, which needs both switches.
+    const officeOn = config.codeSandboxOffice.enabled;
 
     // ── IAM execution role ──
     // IMPORTANT: keep an explicit, stable roleName. This role's ARN is
@@ -101,8 +114,8 @@ export class AgentCoreCodeInterpreterConstruct extends Construct {
       subnetConfiguration: [
         { cidrMask: 26, name: 'Isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       ],
-      enableDnsSupport: false,
-      enableDnsHostnames: false,
+      enableDnsSupport: officeOn,
+      enableDnsHostnames: officeOn,
     });
 
     this.securityGroup = new ec2.SecurityGroup(this, 'SandboxSecurityGroup', {
@@ -126,6 +139,26 @@ export class AgentCoreCodeInterpreterConstruct extends Construct {
       }
     }
 
+    // ── LibreOffice mount and DNS Firewall ──
+    // Built after the retain loop above, so the mount's security group and its
+    // rules are not retained: they hold no AgentCore interfaces, and turning
+    // the mount off should delete them with it.
+    if (officeOn) {
+      this.officeMount = new CodeSandboxOfficeMount(this, 'OfficeMount', {
+        config,
+        vpc: this.vpc,
+        sandboxSecurityGroup: this.securityGroup,
+        runtimeInterpreterRole: this.executionRole,
+      });
+    }
+    if (config.codeSandbox.enabled) {
+      this.dnsFirewall = new CodeSandboxDnsFirewall(this, 'DnsFirewall', {
+        config,
+        vpc: this.vpc,
+        allowedDomains: this.officeMount ? [this.officeMount.dnsName] : [],
+      });
+    }
+
     // ── Code Interpreter Custom resource ──
     this.codeInterpreter = new bedrock.CfnCodeInterpreterCustom(this, 'CodeSandboxInterpreter', {
       name: getResourceName(config, 'code_sandbox').replace(/-/g, '_'),
@@ -143,6 +176,10 @@ export class AgentCoreCodeInterpreterConstruct extends Construct {
     // The service creates its interfaces in these subnets; they must exist
     // first, and must outlive the interpreter on delete.
     this.codeInterpreter.node.addDependency(this.vpc);
+    // On a new stack, no session can start before the firewall is on the VPC.
+    if (this.dnsFirewall) {
+      this.codeInterpreter.node.addDependency(this.dnsFirewall.association);
+    }
 
     this.codeInterpreterArn = this.codeInterpreter.attrCodeInterpreterArn;
     this.codeInterpreterId = this.codeInterpreter.attrCodeInterpreterId;

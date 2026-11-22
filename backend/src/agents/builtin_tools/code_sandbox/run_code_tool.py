@@ -5,7 +5,9 @@ own catalog row (``run_code``, ``enabledByDefault: false``).
 
 **Where it runs.** Only in the stack's Code Interpreter, and only once that
 interpreter is confirmed to be in ``VPC`` network mode (an isolated VPC with no
-route, no security-group egress and DNS off, ``code-interpreter-construct.ts``).
+route, no security-group egress and DNS off, ``code-interpreter-construct.ts``;
+with ``CODE_SANDBOX_OFFICE_ENABLED``, DNS behind a firewall that answers one name
+and NFS egress to a read-only LibreOffice mount, ``office_mount.py``).
 The check is one control-plane read per process; a deployment still on a
 ``PUBLIC`` or ``SANDBOX`` interpreter gets a refusal, never a run. Nothing is
 imported, compiled or executed on the Runtime host.
@@ -43,6 +45,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from strands import tool
 
+from agents.builtin_tools.code_sandbox import office_mount
 from agents.builtin_tools.code_sandbox import sandbox_programs as programs
 from agents.builtin_tools.office._storage import (
     StorageQuotaExceededError,
@@ -196,6 +199,14 @@ class _SandboxState:
     #: upload id -> sandbox path
     inputs: Dict[str, str] = field(default_factory=dict)
     input_bytes: int = 0
+
+    def forget_staging(self) -> None:
+        """Forget what was staged (the session was replaced); the call count stays."""
+        self.programs_written = False
+        self.skills.clear()
+        self.hashes.clear()
+        self.inputs.clear()
+        self.input_bytes = 0
 
 
 def _state_of(entry: Any) -> _SandboxState:
@@ -646,6 +657,33 @@ async def _run(
             await asyncio.to_thread(_audit_code_run, user_id, session_id, code, run.exit_code, duration_ms)
 
 
+async def _start_sandbox(entry: Any, state: _SandboxState, interpreter_id: str) -> bool:
+    """Start the call's sandbox, with LibreOffice mounted when it is on; ``True`` if mounted.
+
+    A session this turn's ``analyze_spreadsheet`` already started without the
+    mount is replaced, since a mount can only be made at session start. A
+    mount that fails is not fatal: the call runs without LibreOffice, and the
+    mount is skipped for a few minutes (``office_mount.mark_failed``).
+    """
+    mount = await asyncio.to_thread(office_mount.session_mount)
+    if not mount:
+        await entry.start(interpreter_id)
+        return bool(getattr(entry, "mounted", False))
+    if getattr(entry, "started", False):
+        if getattr(entry, "mounted", False):
+            return True
+        await entry.reset()
+        state.forget_staging()
+    try:
+        await entry.start(interpreter_id, filesystem_configurations=mount)
+        return True
+    except Exception as exc:  # noqa: BLE001 - run without LibreOffice instead
+        logger.warning("run_code: office mount failed, running without LibreOffice: %s", exc)
+        office_mount.mark_failed()
+        await entry.start(interpreter_id)
+        return False
+
+
 async def _run_in_sandbox(
     entry: Any,
     state: _SandboxState,
@@ -660,7 +698,7 @@ async def _run_in_sandbox(
     file_list: List[str],
     image_list: List[str],
 ) -> Dict[str, Any]:
-    await entry.start(interpreter_id)
+    office = await _start_sandbox(entry, state, interpreter_id)
 
     if not state.programs_written:
         await _write_text(entry, [
@@ -695,7 +733,8 @@ async def _run_in_sandbox(
     await _write_text(entry, [(f"{programs.CONTROL_DIR}/request.json", json.dumps(request))])
 
     run.attempted = True
-    response = await entry.invoke("executeCommand", {"command": programs.run_command(CALL_TIMEOUT_SECONDS)})
+    command = programs.run_command(CALL_TIMEOUT_SECONDS, office_mount.PROGRAM_DIR if office else None)
+    response = await entry.invoke("executeCommand", {"command": command})
     _, stdout, stderr, _ = _stream_result(response)
     result = _parse_result(stdout + "\n" + stderr)
     if result is None:

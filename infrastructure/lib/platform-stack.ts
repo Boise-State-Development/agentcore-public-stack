@@ -271,6 +271,8 @@ export class PlatformStack extends cdk.Stack {
   public readonly agentCoreCodeInterpreterArn: string;
   public readonly agentCoreCodeInterpreterId: string;
   public readonly agentCoreSkillScriptInterpreterIdParameterArn: string;
+  /** The office mount's SSM parameter; only while `codeSandboxOffice` is on. */
+  public readonly agentCoreOfficeMountParameterArn?: string;
   public readonly agentCoreBrowser: bedrock.CfnBrowserCustom;
   public readonly agentCoreBrowserArn: string;
   public readonly browserPolicyBucketName: string;
@@ -809,6 +811,8 @@ export class PlatformStack extends cdk.Stack {
     this.agentCoreCodeInterpreterId = agentCoreCodeInterpreterConstruct.codeInterpreterId;
     this.agentCoreSkillScriptInterpreterIdParameterArn =
       agentCoreCodeInterpreterConstruct.skillScriptInterpreterIdParameter.parameterArn;
+    this.agentCoreOfficeMountParameterArn =
+      agentCoreCodeInterpreterConstruct.officeMount?.mountParameter.parameterArn;
 
     const agentCoreBrowserConstruct = new AgentCoreBrowserConstruct(
       this,
@@ -1040,6 +1044,7 @@ export class PlatformStack extends cdk.Stack {
       codeInterpreterArn: this.agentCoreCodeInterpreterArn,
       codeInterpreterId: this.agentCoreCodeInterpreterId,
       skillScriptInterpreterIdParameterArn: this.agentCoreSkillScriptInterpreterIdParameterArn,
+      officeMountParameterArn: this.agentCoreOfficeMountParameterArn,
       browserArn: this.agentCoreBrowserArn,
       browserId: this.agentCoreBrowserId,
       browserPolicyBucketName: this.browserPolicyBucketName,
