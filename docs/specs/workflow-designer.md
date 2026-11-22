@@ -1280,8 +1280,8 @@ source's prefix is never touched: a prompt step's answer reaches it as a deliver
 - **The sidebar** counts only steps with a conversation, as `runSteps` does, so a run whose summary is a prompt
   step reads "2 Agents · 2 of 2 finished" there while the thread's row counts every step.
 - **Names.** Several prompt steps can share a model, so a prompt step is called by its step's name wherever it is
-  listed ("Fiscal outsider · Prompt · Haiku 5.5"). The sheet's row is labelled "Prompt · *model*" with the step
-  named on its second line. The designer's Step tab gives a prompt step a Name field (the step name, by the
+  listed ("Fiscal outsider · Prompt · Haiku 5.5"). The sheet's row leads with the step's name, with
+  "Prompt · *model* · reads …" on its second line, so its Edit and Remove are told apart by step. The designer's Step tab gives a prompt step a Name field (the step name, by the
   server's naming rule, with every read of it following a rename).
 - **The designer.** Add step adds a step as before, and the Step tab opens on a **Kind** choice (Agent step or
   Prompt step) behind `features.promptSteps`. A menu on every Add step button was the other option; the choice in
@@ -1297,3 +1297,9 @@ source's prefix is never touched: a prompt step's answer reaches it as a deliver
   Bedrock, `SKIP_AUTH`): a two-step prompt workflow designed, saved, started from a conversation, run with the
   second step on a later invocation once the first settled, its answers opened, and the result collected by
   itself; both themes and 375 px.
+- **Fixed after the dev check (PR-D.6c follow-ups).** A sent message's run result names a prompt part by its step
+  and model and the run as "*N* steps": `groupRunResults` matches a prompt step's block on its whole
+  "*model* · *step*" label (`prompt_part_names`), never on the model, which several steps can share. The sheet's
+  rows lead with the step (above). A stopped prompt step's line in the run's row wraps, so its reason is readable on
+  a phone. The graph's "*N* at once" counts only Agent steps, and the sheet's file hint talks about steps once a
+  prompt step is in the run.

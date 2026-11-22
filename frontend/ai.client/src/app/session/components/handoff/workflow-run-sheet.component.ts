@@ -149,6 +149,9 @@ interface StepRow {
                     <div class="min-w-0 flex-1">
                       <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ row.label }}</p>
                       @if (row.unavailable) {
+                        @if (row.prompt) {
+                          <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">{{ row.modelName }}</p>
+                        }
                         <p class="text-xs/5 text-state-danger-700 dark:text-state-danger-300">{{ row.unavailableCopy }}</p>
                       } @else {
                         <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">
@@ -373,7 +376,13 @@ interface StepRow {
             <legend class="text-xs font-medium text-gray-700 dark:text-gray-300">Files from this conversation</legend>
             <p [id]="filesHintId" class="text-xs text-gray-600 dark:text-gray-400">
               @if (fileRule() === 'one') {
-                This workflow takes exactly one file. Tick the one every Agent should open.
+                @if (hasPromptSteps()) {
+                  This workflow takes exactly one file. Tick the one its steps should read.
+                } @else {
+                  This workflow takes exactly one file. Tick the one every Agent should open.
+                }
+              } @else if (hasPromptSteps()) {
+                Every step that reads the files gets the ones you tick. Up to {{ maxFiles }}.
               } @else {
                 Every Agent can open the ones you tick. Up to {{ maxFiles }}.
               }
@@ -552,11 +561,14 @@ export class WorkflowRunSheetComponent {
       const modelName = (prompt ? step.agentName : '') || model?.modelName || step.modelId || 'Your selected model';
       return {
         step,
-        // A prompt step's model is named even when it can't run: the file names it to everyone.
-        label: prompt ? promptWorkerLabel(modelName) : unavailable ? `Unavailable Agent (${saved?.name})` : step.agentName,
-        // Several prompt steps can share a model, so the second line names the step.
+        // Several prompt steps can share a model, so a prompt step is called by its own name, as
+        // the run's row and its result card call it, and its buttons are told apart by it.
+        label: prompt ? promptStepLabel(saved?.name, modelName) : unavailable ? `Unavailable Agent (${saved?.name})` : step.agentName,
+        // The model is named even when it can't run: the file names it to everyone.
         modelName: prompt
-          ? [stepNameLabel(saved?.name), promptReadsLine(saved?.readsFiles ?? true, saved?.readsSteps.length ?? 0)].filter(Boolean).join(' · ')
+          ? [promptWorkerLabel(modelName), promptReadsLine(saved?.readsFiles ?? true, saved?.readsSteps.length ?? 0)]
+              .filter(Boolean)
+              .join(' · ')
           : modelName,
         emoji: agent?.emoji,
         iconUrl: agent?.iconUrl,
@@ -820,16 +832,25 @@ export function changedLine(publishedVersion: number | undefined, runsDraft: boo
 
 /** A step as the sheet names it when another's Remove takes it too. */
 function readerLabel(step: RunReviewStep): string {
-  if (step.kind === 'prompt') return `Prompt · ${step.agentName || step.workflowStep?.name || 'a model'}`;
+  if (step.kind === 'prompt') return promptStepLabel(step.workflowStep?.name, step.agentName);
   return step.agentName || step.workflowStep?.name || 'a step';
 }
 
-/** A prompt step's second line: what its one call is sent, besides its instruction. */
+/** A prompt step on the sheet: its own name, or "Prompt · {model}" when the file kept none. */
+export function promptStepLabel(stepName: string | undefined, modelName: string | undefined): string {
+  return stepNameLabel(stepName) || promptWorkerLabel(modelName);
+}
+
+/**
+ * What a prompt step's one call is sent besides its instruction, for its second line ("reads the
+ * files and 2 results"); empty when it reads neither. The sheet's subtitle already says each prompt
+ * step is one model call, so the line spends its width on the model and what it reads.
+ */
 export function promptReadsLine(readsFiles: boolean, results: number): string {
   const parts: string[] = [];
   if (readsFiles) parts.push('the files');
   if (results) parts.push(`${results} ${results === 1 ? 'result' : 'results'}`);
-  return parts.length ? `One model call · reads ${parts.join(' and ')}` : 'One model call';
+  return parts.length ? `reads ${parts.join(' and ')}` : '';
 }
 
 /** "A", "A and B", "A, B and C". */

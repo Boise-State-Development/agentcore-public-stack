@@ -231,7 +231,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
           @for (stage of stages(); track $index; let s = $index) {
             <section class="relative md:w-60" role="group" [attr.aria-labelledby]="ids.stage + s">
               <h2 [id]="ids.stage + s" class="mb-1.5 text-xs/5 font-medium text-gray-600 dark:text-gray-300">
-                Stage {{ s + 1 }}@if (stage.length > concurrency) { · {{ concurrency }} at once }
+                Stage {{ s + 1 }}@if (agentStepCount(stage) > concurrency) { · {{ concurrency }} at once }
               </h2>
               <ul role="list" class="flex flex-col gap-2.5">
                 @for (card of stage; track card.key) {
@@ -425,6 +425,15 @@ export class WorkflowGraphComponent {
   readonly stepCount = input.required<number>();
   readonly maxSteps = input.required<number>();
   readonly concurrency = 4;
+
+  /**
+   * The cards that take one of the run's `concurrency` slots: Agent steps. A prompt step takes
+   * none (§21.3): a run's ready prompt steps go together on one model invocation, so a stage of
+   * five prompt steps does not run "4 at once".
+   */
+  protected agentStepCount(stage: readonly GraphStepCard[]): number {
+    return stage.filter((card) => card.kind !== 'prompt').length;
+  }
   /** `run` draws a run's status on the graph (§7 D4); `design` is the editable canvas. */
   readonly mode = input<GraphMode>('design');
   /** Run mode: each step card's status, by step key. */

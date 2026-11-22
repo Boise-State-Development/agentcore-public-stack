@@ -51,6 +51,8 @@ interface StepLineView {
   worker?: string;
   /** A done prompt step's answer, as stored: it has no conversation to open instead. */
   answer?: string;
+  /** Wrap the line rather than truncate it: a stopped prompt step's reason must stay readable. */
+  wrap?: boolean;
   state: RunStepState;
   statusLine: string;
   /** The step's conversation, once it has one. A queued or unstarted step links nowhere. */
@@ -153,7 +155,13 @@ const BAR_FILL: Record<RunStepState, string> = {
             } @else {
               <div class="flex items-center gap-3 px-2 py-1" [attr.data-handoff-id]="line.handoffId">
                 <ng-container *ngTemplateOutlet="mark; context: { $implicit: line.state }" />
-                <span class="min-w-0 flex-1 truncate text-xs/5 text-gray-600 dark:text-gray-400">
+                <!-- A stopped prompt step's line says why, which is the one thing to read on it: it
+                     wraps rather than cut the reason off on a phone. -->
+                <span
+                  class="min-w-0 flex-1 text-xs/5 text-gray-600 dark:text-gray-400"
+                  [class.truncate]="!line.wrap"
+                  [class.break-words]="line.wrap"
+                >
                   <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ line.agentName }}</span>
                   @if (line.worker) { · {{ line.worker }} }
                   · {{ line.statusLine }}
@@ -534,6 +542,7 @@ export class WorkflowRunRowComponent {
       agentName: name,
       worker: name === worker ? undefined : worker,
       answer,
+      wrap: line.state === 'stopped',
       state: line.state,
       statusLine,
       link: null,
