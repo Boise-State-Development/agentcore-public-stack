@@ -21,7 +21,19 @@ from typing import Iterable, List, Optional, Protocol, Tuple
 from apis.shared.auth.models import User
 from apis.shared.blocking_io import run_blocking
 from apis.shared.extraction.field_sets import validate_field_set_upload
-from apis.shared.workflows.format import validate_workflow_upload
+from apis.shared.workflows.field_set_refs import (
+    field_sets_in_files,
+    parsed_field_sets,
+    read_skill_field_sets,
+    unreadable_sets,
+)
+from apis.shared.workflows.format import (
+    Workflow,
+    WorkflowError,
+    check_field_set_refs,
+    checklist_field_set_names,
+    validate_workflow_upload,
+)
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.bundle import generate_skill_md
 from apis.shared.skills.models import SkillDefinition, SkillResourceRef
@@ -166,7 +178,10 @@ class SkillBundleFiles:
             # A saved workflow (workflow-designer §9.1) is checked beside it, by
             # the same rule: whatever the flags say, at the top of `references/`.
             # WorkflowError is a ValueError too.
-            validate_workflow_upload(filename, content)
+            workflow = validate_workflow_upload(filename, content)
+            if workflow is not None:
+                # A checklist step's sets must be this skill's own (§22.3).
+                await self._check_checklist_sets(workflow, skill.resources)
 
         existing = list(skill.resources)
         # Adding a NEW filename must respect the per-skill cap; replacing an
@@ -237,6 +252,8 @@ class SkillBundleFiles:
         Raises:
             ValueError: A file breaks a rule, or the manifest would exceed the cap.
         """
+        files = list(files)
+        imported_sets = field_sets_in_files(files)
         current = {r.path: r for r in existing}
         refs: List[SkillResourceRef] = []
         for f in files:
@@ -253,7 +270,9 @@ class SkillBundleFiles:
                 )
             if f.kind == "reference" and "/" not in path:
                 validate_field_set_upload(f.filename, f.content)
-                validate_workflow_upload(f.filename, f.content)
+                # An import replaces the skill's files, so a checklist step's sets
+                # are checked against the import's own (§22.3).
+                validate_workflow_upload(f.filename, f.content, field_sets=imported_sets)
 
             key = resource_key(skill_id, f.kind, path)
             ref = current.get(path)
@@ -295,6 +314,25 @@ class SkillBundleFiles:
             )
         refs.sort(key=manifest_sort_key)
         return refs
+
+    async def _check_checklist_sets(self, workflow: Workflow, resources: List[SkillResourceRef]) -> None:
+        """Refuse a workflow whose checklist step names a set this skill can't run (§22.3).
+
+        Reads only the sets a checklist step names (one GET each, together); a workflow
+        with none reads nothing. A set the skill has but that can't be read now is
+        refused too, rather than stored unchecked.
+        """
+        names = checklist_field_set_names(workflow)
+        if not names:
+            return
+        lookups = await read_skill_field_sets(resources, names, read=self.resource_store.get)
+        unreadable = unreadable_sets(lookups)
+        if unreadable:
+            raise WorkflowError(
+                f"workflow '{workflow.name}': the field set '{unreadable[0]}' couldn't be read "
+                "to check it. Try again"
+            )
+        check_field_set_refs(workflow, parsed_field_sets(lookups))
 
     async def gc_orphaned(
         self,

@@ -538,3 +538,37 @@ class TestWorkflowSkips:
         b = bundle_of({"SKILL.md": SKILL_MD, "references/workflow.review.md": ok})
         assert "references/workflow.review.md" not in skipped(b)
         assert [f.filename for f in b.files] == ["workflow.review.md"]
+
+    _CHECKLIST = (
+        "---\ntitle: T\n---\n\n| step | kind | worker | reads |\n|---|---|---|---|\n"
+        "| a | checklist | us.anthropic.claude-haiku-5-5-v1:0 | files |\n\n## Step: a\n\nField sets: budget\n"
+    )
+    _BUDGET = (
+        "---\ntitle: Budget\nversion: 1\n---\n\n| name | title | type | find | enum | optional |\n"
+        "|---|---|---|---|---|---|\n| cap | Cap | currency | the cap | | |\n"
+    )
+
+    def test_a_checklist_steps_set_may_come_later_in_the_archive(self):
+        """workflow-designer §22.3: the sets are the import's own, checked once every file is read."""
+        b = bundle_of(
+            {
+                "SKILL.md": SKILL_MD,
+                "references/workflow.review.md": self._CHECKLIST,
+                "references/field-set.budget.md": self._BUDGET,
+            }
+        )
+        assert "references/workflow.review.md" not in skipped(b)
+        assert sorted(f.filename for f in b.files) == ["field-set.budget.md", "workflow.review.md"]
+
+    def test_a_checklist_step_whose_set_is_missing_is_skipped(self):
+        b = bundle_of({"SKILL.md": SKILL_MD, "references/workflow.review.md": self._CHECKLIST})
+        reason = skipped(b)["references/workflow.review.md"]
+        assert reason.startswith("invalid workflow:")
+        assert "the field set 'budget' is not in this skill" in reason
+
+    def test_a_checklist_steps_set_with_a_list_field_is_skipped(self):
+        listed = self._BUDGET.replace("| cap | Cap | currency |", "| cap | Cap | list |")
+        b = bundle_of(
+            {"SKILL.md": SKILL_MD, "references/workflow.review.md": self._CHECKLIST, "references/field-set.budget.md": listed}
+        )
+        assert "has a list field" in skipped(b)["references/workflow.review.md"]

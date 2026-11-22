@@ -27,6 +27,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from apis.shared.extraction.field_sets import validate_field_set_upload
+from apis.shared.workflows.field_set_refs import field_sets_in_files
 from apis.shared.workflows.format import validate_workflow_upload
 from apis.shared.skills.bundle import KIND_DIRS
 from apis.shared.skills.bundle_files import (
@@ -512,7 +513,26 @@ def _name_and_read(
                 resource_path=resource_path,
             )
         )
-    return files
+    return _with_checked_checklists(files, skipped)
+
+
+def _with_checked_checklists(files: List[BundleFile], skipped: List[SkippedFile]) -> List[BundleFile]:
+    """Skip a workflow whose checklist step names a field set the import doesn't hold (§22.3).
+
+    An import replaces the skill's files, so the sets a checklist step may run are the import's
+    own. Checked once every file is read, since a workflow may come before its sets in the archive.
+    """
+    sets = field_sets_in_files(files)
+    kept: List[BundleFile] = []
+    for f in files:
+        if f.kind == "reference" and "/" not in (f.resource_path or f.filename):
+            try:
+                validate_workflow_upload(f.filename, f.content, field_sets=sets)
+            except ValueError as e:
+                skipped.append(SkippedFile(f.path, f"invalid workflow: {e}", len(f.content)))
+                continue
+        kept.append(f)
+    return kept
 
 
 def _flat_name(candidate: str) -> Optional[str]:

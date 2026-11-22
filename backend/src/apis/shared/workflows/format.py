@@ -20,11 +20,12 @@ THE GRAMMAR
 
     Prose here is kept, and nothing reads it.
 
-    | step       | kind   | worker                | reads            |
-    |------------|--------|-----------------------|------------------|
-    | generalist | agent  | AST-123 @ 5           | request, files   |
-    | fiscal     | agent  | AST-456               | request, files   |
-    | summary    | prompt | us.anthropic.claude-… | files, fiscal    |
+    | step       | kind      | worker                | reads            |
+    |------------|-----------|-----------------------|------------------|
+    | generalist | agent     | AST-123 @ 5           | request, files   |
+    | fiscal     | agent     | AST-456               | request, files   |
+    | summary    | prompt    | us.anthropic.claude-… | files, fiscal    |
+    | audit      | checklist | us.anthropic.claude-… | files            |
 
     ## Request
 
@@ -33,6 +34,12 @@ THE GRAMMAR
     ## Step: fiscal
 
     This step's own request, when it is not the shared one.
+
+    ## Step: audit
+
+    Field sets: budget-caps, compliance
+
+    Guidance appended to every one of the step's calls (optional).
 
     ## Result
 
@@ -43,14 +50,17 @@ THE GRAMMAR
 - **The table** is the steps, in authored order. It is found by its header: a
   row naming the ``step``, ``kind`` and ``worker`` columns. A table of anything
   else before it is prose. Any other column is kept, cell by cell, and nothing
-  reads it. ``kind`` is ``agent`` or ``prompt``; ``checklist`` is reserved and
-  refused until it ships. An agent's ``worker`` is its id, and ``@ <n>`` records
-  the published version it had when the step was added or last reviewed (§10,
-  D6). A prompt step (§21) is one model call with no Agent: its ``worker`` is a
-  model id, with no version, and its ``## Step:`` section is the instruction.
-  The parser accepts it whatever the flags say; run create is what refuses one
-  while ``PROMPT_STEPS_ENABLED`` is off. Coordinates are never stored: the
-  canvas arranges itself.
+  reads it. ``kind`` is ``agent``, ``prompt`` or ``checklist``. An agent's
+  ``worker`` is its id, and ``@ <n>`` records the published version it had when
+  the step was added or last reviewed (§10, D6). A prompt step (§21) is one
+  model call with no Agent: its ``worker`` is a model id, with no version, and
+  its ``## Step:`` section is the instruction. A checklist step (§22) runs named
+  field sets over the run's files, one model call per set: its ``worker`` is a
+  model id too, and its ``## Step:`` section opens with a ``Field sets:`` line
+  naming them (see below). The parser accepts both whatever the flags say; run
+  create is what refuses one while ``PROMPT_STEPS_ENABLED`` (or
+  ``CHECKLIST_STEPS_ENABLED``) is off. Coordinates are never stored: the canvas
+  arranges itself.
 - **``reads`` is the whole graph:** ``request``, ``files``, and the names of other
   steps, comma-separated. It is a set, so it is held and written in one order:
   ``request``, ``files``, then steps in table order.
@@ -60,20 +70,35 @@ THE GRAMMAR
   the table and before the first section is kept as prose.
 - **``## Result``** opens with an optional ``Reads:`` line naming steps; the rest is
   the instruction. Without one, the result takes every step.
+- **A checklist step's ``## Step:`` section** is required and opens with a
+  ``Field sets:`` line: one or more field-set names, comma-separated, in the
+  order the step runs them. The rest of the section is guidance, appended to
+  every one of the step's calls. A checklist step reads ``files``, and may read
+  ``request`` and earlier steps too.
 
 THE ENVELOPE
 ------------
 The parser refuses, with a message naming the problem: more than
 :data:`MAX_STEPS` steps (``WORKFLOW_RUN_MAX_STEPS``), a step named twice, a read
-of a step that does not exist, a step reading itself, and any cycle. A file that
-breaks one is refused on every skill-file write, whatever the flags say
-(:func:`validate_workflow_upload`), so a broken file cannot collect quietly.
+of a step that does not exist, a step reading itself, and any cycle. A checklist
+step must name between one and :data:`MAX_CHECKLIST_FIELD_SETS` field sets, none
+twice, and read ``files``. A file that breaks one is refused on every skill-file
+write, whatever the flags say (:func:`validate_workflow_upload`), so a broken
+file cannot collect quietly.
+
+What a checklist step's sets *are* is a fact about the skill, not the file, so
+it is checked by :func:`check_field_set_refs` against the skill's own field sets,
+which the write paths hand it: each set must be
+``references/field-set.<name>.md`` in the same skill, and none may hold a
+``list`` field (§22.3: ``record_checklist``'s ``value`` is a string or null).
 
 PURITY
 ------
 Standard library only, like ``extraction.field_sets``: unit-testable without a
 fixture and importable from app-api, the Runtime and a Lambda alike. Nothing
-here reads DynamoDB or S3, and nothing here is on a turn's path.
+here reads DynamoDB or S3, and nothing here is on a turn's path. Field sets are
+read duck-typed (``.fields``, each with ``.name`` and ``.type``) rather than
+imported, because importing ``apis.shared.extraction`` loads its Pydantic layer.
 """
 
 from __future__ import annotations
@@ -82,7 +107,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field as dataclass_field, replace
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -105,10 +130,20 @@ KIND_AGENT = "agent"
 KIND_PROMPT = "prompt"
 KIND_CHECKLIST = "checklist"
 #: The kinds a step can be today, in the order a message lists them.
-STEP_KINDS = (KIND_AGENT, KIND_PROMPT)
-#: Kinds the format will carry once they ship (D.7). Named now so a file
-#: holding one is refused with a sentence, not as an unknown word.
-RESERVED_KINDS = frozenset({KIND_CHECKLIST})
+STEP_KINDS = (KIND_AGENT, KIND_PROMPT, KIND_CHECKLIST)
+#: Steps that are model calls with no Agent: their ``worker`` is a model id.
+MODEL_STEP_KINDS = frozenset({KIND_PROMPT, KIND_CHECKLIST})
+#: Kinds the format will carry once they ship. Named here so a file holding one
+#: is refused with a sentence, not as an unknown word. None are pending today.
+RESERVED_KINDS: frozenset = frozenset()
+
+#: The most field sets one checklist step runs (§22.3). The compliance audit is
+#: 15 sets and the envelope is 8 steps, so several sets share one step.
+MAX_CHECKLIST_FIELD_SETS = 16
+#: The field type a checklist step can't carry yet (§22.3): ``record_checklist``'s
+#: ``value`` is a string or null. Equal to ``extraction.field_sets.TYPE_LIST``
+#: (pinned by a test).
+CHECKLIST_REFUSED_FIELD_TYPE = "list"
 
 READ_REQUEST = "request"
 READ_FILES = "files"
@@ -131,6 +166,10 @@ _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 #: an ARN. Never whitespace, ``|`` (it ends a cell) or ``@`` (it starts a version).
 _MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 _WORKER_RE = re.compile(r"^(?P<id>[^@\s]+)\s*(?:@\s*(?P<version>\S+))?$")
+#: A field set's name, as ``extraction.field_sets`` reads one from
+#: ``field-set.<name>.md`` (pinned by a test).
+_FIELD_SET_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_FIELD_SETS_LINE_RE = re.compile(r"^field[ \t]+sets:(?P<rest>.*)$", re.IGNORECASE)
 _SECTION_RE = re.compile(
     r"^##[ \t]+(?:(?P<request>request)|(?P<result>result)|step:[ \t]*(?P<step>\S*))[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
@@ -155,11 +194,13 @@ class WorkflowError(ValueError):
 
 @dataclass(frozen=True)
 class WorkflowStep:
-    """One step: an Agent (``kind="agent"``) or one model call (``kind="prompt"``).
+    """One step: an Agent (``kind="agent"``), one model call (``kind="prompt"``),
+    or one model call per field set (``kind="checklist"``).
 
-    A prompt step has no Agent, so its ``agent_id`` is ``""`` and its
-    ``agent_version`` ``None``; its worker is ``model_id``. An Agent step's
-    ``model_id`` is ``None``: its model is the Agent's own.
+    A prompt or checklist step has no Agent, so its ``agent_id`` is ``""`` and
+    its ``agent_version`` ``None``; its worker is ``model_id``. An Agent step's
+    ``model_id`` is ``None``: its model is the Agent's own. A checklist step's
+    ``request`` is its guidance, and ``field_sets`` the sets it runs.
     """
 
     #: ``snake_case``, unique in the workflow. What other steps read it by.
@@ -173,17 +214,28 @@ class WorkflowStep:
     #: This step's own request; ``None`` means the shared one.
     request: Optional[str] = None
     kind: str = KIND_AGENT
-    #: A prompt step's model id; ``None`` for an Agent step.
+    #: A prompt or checklist step's model id; ``None`` for an Agent step.
     model_id: Optional[str] = None
+    #: A checklist step's field-set names, in the order it runs them; ``()`` otherwise.
+    field_sets: Tuple[str, ...] = ()
 
     @property
     def is_prompt(self) -> bool:
         return self.kind == KIND_PROMPT
 
     @property
+    def is_checklist(self) -> bool:
+        return self.kind == KIND_CHECKLIST
+
+    @property
+    def is_model_step(self) -> bool:
+        """A prompt or checklist step: model calls with no Agent, whose worker is a model id."""
+        return self.kind in MODEL_STEP_KINDS
+
+    @property
     def worker(self) -> str:
-        """What the ``worker`` cell names: the Agent's id, or a prompt step's model id."""
-        return (self.model_id or "") if self.is_prompt else self.agent_id
+        """What the ``worker`` cell names: the Agent's id, or a model step's model id."""
+        return (self.model_id or "") if self.is_model_step else self.agent_id
 
 
 @dataclass(frozen=True)
@@ -378,8 +430,8 @@ def check_envelope(workflow: Workflow) -> None:
                 "its own name, because that is what other steps read it by"
             )
         names[step.name] = index
-        if step.is_prompt:
-            _check_prompt_worker(step, name=name)
+        if step.is_model_step:
+            _check_model_worker(step, name=name)
         elif step.model_id is not None:
             raise WorkflowError(
                 f"workflow '{name}', step '{step.name}': an Agent step runs on its Agent's "
@@ -399,6 +451,7 @@ def check_envelope(workflow: Workflow) -> None:
                 "positive whole number"
             )
         _check_request(step.request, what=f"step '{step.name}''s request", name=name)
+        _check_field_set_names(step, name=name)
 
     for step in workflow.steps:
         if len(set(step.reads)) != len(step.reads):
@@ -417,6 +470,11 @@ def check_envelope(workflow: Workflow) -> None:
                     f"workflow '{name}', step '{step.name}' reads '{read}', which is not "
                     "a step in this workflow"
                 )
+        if step.is_checklist and READ_FILES not in step.reads:
+            raise WorkflowError(
+                f"workflow '{name}', step '{step.name}': a checklist step runs its field "
+                "sets over the run's files, so it must read 'files'"
+            )
 
     _check_acyclic(workflow)
 
@@ -441,26 +499,118 @@ def _check_kind(kind: str, *, step: str, name: str) -> None:
     if kind in RESERVED_KINDS:
         raise WorkflowError(
             f"workflow '{name}', step '{step}': '{kind}' steps are not available "
-            "yet. Only 'agent' and 'prompt' steps can be saved today"
+            f"yet. Only {_kinds_listed()} steps can be saved today"
         )
     if kind not in STEP_KINDS:
         raise WorkflowError(
             f"workflow '{name}', step '{step}': unknown kind {kind!r}. "
-            "Expected 'agent' or 'prompt'"
+            f"Expected {_kinds_listed('or')}"
         )
 
 
-def _check_prompt_worker(step: WorkflowStep, *, name: str) -> None:
-    """A prompt step names a model and nothing of an Agent's."""
+def _kinds_listed(conjunction: str = "and") -> str:
+    quoted = [f"'{kind}'" for kind in STEP_KINDS]
+    return ", ".join(quoted[:-1]) + f" {conjunction} {quoted[-1]}" if len(quoted) > 1 else quoted[0]
+
+
+def _check_model_worker(step: WorkflowStep, *, name: str) -> None:
+    """A prompt or checklist step names a model and nothing of an Agent's."""
     if step.agent_id or step.agent_version is not None:
         raise WorkflowError(
-            f"workflow '{name}', step '{step.name}': a prompt step has no Agent, so it "
-            "names no Agent or Agent version"
+            f"workflow '{name}', step '{step.name}': a {step.kind} step has no Agent, so "
+            "it names no Agent or Agent version"
         )
     if not _MODEL_ID_RE.match(step.model_id or ""):
         raise WorkflowError(
             f"workflow '{name}', step '{step.name}': {step.model_id!r} is not a model id"
         )
+
+
+def _check_field_set_names(step: WorkflowStep, *, name: str) -> None:
+    """A checklist step names 1–16 field sets, each once; no other kind names any."""
+    if not step.is_checklist:
+        if step.field_sets:
+            raise WorkflowError(
+                f"workflow '{name}', step '{step.name}': only a checklist step runs field sets"
+            )
+        return
+    sets = step.field_sets
+    if not sets:
+        raise WorkflowError(
+            f"workflow '{name}', step '{step.name}': a checklist step names at least one "
+            "field set, on a 'Field sets:' line opening its '## Step:' section"
+        )
+    if len(sets) > MAX_CHECKLIST_FIELD_SETS:
+        raise WorkflowError(
+            f"workflow '{name}', step '{step.name}' names {len(sets)} field sets; a checklist "
+            f"step runs at most {MAX_CHECKLIST_FIELD_SETS}. Split them across two steps"
+        )
+    seen = set()
+    for set_name in sets:
+        if not _FIELD_SET_NAME_RE.match(set_name or ""):
+            raise WorkflowError(
+                f"workflow '{name}', step '{step.name}': {set_name!r} is not a field-set name. "
+                "A field set is named by its file, 'field-set.<name>.md': lowercase words "
+                "joined by hyphens"
+            )
+        if set_name in seen:
+            raise WorkflowError(
+                f"workflow '{name}', step '{step.name}' names the field set '{set_name}' twice"
+            )
+        seen.add(set_name)
+
+
+def checklist_field_set_names(workflow: Workflow) -> Tuple[str, ...]:
+    """Every field set the workflow's checklist steps run, once each, in first-named order."""
+    names: List[str] = []
+    for step in workflow.steps:
+        for set_name in step.field_sets if step.is_checklist else ():
+            if set_name not in names:
+                names.append(set_name)
+    return tuple(names)
+
+
+def field_set_ref_problem(set_name: str, field_set: Any) -> Optional[str]:
+    """Why a checklist step can't run ``field_set``, or ``None`` when it can.
+
+    ``field_set`` is the skill's parsed set of that name (anything with ``.fields``,
+    each with ``.name`` and ``.type``), or ``None`` when the skill has none. The
+    sentence names the set and, for a ``list`` field, the field.
+    """
+    if field_set is None:
+        return (
+            f"the field set '{set_name}' is not in this skill. Add "
+            f"'references/field-set.{set_name}.md' to the skill, or name another set"
+        )
+    for field in getattr(field_set, "fields", ()) or ():
+        if getattr(field, "type", None) == CHECKLIST_REFUSED_FIELD_TYPE:
+            return (
+                f"the field set '{set_name}' has a list field, '{getattr(field, 'name', '')}', "
+                "which a checklist step can't fill yet. Change its type, or run the set "
+                "another way"
+            )
+    return None
+
+
+def check_field_set_refs(workflow: Workflow, field_sets: Mapping[str, Any]) -> None:
+    """Refuse a checklist step whose field set the skill doesn't have, or can't run (§22.3).
+
+    ``field_sets`` maps a set name to the skill's parsed set (anything with
+    ``.fields``, each with ``.name`` and ``.type``); a name it lacks, or maps to
+    ``None``, is a set the skill doesn't have. Every skill-file write path calls
+    this on a workflow with a checklist step, whatever the flags say; run create
+    re-checks at the sheet, because a set can change after the workflow is saved.
+
+    Raises:
+        WorkflowError: naming the step and the set.
+    """
+    for step in workflow.steps:
+        if not step.is_checklist:
+            continue
+        for set_name in step.field_sets:
+            problem = field_set_ref_problem(set_name, field_sets.get(set_name))
+            if problem is not None:
+                raise WorkflowError(f"workflow '{workflow.name}', step '{step.name}': {problem}")
 
 
 def canonical_reads(reads: Sequence[str], steps: Sequence[WorkflowStep]) -> Tuple[str, ...]:
@@ -615,6 +765,25 @@ def _parse_reads(raw: str) -> Tuple[str, ...]:
     return tuple(part.strip().strip("`") for part in raw.split(",") if part.strip())
 
 
+def _split_field_sets(
+    section: Optional[str], *, step: str, name: str
+) -> Tuple[Tuple[str, ...], Optional[str]]:
+    """``(field_sets, guidance)`` from a checklist step's ``## Step:`` section.
+
+    The section's first non-blank line is ``Field sets: a, b``; the rest is guidance.
+    """
+    lines = (section or "").splitlines()
+    first = next((i for i, line in enumerate(lines) if line.strip()), None)
+    match = _FIELD_SETS_LINE_RE.match(lines[first].strip()) if first is not None else None
+    if match is None:
+        raise WorkflowError(
+            f"workflow '{name}', step '{step}': a checklist step's '## Step: {step}' section "
+            "opens with a 'Field sets:' line naming the field sets it runs"
+        )
+    assert first is not None
+    return _parse_reads(match.group("rest")), _prose(lines[first + 1 :])
+
+
 def parse_workflow(text: str, *, name: str) -> Workflow:
     """Parse one workflow file. ``name`` comes from its filename."""
     return read_workflow_file(text, name=name)[0]
@@ -684,15 +853,24 @@ def read_workflow_file(text: str, *, name: str) -> Tuple[Workflow, WorkflowLayou
         worker = (row.get("worker") or "").strip().strip("`")
         reads = _parse_reads(row.get("reads", ""))
         request = step_sections.get(step_name) or None
-        if kind == KIND_PROMPT:
+        if kind in MODEL_STEP_KINDS:
             if not worker or not _MODEL_ID_RE.match(worker):
                 raise WorkflowError(
-                    f"workflow '{name}', step '{step_name}': a prompt step's worker must be "
+                    f"workflow '{name}', step '{step_name}': a {kind} step's worker must be "
                     "a model id, with no '@ <version>'"
                 )
+            field_sets: Tuple[str, ...] = ()
+            if kind == KIND_CHECKLIST:
+                field_sets, request = _split_field_sets(request, step=step_name, name=name)
             raw_steps.append(
                 WorkflowStep(
-                    name=step_name, agent_id="", reads=reads, request=request, kind=kind, model_id=worker
+                    name=step_name,
+                    agent_id="",
+                    reads=reads,
+                    request=request,
+                    kind=kind,
+                    model_id=worker,
+                    field_sets=field_sets,
                 )
             )
             continue
@@ -730,6 +908,7 @@ def read_workflow_file(text: str, *, name: str) -> Tuple[Workflow, WorkflowLayou
             request=s.request,
             kind=s.kind,
             model_id=s.model_id,
+            field_sets=s.field_sets,
         )
         for s in raw_steps
     )
@@ -889,6 +1068,12 @@ def serialize_workflow(workflow: Workflow, *, layout: Optional[WorkflowLayout] =
     if workflow.request and workflow.request.strip():
         lines.extend(["", "## Request", "", _section_body(workflow.request, what="the request", name=name)])
     for step in workflow.steps:
+        if step.is_checklist:
+            # Always written: the section is where a checklist step's sets are named.
+            lines.extend(["", f"## Step: {step.name}", "", f"Field sets: {', '.join(step.field_sets)}"])
+            if step.request and step.request.strip():
+                lines.extend(["", _section_body(step.request, what=f"step '{step.name}''s guidance", name=name)])
+            continue
         if step.request and step.request.strip():
             body = _section_body(step.request, what=f"step '{step.name}''s request", name=name)
             lines.extend(["", f"## Step: {step.name}", "", body])
@@ -954,6 +1139,7 @@ def normalized(workflow: Workflow) -> Workflow:
                 request=text(s.request),
                 kind=s.kind,
                 model_id=s.model_id,
+                field_sets=tuple(s.field_sets),
             )
             for s in workflow.steps
         ),
@@ -1003,8 +1189,11 @@ def workflow_fingerprint(workflow: Workflow) -> str:
         "files": w.files,
         "request": w.request,
         "steps": [
-            # The worker cell's value, so an Agent-only file's digest is what it always was.
-            [s.name, s.kind, s.worker, s.agent_version, list(s.reads), s.request] for s in w.steps
+            # The worker cell's value, so an Agent-only file's digest is what it always was, and
+            # the field sets only where a step runs some, so no other step's digest moves.
+            [s.name, s.kind, s.worker, s.agent_version, list(s.reads), s.request]
+            + ([list(s.field_sets)] if s.field_sets else [])
+            for s in w.steps
         ],
         "result": [w.result.mode, list(w.result.reads) if w.result.reads is not None else None, w.result.instruction],
     }
@@ -1012,7 +1201,9 @@ def workflow_fingerprint(workflow: Workflow) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
 
 
-def validate_workflow_upload(filename: str, content: bytes) -> Optional[Workflow]:
+def validate_workflow_upload(
+    filename: str, content: bytes, *, field_sets: Optional[Mapping[str, Any]] = None
+) -> Optional[Workflow]:
     """Parse a bundle file that claims to be a workflow, or return ``None``.
 
     The check every skill-file write path runs, whatever the flags say (§9.1):
@@ -1021,8 +1212,14 @@ def validate_workflow_upload(filename: str, content: bytes) -> Optional[Workflow
     ``workflow.<x>.md`` whose ``<x>`` is not a valid name is refused rather than
     stored, since it would otherwise never list.
 
+    ``field_sets`` is the skill's own field sets by name, as the write would
+    leave them (:func:`check_field_set_refs`). The write paths always pass it, so
+    a checklist step's sets are checked on every write; without it only the file
+    itself is checked.
+
     Raises:
-        WorkflowError: not UTF-8, a bad name, or contents that do not parse.
+        WorkflowError: not UTF-8, a bad name, contents that do not parse, or (with
+            ``field_sets``) a checklist step whose set the skill can't run.
     """
     tail = (filename or "").strip().rsplit("/", 1)[-1]
     if not tail.startswith(WORKFLOW_PREFIX) or not tail.endswith(WORKFLOW_SUFFIX):
@@ -1033,7 +1230,10 @@ def validate_workflow_upload(filename: str, content: bytes) -> Optional[Workflow
         text = content.decode("utf-8")
     except UnicodeDecodeError:
         raise WorkflowError(f"workflow '{name}' is not UTF-8 text") from None
-    return parse_workflow(text, name=name)
+    workflow = parse_workflow(text, name=name)
+    if field_sets is not None:
+        check_field_set_refs(workflow, field_sets)
+    return workflow
 
 
 __all__ = [
@@ -1045,8 +1245,11 @@ __all__ = [
     "KIND_AGENT",
     "KIND_CHECKLIST",
     "KIND_PROMPT",
+    "CHECKLIST_REFUSED_FIELD_TYPE",
+    "MAX_CHECKLIST_FIELD_SETS",
     "MAX_REQUEST_CHARS",
     "MAX_STEPS",
+    "MODEL_STEP_KINDS",
     "READ_FILES",
     "READ_REQUEST",
     "RESERVED_KINDS",
@@ -1064,6 +1267,9 @@ __all__ = [
     "canonical_reads",
     "carry_layout",
     "check_envelope",
+    "check_field_set_refs",
+    "checklist_field_set_names",
+    "field_set_ref_problem",
     "normalized",
     "parse_workflow",
     "read_workflow_file",

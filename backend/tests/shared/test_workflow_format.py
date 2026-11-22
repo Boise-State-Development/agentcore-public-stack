@@ -15,6 +15,7 @@ import pytest
 from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS
 from apis.shared.handoff.runs import WORKFLOW_RUN_MAX_STEPS
 from apis.shared.workflows.format import (
+    CHECKLIST_REFUSED_FIELD_TYPE,
     MAX_REQUEST_CHARS,
     MAX_STEPS,
     Workflow,
@@ -23,6 +24,8 @@ from apis.shared.workflows.format import (
     WorkflowResult,
     WorkflowStep,
     carry_layout,
+    check_field_set_refs,
+    checklist_field_set_names,
     parse_workflow,
     read_workflow_file,
     same_definition,
@@ -174,9 +177,6 @@ class TestEnvelope:
 
     def test_a_step_named_twice_is_refused(self):
         _refused(_file("| a | agent | AST-1 | |\n| a | agent | AST-2 | |\n"), "two steps are named 'a'")
-
-    def test_checklist_is_still_reserved_and_refused_with_a_sentence(self):
-        _refused(_file("| a | checklist | m | |\n"), "'checklist' steps are not available yet")
 
     def test_an_unknown_kind_is_refused(self):
         _refused(_file("| a | robot | AST-1 | |\n"), "unknown kind 'robot'")
@@ -346,3 +346,183 @@ class TestPromptSteps:
         workflow = parse_workflow(PROMPT_FILE, name="panel")
 
         assert same_definition(workflow, replace(workflow, version=9))
+
+
+CHECKLIST_FILE = f"""---
+title: Audit
+version: 3
+---
+
+| step | kind | worker | reads |
+|---|---|---|---|
+| fiscal | prompt | {HAIKU} | files |
+| audit | checklist | {SONNET} | files, fiscal |
+| quick | checklist | {HAIKU} | request, files |
+
+## Step: fiscal
+
+Check the budget against the solicitation.
+
+## Step: audit
+
+Field sets: budget-caps, compliance
+
+Treat a missing page as cant_tell.
+
+## Step: quick
+
+Field sets: compliance
+"""
+
+
+def _field_set(name: str, *types: str):
+    """A real parsed field set, so the duck-typed check reads what the parser makes."""
+    from apis.shared.extraction.field_sets import parse_field_set
+
+    rows = "".join(f"| f{i} | F{i} | {t} | the value | {'a, b' if t == 'enum' else ''} | |\n" for i, t in enumerate(types))
+    text = (
+        f"---\ntitle: {name}\nversion: 1\n---\n\n| name | title | type | find | enum | optional |\n"
+        f"|---|---|---|---|---|---|\n{rows}"
+    )
+    return parse_field_set(text, name=name)
+
+
+def _checklist_file(section: str, reads: str = "files") -> str:
+    return _file(f"| a | checklist | {HAIKU} | {reads} |\n") + f"\n## Step: a\n\n{section}"
+
+
+class TestChecklistSteps:
+    """A checklist step (workflow-designer §22.3): a model id, and a ``Field sets:`` line."""
+
+    def test_a_checklist_step_reads_as_its_model_its_sets_and_its_guidance(self):
+        workflow = parse_workflow(CHECKLIST_FILE, name="audit")
+
+        audit = workflow.step("audit")
+        assert audit.kind == "checklist"
+        assert audit.is_checklist and audit.is_model_step and not audit.is_prompt
+        assert audit.model_id == SONNET and audit.worker == SONNET
+        assert audit.agent_id == "" and audit.agent_version is None
+        assert audit.field_sets == ("budget-caps", "compliance")
+        assert audit.request == "Treat a missing page as cant_tell."
+        assert audit.reads == ("files", "fiscal")
+        quick = workflow.step("quick")
+        assert quick.field_sets == ("compliance",)
+        assert quick.request is None
+        assert workflow.step("fiscal").field_sets == ()
+
+    def test_it_round_trips_byte_for_byte(self):
+        workflow, layout = read_workflow_file(CHECKLIST_FILE, name="audit")
+
+        text = serialize_workflow(workflow, layout=layout)
+
+        assert text == CHECKLIST_FILE
+        assert read_workflow_file(text, name="audit") == (workflow, layout)
+
+    def test_a_definition_writes_the_field_sets_line_even_with_no_guidance(self):
+        step = WorkflowStep(name="a", agent_id="", kind="checklist", model_id=HAIKU, reads=("files",), field_sets=("x",))
+        text = serialize_workflow(Workflow(name="x", title="T", steps=(step,)))
+
+        assert "## Step: a\n\nField sets: x\n" in text
+        assert parse_workflow(text, name="x").steps[0] == step
+
+    def test_a_no_op_save_is_the_same_definition(self):
+        workflow = parse_workflow(CHECKLIST_FILE, name="audit")
+
+        assert same_definition(workflow, replace(workflow, version=9))
+        assert serialize_workflow(workflow) == serialize_workflow(parse_workflow(serialize_workflow(workflow), name="audit"))
+
+    def test_the_sets_and_their_order_are_part_of_the_definition(self):
+        workflow = parse_workflow(CHECKLIST_FILE, name="audit")
+        swapped = parse_workflow(CHECKLIST_FILE.replace("budget-caps, compliance", "compliance, budget-caps"), name="audit")
+
+        assert not same_definition(workflow, swapped)
+        assert workflow_fingerprint(workflow) != workflow_fingerprint(swapped)
+
+    def test_files_without_a_checklist_step_keep_their_fingerprints(self):
+        assert workflow_fingerprint(parse_workflow(FULL, name="proposal-review")) == "2eba911c9973a3c9"
+
+    def test_the_parser_accepts_it_whatever_the_flag(self, monkeypatch):
+        monkeypatch.delenv("CHECKLIST_STEPS_ENABLED", raising=False)
+        monkeypatch.delenv("PROMPT_STEPS_ENABLED", raising=False)
+
+        assert validate_workflow_upload("workflow.audit.md", CHECKLIST_FILE.encode()) is not None
+
+    def test_the_section_must_open_with_the_field_sets_line(self):
+        _refused(_checklist_file("Be strict.\n\nField sets: x\n"), "opens with a 'Field sets:' line")
+
+    def test_a_checklist_step_with_no_section_is_refused(self):
+        _refused(_file(f"| a | checklist | {HAIKU} | files |\n"), "opens with a 'Field sets:' line")
+
+    def test_an_empty_field_sets_line_is_refused(self):
+        _refused(_checklist_file("Field sets:\n"), "names at least one field set")
+
+    def test_a_set_named_twice_is_refused(self):
+        _refused(_checklist_file("Field sets: x, y, x\n"), "names the field set 'x' twice")
+
+    def test_more_than_sixteen_sets_is_refused(self):
+        names = ", ".join(f"s{i}" for i in range(17))
+        _refused(_checklist_file(f"Field sets: {names}\n"), "names 17 field sets; a checklist step runs at most 16")
+
+    def test_sixteen_sets_parse(self):
+        names = ", ".join(f"s{i}" for i in range(16))
+        assert len(parse_workflow(_checklist_file(f"Field sets: {names}\n"), name="review").steps[0].field_sets) == 16
+
+    def test_a_bad_set_name_is_refused(self):
+        _refused(_checklist_file("Field sets: Budget_Caps\n"), "is not a field-set name")
+
+    @pytest.mark.parametrize("reads", ["", "request", "request, b"])
+    def test_a_checklist_step_must_read_files(self, reads):
+        text = _file(f"| a | checklist | {HAIKU} | {reads} |\n| b | prompt | {HAIKU} | files |\n") + "\n## Step: a\n\nField sets: x\n"
+        _refused(text, "must read 'files'")
+
+    def test_a_worker_that_is_not_a_model_id_is_refused(self):
+        _refused(_checklist_file("Field sets: x\n").replace(HAIKU, f"{HAIKU} @ 2"), "a checklist step's worker must be a model id")
+
+    def test_only_a_checklist_step_names_field_sets(self):
+        step = WorkflowStep(name="a", agent_id="", kind="prompt", model_id=HAIKU, field_sets=("x",))
+        with pytest.raises(WorkflowError, match="only a checklist step runs field sets"):
+            serialize_workflow(Workflow(name="x", title="T", steps=(step,)))
+
+    def test_an_agent_steps_request_may_start_with_field_sets(self):
+        text = _file("| a | agent | AST-1 | |\n") + "\n## Step: a\n\nField sets: are a thing to mention\n"
+        assert parse_workflow(text, name="review").steps[0].request == "Field sets: are a thing to mention"
+
+
+class TestChecklistFieldSetRefs:
+    """``check_field_set_refs``: the sets must be the skill's own, with no ``list`` field (§22.3)."""
+
+    def test_sets_the_skill_has_pass(self):
+        workflow = parse_workflow(CHECKLIST_FILE, name="audit")
+        sets = {"budget-caps": _field_set("budget-caps", "currency", "number"), "compliance": _field_set("compliance", "enum")}
+
+        check_field_set_refs(workflow, sets)
+        assert validate_workflow_upload("workflow.audit.md", CHECKLIST_FILE.encode(), field_sets=sets) is not None
+
+    def test_a_set_missing_from_the_skill_is_refused(self):
+        workflow = parse_workflow(CHECKLIST_FILE, name="audit")
+        with pytest.raises(WorkflowError, match="step 'audit': the field set 'budget-caps' is not in this skill"):
+            check_field_set_refs(workflow, {"compliance": _field_set("compliance", "enum")})
+
+    def test_a_set_with_a_list_field_is_refused(self):
+        workflow = parse_workflow(CHECKLIST_FILE, name="audit")
+        sets = {"budget-caps": _field_set("budget-caps", "string", "list"), "compliance": _field_set("compliance", "enum")}
+        with pytest.raises(WorkflowError, match="the field set 'budget-caps' has a list field, 'f1'"):
+            check_field_set_refs(workflow, sets)
+
+    def test_the_upload_check_refuses_with_the_skills_sets(self):
+        with pytest.raises(WorkflowError, match="is not in this skill"):
+            validate_workflow_upload("workflow.audit.md", CHECKLIST_FILE.encode(), field_sets={})
+
+    def test_names_are_listed_once_in_first_named_order(self):
+        assert checklist_field_set_names(parse_workflow(CHECKLIST_FILE, name="audit")) == ("budget-caps", "compliance")
+
+    def test_the_constants_match_the_field_set_parsers(self):
+        from apis.shared.extraction import field_sets as fs
+
+        assert CHECKLIST_REFUSED_FIELD_TYPE == fs.TYPE_LIST
+        for name in ("budget-caps", "a", "x9-y"):
+            assert fs.field_set_name_for(f"field-set.{name}.md") == name
+        for bad in ("Budget", "a_b", "-a", "a-"):
+            assert fs.field_set_name_for(f"field-set.{bad}.md") is None
+            with pytest.raises(WorkflowError):
+                parse_workflow(_checklist_file(f"Field sets: {bad}\n"), name="review")
