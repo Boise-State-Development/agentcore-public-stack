@@ -40,6 +40,7 @@ rather than a data layer plus a behavior change at once.
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .models import AgentVersion
@@ -57,6 +58,11 @@ MAX_ALLOCATION_ATTEMPTS = 5
 # The sparse store-index attributes. They live on the *published version* row rather than
 # on the Agent row — see ``set_version_index``. Nothing else writes them.
 _GSI5_ATTRS = ("GSI5_PK", "GSI5_SK")
+
+# When a version first became the published one. Written by ``set_version_index`` beside
+# the store keys, ``if_not_exists`` so a re-promotion keeps the first stamp, and never
+# removed: an unpublish clears the keys only. ``version_pins`` reads it.
+_PUBLISHED_AT = "publishedAt"
 
 
 class AgentVersionExistsError(ValueError):
@@ -98,6 +104,11 @@ def _to_item(agent_id: str, version: AgentVersion) -> Dict[str, Any]:
     if version.version is None:
         raise ValueError("A version must be numbered before it can be written.")
     item = to_ddb_safe(version.model_dump(by_alias=True))
+    # ``publishedAt`` is the one attribute whose *absence* means something: it is stamped
+    # with ``if_not_exists`` (``set_version_index``), which treats a stored NULL as already
+    # set. Writing the snapshot's ``None`` would make the version unstampable forever.
+    if item.get(_PUBLISHED_AT) is None:
+        item.pop(_PUBLISHED_AT, None)
     item["PK"] = _pk(agent_id)
     item["SK"] = version_sk(version.version)
     return item
@@ -189,14 +200,22 @@ async def set_version_index(
     instructions.
 
     ``keys`` is ``gsi5_keys(...)`` output: a mapping to write, or ``None`` to REMOVE both.
+    Writing keys also stamps ``publishedAt`` if the row has none, in the same update, so
+    every path that publishes a version (approval, rollback, a D13 edit) records it. Clearing
+    the keys leaves the stamp: a takedown changes what is published now, not what was.
     Raises ``ValueError`` if the version does not exist, so a promotion can never point at
     a row that is not there.
     """
     from botocore.exceptions import ClientError
 
     if keys:
-        expression = "SET " + ", ".join(f"{attr} = :{attr.lower()}" for attr in keys)
+        assignments = [f"{attr} = :{attr.lower()}" for attr in keys]
         values = {f":{attr.lower()}": value for attr, value in keys.items()}
+        # Promotion also records that this version was published, once (workflow-designer
+        # §23.2): the pin rule lets a superseded version run only if it carries this.
+        assignments.append(f"{_PUBLISHED_AT} = if_not_exists({_PUBLISHED_AT}, :published_at)")
+        values[":published_at"] = datetime.now(timezone.utc).isoformat()
+        expression = "SET " + ", ".join(assignments)
     else:
         expression = "REMOVE " + ", ".join(_GSI5_ATTRS)
         values = None
@@ -331,6 +350,42 @@ async def batch_get_versions(refs: List[Tuple[str, int]]) -> Dict[str, AgentVers
                     found[version.agent_id] = version
             request = response.get("UnprocessedKeys") or None
 
+    return found
+
+
+async def get_versions(refs: List[Tuple[str, int]]) -> Dict[Tuple[str, int], AgentVersion]:
+    """Specific versions by ``(agent_id, number)``, keyed the same way, in one ``BatchGetItem``.
+
+    For readers that need several numbers of one Agent at once, which ``batch_get_versions``
+    (keyed by agent id) can't return. A missing version is absent from the result. The read
+    runs through ``run_blocking``, so app-api's event loop never waits on it.
+    """
+    from apis.shared.blocking_io import run_blocking
+
+    unique = list(dict.fromkeys(refs))
+    if not unique:
+        return {}
+    return await run_blocking(_get_versions_sync, unique)
+
+
+def _get_versions_sync(refs: List[Tuple[str, int]]) -> Dict[Tuple[str, int], AgentVersion]:
+    import boto3
+
+    table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
+    if not table_name:
+        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
+    resource = boto3.resource("dynamodb")
+    found: Dict[Tuple[str, int], AgentVersion] = {}
+    for start in range(0, len(refs), 100):  # BatchGetItem caps at 100 keys
+        keys = [{"PK": _pk(agent_id), "SK": version_sk(number)} for agent_id, number in refs[start : start + 100]]
+        request = {table_name: {"Keys": keys}}
+        while request:
+            response = resource.batch_get_item(RequestItems=request)
+            for item in response.get("Responses", {}).get(table_name, []):
+                version = _from_item(item)
+                if version.agent_id and version.version is not None:
+                    found[(version.agent_id, version.version)] = version
+            request = response.get("UnprocessedKeys") or None
     return found
 
 

@@ -303,6 +303,19 @@ class AgentVersion(BaseModel):
             "not read as a transfer of ownership."
         ),
     )
+    published_at: Optional[str] = Field(
+        None,
+        alias="publishedAt",
+        description=(
+            "ISO 8601 timestamp of the first time this version became the published one "
+            "(approval, an admin rollback, a D13 presentation edit). Stamped by "
+            "``version_repository.set_version_index`` in the write that sets its store key, "
+            "never cleared, and never part of the frozen surface: it is a fact about the "
+            "version's history, which the workflow pin rule reads (``version_pins``). "
+            "``None`` on a version that was never published, and on one superseded before "
+            "the stamp existed."
+        ),
+    )
 
     # ── the frozen surface ───────────────────────────────────────────────────────────
     name: str = Field(..., description="Agent display name as reviewed")
