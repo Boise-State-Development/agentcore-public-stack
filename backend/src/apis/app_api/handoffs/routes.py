@@ -170,11 +170,13 @@ async def _open_mention(
     request: str,
     run_id: Optional[str] = None,
     step_id: Optional[str] = None,
+    agent_version: Optional[int] = None,
 ) -> Handoff:
     """Write one ``open`` ``mention`` row for ``card``: a handoff of its own, or a workflow run's step.
 
     The one place a mention row is built, so a run's step is accepted by ``HandoffTurn`` exactly as
-    a single mention is. 503 when the store isn't configured.
+    a single mention is. ``agent_version`` is a pinned workflow step's version (workflow-designer
+    §23), absent from the row when ``None``. 503 when the store isn't configured.
     """
     now = utc_now_iso()
     row = Handoff(
@@ -196,6 +198,7 @@ async def _open_mention(
         updated_at=now,
         run_id=run_id,
         step_id=step_id,
+        agent_version=agent_version,
     )
     try:
         await asyncio.to_thread(store.create, row)

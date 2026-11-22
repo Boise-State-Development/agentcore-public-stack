@@ -1330,6 +1330,32 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Agent version pinning feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_AGENT_VERSION_PINNING_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_AGENT_VERSION_PINNING_ENABLED is unset', () => {
+      delete process.env.CDK_AGENT_VERSION_PINNING_ENABLED;
+      expect(loadConfig(app).agentVersionPinning.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_AGENT_VERSION_PINNING_ENABLED = '';
+      expect(loadConfig(app).agentVersionPinning.enabled).toBe(false);
+    });
+
+    test('CDK_AGENT_VERSION_PINNING_ENABLED="true" turns it on', () => {
+      process.env.CDK_AGENT_VERSION_PINNING_ENABLED = ' TRUE ';
+      expect(loadConfig(app).agentVersionPinning.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_AGENT_VERSION_PINNING_ENABLED = 'yes';
+      expect(loadConfig(app).agentVersionPinning.enabled).toBe(false);
+    });
+  });
+
   describe('Checklist steps feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_CHECKLIST_STEPS_ENABLED;

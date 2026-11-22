@@ -52,13 +52,13 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, replace
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from apis.shared.auth import User, get_current_user_from_session
-from apis.shared.feature_flags import workflow_runs_enabled, workflows_enabled
+from apis.shared.feature_flags import agent_version_pinning_enabled, workflow_runs_enabled, workflows_enabled
 from apis.shared.files.linked_files import HANDOFF_MAX_FILES
 from apis.shared.handoff import HandoffStore, HandoffStoreUnavailable, TurnsCovered, get_handoff_store
 from apis.shared.handoff.context import (
@@ -140,6 +140,7 @@ from apis.shared.workflows.sheet import (
     load_workflow,
     merge_instruction,
     model_views,
+    pin_views,
     sheet_for,
     step_calls,
     step_model,
@@ -187,6 +188,16 @@ class CreateRunWorkflow(BaseModel):
         alias="removedSteps",
         max_length=WORKFLOW_RUN_MAX_STEPS,
         description="Steps the starter took out at the sheet before the run opened; every step that reads one goes too",
+    )
+    use_versions: Dict[str, Annotated[int, Field(ge=1)]] = Field(
+        default_factory=dict,
+        alias="useVersions",
+        max_length=WORKFLOW_RUN_MAX_STEPS,
+        description=(
+            "Per step, by name: run this Agent version instead of the file's, for this run only "
+            "(workflow-designer §23.2, 'Use version N' for someone who can't edit the workflow). Only the "
+            "Agent's current published version may be named. Ignored while AGENT_VERSION_PINNING_ENABLED is off"
+        ),
     )
 
 
@@ -254,6 +265,15 @@ class CreatedRunStep(BaseModel):
             "Model calls the step makes, for the estimate: one per field set on a checklist step, one on a "
             "prompt step, absent on an Agent step. The steps on one model share one cached copy of the "
             "documents (§22.3), so the sheet counts the documents once per model"
+        ),
+    )
+    agent_version: Optional[int] = Field(
+        None,
+        alias="agentVersion",
+        description=(
+            "A pinned Agent step's version (workflow-designer §23), exactly as its HANDOFF# row records it: "
+            "the step's first turn names it in handoff_context.agentVersion. Absent while pinning is off "
+            "and on a step that records no version"
         ),
     )
 
@@ -338,6 +358,7 @@ async def create_workflow_run(
                     request=_step_request(step.request, shared_request),
                     run_id=run_id,
                     step_id=step_id,
+                    agent_version=step.agent_version if plan.pinned else None,
                 )
                 for step, step_id in zip(plan.steps, step_ids)
             )
@@ -410,6 +431,7 @@ async def create_workflow_run(
                 input_price_per_million_tokens=step.rate,
                 field_sets=list(step.field_set_views) if step.kind == KIND_CHECKLIST else None,
                 calls=step.calls,
+                agent_version=row.agent_version,
             )
             for row, step in zip(rows, plan.steps)
         ],
@@ -505,6 +527,8 @@ class _RunPlan:
     request: str
     steps: List[_PlannedStep]
     workflow: Optional[WorkflowRunSource] = None
+    #: Each Agent step's ``agent_version`` is its pin (workflow-designer §23), written to its row.
+    pinned: bool = False
 
 
 async def _plan_from_mentions(body: CreateWorkflowRunRequest, user: User) -> _RunPlan:
@@ -563,7 +587,13 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
     agents, models, sets = await asyncio.gather(
         agent_views(trimmed, user), model_views(trimmed, user), field_set_views(skill, trimmed)
     )
-    sheet = sheet_for(trimmed, agents, models, sets)
+    pinned = agent_version_pinning_enabled()
+    if pinned:
+        trimmed = _use_versions(trimmed, ref.use_versions, agents, removed)
+    elif ref.use_versions:
+        logger.warning("Workflow run: useVersions ignored while agent version pinning is off")
+    pins = await pin_views(trimmed, agents)
+    sheet = sheet_for(trimmed, agents, models, sets, pins=pins)
     if sheet.blockers:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -576,7 +606,8 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
     shared = request.strip() or (workflow.request or "").strip()
     return _RunPlan(
         request=shared,
-        steps=[_planned_step(step, agents, models, sets) for step in trimmed.steps],
+        steps=[_planned_step(step, agents, models, sets, pinned=pinned) for step in trimmed.steps],
+        pinned=pinned,
         workflow=WorkflowRunSource(
             skill_id=skill.skill_id,
             name=workflow.name,
@@ -591,13 +622,58 @@ async def _plan_from_workflow(ref: CreateRunWorkflow, request: str, user: User) 
     )
 
 
+def _use_versions(
+    workflow: Workflow, use: Dict[str, int], agents: Dict[str, AgentView], removed: tuple
+) -> Workflow:
+    """``workflow`` with each named Agent step moved to the version ``use`` names, for this run only.
+
+    "Use version N" for someone who can't edit the workflow (workflow-designer §23.2): the only
+    version it may name is the Agent's current published one, so an override can never pick a
+    version the rule would have to judge. 422 ``use_version_refused`` for a name that is no step, a
+    step with no Agent, an Agent the caller can't use, or any other version. A step taken out at the
+    sheet (``removed``) is ignored.
+    """
+    if not use:
+        return workflow
+    moved: Dict[str, int] = {}
+    for name, number in use.items():
+        if name in removed:
+            continue
+        step = workflow.step(name)
+        agent = agents.get(step.agent_id) if step is not None and not step.is_model_step else None
+        current = agent.published_version if agent is not None and agent.can_run else None
+        if current is None or number != current:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "use_version_refused",
+                    "step": name,
+                    "message": (
+                        f"Step '{name}' can only use its Agent's current published version"
+                        + (f", version {current}" if current is not None else ", and it has none")
+                    ),
+                },
+            )
+        moved[name] = number
+    return replace(
+        workflow,
+        steps=tuple(replace(step, agent_version=moved[step.name]) if step.name in moved else step for step in workflow.steps),
+    )
+
+
 def _planned_step(
     step: WorkflowStep,
     agents: Dict[str, AgentView],
     models: Dict[str, ModelView],
     field_sets: Optional[Dict[str, FieldSetView]] = None,
+    *,
+    pinned: bool = False,
 ) -> _PlannedStep:
     """A saved workflow's step as the run opens it: its Agent, or a model step's model, as the caller.
+
+    An Agent step's ``agent_version`` is the file's version (or this run's ``useVersions``) while
+    pinning is on, since that is the version it runs (workflow-designer §23); while off it is the
+    Agent's current published version, as before, a label only.
 
     An Agent step's reads drop the inputs, since every Agent step gets the request and the files. A
     prompt or checklist step keeps them, in the file's canonical order (request, files, then steps),
@@ -628,7 +704,7 @@ def _planned_step(
         model_id=agent.model_id,
         rate=agent.input_price_per_million_tokens,
         step_name=step.name,
-        agent_version=agent.published_version,
+        agent_version=step.agent_version if pinned else agent.published_version,
         reads=tuple(read for read in step.reads if read not in INPUT_READS),
     )
 

@@ -1009,6 +1009,35 @@ def checklist_steps_enabled() -> bool:
     return prompt_steps_enabled()
 
 
+def agent_version_pinning_enabled() -> bool:
+    """Whether a saved workflow's Agent step runs the Agent version its file records.
+
+    ``docs/specs/workflow-designer.md`` §23. On app-api, the sheet judges each Agent step's
+    recorded version by the pin rule (``apis.shared.assistants.version_pins``) and run create
+    records the file's version on the run step and its ``HANDOFF#`` row; on the AgentCore Runtime,
+    the step conversation's turns run that version for everyone, the Agent's owner included.
+    **Opt-in while in development**: only ``"true"`` enables it; an unset GitHub variable arrives
+    as ``""`` and is off. Off, everything is as before: a run records the Agent's current
+    published version and runs it.
+
+    CDK writes ``AGENT_VERSION_PINNING_ENABLED`` on app-api, and on the Runtime only while the
+    whole chain is on (``agentVersionPinningOn`` in ``infrastructure/lib/config.ts``), so the
+    Runtime's default spends none of the V2 environment budget. app-api also has
+    ``WORKFLOWS_ENABLED``, so there this needs ``workflows_enabled()``; the Runtime has no copy
+    of the workflow flags, so where ``WORKFLOWS_ENABLED`` is absent this variable carries the
+    chain by itself, behind ``HANDOFFS_ENABLED`` (``prompt_steps_enabled``'s rule). The SPA's
+    matching switch is ``features.agentVersionPinning``.
+
+    A **feature switch** once finished: it decides whose review a workflow step runs under,
+    which is a product choice a deployment may make differently.
+    """
+    if os.environ.get("AGENT_VERSION_PINNING_ENABLED", "").strip().lower() != "true":
+        return False
+    if "WORKFLOWS_ENABLED" in os.environ:
+        return workflows_enabled()
+    return handoffs_enabled()
+
+
 def session_rewind_enabled() -> bool:
     """Whether a user can rewind a conversation to one of their earlier messages.
 

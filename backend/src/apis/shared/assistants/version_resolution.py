@@ -40,6 +40,7 @@ import logging
 from typing import Optional, Tuple
 
 from .models import Assistant
+from .version_pins import AgentPinRefusedError, pin_refusal
 from .version_repository import get_version
 from .versions import apply_version
 
@@ -86,7 +87,7 @@ def runs_own_draft(assistant: Assistant, user_id: Optional[str]) -> bool:
 
 
 async def resolve_invocation_agent(
-    assistant: Assistant, user_id: Optional[str]
+    assistant: Assistant, user_id: Optional[str], *, pinned_version: Optional[int] = None
 ) -> Tuple[Assistant, Optional[int]]:
     """Return ``(assistant_to_run, version_number)`` for this caller.
 
@@ -100,7 +101,18 @@ async def resolve_invocation_agent(
     saying the opposite was reverted.
 
     Raises ``AgentVersionUnavailableError`` if a published version is named but missing.
+
+    **A pin (``pinned_version``, workflow-designer §23)** is a saved workflow's step running the
+    version its file records. It replaces the table above: the rule in ``version_pins`` decides,
+    and the pinned snapshot is served to **everyone, the owner included**, because a step whose
+    result depends on who starts it is not a test of the step. A refused pin raises
+    ``AgentPinRefusedError`` (never a fall forward to the draft, never a 503); a project's harness
+    has no published version, so a pin on one is refused ``unpublished``. The caller decides
+    whether pinning is on and passes ``None`` otherwise, which takes exactly today's path.
     """
+    if pinned_version is not None:
+        return await _resolve_pinned(assistant, pinned_version)
+
     listing = assistant.listing
     published = listing.published_version if listing else None
 
@@ -123,6 +135,26 @@ async def resolve_invocation_agent(
 
     logger.info(f"📌 Agent {assistant.assistant_id} running published version {published}")
     return apply_version(assistant, version), published
+
+
+async def _resolve_pinned(assistant: Assistant, number: int) -> Tuple[Assistant, int]:
+    """The pinned snapshot, or ``AgentPinRefusedError``. One ``VERSION#`` read, as an unpinned turn's."""
+    listing = assistant.listing
+    published = listing.published_version if listing else None
+    version = None
+    if published is not None and number <= published:
+        version = await get_version(assistant.assistant_id, number)
+    reason = pin_refusal(number, published, version)
+    if reason is not None or version is None:
+        logger.info(
+            f"⛔ Agent {assistant.assistant_id} pinned to version {number} refused: {reason} "
+            f"(published version is {published})"
+        )
+        raise AgentPinRefusedError(
+            assistant.assistant_id, number, reason or "missing", published=published
+        )
+    logger.info(f"📌 Agent {assistant.assistant_id} running pinned version {number}")
+    return apply_version(assistant, version), number
 
 
 async def resolve_review_agent(assistant: Assistant) -> Tuple[Assistant, Optional[int]]:

@@ -11,7 +11,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { Construct } from 'constructs';
-import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getAgentRuntimeName, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins, checklistStepsOn, promptStepsOn } from '../../config';
+import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getAgentRuntimeName, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins, checklistStepsOn, promptStepsOn, agentVersionPinningOn } from '../../config';
 import { AlarmFactory } from '../observability/alarm-factory';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import {
@@ -532,6 +532,11 @@ export class InferenceAgentCoreConstruct extends Construct {
         // checklist steps. Written only while it and prompt steps' whole chain are
         // ON (`checklistStepsOn`), so the default costs nothing against the V2 budget.
         ...(checklistStepsOn(config) ? { CHECKLIST_STEPS_ENABLED: 'true' } : {}),
+        // Agent version pinning (in development): a workflow step's turns run the
+        // Agent version its file records. Written only while it and the whole
+        // workflow chain are ON (`agentVersionPinningOn`), so the default costs
+        // nothing against the V2 budget.
+        ...(agentVersionPinningOn(config) ? { AGENT_VERSION_PINNING_ENABLED: 'true' } : {}),
         // Conversation rewind (default on): the Runtime filters rewound
         // messages at restore and cuts a warm agent's list in place. Spread in
         // only while OFF: the code reads unset as on, so the default costs

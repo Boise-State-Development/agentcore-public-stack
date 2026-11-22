@@ -205,6 +205,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       promptStepsEnabled: false,
       checklistStepsEnabled: false,
     },
+    agentVersionPinning: {
+      enabled: false,
+    },
     sessionRewind: {
       enabled: false,
     },

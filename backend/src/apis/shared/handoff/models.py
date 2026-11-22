@@ -274,6 +274,16 @@ class Handoff(BaseModel):
     field_sets: Optional[List[str]] = Field(
         None, alias=CHECKLIST_FIELD_FIELD_SETS, description="A checklist step's field sets, in the order it runs them"
     )
+    # A pinned Agent step of a saved-workflow run (workflow-designer §23); absent otherwise.
+    agent_version: Optional[int] = Field(
+        None,
+        alias="agentVersion",
+        description=(
+            "The Agent version this step runs for everyone, as the run recorded it. Written only while "
+            "AGENT_VERSION_PINNING_ENABLED is on and the step records one; the step's first turn must "
+            "name the same version"
+        ),
+    )
 
     @property
     def is_prompt_step(self) -> bool:

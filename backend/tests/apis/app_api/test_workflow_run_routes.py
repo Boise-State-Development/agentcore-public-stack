@@ -2168,3 +2168,145 @@ def test_a_checklist_run_step_names_a_model_and_its_sets():
         WorkflowRunStep(step_id="s", handoff_id="h", kind="checklist", agent_id="a", field_sets=["x"])
     with pytest.raises(ValueError, match="only a checklist step runs field sets"):
         WorkflowRunStep(step_id="s", handoff_id="h", kind="prompt", model_id=HAIKU, field_sets=["x"])
+
+
+# --- Agent version pinning (workflow-designer §23, PR-D.8a) ---------------------------------------
+
+
+@pytest.fixture()
+def pinning(monkeypatch, skills):
+    """Pinning on, and the VERSION# rows the sheet reads: v5 of generalist was published, v2 of colleague is P."""
+    from apis.shared.workflows import sheet
+
+    monkeypatch.setenv("AGENT_VERSION_PINNING_ENABLED", "true")
+    rows: Dict[tuple, Any] = {
+        ("generalist", 5): SimpleNamespace(published_at="2026-11-01T00:00:00+00:00"),
+        ("generalist", 6): SimpleNamespace(published_at="2026-11-10T00:00:00+00:00"),
+        ("colleague", 2): SimpleNamespace(published_at=None),
+    }
+    reads: List[list] = []
+
+    async def get_versions(refs):
+        reads.append(list(refs))
+        return {ref: rows[ref] for ref in refs if ref in rows}
+
+    monkeypatch.setattr(sheet, "get_versions", get_versions)
+    return SimpleNamespace(rows=rows, reads=reads)
+
+
+def test_pinning_off_records_the_current_version_and_writes_no_pin(make_client, stores, skills):
+    handoffs, runs = stores
+    resp = make_client().post(
+        "/sessions/src/workflow-runs",
+        json={"workflow": {"skillId": "skill-1", "name": "review", "useVersions": {"generalist": 6}}},
+    )
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert all("agentVersion" not in step for step in data["steps"])
+    stored = runs.get("alice", data["run"]["runId"])
+    assert [s.agent_version for s in stored.steps] == [6, 2, None]
+    for step in data["steps"]:
+        row = handoffs.get("alice", step["handoffId"])
+        assert row.agent_version is None
+        assert "agentVersion" not in row.model_dump(by_alias=True, exclude_none=True)
+
+
+def test_a_pinned_run_records_the_files_version_on_the_step_and_its_row(make_client, stores, pinning):
+    handoffs, runs = stores
+    resp = _start(make_client())
+
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    # The file says generalist @ 5 while 6 is published: the run runs 5, for everyone.
+    assert [s.get("agentVersion") for s in data["steps"]] == [5, 2, None]
+    stored = runs.get("alice", data["run"]["runId"])
+    assert [s.agent_version for s in stored.steps] == [5, 2, None]
+    assert [s.get("agentVersion") for s in data["run"]["steps"]] == [5, 2, None]
+    assert [handoffs.get("alice", s["handoffId"]).agent_version for s in data["steps"]] == [5, 2, None]
+    # One read: only the superseded pin needs its row; colleague @ 2 is P itself.
+    assert pinning.reads == [[("generalist", 5), ("colleague", 2)]]
+
+
+def test_a_superseded_version_never_published_blocks_until_the_run_uses_the_current_one(make_client, stores, pinning):
+    pinning.rows[("generalist", 5)] = SimpleNamespace(published_at=None)  # a rejected submission's number
+    client = make_client()
+
+    refused = _start(client)
+    assert refused.status_code == 422
+    assert refused.json()["detail"]["blockers"] == [
+        {
+            "code": "agent_version_unavailable",
+            "step": "generalist",
+            "message": (
+                "Version 5 of this Agent was never published; version 6 is the current one. "
+                "Use version 6, or remove the step"
+            ),
+        }
+    ]
+    assert stores[0].list_for_session("alice", "src") == []
+
+    started = _start(client, useVersions={"generalist": 6})
+    assert started.status_code == 201, started.text
+    assert [s.get("agentVersion") for s in started.json()["steps"]] == [6, 2, None]
+
+
+def test_a_rollback_blocks_a_step_pinned_above_it(make_client, skills, pinning, world):
+    world.agents["colleague"].listing = SimpleNamespace(published_version=1)
+
+    refused = _start(make_client())
+
+    assert refused.status_code == 422
+    [blocker] = refused.json()["detail"]["blockers"]
+    assert (blocker["code"], blocker["step"]) == ("agent_version_unavailable", "colleague")
+    assert blocker["message"].startswith("Version 2 of this Agent is no longer published; version 1 is the current one")
+
+
+def test_a_takedown_blocks_the_step_and_no_override_can_unblock_it(make_client, skills, pinning, world):
+    world.agents["generalist"].listing = SimpleNamespace(published_version=None)
+    client = make_client()
+
+    refused = _start(client)
+    assert refused.status_code == 422
+    [blocker] = refused.json()["detail"]["blockers"]
+    assert blocker == {
+        "code": "agent_version_unavailable",
+        "step": "generalist",
+        "message": "This Agent is no longer published, so version 5 can't run. Remove the step or choose another Agent",
+    }
+
+    override = _start(client, useVersions={"generalist": 6})
+    assert override.status_code == 422
+    assert override.json()["detail"]["code"] == "use_version_refused"
+    assert _start(client, removedSteps=["generalist"]).status_code == 201
+
+
+@pytest.mark.parametrize(
+    "use",
+    [
+        {"generalist": 5},  # only the current published version may be named
+        {"generalist": 7},
+        {"nobody": 6},  # no such step
+        {"outsider": 1},  # an Agent with nothing published
+    ],
+)
+def test_use_versions_may_name_only_the_current_published_version(make_client, stores, pinning, use):
+    resp = _start(make_client(), useVersions=use)
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "use_version_refused"
+    assert stores[0].list_for_session("alice", "src") == []
+
+
+def test_use_versions_on_a_removed_step_is_ignored(make_client, pinning):
+    resp = _start(make_client(), removedSteps=["generalist"], useVersions={"generalist": 4})
+    assert resp.status_code == 201, resp.text
+
+
+def test_a_mention_run_stays_unpinned(make_client, stores, pinning):
+    handoffs, runs = stores
+    resp = _create(make_client())
+
+    assert resp.status_code == 201, resp.text
+    assert all("agentVersion" not in s for s in resp.json()["steps"])
+    assert all(handoffs.get("alice", s["handoffId"]).agent_version is None for s in resp.json()["steps"])
