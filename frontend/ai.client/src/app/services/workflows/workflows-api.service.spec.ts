@@ -54,6 +54,21 @@ describe('WorkflowsApiService, the designer’s calls (PR-D.3)', () => {
     expect(await saving).toEqual({ ok: false, conflict: false, message: 'a step reads itself' });
   });
 
+  it('deletes a workflow, with keepalive only when asked, so a delete sent as the tab closes outlives it', async () => {
+    const plain = service.remove(REF);
+    const first = http.expectOne('/api/workflows/SKL-1/proposal-review');
+    expect(first.request.method).toBe('DELETE');
+    expect(first.request.keepalive).toBe(false);
+    first.flush(null, { status: 204, statusText: 'No Content' });
+    await plain;
+
+    const closing = service.remove(REF, { keepalive: true });
+    const second = http.expectOne('/api/workflows/SKL-1/proposal-review');
+    expect(second.request.keepalive).toBe(true);
+    second.flush(null, { status: 204, statusText: 'No Content' });
+    await closing;
+  });
+
   it('validates the draft without its expected version, so a preview never conflicts', () => {
     void service.validate(REF, BODY);
     const req = http.expectOne('/api/workflows/SKL-1/proposal-review?validate=true');

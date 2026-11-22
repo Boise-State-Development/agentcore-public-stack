@@ -186,9 +186,18 @@ export class WorkflowDesignerStore {
   private previewTimer: ReturnType<typeof setTimeout> | null = null;
   private previewSeq = 0;
 
+  /**
+   * The workflow Create the workflow now made in this visit, until a save keeps it. Left without a
+   * save, it is deleted (`abandonCarrier`), so an empty carrying skill isn't left behind.
+   */
+  private madeCarrier: WorkflowRef | null = null;
+
   constructor() {
     void this.mentions.load();
-    inject(DestroyRef).onDestroy(() => this.clearPreviewTimer());
+    inject(DestroyRef).onDestroy(() => {
+      this.clearPreviewTimer();
+      this.abandonCarrier();
+    });
 
     // The sheet follows the draft. It needs a saved workflow to validate against, and an Agent
     // on every step, because the body names one per step.
@@ -212,6 +221,7 @@ export class WorkflowDesignerStore {
   // ---- loading --------------------------------------------------------------------------------
 
   async open(ref: WorkflowRef): Promise<void> {
+    if (this.madeCarrier && !sameRef(this.madeCarrier, ref)) this.abandonCarrier();
     this.ref.set(ref);
     this.load.set('loading');
     try {
@@ -232,6 +242,7 @@ export class WorkflowDesignerStore {
 
   /** A workflow not yet saved: blank, or from the one template. Nothing is written until Save. */
   startNew(template: string | null): void {
+    this.abandonCarrier();
     this.ref.set(null);
     this.baseline.set(null);
     this.version.set(null);
@@ -311,6 +322,8 @@ export class WorkflowDesignerStore {
       const body = toWrite(draft, views, expected);
       if (!body) return null;
       const result = await this.workflows.write(ref, body);
+      // Saved, or moved on by another tab: either way it is the user's now, never ours to delete.
+      if (result.ok || result.conflict) this.madeCarrier = null;
       if (result.ok) {
         this.adopt(result.document, draft);
         this.announcer.announce(result.document.written ? 'Workflow saved' : 'No changes to save', 'polite');
@@ -344,6 +357,7 @@ export class WorkflowDesignerStore {
       const created = await this.workflows.create({ title: this.draft().title.trim() || undefined });
       const ref = { skillId: created.workflow.skillId, name: created.workflow.name };
       this.ref.set(ref);
+      this.madeCarrier = ref;
       this.version.set(created.workflow.version);
       this.baseline.set(draftFrom(created.workflow));
       this.announcer.announce('Workflow created. Add field sets to its skill, then save.', 'polite');
@@ -374,13 +388,46 @@ export class WorkflowDesignerStore {
     this.conflict.set(null);
   }
 
+  /**
+   * Leaving a workflow that Create the workflow now made and no save has kept: delete it, best
+   * effort, and put the draft back to "not saved yet". The route removes the carrying skill too,
+   * but only while it holds nothing else, so a field set added to it meanwhile keeps the skill.
+   * `keepalive` is for a tab that is closing. Returns whether there was one to delete.
+   */
+  abandonCarrier(options: { keepalive?: boolean } = {}): boolean {
+    const ref = this.madeCarrier;
+    if (!ref) return false;
+    this.madeCarrier = null;
+    // Called before the first await, so a `keepalive` delete is on its way before the tab goes.
+    void (async () => {
+      try {
+        await this.workflows.remove(ref, options);
+      } catch {
+        // Best effort: an empty workflow left behind is listed, and its owner can delete it.
+      }
+    })();
+    if (this.ref() && sameRef(this.ref()!, ref)) {
+      this.ref.set(null);
+      this.version.set(null);
+      this.baseline.set(null);
+      this.document.set(null);
+      this.documentDraft.set(null);
+      this.skillFieldSets.set({ state: 'idle' });
+      this.skillFieldSetsFor = null;
+    }
+    return true;
+  }
+
   async remove(): Promise<boolean> {
     const ref = this.ref();
     if (!ref) return true;
+    const made = this.madeCarrier;
+    this.madeCarrier = null;
     try {
       await this.workflows.remove(ref);
       return true;
     } catch (err) {
+      this.madeCarrier = made;
       this.saveError.set(this.workflows.messageFor(err, 'The workflow couldn’t be deleted.'));
       return false;
     }
@@ -647,4 +694,8 @@ function checklistNeeds(step: DraftStep): string {
   if (!step.fieldSets.length) needs.push('a field set');
   if (!step.reads.includes('files')) needs.push('to read the run’s files');
   return needs.length <= 1 ? (needs[0] ?? 'a model') : `${needs.slice(0, -1).join(', ')} and ${needs[needs.length - 1]}`;
+}
+
+function sameRef(a: WorkflowRef, b: WorkflowRef): boolean {
+  return a.skillId === b.skillId && a.name === b.name;
 }

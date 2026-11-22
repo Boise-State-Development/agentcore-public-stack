@@ -3,6 +3,7 @@ import { Location } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   Injector,
   afterNextRender,
   computed,
@@ -121,6 +122,15 @@ export class WorkflowDesignerPage {
     effect(() => {
       if (this.tab() === 'test' && !this.testRecord()) untracked(() => this.tab.set('preview'));
     });
+
+    // Closing the tab on a workflow Create the workflow now made, with nothing saved, deletes it
+    // (a route change does the same from the store's destroy). The URL goes back to a new one, so
+    // Back, or a page restored from the back-forward cache, never opens a workflow that is gone.
+    const onPageHide = () => {
+      if (this.store.abandonCarrier({ keepalive: true })) this.location.replaceState('/workflows/new');
+    };
+    window.addEventListener('pagehide', onPageHide);
+    inject(DestroyRef).onDestroy(() => window.removeEventListener('pagehide', onPageHide));
   }
 
   /** The workflow's test run, while the designer shows one (PR-D.4). */
