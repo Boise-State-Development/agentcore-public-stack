@@ -239,6 +239,7 @@ function allFlagsOn(base: AppConfig): AppConfig {
     handoffs: { enabled: true, briefEnabled: true, suggestionsEnabled: true },
     workflowRuns: { enabled: true },
     workflows: { enabled: true, promptStepsEnabled: true, checklistStepsEnabled: true },
+    agentVersionPinning: { enabled: true },
     sessionRewind: { enabled: true },
     sessionFork: { enabled: true },
     clientTurnTiming: { enabled: true },
