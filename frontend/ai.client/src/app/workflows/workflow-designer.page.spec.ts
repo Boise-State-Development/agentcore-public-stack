@@ -672,7 +672,7 @@ describe('WorkflowDesignerPage', () => {
       TestBed.overrideProvider(MySkillService, { useValue: { getSkill } });
     }
 
-    function checklistDoc(sets: { name: string; canRun?: boolean; title?: string; fieldCount?: number; reason?: 'missing' | 'list_field' }[]): WorkflowDocument {
+    function checklistDoc(sets: { name: string; canRun?: boolean; title?: string; fieldCount?: number; reason?: 'missing' | 'unreadable' }[]): WorkflowDocument {
       return doc({
         steps: [
           ...view().steps,
@@ -804,7 +804,7 @@ describe('WorkflowDesignerPage', () => {
       on({ checklistSteps: true });
       const saved = checklistDoc([
         { name: 'compliance', title: 'Compliance', fieldCount: 6 },
-        { name: 'budget', canRun: false, reason: 'list_field' },
+        { name: 'budget', canRun: false, reason: 'unreadable' },
       ]);
       service.read.mockResolvedValue({ ok: true, document: saved });
       service.validate.mockResolvedValue(saved);
@@ -817,7 +817,7 @@ describe('WorkflowDesignerPage', () => {
       const chosen = [...el.querySelectorAll('[data-testid="wf-chosen-sets"] li')].map((li) => li.textContent!.replace(/\s+/g, ' ').trim());
       expect(chosen[0]).toContain('Compliance');
       expect(chosen[0]).toContain('6 fields');
-      expect(chosen[1]).toContain('Has a list field, which a checklist step can’t fill yet.');
+      expect(chosen[1]).toContain('Couldn’t be read. Try again, or remove it.');
       // No field-set editor link while its own flag is off.
       expect(el.querySelector('[data-testid="wf-chosen-sets"] a')).toBeNull();
       // Every set the skill holds is already on the step.

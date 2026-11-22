@@ -1657,7 +1657,8 @@ compiles and fills on both models, so the refusal went.
 - **Lifted:** the parse check on every skill-file write (`field_set_ref_problem`), the sheet's `list_field` blocker
   (`FieldSetView.reason` is now `missing` or `unreadable`), and the Runtime's `unsupported_field` error. A
   `WFCHK#` row written before this keeps its stored `unsupported_field` code, and its step keeps the answer it
-  stored then.
+  stored then. The SPA has no copy of its own for either code any more: such a row's set reads the generic "This
+  field set couldn't run."
 - **No new flag:** this extends what `CHECKLIST_STEPS_ENABLED` already gates.
 
 **Checked before merge (2026-11-22).** The Runtime path on this branch against dev Bedrock (`us.*` ids), with the
