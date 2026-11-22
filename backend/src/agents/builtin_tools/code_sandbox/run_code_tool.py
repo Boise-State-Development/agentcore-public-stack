@@ -733,7 +733,11 @@ async def _run_in_sandbox(
     await _write_text(entry, [(f"{programs.CONTROL_DIR}/request.json", json.dumps(request))])
 
     run.attempted = True
-    command = programs.run_command(CALL_TIMEOUT_SECONDS, office_mount.PROGRAM_DIR if office else None)
+    command = programs.run_command(
+        CALL_TIMEOUT_SECONDS,
+        office_mount.PROGRAM_DIR if office else None,
+        office_mount.NODE_MODULES_DIR if office else None,
+    )
     response = await entry.invoke("executeCommand", {"command": command})
     _, stdout, stderr, _ = _stream_result(response)
     result = _parse_result(stdout + "\n" + stderr)

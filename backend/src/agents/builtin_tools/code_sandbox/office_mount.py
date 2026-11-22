@@ -1,4 +1,4 @@
-"""LibreOffice for ``run_code``: the read-only EFS mount its sessions start with.
+"""LibreOffice and docx-js for ``run_code``: the read-only EFS mount its sessions start with.
 
 Spec: ``docs/specs/skill-code-sandbox.md`` D9. Behind ``CODE_SANDBOX_OFFICE_ENABLED``.
 
@@ -33,9 +33,12 @@ logger = logging.getLogger(__name__)
 OFFICE_MOUNT_SSM_SUFFIX = "agentcore/code-sandbox-office-mount"
 #: Must match ``OFFICE_MOUNT_PATH`` there.
 MOUNT_PATH = "/mnt/office"
-#: ``scripts/code-sandbox/seed-office.py`` points ``current`` at the installed
-#: build, so an upgrade is one symlink swap and this path never changes.
+#: ``scripts/seed_code_sandbox_office.py`` points ``current`` at the installed
+#: build, so an upgrade is one symlink swap and these paths never change.
 PROGRAM_DIR = f"{MOUNT_PATH}/current/program"
+#: The release's pinned Node packages (docx-js), put first on ``NODE_PATH``.
+#: Must match ``NODE_DIR`` in the seed script.
+NODE_MODULES_DIR = f"{MOUNT_PATH}/current/node/node_modules"
 #: How long a failed mount is skipped before it is tried again.
 RETRY_AFTER_FAILURE_SECONDS = 300
 

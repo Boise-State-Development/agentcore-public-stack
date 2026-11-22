@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import pathlib
+import shutil
 import stat
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -106,6 +107,18 @@ def fake_office(tmp_path, monkeypatch):
     return program
 
 
+@pytest.fixture
+def fake_node_modules(tmp_path, monkeypatch):
+    """A ``node_modules`` holding a ``docx`` that says it was found."""
+    modules = tmp_path / "office" / "node" / "node_modules"
+    package = modules / "docx"
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(json.dumps({"name": "docx", "version": "0.0.0", "main": "index.js"}))
+    (package / "index.js").write_text("module.exports = { from: 'the office mount' };\n")
+    monkeypatch.setattr(office_mount, "NODE_MODULES_DIR", str(modules))
+    return modules
+
+
 def _use(entry: MountingEntry, monkeypatch) -> None:
     entry.root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(sandbox_pool, "acquire", lambda session_id, user_id: entry)
@@ -170,6 +183,32 @@ def test_the_run_command_is_unchanged_without_the_mount():
 def test_the_run_command_puts_libreoffice_first_on_path():
     command = rc.programs.run_command(120, "/mnt/office/current/program")
     assert 'PATH=/mnt/office/current/program:"$PATH" SAL_USE_VCLPLUGIN=svp timeout -k 5 120 python3' in command
+    assert "NODE_PATH=" not in command
+
+
+def test_the_run_command_puts_the_mounts_node_packages_first_on_node_path():
+    command = rc.programs.run_command(
+        120, office_mount.PROGRAM_DIR, office_mount.NODE_MODULES_DIR,
+    )
+    assert (
+        'NODE_PATH=/mnt/office/current/node/node_modules"${NODE_PATH:+:$NODE_PATH}" '
+        "timeout -k 5 120 python3"
+    ) in command
+
+
+def test_node_path_keeps_what_the_sandbox_already_had(tmp_path):
+    """Run the prefix through a real shell: the mount first, the sandbox's own path after it."""
+    import subprocess
+
+    prefix = rc.programs.run_command(120, None, "/mnt/office/current/node/node_modules")
+    assignment = prefix.split("; ", 1)[1].split(" timeout ", 1)[0]
+    script = f'{assignment} sh -c \'printf %s "$NODE_PATH"\''
+    with_existing = subprocess.run(
+        ["sh", "-c", script], capture_output=True, text=True, env={"NODE_PATH": "/opt/node", "PATH": "/usr/bin:/bin"},
+    ).stdout
+    without = subprocess.run(["sh", "-c", script], capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}).stdout
+    assert with_existing == "/mnt/office/current/node/node_modules:/opt/node"
+    assert without == "/mnt/office/current/node/node_modules"
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +223,25 @@ def test_run_code_mounts_libreoffice_and_finds_soffice(tmp_path, monkeypatch, of
     assert result["status"] == "success", _text(result)
     assert "fake soffice svp --version" in _text(result)
     assert entry.starts == [office_mount.session_mount()]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node on PATH")
+def test_run_code_finds_docx_on_the_mount(
+    tmp_path, monkeypatch, office_on, fake_office, fake_node_modules, saved, audits,
+):
+    """What the docx skill does: write a script, ``require('docx')``, run it with node."""
+    entry = MountingEntry(tmp_path / "sandbox")
+    _use(entry, monkeypatch)
+    code = (
+        "import pathlib, subprocess\n"
+        "pathlib.Path('make.js').write_text(\"console.log(require('docx').from)\")\n"
+        "r = subprocess.run(['node', 'make.js'], capture_output=True, text=True)\n"
+        "print(r.stdout, r.stderr)\n"
+    )
+    result = _call(code=code)
+    assert result["status"] == "success", _text(result)
+    assert "the office mount" in _text(result)
+    assert all(f"NODE_PATH={fake_node_modules}" in c for c in entry.commands if "entry.py" in c)
 
 
 def test_without_the_flag_there_is_no_mount_and_no_soffice(tmp_path, monkeypatch, fake_office, saved, audits):

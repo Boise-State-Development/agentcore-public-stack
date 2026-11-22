@@ -1,0 +1,9 @@
+{
+  "name": "code-sandbox-office-node",
+  "private": true,
+  "description": "Node packages seeded onto the code sandbox's read-only office mount (docs/specs/skill-code-sandbox.md D9). Installed only by backend/scripts/seed_code_sandbox_office.py.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "docx": "9.16.0"
+  }
+}
