@@ -304,6 +304,10 @@ itself, with each step's stage derived from what it reads (so `after` becomes "r
 the approval sheet. The file decision above stands. It also found that a turn cannot run a chosen Agent version
 today, and proposes recording the version and saying when it has changed, with pinning as a later PR (§10 there).
 
+*2026-11-22:* pinning is decided and planned in `workflow-designer.md` §23. A saved workflow's Agent step runs
+the version its file records, for everyone, while the Agent has a published version at or above it. A takedown
+or withdrawal blocks the step rather than falling forward to the author's draft.
+
 The worked example, as a workflow:
 
 | Step | Worker | Reads |
