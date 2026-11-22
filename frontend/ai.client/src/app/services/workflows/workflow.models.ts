@@ -44,16 +44,41 @@ export interface WorkflowAgentView {
   runsDraft: boolean;
 }
 
+/** Why the caller can't run a prompt step's model (`ModelView.reason`). */
+export type WorkflowModelUnavailableReason = 'no_catalog_row' | 'no_access' | 'retired' | 'unsupported' | 'unavailable';
+
+/**
+ * A prompt step's model as the caller sees it (workflow-designer §21.3). `modelId` is the id the
+ * step runs on, after retirement; `requestedModelId` is the file's, when that differs.
+ */
+export interface WorkflowModelView {
+  canRun: boolean;
+  modelId: string;
+  requestedModelId?: string;
+  name?: string;
+  inputPricePerMillionTokens?: number;
+  reason?: WorkflowModelUnavailableReason;
+}
+
+/** `agent` (an Agent step) or `prompt` (one model call, no Agent, §21.3). */
+export type WorkflowStepKind = 'agent' | 'prompt';
+
 export interface WorkflowStepView {
   name: string;
   kind: string;
+  /** Empty on a prompt step. */
   agentId: string;
   agentVersion?: number;
+  /** A prompt step's model, as the file names it. */
+  modelId?: string;
   /** `request`, `files`, then other steps' names. */
   reads: string[];
   request?: string;
   effectiveRequest: string;
+  /** The step's worker. On a prompt step, its model in this shape (name, modelId, rate, canRun). */
   agent: WorkflowAgentView;
+  /** A prompt step's model as the caller sees it. */
+  model?: WorkflowModelView;
 }
 
 export interface WorkflowResultView {
@@ -74,7 +99,18 @@ export interface WorkflowView extends WorkflowRef {
   isOwned: boolean;
 }
 
-export type WorkflowSheetBlockerCode = 'too_few_steps' | 'step_unavailable' | 'same_agent_twice' | 'reads_step';
+export type WorkflowSheetBlockerCode =
+  | 'too_few_steps'
+  | 'step_unavailable'
+  | 'same_agent_twice'
+  | 'reads_step'
+  /** A prompt step while `PROMPT_STEPS_ENABLED` is off. */
+  | 'prompt_steps_off'
+  /** A prompt step on a model the caller can't run (`model.reason` says why). */
+  | 'model_unavailable';
+
+/** The blockers a step carries that its removal clears: the run starts without it (§20.1). */
+export const STEP_BLOCKER_CODES: ReadonlySet<WorkflowSheetBlockerCode> = new Set(['step_unavailable', 'prompt_steps_off', 'model_unavailable']);
 
 export interface WorkflowSheetBlocker {
   code: WorkflowSheetBlockerCode;
@@ -105,8 +141,11 @@ export interface WorkflowDefinition {
   steps: {
     name: string;
     kind: string;
+    /** Empty on a prompt step. */
     agentId: string;
     agentVersion?: number | null;
+    /** A prompt step's model; absent on an Agent step. */
+    modelId?: string | null;
     reads: string[];
     request?: string | null;
   }[];

@@ -1248,3 +1248,52 @@ source's prefix is never touched: a prompt step's answer reaches it as a deliver
 - **Dev check:** each PR's own session validates it on dev after merge. D.6c's check is the end-to-end one: the
   NSF panel as five prompt steps over the sample proposal on Haiku 5.5 and Sonnet 5.5. It shows the warm read on
   the `C#` rows, a stop, a `too_large`, and a stage that reads a prompt step.
+
+#### Built (PR-D.6c)
+
+- **The flag.** `features.promptSteps`: off in `environment.ts` and `environment.production.ts`, on in
+  `environment.development.ts`, where the `development` environment has the backend on.
+- **The queue** (`workflow-run-queue.service.ts`, `workflow-prompt.service.ts`). A run's ready prompt steps go
+  together on one `workflow_prompt` invocation on the source session, with a body of `session_id` and
+  `workflow_prompt` alone: the Runtime builds no agent for it, so a turn's fields would be read by nothing. Each step
+  settles from its frame, is shown at once from it, and its row is then read (`GET …/handoffs/{id}`) for
+  `outputText`.
+  - **Concurrency.** Prompt steps take none of the tab's Agent slots: the Runtime runs an invocation's steps at the
+    run's `limits.concurrency` itself. The tab keeps **at most one prompt invocation in flight per run**, so that
+    bound holds for the run as a whole. Prompt steps that become ready meanwhile go together on the next one, once
+    every step on it has settled (a frame comes after its call ends). An Agent step reading a prompt step starts as
+    soon as that step's frame arrives.
+  - **Skips.** `reads_pending` waits and is sent again, with the same bounded, growing backoff as `…/prepare`'s 409
+    (6 attempts in all), then is left "Not started" with Start: never a loop. `not_open` belongs to another tab or
+    invocation, so the row is re-read rather than resent. `not_in_run`, `not_prompt` and `reads_refused` leave the
+    step "Not started". A refused request says why in a toast (except `not_approved`: the run's row already says
+    stopped). A stream that closes without a step's frame re-reads that row, since a dropped connection doesn't
+    cancel the call.
+  - **Stop run** needs nothing new: the stop write is what the Runtime polls, and the frames that follow
+    (`user_stopped`) are still read after the tab's queue has closed.
+  - **The stage gate** skips the input names: `readStepsOf` drops `request` and `files` from a prompt step's
+    `reads`.
+- **Progress.** `stepState` reads a prompt row's own status, and a step on this tab's invocation reads `running`
+  while its row still says `open`. The run refresh also follows a prompt row that says `running` with no invocation
+  of this tab holding it (a reload). The result watch counts prompt steps, and the toast says "*N* steps finished"
+  once a prompt step is among them.
+- **The sidebar** counts only steps with a conversation, as `runSteps` does, so a run whose summary is a prompt
+  step reads "2 Agents · 2 of 2 finished" there while the thread's row counts every step.
+- **Names.** Several prompt steps can share a model, so a prompt step is called by its step's name wherever it is
+  listed ("Fiscal outsider · Prompt · Haiku 5.5"). The sheet's row is labelled "Prompt · *model*" with the step
+  named on its second line. The designer's Step tab gives a prompt step a Name field (the step name, by the
+  server's naming rule, with every read of it following a rename).
+- **The designer.** Add step adds a step as before, and the Step tab opens on a **Kind** choice (Agent step or
+  Prompt step) behind `features.promptSteps`. A menu on every Add step button was the other option; the choice in
+  the tab keeps the canvas as it was and works the same at 375 px. The model picker lists `ModelService`'s models
+  (already filtered to the user's) that run a prompt step, by `prompt_models.py`'s rule mirrored in
+  `workflows/prompt-models.ts`: Bedrock Converse, text in, text alone out. A TEXT-only model is listed but disabled
+  while the step reads `files`. `definitionOf` (Mark as reviewed) now writes a prompt step's `modelId` back, which
+  it dropped before. The Preview tab names a prompt step by its step and model and prices it like the sheet.
+- **No card, no brief.** A prompt step is never sent the context card, so the sheet prices it without one, shows
+  no card box for a run of prompt steps alone, and asks the source for no brief then: it would be a model call
+  nobody reads. A mixed run's brief is asked as its first Agent step's handoff.
+- **Checked before merge** on a local stack (this branch's app-api and inference-api against dev's tables and
+  Bedrock, `SKIP_AUTH`): a two-step prompt workflow designed, saved, started from a conversation, run with the
+  second step on a later invocation once the first settled, its answers opened, and the result collected by
+  itself; both themes and 375 px.

@@ -60,7 +60,7 @@ function step(index: number, name: string, agentName: string, extra: Partial<Run
     agentName,
     ownRequest: null,
     removed: false,
-    workflowStep: { name, readsSteps: [], unavailable: false, changed: false, runsDraft: false, ...extra },
+    workflowStep: { name, readsSteps: [], readsFiles: true, unavailable: false, changed: false, runsDraft: false, ...extra },
   };
 }
 
@@ -194,7 +194,7 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
         phase: 'blocked',
         steps: [
           step(1, 'generalist', 'Generalist'),
-          { ...step(2, 'colleague', ''), handoffId: '', workflowStep: { name: 'colleague', readsSteps: [], unavailable: true, changed: false, runsDraft: false } },
+          { ...step(2, 'colleague', ''), handoffId: '', workflowStep: { name: 'colleague', readsSteps: [], readsFiles: true, unavailable: true, changed: false, runsDraft: false } },
         ],
       }),
     );
@@ -206,6 +206,57 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
     expect(buttons().some((b) => b.getAttribute('aria-label') === 'Edit the request for Unavailable Agent (colleague)')).toBe(false);
     buttons().find((b) => b.getAttribute('aria-label') === 'Remove Unavailable Agent (colleague)')!.click();
     expect(runs.removeStep).toHaveBeenCalledWith('src', 's2');
+  });
+
+  it('labels a prompt step by its model, prices it with no card and only the files it reads (PR-D.6c)', async () => {
+    const files = [
+      { uploadId: 'f1', filename: 'proposal.pdf', mimeType: 'application/pdf', sizeBytes: 1, estimatedTokens: 10_000 },
+    ];
+    const prompt = (index: number, name: string, readsFiles: boolean): RunReviewStep => ({
+      ...step(index, name, index === 3 ? 'Sonnet 5.5' : 'Haiku 5.5', { readsFiles, readsSteps: index === 3 ? ['lens_a'] : [] }),
+      kind: 'prompt',
+      agentId: '',
+      modelId: index === 3 ? 'us.sonnet' : 'us.haiku',
+      inputPricePerMillionTokens: 1,
+    });
+    await render(
+      review({
+        steps: [prompt(1, 'lens_a', true), prompt(3, 'summary', false)],
+        card: 'c'.repeat(40_000),
+        files,
+        fileIds: ['f1'],
+      }),
+    );
+    const text = el().textContent ?? '';
+    expect(text).toContain('Prompt · Haiku 5.5');
+    expect(text).toContain('Lens a · One model call · reads the files');
+    expect(text).toContain('Prompt · Sonnet 5.5');
+    expect(text).toContain('Summary · One model call · reads 1 result');
+    expect(start().textContent).toContain('Start 2 steps');
+    // No step is sent the card, so the sheet neither shows it nor talks about Agents.
+    expect(text).toContain('Each prompt step is one model call, in the background. You stay here.');
+    expect(text).not.toContain('Context from this conversation');
+    // One lens over the file, the summary over nothing priced here: no card for either.
+    // 10,000 tokens × 1.4 (the tokenizer factor) at $1/M is $0.014, plus the two requests.
+    expect(text).toContain('About $0.01 to start, before any follow-up (estimate)');
+  });
+
+  it('says why a prompt step’s model can’t be used, in the sheet’s words', async () => {
+    await render(
+      review({
+        phase: 'blocked',
+        steps: [
+          step(1, 'generalist', 'Generalist'),
+          {
+            ...step(2, 'budget', 'Haiku 5.5', { unavailable: true, unavailableReason: 'You can’t use this step’s model. Remove the step to start.' }),
+            kind: 'prompt',
+            agentId: '',
+          },
+        ],
+      }),
+    );
+    expect(el().textContent).toContain('Prompt · Haiku 5.5');
+    expect(el().textContent).toContain('You can’t use this step’s model. Remove the step to start.');
   });
 
   it('a workflow that takes one file keeps Start off until exactly one is ticked', async () => {

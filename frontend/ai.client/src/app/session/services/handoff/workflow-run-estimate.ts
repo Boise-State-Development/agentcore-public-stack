@@ -5,6 +5,10 @@
  * Each step pays for its own copy of the card, the request and the ticked files, because four
  * Agents have four system prompts and share no cached prefix (§11). The system prompt, tools and
  * output are not counted, so the line says "estimate" and "before any follow-up".
+ *
+ * A prompt step (workflow-designer §21.3) gets no card, and the files only when it reads them. It
+ * is priced as if it paid for them in full: the steps on one model read one cached copy of the
+ * documents, so this stays an upper bound, never the bill.
  */
 
 /**
@@ -39,6 +43,10 @@ export interface EstimateStep {
   inputPricePerMillionTokens: number | null;
   /** The step's request, which goes in its first message. */
   request: string;
+  /** The step is sent the card. False for a prompt step; absent means true. */
+  card?: boolean;
+  /** The step is sent the ticked files. False for a prompt step that doesn't read them; absent means true. */
+  files?: boolean;
 }
 
 export interface RunEstimateInput {
@@ -52,7 +60,8 @@ export interface RunEstimateInput {
 /** `null` when any step or file can't be priced: the sheet says "estimate unavailable". */
 export function estimateRunInputUsd(input: RunEstimateInput): number | null {
   if (input.steps.length === 0) return null;
-  if (input.fileTokens.some((tokens) => tokens === null || tokens === undefined)) return null;
+  const anyFiles = input.steps.some((step) => step.files !== false);
+  if (anyFiles && input.fileTokens.some((tokens) => tokens === null || tokens === undefined)) return null;
   const files = input.fileTokens.reduce<number>((sum, tokens) => sum + (tokens ?? 0), 0);
   // The card and request are counted as the server counts its excerpt: four characters a token.
   const card = Math.ceil(input.card.length / 4);
@@ -61,7 +70,8 @@ export function estimateRunInputUsd(input: RunEstimateInput): number | null {
     const rate = step.inputPricePerMillionTokens;
     // A rate of 0 is the SPA's placeholder default model, not a free one.
     if (rate === null || !Number.isFinite(rate) || rate <= 0) return null;
-    const tokens = (card + Math.ceil(step.request.length / 4) + files) * tokenizerFactor(step.modelId);
+    const sent = (step.card === false ? 0 : card) + Math.ceil(step.request.length / 4) + (step.files === false ? 0 : files);
+    const tokens = sent * tokenizerFactor(step.modelId);
     total += (tokens * rate) / 1_000_000;
   }
   return total;

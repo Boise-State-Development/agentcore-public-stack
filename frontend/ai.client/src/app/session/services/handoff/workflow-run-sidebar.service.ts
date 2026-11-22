@@ -6,7 +6,7 @@ import { ConfigService } from '../../../services/config.service';
 import { ChatStateService } from '../chat/chat-state.service';
 import { SessionMetadata } from '../models/session-metadata.model';
 import { HandoffStateService } from './handoff-state.service';
-import { RunProgress, runProgress, stepRow } from './workflow-run-progress';
+import { RunProgress, isPromptRunStep, runProgress, stepRow } from './workflow-run-progress';
 import { WorkflowRunQueueService } from './workflow-run-queue.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
 import { WorkflowRunView } from './workflow-run.models';
@@ -67,18 +67,25 @@ export class WorkflowRunSidebarService {
     return known ?? this.fetched().get(link.runId) ?? null;
   }
 
-  /** `runProgress` with exactly the run row's signals. */
+  /**
+   * `runProgress` with exactly the run row's signals, over the steps the sidebar can list: those
+   * with a conversation. A prompt step has none (§21.3), so its line says "2 Agents · 2 of 2
+   * finished" for a run whose summary is a prompt step, as `runSteps` (the kept Agent steps) and
+   * `isRunSettled` count it. The thread's run row counts every step.
+   */
   progressFor(run: WorkflowRunView): RunProgress {
-    return runProgress(run, this.handoffState.rowsFor(run.sessionId), {
+    const listed = { ...run, steps: run.steps.filter((step) => !isPromptRunStep(step)) };
+    return runProgress(listed, this.handoffState.rowsFor(run.sessionId), {
       isLoading: (target) => this.chatState.isSessionLoading(target),
       isPending: (handoffId) => this.queue.isPending(run.runId, handoffId),
+      isRunning: (handoffId) => this.queue.isRunning(run.runId, handoffId),
     });
   }
 
   /** Where a step conversation sits in its run's step order, or `-1` when the run doesn't say. */
   stepIndex(run: WorkflowRunView, sessionId: string): number {
     const liveRows = this.handoffState.rowsFor(run.sessionId);
-    return run.steps.filter((step) => !step.removed).findIndex((step) => stepRow(step, liveRows)?.targetSessionId === sessionId);
+    return run.steps.filter((step) => !step.removed && !isPromptRunStep(step)).findIndex((step) => stepRow(step, liveRows)?.targetSessionId === sessionId);
   }
 
   /**

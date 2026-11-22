@@ -128,7 +128,7 @@ describe('WorkflowRunResultService', () => {
         provideHttpClientTesting(),
         { provide: ConfigService, useValue: { appApiUrl: () => API } },
         { provide: ChatStateService, useValue: { isSessionLoading: () => false } },
-        { provide: WorkflowRunQueueService, useValue: { isPending: () => false } },
+        { provide: WorkflowRunQueueService, useValue: { isPending: () => false, isRunning: () => false } },
         { provide: HandoffNotificationService, useValue: { openSource } },
         { provide: ToastService, useValue: toast },
       ],
@@ -173,7 +173,7 @@ describe('WorkflowRunResultService', () => {
     const collected = service.collect({ runId: 'run1', sessionId: 'src' });
     http.expectOne(COLLECT).flush({ detail: 'x' }, { status: 422, statusText: 'Unprocessable' });
     await collected;
-    expect(toast.error).toHaveBeenCalledWith('The results couldn’t be brought back', 'No Agent has a result to bring back yet.');
+    expect(toast.error).toHaveBeenCalledWith('The results couldn’t be brought back', 'No step has a result to bring back yet.');
   });
 
   it('a watched run that settles says so once and collects, quietly', async () => {
@@ -215,5 +215,21 @@ describe('WorkflowRunResultService', () => {
     runs.upsertRun(run([row(0, 'done'), row(1, 'done')]));
     TestBed.tick();
     http.expectNone(COLLECT);
+  });
+
+  it('counts prompt steps: a run settles once they do, says "steps", and collects (PR-D.6c)', async () => {
+    const prompt = (i: number, status: HandoffStatus): HandoffView => ({ ...row(i, status, false), kind: 'prompt', agentId: '', agentName: 'Haiku 5.5' });
+    const view = run([row(0, 'done'), prompt(1, 'running')]);
+    view.steps[1] = { ...view.steps[1], kind: 'prompt', agentId: '', agentName: 'Haiku 5.5' };
+    runs.upsertRun(view);
+    service.watch({ runId: 'run1', sessionId: 'src' });
+    TestBed.tick();
+    http.expectNone(COLLECT);
+
+    handoffs.upsertRow(prompt(1, 'done'));
+    TestBed.tick();
+    expect(toast.success).toHaveBeenCalledWith('2 steps finished', undefined, expect.anything());
+    http.expectOne(COLLECT).flush({ deliveryId: 'd1', created: true, status: 'pending', delivery: delivery() });
+    await vi.waitFor(() => expect(deliveries.cardsFor('src')).toHaveLength(1));
   });
 });

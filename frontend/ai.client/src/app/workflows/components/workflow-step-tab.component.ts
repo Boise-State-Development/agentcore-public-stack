@@ -8,6 +8,22 @@ import { DraftStep } from '../workflow-draft';
 import { RESULT_NODE, START_NODE, WorkflowDesignerStore } from '../workflow-designer.store';
 import { MAX_WORKFLOW_STEPS, WorkflowFiles } from '../workflow.models';
 
+/** Why the server says this user can't run a prompt step's model (`ModelView.reason`). */
+export function modelReasonCopy(reason: string | undefined): string {
+  switch (reason) {
+    case 'no_access':
+      return 'You can’t use this model. Choose another.';
+    case 'no_catalog_row':
+      return 'This model isn’t offered here. Choose another.';
+    case 'retired':
+      return 'This model has been retired. Choose another.';
+    case 'unsupported':
+      return 'This model can’t run this prompt step. Choose a text model that reads documents.';
+    default:
+      return 'This model couldn’t be checked. Try again, or choose another.';
+  }
+}
+
 const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
   { value: 'none', label: 'No files', hint: 'The starter only writes a request.' },
   { value: 'one', label: 'Exactly one file', hint: 'The starter attaches one, such as the proposal.' },
@@ -15,8 +31,12 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
 ];
 
 /**
- * The Step tab (docs/specs/workflow-designer.md §5): edits the selected card. Agent steps and the
- * two fixed cards only; prompt and checklist steps are D.6 and D.7.
+ * The Step tab (docs/specs/workflow-designer.md §5): edits the selected card. Agent steps, prompt
+ * steps (§21.3, behind `features.promptSteps`) and the two fixed cards; checklist steps are D.7.
+ *
+ * A prompt step is one model call with no Agent: it has a name of its own (several can share a
+ * model), a model from the ones this user can use that run a prompt step (`promptModelChoices`),
+ * and an instruction, which the file keeps as the step's `## Step:` section.
  *
  * Reads decide a step's stage (§4.1): a step can read any other step's result except one that
  * already reads it, directly or on the way, which is shown disabled with why, so the form can't
@@ -188,10 +208,127 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
               <div class="min-w-0">
                 <h2 id="wf-step-heading" class="truncate text-base/7 font-semibold text-gray-900 dark:text-white">{{ store.stepLabel(step) }}</h2>
                 <p class="text-xs/5 text-gray-600 dark:text-gray-400">
-                  Agent step · stage {{ stageNumber() }}@if (model()) { · {{ model() }} }
+                  {{ step.kind === 'prompt' ? 'Prompt step' : 'Agent step' }} · stage {{ stageNumber() }}@if (model()) { · {{ model() }} }
                 </p>
               </div>
             </div>
+
+            @if (store.promptStepsOn || step.kind === 'prompt') {
+              <fieldset>
+                <legend class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Kind</legend>
+                <div class="mt-2 space-y-2">
+                  <label class="flex items-start gap-3 text-sm/6 text-gray-900 dark:text-white">
+                    <input
+                      id="wf-kind-agent"
+                      type="radio"
+                      name="wf-step-kind"
+                      [checked]="step.kind !== 'prompt'"
+                      [disabled]="!editable()"
+                      (change)="store.setStepKind(step.key, 'agent')"
+                      [class]="radioClass"
+                    />
+                    <span>
+                      Agent step
+                      <span class="block text-xs/5 text-gray-600 dark:text-gray-400">An Agent answers in a conversation of its own, with its tools.</span>
+                    </span>
+                  </label>
+                  <label class="flex items-start gap-3 text-sm/6 text-gray-900 dark:text-white">
+                    <input
+                      id="wf-kind-prompt"
+                      type="radio"
+                      name="wf-step-kind"
+                      [checked]="step.kind === 'prompt'"
+                      [disabled]="!editable() || !store.promptStepsOn"
+                      (change)="store.setStepKind(step.key, 'prompt')"
+                      [class]="radioClass"
+                    />
+                    <span>
+                      Prompt step
+                      <span class="block text-xs/5 text-gray-600 dark:text-gray-400">One model call over what it reads. No Agent, no tools, no conversation.</span>
+                    </span>
+                  </label>
+                </div>
+              </fieldset>
+            }
+
+            @if (step.kind === 'prompt') {
+              <div>
+                <label for="wf-step-name" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Name</label>
+                <input
+                  id="wf-step-name"
+                  type="text"
+                  maxlength="40"
+                  [value]="step.autoName ? '' : nameOf(step)"
+                  [readOnly]="!editable()"
+                  (change)="rename(step, $event)"
+                  placeholder="Budget check"
+                  aria-describedby="wf-step-name-help"
+                  [class]="inputClass"
+                />
+                <p id="wf-step-name-help" class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
+                  What the run and the Result call this step. Other steps read it by this name.
+                </p>
+              </div>
+
+              <fieldset>
+                <legend class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Model</legend>
+                @if (modelProblem(); as problem) {
+                  <p class="mt-1 flex items-center gap-1.5 text-xs/5 font-medium text-state-warning-700 dark:text-state-warning-300">
+                    <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0" aria-hidden="true" />
+                    {{ problem }}
+                  </p>
+                }
+                <div class="mt-2 max-h-64 overflow-y-auto rounded-2xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+                  @for (choice of store.promptModels(); track choice.modelId) {
+                    @let textOnly = !choice.readsDocuments && step.reads.includes('files');
+                    <label
+                      class="flex cursor-pointer items-center gap-3 border-b border-gray-100 px-3 py-2 last:border-0 has-checked:bg-gray-100 has-disabled:cursor-not-allowed dark:border-white/5 dark:has-checked:bg-gray-700"
+                    >
+                      <input
+                        type="radio"
+                        name="wf-model"
+                        [value]="choice.modelId"
+                        [checked]="choice.modelId === step.modelId"
+                        [disabled]="!editable() || textOnly"
+                        (change)="store.choosePromptModel(step.key, choice.modelId)"
+                        class="size-4 shrink-0 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800"
+                      />
+                      <span class="min-w-0 flex-1">
+                        <span class="block truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ choice.name }}</span>
+                        <span class="block truncate text-xs/5 text-gray-600 dark:text-gray-400">
+                          @if (textOnly) {
+                            Text only: it can’t be sent the run’s files
+                          } @else if (choice.readsDocuments) {
+                            Reads the run’s files and earlier results
+                          } @else {
+                            Text only: reads earlier results, not files
+                          }
+                        </span>
+                      </span>
+                    </label>
+                  } @empty {
+                    <p class="px-3 py-3 text-sm/6 text-gray-600 dark:text-gray-400">No model you can use runs a prompt step.</p>
+                  }
+                </div>
+              </fieldset>
+
+              <div>
+                <label for="wf-instruction" class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">Instruction</label>
+                <textarea
+                  id="wf-instruction"
+                  rows="5"
+                  [value]="step.ownRequest ?? ''"
+                  [readOnly]="!editable()"
+                  (input)="setInstruction(step, $event)"
+                  placeholder="List the three biggest risks in the budget justification, with the page for each."
+                  aria-describedby="wf-instruction-help"
+                  [class]="textareaClass"
+                ></textarea>
+                <p id="wf-instruction-help" class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">
+                  What this one call is asked, after the files and results it reads. Left blank, it is asked the run’s request.
+                </p>
+              </div>
+            } @else {
 
             @if (view()?.runsDraft) {
               <p class="rounded-2xl border border-gray-200 bg-white px-3 py-2 text-xs/5 text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
@@ -301,13 +438,14 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                 ></textarea>
               }
             </fieldset>
+            }
 
             <fieldset>
               <legend class="text-sm/6 font-medium text-gray-700 dark:text-gray-300">Reads</legend>
               <div class="mt-2 space-y-1.5">
                 <label class="flex items-center gap-3 text-sm/6 text-gray-900 dark:text-white">
                   <input type="checkbox" [checked]="step.reads.includes('request')" [disabled]="!editable()" (change)="toggleRead(step, 'request')" [class]="checkboxClass" />
-                  The request
+                  {{ step.kind === 'prompt' ? 'The run’s request' : 'The request' }}
                 </label>
                 <label class="flex items-center gap-3 text-sm/6 text-gray-900 dark:text-white">
                   <input type="checkbox" [checked]="step.reads.includes('files')" [disabled]="!editable()" (change)="toggleRead(step, 'files')" [class]="checkboxClass" />
@@ -401,6 +539,8 @@ export class WorkflowStepTabComponent {
     'mt-1 size-4 border-gray-300 text-primary-accessible focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800';
   protected readonly textareaClass =
     'mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-400';
+  protected readonly inputClass =
+    'mt-1 block w-full rounded-2xl border border-gray-300 bg-white px-3 py-1.5 text-sm/6 text-gray-900 placeholder:text-gray-500 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-accessible-dark dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-400';
   protected readonly maxSteps = MAX_WORKFLOW_STEPS;
   protected readonly filter = signal('');
 
@@ -462,6 +602,40 @@ export class WorkflowStepTabComponent {
     if (!needle) return all;
     return all.filter((agent) => agent.name.toLowerCase().includes(needle) || (agent.subtitle ?? '').toLowerCase().includes(needle));
   });
+
+  /**
+   * Why the prompt step's model won't do, or null: none chosen, one this user can't use (the
+   * server's word), or a text-only model on a step that reads files.
+   */
+  protected readonly modelProblem = computed(() => {
+    const step = this.step();
+    if (!step || step.kind !== 'prompt') return null;
+    if (!step.modelId) return 'Choose the model this step runs on.';
+    const listed = this.store.promptModels().find((choice) => choice.modelId === step.modelId);
+    if (listed && !listed.readsDocuments && step.reads.includes('files')) {
+      return 'This model reads text only. Choose another, or untick the run’s files below.';
+    }
+    const judged = this.store.modelViewFor(step);
+    if (judged && !judged.canRun) return modelReasonCopy(judged.reason);
+    if (!listed && this.store.promptModels().length) return 'This step’s model isn’t one you can choose. Choose another.';
+    return null;
+  });
+
+  /** A step's name as the author reads it: "budget_check" → "Budget check", as the card says it. */
+  protected nameOf(step: DraftStep): string {
+    return this.store.stepLabel(step);
+  }
+
+  protected rename(step: DraftStep, event: Event): void {
+    const label = this.textOf(event).trim();
+    if (label) this.store.renameStep(step.key, label);
+  }
+
+  /** The instruction is the step's own request; blank, the step is asked the run's. */
+  protected setInstruction(step: DraftStep, event: Event): void {
+    const text = this.textOf(event);
+    this.store.setOwnRequest(step.key, text.trim() ? text : null);
+  }
 
   protected usedElsewhere(agentId: string): boolean {
     const step = this.step();

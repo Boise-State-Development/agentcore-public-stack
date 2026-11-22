@@ -5,8 +5,15 @@ import {
   PROPOSAL_REVIEW_TEMPLATE,
   WorkflowDraft,
   addStep,
+  agentViews,
   blankDraft,
   chooseAgent,
+  choosePromptModel,
+  draftFrom,
+  isComplete,
+  modelViews,
+  renameStep,
+  setStepKind,
   moveStep,
   readersOf,
   removeStep,
@@ -19,12 +26,12 @@ import {
   toWrite,
   toggleResultRead,
 } from './workflow-draft';
-import { MAX_WORKFLOW_STEPS, workflowNameFor } from './workflow.models';
+import { MAX_WORKFLOW_STEPS, WorkflowDocument, workflowNameFor } from './workflow.models';
 
 const VIEW = { canRun: true, hasIcon: false, changed: false, runsDraft: false };
 
 function step(key: string, name: string, overrides: Partial<DraftStep> = {}): DraftStep {
-  return { key, name, autoName: false, agentId: `AST-${name}`, agentVersion: null, reads: ['request', 'files'], ownRequest: null, ...overrides };
+  return { key, name, autoName: false, kind: 'agent', agentId: `AST-${name}`, agentVersion: null, modelId: null, reads: ['request', 'files'], ownRequest: null, ...overrides };
 }
 
 function draft(steps: DraftStep[]): WorkflowDraft {
@@ -242,5 +249,104 @@ describe('names', () => {
     expect(workflowNameFor('workflow.proposal-review.md')).toBe('proposal-review');
     expect(workflowNameFor('field-set.intake.md')).toBeNull();
     expect(workflowNameFor('workflow.Bad_Name.md')).toBeNull();
+  });
+});
+
+describe('prompt steps (workflow-designer §21.3, PR-D.6c)', () => {
+  const prompt = (key: string, name: string, overrides: Partial<DraftStep> = {}): DraftStep =>
+    step(key, name, { kind: 'prompt', agentId: null, modelId: 'us.anthropic.claude-haiku-5-5', ...overrides });
+
+  it('writes a prompt step with its model as its worker and no Agent', () => {
+    const body = toWrite(draft([step('a', 'generalist'), prompt('b', 'budget', { reads: ['files'], ownRequest: 'List the budget risks' })]));
+    expect(body?.steps[1]).toEqual({
+      name: 'budget',
+      kind: 'prompt',
+      agentId: '',
+      modelId: 'us.anthropic.claude-haiku-5-5',
+      reads: ['files'],
+      request: 'List the budget risks',
+    });
+    expect('agentVersion' in (body?.steps[1] ?? {})).toBe(false);
+  });
+
+  it('is complete only once a prompt step has a model', () => {
+    const d = draft([step('a', 'generalist'), prompt('b', 'budget', { modelId: null })]);
+    expect(isComplete(d)).toBe(false);
+    expect(toWrite(d)).toBeNull();
+    expect(isComplete(choosePromptModel(d, 'b', 'm'))).toBe(true);
+  });
+
+  it('compares kind and model in the dirty check', () => {
+    const base = draft([prompt('b', 'budget')]);
+    expect(sameDraft(base, draft([prompt('b', 'budget')]))).toBe(true);
+    expect(sameDraft(base, draft([prompt('b', 'budget', { modelId: 'other' })]))).toBe(false);
+    expect(sameDraft(base, draft([step('b', 'budget')]))).toBe(false);
+  });
+
+  it('switches a step’s kind, clearing the old worker and keeping its reads and request', () => {
+    const d = draft([step('a', 'generalist', { ownRequest: 'Read it', reads: ['request'] })]);
+    const asPrompt = setStepKind(d, 'a', 'prompt');
+    expect(asPrompt.steps[0]).toMatchObject({ kind: 'prompt', agentId: null, modelId: null, reads: ['request'], ownRequest: 'Read it' });
+    const back = setStepKind(choosePromptModel(asPrompt, 'a', 'm'), 'a', 'agent');
+    expect(back.steps[0]).toMatchObject({ kind: 'agent', agentId: null, modelId: null });
+  });
+
+  it('a new step on its placeholder name takes the prompt placeholder, and readers follow a rename', () => {
+    const added = addStep(draft([step('a', 'generalist')]), 1)!;
+    const asPrompt = setStepKind(added.draft, added.key, 'prompt');
+    const promptStep = asPrompt.steps.find((s) => s.key === added.key)!;
+    expect(promptStep.name).toBe('prompt');
+    expect(promptStep.autoName).toBe(true);
+
+    const withReader = { ...asPrompt, steps: [...asPrompt.steps, step('c', 'editor', { reads: ['prompt'] })], result: { mode: 'card' as const, reads: ['prompt'], instruction: null } };
+    const renamed = renameStep(withReader, added.key, 'Budget check');
+    expect(renamed.steps.find((s) => s.key === added.key)).toMatchObject({ name: 'budget_check', autoName: false });
+    expect(renamed.steps.find((s) => s.key === 'c')?.reads).toEqual(['budget_check']);
+    expect(renamed.result.reads).toEqual(['budget_check']);
+    expect(renameStep(renamed, added.key, '   ')).toBe(renamed);
+  });
+
+  it('an Agent can’t be chosen for a prompt step', () => {
+    const d = draft([prompt('b', 'budget')]);
+    expect(chooseAgent(d, 'b', 'AST-x', 'X')).toBe(d);
+  });
+
+  it('reads a saved prompt step back with the model its file names', () => {
+    const fresh = draftFrom({
+      skillId: 's',
+      name: 'w',
+      title: 'W',
+      version: 2,
+      files: 'any',
+      steps: [
+        {
+          name: 'budget',
+          kind: 'prompt',
+          agentId: '',
+          modelId: 'us.anthropic.claude-haiku-5-5',
+          reads: ['request', 'files'],
+          effectiveRequest: 'r',
+          agent: { ...VIEW, modelId: 'us.anthropic.claude-haiku-5-6' },
+          model: { canRun: true, modelId: 'us.anthropic.claude-haiku-5-6', requestedModelId: 'us.anthropic.claude-haiku-5-5' },
+        },
+      ],
+      result: { mode: 'card', steps: ['budget'] },
+      fingerprint: 'f',
+      isOwned: true,
+    });
+    expect(fresh.steps[0]).toMatchObject({ kind: 'prompt', agentId: null, modelId: 'us.anthropic.claude-haiku-5-5' });
+  });
+
+  it('keeps prompt steps out of the Agent views and gives their models by step name', () => {
+    const document = {
+      workflow: {
+        steps: [
+          { name: 'budget', kind: 'prompt', agentId: '', reads: [], effectiveRequest: '', agent: VIEW, model: { canRun: false, modelId: 'm', reason: 'no_access' as const } },
+          { name: 'generalist', kind: 'agent', agentId: 'AST-1', reads: [], effectiveRequest: '', agent: VIEW },
+        ],
+      },
+    } as unknown as WorkflowDocument;
+    expect([...agentViews(document).keys()]).toEqual(['AST-1']);
+    expect(modelViews(document).get('budget')?.reason).toBe('no_access');
   });
 });

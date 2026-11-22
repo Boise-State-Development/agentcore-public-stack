@@ -29,12 +29,15 @@ import {
 } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../agents/components/agent-icon.component';
+import { PromptStepIconComponent } from './prompt-step-icon.component';
 import { RunStepState } from '../../session/services/handoff/workflow-run-progress';
 
 /** One step's card as the graph draws it. Everything it says is in text, never colour alone. */
 export interface GraphStepCard {
   key: string;
-  /** The Agent's name, or "Choose an Agent". */
+  /** `prompt` for a prompt step (workflow-designer §21.3), drawn with its own mark; absent for an Agent step. */
+  kind?: 'prompt';
+  /** The Agent's name, "Choose an Agent", or a prompt step's "Prompt · Haiku 5.5". */
   title: string;
   /** "Agent · Sonnet 5.5". */
   meta: string;
@@ -120,7 +123,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
 @Component({
   selector: 'app-workflow-graph',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, NgTemplateOutlet, AgentIconComponent],
+  imports: [NgIcon, NgTemplateOutlet, AgentIconComponent, PromptStepIconComponent],
   providers: [
     provideIcons({
       heroArrowsPointingIn,
@@ -237,7 +240,9 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                       @let st = statusOf(card.key);
                       <div [attr.data-node-id]="card.key" [attr.data-state]="st.state" [class]="runCardClass">
                         <span class="relative shrink-0">
-                          @if (card.agentId) {
+                          @if (card.kind === 'prompt') {
+                            <app-prompt-step-icon [size]="28" />
+                          } @else if (card.agentId) {
                             <app-agent-icon [agentId]="card.agentId" [iconUrl]="card.iconUrl" [emoji]="card.emoji" [size]="28" />
                           }
                           <span class="absolute -right-1.5 -bottom-1.5 rounded-full bg-white dark:bg-gray-800" aria-hidden="true">
@@ -260,7 +265,9 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                       (click)="selectNode.emit(card.key)"
                       [class]="cardClass"
                     >
-                      @if (card.agentId) {
+                      @if (card.kind === 'prompt') {
+                        <app-prompt-step-icon [size]="28" />
+                      } @else if (card.agentId) {
                         <app-agent-icon [agentId]="card.agentId" [iconUrl]="card.iconUrl" [emoji]="card.emoji" [size]="28" />
                       } @else {
                         <span class="grid size-7 shrink-0 place-items-center rounded-lg border border-dashed border-gray-400 text-gray-600 dark:border-gray-500 dark:text-gray-300" aria-hidden="true">
@@ -534,7 +541,9 @@ export class WorkflowGraphComponent {
   }
 
   protected accessibleName(card: GraphStepCard, stageIndex: number): string {
-    const parts = [card.title, 'Agent step', `stage ${stageIndex + 1}`, card.readsLabel];
+    // A prompt step's meta names its model ("Prompt · Haiku 5.5"), which its title doesn't.
+    const kind = card.kind === 'prompt' ? card.meta : 'Agent step';
+    const parts = [card.title, kind, `stage ${stageIndex + 1}`, card.readsLabel];
     if (card.warning) parts.push(card.warning);
     return parts.join(', ');
   }

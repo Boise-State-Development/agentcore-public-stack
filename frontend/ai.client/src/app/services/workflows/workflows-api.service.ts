@@ -150,6 +150,8 @@ export function definitionOf(view: WorkflowView): WorkflowDefinition {
       kind: step.kind,
       agentId: step.agentId,
       agentVersion: step.agentVersion ?? null,
+      // A prompt step's model goes back as the file names it, never its retirement successor.
+      ...(step.kind === 'prompt' ? { modelId: step.modelId ?? step.model?.requestedModelId ?? step.model?.modelId ?? null } : {}),
       reads: [...step.reads],
       request: step.request ?? null,
     })),

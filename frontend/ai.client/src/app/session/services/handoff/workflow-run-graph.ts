@@ -15,7 +15,7 @@ import type {
   GraphStepCard,
   GraphStepStatus,
 } from '../../../workflows/components/workflow-graph.component';
-import { RunProgress, RunStepLine } from './workflow-run-progress';
+import { RunProgress, RunStepLine, promptWorkerLabel, stepNameLabel } from './workflow-run-progress';
 import { RunReview, WorkflowRunView } from './workflow-run.models';
 
 export const GRAPH_START = 'start';
@@ -69,12 +69,23 @@ export function graphStages(nodes: readonly Pick<GraphNode, 'key' | 'name' | 're
   return stages.length ? stages : [[]];
 }
 
-/** "reads the request, the files and 2 results": the card's edges in words (§4.4). */
-export function runReadsLabel(hasFiles: boolean, results: number): string {
-  const parts = ['the request'];
+/**
+ * "reads the request, the files and 2 results": the card's edges in words (§4.4). Every Agent
+ * step gets the request; a prompt step only when it reads it (`hasRequest`, §21.3).
+ */
+export function runReadsLabel(hasFiles: boolean, results: number, hasRequest = true): string {
+  const parts: string[] = [];
+  if (hasRequest) parts.push('the request');
   if (hasFiles) parts.push('the files');
   if (results) parts.push(`${results} ${results === 1 ? 'result' : 'results'}`);
+  if (parts.length === 0) return 'reads nothing';
   return `reads ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`}`;
+}
+
+/** A prompt step's card: titled by its step's name, since several can share a model; the meta names the model. */
+function promptCard(key: string, stepName: string | undefined, modelName: string, readsLabel: string): GraphStepCard {
+  const worker = promptWorkerLabel(modelName);
+  return { key, kind: 'prompt', title: stepNameLabel(stepName) || worker, meta: worker, agentId: null, readsLabel };
 }
 
 /** "1m 04s", from the run's approval to the step's row settling, as the designer's test run says it. */
@@ -123,18 +134,24 @@ export function runGraph(run: WorkflowRunView, progress: RunProgress, phrase: (l
   const hasFiles = run.fileIds.length > 0;
   const nodes = progress.lines.map((line): GraphNode => {
     const reads = (line.step.reads ?? []).filter((name) => progress.lines.some((other) => other.step.stepName === name));
-    return {
-      key: line.step.stepId,
-      name: line.step.stepName ?? line.step.stepId,
-      reads,
-      card: {
-        key: line.step.stepId,
-        title: line.step.agentName,
-        meta: 'Agent',
-        agentId: line.step.agentId,
-        readsLabel: runReadsLabel(hasFiles, reads.length),
-      },
-    };
+    const own = line.step.reads;
+    const card: GraphStepCard =
+      line.step.kind === 'prompt'
+        ? promptCard(
+            line.step.stepId,
+            line.step.stepName,
+            line.step.agentName,
+            // A prompt row's reads keep its inputs; one written without any reads both (§21.3).
+            runReadsLabel(hasFiles && (!own || own.includes('files')), reads.length, !own || own.includes('request')),
+          )
+        : {
+            key: line.step.stepId,
+            title: line.step.agentName,
+            meta: 'Agent',
+            agentId: line.step.agentId,
+            readsLabel: runReadsLabel(hasFiles, reads.length),
+          };
+    return { key: line.step.stepId, name: line.step.stepName ?? line.step.stepId, reads, card };
   });
   const { stages, edges } = layout(nodes, run.workflow?.resultReads ?? null);
 
@@ -172,23 +189,32 @@ export function reviewGraph(review: RunReview, modelName: (stepId: string) => st
   const keptNames = new Set(kept.map((step) => step.workflowStep?.name).filter((name): name is string => !!name));
   const nodes = kept.map((step): GraphNode => {
     const reads = (step.workflowStep?.readsSteps ?? []).filter((name) => keptNames.has(name));
-    return {
-      key: step.stepId,
-      name: step.workflowStep?.name ?? step.stepId,
-      reads,
-      card: {
-        key: step.stepId,
-        title: step.agentName || step.workflowStep?.name || 'A step',
-        meta: 'Agent',
-        agentId: step.agentId,
-        readsLabel: runReadsLabel(hasFiles, reads.length),
-      },
-    };
+    const card: GraphStepCard =
+      step.kind === 'prompt'
+        ? promptCard(
+            step.stepId,
+            step.workflowStep?.name,
+            step.agentName,
+            runReadsLabel(hasFiles && (step.workflowStep?.readsFiles ?? true), reads.length, readsRequest(review, step.workflowStep?.name)),
+          )
+        : {
+            key: step.stepId,
+            title: step.agentName || step.workflowStep?.name || 'A step',
+            meta: 'Agent',
+            agentId: step.agentId,
+            readsLabel: runReadsLabel(hasFiles, reads.length),
+          };
+    return { key: step.stepId, name: step.workflowStep?.name ?? step.stepId, reads, card };
   });
   const result = review.workflow?.document.workflow.result;
   const { stages, edges } = layout(nodes, result?.reads ?? null);
 
-  const agentOf = new Map(kept.map((step) => [step.workflowStep?.name ?? step.stepId, step.agentName]));
+  const agentOf = new Map(
+    kept.map((step) => [
+      step.workflowStep?.name ?? step.stepId,
+      step.kind === 'prompt' ? stepNameLabel(step.workflowStep?.name) || step.agentName : step.agentName,
+    ]),
+  );
   const status = new Map<string, GraphStepStatus>();
   for (const node of nodes) {
     const after = node.reads.map((name) => agentOf.get(name) || 'another step');
@@ -207,6 +233,12 @@ export function reviewGraph(review: RunReview, modelName: (stepId: string) => st
     finished: new Set(),
     stepCount: kept.length,
   };
+}
+
+/** A saved prompt step reads the run's request only when its reads name it; an Agent step always does. */
+function readsRequest(review: RunReview, name: string | undefined): boolean {
+  const step = name ? review.workflow?.document.workflow.steps.find((candidate) => candidate.name === name) : undefined;
+  return !step || step.kind !== 'prompt' || step.reads.includes('request');
 }
 
 /** "A", "A and B", "A, B and C". */

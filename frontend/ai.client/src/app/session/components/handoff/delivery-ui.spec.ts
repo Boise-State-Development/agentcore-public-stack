@@ -210,6 +210,28 @@ describe('delivery UI', () => {
       expect(items.map((li) => li.querySelectorAll('button').length)).toEqual([2, 2, 0, 0]);
     });
 
+    it('names a prompt step’s part by its step and model, with no conversation behind it (PR-D.6c)', () => {
+      const prompt: DeliveryPart = {
+        stepId: 's5',
+        agentName: 'Haiku 5.5',
+        fromSessionId: '',
+        fromTitle: 'fiscal_outsider',
+        status: 'done',
+        text: 'Thin budget.',
+        artifacts: [],
+        files: [],
+        kind: 'prompt',
+      };
+      TestBed.inject(DeliveryStateService).hydrate('src', [{ ...runResult(), parts: [RUN_PARTS[0], prompt] }]);
+      const el = render();
+      const t = text(el.querySelector('section > div') as HTMLElement);
+      expect(t).toContain('Results from 2 steps');
+      expect(t).toContain('Fiscal outsider · Prompt · Haiku 5.5');
+      expect(el.querySelectorAll('a').length).toBe(0);
+      const preview = [...el.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Preview Fiscal outsider’s result');
+      expect(preview).toBeTruthy();
+    });
+
     it('Preview shows one part, Edit changes only that part, and the send carries the edited part alone', () => {
       const state = TestBed.inject(DeliveryStateService);
       state.hydrate('src', [runResult()]);

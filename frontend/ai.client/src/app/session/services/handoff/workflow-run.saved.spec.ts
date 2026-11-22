@@ -21,6 +21,7 @@ import { HandoffBriefService } from './handoff-brief.service';
 import { HandoffNotificationService } from './handoff-notification.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
 import { CreateWorkflowRunResponse, RunDraft } from './workflow-run.models';
+import { WorkflowRunQueueService } from './workflow-run-queue.service';
 import { WorkflowRunService, canStart } from './workflow-run.service';
 
 /** A saved workflow's sheet in `WorkflowRunService` (workflow-designer.md §8.3, §10, §11, PR-D.2). */
@@ -38,6 +39,22 @@ function savedStep(name: string, agentId: string, agent: Partial<WorkflowStepVie
     reads,
     effectiveRequest: 'Review this proposal',
     agent: { canRun: true, name: name.toUpperCase(), hasIcon: false, publishedVersion: 1, changed: false, runsDraft: false, ...agent },
+  };
+}
+
+/** A prompt step (workflow-designer §21.3): its worker is a model, judged as the starter. */
+function promptSavedStep(name: string, reads: string[], model: Partial<NonNullable<WorkflowStepView['model']>> = {}): WorkflowStepView {
+  const view = { canRun: true, modelId: 'us.anthropic.claude-haiku-5-5', name: 'Haiku 5.5', inputPricePerMillionTokens: 1, ...model };
+  return {
+    name,
+    kind: 'prompt',
+    agentId: '',
+    modelId: 'us.anthropic.claude-haiku-5-5',
+    reads,
+    request: `Read it as ${name}`,
+    effectiveRequest: `Read it as ${name}`,
+    agent: { canRun: view.canRun, name: view.canRun ? view.name : undefined, hasIcon: false, changed: false, runsDraft: false, modelId: view.modelId },
+    model: view,
   };
 }
 
@@ -301,5 +318,113 @@ describe('WorkflowRunService, for a saved workflow', () => {
     service.setFileShared('src', 'f2', true);
     expect(state.reviewFor('src')?.fileIds).toEqual(['f2']);
     expect(canStart(state.reviewFor('src')!)).toBe(true);
+  });
+
+  it('a prompt step on a model the starter can’t use holds the sheet, named by its model, until it is removed', async () => {
+    const document = doc(
+      [savedStep('generalist', 'a1'), savedStep('colleague', 'a2'), promptSavedStep('budget', ['request', 'files'], { canRun: false, reason: 'no_access' })],
+      {},
+      [{ code: 'model_unavailable', step: 'budget', message: "You can't use this step's model. Remove the step, or choose a model you can use" }],
+    );
+    await service.open('src', draftFor(document));
+    http.expectNone(RUNS);
+    const review = state.reviewFor('src')!;
+    expect(review.phase).toBe('blocked');
+    const budget = review.steps.find((s) => s.workflowStep?.name === 'budget')!;
+    expect(budget).toMatchObject({ kind: 'prompt', agentName: 'Haiku 5.5', modelId: 'us.anthropic.claude-haiku-5-5' });
+    expect(budget.workflowStep?.unavailable).toBe(true);
+    expect(budget.workflowStep?.unavailableReason).toContain('You can’t use this step’s model');
+
+    service.removeStep('src', budget.stepId);
+    const req = http.expectOne(RUNS);
+    expect(req.request.body.workflow.removedSteps).toEqual(['budget']);
+    req.flush(created([{ name: 'generalist', agentId: 'a1' }, { name: 'colleague', agentId: 'a2' }]));
+  });
+
+  it('prompt steps while they are off are a step’s blocker, not the sheet’s error', async () => {
+    const document = doc(
+      [savedStep('generalist', 'a1'), savedStep('colleague', 'a2'), promptSavedStep('budget', ['request', 'files'])],
+      {},
+      [{ code: 'prompt_steps_off', step: 'budget', message: "Prompt steps aren't available here yet. Remove the step to start" }],
+    );
+    await service.open('src', draftFor(document));
+    http.expectNone(RUNS);
+    const review = state.reviewFor('src')!;
+    expect(review.phase).toBe('blocked');
+    expect(review.steps.find((s) => s.workflowStep?.name === 'budget')?.workflowStep?.unavailableReason).toBe(
+      'Prompt steps aren’t available here yet. Remove the step to start.',
+    );
+  });
+
+  it('a run with prompt steps: no card in their preview, the files only where they read them, and Start queues them by kind', async () => {
+    const document = doc([
+      promptSavedStep('lens_a', ['request', 'files']),
+      promptSavedStep('lens_b', ['request', 'files']),
+      promptSavedStep('summary', ['lens_a', 'lens_b'], { modelId: 'us.anthropic.claude-sonnet-5-5', name: 'Sonnet 5.5' }),
+    ]);
+    const opened = service.open('src', draftFor(document));
+    const response = created([
+      { name: 'lens_a', agentId: '' },
+      { name: 'lens_b', agentId: '' },
+      { name: 'summary', agentId: '' },
+    ]);
+    response.run.steps = response.run.steps.map((step, i) => ({
+      ...step,
+      kind: 'prompt',
+      agentName: i === 2 ? 'Sonnet 5.5' : 'Haiku 5.5',
+      modelId: i === 2 ? 'us.anthropic.claude-sonnet-5-5' : 'us.anthropic.claude-haiku-5-5',
+      reads: i === 2 ? ['lens_a', 'lens_b'] : ['request', 'files'],
+      handoff: null,
+    }));
+    // A conversation with something to brief: still no brief, since no prompt step gets the card.
+    response.excerpt = 'An excerpt of the conversation';
+    response.steps = response.steps.map((step, i) => ({
+      ...step,
+      kind: 'prompt',
+      agentName: i === 2 ? 'Sonnet 5.5' : 'Haiku 5.5',
+      modelId: i === 2 ? 'us.anthropic.claude-sonnet-5-5' : 'us.anthropic.claude-haiku-5-5',
+      inputPricePerMillionTokens: 1,
+    }));
+    http.expectOne(RUNS).flush(response);
+    await opened;
+
+    const review = state.reviewFor('src')!;
+    expect(review.brief).toBeUndefined();
+    expect(review.steps.map((s) => [s.kind, s.workflowStep?.readsFiles])).toEqual([
+      ['prompt', true],
+      ['prompt', true],
+      ['prompt', false],
+    ]);
+    service.setCard('src', 'a card the prompt steps never get');
+    service.setStepRequest('src', 's3', 'Merge the two lenses');
+    expect(service.previewPrompt(state.reviewFor('src')!, 's3')).toBe('Merge the two lenses');
+
+    const queue = TestBed.inject(WorkflowRunQueueService);
+    const enqueue = vi.spyOn(queue, 'enqueue').mockImplementation(() => undefined);
+    const started = service.start('src');
+    const approve = http.expectOne(`${RUNS}/run1/approve`);
+    approve.flush({ ...response.run, status: 'approved', card: { text: '', removed: false } });
+    await started;
+    const launched = enqueue.mock.calls[0][1];
+    expect(launched.map((step) => [step.handoffId, step.kind, step.reads])).toEqual([
+      ['h1', 'prompt', []],
+      ['h2', 'prompt', []],
+      ['h3', 'prompt', ['h1', 'h2']],
+    ]);
+  });
+
+  it('Mark as reviewed writes a prompt step back with the model its file names', async () => {
+    const document = doc([
+      savedStep('generalist', 'a1', { changed: true, publishedVersion: 6 }),
+      promptSavedStep('budget', ['request', 'files'], { modelId: 'us.anthropic.claude-haiku-5-6', requestedModelId: 'us.anthropic.claude-haiku-5-5' }),
+    ]);
+    const opened = service.open('src', draftFor(document));
+    http.expectOne(RUNS).flush(created([{ name: 'generalist', agentId: 'a1' }, { name: 'budget', agentId: '' }]));
+    await opened;
+
+    void service.markReviewed('src', 'generalist');
+    const put = http.expectOne(WORKFLOW);
+    expect(put.request.body.steps[1]).toMatchObject({ name: 'budget', kind: 'prompt', agentId: '', modelId: 'us.anthropic.claude-haiku-5-5' });
+    put.flush({ ...document, written: true });
   });
 });

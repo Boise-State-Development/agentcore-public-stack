@@ -237,4 +237,30 @@ describe('WorkflowRunRefreshService', () => {
     // h1 is live here, and the server's h2 is older than the one this tab holds.
     expect(handoffs.rowsFor('src').map((r) => r.status)).toEqual(['running', 'running', 'open']);
   });
+
+  it('follows a prompt step running on the server after a reload, which has no conversation to stream (PR-D.6c)', async () => {
+    const prompt = (status: HandoffView['status'], updatedAt: string, outputText?: string): HandoffView => ({
+      ...row('h1', status, updatedAt),
+      kind: 'prompt',
+      agentId: '',
+      agentName: 'Haiku 5.5',
+      ...(outputText ? { outputText } : {}),
+    });
+    const stale = run([prompt('running', '2026-11-21T06:00:05Z'), row('h2', 'done', '2026-11-21T06:00:05Z', 't2')]);
+    stale.steps[0] = { ...stale.steps[0], kind: 'prompt', agentId: '', reads: ['request', 'files'] };
+    runs.hydrate('src', [stale]);
+    handoffs.hydrate('src', [stale.steps[0].handoff!, stale.steps[1].handoff!], null);
+    const refresh = TestBed.inject(WorkflowRunRefreshService);
+    TestBed.tick();
+    expect(refresh.stale().has('run1')).toBe(true);
+
+    await advance(REFRESH_FIRST_MS);
+    const done = run([prompt('done', '2026-11-21T06:01:00Z', 'The aims are clear.'), row('h2', 'done', '2026-11-21T06:00:05Z', 't2')]);
+    done.steps[0] = { ...done.steps[0], kind: 'prompt', agentId: '', reads: ['request', 'files'] };
+    http.expectOne(RUN_URL).flush(done);
+    await advance(0);
+
+    expect(handoffs.rowsFor('src')[0]).toMatchObject({ status: 'done', outputText: 'The aims are clear.' });
+    expect(refresh.stale().has('run1')).toBe(false);
+  });
 });

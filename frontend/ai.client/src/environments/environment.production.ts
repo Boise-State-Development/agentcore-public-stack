@@ -41,6 +41,7 @@ export const environment = {
         handoffBrief: false,
         workflowRuns: false,
         workflows: false,
+        promptSteps: false,
         sessionRewind: true,
         sessionFork: true,
         quotaRequests: false,

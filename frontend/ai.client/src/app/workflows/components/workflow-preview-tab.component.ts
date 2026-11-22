@@ -3,6 +3,9 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroExclamationTriangle, heroInformationCircle } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../agents/components/agent-icon.component';
+import { stepNameLabel } from '../../session/services/handoff/workflow-run-progress';
+import { PromptStepIconComponent } from './prompt-step-icon.component';
+import { modelReasonCopy } from './workflow-step-tab.component';
 import { ModelService } from '../../session/services/model/model.service';
 import { WorkflowStartService } from '../../services/workflows/workflow-start.service';
 import { WorkflowTestRunService } from '../workflow-test-run.service';
@@ -18,6 +21,10 @@ const FILES_LINE: Record<WorkflowFiles, string> = {
 
 interface PreviewRow {
   step: WorkflowStepView;
+  /** A prompt step (§21.3): named by its step, with its model in place of an Agent. */
+  prompt: boolean;
+  /** Why a prompt step's model can't be used, when it can't. */
+  unavailable: string;
   label: string;
   model: string;
   rate: string | null;
@@ -39,7 +46,7 @@ interface PreviewRow {
 @Component({
   selector: 'app-workflow-preview-tab',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, AgentIconComponent],
+  imports: [NgIcon, AgentIconComponent, PromptStepIconComponent],
   providers: [provideIcons({ heroExclamationTriangle, heroInformationCircle })],
   template: `
     @if (!store.ref()) {
@@ -82,14 +89,18 @@ interface PreviewRow {
           <ul role="list" class="mt-3 divide-y divide-gray-200 border-y border-gray-200 dark:divide-gray-700 dark:border-gray-700">
             @for (row of rows(); track row.step.name) {
               <li class="flex items-start gap-3 py-2">
-                <app-agent-icon [agentId]="row.step.agentId" [iconUrl]="row.iconUrl" [emoji]="row.emoji" [size]="28" />
+                @if (row.prompt) {
+                  <app-prompt-step-icon [size]="28" />
+                } @else {
+                  <app-agent-icon [agentId]="row.step.agentId" [iconUrl]="row.iconUrl" [emoji]="row.emoji" [size]="28" />
+                }
                 <div class="min-w-0 flex-1">
                   <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ row.label }}</p>
                   @if (row.step.agent.canRun) {
                     <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">
                       {{ row.model }}@if (row.step.request) { · Own request }
                     </p>
-                    @if (row.step.agent.changed) {
+                    @if (row.step.agent.changed && !row.prompt) {
                       <p class="text-xs/5 text-gray-700 dark:text-gray-300">
                         This Agent has changed since it was added. A run uses its published version, now version {{ row.step.agent.publishedVersion }}.
                       </p>
@@ -97,7 +108,7 @@ interface PreviewRow {
                   } @else {
                     <p class="flex items-center gap-1 text-xs/5 font-medium text-state-warning-700 dark:text-state-warning-300">
                       <ng-icon name="heroExclamationTriangle" class="size-3.5 shrink-0" aria-hidden="true" />
-                      You can’t use this Agent
+                      {{ row.prompt ? row.unavailable : 'You can’t use this Agent' }}
                     </p>
                   }
                 </div>
@@ -249,10 +260,14 @@ export class WorkflowPreviewTabComponent {
       const agent = step.agent;
       const model = agent.modelId ? (this.models.modelNameFor(agent.modelId) ?? agent.modelId) : 'The starter’s model';
       const rate = agent.inputPricePerMillionTokens;
+      const prompt = step.kind === 'prompt';
       return {
         step,
-        label: mention?.name || agent.name || 'An Agent you can’t use',
-        model,
+        prompt,
+        // A prompt step is called by its own name; several can share a model (§21.3).
+        label: prompt ? stepNameLabel(step.name) : mention?.name || agent.name || 'An Agent you can’t use',
+        model: prompt ? `Prompt · ${step.model?.name || model}` : model,
+        unavailable: prompt ? modelReasonCopy(step.model?.reason) : '',
         rate: typeof rate === 'number' && rate > 0 ? `$${rate.toFixed(2)} / M input tokens` : null,
         emoji: mention?.emoji ?? agent.emoji,
         iconUrl: mention?.iconUrl,
@@ -269,6 +284,7 @@ export class WorkflowPreviewTabComponent {
         modelId: step.agent.modelId ?? null,
         inputPricePerMillionTokens: step.agent.inputPricePerMillionTokens ?? null,
         request: step.effectiveRequest,
+        ...(step.kind === 'prompt' ? { card: false, files: step.reads.includes('files') } : {}),
       })),
       card: '',
       fileTokens: [],
