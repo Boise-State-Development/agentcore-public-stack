@@ -1,6 +1,6 @@
 # Workflow Designer: authoring a saved workflow on a canvas
 
-**Status:** Step 2 (D.1 to D.5) built and dev-validated, 2026-11-21, behind `WORKFLOWS_ENABLED` and `WORKFLOW_RUNS_ENABLED` (on in `development` only). §20 is its delivery plan and §20.5 what it showed. Prompt steps (D.6, §21) built and dev-validated 2026-11-22 behind `PROMPT_STEPS_ENABLED`; checklist steps (D.7) planned in §22; pinning (D.8) is decided later. It is the authoring half of step 2 in
+**Status:** Step 2 (D.1 to D.5) built and dev-validated, 2026-11-21, behind `WORKFLOWS_ENABLED` and `WORKFLOW_RUNS_ENABLED` (on in `development` only). §20 is its delivery plan and §20.5 what it showed. Prompt steps (D.6, §21) built and dev-validated 2026-11-22 behind `PROMPT_STEPS_ENABLED`; checklist steps (D.7) built and dev-validated 2026-11-22 behind `CHECKLIST_STEPS_ENABLED` (§22); version pinning (D.8) decided 2026-11-22 and planned in §23. It is the authoring half of step 2 in
 `docs/specs/workflow-runs.md` §14, and it replaces that spec's §10 editor (step cards in a list) with a canvas.
 **Targets branch:** `develop`
 **Tracking:** #2218 (step 2)
@@ -396,12 +396,14 @@ So this comes in two parts:
   the same line. That meets the reason for pinning, which is that an edit to a reviewer must not change a
   workflow *silently*.
 - **True pinning is its own PR (D.8)**, because it is a turn-path change: an optional version on the step's
-  turn, read where the published snapshot is read now, and part of the agent cache key. It also needs a policy
-  answer first (open question 2): may a run use a snapshot that has been superseded, and what happens after a
-  takedown.
+  turn, read where the published snapshot is read now. It also needs a policy answer first (open question 2): may
+  a run use a snapshot that has been superseded, and what happens after a takedown.
+  *2026-11-22: answered and planned in §23. The pin is **not** part of the agent cache key: the key is built from
+  the values a version changes, and a version number in it breaks resume (§23.1).*
 
 An Agent's owner who puts their own Agent in a workflow runs their draft when they test, and others run the
 published version. The designer says so on that step.
+*2026-11-22: with pinning on, the owner runs the pinned version too (§23.2).*
 
 ## 11. Access, sharing and what happens when a step is unavailable
 
@@ -463,7 +465,7 @@ Each PR is useful alone. D.1 to D.4 need nothing new from the run engine or the 
   in Add step. ⚠️ **Measure first:** whether prompt steps can read the document from a shared cached prefix
   (`multi-agent-patterns.md` §11.4, G3).
 - **PR-D.7: checklist steps.** The same path over field sets, with the field-set editor reached from the step.
-- **PR-D.8: true version pinning** (§10), after open question 2 is answered.
+- **PR-D.8: true version pinning** (§10), after open question 2 is answered. Planned in §23.
 
 After D.4 a user can design, preview, test, save, share and start a workflow of up to 8 Agents. Until D.5 the
 canvas is one column between Starts with and Result, which is plainer than the mockup.
@@ -508,6 +510,9 @@ Counts only, on rows and in EMF:
    *Answered 2026-11-20: shown, marked Workflow, with a link to the designer (§20).*
 2. **Pinning policy (D.8).** May a run use a superseded snapshot of an Agent? What does a takedown do to a
    workflow that names the Agent?
+   *Answered 2026-11-22: a superseded published version may run while the Agent has a published version at or
+   above it; a takedown or withdrawal blocks the step; the owner runs the pin too; pinning is the default for every
+   step that records a version (§23.2).*
 3. **Sharing.** Should Share warn when a recipient cannot use a step's Agent? Does an Agent's owner see that it
    is used in someone's workflow (`workflow-runs.md` §17, question 4)?
 4. **A step the starter cannot run.** Block until it is removed (recommended), or drop it and run the rest as a
@@ -1681,3 +1686,136 @@ single item), two scalars and one verdict.
   $0.0176. Both runs cost $0.065.
 - **States:** every list `unassessed` (`non_scalar`), the duration and the hour count `supported`, and the absent
   lists and the verdict `unverified` (no quote), as the rule says.
+
+## 23. Delivery plan, step 5: version pinning (D.8)
+
+A saved workflow's Agent step runs the Agent version the file records (`@ <n>`), for everyone who starts it,
+until someone who can edit the workflow moves it on. Today the file records the version and the sheet says when the
+Agent has moved, but the run uses the current published version (§10).
+
+### 23.1 What the code allows today (read 2026-11-22)
+
+- **A superseded snapshot can be read, but nothing says it was ever approved.** `VERSION#` rows are written
+  once and kept until the Agent is deleted (`delete_versions_for_agent`), so `get_version(agent, n)` reads any `n`.
+  A version is cut at **submission**, though, so rejected and withdrawn submissions have numbers too. The only
+  mark of a published version is the store's index key on the current one.
+- **A takedown or a withdrawal to private clears `published_version`** (`takedown_listing`, the immediate branch of
+  `withdraw_listing`, and `decide_withdrawal` on grant). The version rows stay, and `visibility` doesn't change.
+  With the pointer cleared, `resolve_invocation_agent` gives everyone the live record, which is the author's
+  unreviewed draft (pinned by `test_a_taken_down_agent_runs_the_live_record`). So "fall forward" after a takedown
+  means running the draft.
+- **Access rules apply to the snapshot as it runs.** The snapshot is applied before `resolve_agent_invocation`,
+  which checks its bindings for the invoking user at that moment: a tool or skill they lack blocks the turn (D5), a
+  retired model runs as its successor, and a model with no catalog row is refused (`grants_model_access`). An old
+  snapshot can't grant anything. What a version freezes is its instructions, its binding list, its model settings,
+  its strictness and voice. Skill bodies, tool behaviour, knowledge-base content and MCP servers stay live.
+- **Every turn re-resolves the Agent**, except a resume (`resolve_turn_agent` from `invocations`). A pin carried by
+  the step's first request alone would put turn 2 of the step conversation on the current version: a new system
+  prompt, so the whole cached prefix is written again. The pin has to live on the conversation. Its row is
+  already read before the Agent resolves (`_prepare_session_state`), so that costs no read. A resume replays its
+  `PausedTurnSnapshot` values and is unaffected.
+- **Run create records the current `published_version`**, not the file's `@ <n>` (`_planned_step`). The step's
+  `HANDOFF#` row carries no version.
+- **The agent cache key needs no version.** §10 said the pin is "part of the agent cache key". It isn't, and must
+  not be: the key is built from the values a version changes (system prompt, tools, skills, model), so a pinned
+  version already gets its own entry. Adding the number was tried once and broke resume, because the paused turn's
+  snapshot doesn't carry it (`agent-version-snapshots.md` §4.2, and the note at `resolved_version` in
+  `chat/routes.py`).
+
+### 23.2 Settled with the developer (2026-11-22)
+
+**Which versions a pin may name.** Version `n` of an Agent may run only while:
+
+1. the Agent has a published version `P`,
+2. `n ≤ P`, and
+3. `n` is `P`, or `n`'s row carries `publishedAt`.
+
+`publishedAt` is new: it is stamped on a `VERSION#` row whenever that version becomes the published one
+(approval, an admin rollback, a D13 presentation edit), in the same write that sets its index key.
+
+| What happened | Pinned steps |
+|---|---|
+| An update is approved (v3 → v5) | v3 still runs |
+| An admin rolls back (v5 → v3) | Steps pinned to v4 or v5 are blocked; a roll forward unblocks them |
+| A takedown, or a withdrawal to private | Every pinned step is blocked |
+| A submission was rejected | It can never be pinned |
+| A version was superseded before D.8 | It can't be pinned (no stamp). Dev only, since the flags are off in prod |
+
+**Q2.1, a superseded snapshot: yes.**
+
+- **Who:** anyone who can start the workflow and open the Agent. Each step is still checked as the starter (§11),
+  so the pin widens nothing. Only someone who can edit the workflow's skill changes the pin.
+- **How long:** no expiry. Snapshot retention is unbounded on purpose (`agent-version-snapshots.md` §8).
+- **The sheet:** "Uses version 3. Version 5 is the current published version." with **Use version 5**, which
+  replaces Mark as reviewed. For someone who can edit the workflow it writes the file, as Mark as reviewed does.
+  For anyone else it applies to this run only. A user-facing diff is still the §20.2 follow-up.
+
+**Q2.2, a takedown or unpublish: the step is blocked.** "This Agent is no longer published, so version 3 can't
+run. Remove the step or choose another Agent." Start stays off. Falling forward would run the unreviewed draft, and
+keeping the old snapshot running would ignore the decision that pulled it. A step pinned above a rollback is
+blocked the same way, with **Use version 3** offered.
+
+**Q2.3, the owner: the pinned version, like everyone.** A test run is a real run (§6.2), and a step whose result
+depends on who starts it is not a test. An Agent that has never been published records no version and runs live,
+as today, so drafting an Agent inside a workflow before its first publish still works. After that, the owner tries
+a draft in the Agent Designer's preview. The designer's line becomes "Runs version 3 for everyone, including you."
+
+**Q2.4, the default: every Agent step that records a version**, while the flag is on. The file has recorded
+`@ <n>` on every step since D.1, and opt-in pinning would leave most workflows without the protection workflow-runs
+§10 asks for. "Always the latest" is left out until someone asks for it; a step with no `@ <n>` would express it
+without a format change. A run from `@`-mentions stays unpinned.
+
+**Open, separate from D.8:** an *unpinned* step, and any conversation, on an Agent that has been taken down runs
+the author's draft today. Whether that should block too is a marketplace question, not this step's.
+
+### 23.3 The design
+
+**The flag.** `AGENT_VERSION_PINNING_ENABLED` / `CDK_AGENT_VERSION_PINNING_ENABLED` on app-api and the AgentCore
+Runtime (the Runtime copy written only while on), and `features.agentVersionPinning`. In development: only
+`"true"` enables, and only while `WORKFLOWS_ENABLED` is on. While off, everything is as today: a run records the
+current version, the sheet offers Mark as reviewed, and a pin on a request is ignored with a warning, never
+refused.
+
+**The rule** is one pure function in `apis/shared/assistants/version_pins.py`, with reason codes (`unpublished`,
+`above_published`, `never_published`, `missing`). The sheet, run create and the Runtime all call it. Never a
+second copy.
+
+**Run create** records the file's version on the run step and on its `HANDOFF#` row (`agentVersion`, one more field
+on an existing write), and refuses a step the rule refuses, as a sheet blocker. A non-editor's **Use version N**
+is a per-step override on create that may name only the current `P`.
+
+**The turn.**
+
+- **The step's first turn** carries the version in `handoff_context.agentVersion` (optional, additive). Only a
+  turn that takes a handoff honours it. `resolve_invocation_agent(…, pinned_version=)` applies the rule and
+  serves that snapshot to everyone, the owner included. A refused pin is a message in the conversation
+  (`_forbidden_turn`), never a 503.
+- **Acceptance** already runs alongside the agent build. It also checks that the `HANDOFF#` row's `agentVersion`
+  equals the request's, and refuses before any model call when it doesn't, so a client can't pick a version the
+  run didn't record.
+- **Later turns.** The background write that adds `spawnedFrom` to the step conversation's row also writes
+  `pinnedAgentVersion`. It is never cleared when the handoff settles. Later turns read it from the row they
+  already read, re-check the rule (a takedown mid-conversation blocks the next turn), and ignore any version on
+  the request.
+- **Nothing else moves:** no agent cache key element, no `toolConfig` or system-prompt change, no new SSE event.
+
+### 23.4 How we'll know it costs nothing
+
+| What | How | Expected |
+|---|---|---|
+| TTFT | On dev, 10 pinned and 10 unpinned first turns on one Agent, then later turns: the `turn_prelude` mark for the stage that resolves the Agent, and the client's send-to-first-token | No added round trip. One `VERSION#` read either way, the handoff check overlaps the build, and later turns use the row already read. Any new wait before the first token is measured at realistic scale and its number stated in the PR |
+| Agent cache key | Unit tests | An unpinned turn's key is byte-identical with the flag on and off. Pinned v3 and current v5 get different keys through the system prompt. A paused pinned turn (tool approval) resumes |
+| Prompt cache | `C#` rows on dev | Inside a pinned step conversation, `systemPromptHash` stays the same across turns after a v6 is approved mid-conversation. Two runs pinned to v3 share the tools-plus-system prefix (a hit). Unpinned conversations' hashes and `cacheStatus` don't move across the deploy. `wastedUsd` 0, no `miss_avoidable` |
+
+### 23.5 The PRs
+
+| PR | Side | Needs | What it ships |
+|---|---|---|---|
+| D.8a | Backend (shared, app-api), infra | — | The flag (reader, CDK on both services, `platform.yml`, docs-site row). `publishedAt` in `set_version_index`. `version_pins.py` and `resolve_invocation_agent(…, pinned_version=)`. The sheet's pinned state, its blockers and Use version N. Run create recording the file's version and the per-step override. `agentVersion` on the step's `HANDOFF#` row |
+| D.8b | Runtime | D.8a merged | `handoff_context.agentVersion`, the pin in `resolve_turn_agent`, acceptance's version check, `pinnedAgentVersion` beside `spawnedFrom`, the refusal copy, and the CLAUDE.md flag paragraph |
+| D.8c | SPA | D.8a merged | `features.agentVersionPinning`, the queue sending `agentVersion` on a step's first turn, the sheet's and designer's copy, the blockers, and "Version 3" on the step conversation |
+
+- **D.8b and D.8c run in parallel** once D.8a is in, split by file ownership.
+- **Dev check:** each PR's own session validates it after merge. D.8c's is the end-to-end one: a workflow pinned to
+  a superseded version of one of the NSF reviewer Agents, run by a second user, with §23.4's three checks, then a
+  takedown that blocks the step and a rollback that blocks a step pinned above it.
