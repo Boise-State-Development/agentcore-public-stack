@@ -2,7 +2,11 @@ import { LiveAnnouncer } from '@angular/cdk/a11y';
 import { DestroyRef, Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
 
 import { AgentMentionService, MentionableAgent } from '../agents/services/agent-mention.service';
+import { MySkillService } from '../customize/skills/services/my-skill.service';
+import { fieldSetNameFor } from '../customize/skills/models/field-set.model';
 import { FEATURES } from '../services/features';
+import { fieldSetsLabel } from '../session/services/handoff/workflow-run-progress';
+import { isNestedSkillFile } from '../shared/utils/skill-resource-path';
 import { ModelService } from '../session/services/model/model.service';
 import { promptModelChoices } from './prompt-models';
 import {
@@ -14,6 +18,10 @@ import {
   blankDraft,
   chooseAgent,
   choosePromptModel,
+  fieldSetViews as fieldSetViewsOf,
+  isModelDraftStep,
+  moveFieldSet,
+  toggleFieldSet,
   hasWorker,
   modelViews as modelViewsOf,
   renameStep,
@@ -38,6 +46,7 @@ import {
   MAX_WORKFLOW_STEPS,
   WorkflowAgentView,
   WorkflowDocument,
+  WorkflowFieldSetView,
   WorkflowFiles,
   WorkflowModelView,
   WorkflowRef,
@@ -46,6 +55,11 @@ import {
 import { WorkflowsApiService } from '../services/workflows/workflows-api.service';
 
 export type DesignerLoad = 'loading' | 'ready' | 'not_found' | 'broken' | 'error';
+
+/** The workflow's skill's field sets as the Step tab lists them: by name, from its supporting files. */
+export type SkillFieldSets =
+  | { state: 'idle' | 'loading' | 'error' }
+  | { state: 'ready'; names: string[] };
 
 /** How the header says where the draft stands. */
 export type SavedState = 'new' | 'saved' | 'unsaved' | 'saving';
@@ -72,9 +86,14 @@ export class WorkflowDesignerStore {
   private readonly models = inject(ModelService);
   private readonly announcer = inject(LiveAnnouncer);
   private readonly features = inject(FEATURES);
+  private readonly skills = inject(MySkillService);
 
   /** The designer offers prompt steps (`features.promptSteps`, workflow-designer §21.3). */
   readonly promptStepsOn = this.features.promptSteps;
+  /** And checklist steps (`features.checklistSteps`, §22.3), which run on prompt steps' invocation. */
+  readonly checklistStepsOn = this.features.promptSteps && this.features.checklistSteps;
+  /** A checklist step's sets link to the field-set editor (`features.fieldSetAuthoring`). */
+  readonly fieldSetAuthoringOn = this.features.fieldSetAuthoring;
 
   readonly ref = signal<WorkflowRef | null>(null);
   readonly load = signal<DesignerLoad>('loading');
@@ -117,13 +136,15 @@ export class WorkflowDesignerStore {
   readonly saveBlockedReason = computed(() => {
     if (!this.isOwned()) return 'Only the workflow’s owner can save it.';
     const missing = this.draft().steps.filter((step) => !hasWorker(step));
-    const agents = missing.filter((step) => step.kind !== 'prompt').length;
-    const models = missing.length - agents;
+    const agents = missing.filter((step) => !isModelDraftStep(step)).length;
+    const models = missing.filter((step) => step.kind === 'prompt').length;
+    const checklists = missing.filter((step) => step.kind === 'checklist');
     const parts: string[] = [];
     if (agents === 1) parts.push('Choose an Agent for the step that has none.');
     if (agents > 1) parts.push(`Choose an Agent for the ${agents} steps that have none.`);
     if (models === 1) parts.push('Choose a model for the prompt step that has none.');
     if (models > 1) parts.push(`Choose a model for the ${models} prompt steps that have none.`);
+    for (const step of checklists) parts.push(`${this.stepLabel(step)} needs ${checklistNeeds(step)}.`);
     return parts.length ? parts.join(' ') : null;
   });
 
@@ -140,6 +161,17 @@ export class WorkflowDesignerStore {
   readonly modelViews = computed(() => modelViewsOf(this.document()));
   /** The models a prompt step can be given: ones this user can use that run a prompt step. */
   readonly promptModels = computed(() => promptModelChoices(this.models.availableModels()));
+  /** Each field set the server last read for a checklist step, by name (title, field count, can it run). */
+  readonly fieldSetViews = computed(() => fieldSetViewsOf(this.document()));
+
+  /**
+   * The field sets in this workflow's skill, which a checklist step picks from (§22.3): read from
+   * the skill's supporting files by filename (`field-set.<name>.md`), never by parsing one. The
+   * server judges the chosen ones on every preview (`fieldSets` on the step), and refuses a set the
+   * skill doesn't hold. Read only for a saved workflow the user owns, and only with checklist steps on.
+   */
+  readonly skillFieldSets = signal<SkillFieldSets>({ state: 'idle' });
+  private skillFieldSetsFor: string | null = null;
 
   readonly stages = computed(() => stagesOf(this.draft().steps));
   readonly stepCount = computed(() => this.draft().steps.length);
@@ -160,6 +192,14 @@ export class WorkflowDesignerStore {
 
     // The sheet follows the draft. It needs a saved workflow to validate against, and an Agent
     // on every step, because the body names one per step.
+    // The skill's field sets, once per workflow, for the checklist step's picker.
+    effect(() => {
+      const skillId = this.ref()?.skillId ?? null;
+      const owned = this.isOwned();
+      if (!this.checklistStepsOn || !skillId || !owned || skillId === this.skillFieldSetsFor) return;
+      untracked(() => void this.loadSkillFieldSets(skillId));
+    });
+
     effect(() => {
       const draft = this.draft();
       const ref = this.ref();
@@ -213,6 +253,28 @@ export class WorkflowDesignerStore {
     this.version.set(document.workflow.version);
     this.isOwned.set(document.workflow.isOwned);
     this.ref.set({ skillId: document.workflow.skillId, name: document.workflow.name });
+  }
+
+  /**
+   * Read the workflow's skill's field-set names again (Refresh, after a set is added in another
+   * tab). A failed read leaves the picker saying so; the chosen sets are still the server's to judge.
+   */
+  async loadSkillFieldSets(skillId = this.ref()?.skillId ?? null): Promise<void> {
+    if (!skillId) return;
+    this.skillFieldSetsFor = skillId;
+    this.skillFieldSets.set({ state: 'loading' });
+    try {
+      const skill = await this.skills.getSkill(skillId);
+      if (this.ref()?.skillId !== skillId) return;
+      const names = skill.resources
+        .filter((resource) => resource.kind === 'reference' && !isNestedSkillFile(resource))
+        .map((resource) => fieldSetNameFor(resource.filename))
+        .filter((name): name is string => !!name)
+        .sort();
+      this.skillFieldSets.set({ state: 'ready', names });
+    } catch {
+      if (this.ref()?.skillId === skillId) this.skillFieldSets.set({ state: 'error' });
+    }
   }
 
   // ---- saving ---------------------------------------------------------------------------------
@@ -396,13 +458,52 @@ export class WorkflowDesignerStore {
     this.draft.set(chooseAgent(this.draft(), key, agent.agentId, agent.name));
   }
 
-  /** Make a step an Agent step or a prompt step, and say so. */
+  /** Make a step an Agent step, a prompt step or a checklist step, and say so. */
   setStepKind(key: string, kind: DraftStepKind): void {
     const before = this.draft();
     const after = setStepKind(before, key, kind);
     if (after === before) return;
     this.draft.set(after);
-    this.announcer.announce(kind === 'prompt' ? 'Now a prompt step. Choose its model.' : 'Now an Agent step. Choose its Agent.', 'polite');
+    const said: Record<DraftStepKind, string> = {
+      agent: 'Now an Agent step. Choose its Agent.',
+      prompt: 'Now a prompt step. Choose its model.',
+      checklist: 'Now a checklist step. Choose its model and its field sets.',
+    };
+    this.announcer.announce(said[kind], 'polite');
+  }
+
+  /** Add a field set to a checklist step, or take it off, and say so. */
+  toggleFieldSet(key: string, name: string): void {
+    const before = this.draft();
+    const after = toggleFieldSet(before, key, name);
+    if (after === before) return;
+    this.draft.set(after);
+    const sets = after.steps.find((s) => s.key === key)?.fieldSets ?? [];
+    const title = this.fieldSetTitle(name);
+    this.announcer.announce(
+      `${title} ${sets.includes(name) ? 'added' : 'removed'}. ${fieldSetsLabel(sets.length)} on this step`,
+      'polite',
+    );
+  }
+
+  /** Move one of a checklist step's field sets, and say where it is now. */
+  moveFieldSet(key: string, name: string, delta: -1 | 1): void {
+    const before = this.draft();
+    const after = moveFieldSet(before, key, name, delta);
+    if (after === before) return;
+    this.draft.set(after);
+    const sets = after.steps.find((s) => s.key === key)?.fieldSets ?? [];
+    this.announcer.announce(`${this.fieldSetTitle(name)} moved to position ${sets.indexOf(name) + 1} of ${sets.length}`, 'polite');
+  }
+
+  /** A field set as the author reads it: its title once the server has read it, else its name. */
+  fieldSetTitle(name: string): string {
+    return this.fieldSetViews().get(name)?.title?.trim() || name;
+  }
+
+  /** A field set as the server last read it for a checklist step, or null before a preview has. */
+  fieldSetView(name: string): WorkflowFieldSetView | null {
+    return this.fieldSetViews().get(name) ?? null;
   }
 
   choosePromptModel(key: string, modelId: string): void {
@@ -455,7 +556,7 @@ export class WorkflowDesignerStore {
 
   /** A step's Agent as known: the mention list for name and icon, the server for the rest. */
   agentFor(step: DraftStep): { mention: MentionableAgent | null; view: WorkflowAgentView | null } {
-    if (step.kind === 'prompt' || !step.agentId) return { mention: null, view: null };
+    if (isModelDraftStep(step) || !step.agentId) return { mention: null, view: null };
     return { mention: this.agentById().get(step.agentId) ?? null, view: this.views().get(step.agentId) ?? null };
   }
 
@@ -464,11 +565,12 @@ export class WorkflowDesignerStore {
    * the template's "Fiscal outsider", or "New step" for one just added.
    */
   stepLabel(step: DraftStep): string {
-    if (step.kind === 'prompt') {
-      // Several prompt steps can share a model, so a prompt step is called by its own name.
-      if (step.autoName) return 'New prompt step';
+    if (isModelDraftStep(step)) {
+      // Several model steps can share a model, so a prompt or checklist step is called by its own name.
+      const kind = step.kind === 'checklist' ? 'checklist' : 'prompt';
+      if (step.autoName) return `New ${kind} step`;
       const words = step.name.replace(/_/g, ' ').trim();
-      return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Prompt step';
+      return words ? words.charAt(0).toUpperCase() + words.slice(1) : kind === 'checklist' ? 'Checklist step' : 'Prompt step';
     }
     const { mention, view } = this.agentFor(step);
     if (step.agentId) return mention?.name || view?.name || 'An Agent you can’t use';
@@ -479,7 +581,7 @@ export class WorkflowDesignerStore {
 
   /** The Agent's model by name, or what it runs on when it names none. */
   modelLabel(step: DraftStep): string | null {
-    if (step.kind === 'prompt') {
+    if (isModelDraftStep(step)) {
       if (!step.modelId) return null;
       return this.models.modelNameFor(step.modelId) ?? this.modelViewFor(step)?.name ?? step.modelId;
     }
@@ -494,7 +596,7 @@ export class WorkflowDesignerStore {
    * model the server judged (a model chosen since waits for the next preview).
    */
   modelViewFor(step: DraftStep): WorkflowModelView | null {
-    if (step.kind !== 'prompt' || !step.modelId) return null;
+    if (!isModelDraftStep(step) || !step.modelId) return null;
     const view = this.modelViews().get(step.name);
     if (!view) return null;
     return view.modelId === step.modelId || view.requestedModelId === step.modelId ? view : null;
@@ -510,4 +612,13 @@ export class WorkflowDesignerStore {
     if (!parts.length) return 'reads nothing';
     return `reads ${parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`}`;
   }
+}
+
+/** What a checklist step still lacks before it can be saved, in the Save hint's words. */
+function checklistNeeds(step: DraftStep): string {
+  const needs: string[] = [];
+  if (!step.modelId) needs.push('a model');
+  if (!step.fieldSets.length) needs.push('a field set');
+  if (!step.reads.includes('files')) needs.push('to read the run’s files');
+  return needs.length <= 1 ? (needs[0] ?? 'a model') : `${needs.slice(0, -1).join(', ')} and ${needs[needs.length - 1]}`;
 }

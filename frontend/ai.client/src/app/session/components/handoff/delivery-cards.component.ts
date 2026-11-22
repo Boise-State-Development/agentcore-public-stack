@@ -65,10 +65,10 @@ import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
                       @let edited = card.editedParts?.[part.stepId];
                       <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
                         <p class="min-w-0 truncate text-sm/6 text-gray-900 dark:text-white">
-                          @if (part.kind === 'prompt') {
-                            <!-- A prompt step's part comes from no conversation: its step, then its model. -->
+                          @if (part.kind === 'prompt' || part.kind === 'checklist') {
+                            <!-- A prompt or checklist step's part comes from no conversation: its step, then its kind and model. -->
                             <span class="font-medium">{{ partName(part) }}</span>
-                            <span class="text-gray-600 dark:text-gray-400"> · {{ promptWorker(part.agentName) }}</span>
+                            <span class="text-gray-600 dark:text-gray-400"> · {{ promptWorker(part.agentName, part.kind) }}</span>
                           } @else {
                             <span class="font-medium">{{ part.agentName }}</span>
                             @let partTitle = titleAfterAgent(part.agentName, part.fromTitle);
@@ -211,15 +211,15 @@ export class DeliveryCardsComponent {
     this.editingId.set(this.editingId() === deliveryId ? null : deliveryId);
   }
 
-  /** "4 Agents", or "6 steps" once a prompt step's part is among them (§21.3). */
+  /** "4 Agents", or "6 steps" once a prompt or checklist step's part is among them (§21.3, §22.3). */
   protected partsLabel(parts: readonly DeliveryPart[]): string {
-    return stepsLabel(parts.length, parts.some((part) => part.kind === 'prompt'));
+    return stepsLabel(parts.length, parts.some((part) => !!part.kind));
   }
 
-  /** What a part is called: its Agent, or a prompt step's own name (its model is said beside it). */
+  /** What a part is called: its Agent, or a model step's own name (its kind and model are said beside it). */
   protected partName(part: DeliveryPart): string {
-    if (part.kind !== 'prompt') return part.agentName;
-    return stepNameLabel(part.fromTitle) || promptWorkerLabel(part.agentName);
+    if (!part.kind) return part.agentName;
+    return stepNameLabel(part.fromTitle) || promptWorkerLabel(part.agentName, part.kind);
   }
 
   protected readonly promptWorker = promptWorkerLabel;

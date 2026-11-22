@@ -441,4 +441,79 @@ describe('WorkflowRunRowComponent', () => {
     expect(answer.textContent).not.toContain('**');
     expect(answer.textContent).toContain('[cut off at the output limit]');
   });
+  it('draws a checklist step as "{Step} · Checklist · {model}", its sets as tables behind Results, a failed set in words', () => {
+    const checklist = (i: number, status: HandoffStatus, extra: Partial<HandoffView> = {}): HandoffView => ({
+      ...stepRow(i, status),
+      kind: 'checklist',
+      agentId: '',
+      agentName: 'Haiku 5.5',
+      targetSessionId: undefined,
+      ...extra,
+    });
+    const rows = [
+      checklist(0, 'done', { outputText: '### Budget values' }),
+      checklist(1, 'stopped', { stoppedReason: 'error' }),
+      checklist(2, 'done', { outputText: '### Compliance\n| Field | Value | State |' }),
+    ];
+    const value = run(rows);
+    value.steps = value.steps.map((step, i) => ({
+      ...step,
+      kind: 'checklist',
+      stepName: ['compliance_audit', 'budget_audit', 'mentoring'][i],
+      reads: ['files'],
+      fieldSets: i === 0 ? ['budget', 'compliance'] : ['compliance'],
+      // The third's set rows couldn't be read: its line falls back to its answer's text.
+      checklist:
+        i === 0
+          ? [
+              {
+                runId: 'run1',
+                stepId: 's1',
+                fieldSet: 'budget',
+                setIndex: 0,
+                fieldSetTitle: 'Budget values',
+                status: 'done',
+                fields: [
+                  { name: 'cap', title: 'Budget cap', value: '$600,000', state: 'supported', method: 'numeric', quote: 'up to $600,000', locator: { kind: 'page', value: 2, precision: 'measured' } },
+                  { name: 'trips', title: 'Conference trips', value: '2', state: 'quote_unsupported', method: 'number_word', quote: 'Three trips', locator: { kind: 'page', value: 3, precision: 'estimated' } },
+                ],
+              },
+              { runId: 'run1', stepId: 's1', fieldSet: 'compliance', setIndex: 1, fieldSetTitle: 'Compliance', status: 'error', error: 'cut_off', fields: [] },
+            ]
+          : [],
+    }));
+    const { el, detect } = render(value);
+
+    expect(text(el.querySelector('h3'))).toBe('Proposal review · 3 steps, 2 of 3 finished');
+    expect(el.querySelectorAll('a').length).toBe(0);
+    const lines = [...el.querySelectorAll('[data-handoff-id]')].map((line) => text(line));
+    expect(lines).toEqual([
+      'Compliance audit · Checklist · Haiku 5.5 · 2 field sets · Finished Results',
+      'Budget audit · Checklist · Haiku 5.5 · 1 field set · Stopped · something went wrong',
+      'Mentoring · Checklist · Haiku 5.5 · 1 field set · Finished Answer',
+    ]);
+    // A checklist line names its model and sets, so it wraps on a phone rather than cut them off.
+    const spans = [...el.querySelectorAll('[data-handoff-id] > span.flex-1')];
+    expect(spans.every((span) => span.classList.contains('break-words') && !span.classList.contains('truncate'))).toBe(true);
+
+    const toggle = [...el.querySelectorAll('button')].find((b) => text(b) === 'Results')!;
+    expect(toggle.getAttribute('aria-label')).toBe('Show Compliance audit’s results');
+    toggle.click();
+    detect();
+    const region = el.querySelector(`#${toggle.getAttribute('aria-controls')}`)!;
+    expect(region.getAttribute('role')).toBe('region');
+    const tables = region.querySelectorAll('app-document-extraction');
+    expect(tables.length).toBe(1);
+    // The extraction table's own rendering: values, states, quotes and hedged locators.
+    expect(text(tables[0])).toContain('Budget values · 2 fields');
+    expect(text(tables[0])).toContain('$600,000');
+    expect(text(tables[0])).toContain('found on page 2');
+    expect(text(tables[0])).toContain('not in the quoted passage on about page 3');
+    expect(text(tables[0])).toContain('up to $600,000');
+    expect(text(tables[0])).toContain('1 unconfirmed');
+    // A set that failed on its own says why, in plain words, beside its title.
+    expect(text(region.querySelector('[data-testid="checklist-set-error"]'))).toBe(
+      'Compliance · Not filled in. The model’s answer ran past its output limit before it filled in the fields.',
+    );
+  });
 });

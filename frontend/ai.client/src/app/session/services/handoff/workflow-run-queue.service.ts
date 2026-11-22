@@ -256,10 +256,10 @@ export class WorkflowRunQueueService {
     const ready = pending.filter(
       (step) => !run.held.includes(step.handoffId) && (step.reads ?? []).every((id) => this.readState(run, id, pending) === 'settled'),
     );
-    const starting = free > 0 ? ready.filter((step) => step.kind !== 'prompt').slice(0, free) : [];
-    // Every ready prompt step together, on the run's one prompt invocation, once no step is in flight.
-    const prompting =
-      run.prompting.length === 0 ? ready.filter((step) => step.kind === 'prompt').slice(0, MAX_PROMPT_STEPS_PER_CALL) : [];
+    const starting = free > 0 ? ready.filter((step) => !step.kind).slice(0, free) : [];
+    // Every ready prompt and checklist step together, on the run's one prompt invocation, once no
+    // step is in flight (§21.3, §22.3): they take none of the tab's Agent slots.
+    const prompting = run.prompting.length === 0 ? ready.filter((step) => !!step.kind).slice(0, MAX_PROMPT_STEPS_PER_CALL) : [];
     if (starting.length === 0 && prompting.length === 0 && pending.length === run.pending.length) {
       if (isIdle(run)) this.finish(runId);
       return;
@@ -499,6 +499,25 @@ export class WorkflowRunQueueService {
       });
     }
     void this.rereadRow(envelope.sourceSessionId, step.handoffId);
+    // A checklist step's table is on its `WFCHK#` rows, which the run read carries (§22.3), not
+    // its handoff row: every set's row is written before the step's `done`, so one read finds them.
+    if ((frame.kind ?? step.kind) === 'checklist') void this.rereadChecklist(envelope, step);
+  }
+
+  /**
+   * Read the run and take this checklist step's set rows from it, touching nothing else on the
+   * run this tab holds (its rows advance through their own reads, and the run refresh).
+   */
+  private async rereadChecklist(envelope: RunEnvelope, step: RunStepLaunch): Promise<void> {
+    const fresh = await this.handoff.readRun(envelope.sourceSessionId, envelope.runId);
+    const sets = fresh?.steps.find((candidate) => candidate.stepId === step.stepId)?.checklist;
+    if (!sets) return;
+    const current = this.runState.runsFor(envelope.sourceSessionId).find((run) => run.runId === envelope.runId);
+    if (!current) return;
+    this.runState.upsertRun({
+      ...current,
+      steps: current.steps.map((candidate) => (candidate.stepId === step.stepId ? { ...candidate, checklist: sets } : candidate)),
+    });
   }
 
   private knownRow(sourceSessionId: string, runId: string, handoffId: string): HandoffView | null {
@@ -567,7 +586,7 @@ export function launchOf(run: WorkflowRunView, step: WorkflowRunView['steps'][nu
   return {
     stepId: step.stepId,
     handoffId: step.handoffId,
-    ...(step.kind === 'prompt' ? { kind: 'prompt' as const, modelId: step.modelId } : {}),
+    ...(step.kind === 'prompt' || step.kind === 'checklist' ? { kind: step.kind, modelId: step.modelId } : {}),
     agentId: step.agentId,
     agentName: step.agentName,
     request: step.request,

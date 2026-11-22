@@ -66,7 +66,7 @@ export function stepRow(step: WorkflowRunStepView, liveRows: readonly HandoffVie
 
 export function stepState(run: WorkflowRunView, row: HandoffView | null, step: WorkflowRunStepView, signals: RunStepSignals): RunStepState {
   if (!row) return 'stopped';
-  if (isPromptRunStep(step) || row.kind === 'prompt') return promptStepState(run, row, step, signals);
+  if (isModelRunStep(step) || isModelStepKind(row.kind)) return promptStepState(run, row, step, signals);
   if (row.targetSessionId && signals.isLoading(row.targetSessionId)) return 'running';
   switch (row.status) {
     case 'open':
@@ -82,13 +82,30 @@ export function stepState(run: WorkflowRunView, row: HandoffView | null, step: W
   }
 }
 
-/** A workflow run's prompt step (workflow-designer §21.3): one model call, no Agent, no conversation. */
-export function isPromptRunStep(step: Pick<WorkflowRunStepView, 'kind'>): boolean {
-  return step.kind === 'prompt';
+/** A step with no Agent and no conversation: a prompt step (§21.3) or a checklist step (§22.3). */
+export type ModelStepKind = 'prompt' | 'checklist';
+
+/** `kind` names a prompt or a checklist step, the two kinds of step that are model calls alone. */
+export function isModelStepKind(kind: string | null | undefined): kind is ModelStepKind {
+  return kind === 'prompt' || kind === 'checklist';
 }
 
 /**
- * A prompt step has no conversation, so nothing streams for it: its state is its own row's
+ * A workflow run's model step: a prompt step (workflow-designer §21.3, one model call) or a
+ * checklist step (§22.3, one call per field set). Neither has an Agent or a conversation, so both
+ * ride the run's `workflow_prompt` invocation and are read from their own row.
+ */
+export function isModelRunStep(step: Pick<WorkflowRunStepView, 'kind'>): boolean {
+  return isModelStepKind(step.kind);
+}
+
+/** A workflow run's checklist step (§22.3): one model call per field set, read as a table. */
+export function isChecklistRunStep(step: Pick<WorkflowRunStepView, 'kind'>): boolean {
+  return step.kind === 'checklist';
+}
+
+/**
+ * A prompt or checklist step has no conversation, so nothing streams for it: its state is its own row's
  * (`open → running → done | stopped`), and while this tab's invocation holds it, running.
  */
 function promptStepState(run: WorkflowRunView, row: HandoffView, step: WorkflowRunStepView, signals: RunStepSignals): RunStepState {
@@ -133,9 +150,40 @@ export function stepNameLabel(name: string | undefined): string {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : '';
 }
 
-/** "Prompt · Haiku 5.5": a prompt step's worker, named by its model. */
-export function promptWorkerLabel(modelName: string | undefined): string {
-  return `Prompt · ${modelName?.trim() || 'a model'}`;
+/**
+ * "Prompt · Haiku 5.5", or "Checklist · Haiku 5.5": a model step's worker, named by its kind and
+ * its model. Absent `kind` reads as a prompt step, as every caller before checklist steps meant.
+ */
+export function promptWorkerLabel(modelName: string | undefined, kind: string | null | undefined = 'prompt'): string {
+  return `${kind === 'checklist' ? 'Checklist' : 'Prompt'} · ${modelName?.trim() || 'a model'}`;
+}
+
+/** "1 field set", "4 field sets". */
+export function fieldSetsLabel(count: number): string {
+  return `${count} ${count === 1 ? 'field set' : 'field sets'}`;
+}
+
+/**
+ * Why one of a checklist step's field sets has no table (`error` on its `WFCHK#` row, §22.3), in
+ * plain words. A set that fails alone never stops the step's other sets.
+ */
+export function checklistSetErrorLine(code: string | null | undefined): string {
+  switch (code) {
+    case 'field_set_missing':
+      return 'The field set is no longer in the workflow’s skill, so it wasn’t run.';
+    case 'unsupported_field':
+      return 'The field set now has a list field, which a checklist step can’t fill yet, so it wasn’t run.';
+    case 'no_tool_call':
+      return 'The model answered without filling in the fields, twice.';
+    case 'timeout':
+      return 'It took too long, so it was stopped.';
+    case 'cut_off':
+      return 'The model’s answer ran past its output limit before it filled in the fields.';
+    case 'model_error':
+      return 'The model call failed.';
+    default:
+      return 'Something went wrong, so it wasn’t filled in.';
+  }
 }
 
 /**
@@ -186,15 +234,15 @@ export function agentsLabel(count: number): string {
   return `${count} ${count === 1 ? 'Agent' : 'Agents'}`;
 }
 
-/** "4 Agents", or "6 steps" once any of them is a prompt step, which has no Agent (§21.3). */
+/** "4 Agents", or "6 steps" once any of them is a prompt or checklist step, which has no Agent. */
 export function stepsLabel(count: number, anyPrompt: boolean): string {
   if (!anyPrompt) return agentsLabel(count);
   return `${count} ${count === 1 ? 'step' : 'steps'}`;
 }
 
-/** A step as another's "Waiting for …" names it: its Agent, or a prompt step's own name. */
+/** A step as another's "Waiting for …" names it: its Agent, or a model step's own name. */
 export function workerName(step: Pick<WorkflowRunStepView, 'kind' | 'agentName' | 'stepName'>): string {
-  if (step.kind === 'prompt') return stepNameLabel(step.stepName) || promptWorkerLabel(step.agentName);
+  if (isModelStepKind(step.kind)) return stepNameLabel(step.stepName) || promptWorkerLabel(step.agentName, step.kind);
   return step.agentName;
 }
 

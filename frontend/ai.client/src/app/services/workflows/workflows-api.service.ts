@@ -150,10 +150,14 @@ export function definitionOf(view: WorkflowView): WorkflowDefinition {
       kind: step.kind,
       agentId: step.agentId,
       agentVersion: step.agentVersion ?? null,
-      // A prompt step's model goes back as the file names it, never its retirement successor.
-      ...(step.kind === 'prompt' ? { modelId: step.modelId ?? step.model?.requestedModelId ?? step.model?.modelId ?? null } : {}),
+      // A prompt or checklist step's model goes back as the file names it, never its retirement successor.
+      ...(step.kind === 'prompt' || step.kind === 'checklist'
+        ? { modelId: step.modelId ?? step.model?.requestedModelId ?? step.model?.modelId ?? null }
+        : {}),
       reads: [...step.reads],
       request: step.request ?? null,
+      // A checklist step's sets, in the order it runs them: dropping them would make the step one the format refuses.
+      ...(step.kind === 'checklist' ? { fieldSets: (step.fieldSets ?? []).map((set) => set.name) } : {}),
     })),
     result: {
       mode: view.result.mode,

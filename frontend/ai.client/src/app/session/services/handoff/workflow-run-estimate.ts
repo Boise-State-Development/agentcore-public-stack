@@ -9,6 +9,12 @@
  * A prompt step (workflow-designer §21.3) gets no card, and the files only when it reads them. It
  * is priced as if it paid for them in full: the steps on one model read one cached copy of the
  * documents, so this stays an upper bound, never the bill.
+ *
+ * A checklist step (§22.3) makes one call per field set, and every checklist call on one model
+ * reads one cached copy of the documents (one write per model, then reads, as D.7b measured). So
+ * its documents are counted in full once per model (`cacheGroup`), and each further call on that
+ * model pays them at the cache-read rate. Each call also pays its own field list and the constant
+ * checklist tool and frame (`callExtraTokens`).
  */
 
 /**
@@ -36,6 +42,29 @@ export function tokenizerFactor(modelId: string | null | undefined): number {
   return LEGACY_TOKENIZER_MODELS.some((key) => id.includes(key)) ? TOKENIZER_FACTORS.legacy : TOKENIZER_FACTORS.default;
 }
 
+/** What a cache read costs against the model's base input rate (Bedrock prompt caching). */
+export const CACHE_READ_FACTOR = 0.1;
+
+/** The constant `record_checklist` tool and checklist frame ahead of the documents: ~850 tokens (D.7b). */
+export const CHECKLIST_FRAME_TOKENS = 850;
+
+/** One field's line in a checklist call's field list (name, title, type, what to find), roughly. */
+export const CHECKLIST_FIELD_TOKENS = 40;
+
+/** What a checklist step adds to its estimate: one call per field set, sharing its model's documents. */
+export function checklistEstimate(
+  modelId: string | null | undefined,
+  fieldSets: readonly { fieldCount?: number }[] | undefined,
+): Pick<EstimateStep, 'card' | 'files' | 'callExtraTokens' | 'cacheGroup'> {
+  const sets = fieldSets?.length ? fieldSets : [{}];
+  return {
+    card: false,
+    files: true,
+    callExtraTokens: sets.map((set) => CHECKLIST_FRAME_TOKENS + (set.fieldCount ?? 0) * CHECKLIST_FIELD_TOKENS),
+    cacheGroup: `checklist:${modelId ?? ''}`,
+  };
+}
+
 /** One step's inputs to the estimate. */
 export interface EstimateStep {
   modelId: string | null;
@@ -47,6 +76,16 @@ export interface EstimateStep {
   card?: boolean;
   /** The step is sent the ticked files. False for a prompt step that doesn't read them; absent means true. */
   files?: boolean;
+  /**
+   * One entry per model call the step makes, each the tokens that call adds besides the request
+   * and the files: a checklist step's field list and frame. Absent means one call adding nothing.
+   */
+  callExtraTokens?: readonly number[];
+  /**
+   * Steps sharing a group read one cached copy of the files: the group's first call pays them in
+   * full and every later one at `CACHE_READ_FACTOR`. Absent: every call pays them in full.
+   */
+  cacheGroup?: string;
 }
 
 export interface RunEstimateInput {
@@ -66,11 +105,21 @@ export function estimateRunInputUsd(input: RunEstimateInput): number | null {
   // The card and request are counted as the server counts its excerpt: four characters a token.
   const card = Math.ceil(input.card.length / 4);
   let total = 0;
+  const warmed = new Set<string>();
   for (const step of input.steps) {
     const rate = step.inputPricePerMillionTokens;
     // A rate of 0 is the SPA's placeholder default model, not a free one.
     if (rate === null || !Number.isFinite(rate) || rate <= 0) return null;
-    const sent = (step.card === false ? 0 : card) + Math.ceil(step.request.length / 4) + (step.files === false ? 0 : files);
+    const request = Math.ceil(step.request.length / 4);
+    const stepCard = step.card === false ? 0 : card;
+    const stepFiles = step.files === false ? 0 : files;
+    let sent = 0;
+    for (const extra of step.callExtraTokens ?? [0]) {
+      const group = step.cacheGroup;
+      const cached = group !== undefined && warmed.has(group);
+      if (group !== undefined) warmed.add(group);
+      sent += stepCard + request + extra + (cached ? stepFiles * CACHE_READ_FACTOR : stepFiles);
+    }
     const tokens = sent * tokenizerFactor(step.modelId);
     total += (tokens * rate) / 1_000_000;
   }

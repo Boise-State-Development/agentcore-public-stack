@@ -8,6 +8,7 @@
 
 import { WorkflowDocument, WorkflowRef, WorkflowRunSource } from '../../../services/workflows/workflow.models';
 import { FolderAttachmentData } from '../models/message.model';
+import { WorkflowFieldSetView } from '../../../services/workflows/workflow.models';
 import { HandoffBrief, HandoffView, ShareableFile, TurnsCovered } from './handoff.models';
 
 /** Agents in one run (`WORKFLOW_RUN_MAX_STEPS`). The composer refuses a ninth mention. */
@@ -23,8 +24,53 @@ export interface WorkflowRunLimits {
   concurrency: number;
 }
 
-/** An Agent step, or a prompt step: one model call with no Agent and no conversation (§21.3). */
-export type WorkflowRunStepKind = 'agent' | 'prompt';
+/**
+ * An Agent step; a prompt step, one model call with no Agent and no conversation (§21.3); or a
+ * checklist step, one model call per field set, with no Agent and no conversation (§22.3).
+ */
+export type WorkflowRunStepKind = 'agent' | 'prompt' | 'checklist';
+
+/** A model step's kind, as the run's create response, the sheet and the queue carry it. */
+export type WorkflowModelStepKind = 'prompt' | 'checklist';
+
+/** Where a checklist value's quote was found: the unit the document has, and how sure. */
+export interface ChecklistLocator {
+  kind: string;
+  value: number;
+  precision: string;
+}
+
+/** One field of one checklist set, as `WFCHK#` rows carry it (`ChecklistField`). */
+export interface ChecklistFieldView {
+  name: string;
+  title?: string;
+  type?: string;
+  /** Null when the document didn't answer it. */
+  value?: string | null;
+  state: string;
+  method?: string;
+  quote?: string | null;
+  locator?: ChecklistLocator | null;
+}
+
+/**
+ * One field set a checklist step ran (`ChecklistSetRow`, a `WFCHK#` row, §22.3): its values with
+ * their quotes and provenance states, or `status: error` with why, when the set failed on its own.
+ */
+export interface ChecklistSetView {
+  runId: string;
+  stepId: string;
+  fieldSet: string;
+  setIndex: number;
+  fieldSetTitle?: string;
+  fieldSetVersion?: string;
+  modelId?: string;
+  status: 'done' | 'error';
+  error?: string | null;
+  fields: ChecklistFieldView[];
+  quotesOmitted?: boolean;
+  createdAt?: string;
+}
 
 /** A step as the run holds it, with its handoff row's current view (`null` when the row is gone). */
 export interface WorkflowRunStepView {
@@ -36,8 +82,15 @@ export interface WorkflowRunStepView {
   agentId: string;
   /** A prompt step's model's display name. */
   agentName: string;
-  /** A prompt step's model. */
+  /** A prompt or checklist step's model. */
   modelId?: string;
+  /** A checklist step's field sets, in the order it runs them (§22.3). */
+  fieldSets?: string[];
+  /**
+   * A checklist step's `WFCHK#` rows, one per set it has run, in its order: `[]` while none has,
+   * absent on every other kind of step (§22.3).
+   */
+  checklist?: ChecklistSetView[];
   request: string;
   removed: boolean;
   /** The saved workflow's name for this step (PR-D.2); absent for a run of mentions. */
@@ -100,15 +153,19 @@ export interface WorkflowRunCard {
 export interface CreatedRunStep {
   stepId: string;
   handoffId: string;
-  /** `prompt` for a prompt step; absent for an Agent step. */
-  kind?: 'prompt';
-  /** Empty on a prompt step. */
+  /** `prompt` for a prompt step, `checklist` for a checklist step; absent for an Agent step. */
+  kind?: WorkflowModelStepKind;
+  /** Empty on a prompt or checklist step. */
   agentId: string;
-  /** A prompt step's model's display name. */
+  /** A prompt or checklist step's model's display name. */
   agentName: string;
   request: string;
-  /** A prompt step gets no card, so its prompt is its instruction alone. */
+  /** A prompt step gets no card, so its prompt is its instruction alone; a checklist step's is its guidance. */
   prompt: string;
+  /** A checklist step's field sets, each as the skill holds it now, with its field count. */
+  fieldSets?: WorkflowFieldSetView[];
+  /** Model calls the step makes: one per field set on a checklist step, one on a prompt step. */
+  calls?: number;
   /** The Agent's own model, or a prompt step's. Absent when an Agent names none: it runs on the send's model. */
   modelId?: string;
   /** `modelId`'s catalog input rate, USD per million tokens. */
@@ -163,16 +220,21 @@ export interface RunDraftWorkflow {
 export interface RunReviewStep {
   stepId: string;
   handoffId: string;
-  /** A prompt step (§21.3): one model call over the run's files, with no Agent and no card. */
-  kind?: 'prompt';
+  /**
+   * A prompt step (§21.3): one model call over the run's files, with no Agent and no card. A
+   * checklist step (§22.3): one call per field set, the same way.
+   */
+  kind?: WorkflowModelStepKind;
   agentId: string;
-  /** A prompt step's model's display name. */
+  /** A prompt or checklist step's model's display name. */
   agentName: string;
   /** This step's own request, once its Edit was used; `null` while it follows the shared one. */
   ownRequest: string | null;
   removed: boolean;
   modelId?: string;
   inputPricePerMillionTokens?: number;
+  /** A checklist step's field sets, each as the skill holds it now (§22.3). */
+  fieldSets?: WorkflowFieldSetView[];
   /** A saved workflow's step (PR-D.2): its name in the file and its Agent as the starter sees it. */
   workflowStep?: RunReviewWorkflowStep;
 }
@@ -257,10 +319,11 @@ export interface RunStepLaunch {
   stepId: string;
   handoffId: string;
   /**
-   * `prompt` for a prompt step (§21.3): the queue sends the run's ready prompt steps together on
-   * one `workflow_prompt` invocation, never through a handoff's send. Absent for an Agent step.
+   * `prompt` for a prompt step (§21.3), `checklist` for a checklist step (§22.3): the queue sends
+   * the run's ready model steps together on one `workflow_prompt` invocation, never through a
+   * handoff's send. Absent for an Agent step.
    */
-  kind?: 'prompt';
+  kind?: WorkflowModelStepKind;
   agentId: string;
   agentName: string;
   modelId?: string;

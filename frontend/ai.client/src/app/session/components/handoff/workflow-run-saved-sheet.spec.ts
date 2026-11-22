@@ -249,6 +249,64 @@ describe('WorkflowRunSheetComponent, for a saved workflow', () => {
     expect(text).toContain('About $0.01 to start, before any follow-up (estimate)');
   });
 
+  it('leads a checklist step with its name, then "Checklist · {model} · {N} field sets", and prices one call per set (PR-D.7c)', async () => {
+    const files = [
+      { uploadId: 'f1', filename: 'proposal.pdf', mimeType: 'application/pdf', sizeBytes: 1, estimatedTokens: 10_000 },
+    ];
+    const audit: RunReviewStep = {
+      ...step(1, 'compliance_audit', 'Haiku 5.5'),
+      kind: 'checklist',
+      agentId: '',
+      // A checklist step's text is its own guidance, possibly empty, never the shared request.
+      ownRequest: '',
+      modelId: 'us.haiku',
+      inputPricePerMillionTokens: 1,
+      fieldSets: [
+        { name: 'compliance', canRun: true, title: 'Compliance', fieldCount: 6 },
+        { name: 'budget', canRun: true, title: 'Budget', fieldCount: 10 },
+      ],
+    };
+    await render(review({ steps: [step(2, 'generalist', 'Generalist'), audit], card: 'card', files, fileIds: ['f1'] }));
+    const text = el().textContent ?? '';
+    const titles = Array.from(el().querySelectorAll('li p.font-medium')).map((p) => p.textContent?.trim());
+    expect(titles).toEqual(['Generalist', 'Compliance audit']);
+    expect(text).toContain('Checklist · Haiku 5.5 · 2 field sets');
+    expect(text).toContain('Each Agent starts a new conversation and each checklist step is one model call per field set, in the background.');
+    // Edit and Remove are named per step, and a checklist step's Edit is its guidance.
+    const labels = buttons().map((b) => b.getAttribute('aria-label'));
+    expect(labels).toContain('Edit the guidance for Compliance audit');
+    expect(labels).toContain('Remove Compliance audit');
+    // An empty guidance doesn't hold Start back.
+    expect(start().disabled).toBe(false);
+    expect(start().textContent).toContain('Start 2 steps');
+  });
+
+  it('shows each of a checklist step’s blockers once, in the sheet’s words', async () => {
+    await render(
+      review({
+        phase: 'blocked',
+        steps: [
+          step(1, 'generalist', 'Generalist'),
+          {
+            ...step(2, 'audit', 'Haiku 5.5', {
+              unavailable: true,
+              unavailableReason:
+                "This step's field set 'budget' is no longer in the workflow's skill. Remove the step, or add the set back. Checklist steps aren’t available here yet. Remove the step to start.",
+            }),
+            kind: 'checklist',
+            agentId: '',
+            fieldSets: [{ name: 'budget', canRun: false, reason: 'missing' }],
+          },
+        ],
+      }),
+    );
+    const titles = Array.from(el().querySelectorAll('li p.font-medium')).map((p) => p.textContent?.trim());
+    expect(titles).toEqual(['Generalist', 'Audit']);
+    expect(el().textContent).toContain('Checklist · Haiku 5.5 · 1 field set');
+    expect(el().textContent).toContain("field set 'budget' is no longer in the workflow's skill");
+    expect(buttons().some((b) => b.getAttribute('aria-label') === 'Remove Audit')).toBe(true);
+  });
+
   it('says why a prompt step’s model can’t be used, in the sheet’s words', async () => {
     await render(
       review({

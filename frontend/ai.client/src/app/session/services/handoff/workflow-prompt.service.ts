@@ -15,11 +15,16 @@ export type PromptSkipReason = 'not_in_run' | 'not_prompt' | 'not_open' | 'reads
 /** Why a whole request was refused before any step was claimed. */
 export type PromptRefusedReason = 'flag_off' | 'not_found' | 'not_approved' | 'unavailable';
 
-/** One `workflow_prompt_step` frame: a step settled, or was skipped (not started by this call). */
-export type PromptStepFrame =
+/**
+ * One `workflow_prompt_step` frame: a step settled, or was skipped (not started by this call).
+ * `kind` says which kind of model step it is (`prompt` or `checklist`, §22.3); the Runtime sends
+ * it on every frame but a `not_in_run` skip, and a frame from before it reads as absent.
+ */
+export type PromptStepFrame = (
   | { stepId: string; status: 'done' }
   | { stepId: string; status: 'stopped'; stoppedReason: PromptStopReason }
-  | { stepId: string; status: 'skipped'; reason: PromptSkipReason };
+  | { stepId: string; status: 'skipped'; reason: PromptSkipReason }
+) & { kind?: 'prompt' | 'checklist' };
 
 export interface WorkflowPromptHandlers {
   /** One step's frame, as it settles. Called once per step at most. */
@@ -49,8 +54,9 @@ export function workflowPromptBody(sourceSessionId: string, runId: string, stepI
 }
 
 /**
- * A workflow run's prompt steps, sent on their own invocation (docs/specs/workflow-designer.md
- * §21.3, PR-D.6c).
+ * A workflow run's prompt and checklist steps, sent on their own invocation
+ * (docs/specs/workflow-designer.md §21.3, PR-D.6c; §22.3, PR-D.7c: a checklist step rides the
+ * same invocation and the same `stepIds`, and its frame says `kind: checklist`).
  *
  * Like the handoff brief, this is an invocation on the source conversation that is not a turn, so
  * it never goes through `ChatHttpService`: no message map, loading flag, abort controller or turn
@@ -128,17 +134,29 @@ const REFUSED_REASONS: ReadonlySet<string> = new Set<PromptRefusedReason>(['flag
 function asFrame(data: Record<string, unknown>): PromptStepFrame | null {
   const stepId = data['stepId'];
   if (typeof stepId !== 'string' || !stepId) return null;
+  const raw = data['kind'];
+  const kind: { kind?: 'prompt' | 'checklist' } = raw === 'prompt' || raw === 'checklist' ? { kind: raw } : {};
   switch (data['status']) {
     case 'done':
-      return { stepId, status: 'done' };
+      return { stepId, status: 'done', ...kind };
     case 'stopped': {
       const reason = data['stoppedReason'];
-      return { stepId, status: 'stopped', stoppedReason: typeof reason === 'string' && STOP_REASONS.has(reason) ? (reason as PromptStopReason) : 'error' };
+      return {
+        stepId,
+        status: 'stopped',
+        stoppedReason: typeof reason === 'string' && STOP_REASONS.has(reason) ? (reason as PromptStopReason) : 'error',
+        ...kind,
+      };
     }
     case 'skipped': {
       const reason = data['reason'];
       // An unknown skip reads as `not_open`: the row is re-read, never resent blind.
-      return { stepId, status: 'skipped', reason: typeof reason === 'string' && SKIP_REASONS.has(reason) ? (reason as PromptSkipReason) : 'not_open' };
+      return {
+        stepId,
+        status: 'skipped',
+        reason: typeof reason === 'string' && SKIP_REASONS.has(reason) ? (reason as PromptSkipReason) : 'not_open',
+        ...kind,
+      };
     }
     default:
       return null;

@@ -188,6 +188,16 @@ export interface FeatureFlags {
   promptSteps: boolean;
 
   /**
+   * Checklist steps (docs/specs/workflow-designer.md §22): a workflow step that
+   * runs named field sets over the run's files, one model call per set, on
+   * prompt steps' invocation. The designer offers it, the sheet and the run
+   * row show its sets and its table. Only meaningful with `promptSteps`.
+   * Backend: CHECKLIST_STEPS_ENABLED (app-api and the AgentCore Runtime). In
+   * development, so `false` unless the environment has turned the backend on.
+   */
+  checklistSteps: boolean;
+
+  /**
    * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
    * user message offers "Rewind to here", which hides it and everything after
    * it and puts its text back in the composer to edit and resend. Backend:

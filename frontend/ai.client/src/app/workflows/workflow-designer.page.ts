@@ -26,7 +26,7 @@ import {
 import { firstValueFrom } from 'rxjs';
 
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../components/confirmation-dialog';
-import { RunStepLine } from '../session/services/handoff/workflow-run-progress';
+import { RunStepLine, fieldSetsLabel } from '../session/services/handoff/workflow-run-progress';
 import { WorkflowRunView } from '../session/services/handoff/workflow-run.models';
 import {
   GraphEdge,
@@ -213,16 +213,25 @@ export class WorkflowDesignerPage {
       keys.map((key) => {
         const step = byKey.get(key)!;
         const model = this.store.modelLabel(step);
-        if (step.kind === 'prompt') {
+        if (step.kind === 'prompt' || step.kind === 'checklist') {
           const judged = this.store.modelViewFor(step);
+          const checklist = step.kind === 'checklist';
           let warning: string | undefined;
           if (!step.modelId) warning = 'Choose a model';
           else if (judged && !judged.canRun) warning = 'You can’t use this model here';
+          else if (checklist && !step.fieldSets.length) warning = 'Choose a field set';
+          else if (checklist && !step.reads.includes('files')) warning = 'Needs the run’s files';
+          else if (checklist && step.fieldSets.some((name) => this.store.fieldSetView(name)?.canRun === false)) {
+            warning = 'A field set can’t run';
+          }
+          const kindWord = checklist ? 'Checklist' : 'Prompt';
+          // A checklist card also says how many sets it runs: one model call each (§22.3).
+          const sets = checklist && step.fieldSets.length ? ` · ${fieldSetsLabel(step.fieldSets.length)}` : '';
           return {
             key,
-            kind: 'prompt' as const,
+            kind: step.kind,
             title: this.store.stepLabel(step),
-            meta: model ? `Prompt · ${model}` : 'Prompt',
+            meta: `${model ? `${kindWord} · ${model}` : kindWord}${sets}`,
             agentId: null,
             warning,
             readsLabel: this.store.readsLabel(step),

@@ -13,7 +13,7 @@ import { WorkflowRunMergeService, mergeInstructionOf } from './workflow-run-merg
 import { WorkflowRunQueueService } from './workflow-run-queue.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
 import { WorkflowRunView } from './workflow-run.models';
-import { isPromptRunStep, runProgress, stepsLabel } from './workflow-run-progress';
+import { isModelRunStep, runProgress, stepsLabel } from './workflow-run-progress';
 
 /** `POST …/workflow-runs/{runId}/collect` (PR-W.2). */
 export interface CollectWorkflowRunResponse {
@@ -155,7 +155,7 @@ export class WorkflowRunResultService {
     if (done === 0) return;
     const first = run.steps.find((step) => !step.removed);
     const kept = run.steps.filter((step) => !step.removed);
-    const label = `${stepsLabel(done, kept.some(isPromptRunStep))} finished`;
+    const label = `${stepsLabel(done, kept.some(isModelRunStep))} finished`;
     this.toast.success(label, undefined, {
       action: first
         ? { label: 'Open', handler: () => this.notifications.openSource({ handoffId: first.handoffId, sourceSessionId: run.sessionId }) }

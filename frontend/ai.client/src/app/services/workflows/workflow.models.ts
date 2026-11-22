@@ -60,25 +60,49 @@ export interface WorkflowModelView {
   reason?: WorkflowModelUnavailableReason;
 }
 
-/** `agent` (an Agent step) or `prompt` (one model call, no Agent, §21.3). */
-export type WorkflowStepKind = 'agent' | 'prompt';
+/**
+ * `agent` (an Agent step), `prompt` (one model call, no Agent, §21.3) or `checklist` (one model
+ * call per field set, no Agent, §22.3).
+ */
+export type WorkflowStepKind = 'agent' | 'prompt' | 'checklist';
+
+/** Why a checklist step's field set can't run (`FieldSetView.reason`). */
+export type WorkflowFieldSetUnavailableReason = 'missing' | 'list_field' | 'unreadable';
+
+/**
+ * One field set a checklist step runs, as the workflow's skill holds it now (`FieldSetView`,
+ * §22.3). `fieldCount` is how many fields its call asks for, which the estimate reads.
+ */
+export interface WorkflowFieldSetView {
+  name: string;
+  canRun: boolean;
+  title?: string;
+  version?: string;
+  fieldCount?: number;
+  reason?: WorkflowFieldSetUnavailableReason;
+}
 
 export interface WorkflowStepView {
   name: string;
   kind: string;
-  /** Empty on a prompt step. */
+  /** Empty on a prompt or checklist step. */
   agentId: string;
   agentVersion?: number;
-  /** A prompt step's model, as the file names it. */
+  /** A prompt or checklist step's model, as the file names it. */
   modelId?: string;
   /** `request`, `files`, then other steps' names. */
   reads: string[];
+  /** Its own request; a checklist step's guidance. */
   request?: string;
   effectiveRequest: string;
-  /** The step's worker. On a prompt step, its model in this shape (name, modelId, rate, canRun). */
+  /** The step's worker. On a prompt or checklist step, its model in this shape (name, modelId, rate, canRun). */
   agent: WorkflowAgentView;
-  /** A prompt step's model as the caller sees it. */
+  /** A prompt or checklist step's model as the caller sees it. */
   model?: WorkflowModelView;
+  /** A checklist step's field sets, in the order it runs them, each as the skill holds it now. */
+  fieldSets?: WorkflowFieldSetView[];
+  /** Model calls the step makes: one per field set on a checklist step, one on a prompt step. */
+  calls?: number;
 }
 
 export interface WorkflowResultView {
@@ -106,11 +130,21 @@ export type WorkflowSheetBlockerCode =
   | 'reads_step'
   /** A prompt step while `PROMPT_STEPS_ENABLED` is off. */
   | 'prompt_steps_off'
-  /** A prompt step on a model the caller can't run (`model.reason` says why). */
-  | 'model_unavailable';
+  /** A prompt or checklist step on a model the caller can't run (`model.reason` says why). */
+  | 'model_unavailable'
+  /** A checklist step while `CHECKLIST_STEPS_ENABLED` is off. */
+  | 'checklist_steps_off'
+  /** A checklist step naming a set the skill no longer has, or one with a `list` field. */
+  | 'field_set_unavailable';
 
 /** The blockers a step carries that its removal clears: the run starts without it (§20.1). */
-export const STEP_BLOCKER_CODES: ReadonlySet<WorkflowSheetBlockerCode> = new Set(['step_unavailable', 'prompt_steps_off', 'model_unavailable']);
+export const STEP_BLOCKER_CODES: ReadonlySet<WorkflowSheetBlockerCode> = new Set([
+  'step_unavailable',
+  'prompt_steps_off',
+  'model_unavailable',
+  'checklist_steps_off',
+  'field_set_unavailable',
+]);
 
 export interface WorkflowSheetBlocker {
   code: WorkflowSheetBlockerCode;
@@ -141,13 +175,16 @@ export interface WorkflowDefinition {
   steps: {
     name: string;
     kind: string;
-    /** Empty on a prompt step. */
+    /** Empty on a prompt or checklist step. */
     agentId: string;
     agentVersion?: number | null;
-    /** A prompt step's model; absent on an Agent step. */
+    /** A prompt or checklist step's model; absent on an Agent step. */
     modelId?: string | null;
     reads: string[];
+    /** Its own request; a checklist step's guidance. */
     request?: string | null;
+    /** A checklist step's field sets, in the order it runs them; absent on every other kind. */
+    fieldSets?: string[];
   }[];
   result: { mode: string; reads?: string[] | null; instruction?: string | null };
 }
