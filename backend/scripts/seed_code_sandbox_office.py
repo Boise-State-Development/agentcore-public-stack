@@ -1,7 +1,8 @@
-"""Install LibreOffice onto the code sandbox's office file system (spec D9).
+"""Install LibreOffice and docx-js onto the code sandbox's office file system (spec D9).
 
 ``run_code``'s sessions mount that file system read-only at ``/mnt/office`` and
-run with ``/mnt/office/current/program`` first on ``PATH``. Nothing in a
+run with ``/mnt/office/current/program`` first on ``PATH`` and
+``/mnt/office/current/node/node_modules`` first on ``NODE_PATH``. Nothing in a
 session can write to it, so this script is the only way a build gets there:
 it starts a session on the **seeding** interpreter (the one role allowed to
 write, ``code-sandbox-office-construct.ts``), mounts the write access point,
@@ -15,23 +16,31 @@ What it does, all of it re-runnable:
 2. Unpacks the RPMs it needs (core, Writer, Calc, Impress, Draw, Math, en-US,
    fonts and filters: about 550 MB) into a tree, with the two libraries in
    ``program/``, where LibreOffice's ``$ORIGIN`` rpath finds them.
-3. Copies the tree's archive into the seeding session in chunks, unpacks it to
-   ``releases/<version>.partial``, checks that ``soffice --version`` runs from
-   there, renames it to ``releases/<version>``, and points ``current`` at it with
-   one atomic rename, so a session that starts mid-upgrade sees the old build
-   or the new one, never half of either.
+3. Installs the Node package Anthropic's docx skill loads (``docx``, that is
+   docx-js) into the tree's ``node/node_modules`` with ``npm ci`` from the
+   committed lockfile in ``code_sandbox_office_node/``, so every package is the
+   locked version and npm checks each one's ``integrity`` hash. The sandbox has
+   no network, so this runs here, and only pure-JavaScript packages are
+   accepted: a native addon, ``binding.gyp`` or install script is refused,
+   since nothing built on this machine would run on the sandbox's aarch64.
+4. Copies the tree's archive into the seeding session in chunks, unpacks it to
+   a release folder of its own, checks that ``soffice --version`` runs and that
+   ``require('docx')`` writes a document from there, and points ``current`` at
+   it with one atomic rename, so a session that starts mid-upgrade sees the old
+   build or the new one, never half of either.
 
 Run it once after the deploy that turns ``CDK_CODE_SANDBOX_OFFICE_ENABLED`` on,
-and again for each LibreOffice upgrade (bump the pins below). It takes about
-five minutes, most of it the unpack over NFS. Needs credentials for the
-deployment's account (SSM read, Code Interpreter sessions on the seeding
-interpreter) and, for step 2, ``bsdtar`` (macOS ``tar``) or ``rpm2cpio`` and
-``cpio``.
+and again for each LibreOffice or docx-js upgrade (bump the pins below, or the
+version in ``code_sandbox_office_node/package.json`` and its lockfile). It
+takes about five minutes, most of it the unpack over NFS. Needs credentials for
+the deployment's account (SSM read, Code Interpreter sessions on the seeding
+interpreter), ``npm`` for step 3 and, for step 2, ``bsdtar`` (macOS ``tar``) or
+``rpm2cpio`` and ``cpio``.
 
     cd backend
     AWS_PROFILE=<profile> uv run python scripts/seed_code_sandbox_office.py --prefix <project-prefix>
 
-``--dry-run`` stops after step 2 and prints what it would install.
+``--dry-run`` stops after step 3 and prints what it would install.
 """
 
 from __future__ import annotations
@@ -94,9 +103,28 @@ EXTRA_LIBRARIES = [
     },
 ]
 
+#: The Node packages' manifest and lockfile. Bump the version in
+#: ``package.json`` (exact, no range) and regenerate the lockfile with
+#: ``npm install --package-lock-only --ignore-scripts`` there.
+NODE_MANIFEST_DIR = Path(__file__).resolve().parent / "code_sandbox_office_node"
+#: Where the packages go in a release. Must match ``NODE_MODULES_DIR`` in
+#: office_mount.py (``<release>/node/node_modules``).
+NODE_DIR = "node"
+#: The only place a locked package may come from.
+NPM_REGISTRY = "https://registry.npmjs.org/"
+
 # Must match code-sandbox-office-construct.ts / office_mount.py.
 OFFICE_MOUNT_SSM_SUFFIX = "agentcore/code-sandbox-office-mount"
 MOUNT_PATH = "/mnt/office"
+
+#: Writes a one-paragraph document with docx-js and prints its size, so the
+#: check is a real ``Packer`` run, not just a ``require``.
+DOCX_CHECK_JS = (
+    "const d=require('docx');"
+    "const doc=new d.Document({sections:[{children:[new d.Paragraph({children:[new d.TextRun('seed check')]})]}]});"
+    "d.Packer.toBuffer(doc).then(b=>{if(b.length<1000||b[0]!==0x50)throw new Error('not a docx');"
+    "console.log('docx ok '+b.length)}).catch(e=>{console.error(e);process.exit(1)});"
+)
 
 #: Bytes per ``writeFiles`` call; 24 MB calls worked on dev.
 CHUNK_BYTES = 24 * 1024 * 1024
@@ -199,6 +227,85 @@ def build_tree(cache: Path, work: Path) -> Path:
     return tree
 
 
+# ---------------------------------------------------------------------------
+# Step 3: the Node packages
+# ---------------------------------------------------------------------------
+
+
+def check_lockfile(lock: Dict[str, Any]) -> Dict[str, str]:
+    """``{package path: version}`` for every locked package; raises unless each is pinned and hashed.
+
+    Every entry must come from :data:`NPM_REGISTRY` with an ``integrity`` hash
+    (npm checks the download against it), and none may need an install script
+    or ship a native addon, which could not run on the sandbox.
+    """
+    if lock.get("lockfileVersion") != 3:
+        raise SystemExit("code_sandbox_office_node/package-lock.json must be lockfileVersion 3")
+    root = lock.get("packages", {}).get("", {})
+    for name, spec in (root.get("dependencies") or {}).items():
+        if not spec or not spec[0].isdigit():
+            raise SystemExit(f"{name} is pinned as {spec!r}; pin an exact version")
+    locked: Dict[str, str] = {}
+    for path, entry in lock.get("packages", {}).items():
+        if not path:
+            continue
+        if entry.get("dev"):
+            continue
+        resolved = str(entry.get("resolved") or "")
+        integrity = str(entry.get("integrity") or "")
+        if not resolved.startswith(NPM_REGISTRY) or not integrity.startswith("sha512-"):
+            raise SystemExit(f"{path} is not locked to a hashed npm registry tarball")
+        if entry.get("hasInstallScript") or entry.get("gypfile"):
+            raise SystemExit(f"{path} needs an install script, so it is not pure JavaScript; refusing it")
+        locked[path] = str(entry["version"])
+    if not locked:
+        raise SystemExit("the lockfile locks no packages")
+    return locked
+
+
+def build_node_modules(into: Path) -> Dict[str, str]:
+    """``npm ci`` the committed lockfile into ``into/node_modules``; returns what it installed.
+
+    Install scripts are never run, and the installed tree is refused if any
+    package carries a native addon or a ``binding.gyp``. Then docx-js writes a
+    document here, so a broken tree never reaches the file system.
+    """
+    npm = shutil.which("npm")
+    node = shutil.which("node")
+    if not npm or not node:
+        raise SystemExit("installing the Node packages needs npm and node on this machine")
+    lock = json.loads((NODE_MANIFEST_DIR / "package-lock.json").read_text())
+    locked = check_lockfile(lock)
+
+    into.mkdir(parents=True)
+    for name in ("package.json", "package-lock.json"):
+        shutil.copy2(NODE_MANIFEST_DIR / name, into / name)
+    subprocess.run(
+        [npm, "ci", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund",
+         "--registry", NPM_REGISTRY],
+        cwd=into, check=True, stdout=subprocess.DEVNULL,
+    )
+    modules = into / "node_modules"
+    native = [p for p in modules.rglob("*") if p.suffix == ".node" or p.name == "binding.gyp"]
+    if native:
+        raise SystemExit(f"native code in the Node packages: {[str(p.relative_to(into)) for p in native[:5]]}")
+    for path, version in locked.items():
+        installed = json.loads((into / path / "package.json").read_text())["version"]
+        if installed != version:
+            raise SystemExit(f"{path} installed {installed}, not the locked {version}")
+    # npm's own bookkeeping, which names this machine's paths; nothing reads it.
+    (modules / ".package-lock.json").unlink(missing_ok=True)
+    shutil.rmtree(modules / ".bin", ignore_errors=True)
+
+    check = subprocess.run(
+        [node, "-e", DOCX_CHECK_JS], cwd=into.parent, capture_output=True, text=True,
+        env={"PATH": str(Path(node).parent), "NODE_PATH": str(modules)},
+    )
+    if check.returncode != 0 or "docx ok" not in check.stdout:
+        raise SystemExit(f"docx-js did not write a document here:\n{check.stdout}{check.stderr}")
+    return locked
+
+
 def pack(tree: Path, work: Path) -> Path:
     archive = work / f"libreoffice-{LIBREOFFICE_VERSION}.tgz"
     with tarfile.open(archive, "w:gz", compresslevel=6) as out:
@@ -207,7 +314,7 @@ def pack(tree: Path, work: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Step 3: the seeding session
+# Step 4: the seeding session
 # ---------------------------------------------------------------------------
 
 
@@ -308,6 +415,9 @@ def install(seeder: Seeder, archive: Path, expected_sha256: str) -> str:
     version = seeder.run(f"SAL_USE_VCLPLUGIN=svp {folder}/program/soffice --headless --version")
     if LIBREOFFICE_VERSION not in version:
         raise SystemExit(f"soffice did not report {LIBREOFFICE_VERSION}: {version}")
+    docx = seeder.run(_docx_check_command(f"{folder}/{NODE_DIR}/node_modules"))
+    if "docx ok" not in docx:
+        raise SystemExit(f"docx-js did not write a document on the sandbox: {docx}")
 
     previous = seeder.run(f"readlink {MOUNT_PATH}/current || true").rsplit("/", 1)[-1]
     seeder.run(
@@ -319,7 +429,17 @@ def install(seeder: Seeder, archive: Path, expected_sha256: str) -> str:
         + "".join(f"\" {k} \") ;; " for k in sorted(keep))
         + "*) rm -rf \"$r\" ;; esac; done"
     )
-    return seeder.run(f"SAL_USE_VCLPLUGIN=svp {MOUNT_PATH}/current/program/soffice --headless --version")
+    version = seeder.run(f"SAL_USE_VCLPLUGIN=svp {MOUNT_PATH}/current/program/soffice --headless --version")
+    docx = seeder.run(_docx_check_command(f"{MOUNT_PATH}/current/{NODE_DIR}/node_modules"))
+    return f"{version}; {docx}"
+
+
+def _docx_check_command(node_modules: str) -> str:
+    """Run :data:`DOCX_CHECK_JS` from a scratch folder, so only ``NODE_PATH`` can find docx."""
+    return (
+        f"cd \"$(mktemp -d)\" && NODE_PATH={shlex.quote(node_modules)} "
+        f"node -e {shlex.quote(DOCX_CHECK_JS)}"
+    )
 
 
 def read_mount(prefix: str, region: str) -> Dict[str, Any]:
@@ -344,13 +464,18 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Build the tree locally and stop")
     args = parser.parse_args()
 
+    started = time.monotonic()
     args.cache.mkdir(parents=True, exist_ok=True)
     mount = None if args.dry_run else read_mount(args.prefix, args.region)
     with tempfile.TemporaryDirectory(prefix="seed-office-") as tmp:
         work = Path(tmp)
         tree = build_tree(args.cache, work)
-        size = sum(p.stat().st_size for p in tree.rglob("*") if p.is_file() and not p.is_symlink())
-        _say(f"tree for LibreOffice {LIBREOFFICE_VERSION}: {size / 1e6:.0f} MB")
+        _say(f"tree for LibreOffice {LIBREOFFICE_VERSION}: {_size(tree) / 1e6:.0f} MB")
+        node = tree / NODE_DIR
+        locked = build_node_modules(node)
+        packages = ", ".join(f"{path.split('node_modules/')[-1]}@{v}" for path, v in sorted(locked.items()))
+        _say(f"Node packages ({packages}): {_size(node) / 1e6:.1f} MB")
+        _say(f"whole tree: {_size(tree) / 1e6:.0f} MB")
         if args.dry_run:
             _say("dry run: nothing uploaded")
             return
@@ -360,7 +485,11 @@ def main() -> None:
             version = install(seeder, archive, _sha256(archive))
         finally:
             seeder.stop()
-    _say(f"installed: {version}")
+    _say(f"installed: {version} ({time.monotonic() - started:.0f}s in all)")
+
+
+def _size(tree: Path) -> int:
+    return sum(p.stat().st_size for p in tree.rglob("*") if p.is_file() and not p.is_symlink())
 
 
 if __name__ == "__main__":

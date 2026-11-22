@@ -99,6 +99,8 @@ def test_all_python_dependencies_use_exact_pins():
 NPM_PACKAGE_FILES = [
     REPO_ROOT / "frontend" / "ai.client" / "package.json",
     REPO_ROOT / "infrastructure" / "package.json",
+    # docx-js for run_code, seeded onto the office mount (spec D9).
+    REPO_ROOT / "backend" / "scripts" / "code_sandbox_office_node" / "package.json",
 ]
 
 # Prefixes that indicate non-exact npm version pins
