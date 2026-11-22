@@ -214,7 +214,7 @@ class TestAccessChecksFailClosed:
             raise RuntimeError("dynamodb unavailable")
 
         with patch(
-            "apis.shared.assistants.service.resolve_assistant_permission", side_effect=_boom
+            "apis.shared.assistants.service.get_assistant_with_access_check", side_effect=_boom
         ):
             assert await resolve_kb_access(ASSISTANT_ID, USER_ID, "a@b.test") is None
 
@@ -224,7 +224,7 @@ class TestAccessChecksFailClosed:
             return object(), "editor"
 
         with patch(
-            "apis.shared.assistants.service.resolve_assistant_permission", side_effect=_resolve
+            "apis.shared.assistants.service.get_assistant_with_access_check", side_effect=_resolve
         ):
             access = await resolve_kb_access(ASSISTANT_ID, USER_ID, "a@b.test")
 
@@ -239,9 +239,60 @@ class TestAccessChecksFailClosed:
             return object(), None
 
         with patch(
-            "apis.shared.assistants.service.resolve_assistant_permission", side_effect=_resolve
+            "apis.shared.assistants.service.get_assistant_with_access_check", side_effect=_resolve
         ):
             assert await resolve_kb_access(ASSISTANT_ID, USER_ID) is None
+
+    @pytest.mark.asyncio
+    async def test_a_public_agents_user_may_read_what_their_turn_retrieved(self, monkeypatch):
+        """The grant is the one that admitted the turn, not the write routes' share lookup.
+
+        A PUBLIC Agent's ordinary user holds no share record, so the write routes'
+        ``resolve_assistant_permission`` gives them no permission, while the turn
+        admits them as a viewer and retrieves its knowledge base for them. Resolving
+        through the former denied every such call of ``knowledge_files`` (40 of its
+        54 failed calls in production, November 2026). Asserted on the real
+        resolvers, with only the record read and the share lookup stubbed.
+        """
+        from apis.shared.assistants import service
+        from apis.shared.assistants.models import Assistant
+
+        record = Assistant(
+            assistant_id=ASSISTANT_ID,
+            owner_id="someone-else",
+            owner_name="Owner",
+            name="Published agent",
+            description="",
+            instructions="",
+            vector_index_id="idx",
+            visibility="PUBLIC",
+            created_at="2026-11-01T00:00:00Z",
+            updated_at="2026-11-01T00:00:00Z",
+            status="COMPLETE",
+        )
+
+        async def _record(assistant_id, table_name):
+            return record
+
+        async def _no_share(assistant_id, user_email):
+            return None
+
+        monkeypatch.setenv("DYNAMODB_ASSISTANTS_TABLE_NAME", TABLE_NAME)
+        monkeypatch.setattr(service, "_get_assistant_cloud_without_ownership_check", _record)
+        monkeypatch.setattr(service, "check_share_access", _no_share)
+
+        # The write routes' answer: no share, no permission.
+        _, write_permission = await service.resolve_assistant_permission(ASSISTANT_ID, USER_ID, "a@b.test")
+        assert write_permission is None
+
+        access = await resolve_kb_access(ASSISTANT_ID, USER_ID, "a@b.test")
+        assert access is not None
+        assert access.permission == "viewer"
+        assert access.may_read and not access.may_upgrade
+
+        # And a PRIVATE agent's stranger is still refused.
+        record.visibility = "PRIVATE"
+        assert await resolve_kb_access(ASSISTANT_ID, USER_ID, "a@b.test") is None
 
     def test_the_permission_sets_do_not_overlap_wrongly(self):
         """Write implies read; read does not imply write."""

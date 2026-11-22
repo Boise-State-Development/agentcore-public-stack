@@ -319,7 +319,7 @@ class TestSkips:
         assert skipped(b) == {"references/link.md": "symbolic link"}
         assert b.files == []
 
-    @pytest.mark.parametrize("name", ["assets/icon.svg", "assets/page.html", "schemas/a.xml", "LICENSE"])
+    @pytest.mark.parametrize("name", ["assets/icon.svg", "assets/page.html", "assets/page.xhtml", "LICENSE"])
     def test_types_off_the_allowlist_are_skipped(self, name):
         b = bundle_of({"SKILL.md": SKILL_MD, name: "<x/>"})
         assert skipped(b)[name].startswith("file type not allowed")
@@ -335,10 +335,20 @@ class TestSkips:
         b = bundle_of({"SKILL.md": SKILL_MD, "references/field-set.budget.md": "| name |\n|---|\n| x |\n"})
         assert skipped(b)["references/field-set.budget.md"].startswith("invalid field set:")
 
+    def test_an_over_size_xml_template_is_skipped(self):
+        name = "scripts/templates/comments.xml"
+        b = bundle_of({"SKILL.md": SKILL_MD, name: "<w:comments/>" + "x" * MAX_RESOURCE_BYTES})
+        assert skipped(b) == {name: "larger than 1 MiB"}
+
     def test_an_office_skill_imports_whole_with_its_schemas(self):
         """anthropics/skills' xlsx/docx/pptx: 39 OOXML schemas, four of them five
-        folders below scripts/, plus package markers. Every file comes across."""
+        folders below scripts/, plus package markers, and docx's five comment part
+        templates. Every file comes across."""
         files = {"SKILL.md": SKILL_MD, "LICENSE.txt": "license"}
+        files |= {
+            f"scripts/templates/{n}.xml": "<?xml version=\"1.0\"?><w:root/>"
+            for n in ("comments", "commentsExtended", "commentsExtensible", "commentsIds", "people")
+        }
         files |= {f"scripts/office/helpers/{n}.py": "x" for n in ("__init__", "pptx_chart", "pptx_slide")}
         files |= {f"scripts/office/validators/{n}.py": "x" for n in ("__init__", "base", "docx", "pptx")}
         files |= {"scripts/office/validate.py": "x", "scripts/office/soffice.py": "x", "scripts/recalc.py": "x"}
@@ -356,6 +366,12 @@ class TestSkips:
         assert (rels.kind, rels.resource_path, rels.content_type) == (
             "script",
             "office/schemas/ecma/fouth-edition/opc-relationships.xsd",
+            "text/plain",
+        )
+        people = by_path["scripts/templates/people.xml"]
+        assert (people.kind, people.resource_path, people.content_type) == (
+            "script",
+            "templates/people.xml",
             "text/plain",
         )
 

@@ -152,18 +152,25 @@ print(len(pairs))
 '''
 
 
-def run_command(timeout_seconds: int, office_program_dir: Optional[str] = None) -> str:
+def run_command(
+    timeout_seconds: int,
+    office_program_dir: Optional[str] = None,
+    office_node_modules: Optional[str] = None,
+) -> str:
     """The one shell command a call runs (see the module docstring).
 
     ``office_program_dir`` puts a mounted LibreOffice first on the run's
     ``PATH`` (``office_mount.py``), with the headless VCL plugin its own
-    ``soffice.py`` wrappers set too.
+    ``soffice.py`` wrappers set too. ``office_node_modules`` puts the mount's
+    pinned Node packages (docx-js) first on ``NODE_PATH``, so a script's
+    ``require('docx')`` resolves; anything the sandbox already had on
+    ``NODE_PATH`` stays after it.
     """
-    office = (
-        f'PATH={shlex.quote(office_program_dir)}:"$PATH" SAL_USE_VCLPLUGIN=svp '
-        if office_program_dir
-        else ""
-    )
+    office = ""
+    if office_program_dir:
+        office += f'PATH={shlex.quote(office_program_dir)}:"$PATH" SAL_USE_VCLPLUGIN=svp '
+    if office_node_modules:
+        office += f'NODE_PATH={shlex.quote(office_node_modules)}"${{NODE_PATH:+:$NODE_PATH}}" '
     return (
         f"python3 {CONTROL_DIR}/snapshot.py; "
         f"{office}timeout -k 5 {int(timeout_seconds)} python3 {CONTROL_DIR}/entry.py "
