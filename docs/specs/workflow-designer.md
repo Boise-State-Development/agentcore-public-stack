@@ -1304,10 +1304,10 @@ source's prefix is never touched: a prompt step's answer reaches it as a deliver
   a phone. The graph's "*N* at once" counts only Agent steps, and the sheet's file hint talks about steps once a
   prompt step is in the run.
 - **And the rest of that dev check's list:**
-  - A prompt part with no result is noted as a step's: "This step stopped before it finished…"
-    (`PROMPT_PART_STATUS_NOTES`, chosen by `DeliveryPartBlock.prompt` from the part's `kind`, in `context.py` and
-    `handoff-prompt.ts` alike, and pinned by the shared fixture). An Agent part's note is unchanged, and so is
-    every label.
+  - A prompt or checklist part with no result is noted as a step's: "This step stopped before it finished…"
+    (`PROMPT_PART_STATUS_NOTES`, chosen by `DeliveryPartBlock.prompt` when the part's `kind` is in
+    `MODEL_STEP_KINDS`, in `context.py` and `handoff-prompt.ts` alike, and pinned by the shared fixture's prompt and
+    checklist cases). An Agent part's note is unchanged, and so is every label.
   - The note is text the model reads, but only in a new user message. It never touches a cached prefix,
     `toolConfig` or the system prompt.
   - A message sent before this still groups: the bubble reads a prompt part's old Agent note as the same status.

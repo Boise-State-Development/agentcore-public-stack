@@ -2023,6 +2023,33 @@ def test_prepare_for_a_step_that_reads_a_checklist_step_carries_its_values(colle
     assert "cap: $500,000 (supported)" in data["readsBlock"]
 
 
+def test_a_stopped_checklist_step_is_noted_as_a_step_not_an_agent(collect_client, stores, steps, checklisted, table):
+    """A checklist part with no result gets the step note, as a prompt part does; its label is unchanged."""
+    from apis.shared.handoff.context import DELIVERY_PART_STATUS_NOTES, PROMPT_PART_STATUS_NOTES
+
+    handoffs, _runs = stores
+    client = collect_client()
+    created = _start(client).json()
+    run_id = created["run"]["runId"]
+    _approve(client, run_id)
+    _generalist, audit, summary = created["steps"]
+    # The Runtime's claim (open → running), then its stop.
+    table.update_item(
+        Key={"PK": "USER#alice", "SK": f"HANDOFF#{audit['handoffId']}"},
+        UpdateExpression="SET #s = :running",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":running": "running"},
+    )
+    handoffs.transition("alice", audit["handoffId"], "stopped", stoppedReason="too_large")
+
+    data = _prepare(client, run_id, summary["stepId"]).json()
+
+    assert [(p["stepName"], p["status"]) for p in data["parts"]] == [("audit", "stopped")]
+    assert data["readsBlock"].startswith('<handoff_context from_conversation="Claude Haiku 5.5 · audit">')
+    assert PROMPT_PART_STATUS_NOTES["stopped"] in data["readsBlock"]
+    assert DELIVERY_PART_STATUS_NOTES["stopped"] not in data["readsBlock"]
+
+
 def test_a_checklist_part_with_no_step_name_is_named_as_a_checklist_step():
     from apis.shared.handoff.models import Handoff
     from apis.shared.handoff.run_reads import prompt_part
