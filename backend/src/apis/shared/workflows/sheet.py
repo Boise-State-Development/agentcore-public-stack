@@ -43,7 +43,6 @@ from apis.shared.skills.repository import get_skill_catalog_repository
 from apis.shared.skills.user_service import get_user_skill_service
 from apis.shared.workflows.field_set_refs import FieldSetLookup, read_skill_field_sets
 from apis.shared.workflows.format import (
-    CHECKLIST_REFUSED_FIELD_TYPE,
     RESULT_MERGE,
     Workflow,
     WorkflowError,
@@ -134,14 +133,14 @@ def model_for_step(model: "ModelView", step: Any) -> "ModelView":
     return model
 
 
-FieldSetUnavailableReason = Literal["missing", "list_field", "unreadable"]
+FieldSetUnavailableReason = Literal["missing", "unreadable"]
 
 
 class FieldSetView(BaseModel):
     """One field set a checklist step runs, as the workflow's skill holds it now (§22.3).
 
-    ``canRun`` is false when the skill no longer has the set (``missing``), it holds a ``list``
-    field (``list_field``), or it couldn't be read (``unreadable``). ``fieldCount`` is how many
+    ``canRun`` is false when the skill no longer has the set (``missing``) or it couldn't be read
+    (``unreadable``). Every field type runs, ``list`` included (§22.3, since 2026-11-22). ``fieldCount`` is how many
     fields the step's call for it asks for, which the sheet's estimate reads.
     """
 
@@ -471,14 +470,12 @@ def field_set_view(lookup: FieldSetLookup) -> FieldSetView:
     field_set = lookup.field_set
     if field_set is None:
         return FieldSetView(name=lookup.name, can_run=False, reason="missing")
-    listed = any(field.type == CHECKLIST_REFUSED_FIELD_TYPE for field in field_set.fields)
     return FieldSetView(
         name=lookup.name,
-        can_run=not listed,
+        can_run=True,
         title=field_set.title,
         version=field_set.version,
         field_count=len(field_set.fields),
-        reason="list_field" if listed else None,
     )
 
 
@@ -511,7 +508,6 @@ _MODEL_BLOCKER_MESSAGES: Dict[str, str] = {
 
 _FIELD_SET_BLOCKER_MESSAGES: Dict[str, str] = {
     "missing": "This step's field set '{name}' is no longer in the workflow's skill. Remove the step, or add the set back",
-    "list_field": "This step's field set '{name}' has a list field, which a checklist step can't fill yet. Remove the step, or change the field's type",
     "unreadable": "This step's field set '{name}' couldn't be read. Remove the step, or try again",
 }
 

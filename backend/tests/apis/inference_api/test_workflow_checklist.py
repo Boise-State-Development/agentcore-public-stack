@@ -54,6 +54,10 @@ REPLIES = {
         {"name": "postdoc", "value": "fail", "quote": "No postdoc mentoring plan."},
     ],
     "People": [{"name": "pi_name", "value": None, "quote": ""}],
+    "Aims": [
+        {"name": "aims", "value": ["Map the watershed", "Model the runoff"], "quote": "Map the watershed"},
+        {"name": "partners", "value": None, "quote": ""},
+    ],
 }
 
 
@@ -402,19 +406,28 @@ async def test_a_missing_set_is_its_own_error_and_makes_no_call():
     assert "### plans\n\nNot filled in: the field set is no longer in the workflow's skill" in steps.rows["h1"]["outputText"]
 
 
-async def test_a_set_edited_to_hold_a_list_field_is_its_own_error_and_makes_no_call():
+async def test_a_set_with_list_fields_is_called_and_its_lists_read_as_items():
+    """A ``list`` field runs since 2026-11-22 (§22.3): the reply's array is the value, an absent
+    list is null, and both the row and the step's answer show the items."""
     log, rows = Log(), []
     steps = StepStore({"h1": "checklist"}, log)
     model = Checklist()
-    listed = FieldSet("plans", "Plans", "2", (Field("aims", "Aims", "list", "The aims."),))
-    await _drain(_work(_run([_checklist(1, ["budget", "plans"])]), steps, model, log, sets={**SETS, "plans": listed}, rows=rows))
+    aims = FieldSet(
+        "aims",
+        "Aims",
+        "2",
+        (Field("aims", "Aims", "list", "The aims."), Field("partners", "Partners", "list", "Partners.", optional=True)),
+    )
+    await _drain(_work(_run([_checklist(1, ["budget", "aims"])]), steps, model, log, sets={**SETS, "aims": aims}, rows=rows))
 
-    assert len(model.calls) == 1
-    errored = next(row for row in rows if row["field_set"] == "plans")
-    assert errored["status"] == "error" and errored["error"] == "unsupported_field"
-    assert errored["field_set_version"] == "2"
+    assert len(model.calls) == 2
+    done = next(row for row in rows if row["field_set"] == "aims")
+    assert done["status"] == "done"
+    fields = {f["name"]: f for f in done["fields"]}
+    assert fields["aims"]["value"] == "Map the watershed; Model the runoff"
+    assert fields["partners"]["value"] is None
     assert steps.rows["h1"]["status"] == "done"
-    assert "Not filled in: the field set now holds a list field" in steps.rows["h1"]["outputText"]
+    assert "| Aims | Map the watershed; Model the runoff |" in steps.rows["h1"]["outputText"]
 
 
 async def test_a_reply_with_no_tool_call_is_retried_once():

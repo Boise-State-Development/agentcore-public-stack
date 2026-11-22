@@ -1873,24 +1873,22 @@ def test_checklist_steps_are_a_sheet_blocker_while_the_flag_is_off(make_client, 
     assert [b["code"] for b in rest.json()["detail"]["blockers"]] == ["too_few_steps"]
 
 
-@pytest.mark.parametrize(
-    "change, reason",
-    [
-        ("missing", "is no longer in the workflow's skill"),
-        ("list", "has a list field"),
-    ],
-)
-def test_a_set_the_skill_no_longer_runs_blocks_start(make_client, stores, checklisted, skills, change, reason):
-    if change == "missing":
-        skills.skill.resources = [r for r in skills.skill.resources if r.filename != "field-set.compliance.md"]
-    else:
-        _add_set(skills, "compliance", "list")
+def test_a_set_the_skill_no_longer_has_blocks_start(make_client, stores, checklisted, skills):
+    skills.skill.resources = [r for r in skills.skill.resources if r.filename != "field-set.compliance.md"]
     refused = _start(make_client())
 
     assert refused.status_code == 422
     blockers = refused.json()["detail"]["blockers"]
     assert [(b["code"], b["step"]) for b in blockers] == [("field_set_unavailable", "audit")]
-    assert reason in blockers[0]["message"] and "'compliance'" in blockers[0]["message"]
+    assert "is no longer in the workflow's skill" in blockers[0]["message"] and "'compliance'" in blockers[0]["message"]
+
+
+def test_a_set_edited_to_hold_a_list_field_still_starts(make_client, stores, checklisted, skills):
+    """A ``list`` field runs since 2026-11-22 (§22.3), so it is no blocker."""
+    _add_set(skills, "compliance", "list")
+    resp = _start(make_client())
+
+    assert resp.status_code == 201, resp.text
 
 
 def test_a_checklist_steps_model_the_starter_cant_run_blocks_start(make_client, stores, checklisted):

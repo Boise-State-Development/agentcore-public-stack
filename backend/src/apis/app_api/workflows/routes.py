@@ -467,7 +467,7 @@ async def write_workflow(
         target, _ = read_workflow_file(content.decode("utf-8"), name=name)
         if not unchanged:
             # What the write would refuse, ?validate=true refuses too: a checklist step's sets must
-            # be this skill's own, with no list field (§22.3). A no-op save checks nothing, so a set
+            # be this skill's own (§22.3). A no-op save checks nothing, so a set
             # that changed since shows as the sheet's blocker instead.
             await _check_field_sets(service, skill, target)
     except WorkflowError as e:

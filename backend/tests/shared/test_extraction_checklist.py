@@ -55,15 +55,20 @@ def test_the_tool_and_the_frame_are_pinned():
     A change here rewrites every checklist call's prefix once, at deploy: update the digest on
     purpose, never to make the test pass.
     """
-    assert _digest(cl.TOOL_SPEC) == "cf82443a3b8c579d"
-    assert hashlib.sha256(cl.SYSTEM_PROMPT.encode()).hexdigest()[:16] == "7500cb9c31bc43c6"
+    assert _digest(cl.TOOL_SPEC) == "f31976e355c21ccf"
+    assert hashlib.sha256(cl.SYSTEM_PROMPT.encode()).hexdigest()[:16] == "bc618ed0176215f9"
 
 
 def test_the_tool_is_the_shape_that_was_measured():
     item = cl.TOOL_SPEC["inputSchema"]["json"]["properties"]["fields"]["items"]
     assert cl.TOOL_SPEC["name"] == "record_checklist"
     assert item["required"] == ["name", "value", "quote"]
-    assert item["properties"]["value"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+    # PR-D.7a's measured union (§22.3): a list field's items arrive as an array.
+    assert item["properties"]["value"]["anyOf"] == [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}},
+        {"type": "null"},
+    ]
     assert item["properties"]["quote"]["type"] == "string"
 
 
@@ -260,7 +265,117 @@ def test_a_set_too_long_to_carry_its_values_keeps_names_and_states():
     assert long_value not in text
 
 
-def test_a_list_field_is_unsupported_never_coerced():
-    listed = FieldSet("aims", "Aims", "1", (Field("aims", "Aims", "list", "The aims."), Field("pi", "PI", "string", "The PI.")))
-    assert cl.unsupported_fields(listed) == ["aims"]
-    assert cl.unsupported_fields(SET) == []
+LISTED = FieldSet(
+    "aims",
+    "Aims",
+    "1",
+    (
+        Field("aims", "Aims", "list", "The aims."),
+        Field("partners", "Partners", "list", "Partner institutions.", optional=True),
+        Field("pi", "PI", "string", "The PI."),
+        Field("pages", "Pages", "number", "The page count."),
+    ),
+)
+
+LISTED_DOC = (
+    "The project has three aims: Map the watershed, Model the runoff and Train students. "
+    "The PI is Dr. Ada Example. The narrative runs 15 pages."
+)
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        (["Map the watershed", "Model the runoff"], ["Map the watershed", "Model the runoff"]),
+        ("Map the watershed", ["Map the watershed"]),
+        (["  Smith, Jane  ", "", None, "n/a"], ["Smith, Jane"]),
+        ("Smith, Jane; Doe, John", ["Smith, Jane; Doe, John"]),
+        ([], None),
+        (["", "none"], None),
+        ("not stated", None),
+        (None, None),
+    ],
+)
+def test_a_list_field_takes_an_array_and_a_lone_string_is_one_item(raw, expected):
+    assert cl.coerce_value(Field("aims", "Aims", "list", "find"), raw) == expected
+
+
+@pytest.mark.parametrize(
+    "field_type, raw, expected",
+    [
+        ("number", ["15 pages", "20 pages"], 15.0),
+        ("string", ["Dr. Ada Example"], "Dr. Ada Example"),
+        ("enum", ["Can't tell"], "cant_tell"),
+        ("boolean", [None, "yes"], True),
+        ("string", [], None),
+        ("number", [["15"]], None),
+    ],
+)
+def test_a_scalar_field_given_an_array_takes_its_first_item(field_type, raw, expected):
+    field = Field("f", "F", field_type, "find", enum=VERDICT if field_type == "enum" else ())
+    assert cl.coerce_value(field, raw) == expected
+
+
+def test_a_reply_with_list_fields_validates_against_the_sets_own_model():
+    answers = cl.read_answers(
+        LISTED,
+        {
+            "fields": [
+                {"name": "aims", "value": ["Map the watershed", "Model the runoff", "Train students"], "quote": "three aims"},
+                {"name": "partners", "value": None, "quote": ""},
+                {"name": "pi", "value": "Dr. Ada Example", "quote": "The PI is Dr. Ada Example."},
+                {"name": "pages", "value": ["15 pages"], "quote": "15 pages"},
+            ]
+        },
+    )
+
+    assert answers["aims"]["value"] == ["Map the watershed", "Model the runoff", "Train students"]
+    assert answers["partners"]["value"] is None
+    assert answers["pages"]["value"] == 15.0
+
+
+def test_a_list_value_is_judged_as_document_extract_judges_one():
+    """One claim per field, the list as its value: the quote is located, and the value check calls a
+    list non-scalar, so a located list is ``unassessed`` and an unlocated one ``unverified``, exactly
+    as in ``document_extract`` (``source_provenance`` makes every verdict; nothing here combines them).
+    """
+    units = document_units("pdf", [LISTED_DOC])
+    answers = cl.read_answers(
+        LISTED,
+        {
+            "fields": [
+                {"name": "aims", "value": ["Map the watershed", "Model the runoff"], "quote": "three aims: Map the watershed, Model the runoff"},
+                {"name": "partners", "value": ["Another University"], "quote": "partners include Another University"},
+            ]
+        },
+    )
+    rows = {row.field.name: row for row in cl.verified_rows(LISTED, answers, [units])}
+
+    assert (rows["aims"].state, rows["aims"].verification.method) == ("unassessed", "non_scalar")
+    assert rows["partners"].state == "unverified"
+
+
+def test_a_list_reads_as_items_separated_by_semicolons_on_the_row_and_in_the_table():
+    answers = cl.read_answers(
+        LISTED,
+        {"fields": [{"name": "aims", "value": ["Smith, Jane", "Doe, John"], "quote": ""}, {"name": "partners", "value": None, "quote": ""}]},
+    )
+    rows = tuple(cl.verified_rows(LISTED, answers, [None]))
+    fields = {f["name"]: f for f in cl.row_fields(rows)}
+    text = cl.render_set(cl.SetResult(name="aims", title="Aims", status="done", field_set=LISTED, rows=rows))
+
+    assert fields["aims"]["value"] == "Smith, Jane; Doe, John"
+    assert fields["partners"]["value"] is None
+    assert "| Aims | Smith, Jane; Doe, John | unverified |" in text
+    assert "| Partners | not found | unverified |" in text
+
+
+def test_a_long_list_is_cut_at_the_value_bound_in_the_table():
+    items = [f"Item number {i:02d}" for i in range(30)]
+    answers = cl.read_answers(LISTED, {"fields": [{"name": "aims", "value": items, "quote": ""}]})
+    rows = tuple(cl.verified_rows(LISTED, answers, [None]))
+    text = cl.render_set(cl.SetResult(name="aims", title="Aims", status="done", field_set=LISTED, rows=rows))
+    cell = next(line for line in text.splitlines() if line.startswith("| Aims |")).split(" | ")[1]
+
+    assert cell.endswith("…") and len(cell) <= 200
+    assert cell.startswith("Item number 00; Item number 01")
