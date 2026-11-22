@@ -67,6 +67,7 @@ def test_the_server_still_renders_the_delivery_blocks_the_fixture_says(case):
                 status=p["status"],
                 artifacts=[DeliveryArtifact.model_validate(a) for a in p["artifacts"]],
                 files=_files(p),
+                prompt=p.get("prompt", False),
             )
             for p in case["parts"]
         ]

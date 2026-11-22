@@ -70,6 +70,7 @@ from apis.shared.handoff.delivery import (
     get_delivery_store,
 )
 from apis.shared.handoff.metrics import emit_handoff_metric
+from apis.shared.handoff.models import MODEL_STEP_KINDS
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +275,7 @@ class DeliveryTurn:
                     status=part.status,
                     artifacts=part.artifacts,
                     files=lines.get(part.step_id, []),
+                    prompt=part.kind in MODEL_STEP_KINDS,
                 )
             )
         unknown = set(edits) - {p.step_id for p in row.parts if p.status == "done"}

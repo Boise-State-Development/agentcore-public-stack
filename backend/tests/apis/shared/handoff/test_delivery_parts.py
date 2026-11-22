@@ -601,3 +601,23 @@ class TestRunStepTitle:
 
         assert run_step_title("  ", "Proposal review") == "Proposal review"
         assert run_step_title("Budget reader", "Budget reader · Proposal review") == "Budget reader · Proposal review"
+
+
+def test_a_prompt_parts_note_names_a_step_and_its_label_is_unchanged():
+    """A prompt part with no result is noted as a step's (it has no Agent); an Agent part's note is as before."""
+    from apis.shared.handoff.context import PROMPT_PART_STATUS_NOTES
+
+    assert render_delivery_parts(
+        [
+            DeliveryPartBlock("", "Claude Haiku 5.5", "summary", "stopped", prompt=True),
+            DeliveryPartBlock("", "Claude Haiku 5.5", "budget", "running", prompt=True),
+            DeliveryPartBlock("", "Colleague", "Review", "stopped"),
+        ]
+    ) == "\n\n".join(
+        [
+            render_delivery_block(PROMPT_PART_STATUS_NOTES["stopped"], "Claude Haiku 5.5 · summary"),
+            render_delivery_block(PROMPT_PART_STATUS_NOTES["running"], "Claude Haiku 5.5 · budget"),
+            render_delivery_block(DELIVERY_PART_STATUS_NOTES["stopped"], "Colleague · Review"),
+        ]
+    )
+    assert "Agent" not in "".join(PROMPT_PART_STATUS_NOTES.values())

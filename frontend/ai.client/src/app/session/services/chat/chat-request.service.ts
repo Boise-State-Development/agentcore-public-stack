@@ -1055,6 +1055,8 @@ function renderComposerCard(card: ComposerCard, sessionId: string): string {
         text: card.editedParts?.[part.stepId] ?? part.text,
         artifacts: part.artifacts,
         files: part.files.map((f) => fileLineFor(f, sessionId, card.deliveryId)),
+        // A prompt or checklist step's part: one model call, no Agent, so its note names a step.
+        prompt: part.kind === 'prompt' || part.kind === 'checklist',
       })),
     );
   }

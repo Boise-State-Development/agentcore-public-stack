@@ -280,9 +280,10 @@ export interface DeliveryPart {
   files: DeliveryFile[];
   /**
    * `prompt` for a prompt step's part (workflow-designer §21.3): text alone, from no conversation,
-   * with its step's name as `fromTitle`. Absent on an Agent step's part.
+   * with its step's name as `fromTitle`. `checklist` for a checklist step's part (§22.3), the same
+   * text-only shape. Absent on an Agent step's part.
    */
-  kind?: 'prompt';
+  kind?: 'prompt' | 'checklist';
 }
 
 /** `POST /sessions/{targetId}/handoffs/send-back`: a target's answer, offered back to its source. */

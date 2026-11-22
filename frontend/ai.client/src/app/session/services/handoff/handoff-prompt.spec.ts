@@ -8,6 +8,7 @@ import { fromProjectRoot } from '../../../../testing/project-root';
 import { DeliveryArtifact, FileLine } from './handoff.models';
 import {
   DELIVERY_PART_STATUS_NOTES,
+  PROMPT_PART_STATUS_NOTES,
   DeliveryPartBlockInput,
   buildHandoffMessage,
   deliveryPartLabel,
@@ -132,9 +133,9 @@ describe('delivery blocks', () => {
   it('groups prompt steps’ parts by their whole "model · step" label, never by the model alone (§21.3)', () => {
     // Two lenses on one model and a summary on another, as `renderDeliveryParts` writes them.
     const text = renderDeliveryParts([
-      { text: 'A.', agentName: 'Sonnet 5.5', fromTitle: 'generalist', status: 'done' },
-      { text: '', agentName: 'Sonnet 5.5', fromTitle: 'colleague', status: 'stopped' },
-      { text: 'S.', agentName: 'Haiku 5.5', fromTitle: 'summary', status: 'done' },
+      { text: 'A.', agentName: 'Sonnet 5.5', fromTitle: 'generalist', status: 'done', prompt: true },
+      { text: '', agentName: 'Sonnet 5.5', fromTitle: 'colleague', status: 'stopped', prompt: true },
+      { text: 'S.', agentName: 'Haiku 5.5', fromTitle: 'summary', status: 'done', prompt: true },
     ]);
     const { blocks } = extractDeliveryBlocks(joinDeliveryBlocks([text], 'x'));
     const run = {
@@ -160,6 +161,29 @@ describe('delivery blocks', () => {
     // A step the run kept no name for is labelled with the server's fallback.
     const unnamed = extractDeliveryBlocks(joinDeliveryBlocks([renderDeliveryBlock('U.', 'Haiku 5.5 · Prompt step')], 'x')).blocks;
     expect(groupRunResults(unnamed, [{ runId: 'u', agentNames: ['Haiku 5.5'], promptSteps: [''] }]).map((g) => g.kind)).toEqual(['run']);
+  });
+
+  it('notes a prompt part with no result as a step’s, and still reads one sent with the Agent note', () => {
+    expect(Object.values(PROMPT_PART_STATUS_NOTES).join(' ')).not.toContain('Agent');
+    const text = renderDeliveryParts([
+      { text: 'A.', agentName: 'Haiku 5.5', fromTitle: 'generalist', status: 'done', prompt: true },
+      { text: '', agentName: 'Haiku 5.5', fromTitle: 'summary', status: 'running', prompt: true },
+    ]);
+    const { blocks } = extractDeliveryBlocks(joinDeliveryBlocks([text], 'x'));
+    expect(blocks[1].text).toBe(PROMPT_PART_STATUS_NOTES.running);
+    const run = { runId: 'r', agentNames: ['Haiku 5.5', 'Haiku 5.5'], promptSteps: ['generalist', 'summary'] };
+    const parts = (groupRunResults(blocks, [run])[0] as Extract<BubbleDelivery, { kind: 'run' }>).parts;
+    expect(parts.map((p) => p.status)).toEqual(['done', 'running']);
+
+    // A message sent before the notes named a step: its prompt part still reads as stopped.
+    const before = extractDeliveryBlocks(
+      joinDeliveryBlocks(
+        [renderDeliveryBlock('A.', 'Haiku 5.5 · generalist'), renderDeliveryBlock(DELIVERY_PART_STATUS_NOTES.stopped, 'Haiku 5.5 · summary')],
+        'x',
+      ),
+    ).blocks;
+    const old = (groupRunResults(before, [run])[0] as Extract<BubbleDelivery, { kind: 'run' }>).parts;
+    expect(old.map((p) => p.status)).toEqual(['done', 'stopped']);
   });
 
   it('leaves ordinary cards alone, and a lone block grouped only for a run of one', () => {

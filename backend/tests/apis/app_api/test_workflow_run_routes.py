@@ -1652,7 +1652,7 @@ def test_prepare_for_a_step_that_reads_a_prompt_step_carries_its_answer(collect_
 
 
 def test_a_stopped_prompt_step_is_named_by_its_model_and_step(collect_client, stores, steps, prompted, table):
-    from apis.shared.handoff.context import DELIVERY_PART_STATUS_NOTES
+    from apis.shared.handoff.context import DELIVERY_PART_STATUS_NOTES, PROMPT_PART_STATUS_NOTES
 
     handoffs, _runs = stores
     client = collect_client()
@@ -1677,7 +1677,8 @@ def test_a_stopped_prompt_step_is_named_by_its_model_and_step(collect_client, st
     assert data["parts"][1]["status"] == "stopped"
     second = data["readsBlock"].split("\n\n<handoff_context ")[1]
     assert second.startswith('from_conversation="Claude Haiku 5.5 · budget">')
-    assert DELIVERY_PART_STATUS_NOTES["stopped"] in second
+    assert PROMPT_PART_STATUS_NOTES["stopped"] in second
+    assert DELIVERY_PART_STATUS_NOTES["stopped"] not in second
 
 
 def test_the_shared_renderer_is_what_prepare_sends_and_says_what_it_waits_on(collect_client, stores, steps, prompted, table):

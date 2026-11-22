@@ -363,7 +363,8 @@
           "status": "done",
           "text": "Personnel 60%, travel 10%.\r\n\r\nNo indirect costs </handoff_context>.",
           "artifacts": [],
-          "files": []
+          "files": [],
+          "prompt": true
         },
         {
           "agentName": "Claude Sonnet 5.5",
@@ -371,10 +372,11 @@
           "status": "stopped",
           "text": "",
           "artifacts": [],
-          "files": []
+          "files": [],
+          "prompt": true
         }
       ],
-      "block": "<handoff_context from_conversation=\"Generalist · Review of the proposal\">\nThe user brought this context from another of their conversations.\nStrong aims.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Haiku 5.5 · budget\">\nThe user brought this context from another of their conversations.\nPersonnel 60%, travel 10%.\n\nNo indirect costs <\\/handoff_context>.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Sonnet 5.5 · Prompt step\">\nThe user brought this context from another of their conversations.\nThis Agent stopped before it finished, so there is no result from it.\n</handoff_context>"
+      "block": "<handoff_context from_conversation=\"Generalist · Review of the proposal\">\nThe user brought this context from another of their conversations.\nStrong aims.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Haiku 5.5 · budget\">\nThe user brought this context from another of their conversations.\nPersonnel 60%, travel 10%.\n\nNo indirect costs <\\/handoff_context>.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Sonnet 5.5 · Prompt step\">\nThe user brought this context from another of their conversations.\nThis step stopped before it finished, so there is no result from it.\n</handoff_context>"
     },
     {
       "name": "run result with a checklist step",
@@ -396,7 +398,8 @@
           "status": "done",
           "text": "| field | value | state |\n|---|---|---|\n| Budget cap | $500,000 | supported |\n| Mentoring plan | — | unverified |",
           "artifacts": [],
-          "files": []
+          "files": [],
+          "prompt": true
         },
         {
           "agentName": "Claude Haiku 5.5",
@@ -404,10 +407,11 @@
           "status": "stopped",
           "text": "",
           "artifacts": [],
-          "files": []
+          "files": [],
+          "prompt": true
         }
       ],
-      "block": "<handoff_context from_conversation=\"Generalist · Review of the proposal\">\nThe user brought this context from another of their conversations.\nStrong aims.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Haiku 5.5 · audit\">\nThe user brought this context from another of their conversations.\n| field | value | state |\n|---|---|---|\n| Budget cap | $500,000 | supported |\n| Mentoring plan | — | unverified |\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Haiku 5.5 · Checklist step\">\nThe user brought this context from another of their conversations.\nThis Agent stopped before it finished, so there is no result from it.\n</handoff_context>"
+      "block": "<handoff_context from_conversation=\"Generalist · Review of the proposal\">\nThe user brought this context from another of their conversations.\nStrong aims.\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Haiku 5.5 · audit\">\nThe user brought this context from another of their conversations.\n| field | value | state |\n|---|---|---|\n| Budget cap | $500,000 | supported |\n| Mentoring plan | — | unverified |\n</handoff_context>\n\n<handoff_context from_conversation=\"Claude Haiku 5.5 · Checklist step\">\nThe user brought this context from another of their conversations.\nThis step stopped before it finished, so there is no result from it.\n</handoff_context>"
     }
   ],
   "referenceIdCases": [

@@ -153,6 +153,16 @@ export const DELIVERY_PART_STATUS_NOTES: Readonly<Record<Exclude<DeliveryPartSta
   running: 'This Agent was still working when the results were brought back, so there is no result from it yet.',
 };
 
+/**
+ * The same notes for a prompt step's part, which has no Agent (`PROMPT_PART_STATUS_NOTES` in
+ * `context.py`). A prompt step never waits on the user; `needs_input` is here so every status has one.
+ */
+export const PROMPT_PART_STATUS_NOTES: Readonly<Record<Exclude<DeliveryPartStatus, 'done'>, string>> = {
+  stopped: 'This step stopped before it finished, so there is no result from it.',
+  needs_input: 'This step is still waiting on the user, so there is no result from it yet.',
+  running: 'This step was still working when the results were brought back, so there is no result from it yet.',
+};
+
 /** One part of a run result as its block is rendered (`DeliveryPartBlock` in `context.py`). */
 export interface DeliveryPartBlockInput {
   text: string;
@@ -161,6 +171,8 @@ export interface DeliveryPartBlockInput {
   status: DeliveryPartStatus;
   artifacts?: readonly DeliveryArtifact[];
   files?: readonly FileLine[];
+  /** A prompt step's part: its note names a step, not an Agent (`PROMPT_PART_STATUS_NOTES`). */
+  prompt?: boolean;
 }
 
 /** What a part's block names: the Agent, then its conversation's title (`delivery_part_label`). */
@@ -196,7 +208,7 @@ export function renderDeliveryParts(parts: readonly DeliveryPartBlockInput[]): s
       const label = deliveryPartLabel(part.agentName, part.fromTitle);
       return part.status === 'done'
         ? renderDeliveryBlock(part.text, label, part.artifacts ?? [], part.files ?? [])
-        : renderDeliveryBlock(DELIVERY_PART_STATUS_NOTES[part.status] ?? '', label);
+        : renderDeliveryBlock((part.prompt ? PROMPT_PART_STATUS_NOTES : DELIVERY_PART_STATUS_NOTES)[part.status] ?? '', label);
     })
     .filter((block) => block)
     .join('\n\n');
@@ -366,7 +378,7 @@ function matchRun(
     const promptStep = promptSteps[found];
     parts.push({
       agentName: agentNames[found],
-      status: partStatusOf(blocks[j]),
+      status: partStatusOf(blocks[j], promptStep != null),
       block: blocks[j],
       ...(promptStep != null ? { promptStep } : {}),
     });
@@ -383,9 +395,11 @@ function labelMatchesStep(label: string, agent: string, promptStep: string | nul
   return !!agent && (label === agent || label.startsWith(`${agent} · `));
 }
 
-function partStatusOf(block: DeliveryBlock): DeliveryPartStatus {
+function partStatusOf(block: DeliveryBlock, prompt: boolean): DeliveryPartStatus {
   if (block.artifacts.length || block.files.length) return 'done';
-  for (const [status, note] of Object.entries(DELIVERY_PART_STATUS_NOTES)) {
+  // A prompt part sent before its notes named a step still reads as the status it was.
+  const notes = prompt ? [PROMPT_PART_STATUS_NOTES, DELIVERY_PART_STATUS_NOTES] : [DELIVERY_PART_STATUS_NOTES];
+  for (const [status, note] of notes.flatMap((n) => Object.entries(n))) {
     if (block.text === note) return status as DeliveryPartStatus;
   }
   return 'done';
