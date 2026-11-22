@@ -17,14 +17,14 @@ describe('prompt steps on the AgentCore Runtime', () => {
 
   it('writes nothing while it is off', () => {
     const { template } = synthWorstCasePlatformStack({
-      workflows: { enabled: true, promptStepsEnabled: false },
+      workflows: { enabled: true, promptStepsEnabled: false, checklistStepsEnabled: false },
     });
     expect(runtimeEnvironment(template)).not.toHaveProperty('PROMPT_STEPS_ENABLED');
   });
 
   it('writes nothing while saved workflows are off', () => {
     const { template } = synthWorstCasePlatformStack({
-      workflows: { enabled: false, promptStepsEnabled: true },
+      workflows: { enabled: false, promptStepsEnabled: true, checklistStepsEnabled: false },
     });
     expect(runtimeEnvironment(template)).not.toHaveProperty('PROMPT_STEPS_ENABLED');
   });

@@ -583,6 +583,18 @@ export interface WorkflowsConfig {
    * carries the chain. No new resources.
    */
   promptStepsEnabled: boolean;
+  /**
+   * Checklist steps (docs/specs/workflow-designer.md §22): a workflow step that runs
+   * named field sets over the run's files, one model call per set, on prompt steps'
+   * Runtime invocation. **Opt-in while in development**: off unless
+   * CDK_CHECKLIST_STEPS_ENABLED=true (or a `workflows.checklistStepsEnabled: true`
+   * cdk.json context), and it needs `promptStepsEnabled` (and its whole chain) too.
+   * Sets CHECKLIST_STEPS_ENABLED on **app-api** and on the **AgentCore Runtime**,
+   * each only while the whole chain is on (`checklistStepsOn`); the Runtime copy is
+   * written only while on, so the default spends none of the V2 environment budget.
+   * No new resources (`WFCHK#` rows in sessions-metadata).
+   */
+  checklistStepsEnabled: boolean;
 }
 
 /**
@@ -2065,6 +2077,9 @@ export function loadConfig(scope: cdk.App): AppConfig {
       promptStepsEnabled: process.env.CDK_PROMPT_STEPS_ENABLED
         ? process.env.CDK_PROMPT_STEPS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('workflows')?.promptStepsEnabled ?? false,
+      checklistStepsEnabled: process.env.CDK_CHECKLIST_STEPS_ENABLED
+        ? process.env.CDK_CHECKLIST_STEPS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('workflows')?.checklistStepsEnabled ?? false,
     },
     sessionRewind: {
       // Default ON with a kill switch, same parsing as projects above.
@@ -3320,6 +3335,15 @@ export function promptStepsOn(config: Pick<AppConfig, 'handoffs' | 'workflowRuns
     config.workflows.enabled &&
     config.workflows.promptStepsEnabled
   );
+}
+
+/**
+ * Whether checklist steps are on for this deployment: their own switch and prompt
+ * steps' whole chain, since they run on prompt steps' invocation. The one answer
+ * both services' environments are written from.
+ */
+export function checklistStepsOn(config: Pick<AppConfig, 'handoffs' | 'workflowRuns' | 'workflows'>): boolean {
+  return promptStepsOn(config) && config.workflows.checklistStepsEnabled;
 }
 
 export function buildCorsOrigins(config: AppConfig, additionalOrigins?: string): string[] {

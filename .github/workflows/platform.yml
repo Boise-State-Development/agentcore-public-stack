@@ -324,6 +324,12 @@ jobs:
       # Needs CDK_WORKFLOWS_ENABLED (and so workflow runs and handoffs) too.
       # app-api, and the AgentCore Runtime only while on.
       CDK_PROMPT_STEPS_ENABLED: ${{ vars.CDK_PROMPT_STEPS_ENABLED }}
+      # Checklist steps: a workflow step that runs named field sets over the
+      # run's files, one model call per set (docs/specs/workflow-designer.md
+      # §22). Opt-in while in development; set `CDK_CHECKLIST_STEPS_ENABLED` to
+      # "true" to turn it on. Needs CDK_PROMPT_STEPS_ENABLED (and its whole
+      # chain) too. app-api, and the AgentCore Runtime only while on.
+      CDK_CHECKLIST_STEPS_ENABLED: ${{ vars.CDK_CHECKLIST_STEPS_ENABLED }}
       # Conversation rewind: "Rewind to here" on a user message
       # (docs/specs/conversation-rewind-and-fork.md §4). Default ON with a kill
       # switch: set `CDK_SESSION_REWIND_ENABLED` to "false" in an environment to

@@ -984,6 +984,31 @@ def prompt_steps_enabled() -> bool:
     return handoffs_enabled()
 
 
+def checklist_steps_enabled() -> bool:
+    """Whether a saved workflow's checklist steps can run: named field sets over the run's files.
+
+    ``docs/specs/workflow-designer.md`` §22. A checklist step runs one model call per field set,
+    on the prompt-step invocation (§21), and returns typed values with quotes and
+    ``source_provenance`` states. On app-api, run create accepts a workflow's checklist steps and
+    opens a ``kind=checklist`` step row for each (refused as a sheet blocker while off); on the
+    AgentCore Runtime, the ``workflow_prompt`` invocation runs them. **Opt-in while in
+    development**: only ``"true"`` enables it; an unset GitHub variable arrives as ``""`` and is
+    off. It runs on prompt steps' invocation, so it holds only while ``prompt_steps_enabled()``
+    does, through the same chain (on app-api ``WORKFLOWS_ENABLED`` and its parents; on the Runtime,
+    which has no workflow flags, ``PROMPT_STEPS_ENABLED`` behind ``HANDOFFS_ENABLED``).
+
+    CDK writes ``CHECKLIST_STEPS_ENABLED`` on both services only while the whole chain is on
+    (``checklistStepsOn`` in ``infrastructure/lib/config.ts``), so the Runtime's default spends none
+    of the V2 environment budget. The SPA's matching switch is ``features.checklistSteps``.
+
+    A **feature switch** once finished: each set is a model call a run makes with no Agent's
+    governance around it, which a deployment may decline.
+    """
+    if os.environ.get("CHECKLIST_STEPS_ENABLED", "").strip().lower() != "true":
+        return False
+    return prompt_steps_enabled()
+
+
 def session_rewind_enabled() -> bool:
     """Whether a user can rewind a conversation to one of their earlier messages.
 

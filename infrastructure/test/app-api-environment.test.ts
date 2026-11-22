@@ -149,7 +149,7 @@ describe('buildAppApiEnvironment — workflows', () => {
   it('forwards the flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).WORKFLOWS_ENABLED).toBe('false');
     const on = buildAppApiEnvironment(
-      createMockConfig({ handoffs: handoffsOn, workflowRuns: { enabled: true }, workflows: { enabled: true, promptStepsEnabled: false } }),
+      createMockConfig({ handoffs: handoffsOn, workflowRuns: { enabled: true }, workflows: { enabled: true, promptStepsEnabled: false, checklistStepsEnabled: false } }),
       stubParams(),
     );
     expect(on.WORKFLOWS_ENABLED).toBe('true');
@@ -157,7 +157,7 @@ describe('buildAppApiEnvironment — workflows', () => {
 
   it('stays off while workflow runs are off', () => {
     const env = buildAppApiEnvironment(
-      createMockConfig({ handoffs: handoffsOn, workflows: { enabled: true, promptStepsEnabled: false } }),
+      createMockConfig({ handoffs: handoffsOn, workflows: { enabled: true, promptStepsEnabled: false, checklistStepsEnabled: false } }),
       stubParams(),
     );
     expect(env.WORKFLOWS_ENABLED).toBe('false');
@@ -171,7 +171,7 @@ describe('buildAppApiEnvironment — prompt steps', () => {
   it('forwards the flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).PROMPT_STEPS_ENABLED).toBe('false');
     const on = buildAppApiEnvironment(
-      createMockConfig({ ...chain, workflows: { enabled: true, promptStepsEnabled: true } }),
+      createMockConfig({ ...chain, workflows: { enabled: true, promptStepsEnabled: true, checklistStepsEnabled: false } }),
       stubParams(),
     );
     expect(on.PROMPT_STEPS_ENABLED).toBe('true');
@@ -179,10 +179,32 @@ describe('buildAppApiEnvironment — prompt steps', () => {
 
   it('stays off while saved workflows are off', () => {
     const env = buildAppApiEnvironment(
-      createMockConfig({ ...chain, workflows: { enabled: false, promptStepsEnabled: true } }),
+      createMockConfig({ ...chain, workflows: { enabled: false, promptStepsEnabled: true, checklistStepsEnabled: false } }),
       stubParams(),
     );
     expect(env.PROMPT_STEPS_ENABLED).toBe('false');
+  });
+});
+
+describe('buildAppApiEnvironment — checklist steps', () => {
+  const handoffsOn = { enabled: true, briefEnabled: false, suggestionsEnabled: false };
+  const chain = { handoffs: handoffsOn, workflowRuns: { enabled: true } };
+
+  it('forwards the flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).CHECKLIST_STEPS_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(
+      createMockConfig({ ...chain, workflows: { enabled: true, promptStepsEnabled: true, checklistStepsEnabled: true } }),
+      stubParams(),
+    );
+    expect(on.CHECKLIST_STEPS_ENABLED).toBe('true');
+  });
+
+  it('stays off while prompt steps are off', () => {
+    const env = buildAppApiEnvironment(
+      createMockConfig({ ...chain, workflows: { enabled: true, promptStepsEnabled: false, checklistStepsEnabled: true } }),
+      stubParams(),
+    );
+    expect(env.CHECKLIST_STEPS_ENABLED).toBe('false');
   });
 });
 
