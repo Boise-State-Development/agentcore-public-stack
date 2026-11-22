@@ -158,3 +158,80 @@ def test_the_key_names_the_model_and_the_document_bytes():
     assert wp.prefix_key(HAIKU, prefix_a) == wp.prefix_key(HAIKU, wp.document_blocks([_doc(PDF_A)]))
     assert wp.prefix_key(HAIKU, prefix_a) != wp.prefix_key(SONNET, prefix_a)
     assert wp.prefix_key(HAIKU, prefix_a) != wp.prefix_key(HAIKU, wp.document_blocks([_doc(PDF_B)]))
+
+
+# --- Checklist calls (workflow-designer.md §22.3) --------------------------------------------------
+
+
+async def _record_checklist(model_id: str, raw: bytes, *, read: int = 0, write: int = 0, field_set: str = "budget") -> Any:
+    """One checklist call's stored metadata, as ``ChecklistBranch._run_set`` meters it."""
+    from apis.inference_api.chat import workflow_checklist as wc
+    from apis.shared.extraction import checklist as cl
+
+    prefix = wp.document_blocks([_doc(raw)])
+    instruction = f"Checklist: {field_set} (version 1)\n\nFields to find:\n- x (string): find it\n\n{cl.CALL_ONCE}"
+    messages = [{"role": "user", "content": wp.step_content(prefix, "", instruction, cache_point=True)}]
+    key = wp.prefix_key(model_id, prefix, system=cl.SYSTEM_PROMPT, tools=wc.TOOLS)
+    store = AsyncMock(return_value={})
+    with patch("apis.shared.sessions.metadata.store_message_metadata", store), patch(
+        "apis.shared.costs.pricing_config.create_pricing_snapshot", AsyncMock(return_value=PRICING)
+    ):
+        await wp.meter_call(
+            user_id="alice",
+            session_id="src",
+            model_id=model_id,
+            usage={
+                "inputTokens": 30,
+                "outputTokens": 120,
+                "totalTokens": 150 + read + write,
+                "cacheReadInputTokens": read,
+                "cacheWriteInputTokens": write,
+            },
+            metrics={},
+            started=time.time(),
+            ended=time.time(),
+            fingerprint=wp._fingerprint(messages, key, tools=wc.TOOLS, system=cl.SYSTEM_PROMPT),
+            attributes={"runId": "r1", "stepId": "s9", "fieldSet": field_set},
+            call_kind=wc.CALL_KIND,
+        )
+    return store.await_args.kwargs["message_metadata"]
+
+
+async def test_a_checklist_row_carries_its_kind_and_set():
+    row = (await _record_checklist(HAIKU, PDF_A, write=10_400)).model_dump(by_alias=True, exclude_none=True)
+
+    assert row["callKind"] == "workflow_checklist"
+    assert row["fieldSet"] == "budget" and row["stepId"] == "s9"
+    assert row["prefixFingerprints"]["toolConfigHash"] != wp._fingerprint([{"role": "user", "content": []}])["toolConfigHash"]
+
+
+async def test_the_checklist_warm_write_after_a_prompt_steps_rows_is_a_first_write():
+    """The tool list differs, so a prompt step's entry was never one a checklist call could read."""
+    prompt_warm = await _record(HAIKU, PDF_A, write=10_080)
+    prompt_step = await _record(HAIKU, PDF_A, read=10_080, write=60, instruction="Lens 2.")
+    checklist_warm = await _record_checklist(HAIKU, PDF_A, write=10_400)
+
+    result = _classify(checklist_warm, [_as_row(prompt_step, 3), _as_row(prompt_warm, 9), _chat_row(60)])
+
+    assert result["cacheStatus"] == "first_write"
+    assert result["wastedUsd"] == 0
+
+
+async def test_a_second_set_on_the_same_model_is_a_hit():
+    prompt_warm = await _record(HAIKU, PDF_A, write=10_080)
+    checklist_warm = await _record_checklist(HAIKU, PDF_A, write=10_400)
+    second = await _record_checklist(HAIKU, PDF_A, read=10_400, write=40, field_set="plans")
+
+    result = _classify(second, [_as_row(checklist_warm, 4), _as_row(prompt_warm, 10)])
+
+    assert result["cacheStatus"] == "hit"
+    assert result["wastedUsd"] == 0
+
+
+async def test_another_models_checklist_warm_write_is_not_a_miss():
+    haiku = await _record_checklist(HAIKU, PDF_A, write=10_400)
+    sonnet = await _record_checklist(SONNET, PDF_A, write=10_400)
+
+    result = _classify(sonnet, [_as_row(haiku, 2)])
+
+    assert result["cacheStatus"] == "first_write"

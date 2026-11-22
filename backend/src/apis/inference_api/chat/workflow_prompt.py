@@ -1,4 +1,4 @@
-"""A workflow run's prompt steps: one model call each over the run's files, never a turn.
+"""A workflow run's prompt steps (and checklist steps): model calls over the run's files, never a turn.
 
 ``docs/specs/workflow-designer.md`` §21.1, §21.3. A ``workflow_prompt`` invocation names prompt
 steps of one approved run, on the run's **source** session. It does not go through
@@ -28,6 +28,10 @@ is streamed. A closed tab does not cancel: the work runs in a task of its own, f
 its rows, and the run refresh reads them. A stopped run does: the run row is re-read every
 ``RUN_POLL_SECONDS``, and on ``stopped`` the calls in flight are cancelled and every claimed step
 stops ``user_stopped``.
+
+**Checklist steps** (§22.3) ride the same invocation while ``checklist_steps_enabled()``: the same
+checks, claim and stop, with one call per field set. Their calls carry a constant tool and frame of
+their own, so they run as their own warm group per model (``workflow_checklist.ChecklistBranch``).
 """
 
 from __future__ import annotations
@@ -46,8 +50,8 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optiona
 from apis.shared.auth.models import User
 from apis.shared.extraction.batch import run_bounded
 from apis.shared.files.whole_document import WholeDocument, WholeDocumentError, read_whole_document
-from apis.shared.feature_flags import prompt_steps_enabled
-from apis.shared.handoff.models import PromptStopReason
+from apis.shared.feature_flags import checklist_steps_enabled, prompt_steps_enabled
+from apis.shared.handoff.models import KIND_CHECKLIST_STEP, KIND_PROMPT_STEP, PromptStopReason
 from apis.shared.handoff.prompt_models import prompt_model_supported
 from apis.shared.handoff.prompt_steps import (
     PromptStepStore,
@@ -124,14 +128,28 @@ def _frame(event: str, data: Dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def step_frame(run_id: str, step_id: str, status: str, *, stopped_reason: Optional[str] = None, reason: Optional[str] = None) -> str:
+def step_frame(
+    run_id: str,
+    step_id: str,
+    status: str,
+    *,
+    stopped_reason: Optional[str] = None,
+    reason: Optional[str] = None,
+    kind: Optional[str] = None,
+) -> str:
     """One step settled: ``done``, ``stopped`` (with ``stoppedReason``), or ``skipped`` (with ``reason``).
 
-    ``skipped`` is a step this invocation did not run and did not write: not a prompt step of the
-    run, not ``open`` (another invocation claimed it, or it settled), one whose reads have not
-    settled, or one whose reads a delivery rule refused. A client treats it as not started.
+    ``skipped`` is a step this invocation did not run and did not write: not a prompt or checklist
+    step of the run (or a checklist step while those are off), not ``open`` (another invocation
+    claimed it, or it settled), one whose reads have not settled, or one whose reads a delivery rule
+    refused. A client treats it as not started.
+
+    ``kind`` (``prompt`` or ``checklist``, §22.3) is additive: present whenever the step is one of
+    the run's, absent on a ``not_in_run`` skip.
     """
     data: Dict[str, Any] = {"type": "workflow_prompt_step", "runId": run_id, "stepId": step_id, "status": status}
+    if kind:
+        data["kind"] = kind
     if stopped_reason:
         data["stoppedReason"] = stopped_reason
     if reason:
@@ -218,6 +236,8 @@ class CallResult:
     #: The provider accepted the request, so a cancel after this still billed a prompt.
     answered: bool = False
     first_token_at: Optional[float] = None
+    #: The reply's content blocks as the stream ended it (a checklist call's ``toolUse`` is here).
+    content: List[Dict[str, Any]] = field(default_factory=list)
 
 
 CallModel = Callable[[Any, List[Dict[str, Any]], threading.Event], Awaitable[CallResult]]
@@ -229,8 +249,16 @@ def _reported(usage: Optional[Dict[str, Any]]) -> bool:
     return bool(usage) and any((usage or {}).get(key) for key in keys)
 
 
-async def call_bedrock(model: Any, messages: List[Dict[str, Any]], cancel: threading.Event) -> CallResult:
-    """Stream one Converse call through Strands, with no tools and the constant system prompt."""
+async def call_bedrock(
+    model: Any,
+    messages: List[Dict[str, Any]],
+    cancel: threading.Event,
+    *,
+    tool_specs: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Dict[str, Any]] = None,
+    system_prompt: str = SYSTEM_PROMPT,
+) -> CallResult:
+    """Stream one Converse call through Strands: a prompt step's (no tools, its constant system prompt) by default."""
     from strands.event_loop.streaming import stream_messages
 
     result = CallResult(stop_reason="error")
@@ -240,9 +268,9 @@ async def call_bedrock(model: Any, messages: List[Dict[str, Any]], cancel: threa
         model,
         None,
         messages,
-        [],
-        tool_choice=None,
-        system_prompt_content=[{"text": SYSTEM_PROMPT}],
+        list(tool_specs or []),
+        tool_choice=tool_choice,
+        system_prompt_content=[{"text": system_prompt}],
         invocation_state={},
         model_state={},
         cancel_signal=cancel,
@@ -266,6 +294,7 @@ async def call_bedrock(model: Any, messages: List[Dict[str, Any]], cancel: threa
     result.stop_reason = str(stop_reason)
     result.usage = dict(usage or {})
     result.metrics = dict(metrics or {})
+    result.content = [block for block in (message or {}).get("content") or [] if isinstance(block, dict)]
     result.text = "".join(parts) if parts else "".join(
         block.get("text", "") for block in (message or {}).get("content") or [] if isinstance(block, dict)
     )
@@ -431,11 +460,13 @@ async def meter_call(
     fingerprint: Optional[Dict[str, Any]],
     attributes: Dict[str, Any],
     usage_estimate: Optional[Dict[str, Any]] = None,
+    call_kind: str = CALL_KIND,
 ) -> Optional[str]:
     """Write one step call's ``C#`` row on the source session. Returns its ``cacheStatus``. Never raises.
 
     Priced from the catalog like ``document_extract``'s call, with the coordinator's long-context
-    rule (``CostCalculator`` applies it). ``callKind`` and no ``messageId`` keep it off the turn
+    rule (``CostCalculator`` applies it). ``callKind`` (``workflow_prompt``, or
+    ``workflow_checklist`` for a checklist step's call) and no ``messageId`` keep it off the turn
     counts and the context meter.
     """
     from apis.shared.costs.calculator import CostCalculator
@@ -477,12 +508,12 @@ async def meter_call(
                 logger.warning("workflow prompt: cost calculation failed", exc_info=True)
         if cost is None:
             emit_unmetered_model_call(
-                model_id, "calculation_failed" if snapshot else "no_pricing", surface=CALL_KIND, session_id=session_id
+                model_id, "calculation_failed" if snapshot else "no_pricing", surface=call_kind, session_id=session_id
             )
 
         latency_ms = metrics.get("latencyMs")
         ttfb_ms = metrics.get("timeToFirstByteMs")
-        extra: Dict[str, Any] = {"callKind": CALL_KIND, **attributes}
+        extra: Dict[str, Any] = {"callKind": call_kind, **attributes}
         if fingerprint:
             extra["prefixFingerprints"] = fingerprint
         if usage_estimate:
@@ -561,8 +592,14 @@ def estimate_cancelled_usage(
     return usage, estimate
 
 
-def prefix_key(model_id: str, prefix: Sequence[Dict[str, Any]]) -> str:
-    """What a prompt step's cached prefix is made of: the model, the system prompt and the documents.
+def prefix_key(
+    model_id: str,
+    prefix: Sequence[Dict[str, Any]],
+    *,
+    system: str = SYSTEM_PROMPT,
+    tools: Optional[Sequence[Dict[str, Any]]] = None,
+) -> str:
+    """What a step call's cached prefix is made of: the model, the tools, the system prompt and the documents.
 
     Every prompt-step call has the same ``toolConfigHash`` (no tools) and ``systemPromptHash`` (one
     constant), so those two alone would make any earlier prompt-step row a step's predecessor: a
@@ -572,6 +609,11 @@ def prefix_key(model_id: str, prefix: Sequence[Dict[str, Any]]) -> str:
     prefix the cache is keyed on, so only a row that wrote the same one can be a predecessor.
 
     A document's bytes are hashed directly, never rendered into the key's JSON.
+
+    A checklist call (§22.3) passes its tool and its own system prompt, so its key is never a prompt
+    step's: the tool list renders ahead of the documents, so the two groups on one model write two
+    entries, and neither can be read as a missed read of the other. A prompt step's key is exactly
+    what it was before checklist steps (no ``tools`` member), so its rows still match each other.
     """
     import hashlib
 
@@ -586,10 +628,19 @@ def prefix_key(model_id: str, prefix: Sequence[Dict[str, Any]]) -> str:
         else:
             text = str(block.get("text") or "") if isinstance(block, dict) else ""
             parts.append({"text": hashlib.sha256(text.encode("utf-8")).hexdigest()})
-    return fingerprint_canonical_json({"modelId": model_id, "system": SYSTEM_PROMPT, "prefix": parts})
+    key: Dict[str, Any] = {"modelId": model_id, "system": system, "prefix": parts}
+    if tools:
+        key["tools"] = fingerprint_canonical_json(list(tools))
+    return fingerprint_canonical_json(key)
 
 
-def _fingerprint(messages: List[Dict[str, Any]], key: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def _fingerprint(
+    messages: List[Dict[str, Any]],
+    key: Optional[str] = None,
+    *,
+    tools: Sequence[Dict[str, Any]] = (),
+    system: str = SYSTEM_PROMPT,
+) -> Optional[Dict[str, Any]]:
     """This call's prefix hashes, marked stateless (``extendsMessagesHashes``) with ``key``.
 
     The stateless match is the one api-converse uses: a predecessor counts only if its
@@ -599,7 +650,7 @@ def _fingerprint(messages: List[Dict[str, Any]], key: Optional[str] = None) -> O
     try:
         from agents.main_agent.session.hooks.prefix_fingerprint import compute_prefix_fingerprint
 
-        fingerprint = compute_prefix_fingerprint([], [{"text": SYSTEM_PROMPT}], messages)
+        fingerprint = compute_prefix_fingerprint(list(tools), [{"text": system}], messages)
     except Exception:  # noqa: BLE001 - a row without fingerprints falls back to the previous call
         logger.debug("workflow prompt: fingerprint failed", exc_info=True)
         return None
@@ -629,9 +680,29 @@ class StepPlan:
     def handoff_id(self) -> str:
         return self.step.handoff_id
 
+    @property
+    def kind(self) -> str:
+        """``prompt`` or ``checklist``: the row kind the claim holds the step to."""
+        return KIND_CHECKLIST_STEP if self.step.is_checklist else KIND_PROMPT_STEP
+
+
+@dataclass
+class TimedCall:
+    """One model call as ``PromptStepRun._timed_call`` ended it."""
+
+    result: CallResult
+    timed_out: bool
+    started: float
+    ended: float
+
 
 class PromptStepRun:
-    """One ``workflow_prompt`` invocation's work: checks, claims, calls and writes, frames out."""
+    """One ``workflow_prompt`` invocation's work: checks, claims, calls and writes, frames out.
+
+    It runs the run's prompt steps (§21.3) and, while ``checklist_steps_enabled()``, its checklist
+    steps (§22.3), whose calls ``workflow_checklist.run_checklist_group`` makes on this object's
+    slots, cancels, claims and meter.
+    """
 
     def __init__(
         self,
@@ -651,6 +722,12 @@ class PromptStepRun:
         enabled: Callable[[], bool] = prompt_steps_enabled,
         step_timeout: float = STEP_TIMEOUT_SECONDS,
         poll_seconds: float = RUN_POLL_SECONDS,
+        checklist_enabled: Callable[[], bool] = checklist_steps_enabled,
+        call_checklist: Optional[CallModel] = None,
+        build_checklist_model: Optional[Callable[[str], Any]] = None,
+        load_field_sets: Optional[Callable[..., Awaitable[Dict[str, Any]]]] = None,
+        provenance_units: Optional[Callable[..., Awaitable[Any]]] = None,
+        put_checklist_set: Optional[Callable[..., bool]] = None,
     ) -> None:
         self.request = request
         self.user = user
@@ -668,13 +745,23 @@ class PromptStepRun:
         self._enabled = enabled
         self._step_timeout = step_timeout
         self._poll_seconds = poll_seconds
+        self._checklist_enabled = checklist_enabled
+        # The checklist branch's own dependencies, defaulted lazily from its module.
+        self._checklist_deps = {
+            "call_checklist": call_checklist,
+            "build_checklist_model": build_checklist_model,
+            "load_field_sets": load_field_sets,
+            "provenance_units": provenance_units,
+            "put_checklist_set": put_checklist_set,
+        }
         self.frames: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         self._cancels: Dict[str, threading.Event] = {}
         self._stopped = False
         self._settled: Set[str] = set()
         self._claimed: List[StepPlan] = []
         self._slots = asyncio.Semaphore(1)
-        #: Order the calls started in, by step id (warm-then-fan-out is observable here).
+        #: Order the calls started in: a prompt step's id, or ``<step id>:<field set>`` for a
+        #: checklist call (warm-then-fan-out is observable here).
         self.call_order: List[str] = []
 
     # The whole invocation, frames to ``self.frames``, ``None`` last.
@@ -728,6 +815,12 @@ class PromptStepRun:
             watcher.cancel()
             await asyncio.gather(watcher, return_exceptions=True)
 
+    def _runs_kind(self, step: WorkflowRunStep) -> bool:
+        """Whether this invocation runs ``step``'s kind: a prompt step, or a checklist step while those are on."""
+        if step.is_prompt:
+            return True
+        return step.is_checklist and self._checklist_enabled()
+
     async def _candidates(self, run: WorkflowRun) -> List[StepPlan]:
         """The requested steps this invocation may claim, each with its reads rendered."""
         kept = {step.step_id: step for step in run.kept_steps()}
@@ -737,24 +830,25 @@ class PromptStepRun:
             if step is None:
                 self._emit(step_frame(self.run_id, step_id, "skipped", reason="not_in_run"))
                 continue
-            if not step.is_prompt:
-                self._emit(step_frame(self.run_id, step_id, "skipped", reason="not_prompt"))
+            kind = step.kind or "agent"
+            if not self._runs_kind(step):
+                self._emit(step_frame(self.run_id, step_id, "skipped", reason="not_prompt", kind=kind))
                 continue
             # Checked before the claim: a step whose reads haven't settled is left ``open`` for
             # the queue to send again, never stopped.
             try:
                 block = await self._render_reads(self.user.user_id, self.session_id, run, step)
             except StepReadsNotSettled:
-                self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_pending"))
+                self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_pending", kind=kind))
                 continue
             except DeliveryRefused as exc:
                 logger.info("workflow prompt: a step's reads were refused (%s)", getattr(exc, "reason", ""))
-                self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_refused"))
+                self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_refused", kind=kind))
                 continue
             except Exception:
                 # A failed read (a store error) is a retry later, like a step not ready yet.
                 logger.warning("workflow prompt: rendering a step's reads failed", exc_info=True)
-                self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_pending"))
+                self._emit(step_frame(self.run_id, step_id, "skipped", reason="reads_pending", kind=kind))
                 continue
             plans.append(
                 StepPlan(
@@ -768,7 +862,10 @@ class PromptStepRun:
 
     async def _claim(self, run: WorkflowRun, plans: List[StepPlan]) -> List[StepPlan]:
         results = await asyncio.gather(
-            *(asyncio.to_thread(self._steps.claim, self.user.user_id, p.handoff_id, run_id=run.run_id) for p in plans),
+            *(
+                asyncio.to_thread(self._steps.claim, self.user.user_id, p.handoff_id, run_id=run.run_id, kind=p.kind)
+                for p in plans
+            ),
             return_exceptions=True,
         )
         claimed: List[StepPlan] = []
@@ -778,7 +875,7 @@ class PromptStepRun:
                 continue
             if isinstance(result, BaseException):
                 logger.warning("workflow prompt: claiming a step failed", exc_info=result)
-            self._emit(step_frame(self.run_id, plan.step_id, "skipped", reason="not_open"))
+            self._emit(step_frame(self.run_id, plan.step_id, "skipped", reason="not_open", kind=plan.kind))
         return claimed
 
     async def _stop(self, plan: StepPlan, reason: PromptStopReason) -> None:
@@ -790,7 +887,7 @@ class PromptStepRun:
         except Exception:
             logger.warning("workflow prompt: stopping a step failed", exc_info=True)
         logger.info("workflow prompt: step stopped (%s)", reason)
-        self._emit(step_frame(self.run_id, plan.step_id, "stopped", stopped_reason=reason))
+        self._emit(step_frame(self.run_id, plan.step_id, "stopped", stopped_reason=reason, kind=plan.kind))
 
     async def _finish(self, plan: StepPlan, text: str, output_tokens: int) -> None:
         self._settled.add(plan.step_id)
@@ -802,9 +899,9 @@ class PromptStepRun:
             logger.warning("workflow prompt: finishing a step failed", exc_info=True)
             written = False
         if written:
-            self._emit(step_frame(self.run_id, plan.step_id, "done"))
+            self._emit(step_frame(self.run_id, plan.step_id, "done", kind=plan.kind))
         else:
-            self._emit(step_frame(self.run_id, plan.step_id, "stopped", stopped_reason="error"))
+            self._emit(step_frame(self.run_id, plan.step_id, "stopped", stopped_reason="error", kind=plan.kind))
 
     async def _watch_run(self) -> None:
         """Re-read the run every ``poll_seconds``; on ``stopped`` cancel every call in flight."""
@@ -850,17 +947,33 @@ class PromptStepRun:
             return
         prefix = document_blocks(documents)
 
-        # One group per model, side by side: each model has its own cache, so nothing is shared
-        # between groups and running them in turn would only add a group's wall time. One
-        # semaphore across the groups keeps every call in flight within the run's concurrency.
+        checklist = None
+        if any(plan.step.is_checklist for plan in claimed):
+            from apis.inference_api.chat.workflow_checklist import ChecklistBranch
+
+            checklist = ChecklistBranch(self, run, **self._checklist_deps)
+            await checklist.load([plan for plan in claimed if plan.step.is_checklist])
+
+        # One group per (kind, model), side by side: each model has its own cache, and on one
+        # model a checklist call's tool list differs from a prompt step's (none), so the two kinds
+        # write separate entries and neither can warm the other. Running the groups in turn would
+        # only add a group's wall time. One semaphore across the groups keeps every call in flight
+        # within the run's concurrency.
         limit = max(1, int(run.limits.concurrency or 1))
         self._slots = asyncio.Semaphore(limit)
-        groups: Dict[str, List[StepPlan]] = {}
+        groups: Dict[Tuple[str, str], List[StepPlan]] = {}
         for plan in claimed:
-            groups.setdefault(plan.step.model_id or "", []).append(plan)
+            groups.setdefault((plan.kind, plan.step.model_id or ""), []).append(plan)
+        model_plans: Dict[str, "asyncio.Future[ModelPlan]"] = {}
 
-        async def _group(model_id: str, plans: List[StepPlan]) -> None:
-            model_plan = await self._model_plan(self.user, model_id)
+        def _plan_for(model_id: str) -> "asyncio.Future[ModelPlan]":
+            # Resolved once per model, however many groups run on it.
+            if model_id not in model_plans:
+                model_plans[model_id] = asyncio.ensure_future(self._model_plan(self.user, model_id))
+            return model_plans[model_id]
+
+        async def _group(kind: str, model_id: str, plans: List[StepPlan]) -> None:
+            model_plan = await _plan_for(model_id)
             if model_plan.refusal is not None:
                 for plan in plans:
                     await self._stop(plan, model_plan.refusal)
@@ -879,10 +992,13 @@ class PromptStepRun:
                 plans = [p for p in plans if not p.reads_files]
                 if not plans:
                     return
+            if kind == KIND_CHECKLIST_STEP and checklist is not None:
+                await checklist.run_group(model_plan, documents, prefix, plans, limit=limit)
+                return
             await self._run_group(run, model_plan, documents, prefix, plans, limit=limit)
 
         outcomes = await asyncio.gather(
-            *(_group(model_id, plans) for model_id, plans in groups.items()), return_exceptions=True
+            *(_group(kind, model_id, plans) for (kind, model_id), plans in groups.items()), return_exceptions=True
         )
         for outcome in outcomes:
             if isinstance(outcome, asyncio.CancelledError):
@@ -949,6 +1065,86 @@ class PromptStepRun:
         async with self._slots:
             await self._call_step(model, model_plan, prefix, doc_tokens, plan, warm)
 
+    async def _timed_call(self, model: Any, messages: List[Dict[str, Any]], key: str, call: CallModel) -> TimedCall:
+        """One model call under the step timeout, cancellable by a stopped run (``self._cancels[key]``)."""
+        cancel = threading.Event()
+        self._cancels[key] = cancel
+        timed_out = {"value": False}
+
+        async def _deadline() -> None:
+            await asyncio.sleep(self._step_timeout)
+            timed_out["value"] = True
+            cancel.set()
+
+        timer = asyncio.ensure_future(_deadline())
+        started = time.time()
+        self.call_order.append(key)
+        try:
+            try:
+                result = await asyncio.wait_for(call(model, messages, cancel), timeout=self._step_timeout + 15)
+            except asyncio.TimeoutError:
+                timed_out["value"] = True
+                result = CallResult(stop_reason="cancelled")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("workflow prompt: a step's call failed", exc_info=True)
+            result = CallResult(stop_reason="error")
+        finally:
+            timer.cancel()
+            self._cancels.pop(key, None)
+        return TimedCall(result=result, timed_out=timed_out["value"], started=started, ended=time.time())
+
+    async def _meter_result(
+        self,
+        model_plan: ModelPlan,
+        call: TimedCall,
+        messages: List[Dict[str, Any]],
+        *,
+        prompt_tokens: int,
+        warm: Dict[str, Any],
+        key: Optional[str],
+        attributes: Dict[str, Any],
+        call_kind: str = CALL_KIND,
+        tools: Sequence[Dict[str, Any]] = (),
+        system: str = SYSTEM_PROMPT,
+    ) -> None:
+        """Meter one call: its reported usage, or an estimate for one cancelled after the provider answered.
+
+        ``warm["prefix"]`` keeps the first reported call's cached prefix, which a later cancelled
+        call's estimate splits its input by.
+        """
+        result = call.result
+        usage, estimate = result.usage, None
+        if not _reported(usage) and result.stop_reason == "cancelled" and result.answered:
+            usage, estimate = estimate_cancelled_usage(
+                model_id=model_plan.model_id,
+                prompt_tokens=prompt_tokens,
+                cached_prefix=warm["prefix"],
+                cache_point=model_plan.cache_point,
+                partial_text=result.text,
+            )
+        if not _reported(usage):
+            return
+        if warm["prefix"] is None and estimate is None:
+            warm["prefix"] = int(usage.get("cacheWriteInputTokens") or 0) + int(usage.get("cacheReadInputTokens") or 0)
+        await self._meter(
+            user_id=self.user.user_id,
+            session_id=self.session_id,
+            model_id=model_plan.model_id,
+            usage=usage,
+            metrics=result.metrics,
+            started=call.started,
+            ended=call.ended,
+            fingerprint=_fingerprint(messages, key, tools=tools, system=system),
+            attributes={
+                **attributes,
+                **({"truncated": True} if result.stop_reason == "max_tokens" else {}),
+            },
+            usage_estimate=estimate,
+            call_kind=call_kind,
+        )
+
     async def _call_step(
         self,
         model: Any,
@@ -969,72 +1165,23 @@ class PromptStepRun:
             run_request=plan.run_request,
         )
         messages = [{"role": "user", "content": content}]
-        cancel = threading.Event()
-        self._cancels[plan.step_id] = cancel
-        timed_out = {"value": False}
-
-        async def _deadline() -> None:
-            await asyncio.sleep(self._step_timeout)
-            timed_out["value"] = True
-            cancel.set()
-
-        timer = asyncio.ensure_future(_deadline())
-        started = time.time()
-        self.call_order.append(plan.step_id)
-        try:
-            try:
-                result = await asyncio.wait_for(
-                    self._call_model(model, messages, cancel), timeout=self._step_timeout + 15
-                )
-            except asyncio.TimeoutError:
-                timed_out["value"] = True
-                result = CallResult(stop_reason="cancelled")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.warning("workflow prompt: a step's call failed", exc_info=True)
-            result = CallResult(stop_reason="error")
-        finally:
-            timer.cancel()
-            self._cancels.pop(plan.step_id, None)
-        ended = time.time()
-
-        usage, estimate = result.usage, None
-        if not _reported(usage) and result.stop_reason == "cancelled" and result.answered:
-            prompt_tokens = (doc_tokens if plan.reads_files else 0) + math.ceil(
-                (len(SYSTEM_PROMPT) + len(plan.run_request) + len(plan.reads_block) + len(plan.step.request)) / 4
-            )
-            usage, estimate = estimate_cancelled_usage(
-                model_id=model_plan.model_id,
-                prompt_tokens=prompt_tokens,
-                cached_prefix=warm["prefix"],
-                cache_point=model_plan.cache_point,
-                partial_text=result.text,
-            )
-        if _reported(usage):
-            if warm["prefix"] is None and estimate is None:
-                warm["prefix"] = int(usage.get("cacheWriteInputTokens") or 0) + int(
-                    usage.get("cacheReadInputTokens") or 0
-                )
-            await self._meter(
-                user_id=self.user.user_id,
-                session_id=self.session_id,
-                model_id=model_plan.model_id,
-                usage=usage,
-                metrics=result.metrics,
-                started=started,
-                ended=ended,
-                fingerprint=_fingerprint(messages, warm.get("key" if plan.reads_files else "bare_key")),
-                attributes={
-                    "runId": self.run_id,
-                    "stepId": plan.step_id,
-                    **({"truncated": True} if result.stop_reason == "max_tokens" else {}),
-                },
-                usage_estimate=estimate,
-            )
+        call = await self._timed_call(model, messages, plan.step_id, self._call_model)
+        result = call.result
+        prompt_tokens = (doc_tokens if plan.reads_files else 0) + math.ceil(
+            (len(SYSTEM_PROMPT) + len(plan.run_request) + len(plan.reads_block) + len(plan.step.request)) / 4
+        )
+        await self._meter_result(
+            model_plan,
+            call,
+            messages,
+            prompt_tokens=prompt_tokens,
+            warm=warm,
+            key=warm.get("key" if plan.reads_files else "bare_key"),
+            attributes={"runId": self.run_id, "stepId": plan.step_id},
+        )
 
         if result.stop_reason == "cancelled":
-            await self._stop(plan, "user_stopped" if self._stopped and not timed_out["value"] else "timeout")
+            await self._stop(plan, "user_stopped" if self._stopped and not call.timed_out else "timeout")
             return
         if result.stop_reason in ("guardrail_intervened", "content_filtered", "error"):
             await self._stop(plan, "error")

@@ -88,10 +88,10 @@ class StepStore:
         }
         self._lock = threading.Lock()
 
-    def claim(self, user_id: str, handoff_id: str, *, run_id: str) -> bool:
+    def claim(self, user_id: str, handoff_id: str, *, run_id: str, kind: str = "prompt") -> bool:
         with self._lock:
             row = self.rows.get(handoff_id)
-            if not row or row["status"] != "open" or row["kind"] != "prompt" or row["runId"] != run_id:
+            if not row or row["status"] != "open" or row["kind"] != kind or row["runId"] != run_id:
                 return False
             row["status"] = "running"
             return True

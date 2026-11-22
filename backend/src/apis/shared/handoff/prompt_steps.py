@@ -1,7 +1,8 @@
-"""A workflow run's prompt steps: the request that runs them and the writes on their rows.
+"""A workflow run's prompt and checklist steps: the request that runs them and the writes on their rows.
 
-``docs/specs/workflow-designer.md`` §21.3. A prompt step is a ``HANDOFF#`` row of kind ``prompt``:
-one model call over the run's files, with no Agent and no conversation. The Runtime runs the steps
+``docs/specs/workflow-designer.md`` §21.3, §22.3. A prompt step is a ``HANDOFF#`` row of kind ``prompt``:
+one model call over the run's files, with no Agent and no conversation. A checklist step is a row of
+kind ``checklist``: one call per field set it names, with the same three moves below. The Runtime runs the steps
 a ``workflow_prompt`` invocation names (``inference_api/chat/workflow_prompt.py``). This module
 holds the request's shape and the three moves the invocation makes on a step's row::
 
@@ -36,6 +37,7 @@ from apis.shared.handoff.context import context_hash
 from apis.shared.handoff.delivery import SEND_BACK_MAX_CHARS, cap_delivery_text
 from apis.shared.handoff.models import (
     KIND_PROMPT_STEP,
+    MODEL_STEP_KINDS,
     PROMPT_FIELD_OUTPUT_HASH,
     PROMPT_FIELD_OUTPUT_TEXT,
     PROMPT_FIELD_OUTPUT_TOKENS,
@@ -115,14 +117,20 @@ class PromptStepStore:
     def enabled(self) -> bool:
         return self._table is not None
 
-    def claim(self, user_id: str, handoff_id: str, *, run_id: str) -> bool:
-        """``open`` → ``running``, exactly once. False if the step was claimed, settled, or isn't this run's prompt step."""
+    def claim(self, user_id: str, handoff_id: str, *, run_id: str, kind: str = KIND_PROMPT_STEP) -> bool:
+        """``open`` → ``running``, exactly once. False if the step was claimed, settled, or isn't this run's step of ``kind``.
+
+        ``kind`` is ``prompt`` or ``checklist`` (``MODEL_STEP_KINDS``); the condition holds the row to
+        it, so a checklist step is never claimed as a prompt step or the other way round.
+        """
+        if kind not in MODEL_STEP_KINDS:
+            raise ValueError(f"not a model step kind: {kind}")
         return self._update(
             user_id,
             handoff_id,
             sets={"#status": ("status", "running")},
             condition="#status = :from0 AND #kind = :kind AND #runId = :runId",
-            condition_values={":from0": "open", ":kind": KIND_PROMPT_STEP, ":runId": run_id},
+            condition_values={":from0": "open", ":kind": kind, ":runId": run_id},
             condition_names={"#kind": "kind", "#runId": "runId"},
         )
 

@@ -400,3 +400,8 @@ def test_nothing_here_runs_before_the_first_token():
         if path.name != "ledger_rollups.py" and "bump_ledger_for_row" in path.read_text(encoding="utf-8")
     )
     assert callers == ["apis/shared/sessions/metadata.py"]
+
+
+def test_a_checklist_call_counts_under_its_own_kind():
+    assert "workflow_checklist" in CALL_KINDS
+    assert call_kind(_row(callKind="workflow_checklist", messageId=None)) == "workflow_checklist"
