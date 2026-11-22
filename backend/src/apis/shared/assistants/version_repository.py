@@ -40,8 +40,9 @@ rather than a data layer plus a behavior change at once.
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+from apis.shared.timestamps import utc_now_iso
 
 from .models import AgentVersion
 from .serialization import from_ddb, to_ddb_safe
@@ -214,7 +215,7 @@ async def set_version_index(
         # Promotion also records that this version was published, once (workflow-designer
         # §23.2): the pin rule lets a superseded version run only if it carries this.
         assignments.append(f"{_PUBLISHED_AT} = if_not_exists({_PUBLISHED_AT}, :published_at)")
-        values[":published_at"] = datetime.now(timezone.utc).isoformat()
+        values[":published_at"] = utc_now_iso()
         expression = "SET " + ", ".join(assignments)
     else:
         expression = "REMOVE " + ", ".join(_GSI5_ATTRS)
