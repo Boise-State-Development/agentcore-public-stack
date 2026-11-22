@@ -77,6 +77,7 @@ function run(rows: HandoffView[], overrides: Partial<WorkflowRunView> = {}): Wor
 describe('WorkflowRunRowComponent', () => {
   const pending = new Set<string>();
   const loading = new Set<string>();
+  const promptRunning = new Set<string>();
   const onComposer = signal(false);
   const runs = { resume: vi.fn(), stop: vi.fn() };
   const results = { collect: vi.fn(), isCollecting: () => false, isOnComposer: () => onComposer(), resultCardOf: () => 'd1' };
@@ -89,6 +90,7 @@ describe('WorkflowRunRowComponent', () => {
   beforeEach(() => {
     pending.clear();
     loading.clear();
+    promptRunning.clear();
     onComposer.set(false);
     runs.resume.mockClear();
     runs.stop.mockClear();
@@ -114,7 +116,10 @@ describe('WorkflowRunRowComponent', () => {
           useValue: { mergedSessionsResource: () => ({ sessions: [{ sessionId: 'src', title: sessionTitle }] }) },
         },
         { provide: UserConnectorsService, useValue: { ensureLoaded: vi.fn(), displayNameFor: (id: string) => id } },
-        { provide: WorkflowRunQueueService, useValue: { isPending: (_run: string, id: string) => pending.has(id) } },
+        {
+          provide: WorkflowRunQueueService,
+          useValue: { isPending: (_run: string, id: string) => pending.has(id), isRunning: (_run: string, id: string) => promptRunning.has(id) },
+        },
         { provide: WorkflowRunService, useValue: runs },
         { provide: WorkflowRunResultService, useValue: results },
         { provide: WorkflowRunMergeService, useValue: merge },
@@ -372,5 +377,54 @@ describe('WorkflowRunRowComponent', () => {
       mergeHold.set(null);
       expect(buttons(render(run([stepRow(0, 'done')])).el)).not.toContain('Merge now');
     });
+  });
+
+  it('draws a prompt step as a line with no link, named by its step and model, its answer behind a disclosure', () => {
+    const prompt = (i: number, name: string, status: HandoffStatus, extra: Partial<HandoffView> = {}): HandoffView => ({
+      ...stepRow(i, status),
+      kind: 'prompt',
+      agentId: '',
+      agentName: i === 3 ? 'Sonnet 5.5' : 'Haiku 5.5',
+      targetSessionId: undefined,
+      ...extra,
+      handoffId: `h${i + 1}`,
+      request: name,
+    });
+    const rows = [
+      prompt(0, 'generalist', 'done', { outputText: 'Strong aims.\n\n[cut off at the output limit]' }),
+      prompt(1, 'colleague', 'running'),
+      prompt(2, 'fiscal', 'stopped', { stoppedReason: 'too_large' }),
+      prompt(3, 'summary', 'open'),
+    ];
+    const value = run(rows);
+    value.steps = value.steps.map((step, i) => ({
+      ...step,
+      kind: 'prompt',
+      stepName: ['generalist', 'colleague', 'fiscal_outsider', 'summary'][i],
+      ...(i === 3 ? { reads: ['generalist', 'colleague'] } : { reads: ['request', 'files'] }),
+    }));
+    pending.add('h4');
+    const { el, detect } = render(value);
+
+    expect(text(el.querySelector('h3'))).toBe('Proposal review · 4 steps, 1 of 4 finished');
+    expect(el.querySelectorAll('a').length).toBe(0);
+    const lines = [...el.querySelectorAll('[data-handoff-id]')].map((line) => text(line));
+    expect(lines).toEqual([
+      'Generalist · Prompt · Haiku 5.5 · Finished Answer',
+      'Colleague · Prompt · Haiku 5.5 · Working',
+      'Fiscal outsider · Prompt · Haiku 5.5 · Stopped · the documents are too large for Haiku 5.5',
+      'Summary · Prompt · Sonnet 5.5 · Waiting for Colleague',
+    ]);
+
+    const toggle = [...el.querySelectorAll('button')].find((b) => text(b) === 'Answer')!;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.getAttribute('aria-label')).toBe('Show Generalist’s answer');
+    toggle.click();
+    detect();
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const answer = el.querySelector(`#${toggle.getAttribute('aria-controls')}`)!;
+    expect(answer.getAttribute('role')).toBe('region');
+    // The cut-off marker is shown as the step wrote it.
+    expect(answer.textContent).toContain('[cut off at the output limit]');
   });
 });

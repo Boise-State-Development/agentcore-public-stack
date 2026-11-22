@@ -212,8 +212,23 @@ export class WorkflowDesignerPage {
     return this.store.stages().map((keys) =>
       keys.map((key) => {
         const step = byKey.get(key)!;
-        const { mention, view } = this.store.agentFor(step);
         const model = this.store.modelLabel(step);
+        if (step.kind === 'prompt') {
+          const judged = this.store.modelViewFor(step);
+          let warning: string | undefined;
+          if (!step.modelId) warning = 'Choose a model';
+          else if (judged && !judged.canRun) warning = 'You can’t use this model here';
+          return {
+            key,
+            kind: 'prompt' as const,
+            title: this.store.stepLabel(step),
+            meta: model ? `Prompt · ${model}` : 'Prompt',
+            agentId: null,
+            warning,
+            readsLabel: this.store.readsLabel(step),
+          };
+        }
+        const { mention, view } = this.store.agentFor(step);
         let warning: string | undefined;
         if (!step.agentId) warning = 'Choose an Agent';
         else if (view && !view.canRun) warning = 'You can’t use this Agent';
@@ -282,7 +297,9 @@ export class WorkflowDesignerPage {
     const key = this.store.add(stage);
     if (!key) return;
     this.tab.set('step');
-    afterNextRender(() => document.getElementById('wf-agent-filter')?.focus(), { injector: this.injector });
+    // With prompt steps on, the Step tab opens on the choice of kind, so focus goes there first.
+    const first = this.store.promptStepsOn ? 'wf-kind-agent' : 'wf-agent-filter';
+    afterNextRender(() => document.getElementById(first)?.focus(), { injector: this.injector });
   }
 
   protected focusCanvas(node: string): void {

@@ -52,6 +52,11 @@ export interface RunStepSignals {
   isLoading(targetSessionId: string): boolean;
   /** The step waits in this tab's queue. */
   isPending(handoffId: string): boolean;
+  /**
+   * A prompt step is on this tab's prompt invocation and its frame hasn't arrived (PR-D.6c): it
+   * reads running, though its row still says `open` until the frame says how it ended.
+   */
+  isRunning?(handoffId: string): boolean;
 }
 
 /** The step's handoff row: this tab's live copy when it has one, else the run's replayed copy. */
@@ -61,6 +66,7 @@ export function stepRow(step: WorkflowRunStepView, liveRows: readonly HandoffVie
 
 export function stepState(run: WorkflowRunView, row: HandoffView | null, step: WorkflowRunStepView, signals: RunStepSignals): RunStepState {
   if (!row) return 'stopped';
+  if (isPromptRunStep(step) || row.kind === 'prompt') return promptStepState(run, row, step, signals);
   if (row.targetSessionId && signals.isLoading(row.targetSessionId)) return 'running';
   switch (row.status) {
     case 'open':
@@ -76,9 +82,33 @@ export function stepState(run: WorkflowRunView, row: HandoffView | null, step: W
   }
 }
 
+/** A workflow run's prompt step (workflow-designer §21.3): one model call, no Agent, no conversation. */
+export function isPromptRunStep(step: Pick<WorkflowRunStepView, 'kind'>): boolean {
+  return step.kind === 'prompt';
+}
+
+/**
+ * A prompt step has no conversation, so nothing streams for it: its state is its own row's
+ * (`open → running → done | stopped`), and while this tab's invocation holds it, running.
+ */
+function promptStepState(run: WorkflowRunView, row: HandoffView, step: WorkflowRunStepView, signals: RunStepSignals): RunStepState {
+  switch (row.status) {
+    case 'open':
+      if (signals.isRunning?.(step.handoffId)) return 'running';
+      if (run.status !== 'approved') return 'stopped';
+      return signals.isPending(step.handoffId) ? 'queued' : 'not_started';
+    case 'running':
+    case 'done':
+      return row.status;
+    default:
+      return 'stopped';
+  }
+}
+
 /** The steps `step` reads (PR-D.5a), in step order. None on a run of mentions. */
 export function readStepsOf(run: WorkflowRunView, step: WorkflowRunStepView): WorkflowRunStepView[] {
-  const names = new Set(step.reads ?? []);
+  // A prompt step's reads also name its inputs (`request`, `files`), which no step is called.
+  const names = new Set((step.reads ?? []).filter((name) => name !== 'request' && name !== 'files'));
   if (names.size === 0) return [];
   return run.steps.filter((candidate) => candidate.stepId !== step.stepId && !!candidate.stepName && names.has(candidate.stepName));
 }
@@ -92,6 +122,80 @@ export function readSettled(run: WorkflowRunView, read: WorkflowRunStepView, liv
   if (read.removed) return true;
   const state = stepState(run, stepRow(read, liveRows), read, signals);
   return state === 'done' || state === 'stopped';
+}
+
+/**
+ * A saved step's name as a person reads it: "fiscal_outsider" → "Fiscal outsider". A prompt step
+ * is called this, since several can share one model (§21.3).
+ */
+export function stepNameLabel(name: string | undefined): string {
+  const words = (name ?? '').replace(/_/g, ' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : '';
+}
+
+/** "Prompt · Haiku 5.5": a prompt step's worker, named by its model. */
+export function promptWorkerLabel(modelName: string | undefined): string {
+  return `Prompt · ${modelName?.trim() || 'a model'}`;
+}
+
+/**
+ * Why a prompt step stopped, in plain words (`stoppedReason`, §21.3). The model is named where it
+ * is the reason, so the user knows what to change.
+ */
+export function promptStopLine(reason: string | undefined, modelName: string | undefined): string {
+  const model = modelName?.trim() || 'this model';
+  switch (reason) {
+    case 'user_stopped':
+      return 'Stopped';
+    case 'too_large':
+      return `Stopped · the documents are too large for ${model}`;
+    case 'model_refused':
+      return `Stopped · ${model} can’t run this step for you`;
+    case 'quota':
+      return 'Stopped · you’ve reached your usage limit';
+    case 'timeout':
+      return 'Stopped · it took too long';
+    case 'error':
+      return 'Stopped · something went wrong';
+    default:
+      return 'Stopped';
+  }
+}
+
+/**
+ * A prompt step's status line (§21.3), shared by the run's row and the designer's test run so the
+ * two never word one state differently. It has no conversation, so nothing live to read.
+ */
+export function promptStatusLine(line: Pick<RunStepLine, 'state' | 'row' | 'waitingFor' | 'step'>): string {
+  switch (line.state) {
+    case 'queued':
+      return line.waitingFor?.length ? waitingLabel(line.waitingFor) : 'Queued';
+    case 'not_started':
+      return line.waitingFor?.length ? waitingLabel(line.waitingFor) : 'Not started';
+    case 'running':
+      return 'Working';
+    case 'done':
+      return 'Finished';
+    default:
+      return promptStopLine(line.row?.stoppedReason, line.row?.agentName || line.step.agentName);
+  }
+}
+
+/** "4 Agents", "1 Agent". */
+export function agentsLabel(count: number): string {
+  return `${count} ${count === 1 ? 'Agent' : 'Agents'}`;
+}
+
+/** "4 Agents", or "6 steps" once any of them is a prompt step, which has no Agent (§21.3). */
+export function stepsLabel(count: number, anyPrompt: boolean): string {
+  if (!anyPrompt) return agentsLabel(count);
+  return `${count} ${count === 1 ? 'step' : 'steps'}`;
+}
+
+/** A step as another's "Waiting for …" names it: its Agent, or a prompt step's own name. */
+export function workerName(step: Pick<WorkflowRunStepView, 'kind' | 'agentName' | 'stepName'>): string {
+  if (step.kind === 'prompt') return stepNameLabel(step.stepName) || promptWorkerLabel(step.agentName);
+  return step.agentName;
 }
 
 /** "Waiting for Generalist", "… for Generalist and Colleague", "… for A, B and C". */
@@ -111,7 +215,7 @@ export function runProgress(run: WorkflowRunView, liveRows: readonly HandoffView
         state === 'queued' || state === 'not_started'
           ? readStepsOf(run, step)
               .filter((read) => !readSettled(run, read, liveRows, signals))
-              .map((read) => read.agentName)
+              .map(workerName)
           : [];
       return { step, row, state, waitingFor };
     });

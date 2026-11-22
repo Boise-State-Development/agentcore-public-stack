@@ -2,14 +2,22 @@ import { LiveAnnouncer } from '@angular/cdk/a11y';
 import { DestroyRef, Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
 
 import { AgentMentionService, MentionableAgent } from '../agents/services/agent-mention.service';
+import { FEATURES } from '../services/features';
 import { ModelService } from '../session/services/model/model.service';
+import { promptModelChoices } from './prompt-models';
 import {
   DraftStep,
+  DraftStepKind,
   WorkflowDraft,
   addStep,
   agentViews,
   blankDraft,
   chooseAgent,
+  choosePromptModel,
+  hasWorker,
+  modelViews as modelViewsOf,
+  renameStep,
+  setStepKind,
   draftFrom,
   isComplete,
   moveStep,
@@ -31,6 +39,7 @@ import {
   WorkflowAgentView,
   WorkflowDocument,
   WorkflowFiles,
+  WorkflowModelView,
   WorkflowRef,
   WorkflowResultMode,
 } from './workflow.models';
@@ -62,6 +71,10 @@ export class WorkflowDesignerStore {
   private readonly mentions = inject(AgentMentionService);
   private readonly models = inject(ModelService);
   private readonly announcer = inject(LiveAnnouncer);
+  private readonly features = inject(FEATURES);
+
+  /** The designer offers prompt steps (`features.promptSteps`, workflow-designer §21.3). */
+  readonly promptStepsOn = this.features.promptSteps;
 
   readonly ref = signal<WorkflowRef | null>(null);
   readonly load = signal<DesignerLoad>('loading');
@@ -103,10 +116,15 @@ export class WorkflowDesignerStore {
   /** Why Save is off, in words, or null when it isn't. */
   readonly saveBlockedReason = computed(() => {
     if (!this.isOwned()) return 'Only the workflow’s owner can save it.';
-    const missing = this.draft().steps.filter((step) => !step.agentId).length;
-    if (missing === 1) return 'Choose an Agent for the step that has none.';
-    if (missing > 1) return `Choose an Agent for the ${missing} steps that have none.`;
-    return null;
+    const missing = this.draft().steps.filter((step) => !hasWorker(step));
+    const agents = missing.filter((step) => step.kind !== 'prompt').length;
+    const models = missing.length - agents;
+    const parts: string[] = [];
+    if (agents === 1) parts.push('Choose an Agent for the step that has none.');
+    if (agents > 1) parts.push(`Choose an Agent for the ${agents} steps that have none.`);
+    if (models === 1) parts.push('Choose a model for the prompt step that has none.');
+    if (models > 1) parts.push(`Choose a model for the ${models} prompt steps that have none.`);
+    return parts.length ? parts.join(' ') : null;
   });
 
   /** The sheet describes the draft as it is now. */
@@ -118,6 +136,10 @@ export class WorkflowDesignerStore {
   readonly agents = computed(() => this.mentions.mentionable());
   private readonly agentById = computed(() => new Map(this.agents().map((agent) => [agent.agentId, agent])));
   readonly views = computed(() => agentViews(this.document()));
+  /** Each prompt step's model as the server last judged it for this user, by step name. */
+  readonly modelViews = computed(() => modelViewsOf(this.document()));
+  /** The models a prompt step can be given: ones this user can use that run a prompt step. */
+  readonly promptModels = computed(() => promptModelChoices(this.models.availableModels()));
 
   readonly stages = computed(() => stagesOf(this.draft().steps));
   readonly stepCount = computed(() => this.draft().steps.length);
@@ -374,6 +396,24 @@ export class WorkflowDesignerStore {
     this.draft.set(chooseAgent(this.draft(), key, agent.agentId, agent.name));
   }
 
+  /** Make a step an Agent step or a prompt step, and say so. */
+  setStepKind(key: string, kind: DraftStepKind): void {
+    const before = this.draft();
+    const after = setStepKind(before, key, kind);
+    if (after === before) return;
+    this.draft.set(after);
+    this.announcer.announce(kind === 'prompt' ? 'Now a prompt step. Choose its model.' : 'Now an Agent step. Choose its Agent.', 'polite');
+  }
+
+  choosePromptModel(key: string, modelId: string): void {
+    this.draft.set(choosePromptModel(this.draft(), key, modelId));
+  }
+
+  /** Rename a step; what other steps and the Result read follows the new name. */
+  renameStep(key: string, label: string): void {
+    this.draft.set(renameStep(this.draft(), key, label));
+  }
+
   /** Set what a step reads, and say so when that moves it to another stage (§4.4). */
   setReads(key: string, reads: string[]): void {
     const before = this.stageOf(key);
@@ -415,7 +455,7 @@ export class WorkflowDesignerStore {
 
   /** A step's Agent as known: the mention list for name and icon, the server for the rest. */
   agentFor(step: DraftStep): { mention: MentionableAgent | null; view: WorkflowAgentView | null } {
-    if (!step.agentId) return { mention: null, view: null };
+    if (step.kind === 'prompt' || !step.agentId) return { mention: null, view: null };
     return { mention: this.agentById().get(step.agentId) ?? null, view: this.views().get(step.agentId) ?? null };
   }
 
@@ -424,6 +464,12 @@ export class WorkflowDesignerStore {
    * the template's "Fiscal outsider", or "New step" for one just added.
    */
   stepLabel(step: DraftStep): string {
+    if (step.kind === 'prompt') {
+      // Several prompt steps can share a model, so a prompt step is called by its own name.
+      if (step.autoName) return 'New prompt step';
+      const words = step.name.replace(/_/g, ' ').trim();
+      return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Prompt step';
+    }
     const { mention, view } = this.agentFor(step);
     if (step.agentId) return mention?.name || view?.name || 'An Agent you can’t use';
     if (step.autoName) return 'New step';
@@ -433,10 +479,25 @@ export class WorkflowDesignerStore {
 
   /** The Agent's model by name, or what it runs on when it names none. */
   modelLabel(step: DraftStep): string | null {
+    if (step.kind === 'prompt') {
+      if (!step.modelId) return null;
+      return this.models.modelNameFor(step.modelId) ?? this.modelViewFor(step)?.name ?? step.modelId;
+    }
     const { view } = this.agentFor(step);
     if (!view || !view.canRun) return null;
     if (!view.modelId) return 'The starter’s model';
     return this.models.modelNameFor(view.modelId) ?? view.modelId;
+  }
+
+  /**
+   * A prompt step's model as the server last judged it for this user, while it still names the
+   * model the server judged (a model chosen since waits for the next preview).
+   */
+  modelViewFor(step: DraftStep): WorkflowModelView | null {
+    if (step.kind !== 'prompt' || !step.modelId) return null;
+    const view = this.modelViews().get(step.name);
+    if (!view) return null;
+    return view.modelId === step.modelId || view.requestedModelId === step.modelId ? view : null;
   }
 
   /** "reads the request and the files", from the step's reads. */

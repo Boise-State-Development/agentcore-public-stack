@@ -23,12 +23,21 @@ export interface WorkflowRunLimits {
   concurrency: number;
 }
 
+/** An Agent step, or a prompt step: one model call with no Agent and no conversation (§21.3). */
+export type WorkflowRunStepKind = 'agent' | 'prompt';
+
 /** A step as the run holds it, with its handoff row's current view (`null` when the row is gone). */
 export interface WorkflowRunStepView {
   stepId: string;
   handoffId: string;
+  /** Absent on an Agent step (and on every step of a run written before prompt steps). */
+  kind?: WorkflowRunStepKind;
+  /** Empty on a prompt step. */
   agentId: string;
+  /** A prompt step's model's display name. */
   agentName: string;
+  /** A prompt step's model. */
+  modelId?: string;
   request: string;
   removed: boolean;
   /** The saved workflow's name for this step (PR-D.2); absent for a run of mentions. */
@@ -38,6 +47,8 @@ export interface WorkflowRunStepView {
   /**
    * The other steps this step reads, by `stepName` (PR-D.5a). It starts once each has settled, and
    * its first message carries their results. Absent on a run of mentions and on a step reading none.
+   * A prompt step's also keeps its inputs first (`request`, `files`), since it gets each only when
+   * it reads it; `readStepsOf` skips them.
    */
   reads?: string[];
   handoff?: HandoffView | null;
@@ -89,11 +100,16 @@ export interface WorkflowRunCard {
 export interface CreatedRunStep {
   stepId: string;
   handoffId: string;
+  /** `prompt` for a prompt step; absent for an Agent step. */
+  kind?: 'prompt';
+  /** Empty on a prompt step. */
   agentId: string;
+  /** A prompt step's model's display name. */
   agentName: string;
   request: string;
+  /** A prompt step gets no card, so its prompt is its instruction alone. */
   prompt: string;
-  /** The Agent's own model. Absent when it names none: the step runs on the send's model. */
+  /** The Agent's own model, or a prompt step's. Absent when an Agent names none: it runs on the send's model. */
   modelId?: string;
   /** `modelId`'s catalog input rate, USD per million tokens. */
   inputPricePerMillionTokens?: number;
@@ -147,7 +163,10 @@ export interface RunDraftWorkflow {
 export interface RunReviewStep {
   stepId: string;
   handoffId: string;
+  /** A prompt step (§21.3): one model call over the run's files, with no Agent and no card. */
+  kind?: 'prompt';
   agentId: string;
+  /** A prompt step's model's display name. */
   agentName: string;
   /** This step's own request, once its Edit was used; `null` while it follows the shared one. */
   ownRequest: string | null;
@@ -163,6 +182,10 @@ export interface RunReviewWorkflowStep {
   name: string;
   /** Other steps' names this step reads (from D.5a; none can be started before then). */
   readsSteps: string[];
+  /** The step gets the run's files. Every Agent step does; a prompt step only when it reads `files`. */
+  readsFiles: boolean;
+  /** Why the starter can't run it, in the sheet's words, when `unavailable`. */
+  unavailableReason?: string;
   /** The starter can't use the Agent: Start stays off until the step is removed. */
   unavailable: boolean;
   /** The Agent's published version moved since the step recorded it. */
@@ -233,8 +256,14 @@ export interface RunEnvelope {
 export interface RunStepLaunch {
   stepId: string;
   handoffId: string;
+  /**
+   * `prompt` for a prompt step (§21.3): the queue sends the run's ready prompt steps together on
+   * one `workflow_prompt` invocation, never through a handoff's send. Absent for an Agent step.
+   */
+  kind?: 'prompt';
   agentId: string;
   agentName: string;
+  modelId?: string;
   request: string;
   /**
    * Handoff ids of the steps this one reads (PR-D.5a). The queue starts it only once each has

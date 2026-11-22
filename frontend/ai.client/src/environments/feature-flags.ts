@@ -178,6 +178,16 @@ export interface FeatureFlags {
   workflows: boolean;
 
   /**
+   * Prompt steps (docs/specs/workflow-designer.md §21): a workflow step that is
+   * one model call over the run's files, with no Agent and no conversation.
+   * The designer offers it, and a run sends its prompt steps on their own
+   * invocation. Only meaningful with `workflows`. Backend: PROMPT_STEPS_ENABLED
+   * (app-api and the AgentCore Runtime). In development, so `false` unless the
+   * environment has turned the backend on.
+   */
+  promptSteps: boolean;
+
+  /**
    * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
    * user message offers "Rewind to here", which hides it and everything after
    * it and puts its text back in the composer to edit and resend. Backend:

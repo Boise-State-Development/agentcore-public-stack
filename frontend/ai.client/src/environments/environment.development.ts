@@ -39,6 +39,8 @@ export const environment = {
         workflowRuns: true,
         // The `development` GitHub environment sets CDK_WORKFLOWS_ENABLED=true.
         workflows: true,
+        // The `development` GitHub environment sets CDK_PROMPT_STEPS_ENABLED=true.
+        promptSteps: true,
         // Default on, matching CDK_SESSION_REWIND_ENABLED / CDK_SESSION_FORK_ENABLED.
         sessionRewind: true,
         sessionFork: true,

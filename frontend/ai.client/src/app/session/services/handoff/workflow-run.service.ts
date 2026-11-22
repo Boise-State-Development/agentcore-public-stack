@@ -5,7 +5,7 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '../../../services/config.service';
 import { FileUploadService } from '../../../services/file-upload/file-upload.service';
 import { FEATURES } from '../../../services/features';
-import { WorkflowFilesRule } from '../../../services/workflows/workflow.models';
+import { STEP_BLOCKER_CODES, WorkflowFilesRule, WorkflowSheetBlocker } from '../../../services/workflows/workflow.models';
 import { WorkflowsApiService, definitionOf } from '../../../services/workflows/workflows-api.service';
 import { ToastService } from '../../../services/toast/toast.service';
 import { ChatHttpService } from '../chat/chat-http.service';
@@ -21,7 +21,8 @@ import { AgentHandoffService } from './agent-handoff.service';
 import { HandoffBriefService } from './handoff-brief.service';
 import { HandoffStateService } from './handoff-state.service';
 import { BriefFallbackReason, HandoffReview, MAX_SHARED_FILES, SHARED_FILES_RECENT_TURNS } from './handoff.models';
-import { WorkflowRunQueueService } from './workflow-run-queue.service';
+import { WorkflowRunQueueService, launchOf } from './workflow-run-queue.service';
+import { agentsLabel, stepsLabel } from './workflow-run-progress';
 import { WorkflowRunRefreshService } from './workflow-run-refresh.service';
 import { WorkflowRunResultService } from './workflow-run-result.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
@@ -39,7 +40,6 @@ import {
   WorkflowRunCard,
   WorkflowRunView,
 } from './workflow-run.models';
-import { readStepsOf } from './workflow-run-progress';
 
 /**
  * Starting a workflow run (docs/specs/workflow-runs.md §4, §19 PR-W.4a, §20.1).
@@ -106,7 +106,9 @@ export class WorkflowRunService {
     void this.loadShareableFiles(sourceSessionId);
     if (workflow) {
       const blockers = workflow.document.sheet.blockers;
-      const hard = blockers.filter((blocker) => blocker.code !== 'step_unavailable');
+      // A step's own blocker (an Agent or a model the starter can't use, a prompt step while they
+      // are off) clears when the step is removed; anything else is the sheet's error.
+      const hard = blockers.filter((blocker) => !STEP_BLOCKER_CODES.has(blocker.code));
       if (hard.length) {
         this.state.updateReview(sourceSessionId, { phase: 'error', error: blockerSentences(hard) });
         return;
@@ -137,9 +139,11 @@ export class WorkflowRunService {
         void this.dismiss(sourceSessionId, created.run.runId);
         return;
       }
-      // No brief for a conversation with nothing in it yet (a workflow started in a new one).
+      // No brief for a conversation with nothing in it yet (a workflow started in a new one), nor
+      // for a run of prompt steps alone: none of them is sent the card (§21.3), so it is a model
+      // call nobody reads.
       const brief =
-        this.features.handoffBrief && created.steps.length && created.excerpt
+        this.features.handoffBrief && created.steps.some((step) => step.kind !== 'prompt') && created.excerpt
           ? ({ status: 'writing', text: '' } as const)
           : undefined;
       const fileRule = current.workflow?.document.workflow.files;
@@ -151,13 +155,14 @@ export class WorkflowRunService {
           (step, index): RunReviewStep => ({
             stepId: step.stepId,
             handoffId: step.handoffId,
+            ...(step.kind === 'prompt' ? { kind: 'prompt' as const } : {}),
             agentId: step.agentId,
             agentName: step.agentName,
             ownRequest: step.request === created.run.request ? null : step.request,
             removed: false,
             modelId: step.modelId,
             inputPricePerMillionTokens: step.inputPricePerMillionTokens,
-            workflowStep: workflowStepFor(current.workflow, created.run.steps[index]?.stepName),
+            workflowStep: workflowStepFor(current.workflow, created.run.steps[index]?.stepName, created.run.steps[index]?.reads),
           }),
         ),
         card: created.excerpt,
@@ -305,6 +310,8 @@ export class WorkflowRunService {
     const created = review.created;
     if (!step || !created) return '';
     const request = stepRequest(review, step);
+    // A prompt step gets no card: its message is the documents it reads, then this instruction.
+    if (step.kind === 'prompt') return request;
     const single: HandoffReview = {
       draft: { agentId: step.agentId, agentName: step.agentName, request },
       phase: 'ready',
@@ -391,24 +398,16 @@ export class WorkflowRunService {
       concurrency: approved.limits?.concurrency ?? DEFAULT_RUN_CONCURRENCY,
     };
     // The approved row is the truth for each step's request and whether it was kept.
-    const steps: RunStepLaunch[] = approved.steps
-      .filter((step) => !step.removed)
-      .map((step) => ({
-        stepId: step.stepId,
-        handoffId: step.handoffId,
-        agentId: step.agentId,
-        agentName: step.agentName,
-        request: step.request,
-        // A step that reads others waits for them in the queue (PR-D.5a); a mention run has none.
-        ...(step.reads?.length ? { reads: readStepsOf(approved, step).map((read) => read.handoffId) } : {}),
-      }));
+    // A step that reads others waits for them in the queue (PR-D.5a); a mention run has none. A
+    // prompt step goes on the run's prompt invocation instead of a handoff's send (PR-D.6c).
+    const steps: RunStepLaunch[] = approved.steps.filter((step) => !step.removed).map((step) => launchOf(approved, step));
 
     this.state.upsertRun(approved);
     this.state.clearReview(sourceSessionId);
     if (review.workflow) this.releaseRunFiles(sourceSessionId, envelope.fileIds);
     this.queue.enqueue(envelope, steps);
     this.results.watch(approved);
-    this.toast.info(`Handed off to ${agentsLabel(steps.length)}`);
+    this.toast.info(startedLabel(steps));
   }
 
   /**
@@ -453,7 +452,7 @@ export class WorkflowRunService {
     };
     this.queue.enqueue(envelope, steps);
     this.results.watch(run);
-    this.toast.info(`Handed off to ${agentsLabel(steps.length)}`);
+    this.toast.info(startedLabel(steps));
     return true;
   }
 
@@ -507,7 +506,9 @@ export class WorkflowRunService {
    */
   private async requestBrief(sourceSessionId: string, created: CreateWorkflowRunResponse, draft: RunDraft): Promise<void> {
     const runId = created.run.runId;
-    const handoffId = created.steps[0].handoffId;
+    // The brief is for the Agent steps' card, so it is asked as the first Agent step's handoff.
+    const first = created.steps.find((step) => step.kind !== 'prompt') ?? created.steps[0];
+    const handoffId = first.handoffId;
     const writing = (): RunReview | undefined => {
       const review = this.state.reviewFor(sourceSessionId);
       return review?.created?.run.runId === runId && review.brief?.status === 'writing' ? review : undefined;
@@ -521,7 +522,7 @@ export class WorkflowRunService {
         sourceSessionId,
         handoffId,
         runId,
-        request: created.run.request || created.steps[0].request,
+        request: created.run.request || first.request,
         sourceAssistantId: draft.sourceAssistantId,
       });
     } catch {
@@ -674,33 +675,72 @@ function withinFileRule(fileIds: string[], rule: WorkflowFilesRule | undefined):
 
 /** A blocked workflow sheet's rows, before the run exists: one per step, keyed by its name. */
 function blockedSteps(workflow: RunDraftWorkflow): RunReviewStep[] {
-  return workflow.document.workflow.steps.map(
-    (step): RunReviewStep => ({
+  return workflow.document.workflow.steps.map((step): RunReviewStep => {
+    const prompt = step.kind === 'prompt';
+    return {
       stepId: `workflow-step:${step.name}`,
       handoffId: '',
+      ...(prompt ? { kind: 'prompt' as const } : {}),
       agentId: step.agentId,
-      agentName: step.agent.name ?? '',
+      // A prompt step's model is named even when the starter can't use it: it is no one's secret.
+      agentName: prompt ? (step.model?.name ?? step.agent.name ?? step.modelId ?? '') : (step.agent.name ?? ''),
       ownRequest: step.request ?? null,
       removed: false,
-      modelId: step.agent.modelId,
-      inputPricePerMillionTokens: step.agent.inputPricePerMillionTokens,
+      modelId: prompt ? (step.model?.modelId ?? step.modelId) : step.agent.modelId,
+      inputPricePerMillionTokens: prompt ? step.model?.inputPricePerMillionTokens : step.agent.inputPricePerMillionTokens,
       workflowStep: workflowStepFor(workflow, step.name),
-    }),
-  );
+    };
+  });
 }
 
-/** What the sheet says about one saved step, from the workflow's document. */
-function workflowStepFor(workflow: RunDraftWorkflow | undefined, name: string | undefined): RunReviewWorkflowStep | undefined {
+/**
+ * What the sheet says about one saved step, from the workflow's document. `runReads` is the run
+ * row's record of the step's reads, which for a prompt step keeps its inputs as well.
+ */
+function workflowStepFor(
+  workflow: RunDraftWorkflow | undefined,
+  name: string | undefined,
+  runReads?: readonly string[],
+): RunReviewWorkflowStep | undefined {
   const step = name ? workflow?.document.workflow.steps.find((candidate) => candidate.name === name) : undefined;
   if (!step) return undefined;
+  const prompt = step.kind === 'prompt';
+  const reads = runReads ?? step.reads;
+  const blocker = workflow?.document.sheet.blockers.find((b) => b.step === step.name && STEP_BLOCKER_CODES.has(b.code));
   return {
     name: step.name,
     readsSteps: step.reads.filter((read) => read !== 'request' && read !== 'files'),
-    unavailable: !step.agent.canRun,
-    changed: step.agent.changed,
+    // Every Agent step gets the run's files; a prompt step only when it reads them (§21.3).
+    readsFiles: !prompt || reads.includes('files'),
+    unavailable: !step.agent.canRun || !!blocker,
+    ...(blocker ? { unavailableReason: stepBlockerCopy(blocker, step.model?.reason) } : {}),
+    changed: !prompt && step.agent.changed,
     publishedVersion: step.agent.publishedVersion,
-    runsDraft: step.agent.runsDraft,
+    runsDraft: !prompt && step.agent.runsDraft,
   };
+}
+
+/**
+ * Why a step can't run, in the sheet's words: the model's own reason for a prompt step's model,
+ * else the server's message for the blocker.
+ */
+export function stepBlockerCopy(blocker: Pick<WorkflowSheetBlocker, 'code' | 'message'>, reason?: string): string {
+  if (blocker.code === 'prompt_steps_off') return 'Prompt steps aren’t available here yet. Remove the step to start.';
+  if (blocker.code === 'model_unavailable') {
+    switch (reason) {
+      case 'no_access':
+        return 'You can’t use this step’s model. Remove the step to start, or ask the workflow’s owner to choose a model you can use.';
+      case 'no_catalog_row':
+        return 'This step’s model isn’t offered here. Remove the step to start.';
+      case 'retired':
+        return 'This step’s model has been retired. Remove the step to start.';
+      case 'unsupported':
+        return 'This step’s model can’t run this prompt step: it needs a text model that reads documents. Remove the step to start.';
+      default:
+        return 'This step’s model couldn’t be checked. Remove the step, or try again.';
+    }
+  }
+  return `${blocker.message.replace(/\.$/, '')}.`;
 }
 
 /** `name` and every step that reads it, directly or through another (§20.1). */
@@ -731,9 +771,14 @@ export function canResume(run: WorkflowRunView): boolean {
 }
 
 /** "4 Agents", "1 Agent". */
-export function agentsLabel(count: number): string {
-  return `${count} ${count === 1 ? 'Agent' : 'Agents'}`;
+export { agentsLabel, stepsLabel } from './workflow-run-progress';
+
+/** The toast a start says: "Handed off to 4 Agents", or "Started 6 steps" with a prompt step among them. */
+export function startedLabel(steps: readonly Pick<RunStepLaunch, 'kind'>[]): string {
+  const anyPrompt = steps.some((step) => step.kind === 'prompt');
+  return anyPrompt ? `Started ${stepsLabel(steps.length, true)}` : `Handed off to ${agentsLabel(steps.length)}`;
 }
+
 
 /** Upload ids attached to the source's last few user messages (the single sheet's default ticks). */
 function recentlyAttachedIds(messages: readonly Message[]): Set<string> {

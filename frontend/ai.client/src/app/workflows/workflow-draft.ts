@@ -14,6 +14,7 @@ import {
   INPUT_READS,
   MAX_WORKFLOW_STEPS,
   WorkflowAgentView,
+  WorkflowModelView,
   WorkflowDocument,
   WorkflowFiles,
   WorkflowResultMode,
@@ -28,12 +29,21 @@ export interface DraftStep {
   name: string;
   /** Renamed after its Agent when one is picked (a blank step's placeholder name). */
   autoName: boolean;
+  /**
+   * `agent`, or `prompt`: one model call over the run's files, with no Agent (workflow-designer
+   * §21.3). A prompt step names a model instead of an Agent.
+   */
+  kind: DraftStepKind;
   agentId: string | null;
   agentVersion: number | null;
+  /** A prompt step's model; null on an Agent step, and on a prompt step with none chosen yet. */
+  modelId: string | null;
   reads: string[];
   /** This step's own request; null takes the run's. */
   ownRequest: string | null;
 }
+
+export type DraftStepKind = 'agent' | 'prompt';
 
 export interface WorkflowDraft {
   title: string;
@@ -62,8 +72,10 @@ export function templateDraft(template: string): WorkflowDraft | null {
     key: nextKey(),
     name,
     autoName: false,
+    kind: 'agent',
     agentId: null,
     agentVersion: null,
+    modelId: null,
     reads: [...INPUT_READS],
     ownRequest: null,
   });
@@ -85,8 +97,11 @@ export function draftFrom(view: WorkflowView): WorkflowDraft {
       key: nextKey(),
       name: step.name,
       autoName: false,
-      agentId: step.agentId,
+      kind: step.kind === 'prompt' ? 'prompt' : 'agent',
+      agentId: step.kind === 'prompt' ? null : step.agentId,
       agentVersion: step.agentVersion ?? null,
+      // The file's model, never its retirement successor: a save writes back what it read.
+      modelId: step.kind === 'prompt' ? (step.modelId ?? step.model?.requestedModelId ?? step.model?.modelId ?? null) : null,
       reads: [...step.reads],
       ownRequest: step.request ?? null,
     })),
@@ -107,9 +122,14 @@ export function rekeyed(fresh: WorkflowDraft, previous: WorkflowDraft): Workflow
   return { ...fresh, steps: fresh.steps.map((s) => ({ ...s, key: keys.get(s.name) ?? s.key })) };
 }
 
-/** Every step has an Agent, so the draft can be sent. */
+/** Every step has its worker (an Agent, or a prompt step's model), so the draft can be sent. */
 export function isComplete(draft: WorkflowDraft): boolean {
-  return draft.steps.every((step) => !!step.agentId);
+  return draft.steps.every(hasWorker);
+}
+
+/** The step names what runs it: an Agent, or a prompt step's model. */
+export function hasWorker(step: DraftStep): boolean {
+  return step.kind === 'prompt' ? !!step.modelId : !!step.agentId;
 }
 
 /**
@@ -127,14 +147,21 @@ export function toWrite(
     title: draft.title.trim() || 'Untitled workflow',
     files: draft.files,
     request: draft.request.trim() ? draft.request : null,
-    steps: draft.steps.map((step) => ({
-      name: step.name,
-      kind: 'agent',
-      agentId: step.agentId as string,
-      agentVersion: step.agentVersion ?? agents.get(step.agentId as string)?.publishedVersion ?? null,
-      reads: [...step.reads],
-      request: step.ownRequest !== null && step.ownRequest.trim() ? step.ownRequest : null,
-    })),
+    steps: draft.steps.map((step) => {
+      const request = step.ownRequest !== null && step.ownRequest.trim() ? step.ownRequest : null;
+      if (step.kind === 'prompt') {
+        // The model is the step's worker; the file writes it on the step's `Worker:` line.
+        return { name: step.name, kind: 'prompt', agentId: '', modelId: step.modelId as string, reads: [...step.reads], request };
+      }
+      return {
+        name: step.name,
+        kind: 'agent',
+        agentId: step.agentId as string,
+        agentVersion: step.agentVersion ?? agents.get(step.agentId as string)?.publishedVersion ?? null,
+        reads: [...step.reads],
+        request,
+      };
+    }),
     result: {
       mode: draft.result.mode,
       reads: draft.result.reads,
@@ -153,8 +180,10 @@ export function sameDraft(a: WorkflowDraft, b: WorkflowDraft): boolean {
     request: d.request.trim(),
     steps: d.steps.map((s) => ({
       name: s.name,
-      agentId: s.agentId,
-      agentVersion: s.agentVersion,
+      kind: s.kind,
+      agentId: s.kind === 'prompt' ? null : s.agentId,
+      agentVersion: s.kind === 'prompt' ? null : s.agentVersion,
+      modelId: s.kind === 'prompt' ? s.modelId : null,
       reads: [...s.reads].sort(),
       ownRequest: s.ownRequest?.trim() || null,
     })),
@@ -258,8 +287,10 @@ export function addStep(draft: WorkflowDraft, stage = 0): { draft: WorkflowDraft
     key,
     name: stepNameFor('step', draft.steps.map((s) => s.name)),
     autoName: true,
+    kind: 'agent',
     agentId: null,
     agentVersion: null,
+    modelId: null,
     reads: [...INPUT_READS, ...before],
     ownRequest: null,
   };
@@ -339,7 +370,7 @@ export function removeStep(draft: WorkflowDraft, key: string): WorkflowDraft {
  */
 export function chooseAgent(draft: WorkflowDraft, key: string, agentId: string, agentName: string): WorkflowDraft {
   const step = draft.steps.find((s) => s.key === key);
-  if (!step || step.agentId === agentId) return draft;
+  if (!step || step.kind === 'prompt' || step.agentId === agentId) return draft;
   const taken = draft.steps.filter((s) => s.key !== key).map((s) => s.name);
   const name = step.autoName ? stepNameFor(agentName, taken) : step.name;
   const rename = (read: string) => (read === step.name ? name : read);
@@ -352,13 +383,68 @@ export function chooseAgent(draft: WorkflowDraft, key: string, agentId: string, 
   return { ...draft, steps, result: { ...draft.result, reads } };
 }
 
+/**
+ * Make a step an Agent step or a prompt step (§21.3). Its reads and request are kept; the worker
+ * of the old kind is cleared, so the step is complete again once the new kind's is chosen. A step
+ * still on its placeholder name takes the new kind's placeholder.
+ */
+export function setStepKind(draft: WorkflowDraft, key: string, kind: DraftStepKind): WorkflowDraft {
+  const step = draft.steps.find((s) => s.key === key);
+  if (!step || step.kind === kind) return draft;
+  const next = { ...step, kind, agentId: null, agentVersion: null, modelId: null };
+  const changed = { ...draft, steps: draft.steps.map((s) => (s.key === key ? next : s)) };
+  // Still on its placeholder name: it takes the new kind's, and stays a placeholder.
+  return step.autoName ? renamed(changed, key, kind === 'prompt' ? 'prompt' : 'step') : changed;
+}
+
+/** Give a prompt step its model. Its name stays: several prompt steps can share one model. */
+export function choosePromptModel(draft: WorkflowDraft, key: string, modelId: string): WorkflowDraft {
+  const step = draft.steps.find((s) => s.key === key);
+  if (!step || step.kind !== 'prompt' || step.modelId === modelId) return draft;
+  return { ...draft, steps: draft.steps.map((s) => (s.key === key ? { ...s, modelId } : s)) };
+}
+
+/**
+ * Rename a step from a label the author typed, by the server's naming rule (`stepNameFor`), and
+ * every read of the old name with it. The name is what other steps' reads and the Result name.
+ */
+export function renameStep(draft: WorkflowDraft, key: string, label: string): WorkflowDraft {
+  const step = draft.steps.find((s) => s.key === key);
+  if (!step || !label.trim()) return draft;
+  const next = renamed(draft, key, label);
+  return { ...next, steps: next.steps.map((s) => (s.key === key ? { ...s, autoName: false } : s)) };
+}
+
+function renamed(draft: WorkflowDraft, key: string, label: string): WorkflowDraft {
+  const step = draft.steps.find((s) => s.key === key);
+  if (!step) return draft;
+  const taken = draft.steps.filter((s) => s.key !== key).map((s) => s.name);
+  const name = stepNameFor(label, taken);
+  if (name === step.name) return draft;
+  const rename = (read: string) => (read === step.name ? name : read);
+  const steps = draft.steps.map((s) => (s.key === key ? { ...s, name } : { ...s, reads: s.reads.map(rename) }));
+  const reads = draft.result.reads?.map(rename) ?? null;
+  return { ...draft, steps, result: { ...draft.result, reads } };
+}
+
 export function updateStep(draft: WorkflowDraft, key: string, patch: Partial<Pick<DraftStep, 'reads' | 'ownRequest'>>): WorkflowDraft {
   return { ...draft, steps: draft.steps.map((s) => (s.key === key ? { ...s, ...patch } : s)) };
 }
 
-/** Each Agent the server last described, by id, from a document. */
+/** Each Agent the server last described, by id, from a document. A prompt step has none. */
 export function agentViews(document: WorkflowDocument | null): Map<string, WorkflowAgentView> {
   const map = new Map<string, WorkflowAgentView>();
-  for (const step of document?.workflow.steps ?? []) map.set(step.agentId, step.agent);
+  for (const step of document?.workflow.steps ?? []) {
+    if (step.kind !== 'prompt' && step.agentId) map.set(step.agentId, step.agent);
+  }
+  return map;
+}
+
+/** Each prompt step's model as the server last judged it for the caller, by the step's name. */
+export function modelViews(document: WorkflowDocument | null): Map<string, WorkflowModelView> {
+  const map = new Map<string, WorkflowModelView>();
+  for (const step of document?.workflow.steps ?? []) {
+    if (step.kind === 'prompt' && step.model) map.set(step.name, step.model);
+  }
   return map;
 }

@@ -17,17 +17,27 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowRight, heroChevronRight, heroMinusCircle, heroPaperClip, heroXMark } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../../agents/components/agent-icon.component';
+import { PromptStepIconComponent } from '../../../workflows/components/prompt-step-icon.component';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { formatFileSize } from '../../services/handoff/handoff-prompt';
 import { MAX_SHARED_FILES } from '../../services/handoff/handoff.models';
 import { estimateRunInputUsd, formatEstimateUsd } from '../../services/handoff/workflow-run-estimate';
 import { RunReviewStep, RunShareableFile } from '../../services/handoff/workflow-run.models';
 import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
-import { WorkflowRunService, agentsLabel, canStart, keptSteps, readersOf, removalOf, stepRequest } from '../../services/handoff/workflow-run.service';
+import {
+  WorkflowRunService,
+  canStart,
+  keptSteps,
+  readersOf,
+  removalOf,
+  stepRequest,
+  stepsLabel,
+} from '../../services/handoff/workflow-run.service';
 import { ModelService } from '../../services/model/model.service';
 import { WorkflowGraphComponent } from '../../../workflows/components/workflow-graph.component';
 import { MAX_WORKFLOW_STEPS } from '../../../workflows/workflow.models';
 import { reviewGraph } from '../../services/handoff/workflow-run-graph';
+import { promptWorkerLabel, stepNameLabel } from '../../services/handoff/workflow-run-progress';
 
 /** One step as the sheet renders it. */
 interface StepRow {
@@ -38,8 +48,12 @@ interface StepRow {
   emoji?: string;
   iconUrl?: string;
   ownRequest: boolean;
-  /** A saved workflow's step whose Agent the starter can't use (§11). */
+  /** A prompt step (workflow-designer §21.3): one model call, no Agent, no card. */
+  prompt: boolean;
+  /** A saved workflow's step whose Agent (or model) the starter can't use (§11, §21.3). */
   unavailable: boolean;
+  /** Why, in the sheet's words. */
+  unavailableCopy: string;
   /** The saved step's name, for Mark as reviewed. */
   stepName?: string;
   /** "This Agent has changed since it was added…" (§10), when it has. */
@@ -61,7 +75,7 @@ interface StepRow {
 @Component({
   selector: 'app-workflow-run-sheet',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon, SpinnerComponent, AgentIconComponent, WorkflowGraphComponent],
+  imports: [FormsModule, NgIcon, SpinnerComponent, AgentIconComponent, PromptStepIconComponent, WorkflowGraphComponent],
   providers: [provideIcons({ heroArrowRight, heroChevronRight, heroMinusCircle, heroPaperClip, heroXMark })],
   host: { '(keydown.escape)': 'cancel()' },
   template: `
@@ -87,7 +101,13 @@ interface StepRow {
           </button>
         </div>
         <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-          Each Agent starts a new conversation in the background. You stay here.
+          @if (hasPromptSteps() && !hasAgentSteps()) {
+            Each prompt step is one model call, in the background. You stay here.
+          } @else if (hasPromptSteps()) {
+            Each Agent starts a new conversation in the background, and each prompt step is one model call. You stay here.
+          } @else {
+            Each Agent starts a new conversation in the background. You stay here.
+          }
         </p>
         </div>
 
@@ -121,13 +141,15 @@ interface StepRow {
               @for (row of stepRows(); track row.step.stepId) {
                 <li class="py-2">
                   <div class="flex items-center gap-3">
-                    <app-agent-icon [agentId]="row.step.agentId" [iconUrl]="row.iconUrl" [emoji]="row.emoji" [size]="28" />
+                    @if (row.prompt) {
+                      <app-prompt-step-icon [size]="28" />
+                    } @else {
+                      <app-agent-icon [agentId]="row.step.agentId" [iconUrl]="row.iconUrl" [emoji]="row.emoji" [size]="28" />
+                    }
                     <div class="min-w-0 flex-1">
                       <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ row.label }}</p>
                       @if (row.unavailable) {
-                        <p class="text-xs/5 text-state-danger-700 dark:text-state-danger-300">
-                          You can't use this step's Agent. Remove the step, or ask its owner to share it.
-                        </p>
+                        <p class="text-xs/5 text-state-danger-700 dark:text-state-danger-300">{{ row.unavailableCopy }}</p>
                       } @else {
                         <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">
                           {{ row.modelName }}@if (row.ownRequest) { · Own request }
@@ -140,7 +162,7 @@ interface StepRow {
                       class="text-sm/6 font-medium text-primary-accessible underline-offset-2 dark:text-primary-accessible-dark hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50"
                       [attr.aria-expanded]="editingStep() === row.step.stepId"
                       [attr.aria-controls]="stepEditorId(row.step.stepId)"
-                      [attr.aria-label]="'Edit the request for ' + row.step.agentName"
+                      [attr.aria-label]="'Edit the request for ' + row.label"
                       [disabled]="r.phase === 'starting'"
                       (click)="toggleStepEditor(row.step.stepId)"
                     >
@@ -179,7 +201,7 @@ interface StepRow {
                   @if (editingStep() === row.step.stepId) {
                     <div [id]="stepEditorId(row.step.stepId)" class="mt-2 pl-8">
                       <label [attr.for]="stepEditorId(row.step.stepId) + '-text'" class="block text-xs font-medium text-gray-700 dark:text-gray-300">
-                        Request for {{ row.step.agentName }}
+                        Request for {{ row.label }}
                       </label>
                       <textarea
                         [id]="stepEditorId(row.step.stepId) + '-text'"
@@ -237,7 +259,8 @@ interface StepRow {
               <p class="mt-3 text-sm/6 text-gray-700 dark:text-gray-300" role="status">
                 Remove the steps you can't use to continue.
               </p>
-            } @else {
+            } @else if (hasAgentSteps()) {
+            <!-- The one card every Agent step is sent with; a prompt step gets none (§21.3). -->
             <div class="mt-3 rounded-lg bg-gray-50 px-3 py-2 dark:bg-white/5">
               @if (r.brief?.status === 'writing') {
                 @if (!r.brief.text) {
@@ -322,7 +345,7 @@ interface StepRow {
                     (ngModelChange)="previewStep.set($event)"
                   >
                     @for (row of stepRows(); track row.step.stepId) {
-                      <option [value]="row.step.stepId">{{ row.step.agentName }}</option>
+                      <option [value]="row.step.stepId">{{ row.label }}</option>
                     }
                   </select>
                   <pre tabindex="0" role="region" [attr.aria-label]="'Full prompt ' + previewAgentName() + ' will receive'" class="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-white p-2 font-mono text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-gray-800 dark:text-gray-200">{{ prompt() }}</pre>
@@ -478,7 +501,23 @@ export class WorkflowRunSheetComponent {
     return keptSteps(r).length;
   });
 
-  protected readonly agents = computed(() => agentsLabel(this.keptCount()));
+  /** The run has a prompt step (§21.3), which has no Agent: the sheet says "steps" then. */
+  protected readonly hasPromptSteps = computed(() => {
+    const r = this.review();
+    if (!r) return false;
+    return r.steps.some((step) => step.kind === 'prompt' && !step.removed) || (r.steps.length === 0 && !!r.workflow?.document.workflow.steps.some((step) => step.kind === 'prompt'));
+  });
+
+  /** Some kept step is an Agent step, so the context card goes somewhere. */
+  protected readonly hasAgentSteps = computed(() => {
+    const r = this.review();
+    if (!r) return true;
+    const kept = r.steps.filter((step) => !step.removed);
+    return kept.length === 0 || kept.some((step) => step.kind !== 'prompt');
+  });
+
+  /** "4 Agents", or "6 steps" once a prompt step is among them. */
+  protected readonly agents = computed(() => stepsLabel(this.keptCount(), this.hasPromptSteps()));
   /** A saved workflow's sheet is titled with its name (§8.3); a run of mentions says who it goes to. */
   protected readonly title = computed(() => this.review()?.workflow?.document.workflow.title || `Hand off to ${this.agents()}`);
 
@@ -492,7 +531,7 @@ export class WorkflowRunSheetComponent {
   protected readonly graph = computed(() => {
     const r = this.review();
     const rows = this.stepRows();
-    const names = new Map(rows.map((row) => [row.step.stepId, row.modelName]));
+    const names = new Map(rows.map((row) => [row.step.stepId, row.prompt ? row.step.agentName : row.modelName]));
     return r ? reviewGraph(r, (stepId) => names.get(stepId) ?? 'Your selected model') : null;
   });
 
@@ -509,14 +548,22 @@ export class WorkflowRunSheetComponent {
       const model = step.modelId ? catalog.find((m) => m.modelId === step.modelId) : sendModel;
       const saved = step.workflowStep;
       const unavailable = !!saved?.unavailable;
+      const prompt = step.kind === 'prompt';
+      const modelName = (prompt ? step.agentName : '') || model?.modelName || step.modelId || 'Your selected model';
       return {
         step,
-        label: unavailable ? `Unavailable Agent (${saved?.name})` : step.agentName,
-        modelName: model?.modelName || step.modelId || 'Your selected model',
+        // A prompt step's model is named even when it can't run: the file names it to everyone.
+        label: prompt ? promptWorkerLabel(modelName) : unavailable ? `Unavailable Agent (${saved?.name})` : step.agentName,
+        // Several prompt steps can share a model, so the second line names the step.
+        modelName: prompt
+          ? [stepNameLabel(saved?.name), promptReadsLine(saved?.readsFiles ?? true, saved?.readsSteps.length ?? 0)].filter(Boolean).join(' · ')
+          : modelName,
         emoji: agent?.emoji,
         iconUrl: agent?.iconUrl,
         ownRequest: step.ownRequest !== null,
+        prompt,
         unavailable,
+        unavailableCopy: saved?.unavailableReason ?? "You can't use this step's Agent. Remove the step, or ask its owner to share it.",
         stepName: saved?.name,
         changedLine: saved && !unavailable && saved.changed ? changedLine(saved.publishedVersion, saved.runsDraft) : undefined,
         readers: readersOf(r, step.stepId).map((reader) => readerLabel(reader)),
@@ -532,7 +579,7 @@ export class WorkflowRunSheetComponent {
   });
 
   protected readonly previewAgentName = computed(
-    () => this.stepRows().find((row) => row.step.stepId === this.previewStepId())?.step.agentName ?? '',
+    () => this.stepRows().find((row) => row.step.stepId === this.previewStepId())?.label ?? '',
   );
 
   protected readonly prompt = computed(() => {
@@ -577,6 +624,8 @@ export class WorkflowRunSheetComponent {
           ? (step.inputPricePerMillionTokens ?? null)
           : (sendModel?.inputPricePerMillionTokens ?? null),
         request: stepRequest(r, step),
+        // A prompt step gets no card, and the files only when it reads them (§21.3).
+        ...(step.kind === 'prompt' ? { card: false, files: step.workflowStep?.readsFiles ?? true } : {}),
       })),
       card: r.cardRemoved ? '' : r.card,
       fileTokens: r.fileIds.map((id) => byId.get(id)?.estimatedTokens ?? null),
@@ -771,7 +820,16 @@ export function changedLine(publishedVersion: number | undefined, runsDraft: boo
 
 /** A step as the sheet names it when another's Remove takes it too. */
 function readerLabel(step: RunReviewStep): string {
+  if (step.kind === 'prompt') return `Prompt · ${step.agentName || step.workflowStep?.name || 'a model'}`;
   return step.agentName || step.workflowStep?.name || 'a step';
+}
+
+/** A prompt step's second line: what its one call is sent, besides its instruction. */
+export function promptReadsLine(readsFiles: boolean, results: number): string {
+  const parts: string[] = [];
+  if (readsFiles) parts.push('the files');
+  if (results) parts.push(`${results} ${results === 1 ? 'result' : 'results'}`);
+  return parts.length ? `One model call · reads ${parts.join(' and ')}` : 'One model call';
 }
 
 /** "A", "A and B", "A, B and C". */

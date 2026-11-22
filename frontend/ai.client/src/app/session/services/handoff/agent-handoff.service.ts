@@ -387,6 +387,18 @@ export class AgentHandoffService {
   }
 
   /**
+   * One handoff row as the server has it now, or null when it can't be read. For a workflow run's
+   * prompt step (§21.3), read once its frame says it settled: the row holds its answer.
+   */
+  async readRow(sourceSessionId: string, handoffId: string): Promise<HandoffView | null> {
+    try {
+      return await firstValueFrom(this.http.get<HandoffView>(`${this.handoffsUrl(sourceSessionId)}/${encodeURIComponent(handoffId)}`));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Add the handoff row and start the target's conversation in the background. The row goes in
    * first, so it is there the moment the sheet closes and its watcher sees the target start
    * streaming. `beforeSend` runs between the two, where `send` closes its sheet.

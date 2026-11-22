@@ -12,7 +12,7 @@ import { ChatStateService } from '../session/services/chat/chat-state.service';
 import { ToolInsightService } from '../session/services/chat/tool-insight.service';
 import { HandoffStateService } from '../session/services/handoff/handoff-state.service';
 import { WorkflowRunQueueService } from '../session/services/handoff/workflow-run-queue.service';
-import { RunProgress, RunStepLine, runProgress, showsInThread } from '../session/services/handoff/workflow-run-progress';
+import { RunProgress, RunStepLine, isPromptRunStep, promptStatusLine, runProgress, showsInThread } from '../session/services/handoff/workflow-run-progress';
 import { WorkflowRunStateService } from '../session/services/handoff/workflow-run-state.service';
 import { WorkflowRunView } from '../session/services/handoff/workflow-run.models';
 
@@ -155,11 +155,13 @@ export class WorkflowTestRunService {
     return runProgress(run, this.handoffState.rowsFor(run.sessionId), {
       isLoading: (target) => this.chatState.isSessionLoading(target),
       isPending: (handoffId) => this.queue.isPending(run.runId, handoffId),
+      isRunning: (handoffId) => this.queue.isRunning(run.runId, handoffId),
     });
   }
 
   /** A step's phrase, worded as its line on the run's row words it (`handoffStatusLine`). */
   phrase(line: RunStepLine): string {
+    if (isPromptRunStep(line.step)) return promptStatusLine(line);
     if (line.state === 'queued') return 'Queued';
     if (line.state === 'not_started') return 'Not started';
     if (!line.row?.targetSessionId) return 'Didn’t start';

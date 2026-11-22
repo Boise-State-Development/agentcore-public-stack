@@ -55,7 +55,8 @@ export interface TurnsCovered {
 export interface HandoffView {
   handoffId: string;
   sessionId: string;
-  kind: 'mention' | 'suggested' | 'send_back';
+  /** `prompt` is a workflow run's prompt step (workflow-designer §21.3): no Agent, no conversation. */
+  kind: 'mention' | 'suggested' | 'send_back' | 'prompt';
   status: HandoffStatus;
   agentId: string;
   agentName: string;
@@ -83,6 +84,19 @@ export interface HandoffView {
   agentHint?: string;
   /** The `suggest_handoff` call, which places the chip under the message holding it. */
   toolUseId?: string;
+  /** A prompt step's model (§21.3). Its `agentName` is the model's display name and `agentId` is empty. */
+  modelId?: string;
+  /** A done prompt step's answer, as stored (capped at write, with the cut-off marker when cut). */
+  outputText?: string;
+  outputTokens?: number;
+}
+
+/** Why a prompt step stopped (`stoppedReason` on its row, workflow-designer §21.3). */
+export type PromptStopReason = 'user_stopped' | 'too_large' | 'model_refused' | 'quota' | 'timeout' | 'error';
+
+/** A workflow run's prompt step: one model call, with no Agent and no conversation (§21.3). */
+export function isPromptStep(row: Pick<HandoffView, 'kind'> | null | undefined): boolean {
+  return row?.kind === 'prompt';
 }
 
 /**
@@ -254,7 +268,9 @@ export interface DeliveryView {
 /** One step's part of a run result. Only a `done` part carries text, artifacts and files. */
 export interface DeliveryPart {
   stepId: string;
+  /** A prompt step's part: its model's name. */
   agentName: string;
+  /** Empty on a prompt step's part, which comes from no conversation. */
   fromSessionId: string;
   /** The step conversation's title; empty on a part with no result. */
   fromTitle: string;
@@ -262,6 +278,11 @@ export interface DeliveryPart {
   text: string;
   artifacts: DeliveryArtifact[];
   files: DeliveryFile[];
+  /**
+   * `prompt` for a prompt step's part (workflow-designer §21.3): text alone, from no conversation,
+   * with its step's name as `fromTitle`. Absent on an Agent step's part.
+   */
+  kind?: 'prompt';
 }
 
 /** `POST /sessions/{targetId}/handoffs/send-back`: a target's answer, offered back to its source. */

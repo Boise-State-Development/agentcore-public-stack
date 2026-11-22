@@ -13,7 +13,7 @@ import { WorkflowRunMergeService, mergeInstructionOf } from './workflow-run-merg
 import { WorkflowRunQueueService } from './workflow-run-queue.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
 import { WorkflowRunView } from './workflow-run.models';
-import { runProgress } from './workflow-run-progress';
+import { isPromptRunStep, runProgress, stepsLabel } from './workflow-run-progress';
 
 /** `POST …/workflow-runs/{runId}/collect` (PR-W.2). */
 export interface CollectWorkflowRunResponse {
@@ -77,6 +77,7 @@ export class WorkflowRunResultService {
         const progress = runProgress(run, this.handoffState.rowsFor(run.sessionId), {
           isLoading: (target) => this.chatState.isSessionLoading(target),
           isPending: (handoffId) => this.queue.isPending(run.runId, handoffId),
+          isRunning: (handoffId) => this.queue.isRunning(run.runId, handoffId),
         });
         if (!progress.settled) continue;
         untracked(() => {
@@ -153,7 +154,8 @@ export class WorkflowRunResultService {
   private onSettled(run: WorkflowRunView, done: number): void {
     if (done === 0) return;
     const first = run.steps.find((step) => !step.removed);
-    const label = `${done} ${done === 1 ? 'Agent' : 'Agents'} finished`;
+    const kept = run.steps.filter((step) => !step.removed);
+    const label = `${stepsLabel(done, kept.some(isPromptRunStep))} finished`;
     this.toast.success(label, undefined, {
       action: first
         ? { label: 'Open', handler: () => this.notifications.openSource({ handoffId: first.handoffId, sourceSessionId: run.sessionId }) }
@@ -187,7 +189,7 @@ export class WorkflowRunResultService {
 
 function describe(error: unknown): string {
   if (error instanceof HttpErrorResponse) {
-    if (error.status === 422) return 'No Agent has a result to bring back yet.';
+    if (error.status === 422) return 'No step has a result to bring back yet.';
     if (error.status === 404) return 'The conversation can’t be found.';
   }
   return 'Something went wrong. Try again.';

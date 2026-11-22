@@ -9,6 +9,8 @@ import { AgentMentionService, MentionableAgent } from '../agents/services/agent-
 import { RunProgress, RunStepLine } from '../session/services/handoff/workflow-run-progress';
 import { WorkflowRunView } from '../session/services/handoff/workflow-run.models';
 import { ModelService } from '../session/services/model/model.service';
+import { FEATURES } from '../services/features';
+import { environment } from '../../environments/environment';
 import { fitScale } from './components/workflow-graph.component';
 import { WorkflowTestRunPanelComponent } from './components/workflow-test-run-panel.component';
 import { WorkflowDesignerPage, elapsedLabel } from './workflow-designer.page';
@@ -559,6 +561,83 @@ describe('WorkflowDesignerPage', () => {
       el.querySelector('#wf-tab-step')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
       await settle();
       expect(el.querySelector('#wf-tab-test')!.getAttribute('aria-selected')).toBe('true');
+    });
+  });
+
+  describe('prompt steps (PR-D.6c)', () => {
+    const MODELS = [
+      { modelId: 'us.model-a', modelName: 'Model A', provider: 'bedrock', inputModalities: ['TEXT', 'IMAGE'], outputModalities: ['TEXT'] },
+      { modelId: 'us.micro', modelName: 'Micro', provider: 'bedrock', inputModalities: ['TEXT'], outputModalities: ['TEXT'] },
+      { modelId: 'us.sonic', modelName: 'Sonic', provider: 'bedrock', inputModalities: ['TEXT', 'SPEECH'], outputModalities: ['SPEECH'] },
+    ];
+
+    function on(promptSteps: boolean): void {
+      TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, promptSteps } });
+      TestBed.overrideProvider(ModelService, {
+        useValue: {
+          modelNameFor: (id: string) => MODELS.find((m) => m.modelId === id)?.modelName ?? null,
+          availableModels: signal(MODELS),
+        },
+      });
+    }
+
+    function radio(label: string): HTMLInputElement {
+      const found = [...el.querySelectorAll('label')].find((l) => (l.textContent ?? '').trim().startsWith(label))?.querySelector('input');
+      if (!found) throw new Error(`no radio "${label}"`);
+      return found as HTMLInputElement;
+    }
+
+    it('offers no prompt step while the flag is off', async () => {
+      on(false);
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Add step to stage 1').click();
+      await settle();
+      expect(el.querySelector('#wf-kind-prompt')).toBeNull();
+    });
+
+    it('Add step offers Prompt; the step gets a model the user can use, a name and an instruction, and saves as a prompt step', async () => {
+      on(true);
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Add step to stage 1').click();
+      await settle();
+      expect(document.activeElement?.id).toBe('wf-kind-agent');
+
+      (el.querySelector('#wf-kind-prompt') as HTMLInputElement).click();
+      await settle();
+      // Only models that run a prompt step: the speech model is left out.
+      const models = [...el.querySelectorAll<HTMLInputElement>('input[name="wf-model"]')].map((input) => input.value);
+      expect(models).toEqual(['us.model-a', 'us.micro']);
+      // A text-only model can't be sent the run's files, which a new step reads.
+      expect(radio('Micro').disabled).toBe(true);
+      expect(el.textContent).toContain('Choose the model this step runs on.');
+      expect(button('Save workflow').disabled).toBe(true);
+      expect(el.textContent).toContain('Choose a model for the prompt step that has none.');
+
+      radio('Model A').click();
+      const name = el.querySelector('#wf-step-name') as HTMLInputElement;
+      name.value = 'Budget check';
+      name.dispatchEvent(new Event('change'));
+      const instruction = el.querySelector('#wf-instruction') as HTMLTextAreaElement;
+      instruction.value = 'List the budget risks.';
+      instruction.dispatchEvent(new Event('input'));
+      await settle();
+
+      const card = el.querySelector('[data-node-id][aria-pressed="true"]')!;
+      expect(card.getAttribute('aria-label')).toBe('Budget check, Prompt · Model A, stage 1, reads the request and the files');
+      expect(card.textContent).toContain('Prompt · Model A');
+
+      service.write.mockResolvedValue({ ok: true, document: doc({ version: 4 }, true) });
+      button('Save workflow').click();
+      await settle();
+      const body = service.write.mock.calls[0][1] as WorkflowWrite;
+      expect(body.steps[body.steps.length - 1]).toEqual({
+        name: 'budget_check',
+        kind: 'prompt',
+        agentId: '',
+        modelId: 'us.model-a',
+        reads: ['request', 'files'],
+        request: 'List the budget risks.',
+      });
     });
   });
 });

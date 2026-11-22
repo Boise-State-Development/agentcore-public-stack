@@ -9,7 +9,7 @@ import { HandoffStateService } from './handoff-state.service';
 import { WorkflowRunQueueService } from './workflow-run-queue.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
 import { WorkflowRunView } from './workflow-run.models';
-import { stepRow } from './workflow-run-progress';
+import { isPromptRunStep, stepRow } from './workflow-run-progress';
 
 /** The first wait, and the longest, between two reads of one run (milliseconds). */
 export const REFRESH_FIRST_MS = 5_000;
@@ -103,14 +103,22 @@ export class WorkflowRunRefreshService {
     return sources;
   }
 
-  /** A kept step this tab's copy shows started and unfinished, whose conversation isn't streaming here. */
+  /**
+   * A kept step this tab's copy shows started and unfinished, whose conversation isn't streaming
+   * here. A prompt step has no conversation (§21.3): one whose row says `running` while no prompt
+   * invocation of this tab holds it (a reload, or another tab's) is followed the same way.
+   */
   private hasServerPendingStep(run: WorkflowRunView): boolean {
     if (run.status !== 'approved' && run.status !== 'stopped') return false;
     const live = this.handoffState.rowsFor(run.sessionId);
     return run.steps.some((step) => {
       if (step.removed) return false;
       const row = stepRow(step, live);
-      if (!row || !row.targetSessionId || !SERVER_PENDING.has(row.status)) return false;
+      if (!row || !SERVER_PENDING.has(row.status)) return false;
+      if (isPromptRunStep(step) || row.kind === 'prompt') {
+        return row.status === 'running' && !this.queue.isRunning(run.runId, step.handoffId);
+      }
+      if (!row.targetSessionId) return false;
       return !this.chatState.isSessionLoading(row.targetSessionId);
     });
   }

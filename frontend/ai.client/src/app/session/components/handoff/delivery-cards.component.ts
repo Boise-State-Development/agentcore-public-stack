@@ -7,7 +7,7 @@ import { ComposerCard, DELIVERY_MAX_PER_TURN, DeliveryStateService } from '../..
 import { DeliveryService } from '../../services/handoff/delivery.service';
 import { DeliveryPart } from '../../services/handoff/handoff.models';
 import { partTitleAfterAgent } from '../../services/handoff/handoff-prompt';
-import { agentsLabel } from '../../services/handoff/workflow-run.service';
+import { promptWorkerLabel, stepNameLabel, stepsLabel } from '../../services/handoff/workflow-run-progress';
 import { DeliveryArtifactChipsComponent } from './delivery-artifact-chips.component';
 import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
 
@@ -41,7 +41,7 @@ import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
               <div class="flex items-start justify-between gap-3">
                 <p class="flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-gray-600 dark:text-gray-400">
                   <ng-icon name="heroArrowUturnLeft" class="size-3.5 shrink-0" aria-hidden="true" />
-                  <span class="font-medium text-gray-900 dark:text-white">Results from {{ agentsLabel(parts.length) }}</span>
+                  <span class="font-medium text-gray-900 dark:text-white">Results from {{ partsLabel(parts) }}</span>
                   <span aria-hidden="true">·</span>
                   <span>{{ finishedCount(parts) }} of {{ parts.length }} finished</span>
                   @if (card.editedParts) {
@@ -52,7 +52,7 @@ import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
                   type="button"
                   (click)="remove(card)"
                   class="-mr-1 shrink-0 rounded-sm p-0.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-200"
-                  [attr.aria-label]="'Remove the results from ' + agentsLabel(parts.length)"
+                  [attr.aria-label]="'Remove the results from ' + partsLabel(parts)"
                 >
                   <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
                 </button>
@@ -65,10 +65,16 @@ import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
                       @let edited = card.editedParts?.[part.stepId];
                       <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
                         <p class="min-w-0 truncate text-sm/6 text-gray-900 dark:text-white">
-                          <span class="font-medium">{{ part.agentName }}</span>
-                          @let partTitle = titleAfterAgent(part.agentName, part.fromTitle);
-                          @if (partTitle) {
-                            <span class="text-gray-600 dark:text-gray-400"> · {{ partTitle }}</span>
+                          @if (part.kind === 'prompt') {
+                            <!-- A prompt step's part comes from no conversation: its step, then its model. -->
+                            <span class="font-medium">{{ partName(part) }}</span>
+                            <span class="text-gray-600 dark:text-gray-400"> · {{ promptWorker(part.agentName) }}</span>
+                          } @else {
+                            <span class="font-medium">{{ part.agentName }}</span>
+                            @let partTitle = titleAfterAgent(part.agentName, part.fromTitle);
+                            @if (partTitle) {
+                              <span class="text-gray-600 dark:text-gray-400"> · {{ partTitle }}</span>
+                            }
                           }
                           @if (edited !== undefined) {
                             <span class="sr-only"> (edited)</span>
@@ -76,17 +82,17 @@ import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
                         </p>
                         <span class="flex shrink-0 items-center gap-x-3 text-xs/5">
                           @if (editingId() !== key) {
-                            <button type="button" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50" [attr.aria-expanded]="openId() === key" [attr.aria-label]="(openId() === key ? 'Hide ' : 'Preview ') + part.agentName + '’s result'" (click)="toggleOpen(key)">
+                            <button type="button" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50" [attr.aria-expanded]="openId() === key" [attr.aria-label]="(openId() === key ? 'Hide ' : 'Preview ') + partName(part) + '’s result'" (click)="toggleOpen(key)">
                               {{ openId() === key ? 'Hide' : 'Preview' }}
                             </button>
                           }
-                          <button type="button" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50" [attr.aria-label]="(editingId() === key ? 'Done editing ' : 'Edit ') + part.agentName + '’s result'" (click)="toggleEdit(key)">
+                          <button type="button" class="rounded-sm font-medium text-primary-accessible underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-50" [attr.aria-label]="(editingId() === key ? 'Done editing ' : 'Edit ') + partName(part) + '’s result'" (click)="toggleEdit(key)">
                             {{ editingId() === key ? 'Done editing' : 'Edit' }}
                           </button>
                         </span>
                       </div>
                       @if (editingId() === key) {
-                        <label [attr.for]="'delivery-edit-' + key" class="sr-only">{{ part.agentName }}’s result to send</label>
+                        <label [attr.for]="'delivery-edit-' + key" class="sr-only">{{ partName(part) }}’s result to send</label>
                         <textarea
                           [id]="'delivery-edit-' + key"
                           rows="6"
@@ -95,7 +101,7 @@ import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
                           (ngModelChange)="state.editPart(sessionId(), card.deliveryId, part.stepId, $event)"
                         ></textarea>
                       } @else if (openId() === key) {
-                        <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + part.agentName" class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-2 text-sm/6 text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200">{{ edited ?? part.text }}</pre>
+                        <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + partName(part)" class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-2 text-sm/6 text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200">{{ edited ?? part.text }}</pre>
                       }
                       @if (part.artifacts.length > 0) {
                         <div class="mt-1">
@@ -109,7 +115,7 @@ import { DeliveryFileChipsComponent } from './delivery-file-chips.component';
                       }
                     } @else {
                       <p class="truncate text-sm/6 text-gray-600 dark:text-gray-400">
-                        {{ part.agentName }} · {{ part.status === 'stopped' ? 'Stopped, not included' : 'Still waiting, not included' }}
+                        {{ partName(part) }} · {{ part.status === 'stopped' ? 'Stopped, not included' : 'Still waiting, not included' }}
                       </p>
                     }
                   </li>
@@ -205,7 +211,18 @@ export class DeliveryCardsComponent {
     this.editingId.set(this.editingId() === deliveryId ? null : deliveryId);
   }
 
-  protected readonly agentsLabel = agentsLabel;
+  /** "4 Agents", or "6 steps" once a prompt step's part is among them (§21.3). */
+  protected partsLabel(parts: readonly DeliveryPart[]): string {
+    return stepsLabel(parts.length, parts.some((part) => part.kind === 'prompt'));
+  }
+
+  /** What a part is called: its Agent, or a prompt step's own name (its model is said beside it). */
+  protected partName(part: DeliveryPart): string {
+    if (part.kind !== 'prompt') return part.agentName;
+    return stepNameLabel(part.fromTitle) || promptWorkerLabel(part.agentName);
+  }
+
+  protected readonly promptWorker = promptWorkerLabel;
   /** A step's title already leads with its Agent (workflow-runs §19); the line shows the name once. */
   protected readonly titleAfterAgent = partTitleAfterAgent;
 

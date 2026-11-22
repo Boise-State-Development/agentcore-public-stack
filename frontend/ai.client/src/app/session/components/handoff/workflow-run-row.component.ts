@@ -21,9 +21,19 @@ import { HandoffStateService } from '../../services/handoff/handoff-state.servic
 import { HandoffView } from '../../services/handoff/handoff.models';
 import { WorkflowRunQueueService } from '../../services/handoff/workflow-run-queue.service';
 import { WorkflowRunResultService } from '../../services/handoff/workflow-run-result.service';
-import { RunStepLine, RunStepState, runProgress, waitingLabel } from '../../services/handoff/workflow-run-progress';
+import {
+  RunStepLine,
+  RunStepState,
+  isPromptRunStep,
+  promptStatusLine,
+  promptWorkerLabel,
+  runProgress,
+  stepNameLabel,
+  stepsLabel,
+  waitingLabel,
+} from '../../services/handoff/workflow-run-progress';
 import { WorkflowRunView } from '../../services/handoff/workflow-run.models';
-import { WorkflowRunService, agentsLabel, canResume } from '../../services/handoff/workflow-run.service';
+import { WorkflowRunService, canResume } from '../../services/handoff/workflow-run.service';
 import { SessionService } from '../../services/session/session.service';
 import { WorkflowGraphComponent } from '../../../workflows/components/workflow-graph.component';
 import { MAX_WORKFLOW_STEPS } from '../../../workflows/workflow.models';
@@ -35,7 +45,12 @@ import { bringIntoView, handoffStatusLine, truncate } from './handoff-status-lin
 /** One step line as the template draws it. */
 interface StepLineView {
   handoffId: string;
+  /** The Agent's name, or a prompt step's name (several prompt steps can share one model). */
   agentName: string;
+  /** A prompt step's worker, "Prompt · Haiku 5.5" (§21.3); absent on an Agent step. */
+  worker?: string;
+  /** A done prompt step's answer, as stored: it has no conversation to open instead. */
+  answer?: string;
   state: RunStepState;
   statusLine: string;
   /** The step's conversation, once it has one. A queued or unstarted step links nowhere. */
@@ -140,9 +155,32 @@ const BAR_FILL: Record<RunStepState, string> = {
                 <ng-container *ngTemplateOutlet="mark; context: { $implicit: line.state }" />
                 <span class="min-w-0 flex-1 truncate text-xs/5 text-gray-600 dark:text-gray-400">
                   <span class="text-sm/6 font-medium text-gray-900 dark:text-white">{{ line.agentName }}</span>
+                  @if (line.worker) { · {{ line.worker }} }
                   · {{ line.statusLine }}
                 </span>
+                @if (line.answer) {
+                  <button
+                    type="button"
+                    (click)="toggleAnswer(line.handoffId)"
+                    [attr.aria-expanded]="openAnswer() === line.handoffId"
+                    [attr.aria-controls]="answerId(line.handoffId)"
+                    [attr.aria-label]="(openAnswer() === line.handoffId ? 'Hide ' : 'Show ') + line.agentName + '’s answer'"
+                    class="shrink-0 rounded-md text-xs/5 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:focus-visible:outline-primary-accessible-dark"
+                  >
+                    {{ openAnswer() === line.handoffId ? 'Hide answer' : 'Answer' }}
+                  </button>
+                }
               </div>
+              @if (line.answer && openAnswer() === line.handoffId) {
+                <!-- Scrollable, so focusable: keyboard users scroll it with the arrow keys (axe scrollable-region-focusable). -->
+                <pre
+                  [id]="answerId(line.handoffId)"
+                  tabindex="0"
+                  role="region"
+                  [attr.aria-label]="line.agentName + '’s answer'"
+                  class="mx-2 mt-1 mb-1.5 max-h-72 overflow-auto rounded-lg bg-gray-50 p-2 font-sans text-sm/6 whitespace-pre-wrap text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200"
+                >{{ line.answer }}</pre>
+              }
             }
             @if (line.row) {
               <div class="px-2">
@@ -314,6 +352,7 @@ export class WorkflowRunRowComponent {
     return runProgress(run, this.handoffState.rowsFor(run.sessionId), {
       isLoading: (target) => this.chatState.isSessionLoading(target),
       isPending: (handoffId) => this.queue.isPending(run.runId, handoffId),
+      isRunning: (handoffId) => this.queue.isRunning(run.runId, handoffId),
     });
   });
 
@@ -342,18 +381,35 @@ export class WorkflowRunRowComponent {
     return source && source !== 'New Conversation' ? source : null;
   });
 
+  /** The run has a prompt step (§21.3): it is "6 steps", since a prompt step has no Agent. */
+  private readonly hasPromptSteps = computed(() => this.progress().lines.some((line) => isPromptRunStep(line.step)));
+
   protected readonly title = computed(() => {
-    const total = this.progress().total;
+    const total = stepsLabel(this.progress().total, this.hasPromptSteps());
     const source = this.sourceTitle();
-    return source ? `${source} · ${agentsLabel(total)}` : `Handed off to ${agentsLabel(total)}`;
+    if (source) return `${source} · ${total}`;
+    return this.hasPromptSteps() ? `Started ${total}` : `Handed off to ${total}`;
   });
+
+  /** The prompt step whose answer is open, by handoff id; one at a time keeps the row short. */
+  protected readonly openAnswer = signal<string | null>(null);
+
+  protected toggleAnswer(handoffId: string): void {
+    this.openAnswer.set(this.openAnswer() === handoffId ? null : handoffId);
+  }
+
+  protected answerId(handoffId: string): string {
+    return `run-answer-${handoffId}`;
+  }
 
   private readonly notStarted = computed(() => this.progress().lines.filter((line) => line.state === 'not_started').length);
 
   protected readonly offerStart = computed(() => this.notStarted() > 0 && canResume(this.run()));
   /** An approved run from before the card was kept on its row: nothing here can start it. */
   protected readonly startElsewhere = computed(() => this.notStarted() > 0 && !canResume(this.run()));
-  protected readonly notStartedLabel = computed(() => agentsLabel(this.notStarted()));
+  protected readonly notStartedLabel = computed(() =>
+    stepsLabel(this.notStarted(), this.progress().lines.some((line) => line.state === 'not_started' && isPromptRunStep(line.step))),
+  );
 
   protected readonly collecting = computed(() => this.results.isCollecting(this.run().runId));
   protected readonly onComposer = computed(() => this.results.isOnComposer(this.run()));
@@ -435,6 +491,7 @@ export class WorkflowRunRowComponent {
   }
 
   private lineView(line: RunStepLine): StepLineView {
+    if (isPromptRunStep(line.step)) return this.promptLineView(line);
     const base = { handoffId: line.step.handoffId, agentName: line.step.agentName, state: line.state };
     if (line.state === 'queued' || line.state === 'not_started' || !line.row?.targetSessionId) {
       const statusLine =
@@ -459,6 +516,29 @@ export class WorkflowRunRowComponent {
       link: this.handoff.targetLink(row),
       accessibleName: `${title}, ${row.agentName}, ${statusLine}`,
       row,
+    };
+  }
+
+  /**
+   * A prompt step's line (§21.3): no conversation, so no link and no relay. It is named by its
+   * step (several can share a model), says its model, and once done holds its answer.
+   */
+  private promptLineView(line: RunStepLine): StepLineView {
+    const model = line.row?.agentName || line.step.agentName;
+    const worker = promptWorkerLabel(model);
+    const name = stepNameLabel(line.step.stepName) || worker;
+    const statusLine = promptStatusLine(line);
+    const answer = line.state === 'done' ? line.row?.outputText?.trim() || undefined : undefined;
+    return {
+      handoffId: line.step.handoffId,
+      agentName: name,
+      worker: name === worker ? undefined : worker,
+      answer,
+      state: line.state,
+      statusLine,
+      link: null,
+      accessibleName: `${name}, ${worker}, ${statusLine}`,
+      row: null,
     };
   }
 }

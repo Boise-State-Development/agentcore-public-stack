@@ -9,6 +9,7 @@ import { WorkflowFilesRule, WorkflowRef } from '../services/workflows/workflow.m
 export type {
   WorkflowAgentView,
   WorkflowDocument,
+  WorkflowModelView,
   WorkflowRef,
   WorkflowSheet,
   WorkflowSheetBlocker,
