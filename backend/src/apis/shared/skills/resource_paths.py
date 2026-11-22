@@ -28,8 +28,10 @@ from apis.shared.skills.resource_store import KIND_DIRS
 # file) or '-' (read as a command-line flag) is not.
 FILENAME_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
 
-#: The deepest a file may sit below its kind directory (``a/b/c/file.md``).
-MAX_PATH_SEGMENTS = 4
+#: The deepest a file may sit below its kind directory (``a/b/c/d/file.md``).
+#: Five, because anthropics/skills' Office bundles keep the OPC schemas every
+#: package check reads at ``scripts/office/schemas/ecma/fouth-edition/*.xsd``.
+MAX_PATH_SEGMENTS = 5
 
 
 def path_problem(path: Optional[str]) -> Optional[str]:

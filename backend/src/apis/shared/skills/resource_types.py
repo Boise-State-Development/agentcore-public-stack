@@ -39,6 +39,9 @@ the page's origin. Notably absent:
   (a skill may legitimately ship example code) but map to ``text/plain``, so
   the bytes are readable and inert. This matches spec D5: ``script`` resources
   are stored, listed, and never executed.
+* ``.xsd`` as an XML type — allowed, because Office skills ship the OOXML
+  schemas their validators read, but stored and served as ``text/plain``, never
+  as ``application/xml``, for the reason ``.xml`` is absent.
 
 Both tiers (admin catalog and user-authored "My Skills") and the runtime's
 authoring tools funnel their writes through ``SkillBundleFiles.add_resource``
@@ -76,6 +79,9 @@ SAFE_EXTENSION_CONTENT_TYPES: Final[Dict[str, str]] = {
     "log": "text/plain",
     "rst": "text/plain",
     "tex": "text/plain",
+    # XML Schema (anthropics/skills' docx/pptx/xlsx validators). Inert text,
+    # never an XML type: see the module docstring.
+    "xsd": "text/plain",
     # Example / helper code. Stored inert (D5): text/plain, not an active type.
     "py": "text/plain",
     "sh": "text/plain",

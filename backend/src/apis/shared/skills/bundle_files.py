@@ -53,7 +53,10 @@ VALID_RESOURCE_KINDS = ("reference", "script", "asset")
 # manifest stays well inside the DynamoDB item limit and the agent's
 # progressive-disclosure budget (PR-6) stays bounded.
 MAX_RESOURCE_BYTES = 1_048_576  # 1 MiB per file
-MAX_RESOURCES_PER_SKILL = 50
+# 64 holds anthropics/skills' Office bundles (52–60 files with their 39 OOXML
+# schemas). A manifest entry is a few hundred bytes, so 64 stays far inside the
+# item limit; each file adds one line to the skill's activation result.
+MAX_RESOURCES_PER_SKILL = 64
 # Safe, flat filenames only — no path separators, no traversal. Mirrors the
 # skill_id discipline: visible, predictable object keys. A nested ``path``
 # applies the same rule per segment (``resource_paths``).

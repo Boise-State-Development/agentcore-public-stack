@@ -16,7 +16,7 @@ Read this before drafting, because it shapes what a good skill looks like on thi
 
 - **The model sees a skill in three stages.** The name and description are listed whenever the skill is turned on. The instructions load only when the skill is used. Reference files load one at a time, when the instructions point to them. So the description decides whether the skill gets used at all, the instructions should stay lean, and long detail belongs in reference files.
 - **Skills are off until the user turns them on**, under **Customize → Skills**. A new skill starts off, and it cannot be used in the conversation where it was created. To try it, the user turns it on and starts a new conversation. Its slash command appears once it is on.
-- **Limits:** 50 skills per person, 50 files per skill, 1 MiB per file, a description of at most 1,024 characters, and a name of at most 200.
+- **Limits:** 50 skills per person, 64 files per skill, 1 MiB per file, a description of at most 1,024 characters, and a name of at most 200.
 - **Files are flat.** A file is a name with an extension, with no folders (`forms.md`, not `docs/forms.md`). Instructions refer to a reference file as `references/<filename>`.
 - **Scripts are stored but never run.** Don't design a skill that depends on executing code. Write the steps out instead, or rely on tools the user has.
 - **A skill grants no tools.** An `allowed-tools` list is advisory only. A skill can use only the tools the user already has turned on, so if it needs one, the instructions should name it and say what to do when it is missing.

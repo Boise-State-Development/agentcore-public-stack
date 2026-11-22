@@ -21,6 +21,8 @@ export const ALLOWED_RESOURCE_EXTENSIONS: readonly string[] = [
   // Prose / structured text
   'md', 'markdown', 'txt', 'text', 'csv', 'tsv', 'json', 'jsonl', 'yaml', 'yml',
   'toml', 'ini', 'cfg', 'env', 'log', 'rst', 'tex',
+  // XML Schema — stored and served as inert plain text, never as XML
+  'xsd',
   // Example / helper code — stored and served as inert plain text
   'py', 'sh', 'bash', 'zsh', 'ps1', 'rb', 'pl', 'r', 'js', 'mjs', 'cjs', 'ts',
   'jsx', 'tsx', 'css', 'sql', 'graphql', 'java', 'kt', 'go', 'rs', 'c', 'h',

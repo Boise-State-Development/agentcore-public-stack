@@ -25,6 +25,7 @@ from agents.builtin_tools.skill_authoring.tools import (
     build_skill_authoring_tools,
 )
 from apis.shared.auth.models import User
+from apis.shared.skills.bundle_files import MAX_RESOURCES_PER_SKILL
 from apis.shared.skills.models import SKILL_DESCRIPTION_MAX_LENGTH, SkillVisibility
 
 REGION = "us-east-1"
@@ -338,9 +339,9 @@ class TestFiles:
         _create()
         tools = _tools()
         first = tools["my_skill_write_file"](skill_id="grant_review", filename="a.md", content="one")
-        assert "1 of 50 files" in _text(first)
+        assert f"1 of {MAX_RESOURCES_PER_SKILL} files" in _text(first)
         again = tools["my_skill_write_file"](skill_id="grant_review", filename="a.md", content="two")
-        assert "1 of 50 files" in _text(again)
+        assert f"1 of {MAX_RESOURCES_PER_SKILL} files" in _text(again)
         assert tools["my_skill_read_file"](skill_id="grant_review", filename="a.md")["content"][0]["text"] == "two"
         deleted = tools["my_skill_delete_file"](skill_id="grant_review", filename="a.md")
         assert deleted["status"] == "success"

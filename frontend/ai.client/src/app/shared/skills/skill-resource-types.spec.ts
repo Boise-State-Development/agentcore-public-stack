@@ -45,7 +45,7 @@ describe('skill resource type allowlist (client mirror)', () => {
   });
 
   it('accepts the ordinary bundle file types', () => {
-    for (const name of ['forms.md', 'data.json', 'chart.png', 'manual.pdf']) {
+    for (const name of ['forms.md', 'data.json', 'chart.png', 'manual.pdf', 'sml.xsd']) {
       expect(isAllowedResourceFilename(name)).toBe(true);
     }
   });
