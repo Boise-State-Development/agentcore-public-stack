@@ -442,6 +442,7 @@ describe('WorkflowRunRowComponent', () => {
     expect(answer.textContent).toContain('[cut off at the output limit]');
   });
   it('draws a checklist step as "{Step} · Checklist · {model}", its sets as tables behind Results, a failed set in words', () => {
+    features.workflows = true;
     const checklist = (i: number, status: HandoffStatus, extra: Partial<HandoffView> = {}): HandoffView => ({
       ...stepRow(i, status),
       kind: 'checklist',
@@ -492,6 +493,9 @@ describe('WorkflowRunRowComponent', () => {
       'Budget audit · Checklist · Haiku 5.5 · 1 field set · Stopped · something went wrong',
       'Mentoring · Checklist · Haiku 5.5 · 1 field set · Finished Answer',
     ]);
+    // No Save as workflow: the server refuses a run with a checklist step (its sets live in the
+    // workflow it started from), so the row doesn't offer what would fail.
+    expect([...el.querySelectorAll('button')].some((b) => text(b).startsWith('Save as workflow'))).toBe(false);
     // A checklist line names its model and sets, so it wraps on a phone rather than cut them off.
     const spans = [...el.querySelectorAll('[data-handoff-id] > span.flex-1')];
     expect(spans.every((span) => span.classList.contains('break-words') && !span.classList.contains('truncate'))).toBe(true);

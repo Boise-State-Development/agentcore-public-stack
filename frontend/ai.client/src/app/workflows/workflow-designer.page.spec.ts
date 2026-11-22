@@ -725,7 +725,10 @@ describe('WorkflowDesignerPage', () => {
       // Only top-level field-set files are offered, by their names.
       const adds = [...el.querySelectorAll('[data-testid="wf-skill-sets"] button')].map((b) => b.getAttribute('aria-label') ?? b.textContent!.trim());
       expect(adds).toEqual(['Add the field set budget', 'Add the field set compliance', 'Refresh the list']);
-      expect(el.querySelector('[data-testid="wf-skill-sets"] a[href="/customize/skills/SKL-1/field-sets/new"]')).not.toBeNull();
+      // The editor opens in a new tab, so the unsaved draft stays as it is.
+      const create = el.querySelector('[data-testid="wf-skill-sets"] a[href="/customize/skills/SKL-1/field-sets/new"]')!;
+      expect(create.getAttribute('target')).toBe('_blank');
+      expect(create.textContent).toContain('(opens in a new tab)');
 
       ([...el.querySelectorAll<HTMLInputElement>('input[name="wf-model"]')].find((input) => input.value === 'us.model-a')!).click();
       button('Add the field set compliance').click();
@@ -770,6 +773,31 @@ describe('WorkflowDesignerPage', () => {
         request: 'Treat a missing section as a fail.',
         fieldSets: ['budget', 'compliance'],
       });
+    });
+
+    it('on a new workflow, makes its skill on request so a checklist step can pick sets before the first save', async () => {
+      on({ checklistSteps: true });
+      TestBed.overrideProvider(Location, { useValue: { replaceState, path: () => '/workflows/new' } });
+      service.create.mockResolvedValue(doc({ skillId: 'SKL-new', name: 'untitled', version: 1, steps: [], request: '' }));
+      await open({});
+      button('Add step to stage 1').click();
+      await settle();
+      (el.querySelector('#wf-kind-checklist') as HTMLInputElement).click();
+      await settle();
+      expect(getSkill).not.toHaveBeenCalled();
+      expect(button('Save workflow').disabled).toBe(true);
+
+      button('Create the workflow now').click();
+      await settle();
+      expect(service.create).toHaveBeenCalledWith({ title: 'Untitled workflow' });
+      // Only the carrier: the draft isn't written, and stays unsaved.
+      expect(service.write).not.toHaveBeenCalled();
+      expect(el.textContent).toContain('Unsaved changes');
+      expect(replaceState).toHaveBeenCalledWith('/workflows/SKL-new/untitled');
+      expect(getSkill).toHaveBeenCalledWith('SKL-new');
+      expect(announce).toHaveBeenCalledWith('Workflow created. Add field sets to its skill, then save.', 'polite');
+      await settle();
+      expect(el.querySelector('[data-testid="wf-skill-sets"] button[aria-label="Add the field set budget"]')).not.toBeNull();
     });
 
     it('opens a saved checklist step with its sets as the server read them, and says what can’t run', async () => {

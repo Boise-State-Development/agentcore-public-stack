@@ -319,6 +319,16 @@ export class WorkflowDesignerPage {
     return (event.target as HTMLInputElement).value;
   }
 
+  /**
+   * A new workflow takes its URL once it exists, whether its first save made it or the checklist
+   * step's Create the workflow now did (§22.3), so a reload opens it rather than a blank one.
+   */
+  private readonly urlFollowsRef = effect(() => {
+    const ref = this.store.ref();
+    if (!ref || !this.location.path().split('?')[0].endsWith('/workflows/new')) return;
+    untracked(() => this.location.replaceState(`/workflows/${encodeURIComponent(ref.skillId)}/${encodeURIComponent(ref.name)}`));
+  });
+
   protected async save(): Promise<void> {
     const wasNew = this.store.ref() === null;
     const ref = await this.store.save();

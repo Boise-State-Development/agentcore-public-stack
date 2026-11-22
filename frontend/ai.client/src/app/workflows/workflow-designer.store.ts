@@ -330,6 +330,32 @@ export class WorkflowDesignerStore {
     }
   }
 
+  /**
+   * Make a new workflow's carrying skill now, without saving the draft: the first half of a first
+   * save (`POST /workflows`). A checklist step picks its field sets from that skill, so a new
+   * workflow needs it before its checklist step can be complete enough to save (§22.3). The draft
+   * stays unsaved; the next Save writes it against the version this created.
+   */
+  async createCarrier(): Promise<WorkflowRef | null> {
+    if (this.ref() || this.saving() || !this.isOwned()) return this.ref();
+    this.saving.set(true);
+    this.saveError.set(null);
+    try {
+      const created = await this.workflows.create({ title: this.draft().title.trim() || undefined });
+      const ref = { skillId: created.workflow.skillId, name: created.workflow.name };
+      this.ref.set(ref);
+      this.version.set(created.workflow.version);
+      this.baseline.set(draftFrom(created.workflow));
+      this.announcer.announce('Workflow created. Add field sets to its skill, then save.', 'polite');
+      return ref;
+    } catch (err) {
+      this.saveError.set(this.workflows.messageFor(err, 'The workflow couldn’t be created.'));
+      return null;
+    } finally {
+      this.saving.set(false);
+    }
+  }
+
   /** Drop this tab's edits for what is stored now (after a conflict). */
   async reloadStored(): Promise<void> {
     const conflict = this.conflict();

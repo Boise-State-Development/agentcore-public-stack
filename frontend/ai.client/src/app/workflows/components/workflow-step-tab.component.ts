@@ -384,9 +384,12 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                           </span>
                           <span class="flex shrink-0 items-center gap-1">
                             @if (store.fieldSetAuthoringOn && editable() && skillId()) {
+                              <!-- A new tab, so the draft stays as it is; Refresh the list reads the skill again. -->
                               <a
                                 [routerLink]="['/customize/skills', skillId(), 'field-sets', name]"
-                                [attr.aria-label]="'Edit the field set ' + store.fieldSetTitle(name)"
+                                target="_blank"
+                                rel="noopener"
+                                [attr.aria-label]="'Edit the field set ' + store.fieldSetTitle(name) + ' (opens in a new tab)'"
                                 class="rounded-md px-1.5 text-xs/5 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark dark:focus-visible:outline-primary-accessible-dark"
                               >
                                 Edit
@@ -433,7 +436,10 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                     <div class="mt-3" data-testid="wf-skill-sets">
                       @if (!skillId()) {
                         <p class="text-xs/5 text-gray-600 dark:text-gray-400">
-                          Save the workflow first. Its field sets live in its skill, which the first save makes.
+                          A checklist step’s field sets live in this workflow’s skill, which isn’t made until the workflow is.
+                          <button type="button" (click)="createCarrier()" [disabled]="store.saving()" [class]="linkButtonClass + ' disabled:opacity-60'">
+                            {{ store.saving() ? 'Creating…' : 'Create the workflow now' }}
+                          </button>
                         </p>
                       } @else {
                         @switch (skillSets().state) {
@@ -472,7 +478,14 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
                             }
                             <p class="mt-2 flex flex-wrap gap-x-3 text-xs/5">
                               @if (store.fieldSetAuthoringOn) {
-                                <a [routerLink]="['/customize/skills', skillId(), 'field-sets', 'new']" [class]="linkButtonClass">New field set</a>
+                                <a
+                                  [routerLink]="['/customize/skills', skillId(), 'field-sets', 'new']"
+                                  target="_blank"
+                                  rel="noopener"
+                                  [class]="linkButtonClass"
+                                >
+                                  New field set<span class="sr-only"> (opens in a new tab)</span>
+                                </a>
                               }
                               <button type="button" (click)="store.loadSkillFieldSets()" [class]="linkButtonClass">Refresh the list</button>
                             </p>
@@ -861,6 +874,15 @@ export class WorkflowStepTabComponent {
 
   protected setControlId(direction: 'up' | 'down' | 'remove', name: string): string {
     return `wf-set-${direction}-${name}`;
+  }
+
+  /** Make the workflow's skill, so its field sets can be added; the page takes the new URL. */
+  protected async createCarrier(): Promise<void> {
+    if (await this.store.createCarrier()) {
+      afterNextRender(() => document.querySelector<HTMLElement>('[data-testid="wf-skill-sets"] a, [data-testid="wf-skill-sets"] button')?.focus(), {
+        injector: this.injector,
+      });
+    }
   }
 
   protected addSet(step: DraftStep, name: string): void {

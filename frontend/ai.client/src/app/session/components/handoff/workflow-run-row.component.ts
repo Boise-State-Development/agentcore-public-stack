@@ -541,6 +541,9 @@ export class WorkflowRunRowComponent {
    */
   protected readonly offerSave = computed(() => {
     if (!this.features.workflows || !this.offerSaveAsWorkflow()) return false;
+    // A checklist step's field sets live in the skill of the workflow the run started from, and a
+    // new carrying skill would hold none of them, so the server refuses this run (§22.3).
+    if (this.run().steps.some((step) => isChecklistRunStep(step))) return false;
     const status = this.run().status;
     return status === 'stopped' || (status === 'approved' && this.progress().settled);
   });
