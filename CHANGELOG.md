@@ -4,6 +4,61 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.39.0] - 2026-11-22
+
+Workflow runs and the workflow designer, all in development and off by default. A message can hand work to several Agents from one approval sheet, and their results come back as one card. A run's shape can be saved, designed on a canvas with stages, tested, and started again, with prompt steps, checklist steps and pinned Agent versions. Skills can run their own scripts with `run_code`, which is also in development: Python or Node, in a new isolated Code Interpreter that has no network path out, with an optional read-only LibreOffice mount. Every existing Code Interpreter tool now runs in that interpreter. Long-context pricing is metered. `knowledge_files` works for users of a PUBLIC Agent. Generated files get a new output card.
+
+### 🚀 Added
+
+- **Workflow runs, in development** (`WORKFLOW_RUNS_ENABLED` / `CDK_WORKFLOW_RUNS_ENABLED` / `features.workflowRuns`, app-api only, needs handoffs). Mentioning up to 8 Agents opens one review sheet with one card, one brief, the files and an input-cost estimate. Start approves the run once, and up to 4 steps then run at a time as background handoffs. The source thread shows one row for the run, with **Stop run** and **Bring back results**, and the results come back as one card with a part per step. A run's step conversations nest under the source conversation in the sidebar (#2189, #2195, #2193, #2194, #2199, #2208)
+- **Saved workflows and the designer, in development** (`WORKFLOWS_ENABLED` / `CDK_WORKFLOWS_ENABLED` / `features.workflows`, app-api only). A workflow is stored as `references/workflow.<name>.md` in a skill and is listed, created, read, written and deleted under `/workflows`. The **Workflows** page and the designer show a canvas that lays itself out, plus a Step tab and a Preview tab, which is the real approval sheet. **Save as workflow** is on a finished run's row. A workflow can be started from the composer's `+` menu or in a new conversation. The designer also has stages (a step's **Reads**), a Result that merges and starts by itself, a test run you watch on the canvas, and runs drawn as graphs (#2221, #2223, #2225, #2228, #2233, #2236, #2249, #2251)
+- **Prompt steps, in development** (`PROMPT_STEPS_ENABLED` / `CDK_PROMPT_STEPS_ENABLED` / `features.promptSteps`, app-api and the Runtime). A workflow step can be one model call over the run's files, with no Agent and no conversation. It runs on a new `workflow_prompt` invocation, so a run's steps share one cached copy of the documents (#2272, #2273, #2279, #2284)
+- **Checklist steps, in development** (`CHECKLIST_STEPS_ENABLED` / `CDK_CHECKLIST_STEPS_ENABLED` / `features.checklistSteps`, app-api and the Runtime). A workflow step can run the workflow skill's own field sets over the run's files, one cached call per set, with typed values, quotes and `source_provenance` states. List fields are supported, and a run with a checklist step can be saved as a workflow, which copies its field sets (#2293, #2295, #2310, #2308, #2322)
+- **Agent version pinning for workflow steps, in development, backend half** (`AGENT_VERSION_PINNING_ENABLED` / `CDK_AGENT_VERSION_PINNING_ENABLED`, app-api, and the Runtime only while the whole chain is on). An Agent step that records `@ <n>` is judged by one rule. The sheet shows each pinned step's state and offers "Use version P", and run create records the version. The Runtime and SPA halves follow (#2324)
+- **Suggested handoffs, in development** (`HANDOFF_SUGGESTIONS_ENABLED` / `CDK_HANDOFF_SUGGESTIONS_ENABLED`, Runtime only, needs handoffs; `suggest_handoff` catalog row seeded `enabledByDefault: false`). The model can offer a chip that opens a separate conversation, without stopping its turn. **Start** opens the handoff review sheet. New SSE event `handoff_suggested` (#2177, #2180)
+- **`run_code`, in development** (`CODE_SANDBOX_ENABLED` / `CDK_CODE_SANDBOX_ENABLED`, Runtime only; `run_code` catalog row seeded `enabledByDefault: false`). It runs a bound skill's `scripts/*.py`, `.js`, `.cjs` or `.mjs`, or Python or JavaScript the model writes, in the isolated interpreter, on the conversation's files. Each run is its own process, with output files returned as download cards. Scripts run only from the user's own skills or admin-catalog skills (#2254, #2263, #2312)
+- **LibreOffice for `run_code`, in development** (`CODE_SANDBOX_OFFICE_ENABLED` / `CDK_CODE_SANDBOX_OFFICE_ENABLED`, Runtime only, needs the code sandbox). A read-only EFS mount at `/mnt/office` sits behind a Route 53 Resolver DNS Firewall that answers only the file system's name. `seed_code_sandbox_office.py` installs a pinned, checksummed build. The mount also carries docx-js and the pptx skill's Node packages, icon recipe included (#2285, #2304, #2323)
+- **Long-context pricing is metered.** A catalog row can declare `longContextThresholdTokens` and multipliers, and `CostCalculator.rates_for_call` applies them. The curated Claude Haiku 5.5 row bills 5× above 100K tokens, and the curated OpenAI rows bill 2×/1.5× above 272K. `C#` rows carry `longContext: true`, and the context meter names the threshold (#2235)
+- `CDK_AGENTCORE_RUNTIME_GENERATION`, an optional GitHub environment variable. Changing it recreates the AgentCore Runtime under a new name, starting again at zero versions, for a Runtime at its 1,000-version quota (#2240)
+- Specs: workflow runs (#2187), the workflow designer (#2201, #2219, #2267, #2287, #2321), the skill code sandbox (#2253), the agent plan tool (#2271), and the agentskills.io conformance spec (#2185)
+
+### ✨ Improved
+
+- **Generated files get an output card.** The tool call that made a file folds into the tool rail, and the file shows under the rail as one card with a preview of its opening lines or first rows. The same short output card is used for artifacts and browsed pages (#2207). Preview is compact and sits after Download (#2259)
+- **Memory tools read plainly in the tool rail**: "Saved a memory", "Updated the memory index" and so on, plus a "saved a memory" readout in the rail header (#2183)
+- **Web crawls ingest linked PDFs.** A crawl no longer fails them as an unsupported content type, and it skips other file types quietly (#2119)
+- **Skill import keeps whole Office skills.** `.xsd` and `.xml` files are stored and served as inert `text/plain`. A skill may hold 64 files (was 50), and a file may sit 5 folders deep (was 4). Filenames may start with `_`, so `__init__.py` keeps its name (#2282, #2303, #2275)
+- Each workflow run step's conversation title names its Agent ("Budget reader · Proposal review"), and the top nav shows the name only once (#2214, #2216)
+- AgentCore Runtime updates that change nothing no longer cut a new Runtime version: `platform.yml` stops re-sending the live image (#2240)
+
+### 🐛 Fixed
+
+- **`knowledge_files` no longer refuses the users of a PUBLIC Agent** ("You don't have access to this assistant's Knowledge"). It now resolves access through the same check that admitted the turn (#2300)
+- **Source verification no longer flags a correct number that the document spells out** ("Two domestic conferences" for `2`), under a new `number_word` method (#2298)
+- **Structured extraction keeps its schema enforced on models that refuse forced tool choice** (Sonnet 5.5, Opus 5.5), instead of failing with `SchemaTooComplexError` (#2291)
+- **A web-crawl knowledge base's first scheduled re-crawl re-indexes only changed pages**, not the whole site. The first crawl now stores `contentHash` (#2262)
+- **Send to *{title}* works on an answer streamed in this tab without a reload.** Live message ids drifted one behind the server after each tool round, and feedback, rewind and fork used the wrong message too (#2212)
+- The sidebar's focus rings meet 3:1 in dark mode, the user menu's ring is visible on the light sidebar, and the first nav entry's ring is no longer clipped (#2210)
+- Workflow-run fixes from dev checks: a queued step no longer starts while the page unloads (#2203). Steps stay current after a reload (#2242), and a waiting step's approval card shows in the designer's test run after a reload (#2238). The sidebar reads only runs that are still going (#2247). A run row and its first send work in a conversation with no turns (#2234), and a starting Runtime session is polled every 0.5 s (#2243). The merge starts while the run's own file is still on the composer (#2256), Start takes the run's files off the composer, and the sheet stays on screen on phones (#2260). **Stop run** stops Agent steps in every tab (#2307). Prompt-step cost rows no longer read as avoidable cache misses, and answers are no longer cut off (#2277). Stopped prompt and checklist parts are named as steps, and prompt answers render as Markdown (#2289). Two cleanups (#2315)
+
+### 🔒 Security
+
+- **Every Code Interpreter tool now runs in one interpreter with no network path out.** That covers Word, Excel and PowerPoint generation, `generate_diagram_and_validate`, `analyze_spreadsheet` and Word skill scripts. The interpreter is `VPC`-mode in an isolated VPC: no gateway, NAT, endpoint or route, a security group with no egress, and DNS off. It replaces the `PUBLIC` and `SANDBOX` interpreters (#2245)
+- Generated documents now count against the user's file storage quota for every caller of `_store_document` (#2254)
+
+### 🏗️ Infrastructure
+
+- Isolated sandbox VPC (2 subnets, 2 route tables, a security group with no egress, `DeletionPolicy: Retain` on network resources) and one `VPC`-mode Code Interpreter, replacing the two old interpreters, net +8 resources, one more VPC (#2245)
+- While `CODE_SANDBOX_ENABLED` is on: a Route 53 Resolver DNS Firewall on the sandbox VPC (4 resources). While `CODE_SANDBOX_OFFICE_ENABLED` is also on: an EFS file system, its read-only access point and a seeding interpreter on its own role (about 14 resources) (#2285)
+- `ContainerUri` is no longer an SSM-resolved template parameter, and `CDK_AGENTCORE_RUNTIME_GENERATION` is forwarded in `platform.yml` (#2240)
+- New `CDK_*_ENABLED` variables forwarded in `platform.yml`: `HANDOFF_SUGGESTIONS`, `WORKFLOW_RUNS`, `WORKFLOWS`, `PROMPT_STEPS`, `CHECKLIST_STEPS`, `AGENT_VERSION_PINNING`, `CODE_SANDBOX`, `CODE_SANDBOX_OFFICE`
+- Shipped defaults: 437/500 resources. With every opt-in flag on: 466/500 (#2326)
+
+### 📚 Docs
+
+- Kaizen research and review prep for 2026-11-20, and the 2026-11-20 efficiency review (#2198, #2297, #2196)
+- Workflow runs step 1 and step 2 outcomes recorded in their specs (#2217, #2265)
+
 ## [1.38.0] - 2026-11-19
 
 Skills follow the agentskills.io format end to end. A skill can be downloaded as a bundle, and imported from one (a `.zip` or a public GitHub path, in development). Skill files keep their folders. Word skill scripts run in a dedicated sandbox without network access and with a time limit. Skill changes are audited, and an edit that reaches other people's agents asks first. Knowledge-base citations name the document and link to the web page they came from, and can show the indexed text. MCP Apps that render from structured results draw their content and follow dark mode, Run now runs in the background, and the terminal client gains pipe mode.
