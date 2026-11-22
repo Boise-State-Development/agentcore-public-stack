@@ -305,7 +305,18 @@ async def is_session_lease_held(session_id: str, user_id: str) -> bool:
 async def request_session_cancel(session_id: str, user_id: str) -> bool:
     """Ask the turn currently holding this session's lease to stop.
 
-    Called from the app-api ``user_stopped`` path (any container). Reads the
+    The awaitable face of ``arm_session_cancel``, for the app-api ``user_stopped``
+    path; see it for the contract.
+    """
+    return arm_session_cancel(session_id, user_id)
+
+
+def arm_session_cancel(session_id: str, user_id: str) -> bool:
+    """Ask the turn currently holding this session's lease to stop (blocking IO).
+
+    The one cancel path. ``request_session_cancel`` (a conversation's own Stop)
+    and a workflow run's Stop run (one call per step conversation, each in a
+    worker thread) both arm it here. Called from app-api (any container). Reads the
     lease's current ``leaseOwner`` and stamps ``cancelRequestedFor = <owner>``
     so the running container observes it on its next heartbeat and unwinds the
     turn. Owner-scoping is the safety property: the request names the *current*

@@ -425,6 +425,100 @@ def test_stop_closes_an_approved_run_once(make_client, stores, metrics):
     assert [name for name, _ in metrics].count("WorkflowRunStopped") == 1
 
 
+def _lease(table, user_id: str, session_id: str, owner: str) -> None:
+    """A live single-flight lease row: a turn is streaming in that conversation right now."""
+    import time
+
+    table.put_item(
+        Item={
+            "PK": f"USER#{user_id}",
+            "SK": f"LEASE#{session_id}",
+            "leaseOwner": owner,
+            "leaseExpiresAt": int(time.time()) + 90,
+        }
+    )
+
+
+def _cancel_stamp(table, user_id: str, session_id: str) -> Optional[str]:
+    item = table.get_item(Key={"PK": f"USER#{user_id}", "SK": f"LEASE#{session_id}"}).get("Item")
+    return item.get("cancelRequestedFor") if item else None
+
+
+@pytest.fixture()
+def leases(table, monkeypatch):
+    monkeypatch.setenv("DYNAMODB_SESSIONS_METADATA_TABLE_NAME", TABLE)
+    return table
+
+
+def test_stop_cancels_every_step_turn_still_running_wherever_it_streams(make_client, stores, leases):
+    handoffs, _runs = stores
+    client = make_client()
+    created = _create(client, agents=("generalist", "colleague", "outsider", "fiscal")).json()
+    run_id, rows = created["run"]["runId"], created["steps"]
+    _approve(client, run_id)
+    for index, step in enumerate(rows[:3]):
+        handoffs.accept("alice", step["handoffId"], target_session_id=f"t{index}", context_edited=False, context_removed=False)
+    # t0 streams in another tab; t1 is done and the user is chatting on in it; t2 was stopped and the
+    # user continued it there; the fourth step never started. Bob has a turn on a session named t0.
+    handoffs.transition("alice", rows[1]["handoffId"], "done")
+    handoffs.transition("alice", rows[2]["handoffId"], "stopped", stoppedReason="error")
+    for session_id in ("t0", "t1", "t2"):
+        _lease(leases, "alice", session_id, f"owner-{session_id}")
+    _lease(leases, "bob", "t0", "owner-bob")
+
+    assert client.post(f"/sessions/src/workflow-runs/{run_id}/stop").status_code == 204
+
+    assert _cancel_stamp(leases, "alice", "t0") == "owner-t0"
+    assert _cancel_stamp(leases, "alice", "t2") == "owner-t2"
+    assert _cancel_stamp(leases, "alice", "t1") is None
+    assert _cancel_stamp(leases, "bob", "t0") is None
+    # Arming a cancel moves no row: each step settles from its own turn's end (user_stopped).
+    assert handoffs.get("alice", rows[0]["handoffId"]).status == "running"
+
+
+def test_a_second_stop_arms_nothing(make_client, stores, leases):
+    handoffs, _runs = stores
+    client = make_client()
+    created = _create(client).json()
+    run_id, rows = created["run"]["runId"], created["steps"]
+    _approve(client, run_id)
+    handoffs.accept("alice", rows[0]["handoffId"], target_session_id="t0", context_edited=False, context_removed=False)
+    _lease(leases, "alice", "t0", "owner-1")
+    assert client.post(f"/sessions/src/workflow-runs/{run_id}/stop").status_code == 204
+    assert _cancel_stamp(leases, "alice", "t0") == "owner-1"
+
+    _lease(leases, "alice", "t0", "owner-2")  # a later turn the user started in the step
+    assert client.post(f"/sessions/src/workflow-runs/{run_id}/stop").status_code == 204
+    assert _cancel_stamp(leases, "alice", "t0") is None
+
+
+def test_a_step_with_no_live_turn_is_left_alone(make_client, stores, leases):
+    handoffs, _runs = stores
+    client = make_client()
+    created = _create(client).json()
+    run_id, rows = created["run"]["runId"], created["steps"]
+    _approve(client, run_id)
+    handoffs.accept("alice", rows[0]["handoffId"], target_session_id="t0", context_edited=False, context_removed=False)
+    handoffs.transition("alice", rows[0]["handoffId"], "needs_input")
+
+    assert client.post(f"/sessions/src/workflow-runs/{run_id}/stop").status_code == 204
+    assert leases.get_item(Key={"PK": "USER#alice", "SK": "LEASE#t0"}).get("Item") is None
+
+
+def test_a_step_row_that_cant_be_read_never_fails_the_stop(make_client, stores, leases, monkeypatch):
+    handoffs, runs = stores
+    client = make_client()
+    run_id = _create(client).json()["run"]["runId"]
+    _approve(client, run_id)
+
+    def unreadable(*_args: Any, **_kwargs: Any):
+        raise RuntimeError("throttled")
+
+    monkeypatch.setattr(handoffs, "get", unreadable)
+    assert client.post(f"/sessions/src/workflow-runs/{run_id}/stop").status_code == 204
+    assert runs.get("alice", run_id).status == "stopped"
+
+
 def test_dismiss_cancels_the_sheet_and_every_open_step(make_client, stores, metrics):
     handoffs, runs = stores
     client = make_client()

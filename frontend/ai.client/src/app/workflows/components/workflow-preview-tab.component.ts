@@ -3,13 +3,14 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroExclamationTriangle, heroInformationCircle } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../agents/components/agent-icon.component';
-import { stepNameLabel } from '../../session/services/handoff/workflow-run-progress';
+import { fieldSetsLabel, promptWorkerLabel, stepNameLabel } from '../../session/services/handoff/workflow-run-progress';
+import { ChecklistStepIconComponent } from './checklist-step-icon.component';
 import { PromptStepIconComponent } from './prompt-step-icon.component';
 import { modelReasonCopy } from './workflow-step-tab.component';
 import { ModelService } from '../../session/services/model/model.service';
 import { WorkflowStartService } from '../../services/workflows/workflow-start.service';
 import { WorkflowTestRunService } from '../workflow-test-run.service';
-import { estimateRunInputUsd, formatEstimateUsd } from '../../session/services/handoff/workflow-run-estimate';
+import { checklistEstimate, estimateRunInputUsd, formatEstimateUsd } from '../../session/services/handoff/workflow-run-estimate';
 import { WorkflowDesignerStore } from '../workflow-designer.store';
 import { WorkflowFiles, WorkflowStepView } from '../workflow.models';
 
@@ -21,9 +22,11 @@ const FILES_LINE: Record<WorkflowFiles, string> = {
 
 interface PreviewRow {
   step: WorkflowStepView;
-  /** A prompt step (§21.3): named by its step, with its model in place of an Agent. */
+  /** A prompt step (§21.3) or a checklist step (§22.3): named by its step, with its model in place of an Agent. */
   prompt: boolean;
-  /** Why a prompt step's model can't be used, when it can't. */
+  /** A checklist step, drawn with its own mark. */
+  checklist: boolean;
+  /** Why a prompt or checklist step's model can't be used, when it can't. */
   unavailable: string;
   label: string;
   model: string;
@@ -46,7 +49,7 @@ interface PreviewRow {
 @Component({
   selector: 'app-workflow-preview-tab',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, AgentIconComponent, PromptStepIconComponent],
+  imports: [NgIcon, AgentIconComponent, PromptStepIconComponent, ChecklistStepIconComponent],
   providers: [provideIcons({ heroExclamationTriangle, heroInformationCircle })],
   template: `
     @if (!store.ref()) {
@@ -89,7 +92,9 @@ interface PreviewRow {
           <ul role="list" class="mt-3 divide-y divide-gray-200 border-y border-gray-200 dark:divide-gray-700 dark:border-gray-700">
             @for (row of rows(); track row.step.name) {
               <li class="flex items-start gap-3 py-2">
-                @if (row.prompt) {
+                @if (row.checklist) {
+                  <app-checklist-step-icon [size]="28" />
+                } @else if (row.prompt) {
                   <app-prompt-step-icon [size]="28" />
                 } @else {
                   <app-agent-icon [agentId]="row.step.agentId" [iconUrl]="row.iconUrl" [emoji]="row.emoji" [size]="28" />
@@ -98,7 +103,7 @@ interface PreviewRow {
                   <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">{{ row.label }}</p>
                   @if (row.step.agent.canRun) {
                     <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">
-                      {{ row.model }}@if (row.step.request) { · Own request }
+                      {{ row.model }}@if (row.step.request) { · {{ row.checklist ? 'Guidance' : 'Own request' }} }
                     </p>
                     @if (row.step.agent.changed && !row.prompt) {
                       <p class="text-xs/5 text-gray-700 dark:text-gray-300">
@@ -260,13 +265,17 @@ export class WorkflowPreviewTabComponent {
       const agent = step.agent;
       const model = agent.modelId ? (this.models.modelNameFor(agent.modelId) ?? agent.modelId) : 'The starter’s model';
       const rate = agent.inputPricePerMillionTokens;
-      const prompt = step.kind === 'prompt';
+      const checklist = step.kind === 'checklist';
+      const prompt = step.kind === 'prompt' || checklist;
+      const worker = promptWorkerLabel(step.model?.name || model, step.kind);
       return {
         step,
         prompt,
-        // A prompt step is called by its own name; several can share a model (§21.3).
+        checklist,
+        // A prompt or checklist step is called by its own name; several can share a model (§21.3).
         label: prompt ? stepNameLabel(step.name) : mention?.name || agent.name || 'An Agent you can’t use',
-        model: prompt ? `Prompt · ${step.model?.name || model}` : model,
+        // "Checklist · Haiku 5.5 · 4 field sets", as the sheet names it.
+        model: checklist ? `${worker} · ${fieldSetsLabel(step.fieldSets?.length ?? 0)}` : prompt ? worker : model,
         unavailable: prompt ? modelReasonCopy(step.model?.reason) : '',
         rate: typeof rate === 'number' && rate > 0 ? `$${rate.toFixed(2)} / M input tokens` : null,
         emoji: mention?.emoji ?? agent.emoji,
@@ -285,6 +294,7 @@ export class WorkflowPreviewTabComponent {
         inputPricePerMillionTokens: step.agent.inputPricePerMillionTokens ?? null,
         request: step.effectiveRequest,
         ...(step.kind === 'prompt' ? { card: false, files: step.reads.includes('files') } : {}),
+        ...(step.kind === 'checklist' ? checklistEstimate(step.agent.modelId ?? step.modelId, step.fieldSets) : {}),
       })),
       card: '',
       fileTokens: [],

@@ -17,11 +17,12 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowRight, heroChevronRight, heroMinusCircle, heroPaperClip, heroXMark } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../../agents/components/agent-icon.component';
+import { ChecklistStepIconComponent } from '../../../workflows/components/checklist-step-icon.component';
 import { PromptStepIconComponent } from '../../../workflows/components/prompt-step-icon.component';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { formatFileSize } from '../../services/handoff/handoff-prompt';
 import { MAX_SHARED_FILES } from '../../services/handoff/handoff.models';
-import { estimateRunInputUsd, formatEstimateUsd } from '../../services/handoff/workflow-run-estimate';
+import { checklistEstimate, estimateRunInputUsd, formatEstimateUsd } from '../../services/handoff/workflow-run-estimate';
 import { RunReviewStep, RunShareableFile } from '../../services/handoff/workflow-run.models';
 import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
 import {
@@ -37,7 +38,7 @@ import { ModelService } from '../../services/model/model.service';
 import { WorkflowGraphComponent } from '../../../workflows/components/workflow-graph.component';
 import { MAX_WORKFLOW_STEPS } from '../../../workflows/workflow.models';
 import { reviewGraph } from '../../services/handoff/workflow-run-graph';
-import { promptWorkerLabel, stepNameLabel } from '../../services/handoff/workflow-run-progress';
+import { fieldSetsLabel, isModelStepKind, promptWorkerLabel, stepNameLabel } from '../../services/handoff/workflow-run-progress';
 
 /** One step as the sheet renders it. */
 interface StepRow {
@@ -48,8 +49,10 @@ interface StepRow {
   emoji?: string;
   iconUrl?: string;
   ownRequest: boolean;
-  /** A prompt step (workflow-designer §21.3): one model call, no Agent, no card. */
+  /** A prompt step (workflow-designer §21.3) or a checklist step (§22.3): model calls, no Agent, no card. */
   prompt: boolean;
+  /** A checklist step: its text is guidance, never the shared request, and it is drawn with its own mark. */
+  checklist: boolean;
   /** A saved workflow's step whose Agent (or model) the starter can't use (§11, §21.3). */
   unavailable: boolean;
   /** Why, in the sheet's words. */
@@ -75,7 +78,7 @@ interface StepRow {
 @Component({
   selector: 'app-workflow-run-sheet',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, NgIcon, SpinnerComponent, AgentIconComponent, PromptStepIconComponent, WorkflowGraphComponent],
+  imports: [FormsModule, NgIcon, SpinnerComponent, AgentIconComponent, PromptStepIconComponent, ChecklistStepIconComponent, WorkflowGraphComponent],
   providers: [provideIcons({ heroArrowRight, heroChevronRight, heroMinusCircle, heroPaperClip, heroXMark })],
   host: { '(keydown.escape)': 'cancel()' },
   template: `
@@ -100,15 +103,7 @@ interface StepRow {
             <ng-icon name="heroXMark" class="size-4" aria-hidden="true" />
           </button>
         </div>
-        <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">
-          @if (hasPromptSteps() && !hasAgentSteps()) {
-            Each prompt step is one model call, in the background. You stay here.
-          } @else if (hasPromptSteps()) {
-            Each Agent starts a new conversation in the background, and each prompt step is one model call. You stay here.
-          } @else {
-            Each Agent starts a new conversation in the background. You stay here.
-          }
-        </p>
+        <p class="mt-1 text-sm/6 text-gray-600 dark:text-gray-400">{{ subtitle() }}</p>
         </div>
 
         <!-- The body scrolls between the fixed header and footer, so Start never leaves the screen. -->
@@ -141,7 +136,9 @@ interface StepRow {
               @for (row of stepRows(); track row.step.stepId) {
                 <li class="py-2">
                   <div class="flex items-center gap-3">
-                    @if (row.prompt) {
+                    @if (row.checklist) {
+                      <app-checklist-step-icon [size]="28" />
+                    } @else if (row.prompt) {
                       <app-prompt-step-icon [size]="28" />
                     } @else {
                       <app-agent-icon [agentId]="row.step.agentId" [iconUrl]="row.iconUrl" [emoji]="row.emoji" [size]="28" />
@@ -154,8 +151,9 @@ interface StepRow {
                         }
                         <p class="text-xs/5 text-state-danger-700 dark:text-state-danger-300">{{ row.unavailableCopy }}</p>
                       } @else {
-                        <p class="truncate text-xs/5 text-gray-600 dark:text-gray-400">
-                          {{ row.modelName }}@if (row.ownRequest) { · Own request }
+                        <!-- A model step's line names its kind, model and sets: it wraps on a phone rather than cut them off. -->
+                        <p class="text-xs/5 text-gray-600 dark:text-gray-400" [class.truncate]="!row.prompt" [class.break-words]="row.prompt">
+                          {{ row.modelName }}@if (row.ownRequest) { · {{ row.checklist ? 'Guidance' : 'Own request' }} }
                         </p>
                       }
                     </div>
@@ -165,7 +163,7 @@ interface StepRow {
                       class="text-sm/6 font-medium text-primary-accessible underline-offset-2 dark:text-primary-accessible-dark hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50"
                       [attr.aria-expanded]="editingStep() === row.step.stepId"
                       [attr.aria-controls]="stepEditorId(row.step.stepId)"
-                      [attr.aria-label]="'Edit the request for ' + row.label"
+                      [attr.aria-label]="(row.checklist ? 'Edit the guidance for ' : 'Edit the request for ') + row.label"
                       [disabled]="r.phase === 'starting'"
                       (click)="toggleStepEditor(row.step.stepId)"
                     >
@@ -204,7 +202,7 @@ interface StepRow {
                   @if (editingStep() === row.step.stepId) {
                     <div [id]="stepEditorId(row.step.stepId)" class="mt-2 pl-8">
                       <label [attr.for]="stepEditorId(row.step.stepId) + '-text'" class="block text-xs font-medium text-gray-700 dark:text-gray-300">
-                        Request for {{ row.label }}
+                        {{ row.checklist ? 'Guidance for' : 'Request for' }} {{ row.label }}
                       </label>
                       <textarea
                         [id]="stepEditorId(row.step.stepId) + '-text'"
@@ -213,7 +211,9 @@ interface StepRow {
                         [ngModel]="row.step.ownRequest ?? r.request"
                         (ngModelChange)="runs.setStepRequest(sessionId(), row.step.stepId, $event)"
                       ></textarea>
-                      @if (row.ownRequest) {
+                      @if (row.checklist) {
+                        <p class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">Optional. Added to every field set’s call; the shared request isn’t used.</p>
+                      } @else if (row.ownRequest) {
                         <button
                           type="button"
                           class="mt-1 text-sm/6 font-medium text-primary-accessible underline-offset-2 dark:text-primary-accessible-dark hover:underline"
@@ -514,7 +514,41 @@ export class WorkflowRunSheetComponent {
   protected readonly hasPromptSteps = computed(() => {
     const r = this.review();
     if (!r) return false;
-    return r.steps.some((step) => step.kind === 'prompt' && !step.removed) || (r.steps.length === 0 && !!r.workflow?.document.workflow.steps.some((step) => step.kind === 'prompt'));
+    return (
+      r.steps.some((step) => isModelStepKind(step.kind) && !step.removed) ||
+      (r.steps.length === 0 && !!r.workflow?.document.workflow.steps.some((step) => isModelStepKind(step.kind)))
+    );
+  });
+
+  /** Some kept step is a checklist step (§22.3): one model call per field set. */
+  private readonly hasChecklistSteps = computed(() => {
+    const r = this.review();
+    if (!r) return false;
+    return (
+      r.steps.some((step) => step.kind === 'checklist' && !step.removed) ||
+      (r.steps.length === 0 && !!r.workflow?.document.workflow.steps.some((step) => step.kind === 'checklist'))
+    );
+  });
+
+  /** What starting does, for the kinds of step the sheet holds. */
+  protected readonly subtitle = computed(() => {
+    const agents = this.hasAgentSteps();
+    const checklists = this.hasChecklistSteps();
+    const r = this.review();
+    const prompts = !!r && r.steps.some((step) => step.kind === 'prompt' && !step.removed);
+    if (!this.hasPromptSteps()) return 'Each Agent starts a new conversation in the background. You stay here.';
+    if (!checklists) {
+      return agents
+        ? 'Each Agent starts a new conversation in the background, and each prompt step is one model call. You stay here.'
+        : 'Each prompt step is one model call, in the background. You stay here.';
+    }
+    const parts = [
+      ...(agents ? ['each Agent starts a new conversation'] : []),
+      ...(prompts ? ['each prompt step is one model call'] : []),
+      'each checklist step is one model call per field set',
+    ];
+    const joined = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+    return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}, in the background. You stay here.`;
   });
 
   /** Some kept step is an Agent step, so the context card goes somewhere. */
@@ -522,7 +556,7 @@ export class WorkflowRunSheetComponent {
     const r = this.review();
     if (!r) return true;
     const kept = r.steps.filter((step) => !step.removed);
-    return kept.length === 0 || kept.some((step) => step.kind !== 'prompt');
+    return kept.length === 0 || kept.some((step) => !isModelStepKind(step.kind));
   });
 
   /** "4 Agents", or "6 steps" once a prompt step is among them. */
@@ -557,23 +591,31 @@ export class WorkflowRunSheetComponent {
       const model = step.modelId ? catalog.find((m) => m.modelId === step.modelId) : sendModel;
       const saved = step.workflowStep;
       const unavailable = !!saved?.unavailable;
-      const prompt = step.kind === 'prompt';
+      const checklist = step.kind === 'checklist';
+      const prompt = step.kind === 'prompt' || checklist;
       const modelName = (prompt ? step.agentName : '') || model?.modelName || step.modelId || 'Your selected model';
       return {
         step,
-        // Several prompt steps can share a model, so a prompt step is called by its own name, as
-        // the run's row and its result card call it, and its buttons are told apart by it.
-        label: prompt ? promptStepLabel(saved?.name, modelName) : unavailable ? `Unavailable Agent (${saved?.name})` : step.agentName,
-        // The model is named even when it can't run: the file names it to everyone.
-        modelName: prompt
-          ? [promptWorkerLabel(modelName), promptReadsLine(saved?.readsFiles ?? true, saved?.readsSteps.length ?? 0)]
+        // Several model steps can share a model, so a prompt or checklist step is called by its own
+        // name, as the run's row and its result card call it, and its buttons are told apart by it.
+        label: prompt ? promptStepLabel(saved?.name, modelName, step.kind) : unavailable ? `Unavailable Agent (${saved?.name})` : step.agentName,
+        // The model is named even when it can't run: the file names it to everyone. A checklist
+        // step says how many sets it runs instead of what it reads: it always reads the files.
+        modelName: checklist
+          ? [promptWorkerLabel(modelName, 'checklist'), fieldSetsLabel(step.fieldSets?.length ?? 0), checklistReadsLine(saved?.readsSteps.length ?? 0)]
               .filter(Boolean)
               .join(' · ')
-          : modelName,
+          : prompt
+            ? [promptWorkerLabel(modelName), promptReadsLine(saved?.readsFiles ?? true, saved?.readsSteps.length ?? 0)]
+                .filter(Boolean)
+                .join(' · ')
+            : modelName,
         emoji: agent?.emoji,
         iconUrl: agent?.iconUrl,
-        ownRequest: step.ownRequest !== null,
+        // A checklist step always has its own text (its guidance, possibly empty): only a written one is noted.
+        ownRequest: checklist ? !!step.ownRequest?.trim() : step.ownRequest !== null,
         prompt,
+        checklist,
         unavailable,
         unavailableCopy: saved?.unavailableReason ?? "You can't use this step's Agent. Remove the step, or ask its owner to share it.",
         stepName: saved?.name,
@@ -636,8 +678,10 @@ export class WorkflowRunSheetComponent {
           ? (step.inputPricePerMillionTokens ?? null)
           : (sendModel?.inputPricePerMillionTokens ?? null),
         request: stepRequest(r, step),
-        // A prompt step gets no card, and the files only when it reads them (§21.3).
+        // A prompt step gets no card, and the files only when it reads them (§21.3). A checklist
+        // step makes one call per set, sharing its model's one cached copy of the files (§22.3).
         ...(step.kind === 'prompt' ? { card: false, files: step.workflowStep?.readsFiles ?? true } : {}),
+        ...(step.kind === 'checklist' ? checklistEstimate(step.modelId, step.fieldSets) : {}),
       })),
       card: r.cardRemoved ? '' : r.card,
       fileTokens: r.fileIds.map((id) => byId.get(id)?.estimatedTokens ?? null),
@@ -832,13 +876,18 @@ export function changedLine(publishedVersion: number | undefined, runsDraft: boo
 
 /** A step as the sheet names it when another's Remove takes it too. */
 function readerLabel(step: RunReviewStep): string {
-  if (step.kind === 'prompt') return promptStepLabel(step.workflowStep?.name, step.agentName);
+  if (isModelStepKind(step.kind)) return promptStepLabel(step.workflowStep?.name, step.agentName, step.kind);
   return step.agentName || step.workflowStep?.name || 'a step';
 }
 
-/** A prompt step on the sheet: its own name, or "Prompt · {model}" when the file kept none. */
-export function promptStepLabel(stepName: string | undefined, modelName: string | undefined): string {
-  return stepNameLabel(stepName) || promptWorkerLabel(modelName);
+/** A prompt or checklist step on the sheet: its own name, or "Prompt · {model}" when the file kept none. */
+export function promptStepLabel(stepName: string | undefined, modelName: string | undefined, kind?: string): string {
+  return stepNameLabel(stepName) || promptWorkerLabel(modelName, kind);
+}
+
+/** What a checklist step reads besides the files it always reads: "reads 2 results", or nothing. */
+export function checklistReadsLine(results: number): string {
+  return results ? `reads ${results} ${results === 1 ? 'result' : 'results'}` : '';
 }
 
 /**

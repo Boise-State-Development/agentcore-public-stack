@@ -29,15 +29,19 @@ import {
 } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../agents/components/agent-icon.component';
+import { ChecklistStepIconComponent } from './checklist-step-icon.component';
 import { PromptStepIconComponent } from './prompt-step-icon.component';
 import { RunStepState } from '../../session/services/handoff/workflow-run-progress';
 
 /** One step's card as the graph draws it. Everything it says is in text, never colour alone. */
 export interface GraphStepCard {
   key: string;
-  /** `prompt` for a prompt step (workflow-designer §21.3), drawn with its own mark; absent for an Agent step. */
-  kind?: 'prompt';
-  /** The Agent's name, "Choose an Agent", or a prompt step's "Prompt · Haiku 5.5". */
+  /**
+   * `prompt` for a prompt step (workflow-designer §21.3), `checklist` for a checklist step (§22.3),
+   * each drawn with its own mark; absent for an Agent step.
+   */
+  kind?: 'prompt' | 'checklist';
+  /** The Agent's name, "Choose an Agent", or a model step's own name. */
   title: string;
   /** "Agent · Sonnet 5.5". */
   meta: string;
@@ -123,7 +127,7 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
 @Component({
   selector: 'app-workflow-graph',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, NgTemplateOutlet, AgentIconComponent, PromptStepIconComponent],
+  imports: [NgIcon, NgTemplateOutlet, AgentIconComponent, PromptStepIconComponent, ChecklistStepIconComponent],
   providers: [
     provideIcons({
       heroArrowsPointingIn,
@@ -242,6 +246,8 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                         <span class="relative shrink-0">
                           @if (card.kind === 'prompt') {
                             <app-prompt-step-icon [size]="28" />
+                          } @else if (card.kind === 'checklist') {
+                            <app-checklist-step-icon [size]="28" />
                           } @else if (card.agentId) {
                             <app-agent-icon [agentId]="card.agentId" [iconUrl]="card.iconUrl" [emoji]="card.emoji" [size]="28" />
                           }
@@ -267,6 +273,8 @@ export function fitScale(graph: { width: number; height: number }, canvas: { wid
                     >
                       @if (card.kind === 'prompt') {
                         <app-prompt-step-icon [size]="28" />
+                      } @else if (card.kind === 'checklist') {
+                        <app-checklist-step-icon [size]="28" />
                       } @else if (card.agentId) {
                         <app-agent-icon [agentId]="card.agentId" [iconUrl]="card.iconUrl" [emoji]="card.emoji" [size]="28" />
                       } @else {
@@ -427,12 +435,12 @@ export class WorkflowGraphComponent {
   readonly concurrency = 4;
 
   /**
-   * The cards that take one of the run's `concurrency` slots: Agent steps. A prompt step takes
-   * none (§21.3): a run's ready prompt steps go together on one model invocation, so a stage of
+   * The cards that take one of the run's `concurrency` slots: Agent steps. A prompt or checklist step
+   * takes none (§21.3, §22.3): a run's ready model steps go together on one invocation, so a stage of
    * five prompt steps does not run "4 at once".
    */
   protected agentStepCount(stage: readonly GraphStepCard[]): number {
-    return stage.filter((card) => card.kind !== 'prompt').length;
+    return stage.filter((card) => !card.kind).length;
   }
   /** `run` draws a run's status on the graph (§7 D4); `design` is the editable canvas. */
   readonly mode = input<GraphMode>('design');
@@ -550,8 +558,8 @@ export class WorkflowGraphComponent {
   }
 
   protected accessibleName(card: GraphStepCard, stageIndex: number): string {
-    // A prompt step's meta names its model ("Prompt · Haiku 5.5"), which its title doesn't.
-    const kind = card.kind === 'prompt' ? card.meta : 'Agent step';
+    // A model step's meta names its kind and model ("Checklist · Haiku 5.5 · 4 field sets"), which its title doesn't.
+    const kind = card.kind ? card.meta : 'Agent step';
     const parts = [card.title, kind, `stage ${stageIndex + 1}`, card.readsLabel];
     if (card.warning) parts.push(card.warning);
     return parts.join(', ');

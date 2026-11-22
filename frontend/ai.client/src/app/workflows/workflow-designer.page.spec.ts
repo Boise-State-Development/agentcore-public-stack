@@ -18,6 +18,7 @@ import { TestRunRecord, WorkflowTestRunService } from './workflow-test-run.servi
 import { WorkflowDocument, WorkflowView, WorkflowWrite } from './workflow.models';
 import { WorkflowStartService } from '../services/workflows/workflow-start.service';
 import { WorkflowsApiService } from '../services/workflows/workflows-api.service';
+import { MySkillService } from '../customize/skills/services/my-skill.service';
 
 const AGENTS: MentionableAgent[] = [
   { agentId: 'AST-gen', name: 'Generalist', emoji: '🧭', group: 'own' },
@@ -638,6 +639,189 @@ describe('WorkflowDesignerPage', () => {
         reads: ['request', 'files'],
         request: 'List the budget risks.',
       });
+    });
+  });
+  describe('checklist steps (PR-D.7c)', () => {
+    const MODELS = [
+      { modelId: 'us.model-a', modelName: 'Model A', provider: 'bedrock', inputModalities: ['TEXT', 'IMAGE'], outputModalities: ['TEXT'] },
+      { modelId: 'us.micro', modelName: 'Micro', provider: 'bedrock', inputModalities: ['TEXT'], outputModalities: ['TEXT'] },
+    ];
+    let getSkill: ReturnType<typeof vi.fn>;
+
+    function on(flags: { checklistSteps: boolean; fieldSetAuthoring?: boolean }): void {
+      TestBed.overrideProvider(FEATURES, {
+        useValue: { ...environment.features, promptSteps: true, fieldSetAuthoring: false, ...flags },
+      });
+      TestBed.overrideProvider(ModelService, {
+        useValue: {
+          modelNameFor: (id: string) => MODELS.find((m) => m.modelId === id)?.modelName ?? null,
+          availableModels: signal(MODELS),
+        },
+      });
+      const ref = (filename: string, kind = 'reference', path?: string) => ({ filename, kind, path: path ?? filename });
+      getSkill = vi.fn().mockResolvedValue({
+        resources: [
+          ref('field-set.budget.md'),
+          ref('field-set.compliance.md'),
+          ref('workflow.proposal-review.md'),
+          ref('notes.md'),
+          // A same-named file in a subfolder is an ordinary file, not a set.
+          ref('field-set.nested.md', 'reference', 'old/field-set.nested.md'),
+        ],
+      });
+      TestBed.overrideProvider(MySkillService, { useValue: { getSkill } });
+    }
+
+    function checklistDoc(sets: { name: string; canRun?: boolean; title?: string; fieldCount?: number; reason?: 'missing' | 'list_field' }[]): WorkflowDocument {
+      return doc({
+        steps: [
+          ...view().steps,
+          {
+            name: 'compliance_audit',
+            kind: 'checklist',
+            agentId: '',
+            modelId: 'us.model-a',
+            reads: ['files'],
+            effectiveRequest: '',
+            agent: { ...AGENT_VIEW, name: 'Model A', modelId: 'us.model-a' },
+            model: { canRun: true, modelId: 'us.model-a', name: 'Model A' },
+            fieldSets: sets.map((set) => ({ canRun: true, ...set })),
+            calls: sets.length,
+          },
+        ],
+      });
+    }
+
+    it('offers no checklist step while the flag is off, and reads no field sets', async () => {
+      on({ checklistSteps: false });
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Add step to stage 1').click();
+      await settle();
+      expect(el.querySelector('#wf-kind-prompt')).not.toBeNull();
+      expect(el.querySelector('#wf-kind-checklist')).toBeNull();
+      expect(getSkill).not.toHaveBeenCalled();
+    });
+
+    it('Add step offers Checklist: a model, the skill’s sets in order, guidance, and the files it must read', async () => {
+      on({ checklistSteps: true, fieldSetAuthoring: true });
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      expect(getSkill).toHaveBeenCalledWith('SKL-1');
+      button('Add step to stage 1').click();
+      await settle();
+      (el.querySelector('#wf-kind-checklist') as HTMLInputElement).click();
+      await settle();
+
+      // The same model rule as a prompt step: a text-only model can't be sent the files it reads.
+      const micro = [...el.querySelectorAll<HTMLInputElement>('input[name="wf-model"]')].find((input) => input.value === 'us.micro')!;
+      expect(micro.disabled).toBe(true);
+      expect(el.textContent).toContain('Choose at least one field set.');
+      expect(el.textContent).toContain('New checklist step needs a model and a field set.');
+      // The files are required, and the form says so rather than let the server refuse it.
+      const files = [...el.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((input) => input.getAttribute('aria-describedby') === 'wf-files-required')!;
+      expect(files.checked).toBe(true);
+      expect(files.disabled).toBe(true);
+      expect(el.querySelector('#wf-files-required')?.textContent).toContain('Required');
+
+      // Only top-level field-set files are offered, by their names.
+      const adds = [...el.querySelectorAll('[data-testid="wf-skill-sets"] button')].map((b) => b.getAttribute('aria-label') ?? b.textContent!.trim());
+      expect(adds).toEqual(['Add the field set budget', 'Add the field set compliance', 'Refresh the list']);
+      // The editor opens in a new tab, so the unsaved draft stays as it is.
+      const create = el.querySelector('[data-testid="wf-skill-sets"] a[href="/customize/skills/SKL-1/field-sets/new"]')!;
+      expect(create.getAttribute('target')).toBe('_blank');
+      expect(create.textContent).toContain('(opens in a new tab)');
+
+      ([...el.querySelectorAll<HTMLInputElement>('input[name="wf-model"]')].find((input) => input.value === 'us.model-a')!).click();
+      button('Add the field set compliance').click();
+      await settle();
+      button('Add the field set budget').click();
+      await settle();
+      expect(announce).toHaveBeenCalledWith('budget added. 2 field sets on this step', 'polite');
+      const chosen = () => [...el.querySelectorAll('[data-testid="wf-chosen-sets"] li')].map((li) => li.textContent!.replace(/\s+/g, ' ').trim());
+      expect(chosen()[0]).toContain('compliance');
+      expect(chosen()[1]).toContain('budget');
+      // Each set links to the field-set editor under its own flag.
+      expect(el.querySelector('[data-testid="wf-chosen-sets"] a[href="/customize/skills/SKL-1/field-sets/compliance"]')).not.toBeNull();
+
+      // Move up keeps focus on the control that moved it, or the other one at the end.
+      button('Move budget up').click();
+      await settle();
+      expect(chosen()[0]).toContain('budget');
+      expect(document.activeElement?.id).toBe('wf-set-down-budget');
+      expect(announce).toHaveBeenCalledWith('budget moved to position 1 of 2', 'polite');
+
+      const name = el.querySelector('#wf-step-name') as HTMLInputElement;
+      name.value = 'Compliance audit';
+      name.dispatchEvent(new Event('change'));
+      const guidance = el.querySelector('#wf-guidance') as HTMLTextAreaElement;
+      guidance.value = 'Treat a missing section as a fail.';
+      guidance.dispatchEvent(new Event('input'));
+      await settle();
+
+      const card = el.querySelector('[data-node-id][aria-pressed="true"]')!;
+      expect(card.getAttribute('aria-label')).toBe('Compliance audit, Checklist · Model A · 2 field sets, stage 1, reads the request and the files');
+
+      service.write.mockResolvedValue({ ok: true, document: doc({ version: 4 }, true) });
+      button('Save workflow').click();
+      await settle();
+      const body = service.write.mock.calls[0][1] as WorkflowWrite;
+      expect(body.steps[body.steps.length - 1]).toEqual({
+        name: 'compliance_audit',
+        kind: 'checklist',
+        agentId: '',
+        modelId: 'us.model-a',
+        reads: ['request', 'files'],
+        request: 'Treat a missing section as a fail.',
+        fieldSets: ['budget', 'compliance'],
+      });
+    });
+
+    it('on a new workflow, makes its skill on request so a checklist step can pick sets before the first save', async () => {
+      on({ checklistSteps: true });
+      TestBed.overrideProvider(Location, { useValue: { replaceState, path: () => '/workflows/new' } });
+      service.create.mockResolvedValue(doc({ skillId: 'SKL-new', name: 'untitled', version: 1, steps: [], request: '' }));
+      await open({});
+      button('Add step to stage 1').click();
+      await settle();
+      (el.querySelector('#wf-kind-checklist') as HTMLInputElement).click();
+      await settle();
+      expect(getSkill).not.toHaveBeenCalled();
+      expect(button('Save workflow').disabled).toBe(true);
+
+      button('Create the workflow now').click();
+      await settle();
+      expect(service.create).toHaveBeenCalledWith({ title: 'Untitled workflow' });
+      // Only the carrier: the draft isn't written, and stays unsaved.
+      expect(service.write).not.toHaveBeenCalled();
+      expect(el.textContent).toContain('Unsaved changes');
+      expect(replaceState).toHaveBeenCalledWith('/workflows/SKL-new/untitled');
+      expect(getSkill).toHaveBeenCalledWith('SKL-new');
+      expect(announce).toHaveBeenCalledWith('Workflow created. Add field sets to its skill, then save.', 'polite');
+      await settle();
+      expect(el.querySelector('[data-testid="wf-skill-sets"] button[aria-label="Add the field set budget"]')).not.toBeNull();
+    });
+
+    it('opens a saved checklist step with its sets as the server read them, and says what can’t run', async () => {
+      on({ checklistSteps: true });
+      const saved = checklistDoc([
+        { name: 'compliance', title: 'Compliance', fieldCount: 6 },
+        { name: 'budget', canRun: false, reason: 'list_field' },
+      ]);
+      service.read.mockResolvedValue({ ok: true, document: saved });
+      service.validate.mockResolvedValue(saved);
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      const card = [...el.querySelectorAll('[data-node-id]')].find((c) => c.getAttribute('aria-label')?.startsWith('Compliance audit'))!;
+      expect(card.getAttribute('aria-label')).toContain('Checklist · Model A · 2 field sets');
+      expect(card.textContent).toContain('A field set can’t run');
+      (card as HTMLButtonElement).click();
+      await settle();
+      const chosen = [...el.querySelectorAll('[data-testid="wf-chosen-sets"] li')].map((li) => li.textContent!.replace(/\s+/g, ' ').trim());
+      expect(chosen[0]).toContain('Compliance');
+      expect(chosen[0]).toContain('6 fields');
+      expect(chosen[1]).toContain('Has a list field, which a checklist step can’t fill yet.');
+      // No field-set editor link while its own flag is off.
+      expect(el.querySelector('[data-testid="wf-chosen-sets"] a')).toBeNull();
+      // Every set the skill holds is already on the step.
+      expect(el.textContent).toContain('Every field set in this workflow’s skill is on this step.');
     });
   });
 });

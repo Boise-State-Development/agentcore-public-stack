@@ -427,4 +427,48 @@ describe('WorkflowRunService, for a saved workflow', () => {
     expect(put.request.body.steps[1]).toMatchObject({ name: 'budget', kind: 'prompt', agentId: '', modelId: 'us.anthropic.claude-haiku-5-5' });
     put.flush({ ...document, written: true });
   });
+  it('a checklist step lists every blocker it carries once, and Mark as reviewed keeps its sets in order (PR-D.7c)', async () => {
+    const audit = (canRun: boolean): WorkflowStepView => ({
+      ...promptSavedStep('audit', ['files'], canRun ? {} : { canRun: false, reason: 'no_access' }),
+      kind: 'checklist',
+      request: 'Treat a gap as a fail.',
+      fieldSets: [
+        { name: 'compliance', canRun: true, title: 'Compliance', fieldCount: 6 },
+        { name: 'budget', canRun, reason: canRun ? undefined : 'missing' },
+      ],
+      calls: 2,
+    });
+    const blocked = doc([savedStep('generalist', 'a1'), savedStep('colleague', 'a2'), audit(false)], {}, [
+      { code: 'model_unavailable', step: 'audit', message: "You can't use this step's model. Remove the step, or choose a model you can use" },
+      { code: 'field_set_unavailable', step: 'audit', message: "This step's field set 'budget' is no longer in the workflow's skill. Remove the step, or add the set back" },
+    ]);
+    await service.open('src', draftFor(blocked));
+    http.expectNone(RUNS);
+    const step = state.reviewFor('src')!.steps.find((s) => s.workflowStep?.name === 'audit')!;
+    expect(step).toMatchObject({ kind: 'checklist', fieldSets: [{ name: 'compliance' }, { name: 'budget' }] });
+    // A checklist step reads the files whatever its reads say: its sets are filled in from them.
+    expect(step.workflowStep?.readsFiles).toBe(true);
+    expect(step.workflowStep?.unavailableReason).toBe(
+      "You can’t use this step’s model. Remove the step to start, or ask the workflow’s owner to choose a model you can use. This step's field set 'budget' is no longer in the workflow's skill. Remove the step, or add the set back.",
+    );
+    service.cancel('src');
+
+    const ready = doc([savedStep('generalist', 'a1', { changed: true, publishedVersion: 6 }), audit(true)]);
+    const opened = service.open('src', draftFor(ready));
+    http.expectOne(RUNS).flush(created([{ name: 'generalist', agentId: 'a1' }, { name: 'audit', agentId: '' }]));
+    await opened;
+    void service.markReviewed('src', 'generalist');
+    const put = http.expectOne(WORKFLOW);
+    expect(put.request.body.steps[1]).toEqual({
+      name: 'audit',
+      kind: 'checklist',
+      agentId: '',
+      agentVersion: null,
+      modelId: 'us.anthropic.claude-haiku-5-5',
+      reads: ['files'],
+      request: 'Treat a gap as a fail.',
+      fieldSets: ['compliance', 'budget'],
+    });
+    put.flush({ ...ready, written: true });
+  });
 });

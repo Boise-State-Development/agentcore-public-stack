@@ -4,12 +4,12 @@ import { firstValueFrom } from 'rxjs';
 
 import { ConfigService } from '../../../services/config.service';
 import { ChatStateService } from '../chat/chat-state.service';
-import { HandoffView } from './handoff.models';
+import { HandoffView, isModelStep } from './handoff.models';
 import { HandoffStateService } from './handoff-state.service';
 import { WorkflowRunQueueService } from './workflow-run-queue.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
 import { WorkflowRunView } from './workflow-run.models';
-import { isPromptRunStep, stepRow } from './workflow-run-progress';
+import { isModelRunStep, stepRow } from './workflow-run-progress';
 
 /** The first wait, and the longest, between two reads of one run (milliseconds). */
 export const REFRESH_FIRST_MS = 5_000;
@@ -115,7 +115,7 @@ export class WorkflowRunRefreshService {
       if (step.removed) return false;
       const row = stepRow(step, live);
       if (!row || !SERVER_PENDING.has(row.status)) return false;
-      if (isPromptRunStep(step) || row.kind === 'prompt') {
+      if (isModelRunStep(step) || isModelStep(row)) {
         return row.status === 'running' && !this.queue.isRunning(run.runId, step.handoffId);
       }
       if (!row.targetSessionId) return false;

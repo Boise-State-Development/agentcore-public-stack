@@ -22,7 +22,7 @@ import { HandoffBriefService } from './handoff-brief.service';
 import { HandoffStateService } from './handoff-state.service';
 import { BriefFallbackReason, HandoffReview, MAX_SHARED_FILES, SHARED_FILES_RECENT_TURNS } from './handoff.models';
 import { WorkflowRunQueueService, launchOf } from './workflow-run-queue.service';
-import { agentsLabel, stepsLabel } from './workflow-run-progress';
+import { agentsLabel, isModelStepKind, stepsLabel } from './workflow-run-progress';
 import { WorkflowRunRefreshService } from './workflow-run-refresh.service';
 import { WorkflowRunResultService } from './workflow-run-result.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
@@ -143,7 +143,7 @@ export class WorkflowRunService {
       // for a run of prompt steps alone: none of them is sent the card (§21.3), so it is a model
       // call nobody reads.
       const brief =
-        this.features.handoffBrief && created.steps.some((step) => step.kind !== 'prompt') && created.excerpt
+        this.features.handoffBrief && created.steps.some((step) => !isModelStepKind(step.kind)) && created.excerpt
           ? ({ status: 'writing', text: '' } as const)
           : undefined;
       const fileRule = current.workflow?.document.workflow.files;
@@ -155,13 +155,15 @@ export class WorkflowRunService {
           (step, index): RunReviewStep => ({
             stepId: step.stepId,
             handoffId: step.handoffId,
-            ...(step.kind === 'prompt' ? { kind: 'prompt' as const } : {}),
+            ...(isModelStepKind(step.kind) ? { kind: step.kind } : {}),
             agentId: step.agentId,
             agentName: step.agentName,
-            ownRequest: step.request === created.run.request ? null : step.request,
+            // A checklist step's text is its own guidance, never the shared request (§22.3).
+            ownRequest: step.kind === 'checklist' || step.request !== created.run.request ? step.request : null,
             removed: false,
             modelId: step.modelId,
             inputPricePerMillionTokens: step.inputPricePerMillionTokens,
+            ...(step.kind === 'checklist' ? { fieldSets: step.fieldSets ?? [] } : {}),
             workflowStep: workflowStepFor(current.workflow, created.run.steps[index]?.stepName, created.run.steps[index]?.reads),
           }),
         ),
@@ -310,8 +312,8 @@ export class WorkflowRunService {
     const created = review.created;
     if (!step || !created) return '';
     const request = stepRequest(review, step);
-    // A prompt step gets no card: its message is the documents it reads, then this instruction.
-    if (step.kind === 'prompt') return request;
+    // A prompt or checklist step gets no card: its message is the documents it reads, then this text.
+    if (isModelStepKind(step.kind)) return request;
     const single: HandoffReview = {
       draft: { agentId: step.agentId, agentName: step.agentName, request },
       phase: 'ready',
@@ -507,7 +509,7 @@ export class WorkflowRunService {
   private async requestBrief(sourceSessionId: string, created: CreateWorkflowRunResponse, draft: RunDraft): Promise<void> {
     const runId = created.run.runId;
     // The brief is for the Agent steps' card, so it is asked as the first Agent step's handoff.
-    const first = created.steps.find((step) => step.kind !== 'prompt') ?? created.steps[0];
+    const first = created.steps.find((step) => !isModelStepKind(step.kind)) ?? created.steps[0];
     const handoffId = first.handoffId;
     const writing = (): RunReview | undefined => {
       const review = this.state.reviewFor(sourceSessionId);
@@ -650,12 +652,13 @@ export function stepRequest(review: RunReview, step: RunReviewStep): string {
   return (step.ownRequest ?? review.request).trim();
 }
 
-/** Start is allowed once the sheet is ready, the brief has settled and every kept step has a request. */
+/** Start is allowed once the sheet is ready, the brief has settled and every kept step has a request (or is a checklist step). */
 export function canStart(review: RunReview): boolean {
   if (review.phase !== 'ready' || review.brief?.status === 'writing') return false;
   if (!meetsFileRule(review)) return false;
   const kept = keptSteps(review);
-  return kept.length > 0 && kept.every((step) => stepRequest(review, step).length > 0);
+  // A checklist step's text is optional guidance (§22.3): its sets are what it is asked.
+  return kept.length > 0 && kept.every((step) => step.kind === 'checklist' || stepRequest(review, step).length > 0);
 }
 
 /** A saved workflow's `files` rule (none, exactly one, any) holds for the ticked files. */
@@ -676,11 +679,13 @@ function withinFileRule(fileIds: string[], rule: WorkflowFilesRule | undefined):
 /** A blocked workflow sheet's rows, before the run exists: one per step, keyed by its name. */
 function blockedSteps(workflow: RunDraftWorkflow): RunReviewStep[] {
   return workflow.document.workflow.steps.map((step): RunReviewStep => {
-    const prompt = step.kind === 'prompt';
+    const kind = step.kind === 'prompt' || step.kind === 'checklist' ? step.kind : null;
+    const prompt = kind !== null;
     return {
       stepId: `workflow-step:${step.name}`,
       handoffId: '',
-      ...(prompt ? { kind: 'prompt' as const } : {}),
+      ...(kind ? { kind } : {}),
+      ...(kind === 'checklist' ? { fieldSets: step.fieldSets ?? [] } : {}),
       agentId: step.agentId,
       // A prompt step's model is named even when the starter can't use it: it is no one's secret.
       agentName: prompt ? (step.model?.name ?? step.agent.name ?? step.modelId ?? '') : (step.agent.name ?? ''),
@@ -704,16 +709,19 @@ function workflowStepFor(
 ): RunReviewWorkflowStep | undefined {
   const step = name ? workflow?.document.workflow.steps.find((candidate) => candidate.name === name) : undefined;
   if (!step) return undefined;
-  const prompt = step.kind === 'prompt';
+  const prompt = step.kind === 'prompt' || step.kind === 'checklist';
   const reads = runReads ?? step.reads;
-  const blocker = workflow?.document.sheet.blockers.find((b) => b.step === step.name && STEP_BLOCKER_CODES.has(b.code));
+  // A checklist step can carry several (its model, and each set it can't run): each is said once.
+  const blockers = (workflow?.document.sheet.blockers ?? []).filter((b) => b.step === step.name && STEP_BLOCKER_CODES.has(b.code));
+  const reasons = [...new Set(blockers.map((blocker) => stepBlockerCopy(blocker, step.model?.reason)))];
   return {
     name: step.name,
     readsSteps: step.reads.filter((read) => read !== 'request' && read !== 'files'),
-    // Every Agent step gets the run's files; a prompt step only when it reads them (§21.3).
-    readsFiles: !prompt || reads.includes('files'),
-    unavailable: !step.agent.canRun || !!blocker,
-    ...(blocker ? { unavailableReason: stepBlockerCopy(blocker, step.model?.reason) } : {}),
+    // Every Agent step gets the run's files; a prompt step only when it reads them (§21.3), and a
+    // checklist step always does (§22.3).
+    readsFiles: !prompt || step.kind === 'checklist' || reads.includes('files'),
+    unavailable: !step.agent.canRun || blockers.length > 0,
+    ...(reasons.length ? { unavailableReason: reasons.join(' ') } : {}),
     changed: !prompt && step.agent.changed,
     publishedVersion: step.agent.publishedVersion,
     runsDraft: !prompt && step.agent.runsDraft,
@@ -726,6 +734,7 @@ function workflowStepFor(
  */
 export function stepBlockerCopy(blocker: Pick<WorkflowSheetBlocker, 'code' | 'message'>, reason?: string): string {
   if (blocker.code === 'prompt_steps_off') return 'Prompt steps aren’t available here yet. Remove the step to start.';
+  if (blocker.code === 'checklist_steps_off') return 'Checklist steps aren’t available here yet. Remove the step to start.';
   if (blocker.code === 'model_unavailable') {
     switch (reason) {
       case 'no_access':
@@ -735,7 +744,7 @@ export function stepBlockerCopy(blocker: Pick<WorkflowSheetBlocker, 'code' | 'me
       case 'retired':
         return 'This step’s model has been retired. Remove the step to start.';
       case 'unsupported':
-        return 'This step’s model can’t run this prompt step: it needs a text model that reads documents. Remove the step to start.';
+        return 'This step’s model can’t run this step: it needs a text model that reads documents. Remove the step to start.';
       default:
         return 'This step’s model couldn’t be checked. Remove the step, or try again.';
     }
@@ -773,9 +782,9 @@ export function canResume(run: WorkflowRunView): boolean {
 /** "4 Agents", "1 Agent". */
 export { agentsLabel, stepsLabel } from './workflow-run-progress';
 
-/** The toast a start says: "Handed off to 4 Agents", or "Started 6 steps" with a prompt step among them. */
+/** The toast a start says: "Handed off to 4 Agents", or "Started 6 steps" with a model step among them. */
 export function startedLabel(steps: readonly Pick<RunStepLaunch, 'kind'>[]): string {
-  const anyPrompt = steps.some((step) => step.kind === 'prompt');
+  const anyPrompt = steps.some((step) => isModelStepKind(step.kind));
   return anyPrompt ? `Started ${stepsLabel(steps.length, true)}` : `Handed off to ${agentsLabel(steps.length)}`;
 }
 

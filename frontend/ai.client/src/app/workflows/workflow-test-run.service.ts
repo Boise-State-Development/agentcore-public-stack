@@ -12,7 +12,7 @@ import { ChatStateService } from '../session/services/chat/chat-state.service';
 import { ToolInsightService } from '../session/services/chat/tool-insight.service';
 import { HandoffStateService } from '../session/services/handoff/handoff-state.service';
 import { WorkflowRunQueueService } from '../session/services/handoff/workflow-run-queue.service';
-import { RunProgress, RunStepLine, isPromptRunStep, promptStatusLine, runProgress, showsInThread } from '../session/services/handoff/workflow-run-progress';
+import { RunProgress, RunStepLine, isModelRunStep, promptStatusLine, runProgress, showsInThread } from '../session/services/handoff/workflow-run-progress';
 import { WorkflowRunStateService } from '../session/services/handoff/workflow-run-state.service';
 import { WorkflowRunView } from '../session/services/handoff/workflow-run.models';
 
@@ -161,7 +161,7 @@ export class WorkflowTestRunService {
 
   /** A step's phrase, worded as its line on the run's row words it (`handoffStatusLine`). */
   phrase(line: RunStepLine): string {
-    if (isPromptRunStep(line.step)) return promptStatusLine(line);
+    if (isModelRunStep(line.step)) return promptStatusLine(line);
     if (line.state === 'queued') return 'Queued';
     if (line.state === 'not_started') return 'Not started';
     if (!line.row?.targetSessionId) return 'Didn’t start';

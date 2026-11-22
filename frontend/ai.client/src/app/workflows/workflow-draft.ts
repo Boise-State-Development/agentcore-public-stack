@@ -14,6 +14,7 @@ import {
   INPUT_READS,
   MAX_WORKFLOW_STEPS,
   WorkflowAgentView,
+  WorkflowFieldSetView,
   WorkflowModelView,
   WorkflowDocument,
   WorkflowFiles,
@@ -30,20 +31,31 @@ export interface DraftStep {
   /** Renamed after its Agent when one is picked (a blank step's placeholder name). */
   autoName: boolean;
   /**
-   * `agent`, or `prompt`: one model call over the run's files, with no Agent (workflow-designer
-   * §21.3). A prompt step names a model instead of an Agent.
+   * `agent`; `prompt`, one model call over the run's files, with no Agent (workflow-designer
+   * §21.3); or `checklist`, one model call per field set over the run's files (§22.3). A prompt or
+   * checklist step names a model instead of an Agent.
    */
   kind: DraftStepKind;
   agentId: string | null;
   agentVersion: number | null;
-  /** A prompt step's model; null on an Agent step, and on a prompt step with none chosen yet. */
+  /** A prompt or checklist step's model; null on an Agent step, and on one with none chosen yet. */
   modelId: string | null;
   reads: string[];
-  /** This step's own request; null takes the run's. */
+  /** This step's own request; null takes the run's. A checklist step's guidance, never the run's request. */
   ownRequest: string | null;
+  /** A checklist step's field sets from the workflow's skill, in the order it runs them; empty on every other kind. */
+  fieldSets: string[];
 }
 
-export type DraftStepKind = 'agent' | 'prompt';
+export type DraftStepKind = 'agent' | 'prompt' | 'checklist';
+
+/** A step that is model calls alone, with no Agent: a prompt step or a checklist step. */
+export function isModelDraftStep(step: Pick<DraftStep, 'kind'>): boolean {
+  return step.kind === 'prompt' || step.kind === 'checklist';
+}
+
+/** Field sets one checklist step may run (`MAX_CHECKLIST_FIELD_SETS` in the parser). */
+export const MAX_CHECKLIST_FIELD_SETS = 16;
 
 export interface WorkflowDraft {
   title: string;
@@ -78,6 +90,7 @@ export function templateDraft(template: string): WorkflowDraft | null {
     modelId: null,
     reads: [...INPUT_READS],
     ownRequest: null,
+    fieldSets: [],
   });
   return {
     title: 'Proposal review',
@@ -93,18 +106,23 @@ export function draftFrom(view: WorkflowView): WorkflowDraft {
     title: view.title,
     files: view.files,
     request: view.request ?? '',
-    steps: view.steps.map((step) => ({
-      key: nextKey(),
-      name: step.name,
-      autoName: false,
-      kind: step.kind === 'prompt' ? 'prompt' : 'agent',
-      agentId: step.kind === 'prompt' ? null : step.agentId,
-      agentVersion: step.agentVersion ?? null,
-      // The file's model, never its retirement successor: a save writes back what it read.
-      modelId: step.kind === 'prompt' ? (step.modelId ?? step.model?.requestedModelId ?? step.model?.modelId ?? null) : null,
-      reads: [...step.reads],
-      ownRequest: step.request ?? null,
-    })),
+    steps: view.steps.map((step) => {
+      const kind: DraftStepKind = step.kind === 'prompt' || step.kind === 'checklist' ? step.kind : 'agent';
+      const model = kind !== 'agent';
+      return {
+        key: nextKey(),
+        name: step.name,
+        autoName: false,
+        kind,
+        agentId: model ? null : step.agentId,
+        agentVersion: step.agentVersion ?? null,
+        // The file's model, never its retirement successor: a save writes back what it read.
+        modelId: model ? (step.modelId ?? step.model?.requestedModelId ?? step.model?.modelId ?? null) : null,
+        reads: [...step.reads],
+        ownRequest: step.request ?? null,
+        fieldSets: kind === 'checklist' ? (step.fieldSets ?? []).map((set) => set.name) : [],
+      };
+    }),
     result: {
       mode: view.result.mode === 'merge' ? 'merge' : 'card',
       reads: view.result.reads ? [...view.result.reads] : null,
@@ -122,13 +140,17 @@ export function rekeyed(fresh: WorkflowDraft, previous: WorkflowDraft): Workflow
   return { ...fresh, steps: fresh.steps.map((s) => ({ ...s, key: keys.get(s.name) ?? s.key })) };
 }
 
-/** Every step has its worker (an Agent, or a prompt step's model), so the draft can be sent. */
+/** Every step has its worker (an Agent, or a model step's model and sets), so the draft can be sent. */
 export function isComplete(draft: WorkflowDraft): boolean {
   return draft.steps.every(hasWorker);
 }
 
-/** The step names what runs it: an Agent, or a prompt step's model. */
+/**
+ * The step names what runs it: an Agent, or a prompt step's model. A checklist step also needs a
+ * field set, and reads the run's files: the format refuses one without either (§22.3).
+ */
 export function hasWorker(step: DraftStep): boolean {
+  if (step.kind === 'checklist') return !!step.modelId && step.fieldSets.length > 0 && step.reads.includes('files');
   return step.kind === 'prompt' ? !!step.modelId : !!step.agentId;
 }
 
@@ -152,6 +174,18 @@ export function toWrite(
       if (step.kind === 'prompt') {
         // The model is the step's worker; the file writes it on the step's `Worker:` line.
         return { name: step.name, kind: 'prompt', agentId: '', modelId: step.modelId as string, reads: [...step.reads], request };
+      }
+      if (step.kind === 'checklist') {
+        // The file writes the sets on the section's `Field sets:` line, and the request after it as guidance.
+        return {
+          name: step.name,
+          kind: 'checklist',
+          agentId: '',
+          modelId: step.modelId as string,
+          reads: [...step.reads],
+          request,
+          fieldSets: [...step.fieldSets],
+        };
       }
       return {
         name: step.name,
@@ -181,11 +215,13 @@ export function sameDraft(a: WorkflowDraft, b: WorkflowDraft): boolean {
     steps: d.steps.map((s) => ({
       name: s.name,
       kind: s.kind,
-      agentId: s.kind === 'prompt' ? null : s.agentId,
-      agentVersion: s.kind === 'prompt' ? null : s.agentVersion,
-      modelId: s.kind === 'prompt' ? s.modelId : null,
+      agentId: isModelDraftStep(s) ? null : s.agentId,
+      agentVersion: isModelDraftStep(s) ? null : s.agentVersion,
+      modelId: isModelDraftStep(s) ? s.modelId : null,
       reads: [...s.reads].sort(),
       ownRequest: s.ownRequest?.trim() || null,
+      // Authored order is what the step runs, so it is compared as is.
+      fieldSets: s.kind === 'checklist' ? [...s.fieldSets] : [],
     })),
     result: { mode: d.result.mode, reads: d.result.reads, instruction: d.result.instruction?.trim() || null },
   });
@@ -293,6 +329,7 @@ export function addStep(draft: WorkflowDraft, stage = 0): { draft: WorkflowDraft
     modelId: null,
     reads: [...INPUT_READS, ...before],
     ownRequest: null,
+    fieldSets: [],
   };
   return { draft: { ...draft, steps: [...draft.steps, step] }, key };
 }
@@ -370,7 +407,7 @@ export function removeStep(draft: WorkflowDraft, key: string): WorkflowDraft {
  */
 export function chooseAgent(draft: WorkflowDraft, key: string, agentId: string, agentName: string): WorkflowDraft {
   const step = draft.steps.find((s) => s.key === key);
-  if (!step || step.kind === 'prompt' || step.agentId === agentId) return draft;
+  if (!step || isModelDraftStep(step) || step.agentId === agentId) return draft;
   const taken = draft.steps.filter((s) => s.key !== key).map((s) => s.name);
   const name = step.autoName ? stepNameFor(agentName, taken) : step.name;
   const rename = (read: string) => (read === step.name ? name : read);
@@ -384,24 +421,61 @@ export function chooseAgent(draft: WorkflowDraft, key: string, agentId: string, 
 }
 
 /**
- * Make a step an Agent step or a prompt step (§21.3). Its reads and request are kept; the worker
- * of the old kind is cleared, so the step is complete again once the new kind's is chosen. A step
+ * Make a step an Agent step, a prompt step (§21.3) or a checklist step (§22.3). Its reads and
+ * request are kept; the worker of the old kind is cleared, so the step is complete again once the
+ * new kind's is chosen. A prompt step's model carries over to a checklist step and back, since both
+ * run on one. A checklist step always reads the run's files, so becoming one ticks them. A step
  * still on its placeholder name takes the new kind's placeholder.
  */
 export function setStepKind(draft: WorkflowDraft, key: string, kind: DraftStepKind): WorkflowDraft {
   const step = draft.steps.find((s) => s.key === key);
   if (!step || step.kind === kind) return draft;
-  const next = { ...step, kind, agentId: null, agentVersion: null, modelId: null };
+  const keepModel = isModelDraftStep(step) && kind !== 'agent';
+  const reads = kind === 'checklist' && !step.reads.includes('files') ? [...step.reads, 'files'] : step.reads;
+  const next: DraftStep = {
+    ...step,
+    kind,
+    agentId: null,
+    agentVersion: null,
+    modelId: keepModel ? step.modelId : null,
+    reads,
+    fieldSets: kind === 'checklist' ? step.fieldSets : [],
+  };
   const changed = { ...draft, steps: draft.steps.map((s) => (s.key === key ? next : s)) };
   // Still on its placeholder name: it takes the new kind's, and stays a placeholder.
-  return step.autoName ? renamed(changed, key, kind === 'prompt' ? 'prompt' : 'step') : changed;
+  return step.autoName ? renamed(changed, key, kind === 'agent' ? 'step' : kind) : changed;
 }
 
-/** Give a prompt step its model. Its name stays: several prompt steps can share one model. */
+/** Give a prompt or checklist step its model. Its name stays: several such steps can share one model. */
 export function choosePromptModel(draft: WorkflowDraft, key: string, modelId: string): WorkflowDraft {
   const step = draft.steps.find((s) => s.key === key);
-  if (!step || step.kind !== 'prompt' || step.modelId === modelId) return draft;
+  if (!step || !isModelDraftStep(step) || step.modelId === modelId) return draft;
   return { ...draft, steps: draft.steps.map((s) => (s.key === key ? { ...s, modelId } : s)) };
+}
+
+/**
+ * Add a field set to a checklist step (at the end: authored order is the order it runs) or take it
+ * off. Never past `MAX_CHECKLIST_FIELD_SETS`, and never twice, both of which the parser refuses.
+ */
+export function toggleFieldSet(draft: WorkflowDraft, key: string, name: string): WorkflowDraft {
+  const step = draft.steps.find((s) => s.key === key);
+  if (!step || step.kind !== 'checklist') return draft;
+  const has = step.fieldSets.includes(name);
+  if (!has && step.fieldSets.length >= MAX_CHECKLIST_FIELD_SETS) return draft;
+  const fieldSets = has ? step.fieldSets.filter((n) => n !== name) : [...step.fieldSets, name];
+  return { ...draft, steps: draft.steps.map((s) => (s.key === key ? { ...s, fieldSets } : s)) };
+}
+
+/** Move one of a checklist step's field sets up or down; the same draft at an end. */
+export function moveFieldSet(draft: WorkflowDraft, key: string, name: string, delta: -1 | 1): WorkflowDraft {
+  const step = draft.steps.find((s) => s.key === key);
+  if (!step || step.kind !== 'checklist') return draft;
+  const at = step.fieldSets.indexOf(name);
+  const to = at + delta;
+  if (at < 0 || to < 0 || to >= step.fieldSets.length) return draft;
+  const fieldSets = [...step.fieldSets];
+  [fieldSets[at], fieldSets[to]] = [fieldSets[to], fieldSets[at]];
+  return { ...draft, steps: draft.steps.map((s) => (s.key === key ? { ...s, fieldSets } : s)) };
 }
 
 /**
@@ -431,20 +505,33 @@ export function updateStep(draft: WorkflowDraft, key: string, patch: Partial<Pic
   return { ...draft, steps: draft.steps.map((s) => (s.key === key ? { ...s, ...patch } : s)) };
 }
 
-/** Each Agent the server last described, by id, from a document. A prompt step has none. */
+/** Each Agent the server last described, by id, from a document. A prompt or checklist step has none. */
 export function agentViews(document: WorkflowDocument | null): Map<string, WorkflowAgentView> {
   const map = new Map<string, WorkflowAgentView>();
   for (const step of document?.workflow.steps ?? []) {
-    if (step.kind !== 'prompt' && step.agentId) map.set(step.agentId, step.agent);
+    if (step.kind !== 'prompt' && step.kind !== 'checklist' && step.agentId) map.set(step.agentId, step.agent);
   }
   return map;
 }
 
-/** Each prompt step's model as the server last judged it for the caller, by the step's name. */
+/** Each prompt or checklist step's model as the server last judged it for the caller, by the step's name. */
 export function modelViews(document: WorkflowDocument | null): Map<string, WorkflowModelView> {
   const map = new Map<string, WorkflowModelView>();
   for (const step of document?.workflow.steps ?? []) {
-    if (step.kind === 'prompt' && step.model) map.set(step.name, step.model);
+    if ((step.kind === 'prompt' || step.kind === 'checklist') && step.model) map.set(step.name, step.model);
+  }
+  return map;
+}
+
+/**
+ * Each field set the server last read for a checklist step, by set name: its title, its field
+ * count, and whether it can run (§22.3). Keyed by name alone, since a set is one file in the skill
+ * whichever step names it.
+ */
+export function fieldSetViews(document: WorkflowDocument | null): Map<string, WorkflowFieldSetView> {
+  const map = new Map<string, WorkflowFieldSetView>();
+  for (const step of document?.workflow.steps ?? []) {
+    for (const set of step.fieldSets ?? []) map.set(set.name, set);
   }
   return map;
 }

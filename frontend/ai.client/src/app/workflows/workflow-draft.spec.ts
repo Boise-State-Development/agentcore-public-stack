@@ -10,7 +10,11 @@ import {
   chooseAgent,
   choosePromptModel,
   draftFrom,
+  fieldSetViews,
   isComplete,
+  MAX_CHECKLIST_FIELD_SETS,
+  moveFieldSet,
+  toggleFieldSet,
   modelViews,
   renameStep,
   setStepKind,
@@ -31,7 +35,7 @@ import { MAX_WORKFLOW_STEPS, WorkflowDocument, workflowNameFor } from './workflo
 const VIEW = { canRun: true, hasIcon: false, changed: false, runsDraft: false };
 
 function step(key: string, name: string, overrides: Partial<DraftStep> = {}): DraftStep {
-  return { key, name, autoName: false, kind: 'agent', agentId: `AST-${name}`, agentVersion: null, modelId: null, reads: ['request', 'files'], ownRequest: null, ...overrides };
+  return { key, name, autoName: false, kind: 'agent', agentId: `AST-${name}`, agentVersion: null, modelId: null, reads: ['request', 'files'], ownRequest: null, fieldSets: [], ...overrides };
 }
 
 function draft(steps: DraftStep[]): WorkflowDraft {
@@ -348,5 +352,108 @@ describe('prompt steps (workflow-designer §21.3, PR-D.6c)', () => {
     } as unknown as WorkflowDocument;
     expect([...agentViews(document).keys()]).toEqual(['AST-1']);
     expect(modelViews(document).get('budget')?.reason).toBe('no_access');
+  });
+});
+
+describe('checklist steps (PR-D.7c)', () => {
+  const checklist = (overrides: Partial<DraftStep> = {}): DraftStep =>
+    step('k1', 'audit', { kind: 'checklist', agentId: null, modelId: 'us.m', reads: ['files'], fieldSets: ['budget'], ...overrides });
+
+  it('becomes a checklist step keeping a prompt step’s model, and reads the files it must', () => {
+    const prompt = step('k1', 'budget_check', { kind: 'prompt', agentId: null, modelId: 'us.m', reads: ['request'] });
+    const next = setStepKind(draft([prompt]), 'k1', 'checklist').steps[0];
+    expect(next).toMatchObject({ kind: 'checklist', modelId: 'us.m', reads: ['request', 'files'], fieldSets: [] });
+    // From an Agent step, nothing carries over: the model is chosen afresh.
+    expect(setStepKind(draft([step('k1', 'generalist')]), 'k1', 'checklist').steps[0]).toMatchObject({ agentId: null, modelId: null });
+    // Back to an Agent step, its sets go.
+    expect(setStepKind(draft([checklist()]), 'k1', 'agent').steps[0].fieldSets).toEqual([]);
+    // A placeholder name takes the kind's.
+    const blank = addStep(blankDraft())!;
+    expect(setStepKind(blank.draft, blank.key, 'checklist').steps[0].name).toBe('checklist');
+  });
+
+  it('is complete with a model, a field set and the files, and not before', () => {
+    expect(isComplete(draft([checklist()]))).toBe(true);
+    expect(isComplete(draft([checklist({ fieldSets: [] })]))).toBe(false);
+    expect(isComplete(draft([checklist({ modelId: null })]))).toBe(false);
+    expect(isComplete(draft([checklist({ reads: ['request'] })]))).toBe(false);
+  });
+
+  it('adds sets at the end, never twice or past the cap, and moves them within the step', () => {
+    let d = toggleFieldSet(draft([checklist()]), 'k1', 'compliance');
+    expect(d.steps[0].fieldSets).toEqual(['budget', 'compliance']);
+    d = moveFieldSet(d, 'k1', 'compliance', -1);
+    expect(d.steps[0].fieldSets).toEqual(['compliance', 'budget']);
+    expect(moveFieldSet(d, 'k1', 'compliance', -1)).toBe(d);
+    d = toggleFieldSet(d, 'k1', 'compliance');
+    expect(d.steps[0].fieldSets).toEqual(['budget']);
+    const full = draft([checklist({ fieldSets: Array.from({ length: MAX_CHECKLIST_FIELD_SETS }, (_, i) => `set-${i}`) })]);
+    expect(toggleFieldSet(full, 'k1', 'one-more')).toBe(full);
+    // Only a checklist step has sets.
+    const agent = draft([step('k1', 'generalist')]);
+    expect(toggleFieldSet(agent, 'k1', 'budget')).toBe(agent);
+  });
+
+  it('writes its model, sets in order and guidance, and reads them back', () => {
+    const d = draft([checklist({ fieldSets: ['compliance', 'budget'], ownRequest: 'Treat a gap as a fail.' })]);
+    expect(toWrite(d)!.steps[0]).toEqual({
+      name: 'audit',
+      kind: 'checklist',
+      agentId: '',
+      modelId: 'us.m',
+      reads: ['files'],
+      request: 'Treat a gap as a fail.',
+      fieldSets: ['compliance', 'budget'],
+    });
+    const back = draftFrom({
+      skillId: 'S',
+      name: 'w',
+      title: 'W',
+      version: 1,
+      files: 'any',
+      steps: [
+        {
+          name: 'audit',
+          kind: 'checklist',
+          agentId: '',
+          modelId: 'us.m',
+          reads: ['files'],
+          request: 'Treat a gap as a fail.',
+          effectiveRequest: 'Treat a gap as a fail.',
+          agent: { canRun: true, hasIcon: false, changed: false, runsDraft: false },
+          model: { canRun: true, modelId: 'us.m-next', requestedModelId: 'us.m' },
+          fieldSets: [{ name: 'compliance', canRun: true }, { name: 'budget', canRun: false, reason: 'missing' }],
+        },
+      ],
+      result: { mode: 'card', steps: ['audit'] },
+      fingerprint: 'f',
+      isOwned: true,
+    });
+    expect(back.steps[0]).toMatchObject({ kind: 'checklist', agentId: null, modelId: 'us.m', fieldSets: ['compliance', 'budget'] });
+  });
+
+  it('is dirty when its sets change order: the order is what it runs', () => {
+    const a = draft([checklist({ fieldSets: ['budget', 'compliance'] })]);
+    expect(sameDraft(a, moveFieldSet(a, 'k1', 'compliance', -1))).toBe(false);
+  });
+
+  it('keeps each set the server read by name, and no Agent for the step', () => {
+    const document = {
+      workflow: {
+        steps: [
+          {
+            name: 'audit',
+            kind: 'checklist',
+            agentId: '',
+            agent: { canRun: true },
+            model: { canRun: true, modelId: 'us.m' },
+            fieldSets: [{ name: 'budget', canRun: true, title: 'Budget', fieldCount: 10 }],
+          },
+        ],
+      },
+    } as unknown as WorkflowDocument;
+    expect(fieldSetViews(document).get('budget')?.fieldCount).toBe(10);
+    expect(agentViews(document).size).toBe(0);
+    expect(modelViews(document).get('audit')?.modelId).toBe('us.m');
   });
 });

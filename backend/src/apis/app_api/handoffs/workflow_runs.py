@@ -3,7 +3,7 @@
     POST /sessions/{session_id}/workflow-runs                    open a run of 2–8 Agents for review
     GET  /sessions/{session_id}/workflow-runs/{run_id}           read one, with its steps' rows
     POST /sessions/{session_id}/workflow-runs/{run_id}/approve   fix the envelope, once
-    POST /sessions/{session_id}/workflow-runs/{run_id}/stop      no queued step starts after this
+    POST /sessions/{session_id}/workflow-runs/{run_id}/stop      no queued step starts; running steps stop
     POST /sessions/{session_id}/workflow-runs/{run_id}/dismiss   cancel the sheet
     POST /sessions/{session_id}/workflow-runs/{run_id}/collect   the run's one result, once (PR-W.2)
     POST /sessions/{session_id}/workflow-runs/{run_id}/steps/{step_id}/prepare
@@ -115,6 +115,7 @@ from apis.shared.handoff.send_back import (
     write_delivery,
 )
 from apis.shared.handoff.turn import cap_context_text
+from apis.shared.sessions.session_lease import arm_session_cancel
 from apis.shared.timestamps import utc_now_iso
 from apis.shared.workflows.format import (
     FILES_NONE,
@@ -891,12 +892,17 @@ async def stop_workflow_run(
     session_id: str,
     run_id: str,
     user: User = Depends(require_workflow_runs_user),
+    store: HandoffStore = Depends(get_handoff_store),
     runs: WorkflowRunStore = Depends(get_workflow_run_store),
 ) -> Response:
-    """Stop run: mark an approved run ``stopped``, so no queued step starts after it.
+    """Stop run: mark an approved run ``stopped``, so no queued step starts after it, and stop its steps.
 
-    Running steps are stopped by the SPA's existing cooperative cancel, each as its own turn; this
-    only records that the queue is closed. Idempotent for a stopped run; 409 for one never approved.
+    Once the run row is ``stopped``, every kept Agent step whose conversation may be mid-turn gets
+    the same owner-scoped lease cancel a conversation's own Stop arms (``arm_session_cancel``), so
+    a step streaming in another tab, or in none, stops too; its turn ends ``user_stopped``, which
+    writes no inbox entry. Prompt and checklist steps stop from the run row, which the Runtime
+    polls. The SPA still cancels this tab's streams itself, which is quicker. Nothing waits on a
+    turn. Idempotent for a stopped run (a second Stop arms nothing); 409 for one never approved.
     """
     run = await _owned_run(runs, user, session_id, run_id)
     if run.status == "stopped":
@@ -904,8 +910,52 @@ async def stop_workflow_run(
     updated = await asyncio.to_thread(runs.transition, user.user_id, run_id, "stopped")
     if updated is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This run was never started")
+    await _cancel_running_steps(store, user, updated)
     emit_workflow_run_metric("WorkflowRunStopped", session_id=session_id, run_id=run_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+#: A step row in one of these may have a turn running in its conversation: ``running`` from
+#: acceptance on, and ``needs_input`` / ``stopped`` while the user answers or continues it there
+#: (a later turn moves the row only when it ends). A ``done`` step is finished and left alone.
+_STEP_STATUSES_TO_CANCEL = frozenset({"running", "needs_input", "stopped"})
+
+
+async def _cancel_running_steps(store: HandoffStore, user: User, run: WorkflowRun) -> int:
+    """Arm a cancel on each kept Agent step's conversation; how many found a live turn.
+
+    Each step's row is read from the caller's own partition and must still be this run's step
+    with a conversation, so only the caller's ``(session, user)`` leases are ever touched. A step
+    with no live lease is a no-op inside ``arm_session_cancel``. Best-effort: a failure is logged
+    and never fails the Stop, which has already closed the queue.
+    """
+    steps = [step for step in run.steps if not step.removed and not step.is_model_step]
+    if not steps:
+        return 0
+    rows = await asyncio.gather(
+        *(asyncio.to_thread(store.get, user.user_id, step.handoff_id) for step in steps),
+        return_exceptions=True,
+    )
+    targets = [
+        row.target_session_id
+        for row in rows
+        if isinstance(row, Handoff)
+        and row.run_id == run.run_id
+        and row.session_id == run.session_id
+        and row.target_session_id
+        and row.status in _STEP_STATUSES_TO_CANCEL
+    ]
+    if any(isinstance(row, BaseException) for row in rows):
+        logger.warning("Workflow run stop: a step row could not be read; its turn is left to the SPA")
+    armed = await asyncio.gather(
+        *(asyncio.to_thread(arm_session_cancel, target, user.user_id) for target in targets),
+        return_exceptions=True,
+    )
+    if any(isinstance(result, BaseException) for result in armed):
+        logger.warning("Workflow run stop: arming a step's cancel failed")
+    found = sum(1 for result in armed if result is True)
+    logger.info("Workflow run stop: armed a cancel on %d of %d step conversations", found, len(targets))
+    return found
 
 
 @router.post("/{session_id}/workflow-runs/{run_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT)

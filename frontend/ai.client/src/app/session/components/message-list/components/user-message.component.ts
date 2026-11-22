@@ -445,14 +445,14 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   /** What a part is called: its Agent, or a prompt step's own name (several can share one model). */
   protected partName(part: RunResultPartBlock): string {
     if (part.promptStep === undefined) return part.agentName;
-    return stepNameLabel(part.promptStep) || promptWorkerLabel(part.agentName);
+    return stepNameLabel(part.promptStep) || promptWorkerLabel(part.agentName, part.checklist ? 'checklist' : 'prompt');
   }
 
   /** A finished part's heading: as its block names it, or "Generalist · Prompt · Sonnet 5.5". */
   protected partTitle(part: RunResultPartBlock): string {
     if (part.promptStep === undefined) return part.block.fromTitle;
     const name = stepNameLabel(part.promptStep);
-    const worker = promptWorkerLabel(part.agentName);
+    const worker = promptWorkerLabel(part.agentName, part.checklist ? 'checklist' : 'prompt');
     return name ? `${name} · ${worker}` : worker;
   }
 
@@ -469,7 +469,10 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
     const runs = this.workflowRuns.runsFor(sessionId).map((run) => ({
       runId: run.runId,
       agentNames: run.steps.filter((step) => !step.removed).map((step) => step.agentName),
-      promptSteps: run.steps.filter((step) => !step.removed).map((step) => (step.kind === 'prompt' ? (step.stepName ?? '') : null)),
+      promptSteps: run.steps
+        .filter((step) => !step.removed)
+        .map((step) => (step.kind === 'prompt' || step.kind === 'checklist' ? (step.stepName ?? '') : null)),
+      checklistSteps: run.steps.filter((step) => !step.removed).map((step) => step.kind === 'checklist'),
     }));
     return groupRunResults(blocks, runs);
   });
