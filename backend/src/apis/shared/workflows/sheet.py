@@ -14,6 +14,11 @@ Workflows page calls startable is one run create accepts.
   §21.3): it needs a catalog row and the shared model-access rule, after retirement.
 - **The sheet's blockers** are step 1's engine limits (:func:`sheet_for`), plus a prompt step
   while ``PROMPT_STEPS_ENABLED`` is off, or on a model the caller can't run.
+- **A pinned Agent step** (workflow-designer §23, while ``AGENT_VERSION_PINNING_ENABLED`` is on):
+  a step that records a version runs that version for everyone, so the sheet judges it by the one
+  rule (``apis.shared.assistants.version_pins``) and says so (:func:`pin_views`, ``StepView.pin``).
+  A refused pin blocks Start (``agent_version_unavailable``); ``offerVersion`` is the current
+  published version, which "Use version N" moves the step to.
 - **A checklist step** (workflow-designer §22.3) is judged like a prompt step, on its model, and
   also on its field sets (:func:`field_set_views`): each must still be in the workflow's skill and
   hold no ``list`` field, since a set can change after the workflow is saved. It blocks while
@@ -32,9 +37,15 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Set, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.assistants.service import get_assistant_with_access_check
+from apis.shared.assistants.version_pins import PinRefusalReason, pin_refusal, pin_row_needed
+from apis.shared.assistants.version_repository import get_versions
 from apis.shared.auth import User
 from apis.shared.blocking_io import run_blocking
-from apis.shared.feature_flags import checklist_steps_enabled, prompt_steps_enabled
+from apis.shared.feature_flags import (
+    agent_version_pinning_enabled,
+    checklist_steps_enabled,
+    prompt_steps_enabled,
+)
 from apis.shared.handoff.runs import WORKFLOW_RUN_MIN_STEPS
 from apis.shared.models.retirement import resolve_effective_model
 from apis.shared.skills.access import resolve_accessible_skill_ids
@@ -154,6 +165,26 @@ class FieldSetView(BaseModel):
     reason: Optional[FieldSetUnavailableReason] = None
 
 
+class PinView(BaseModel):
+    """An Agent step's pinned version, judged by the pin rule as of now (workflow-designer §23.2).
+
+    Present only while ``AGENT_VERSION_PINNING_ENABLED`` is on, on an Agent step that records a
+    version and whose Agent the caller can use. ``version`` is what the step runs, for everyone.
+    ``offerVersion`` is the Agent's current published version when it differs: what "Use version
+    N" moves the step to, by the workflow PUT for an editor or by ``useVersions`` on run create for
+    this run only. Absent when nothing is published.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    version: int
+    can_run: bool = Field(..., alias="canRun")
+    reason: Optional[PinRefusalReason] = Field(
+        None, description="Why the version can't run: unpublished, above_published, never_published or missing"
+    )
+    offer_version: Optional[int] = Field(None, alias="offerVersion")
+
+
 class StepView(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -191,6 +222,10 @@ class StepView(BaseModel):
             "prompt step; absent on an Agent step, whose turn makes as many as it needs"
         ),
     )
+    pin: Optional[PinView] = Field(
+        None,
+        description="A pinned Agent step's version as the rule judges it now (§23); absent while pinning is off",
+    )
 
 
 class ResultView(BaseModel):
@@ -225,6 +260,7 @@ SheetBlockerCode = Literal[
     "model_unavailable",
     "checklist_steps_off",
     "field_set_unavailable",
+    "agent_version_unavailable",
 ]
 
 
@@ -495,6 +531,71 @@ def step_changed(step: WorkflowStep, agent: AgentView) -> bool:
     return agent.can_run and agent.published_version is not None and agent.published_version != step.agent_version
 
 
+# --- Pinned versions (workflow-designer §23) ------------------------------------------------------
+
+
+def pin_view(step: WorkflowStep, agent: AgentView, row: Any = None) -> Optional[PinView]:
+    """``step``'s pin as the rule judges it, or ``None`` when the step has none to judge.
+
+    ``row`` is the step's ``VERSION#`` row when :func:`pin_row_needed`, else ignored. An Agent the
+    caller can't use is the ``step_unavailable`` blocker's, so it gets no pin view.
+    """
+    if step.is_model_step or step.agent_version is None or not agent.can_run:
+        return None
+    published = agent.published_version
+    reason = pin_refusal(step.agent_version, published, row if pin_row_needed(step.agent_version, published) else None)
+    offer = published if published is not None and published != step.agent_version else None
+    return PinView(version=step.agent_version, can_run=reason is None, reason=reason, offer_version=offer)
+
+
+async def pin_views(workflow: Workflow, agents: Dict[str, AgentView]) -> Dict[str, PinView]:
+    """Each pinned Agent step's :class:`PinView`, keyed by step name, with one read for every row.
+
+    Empty while ``AGENT_VERSION_PINNING_ENABLED`` is off, so the sheet is exactly what it was. The
+    rows the rule needs (a pin at or below the published version) come back in one
+    ``BatchGetItem``. A read that fails reads each needed row as missing, which blocks rather
+    than runs a version nobody could check.
+    """
+    if not agent_version_pinning_enabled():
+        return {}
+    steps = [
+        step
+        for step in workflow.steps
+        if not step.is_model_step
+        and step.agent_version is not None
+        and step.agent_id in agents
+        and agents[step.agent_id].can_run
+    ]
+    refs = [
+        (step.agent_id, step.agent_version)
+        for step in steps
+        if pin_row_needed(step.agent_version, agents[step.agent_id].published_version)
+    ]
+    try:
+        rows = await get_versions(refs) if refs else {}
+    except Exception:  # noqa: BLE001 - an unreadable row is a refused pin, not an error page
+        logger.warning("Workflow: version lookup failed", exc_info=True)
+        rows = {}
+    views: Dict[str, PinView] = {}
+    for step in steps:
+        view = pin_view(step, agents[step.agent_id], rows.get((step.agent_id, step.agent_version)))
+        if view is not None:
+            views[step.name] = view
+    return views
+
+
+def _pin_blocker_message(pin: PinView) -> str:
+    if pin.reason == "unpublished":
+        return f"This Agent is no longer published, so version {pin.version} can't run. Remove the step or choose another Agent"
+    if pin.reason in ("above_published", "never_published") and pin.offer_version is not None:
+        why = "is no longer published" if pin.reason == "above_published" else "was never published"
+        return (
+            f"Version {pin.version} of this Agent {why}; version {pin.offer_version} is the current one. "
+            f"Use version {pin.offer_version}, or remove the step"
+        )
+    return f"Version {pin.version} of this Agent can't be found. Remove the step or choose another Agent"
+
+
 # --- The sheet ------------------------------------------------------------------------------------
 
 
@@ -520,6 +621,7 @@ def sheet_for(
     *,
     prompt_steps: Optional[bool] = None,
     checklist_steps: Optional[bool] = None,
+    pins: Optional[Dict[str, PinView]] = None,
 ) -> SheetView:
     """What blocks Start today, each reason once, with the step it is about.
 
@@ -536,6 +638,9 @@ def sheet_for(
     A checklist step (§22.3) blocks while ``CHECKLIST_STEPS_ENABLED`` is off (``checklist_steps``
     overrides the flag), on its model by the prompt step's rule, and on each field set
     (``field_sets``, by name) the skill no longer has, or holds a ``list`` field in.
+
+    A pinned Agent step (§23) blocks while its pin (``pins``, by step name, from :func:`pin_views`)
+    is refused, with ``agent_version_unavailable``. ``pins`` is empty while pinning is off.
     """
     blockers: List[SheetBlocker] = []
     seen: Dict[str, str] = {}
@@ -611,6 +716,11 @@ def sheet_for(
             )
         else:
             seen[step.agent_id] = step.name
+        pin = (pins or {}).get(step.name)
+        if pin is not None and not pin.can_run:
+            blockers.append(
+                SheetBlocker(code="agent_version_unavailable", step=step.name, message=_pin_blocker_message(pin))
+            )
     if len(workflow.steps) < WORKFLOW_RUN_MIN_STEPS:
         blockers.insert(
             0,
@@ -669,7 +779,8 @@ async def workflow_document(
     agents, models, sets = await asyncio.gather(
         agent_views(workflow, user), model_views(workflow, user), field_set_views(skill, workflow)
     )
-    return document_from(skill, workflow, user, agents, models, sets, written=written)
+    pins = await pin_views(workflow, agents)
+    return document_from(skill, workflow, user, agents, models, sets, pins=pins, written=written)
 
 
 def document_from(
@@ -680,9 +791,13 @@ def document_from(
     models: Optional[Dict[str, ModelView]] = None,
     field_sets: Optional[Dict[str, FieldSetView]] = None,
     *,
+    pins: Optional[Dict[str, PinView]] = None,
     written: Optional[bool] = None,
 ) -> WorkflowDocument:
-    """:func:`workflow_document` from worker views already looked up."""
+    """:func:`workflow_document` from worker views already looked up.
+
+    A pinned step runs its version for everyone, its owner included, so its ``runsDraft`` is false.
+    """
     steps = []
     for step in workflow.steps:
         model: Optional[ModelView] = None
@@ -699,7 +814,10 @@ def document_from(
             model = model_for_step(model, step)
             agent = model_as_worker(model)
         else:
-            agent = agents[step.agent_id].model_copy(update={"changed": step_changed(step, agents[step.agent_id])})
+            update: Dict[str, Any] = {"changed": step_changed(step, agents[step.agent_id])}
+            if step.name in (pins or {}):
+                update["runs_draft"] = False
+            agent = agents[step.agent_id].model_copy(update=update)
         steps.append(
             StepView(
                 name=step.name,
@@ -715,6 +833,7 @@ def document_from(
                 model=model,
                 field_sets=sets,
                 calls=step_calls(step),
+                pin=(pins or {}).get(step.name),
             )
         )
     view = WorkflowView(
@@ -734,7 +853,9 @@ def document_from(
         fingerprint=workflow_fingerprint(workflow),
         is_owned=skill.owner_id == user.user_id,
     )
-    return WorkflowDocument(workflow=view, sheet=sheet_for(workflow, agents, models, field_sets), written=written)
+    return WorkflowDocument(
+        workflow=view, sheet=sheet_for(workflow, agents, models, field_sets, pins=pins), written=written
+    )
 
 
 __all__ = [
@@ -744,6 +865,7 @@ __all__ = [
     "FieldSetView",
     "ModelUnavailableReason",
     "ModelView",
+    "PinView",
     "ResultView",
     "SheetBlocker",
     "SheetBlockerCode",
@@ -763,6 +885,8 @@ __all__ = [
     "model_as_worker",
     "model_for_step",
     "model_views",
+    "pin_view",
+    "pin_views",
     "prompt_model_view",
     "read_stored_workflow_text",
     "readable_workflow_skill",
