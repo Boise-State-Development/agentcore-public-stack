@@ -1215,6 +1215,68 @@ ambiguous document or a skill with several sets is answered with the real
 choices. The `upload_ids` description now says filenames are accepted, which
 shortened the spec by 6 tokens.
 
+**16.13 A model that refuses forced tool choice reached the wrong mechanism, and
+the label did not say so (measured on dev, 2026-11-22).** §6 and §16.9 measured
+a **forced** strict tool call on Haiku 4.5. Bedrock refuses forced choice on
+Sonnet 5.5 and Opus 5.5 (`tool_choice: type "tool" and "any" are not supported
+for this model`), and Strands 1.65's `model_info.json` lists every 5.x Claude,
+Haiku 5.5 included, as `forcedToolChoice: false`. Haiku 5.5 actually accepts
+it on Bedrock. Strands therefore never sends the forced call on any of them. It
+tries `native` (Converse `outputConfig` json_schema), then `auto`. What
+`DOCUMENT_EXTRACT_MODEL_ID` set to a 5.x model actually did:
+
+| Field set | Mechanism Strands chose | Result before the fix |
+|---|---|---|
+| no `enum` field | `native`, sent **beside** the strict tool | 2 fields worked. **14 fields refused**: "The compiled grammar is too large, which would cause performance issues", raised as `SchemaTooComplexError`, which blames the author |
+| any `enum` field | `auto` (Strands reads our `enum` with `null` and no `type` as "untyped" and skips native) | Worked, `schemaEnforced: true`. But a text answer would be parsed as JSON by Strands and still reported as enforced |
+
+Direct Converse calls on Sonnet 5.5 at 14 fields isolate the cause. Native output
+alone compiles (8 s). The strict tool alone on auto compiles (10 s). Both in one
+request, which is what Strands sends, are refused in 0.9 s. Haiku 5.5 behaves
+the same. The ceilings are the same on either path alone: 14 compiles, and 16
+(strict tool, auto) or 18 (native alone) is refused with the same message.
+
+**The fix (`extractor._build_model`):** both model builds pass
+`model_info=ModelInfo(capabilities=ModelCapabilities(native_structured_output=False))`.
+A model that accepts forcing (Haiku 4.5, the default) is unchanged and still
+tries `forced` first. A model that refuses it goes straight to `auto` with the
+**same strict tool** §16.9 measured, so `MAX_FIELDS` and the union cap carry
+over. And `schema_enforced` is now read from the answer: `True` only when the
+final stop reason is `tool_use`. A text answer is validated by Pydantic but was
+constrained by no grammar, so it is marked `schemaEnforced: false` with no
+retry. After the fix, 14-field sets with and without an `enum` ran
+`auto → tool_use`, enforced, on Sonnet, Haiku and Opus 5.5 (9/9). Pinned by
+`TestMechanismOrderOnTheInstalledSdk` and `TestEnforcementIsReadFromTheAnswer`
+in `tests/shared/test_extraction_extractor.py`.
+
+Answers to the four questions this was opened with:
+
+1. On a model that refuses forcing, the schema was enforced by native output
+   for an enum-free set (when it compiled), or by auto with the strict tool for
+   a set with an enum. It is now always auto with the strict tool.
+2. Enforced in every observed run: all 15 auto calls answered with the tool.
+   The label was not truthful by construction: a text answer would have read
+   `true`. It now reads the stop reason.
+3. D11's unenforced fallback never fired on the refusal. Strands skips forcing
+   from `model_info` without a request, and it absorbs Bedrock's refusal message
+   itself if a model it does not know refuses. The wrong failure was the
+   other one: the doubled grammar was raised as an authoring error.
+4. The limits match on the strict-tool path (14 compiles on the 5.x models,
+   16 refused). Native output alone has the same order of limit (14 compiles,
+   18 refused). Native output beside the tool is about half: 14 refused.
+
+**Found in passing, not fixed here.** On Haiku 4.5 (the forced path, the
+default), a 14-field set with no `enum` and mixed types (date, currency,
+string, number, boolean, list) is refused with the same "grammar is too large"
+message. 13 such fields compile, and 14 with two `enum` fields compile.
+§16.9's 14 was measured on one shape, so `MAX_FIELDS` is the ceiling for that
+shape, not for every 14-field set. The parse-time check does not catch the
+difference, and the author only finds out at run time.
+
+Cost of the measurement: about 40 calls, ~$0.40 in all (Sonnet 5.5 ≈ $0.18,
+Opus 5.5 ≈ $0.12, Haiku 4.5 ≈ $0.03, Haiku 5.5 < $0.01). Refused requests bill
+nothing.
+
 ---
 
 ## 17. N documents per call (Amendment 2026-10-20)
