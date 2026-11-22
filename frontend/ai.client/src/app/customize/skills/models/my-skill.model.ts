@@ -209,4 +209,4 @@ export const RESOURCE_KINDS: { value: SkillResourceKind; label: string; hint: st
 export const MAX_RESOURCE_BYTES = 1_048_576;
 
 /** Per-skill file ceiling, mirroring the backend `MAX_RESOURCES_PER_SKILL`. */
-export const MAX_RESOURCES_PER_SKILL = 50;
+export const MAX_RESOURCES_PER_SKILL = 64;

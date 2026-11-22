@@ -74,7 +74,7 @@ REFUSED_PATHS = {
     "legal//nda.md": "empty folder",
     "legal/": "empty folder",
     "nda\x00.md": "NUL",
-    "a/b/c/d/e.md": f"at most {MAX_PATH_SEGMENTS}",
+    "a/b/c/d/e/f.md": f"at most {MAX_PATH_SEGMENTS}",
     "legal/bad name!/nda.md": "not allowed",
     "legal/-rf.md": "not allowed",
     ".hidden/nda.md": "not allowed",
@@ -236,9 +236,9 @@ def test_the_path_rule_refuses_each_shape(bad, why):
 
 @pytest.mark.parametrize(
     "good",
-    ["nda.md", "legal/nda.md", "a/b/c/d.md", "v1.2/notes_x-y.md", "__init__.py", "office/helpers/__init__.py"],
+    ["nda.md", "legal/nda.md", "a/b/c/d.md", "a/b/c/d/e.md", "v1.2/notes_x-y.md", "__init__.py", "office/helpers/__init__.py"],
 )
-def test_the_path_rule_accepts_up_to_four_segments(good):
+def test_the_path_rule_accepts_up_to_five_segments(good):
     assert path_problem(good) is None
 
 
@@ -290,7 +290,7 @@ def test_the_rest_upload_refuses_each_shape(client, skill_id, bad):
 @pytest.mark.parametrize(
     "entry,reason",
     [
-        ("references/a/b/c/d/e.md", f"more than {MAX_PATH_SEGMENTS} folders deep"),
+        ("references/a/b/c/d/e/f.md", f"more than {MAX_PATH_SEGMENTS} folders deep"),
         ("references/legal//nda.md", "name is not allowed"),
         ("references/legal/ü/nda.md", "name is not allowed"),
     ],

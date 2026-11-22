@@ -282,12 +282,13 @@ class TestRefusals:
         """The cap message says where the files are, so the author knows what to leave out."""
         files = {"SKILL.md": SKILL_MD}
         files |= {f"csharp/c{i}.md": "x" for i in range(30)}
-        files |= {f"go/g{i}.md": "x" for i in range(20)}
+        files |= {f"go/g{i}.md": "x" for i in range(30)}
         files |= {f"references/r{i}.md": "x" for i in range(5)}
+        assert len(files) - 1 > MAX_RESOURCES_PER_SKILL
         with pytest.raises(BundleImportError) as e:
             load_bundle(make_zip(files))
         message = str(e.value)
-        assert "Most are in csharp/ (30), go/ (20), references/ (5)." in message
+        assert "Most are in csharp/ (30), go/ (30), references/ (5)." in message
         assert "Upload a .zip" in message
 
     def test_a_missing_skill_folder_says_how_many_more_were_found(self):
@@ -318,7 +319,7 @@ class TestSkips:
         assert skipped(b) == {"references/link.md": "symbolic link"}
         assert b.files == []
 
-    @pytest.mark.parametrize("name", ["assets/icon.svg", "assets/page.html", "schemas/a.xsd", "LICENSE"])
+    @pytest.mark.parametrize("name", ["assets/icon.svg", "assets/page.html", "schemas/a.xml", "LICENSE"])
     def test_types_off_the_allowlist_are_skipped(self, name):
         b = bundle_of({"SKILL.md": SKILL_MD, name: "<x/>"})
         assert skipped(b)[name].startswith("file type not allowed")
@@ -333,6 +334,30 @@ class TestSkips:
     def test_an_invalid_field_set_is_skipped_with_the_parser_message(self):
         b = bundle_of({"SKILL.md": SKILL_MD, "references/field-set.budget.md": "| name |\n|---|\n| x |\n"})
         assert skipped(b)["references/field-set.budget.md"].startswith("invalid field set:")
+
+    def test_an_office_skill_imports_whole_with_its_schemas(self):
+        """anthropics/skills' xlsx/docx/pptx: 39 OOXML schemas, four of them five
+        folders below scripts/, plus package markers. Every file comes across."""
+        files = {"SKILL.md": SKILL_MD, "LICENSE.txt": "license"}
+        files |= {f"scripts/office/helpers/{n}.py": "x" for n in ("__init__", "pptx_chart", "pptx_slide")}
+        files |= {f"scripts/office/validators/{n}.py": "x" for n in ("__init__", "base", "docx", "pptx")}
+        files |= {"scripts/office/validate.py": "x", "scripts/office/soffice.py": "x", "scripts/recalc.py": "x"}
+        files |= {f"scripts/office/schemas/ISO-IEC29500-4_2016/s{i}.xsd": "<xs:schema/>" for i in range(31)}
+        files |= {f"scripts/office/schemas/microsoft/m{i}.xsd": "<xs:schema/>" for i in range(4)}
+        files |= {
+            f"scripts/office/schemas/ecma/fouth-edition/opc-{n}.xsd": "<xs:schema/>"
+            for n in ("contentTypes", "coreProperties", "digSig", "relationships")
+        }
+        b = bundle_of(files)
+        assert b.skipped == []
+        assert len(b.files) == len(files) - 1 <= MAX_RESOURCES_PER_SKILL
+        by_path = {f.path: f for f in b.files}
+        rels = by_path["scripts/office/schemas/ecma/fouth-edition/opc-relationships.xsd"]
+        assert (rels.kind, rels.resource_path, rels.content_type) == (
+            "script",
+            "office/schemas/ecma/fouth-edition/opc-relationships.xsd",
+            "text/plain",
+        )
 
     def test_a_name_the_manifest_cannot_hold_is_cleaned(self):
         b = bundle_of({"SKILL.md": SKILL_MD, "references/My Notes (v2).md": "x"})

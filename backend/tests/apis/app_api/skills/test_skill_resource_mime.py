@@ -101,6 +101,12 @@ class TestResourceTypePolicy:
         for ext in ("js", "mjs", "ts", "py", "sh", "css"):
             assert resolve_upload_content_type(f"example.{ext}") == "text/plain"
 
+    def test_xml_schemas_store_and_serve_as_inert_plain_text(self):
+        """Office skills ship OOXML schemas; never stored or served as an XML type."""
+        assert resolve_upload_content_type("office/schemas/sml.xsd") == "text/plain"
+        assert safe_download_content_type("sml.xsd") == "text/plain"
+        assert resolve_upload_content_type("SML.XSD") == "text/plain"
+
     def test_ordinary_bundle_types_still_work(self):
         assert resolve_upload_content_type("forms.md") == "text/markdown"
         assert resolve_upload_content_type("data.json") == "application/json"
