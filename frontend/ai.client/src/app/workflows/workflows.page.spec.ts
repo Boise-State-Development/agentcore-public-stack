@@ -1,3 +1,4 @@
+import { provideHttpClient } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,21 +15,25 @@ describe('WorkflowsPage', () => {
   let list: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    list = vi.fn();
     TestBed.configureTestingModule({
       imports: [WorkflowsPage],
-      providers: [provideRouter([]), { provide: WorkflowsApiService, useValue: { listQuietly: list } }],
+      providers: [provideRouter([]), provideHttpClient()],
     });
+    list = vi.spyOn(TestBed.inject(WorkflowsApiService), 'listQuietly') as unknown as ReturnType<typeof vi.fn>;
   });
 
-  async function render(): Promise<HTMLElement> {
-    const fixture = TestBed.createComponent(WorkflowsPage);
-    fixture.detectChanges();
+  async function settle(fixture: ReturnType<typeof TestBed.createComponent<WorkflowsPage>>): Promise<void> {
     for (let i = 0; i < 3; i++) {
       await new Promise((resolve) => setTimeout(resolve));
       await fixture.whenStable();
       fixture.detectChanges();
     }
+  }
+
+  async function render(): Promise<HTMLElement> {
+    const fixture = TestBed.createComponent(WorkflowsPage);
+    fixture.detectChanges();
+    await settle(fixture);
     return fixture.nativeElement as HTMLElement;
   }
 
@@ -61,5 +66,26 @@ describe('WorkflowsPage', () => {
     expect(hrefs).toContain('/workflows/new?template=proposal-review');
     expect(el.textContent).toContain('No workflows yet');
     expect(el.textContent).not.toMatch(/share/i);
+  });
+
+  it('shows the kept list at once on a return visit, and refreshes it behind that copy', async () => {
+    list.mockResolvedValue([summary({ title: 'My review' })]);
+    const first = TestBed.createComponent(WorkflowsPage);
+    first.detectChanges();
+    await settle(first);
+    first.destroy();
+
+    let answer!: (value: WorkflowSummary[]) => void;
+    list.mockReturnValue(new Promise<WorkflowSummary[]>((resolve) => (answer = resolve)));
+    const again = TestBed.createComponent(WorkflowsPage);
+    again.detectChanges();
+    const el = again.nativeElement as HTMLElement;
+    expect(el.textContent).not.toContain('Loading workflows');
+    expect(el.textContent).toContain('My review');
+    expect(list).toHaveBeenCalledTimes(2);
+
+    answer([summary({ title: 'My review, renamed' })]);
+    await settle(again);
+    expect(el.textContent).toContain('My review, renamed');
   });
 });

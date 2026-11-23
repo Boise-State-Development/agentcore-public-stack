@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, resource } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -21,6 +21,9 @@ interface ListRow {
  * a skill, and a skill isn't shared person to person, so this page has no Share.
  *
  * New starts a blank draft or the one template; nothing is stored until the designer saves.
+ *
+ * The list is the service's, kept for the tab: coming back shows it at once and refreshes it
+ * behind the copy shown, so only the first visit has a "Loading" line.
  */
 @Component({
   selector: 'app-workflows-page',
@@ -56,7 +59,7 @@ interface ListRow {
           </div>
         </div>
 
-        @if (list.isLoading()) {
+        @if (!list.hasValue() && list.isLoading()) {
           <p class="text-sm/6 text-gray-600 dark:text-gray-400" role="status">Loading workflows…</p>
         } @else if (list.error()) {
           <div role="alert" class="rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-800/60 dark:bg-state-danger-900/20 dark:text-state-danger-300">
@@ -134,7 +137,11 @@ export class WorkflowsPage {
 
   protected readonly template = PROPOSAL_REVIEW_TEMPLATE;
 
-  protected readonly list = resource({ loader: () => this.workflows.listQuietly() });
+  protected readonly list = this.workflows.workflows;
+
+  constructor() {
+    this.workflows.openList();
+  }
 
   private readonly rows = computed<ListRow[]>(() =>
     (this.list.hasValue() ? this.list.value() : []).map((summary) => {
