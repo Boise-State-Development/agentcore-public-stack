@@ -600,3 +600,45 @@ def test_retried_sessions_covers_every_session_of_a_replaced_attempt():
     ]}
     assert retried_sessions(row) == ["eval-1", "eval-1b"]
     assert retried_sessions({"session_id": "eval-3"}) == []
+
+
+def _reload_case():
+    return parse_case(
+        {
+            "id": "skill_selection.reload",
+            "family": "skill_selection",
+            "turns": [{"prompt": "Use the skill."}, {"prompt": "Filler."}, {"prompt": "Use it again."}],
+            "run": {"enabled_tools": [], "enabled_skills": ["skill_creator"]},
+            "expect": {"skill": {"reloads_after_cut": ["skill_creator"]}},
+        },
+        family="skill_selection",
+    )
+
+
+class CutRunner(FakeRunner):
+    """Turn 1 loads the skill; ``cut_on`` streams a compaction event; the last turn loads it only if told to."""
+
+    def __init__(self, *, cut_on, reload):
+        super().__init__(["a", "b", "c"])
+        self.cut_on, self.reload = cut_on, reload
+
+    async def __call__(self, **kwargs):
+        result = await super().__call__(**kwargs)
+        index = len(self.calls) - 1
+        if index == 0 or (index == 2 and self.reload):
+            result.tool_trace = [ToolTraceEntry(tool_use_id=f"t{index}", name="skills",
+                                                input={"skill_name": "skill-creator"})]
+        result.events_seen = {"message_start": 1, **({"compaction": 1} if index == self.cut_on else {})}
+        return result
+
+
+@pytest.mark.asyncio
+async def test_a_reload_check_reads_every_turn_and_records_an_uncovered_pass():
+    cut = await run_sample(_reload_case(), sample=0, model_id="m", run_turn=CutRunner(cut_on=1, reload=False))
+    assert not cut["passed"] and cut["failures"] == ["did not reload skill skill_creator after a cut"]
+    assert "uncovered" not in cut
+
+    no_cut = await run_sample(_reload_case(), sample=0, model_id="m", run_turn=CutRunner(cut_on=None, reload=False))
+    assert no_cut["passed"]
+    assert no_cut["uncovered"] == ["skill.reloads_after_cut skill_creator: no cut after its activation"]
+    json.dumps(no_cut)
