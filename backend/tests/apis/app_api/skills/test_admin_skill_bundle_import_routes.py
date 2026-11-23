@@ -225,3 +225,23 @@ class TestGitHub:
             "/skills/import/preview", data={"url": "https://169.254.169.254/latest/meta-data"}
         )
         assert resp.status_code == 400
+
+
+class TestVersionHistory:
+    def test_a_reimport_whose_checkpoint_fails_is_503_and_writes_nothing(
+        self, client, monkeypatch
+    ):
+        from apis.shared.skills import history
+
+        sid = _create(client, V1).json()["skill"]["skillId"]
+        client.put(f"/skills/{sid}", json={"instructions": "edited before history"})
+        monkeypatch.setenv("SKILL_VERSION_HISTORY_ENABLED", "true")
+
+        async def broken(*args, **kwargs):
+            raise RuntimeError("s3 down")
+
+        monkeypatch.setattr(history, "capture_current", broken)
+        resp = _reimport(client, sid, V2)
+        assert resp.status_code == 503
+        assert "nothing was changed" in resp.json()["detail"]
+        assert client.get(f"/skills/{sid}").json()["instructions"] == "edited before history"

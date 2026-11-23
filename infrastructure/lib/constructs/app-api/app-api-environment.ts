@@ -482,6 +482,7 @@ export function buildAppApiEnvironment(
     // Skill bundle import: the `/skills/mine/import*` routes (a `.zip` or a
     // public GitHub path). app-api only. In development, so only "true" enables.
     SKILL_BUNDLE_IMPORT_ENABLED: config.skillBundleImport.enabled ? 'true' : 'false',
+    SKILL_VERSION_HISTORY_ENABLED: config.skillVersionHistory.enabled ? 'true' : 'false',
 
     // Assistant KB full-context mode. app-api never sends a knowledge base to a
     // model; its share is `GET /assistants/{id}/knowledge-base/mode`, which tells

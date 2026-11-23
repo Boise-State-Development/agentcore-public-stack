@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.bundle_import import ParsedBundle
+from apis.shared.skills.history import SkillCheckpointError
 from apis.shared.skills.models import SkillDefinition
 from apis.shared.skills.user_service import (
     UserSkillError,
@@ -154,6 +155,8 @@ async def reimport_skill(
             expected_bundle_hash=expected_bundle_hash,
             expected_updated_at=expected_updated_at,
         )
+    except SkillCheckpointError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except UserSkillError as e:
         raise _user_skill_error(e)
     except ValueError as e:

@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 from apis.shared.audit.models import AuditAction
 from apis.shared.auth.models import User
+from apis.shared.skills import history
 from apis.shared.skills.bundle_import import ParsedBundle
 from apis.shared.rbac.admin_service import (
     AppRoleAdminService,
@@ -36,6 +37,7 @@ from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.audit import is_no_op, record_skill_event
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.bundle_files import SkillBundleFiles
+from apis.shared.skills.versions import SNAPSHOT_FIELDS
 from apis.shared.skills.resource_store import (
     SkillResourceStore,
     get_skill_resource_store,
@@ -201,6 +203,7 @@ class SkillCatalogService:
 
         created = await self.repository.create_skill(skill)
         self.bundle_files.write_skill_md(created)
+        await self._capture(skill.skill_id, admin, "create", live=created)
         await record_skill_event(AuditAction.SKILL_CREATED, admin, skill.skill_id, after=created)
 
         logger.info(
@@ -250,10 +253,15 @@ class SkillCatalogService:
         before = await self.get_catalog_skill(skill_id)
         if before is None:
             return None
+        touches_content = bool(set(updates) & set(SNAPSHOT_FIELDS))
+        if touches_content:
+            await self._checkpoint(skill_id, admin, live=before)
 
         updated = await self.repository.update_skill(
             skill_id, updates, admin_user_id=admin.user_id
         )
+        if updated and touches_content:
+            await self._capture(skill_id, admin, "save", live=updated)
 
         if updated and not is_no_op(before, updated):
             await record_skill_event(
@@ -367,9 +375,12 @@ class SkillCatalogService:
     ) -> List[SkillResourceRef]:
         """Upload (or replace) one supporting file; see ``SkillBundleFiles.add_resource``."""
         before = await self.get_catalog_skill(skill_id)
+        # Before the write: re-uploading a filename overwrites its live key in place.
+        await self._checkpoint(skill_id, admin, live=before)
         refs = await self.bundle_files.add_resource(
             skill_id, filename, content, content_type, admin, kind=kind, path=path
         )
+        await self._capture(skill_id, admin, "file")
         await self._record_files_changed(admin, before, refs)
         return refs
 
@@ -384,7 +395,9 @@ class SkillCatalogService:
     ) -> List[SkillResourceRef]:
         """Remove one reference file from the manifest (and GC its object)."""
         before = await self.get_catalog_skill(skill_id)
+        await self._checkpoint(skill_id, admin, live=before)
         refs = await self.bundle_files.delete_resource(skill_id, filename, admin)
+        await self._capture(skill_id, admin, "file")
         await self._record_files_changed(admin, before, refs)
         return refs
 
@@ -452,6 +465,9 @@ class SkillCatalogService:
             raise SkillImportConflictError(
                 "This skill changed since you previewed the import. Review it again."
             )
+        # Fails closed: a re-import replaces everything, so it must not run
+        # unless what it replaces is already a version (spec D2).
+        await self._checkpoint(skill_id, admin, live=skill, required=True)
 
         old_refs = list(skill.resources)
         new_refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, old_refs)
@@ -471,6 +487,7 @@ class SkillCatalogService:
             raise ValueError(f"Skill '{skill_id}' not found")
         self.bundle_files.write_skill_md(updated)
         await self.bundle_files.gc_orphaned(old_refs, new_refs)
+        await self._capture(skill_id, admin, "reimport", live=updated)
         if not is_no_op(skill, updated):
             await record_skill_event(
                 AuditAction.SKILL_REFRESHED, admin, skill_id, before=skill, after=updated
@@ -507,6 +524,7 @@ class SkillCatalogService:
             await self.bundle_files.gc_orphaned(refs, [])
             raise
         self.bundle_files.write_skill_md(created)
+        await self._capture(skill_id, admin, "import", live=created)
         await record_skill_event(AuditAction.SKILL_IMPORTED, admin, skill_id, after=created)
         self._log_import(admin, skill_id, source, [], refs, created=True)
         return created
@@ -560,6 +578,44 @@ class SkillCatalogService:
                 "files_changed": sum(1 for k in set(new) & set(old) if new[k] != old[k]),
                 "files_removed": len(set(old) - set(new)),
             },
+        )
+
+    # =========================================================================
+    # Version history (docs/specs/skill-version-history.md D1/D2)
+    # =========================================================================
+
+    async def _checkpoint(
+        self,
+        skill_id: str,
+        admin: User,
+        *,
+        live: Optional[SkillDefinition] = None,
+        required: bool = False,
+    ) -> None:
+        await history.checkpoint(
+            skill_id,
+            actor=admin.user_id,
+            required=required,
+            live=live,
+            repository=self.repository,
+            resource_store=self.resource_store,
+        )
+
+    async def _capture(
+        self,
+        skill_id: str,
+        admin: User,
+        trigger: history.VersionTrigger,
+        *,
+        live: Optional[SkillDefinition] = None,
+    ) -> None:
+        await history.capture(
+            skill_id,
+            actor=admin.user_id,
+            trigger=trigger,
+            live=live,
+            repository=self.repository,
+            resource_store=self.resource_store,
         )
 
     # =========================================================================
