@@ -41,9 +41,9 @@ logger = logging.getLogger(__name__)
 CONNECT_TIMEOUT_SECONDS = 300.0
 
 # Longest gap between bytes from the Runtime. This is a *silence* limit, not a
-# total: httpx applies it to each read. The Runtime sends nothing while the
-# model thinks silently (Opus 5.5 omits its thinking by default) or a slow tool
-# runs, so it must outlast the Runtime's own model read timeout
+# total: httpx applies it to each read. The Runtime sends nothing while a slow
+# tool runs or a model thinks without streaming it (the Claude 5.x models
+# stream a summary, see `_apply_thinking_binding`), so it must outlast the Runtime's own model read timeout
 # (`RETRY_READ_TIMEOUT`, 600s) by enough for that timeout's explained error to
 # arrive. Kept equal to the chat proxy's `_PROXY_READ_TIMEOUT_SECONDS`, so a
 # headless run survives exactly the silences an attended turn survives
