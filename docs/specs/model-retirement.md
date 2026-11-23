@@ -482,13 +482,22 @@ The catalog runbook doesn't reach these; each needs a PR:
 | `Defaults.MODEL_ID` (`agents/main_agent/config/constants.py:137`) + `agents/main_agent/__init__.py:22` | Haiku 4.5 | **Every** fallback turn fails: saved-default, scheduled, harness, null `model_id` |
 | SPA `DEFAULT_MODEL` (`model.service.ts:34`) | Haiku 4.5 | Display only. It sends `null`, which lands on the row above |
 | `DEFAULT_MODELS` seed (`seed_bootstrap_data.py:233`) | Haiku 4.5 (`isDefault`), Sonnet 4.6, Nova 2 Sonic | Resurrects a deleted row; seeds a fresh stack with a dead default |
-| Title generation (`inference_api/chat/service.py:588`) | Nova Micro | Fails open → "New Conversation" |
-| Tool summaries (`tool_summaries/summarizer.py:42`) | Nova Micro | Fails open → client-side formatter |
-| Compaction summary (`AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ID`, `constants.py:197`) | Nova 2 Lite | Fails open. **Compaction stops**, and the cost goes to prompt size rather than errors |
+| Title generation (task model `session_title`) | Nova Micro | Fails open → "New Conversation" |
+| Tool summaries (task model `tool_summary`) | Nova Micro | Fails open → client-side formatter |
+| Compaction summary (task model `compaction_summary`; deploy override `AGENTCORE_MEMORY_COMPACTION_SUMMARY_MODEL_ID`) | Nova 2 Lite | Fails open. **Compaction stops**, and the cost goes to prompt size rather than errors |
 | Document digest (`DOCUMENT_DIGEST_MODEL_ID`) | — | Fails open |
 | Voice (`NOVA_SONIC_MODEL_ID`, `constants.py:242`) | Nova 2 Sonic | Voice fails; pricing also depends on the catalog row |
 | Embeddings (`kb_backend/provisioning.py:93`, CDK `managed-kb-role-construct.ts`) | Titan v2 | **Existing vectors are tied to the model.** Changing it means re-embedding every KB. A project in its own right, not a runbook step |
 | Memory role IAM (`memory-construct.ts:66`) | `anthropic.claude-*`, `amazon.nova-*` wildcards | Only matters if a successor is from another vendor |
+
+**Task models no longer need a PR.** Titles, tool summaries, compaction and
+structured extraction resolve through `apis/shared/models/task_models.py`
+(`docs/specs/admin-model-assignments.md` §8). An admin moves any of them to another
+catalog model on **Manage Models → Task models**, and a retired catalog row with
+`replacedBy` redirects them like any other model, for an assignment or a default.
+Their code defaults live in one file, `apis/shared/models/task_model_defaults.py`. The
+tab flags a default with no catalog row; that is the case the catalog cannot redirect,
+so it still needs a PR or an assignment before its EOL date.
 
 Three of these fail *open*. That is the right choice for availability, but it
 means their retirement is noticed as a quality or cost drift, never as an

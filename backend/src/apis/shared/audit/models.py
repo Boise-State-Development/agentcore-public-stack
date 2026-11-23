@@ -145,6 +145,11 @@ class AuditAction:
     # script run through ``run_code`` writes ``skill.script_run`` instead.
     SANDBOX_CODE_RUN = "sandbox.code_run"
 
+    # Task models (docs/specs/admin-model-assignments.md §4.5), target ``task_model``
+    # keyed by the slot (``session_title``, ``compaction_summary``, ...). One record per
+    # set or clear, with the model id and effort before and after.
+    TASK_MODEL_UPDATED = "task_model.updated"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -165,6 +170,7 @@ TARGET_QUOTA_PERIOD = "quota_period"
 TARGET_AWS_LIMIT_REQUEST = "aws_limit_request"
 TARGET_SKILL = "skill"
 TARGET_CONVERSATION = "conversation"
+TARGET_TASK_MODEL = "task_model"
 
 
 @dataclass

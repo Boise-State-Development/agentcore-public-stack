@@ -215,7 +215,7 @@ class TestModelWrittenSummary:
     async def test_line_survives_model_compression(self, make_session_manager, monkeypatch):
         """Over budget, the model compresses the records; the line goes on after, verbatim."""
 
-        async def fake_compress(records, budget_tokens, *, model_id, region):
+        async def fake_compress(records, budget_tokens, *, model_id, region, effort=None, send_temperature=True):
             return "Compressed narrative.", False
 
         monkeypatch.setattr(compaction_summary, "_compress", fake_compress)

@@ -1,6 +1,7 @@
 # Admin model assignments
 
-**Status:** Plan, not built. Audit taken 2026-11-13 on `develop` at `bee114fb9`.
+**Status:** PR 2 + PR 3 built together on 2026-11-23 as the **Task models** tab on Manage
+Models (§8). Audit taken 2026-11-13 on `develop` at `bee114fb9`.
 **Supersedes:** the narrower "admin-configurable model for document extraction"
 follow-up. That model is one slot here (§3, slot 1).
 
@@ -257,3 +258,43 @@ never strands an assignment.
    field), or keep an allowlist in the extraction slot?
 4. **Per-environment defaults:** should an assignment carry across environments (seeded
    by the bootstrap), or stay deliberately per deployment like the catalog?
+
+---
+
+## 8. What was built (2026-11-23)
+
+PR 2 and PR 3 shipped as one change, so no `MODEL_ASSIGNMENTS_ENABLED` flag: with nothing
+assigned every call runs exactly as before, which is the CLAUDE.md case for no flag.
+
+- **Name.** The admin surface calls them *task models*; the code is
+  `apis/shared/models/task_models.py` (registry, resolver, store, the one eligibility rule)
+  and `task_model_defaults.py` (the code defaults, the one file to watch for AWS
+  retirement notices). Routes: `GET /admin/task-models`, `PUT /admin/task-models/{slot}`
+  under `admin.models`, audited as `task_model.updated`.
+- **Slots:** `session_title`, `tool_summary`, `compaction_summary`, `document_extract`.
+  `document_digest` and `voice` are not slots yet (§4.4 option (b) still applies).
+- **Storage** as §4.1: `PK = SK = SYSTEM#TASK_MODELS`, a `slots` map of
+  `{modelId, effort?, updatedAt, updatedBy}`. The catalog scan never sees it.
+- **Effort** (new since the plan): each slot stores an optional effort level, validated
+  against the model row's `effort` param (`allowed`), sent as Anthropic
+  `output_config.effort` in `additionalModelRequestFields`. A level the row stops declaring
+  is dropped at read time.
+- **Temperature.** Titles, tool summaries and compaction send `temperature`; the Claude 5.x
+  rows declare a params map without it, and Bedrock refuses it ("`temperature` is
+  deprecated for this model", seen on dev with Haiku 5.5). A row that declares a params map
+  without `temperature` gets none (`TaskModelChoice.supports_temperature`).
+- **Read path** as §4.3, simplified: every slot runs off the TTFT path (titles and tool
+  summaries are side-channel tasks, compaction is in `update_after_turn`, extraction is a
+  tool call), so the resolver awaits the `config_cache` read (60 s TTL, single flight)
+  inside those tasks rather than serving the default on a miss. The turn-path inventory
+  records the one cold-cache `GetItem` as **concurrent** in the title task.
+- **Retirement.** Resolution follows `replacedBy` for the assignment *and* the default. A
+  default with no catalog row (Nova Micro and Nova 2 Lite on dev today) is flagged on the
+  tab, since the catalog's redirect cannot reach it.
+- **Metering (§4.6): deferred.** Titles, tool summaries and — correcting §3 — the
+  compaction summary call write no cost row today; the tab labels them *Not metered* and
+  says the cost lands on the platform. Writing `C#` rows for them (option (a)) is the next
+  PR. Extraction is metered.
+- **Extraction default.** `DOCUMENT_EXTRACT_MODEL_ID` now also reaches app-api while the
+  feature is on, so the tab shows the deployment's real default.
+

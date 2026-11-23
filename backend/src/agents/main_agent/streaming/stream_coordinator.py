@@ -3852,10 +3852,8 @@ class StreamCoordinator:
         good enough answer that no failure here is worth surfacing.
         """
         try:
-            from apis.shared.tool_summaries import (
-                get_tool_summary_store,
-                summarize_tool_batch,
-            )
+            from apis.shared.tool_summaries import get_tool_summary_store
+            from apis.shared.tool_summaries.summarizer import summarize_tool_batch
 
             summary = await summarize_tool_batch(batch.get("calls") or [])
             if not summary:

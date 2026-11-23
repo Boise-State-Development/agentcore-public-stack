@@ -116,6 +116,12 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./manage-models/manage-models.page').then(m => m.ManageModelsPage),
   },
   {
+    path: 'manage-models/tasks',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.models' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./manage-models/task-models.page').then(m => m.TaskModelsPage),
+  },
+  {
     path: 'manage-models/catalog',
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.models' } satisfies AdminScopeRouteData,

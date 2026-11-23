@@ -1122,6 +1122,11 @@ from .user_menu_links.routes import router as user_menu_links_admin_router
 
 router.include_router(user_menu_links_admin_router)
 
+# ========== Include Task Models Admin Subrouter ==========
+from .task_models.routes import router as task_models_admin_router
+
+router.include_router(task_models_admin_router)
+
 # ========== Include System Prompts Admin Subrouter ==========
 from .system_prompts.routes import router as system_prompts_admin_router
 

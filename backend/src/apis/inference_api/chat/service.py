@@ -18,6 +18,7 @@ import boto3
 from agents.main_agent.agent_types import create_agent
 from agents.main_agent.base_agent import BaseAgent
 from apis.shared.handoff.context import run_step_title
+from apis.shared.models.task_models import TaskModelSlot, resolve_task_model
 from apis.shared.sessions.metadata import update_session_title
 
 from apis.shared.security.log_sanitize import scrub_log
@@ -956,8 +957,9 @@ async def generate_conversation_title(
         logger.debug(f"Truncated input from {len(user_input)} to {MAX_INPUT_LENGTH} chars")
 
     try:
-        # Prepare request for Nova Micro
-        # us.amazon.nova-micro-v1:0 is the fastest, most cost-effective model
+        # The admin's Task models choice (Nova Micro by default). Read through the
+        # per-process config cache, inside this task, which nothing on the turn path awaits.
+        choice = await resolve_task_model(TaskModelSlot.SESSION_TITLE)
         request_body = {
             "messages": [
                 {
@@ -967,22 +969,19 @@ async def generate_conversation_title(
             ],
             "system": [{"text": TITLE_GENERATION_SYSTEM_PROMPT}],
             # Temperature only: Claude 4.5+ rejects `temperature` and `topP`
-            # together, so sending both would break titles on a model swap.
-            "inferenceConfig": {
-                "temperature": 0.3,  # Low temperature for consistent, focused output
-                "maxTokens": 50,      # Title should be very short
-            }
+            # together, so sending both would break titles on a model swap. A model
+            # whose catalog row leaves temperature out (Claude 5.x) gets none.
+            "inferenceConfig": choice.inference_config(temperature=0.3, max_tokens=50),
         }
 
         logger.info("🎯 Generating title (input length: %d chars)", len(truncated_input))
 
-        # Call Bedrock Nova Micro in a worker thread. boto3's converse() is
-        # synchronous — awaited inline it would block the event loop for the
-        # whole Nova round-trip, stalling the agent stream this task runs
-        # concurrently with.
+        # Call Bedrock in a worker thread. boto3's converse() is synchronous —
+        # awaited inline it would block the event loop for the whole round-trip,
+        # stalling the agent stream this task runs concurrently with.
         response = await asyncio.to_thread(
             _converse_for_title,
-            modelId="us.amazon.nova-micro-v1:0",
+            **choice.converse_kwargs(),
             messages=request_body["messages"],
             system=request_body["system"],
             inferenceConfig=request_body["inferenceConfig"],
@@ -997,7 +996,15 @@ async def generate_conversation_title(
             return "New Conversation"
 
         # Extract generated title from response
-        title = response["output"]["message"]["content"][0]["text"].strip()
+        # The first text block, not block 0: a reasoning model an admin assigned
+        # may open with a reasoning block.
+        title = next(
+            (b["text"] for b in response["output"]["message"]["content"] if isinstance(b.get("text"), str)),
+            "",
+        ).strip()
+        if not title:
+            logger.warning("Title generation returned no text; keeping the placeholder")
+            return "New Conversation"
 
         # Enforce 50 character limit (just in case model exceeds)
         if len(title) > 50:

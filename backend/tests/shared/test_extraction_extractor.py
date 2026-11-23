@@ -115,7 +115,7 @@ def install(monkeypatch, *behaviours: Any) -> None:
     FakeModel.built = []
     queue = list(behaviours)
 
-    def build(model_id: str, *, strict: bool) -> FakeModel:
+    def build(model_id: str, *, strict: bool, effort: Optional[str] = None) -> FakeModel:
         behaviour = queue.pop(0) if queue else behaviours[-1]
         return FakeModel(model_id, strict, behaviour)
 
@@ -171,7 +171,7 @@ class TestTheHappyPath:
         """
         captured: Dict[str, Any] = {}
 
-        def build(model_id: str, *, strict: bool) -> Any:
+        def build(model_id: str, *, strict: bool, effort: Optional[str] = None) -> Any:
             model = FakeModel(model_id, strict, "ok")
             captured["model"] = model
             return model
@@ -577,7 +577,7 @@ class TestAwkwardFieldNames:
 
         FakeModel.built = []
         monkeypatch.setattr(
-            ex, "_build_model", lambda model_id, *, strict: Model(model_id, strict, "ok")
+            ex, "_build_model", lambda model_id, *, strict, effort=None: Model(model_id, strict, "ok")
         )
         result = await ex.extract_fields(
             field_set, "a document", filename="x.pdf", model_id="us.model"
