@@ -396,6 +396,9 @@ export function buildAppApiEnvironment(
     // AWS Limits (opt-in while in development): gates /admin/aws-limits.
     // app-api only; the Runtime never reads Service Quotas.
     AWS_LIMITS_ENABLED: config.awsLimits.enabled ? 'true' : 'false',
+    // Organize lists (opt-in while in development): gates
+    // /users/me/arrangements/*. app-api only; nothing on the turn path reads it.
+    ORGANIZE_LISTS_ENABLED: config.organizeLists.enabled ? 'true' : 'false',
     // Handoffs (opt-in while in development): gates /sessions/{id}/handoffs.
     HANDOFFS_ENABLED: config.handoffs.enabled ? 'true' : 'false',
     // Workflow runs (opt-in while in development): gates

@@ -52,6 +52,7 @@ export const environment = {
         projectFileReadiness: true,
         // Needs CDK_AWS_LIMITS_ENABLED=true in the `development` GitHub environment.
         awsLimits: true,
+        organizeLists: false,
         // Reads app-api's knowledge-base mode, which follows the Runtime's
         // CDK_ASSISTANT_KB_FULL_CONTEXT_* variables in the `development` environment.
         knowledgeBaseMode: true,

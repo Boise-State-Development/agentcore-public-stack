@@ -51,6 +51,7 @@ export const environment = {
         // default; #1798).
         projectFileReadiness: true,
         awsLimits: false,
+        organizeLists: false,
         knowledgeBaseMode: true,
         releaseLedger: true,
         // On in our prod from 1.36.1 (UI only; in development, off by default; #1798).

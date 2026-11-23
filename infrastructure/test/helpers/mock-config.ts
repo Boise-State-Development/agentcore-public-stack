@@ -196,6 +196,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     awsLimits: {
       enabled: false,
     },
+    organizeLists: {
+      enabled: false,
+    },
     handoffs: {
       enabled: false,
       briefEnabled: false,

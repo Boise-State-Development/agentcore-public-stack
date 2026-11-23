@@ -119,6 +119,12 @@ describe('buildAppApiEnvironment — quota requests', () => {
     const on = buildAppApiEnvironment(createMockConfig({ awsLimits: { enabled: true } }), stubParams());
     expect(on.AWS_LIMITS_ENABLED).toBe('true');
   });
+
+  it('forwards the organize-lists flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).ORGANIZE_LISTS_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ organizeLists: { enabled: true } }), stubParams());
+    expect(on.ORGANIZE_LISTS_ENABLED).toBe('true');
+  });
 });
 
 describe('buildAppApiEnvironment — handoffs', () => {

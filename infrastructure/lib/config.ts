@@ -95,6 +95,7 @@ export interface AppConfig {
   sessionFork: SessionForkConfig;
   quotaRequests: QuotaRequestsConfig;
   awsLimits: AwsLimitsConfig;
+  organizeLists: OrganizeListsConfig;
   clientTurnTiming: ClientTurnTimingConfig;
   ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
@@ -544,6 +545,20 @@ export interface QuotaRequestsConfig {
  * submissions are audited in the existing audit-log table.
  */
 export interface AwsLimitsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Organizing the Agents and Projects pages
+ * (docs/specs/agent-project-organization.md): a member hides items and sets a
+ * custom order, a view preference that never changes access.
+ * **Opt-in while the feature is in development**: off unless
+ * CDK_ORGANIZE_LISTS_ENABLED=true (or an `organizeLists.enabled: true` cdk.json
+ * context). Sets ORGANIZE_LISTS_ENABLED on **app-api only**, which serves
+ * `/users/me/arrangements/{surface}`. No new resources: arrangements are items
+ * in the existing user-settings table.
+ */
+export interface OrganizeListsConfig {
   enabled: boolean;
 }
 
@@ -2173,6 +2188,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_AWS_LIMITS_ENABLED
         ? process.env.CDK_AWS_LIMITS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('awsLimits')?.enabled ?? false,
+    },
+    organizeLists: {
+      // Opt-in while in development, same parsing as quotaRequests above.
+      enabled: process.env.CDK_ORGANIZE_LISTS_ENABLED
+        ? process.env.CDK_ORGANIZE_LISTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('organizeLists')?.enabled ?? false,
     },
     clientTurnTiming: {
       // Default ON with a kill switch, same parsing as projects above.
