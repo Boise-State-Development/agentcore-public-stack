@@ -99,3 +99,80 @@ describe('WorkflowsApiService, the designer’s calls (PR-D.3)', () => {
     req.flush({ workflows: [] });
   });
 });
+
+describe('WorkflowsApiService, the kept list', () => {
+  let http: HttpTestingController;
+  let service: WorkflowsApiService;
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    TestBed.inject(ConfigService).appApiUrl.set('/api');
+    http = TestBed.inject(HttpTestingController);
+    service = TestBed.inject(WorkflowsApiService);
+  });
+
+  afterEach(() => http.verify());
+
+  async function flushList(names: string[]): Promise<void> {
+    TestBed.tick();
+    await Promise.resolve();
+    http.expectOne('/api/workflows').flush({ workflows: names.map((name) => ({ skillId: 'SKL-1', name, isOwned: true })) });
+    await new Promise((resolve) => setTimeout(resolve));
+  }
+
+  it('fetches nothing until a page opens the list, and a write before then refreshes nothing', async () => {
+    TestBed.tick();
+    expect(service.workflows.status()).toBe('idle');
+    const removing = service.remove(REF);
+    http.expectOne('/api/workflows/SKL-1/proposal-review').flush(null);
+    await removing;
+    TestBed.tick();
+    http.expectNone('/api/workflows');
+  });
+
+  it('keeps the list it has while a second open refreshes it', async () => {
+    service.openList();
+    await flushList(['a']);
+    expect((service.workflows.value() ?? []).map((w) => w.name)).toEqual(['a']);
+
+    service.openList();
+    TestBed.tick();
+    expect(service.workflows.status()).toBe('reloading');
+    expect(service.workflows.hasValue()).toBe(true);
+    await flushList(['a', 'b']);
+    expect((service.workflows.value() ?? []).map((w) => w.name)).toEqual(['a', 'b']);
+  });
+
+  it('drops a deleted workflow from the shown list at once, then refreshes it', async () => {
+    service.openList();
+    await flushList(['proposal-review', 'other']);
+
+    const removing = service.remove(REF);
+    http.expectOne('/api/workflows/SKL-1/proposal-review').flush(null);
+    await removing;
+    expect((service.workflows.value() ?? []).map((w) => w.name)).toEqual(['other']);
+    await flushList(['other']);
+  });
+
+  it('refreshes the list after a create, a save and a stale save', async () => {
+    service.openList();
+    await flushList([]);
+
+    const creating = service.create({ title: 'Review' });
+    http.expectOne('/api/workflows').flush({ workflow: { skillId: 'SKL-1', name: 'proposal-review' } });
+    await creating;
+    await flushList(['proposal-review']);
+
+    const saving = service.write(REF, BODY);
+    http.expectOne('/api/workflows/SKL-1/proposal-review').flush({ workflow: { skillId: 'SKL-1', name: 'proposal-review' } });
+    await saving;
+    await flushList(['proposal-review']);
+
+    const stale = service.write(REF, BODY);
+    http
+      .expectOne('/api/workflows/SKL-1/proposal-review')
+      .flush({ code: 'workflow_deleted', document: null }, { status: 409, statusText: 'Conflict' });
+    await stale;
+    await flushList([]);
+  });
+});
