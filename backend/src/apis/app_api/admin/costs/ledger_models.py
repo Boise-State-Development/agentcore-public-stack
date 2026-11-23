@@ -247,6 +247,20 @@ class ReadoutTool(_Model):
     spec_tokens: Optional[int] = Field(None, alias="specTokens")
 
 
+class ReadoutCallKind(_Model):
+    """One call kind's calls, cost and mean model first byte (``chat`` is what the turn KPIs read).
+
+    ``cost`` and ``meanFirstTokenMs`` are ``None`` for a side whose rows predate
+    the chat split (the ``predates_chat_split`` caveat), never ``0``.
+    """
+
+    kind: str
+    calls: List[int]
+    cost: List[Optional[float]]
+    mean_first_token_ms: List[Optional[float]] = Field(..., alias="meanFirstTokenMs")
+    first_token_n: List[int] = Field(..., alias="firstTokenN")
+
+
 class ReadoutGroup(_Model):
     id: str
     calls: List[int]
@@ -328,6 +342,7 @@ class LedgerReadout(_Model):
     requested_days: int = Field(..., alias="requestedDays")
     mix_shift: ReadoutMixShift = Field(..., alias="mixShift")
     kpis: Dict[str, ReadoutKpi] = Field(default_factory=dict)
+    call_kinds: List[ReadoutCallKind] = Field(default_factory=list, alias="callKinds")
     tools: List[ReadoutTool] = Field(default_factory=list)
     agents: List[ReadoutGroup] = Field(default_factory=list)
     projects: List[ReadoutGroup] = Field(default_factory=list)

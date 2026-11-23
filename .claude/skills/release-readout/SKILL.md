@@ -114,6 +114,19 @@ for anything the markdown cuts (all 30 tools, every model's share).
   `toolPayloadPerCall` on such a window reads low, not zero-cost.
 - **`unmetered_rows`**: calls on a model with no catalog row priced to $0, so
   cost per turn on that side is understated. That is a catalog fix first.
+- **Turn KPIs are chat-only; workflow spend is its own line.** `costPerTurn`
+  and `meanFirstTokenMs` read chat calls only (spec §5.2.1). Workflow prompt
+  and checklist steps, handoff briefs, voice, api-converse and extraction
+  calls are listed under *Calls by kind*, with their calls, cost and mean
+  first byte. If workflow cost or first byte rises, that is a change in
+  workflow use or in the workflow path, not a turn regression. Read it there.
+- **`predates_chat_split`**: a side whose rows were written before the split
+  has no chat-only counters. With none, its `costPerTurn` and
+  `meanFirstTokenMs` read `—`, which is no evidence, never a zero and never a
+  floor. With some, the caveat says what part of the window they cover. The
+  first readout after the split shipped has a `—` baseline for both KPIs.
+  That is expected, and the verdict leans on the other KPIs and on server
+  TTFT.
 
 ## 4. Flag regressions, then say where to look
 

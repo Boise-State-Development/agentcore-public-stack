@@ -293,6 +293,19 @@ export interface ReadoutTool {
   specTokens: number | null;
 }
 
+/**
+ * One call kind's calls, cost and mean model first byte. `chat` is what the
+ * turn KPIs read; the rest are calls that are not turns. `cost` and
+ * `meanFirstTokenMs` are `null` for a side whose rows predate the chat split.
+ */
+export interface ReadoutCallKind {
+  kind: string;
+  calls: LedgerPair<number>;
+  cost: LedgerPair<number | null>;
+  meanFirstTokenMs: LedgerPair<number | null>;
+  firstTokenN: LedgerPair<number>;
+}
+
 export interface ReadoutGroup {
   id: string;
   calls: LedgerPair<number>;
@@ -373,6 +386,8 @@ export interface LedgerReadout {
   requestedDays: number;
   mixShift: ReadoutMixShift;
   kpis: Record<string, ReadoutKpi>;
+  /** Absent from a readout saved before the chat split. */
+  callKinds?: ReadoutCallKind[];
   tools: ReadoutTool[];
   agents: ReadoutGroup[];
   projects: ReadoutGroup[];

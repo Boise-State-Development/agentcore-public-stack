@@ -73,6 +73,9 @@ const TONE_TEXT: Record<DeltaTone, string> = {
           <div class="flex flex-col gap-2 px-6 py-4 sm:flex-row sm:items-baseline sm:justify-between">
             <div>
               <p class="text-sm/6 font-medium text-gray-600 dark:text-gray-300">{{ card.def.label }}</p>
+              @if (card.def.hint) {
+                <p class="text-xs/5 text-gray-500 dark:text-gray-400">{{ card.def.hint }}</p>
+              }
               <p class="mt-1 text-2xl/8 font-semibold text-gray-900 tabular-nums dark:text-white">
                 {{ card.baseline }} <span aria-hidden="true">→</span><span class="sr-only"> to</span> {{ card.candidate }}
                 <span class="ml-1 text-base/7 font-medium" [class]="toneClass(card.tone)">
@@ -122,6 +125,9 @@ const TONE_TEXT: Record<DeltaTone, string> = {
         @for (card of cards(); track card.def.key) {
           <li class="rounded-2xl border border-gray-200 bg-white px-5 py-4 shadow-xs dark:border-gray-700 dark:bg-gray-800" [attr.data-kpi]="card.def.key">
             <p class="text-sm/6 font-medium text-gray-600 dark:text-gray-300">{{ card.def.label }}</p>
+            @if (card.def.hint) {
+              <p class="text-xs/5 text-gray-500 dark:text-gray-400">{{ card.def.hint }}</p>
+            }
             <p class="mt-1 text-lg/7 font-semibold text-gray-900 tabular-nums dark:text-white">
               {{ card.baseline }} <span aria-hidden="true">→</span><span class="sr-only"> to</span> {{ card.candidate }}
             </p>

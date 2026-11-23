@@ -63,6 +63,7 @@ CAVEAT_CODES = (
     "latency_unavailable",
     "latency_mixed_window",
     "coverage_truncated",
+    "predates_chat_split",
 )
 
 Row = Dict[str, Any]
@@ -298,6 +299,49 @@ def _groups(rows_b: Sequence[Row], rows_c: Sequence[Row], label: str) -> List[Di
     return out[:TOP_GROUPS]
 
 
+def _call_kinds(t_b: Mapping[str, Any], t_c: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Calls, cost and mean model first byte per call kind: chat first, then by candidate cost.
+
+    The line that keeps the calls that are not turns (workflow steps, handoff
+    briefs, voice, api-converse, extraction) visible now that the turn KPIs
+    leave them out.
+    """
+    kb, kc = ledger_kpis.call_kind_kpis(t_b), ledger_kpis.call_kind_kpis(t_c)
+    empty: Dict[str, Any] = {}
+    out = []
+    for kind in set(kb) | set(kc):
+        b, c = kb.get(kind, empty), kc.get(kind, empty)
+        out.append({
+            "kind": kind,
+            "calls": _pair(_n(b.get("calls")), _n(c.get("calls"))),
+            "cost": _pair(_value(b.get("cost")), _value(c.get("cost"))),
+            "meanFirstTokenMs": _pair(_value(b.get("meanFirstTokenMs")), _value(c.get("meanFirstTokenMs"))),
+            "firstTokenN": _pair(_n(b.get("meanFirstTokenMs")), _n(c.get("meanFirstTokenMs"))),
+        })
+    out.sort(key=lambda k: (k["kind"] != ledger_kpis.CHAT_KIND, -(k["cost"][1] or 0.0), -k["calls"][1], k["kind"]))
+    return out
+
+
+def _split_caveat(name: str, totals_side: Mapping[str, Any]) -> Optional[Dict[str, str]]:
+    """``predates_chat_split`` when some of a side's rows were written before the chat split."""
+    cov = ledger_kpis.chat_split_coverage(totals_side)
+    if cov["calls"] == 0 or (cov["splitTurns"] >= cov["turns"] and cov["splitCalls"] >= cov["calls"]):
+        return None
+    kpis = ", ".join(ledger_kpis.CHAT_SPLIT_KPIS)
+    if cov["splitCalls"] == 0:
+        return caveat(
+            "predates_chat_split",
+            f"{name} rows predate the chat-only counters: {kpis} and the by-kind cost read — for it, "
+            "and its calls are not split into chat and non-turn kinds",
+        )
+    return caveat(
+        "predates_chat_split",
+        f"{name} {kpis} cover {cov['splitTurns']:,} of {cov['turns']:,} turns and {cov['splitCalls']:,} of "
+        f"{cov['calls']:,} calls: rows written before the chat-only counters are left out, "
+        "and the by-kind cost is over the same part",
+    )
+
+
 #: The key prefix of an item whose cost row predates PR-1's stamps.
 UNSTAMPED_PREFIX = "unstamped#"
 
@@ -441,8 +485,17 @@ def build_readout(
         mc = ledger_kpis.model_kpis(totals(grouped_mc.get(model_id, [])))
         by_model[model_id] = _compare(mb, mc, "costPerTurn")
     kpis["costPerTurn"]["byModel"] = by_model
+    split_caveats = [c for c in (_split_caveat("baseline", t_b) if base else None,
+                                 _split_caveat("candidate", t_c)) if c]
+    caveats.extend(split_caveats)
+    # A side with no split rows reads `None` on the chat KPIs because the
+    # counters are missing, not because n is small: `predates_chat_split`
+    # already says so, and `below_floor` would name the wrong reason.
+    unsplit = {side for side, t in (("baseline", t_b), ("candidate", t_c))
+               if t.get("calls") and not t.get("splitCalls")}
     under = [name for name, k in kpis.items()
-             if base and (k["baseline"] is None or k["candidate"] is None) and max(k["n"]) > 0]
+             if base and (k["baseline"] is None or k["candidate"] is None) and max(k["n"]) > 0
+             and not (name in ledger_kpis.CHAT_SPLIT_KPIS and unsplit)]
     for name in under:
         caveats.append(caveat("below_floor", f"{name} under its floor (n={kpis[name]['n'][0]} / {kpis[name]['n'][1]})"))
 
@@ -564,6 +617,7 @@ def build_readout(
         "requestedDays": requested,
         "mixShift": {"warn": bool(shifted) or users_shifted, "models": models, "activeUsers": users},
         "kpis": kpis,
+        "callKinds": _call_kinds(t_b, t_c),
         "tools": tools[:TOP_TOOLS],
         "agents": _groups(_side_rows(agent_rows, base), _side_rows(agent_rows, cand), "agentId"),
         "projects": _groups(_side_rows(project_rows, base), _side_rows(project_rows, cand), "projectId"),
