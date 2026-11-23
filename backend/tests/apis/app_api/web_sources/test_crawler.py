@@ -48,6 +48,10 @@ class _Recorder:
         self.preassigned_root_id = "DOC-root00000001"
         self.created_statuses: List[str] = []  # the status each new page starts at
         self.kb_record: dict | None = None  # the knowledge-base record a new page reads
+        self.s3_content_types: List[str] = []  # the ContentType of each S3 PUT, in order
+        self.metadata_calls: List[dict] = []  # every update_document_import_metadata kwargs
+        self.metadata_hashes: Dict[str, str | None] = {}  # document_id -> content_hash written
+        self.status_messages: Dict[str, str | None] = {}  # document_id -> last error_message
 
     def next_doc_id(self) -> str:
         self._doc_counter += 1
@@ -94,6 +98,7 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         table_name: str | None = None,
     ):
         rec.status_updates.append((document_id, status))
+        rec.status_messages[document_id] = error_message
         return None
 
     async def fake_update_metadata(
@@ -105,8 +110,13 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         size_bytes: int,
         s3_key: str,
         source_etag: str | None = None,
+        content_hash: str | None = None,
     ):
         rec.metadata_updates.append(document_id)
+        rec.metadata_hashes[document_id] = content_hash
+        rec.metadata_calls.append(
+            {"document_id": document_id, "filename": filename, "content_type": content_type, "size_bytes": size_bytes}
+        )
         return None
 
     counter = {"n": 0}
@@ -120,6 +130,13 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     ) -> str:
         key = f"assistants/{assistant_id}/documents/{document_id}/{filename}"
         rec.s3_puts.append((key, markdown.encode("utf-8")))
+        rec.s3_content_types.append("text/markdown")
+        return key
+
+    async def fake_put_pdf(*, assistant_id: str, document_id: str, body: bytes, filename: str) -> str:
+        key = f"assistants/{assistant_id}/documents/{document_id}/{filename}"
+        rec.s3_puts.append((key, body))
+        rec.s3_content_types.append("application/pdf")
         return key
 
     async def fake_increment(
@@ -148,6 +165,7 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     monkeypatch.setattr(crawler, "update_document_status", fake_update_status)
     monkeypatch.setattr(crawler, "update_document_import_metadata", fake_update_metadata)
     monkeypatch.setattr(crawler, "_put_markdown", fake_put_markdown)
+    monkeypatch.setattr(crawler, "_put_pdf", fake_put_pdf)
     monkeypatch.setattr(crawler, "increment_counters", fake_increment)
     monkeypatch.setattr(crawler, "finalize_crawl", fake_finalize)
     # _create_pending_document calls _generate_document_id, which lives in
@@ -665,6 +683,51 @@ async def test_refresh_identical_hash_skips_stage(recorder: _Recorder):
     assert recorder.s3_puts == []
     # etag advanced via on_result so next run's conditional GET can 304
     assert log.events == [("unchanged", ROOT, 0)]
+
+
+@pytest.mark.asyncio
+async def test_first_crawl_stores_the_hash_its_first_refresh_matches(recorder: _Recorder):
+    """The first crawl records each page's hash, so the first scheduled
+    re-crawl of an unchanged site stages nothing.
+
+    Without it every page of a new crawl project re-embedded on its first
+    re-crawl (prod 2026-11-21: 8 new policies, 0 of 185 pages unchanged),
+    and the burst throttled the managed KB's ingestion consumer.
+    """
+    html = "<html><head><title>T</title></head><body><p>same content</p></body></html>"
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=ROOT,
+        settings=CrawlSettings(max_depth=0, max_pages=1),
+        root_document_id=recorder.preassigned_root_id,
+        http_client_factory=_client_factory(_build_refresh_handler({ROOT: html}, {ROOT: '"v1"'})),
+    )
+    stored_hash = recorder.metadata_hashes[recorder.preassigned_root_id]
+    assert stored_hash is not None
+
+    recorder.s3_puts.clear()
+    state, log = _refresh_state(
+        recorder,
+        {ROOT: crawler.RefreshDoc(document_id="DOC-root", source_etag='"v1"', content_hash=stored_hash)},
+    )
+    # A new ETag defeats the conditional GET, as a CMS that re-stamps pages does.
+    await _run_refresh(recorder, {ROOT: html}, state, etags={ROOT: '"v2"'})
+
+    assert state.unchanged == 1 and state.changed == 0
+    assert recorder.s3_puts == []
+
+
+@pytest.mark.asyncio
+async def test_first_crawl_stores_the_hash_of_a_pdf_as_staged(recorder: _Recorder):
+    pdf_url = "https://example.com/files/report.pdf"
+    handler = _files_handler({ROOT: (_HTML, _page_linking("/files/report.pdf")), pdf_url: ("application/pdf", _PDF)})
+
+    await _crawl(recorder, handler)
+
+    [(pdf_doc, _source)] = recorder.created_docs
+    assert recorder.metadata_hashes[pdf_doc] == crawler._bytes_sha256(_PDF)
 
 
 @pytest.mark.asyncio
@@ -1208,3 +1271,413 @@ async def test_a_hostname_resolving_privately_is_refused_by_the_default_client(
     assert connects == []
     assert (recorder.preassigned_root_id, "failed") in recorder.status_updates
     assert recorder.s3_puts == []
+
+
+# ── Linked files: PDFs and everything else ─────────────────────────────────
+
+
+_PDF = b"%PDF-1.7\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n"
+
+
+class _Body:
+    """A response body served in chunks, recording how much of it was read."""
+
+    def __init__(self, data: bytes, chunk: int = 64) -> None:
+        self.data = data
+        self.chunk = chunk
+        self.read = 0
+
+    async def __aiter__(self):
+        for start in range(0, len(self.data), self.chunk):
+            piece = self.data[start : start + self.chunk]
+            self.read += len(piece)
+            yield piece
+
+
+def _files_handler(
+    files: Dict[str, Tuple[str, bytes | _Body]],
+    *,
+    redirects: Dict[str, str] | None = None,
+    etags: Dict[str, str] | None = None,
+):
+    """Serve `files` as url -> (content type, body); 301 each `redirects` key.
+
+    A `bytes` body is sent with a Content-Length; a `_Body` is streamed
+    without one, the way a chunked response arrives.
+    """
+    redirects = redirects or {}
+    etags = etags or {}
+    requested: List[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/robots.txt"):
+            return httpx.Response(404, text="")
+        requested.append(url)
+        if url in redirects:
+            return httpx.Response(301, headers={"location": redirects[url]})
+        if url not in files:
+            return httpx.Response(404, text="not found")
+        content_type, body = files[url]
+        headers = {"content-type": content_type}
+        etag = etags.get(url)
+        if etag:
+            if request.headers.get("if-none-match") == etag:
+                return httpx.Response(304, headers={"etag": etag})
+            headers["etag"] = etag
+        return httpx.Response(200, headers=headers, content=body)
+
+    _handler.requested = requested  # type: ignore[attr-defined]
+    return _handler
+
+
+_HTML = "text/html; charset=utf-8"
+
+
+def _page_linking(*hrefs: str) -> bytes:
+    links = "".join(f'<a href="{href}">link</a>' for href in hrefs)
+    return f"<html><head><title>Home</title></head><body><p>hi</p>{links}</body></html>".encode()
+
+
+async def _crawl(rec: _Recorder, handler, *, root: str = ROOT, settings: CrawlSettings | None = None, refresh=None):
+    await run_crawl(
+        assistant_id="ast-1",
+        crawl_id="CRAWL-1",
+        user_id="user-1",
+        root_url=root,
+        settings=settings or CrawlSettings(max_depth=1, max_pages=10),
+        root_document_id=rec.preassigned_root_id if refresh is None else "DOC-root",
+        http_client_factory=_client_factory(handler),
+        refresh=refresh,
+        finalize_with_ttl=refresh is None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_linked_pdf_is_staged_as_a_pdf(recorder: _Recorder):
+    pdf_url = "https://example.com/files/FY2025%20Annual%20Report.pdf"
+    handler = _files_handler(
+        {ROOT: (_HTML, _page_linking("/files/FY2025%20Annual%20Report.pdf")), pdf_url: ("application/pdf", _PDF)}
+    )
+
+    await _crawl(recorder, handler)
+
+    assert recorder.finalized_status == "complete"
+    assert recorder.fetched_delta == 2 and recorder.failed_delta == 0
+    assert not any(status == "failed" for _doc, status in recorder.status_updates)
+    [(pdf_doc, source)] = recorder.created_docs
+    assert source == pdf_url
+    # The bytes go to S3 untouched, as a device upload of a PDF does, and the
+    # row says what they are, so the pipeline extracts them as a PDF.
+    assert recorder.s3_puts[1] == (
+        f"assistants/ast-1/documents/{pdf_doc}/FY2025 Annual Report.pdf",
+        _PDF,
+    )
+    assert recorder.s3_content_types == ["text/markdown", "application/pdf"]
+    pdf_meta = next(m for m in recorder.metadata_calls if m["document_id"] == pdf_doc)
+    assert pdf_meta == {
+        "document_id": pdf_doc,
+        "filename": "FY2025 Annual Report.pdf",
+        "content_type": "application/pdf",
+        "size_bytes": len(_PDF),
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_start_url_is_staged_on_the_routes_document(recorder: _Recorder):
+    root = "https://example.com/report.pdf"
+    handler = _files_handler({root: ("application/pdf; qs=0.001", _PDF)})
+
+    await _crawl(recorder, handler, root=root)
+
+    assert recorder.created_docs == []
+    assert recorder.metadata_calls[0]["document_id"] == recorder.preassigned_root_id
+    assert recorder.metadata_calls[0]["content_type"] == "application/pdf"
+    assert recorder.s3_puts[0][1] == _PDF
+    assert recorder.fetched_delta == 1 and recorder.failed_delta == 0
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_url_served_as_a_generic_binary_is_still_a_pdf(recorder: _Recorder):
+    pdf_url = "https://example.com/report.pdf"
+    handler = _files_handler(
+        {ROOT: (_HTML, _page_linking("/report.pdf")), pdf_url: ("application/octet-stream", _PDF)}
+    )
+
+    await _crawl(recorder, handler)
+
+    assert recorder.s3_content_types == ["text/markdown", "application/pdf"]
+    assert recorder.failed_delta == 0
+
+
+@pytest.mark.asyncio
+async def test_a_response_labeled_pdf_that_is_not_one_fails(recorder: _Recorder):
+    pdf_url = "https://example.com/report.pdf"
+    handler = _files_handler(
+        {ROOT: (_HTML, _page_linking("/report.pdf")), pdf_url: ("application/pdf", b"<html>Login required</html>")}
+    )
+
+    await _crawl(recorder, handler)
+
+    [(pdf_doc, _source)] = recorder.created_docs
+    assert (pdf_doc, "failed") in recorder.status_updates
+    assert recorder.s3_content_types == ["text/markdown"]
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_over_the_crawl_limit_fails_saying_so(
+    recorder: _Recorder, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(crawler, "MAX_PDF_BYTES", 1024 * 1024)
+    big = _PDF + b"0" * (2 * 1024 * 1024 - len(_PDF))
+    pdf_url = "https://example.com/catalog.pdf"
+    handler = _files_handler({ROOT: (_HTML, _page_linking("/catalog.pdf")), pdf_url: ("application/pdf", big)})
+
+    await _crawl(recorder, handler)
+
+    [(pdf_doc, _source)] = recorder.created_docs
+    assert (pdf_doc, "failed") in recorder.status_updates
+    # The row says why, in the sentence every upload refusal uses.
+    assert recorder.status_messages[pdf_doc] == "This PDF is too large to add. Files can be up to 1 MB. This one is 2 MB."
+    assert recorder.s3_content_types == ["text/markdown"]
+    assert recorder.failed_delta == 1
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_without_a_content_length_is_cut_off_at_the_limit(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(crawler, "MAX_PDF_BYTES", 4096)
+    body = _Body(_PDF + b"0" * 100_000, chunk=1024)
+    handler = _files_handler({"https://example.com/big.pdf": ("application/pdf", body)})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(crawler.ResponseTooLarge) as raised:
+            await crawler._fetch_page(client, "https://example.com/big.pdf")
+
+    assert raised.value.size_bytes is None
+    # Reading stopped at the limit; the rest of the body never arrived.
+    assert body.read <= 4096 + 1024
+
+
+@pytest.mark.asyncio
+async def test_a_knowledge_base_file_limit_below_the_crawl_limit_holds(
+    recorder: _Recorder, monkeypatch: pytest.MonkeyPatch
+):
+    # The deployment's per-file limit (upload_limit) binds a crawled PDF as it
+    # binds a device upload.
+    monkeypatch.setenv("KB_UPLOAD_MAX_FILE_BYTES", str(len(_PDF) - 1))
+    pdf_url = "https://example.com/report.pdf"
+    handler = _files_handler({ROOT: (_HTML, _page_linking("/report.pdf")), pdf_url: ("application/pdf", _PDF)})
+
+    await _crawl(recorder, handler)
+
+    [(pdf_doc, _source)] = recorder.created_docs
+    assert (pdf_doc, "failed") in recorder.status_updates
+    assert recorder.status_messages[pdf_doc].startswith("This PDF is too large to add.")
+    assert recorder.s3_content_types == ["text/markdown"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_pdf_row_keeps_the_pdfs_name(recorder: _Recorder, monkeypatch: pytest.MonkeyPatch):
+    pdf_url = "https://example.com/report.pdf"
+    handler = _files_handler({ROOT: (_HTML, _page_linking("/report.pdf"))})  # the PDF 404s
+
+    created_filenames: List[str] = []
+    real_create = crawler.create_document
+
+    async def spy_create(**kwargs):
+        created_filenames.append(kwargs["filename"])
+        return await real_create(**kwargs)
+
+    monkeypatch.setattr(crawler, "create_document", spy_create)
+    await _crawl(recorder, handler)
+
+    assert [u for _id, u in recorder.created_docs] == [pdf_url]
+    assert created_filenames == ["report.pdf"]
+
+
+@pytest.mark.asyncio
+async def test_links_to_other_files_never_become_documents(recorder: _Recorder):
+    image = _Body(b"\x89PNG" + b"0" * 10_000)
+    archive = _Body(b"PK" + b"0" * 10_000)
+    handler = _files_handler(
+        {
+            ROOT: (_HTML, _page_linking("/logo.png", "/data.zip", "/a")),
+            "https://example.com/logo.png": ("image/png", image),
+            "https://example.com/data.zip": ("application/zip", archive),
+            "https://example.com/a": (_HTML, _page_linking()),
+        }
+    )
+
+    await _crawl(recorder, handler)
+
+    # No red rows: nothing was created for them, nothing failed, and each
+    # gave its page-budget slot back.
+    assert [u for _id, u in recorder.created_docs] == ["https://example.com/a"]
+    assert recorder.failed_delta == 0
+    assert recorder.discovered_delta == 2  # the root and /a
+    assert recorder.fetched_delta == 2
+    # Their bodies were never read.
+    assert image.read == 0 and archive.read == 0
+
+
+@pytest.mark.asyncio
+async def test_skipped_files_do_not_spend_the_page_budget(recorder: _Recorder):
+    handler = _files_handler(
+        {
+            ROOT: (_HTML, _page_linking("/one.png", "/two.png", "/a", "/b")),
+            "https://example.com/one.png": ("image/png", b"x"),
+            "https://example.com/two.png": ("image/png", b"x"),
+            "https://example.com/a": (_HTML, _page_linking("/c")),
+            "https://example.com/b": (_HTML, _page_linking()),
+            "https://example.com/c": (_HTML, _page_linking()),
+        }
+    )
+
+    # Budget of 4: the root, two images, /a fill it at discovery; the image
+    # slots come back, so /c (found on /a) still gets a turn.
+    await _crawl(recorder, handler, settings=CrawlSettings(max_depth=2, max_pages=4))
+
+    fetched = {u for _id, u in recorder.created_docs}
+    assert "https://example.com/c" in fetched
+    assert recorder.failed_delta == 0
+
+
+@pytest.mark.asyncio
+async def test_an_unsupported_start_url_says_why_it_is_empty(recorder: _Recorder):
+    root = "https://example.com/photo.jpg"
+    handler = _files_handler({root: ("image/jpeg", b"\xff\xd8\xff")})
+
+    await _crawl(recorder, handler, root=root)
+
+    assert (recorder.preassigned_root_id, "failed") in recorder.status_updates
+    assert recorder.status_messages[recorder.preassigned_root_id] == "This address isn't a web page or a PDF."
+    assert recorder.s3_puts == []
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_reached_through_two_urls_gets_one_document(recorder: _Recorder):
+    landing = "https://example.com/files/report.pdf"
+    handler = _files_handler(
+        {ROOT: (_HTML, _page_linking("/report.pdf", "/annual-report")), landing: ("application/pdf", _PDF)},
+        redirects={"https://example.com/report.pdf": landing, "https://example.com/annual-report": landing},
+    )
+
+    await _crawl(recorder, handler)
+
+    assert [u for _id, u in recorder.created_docs] == [landing]
+    assert recorder.s3_content_types.count("application/pdf") == 1
+    assert recorder.failed_delta == 0
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_outside_the_section_is_never_requested(recorder: _Recorder):
+    root = "https://example.com/research/"
+    outside = "https://example.com/finance/budget.pdf"
+    handler = _files_handler(
+        {
+            root: (_HTML, _page_linking("/finance/budget.pdf", "/research/plan.pdf")),
+            outside: ("application/pdf", _PDF),
+            "https://example.com/research/plan.pdf": ("application/pdf", _PDF),
+        }
+    )
+
+    await _crawl(recorder, handler, root=root)
+
+    assert outside not in handler.requested
+    assert [u for _id, u in recorder.created_docs] == ["https://example.com/research/plan.pdf"]
+
+
+@pytest.mark.asyncio
+async def test_a_pdf_redirecting_to_an_internal_address_is_never_requested(recorder: _Recorder):
+    handler = _files_handler(
+        {ROOT: (_HTML, _page_linking("/report.pdf"))},
+        redirects={"https://example.com/report.pdf": "http://169.254.169.254/latest/meta-data/report.pdf"},
+    )
+
+    await _crawl(recorder, handler)
+
+    assert not any("169.254" in u for u in handler.requested)
+    assert recorder.created_docs == []
+    assert recorder.failed_delta == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_an_identical_pdf_is_not_restaged(recorder: _Recorder):
+    pdf_url = "https://example.com/report.pdf"
+    page = _page_linking("/report.pdf")
+    markdown, _ = crawler._extract_markdown(page.decode(), ROOT)
+    state, log = _refresh_state(
+        recorder,
+        {
+            ROOT: crawler.RefreshDoc(document_id="DOC-root", content_hash=crawler._content_sha256(markdown)),
+            pdf_url: crawler.RefreshDoc(
+                document_id="DOC-pdf", source_etag='"old"', content_hash=crawler._bytes_sha256(_PDF)
+            ),
+        },
+    )
+    handler = _files_handler({ROOT: (_HTML, page), pdf_url: ("application/pdf", _PDF)}, etags={pdf_url: '"new"'})
+
+    await _crawl(recorder, handler, refresh=state)
+
+    assert state.unchanged == 2 and state.changed == 0 and state.created == 0
+    assert recorder.s3_puts == []
+    assert pdf_url in state.seen_urls
+
+
+@pytest.mark.asyncio
+async def test_refresh_a_pdf_answering_304_is_unchanged(recorder: _Recorder):
+    pdf_url = "https://example.com/report.pdf"
+    state, _ = _refresh_state(
+        recorder,
+        {
+            ROOT: crawler.RefreshDoc(document_id="DOC-root", content_hash="stale"),
+            pdf_url: crawler.RefreshDoc(document_id="DOC-pdf", source_etag='"v1"', content_hash="h"),
+        },
+    )
+    handler = _files_handler(
+        {ROOT: (_HTML, _page_linking("/report.pdf")), pdf_url: ("application/pdf", _PDF)}, etags={pdf_url: '"v1"'}
+    )
+
+    await _crawl(recorder, handler, refresh=state)
+
+    assert state.unchanged == 1  # the PDF; the root changed
+    assert recorder.s3_content_types == ["text/markdown"]
+    assert pdf_url in state.seen_urls
+
+
+@pytest.mark.asyncio
+async def test_refresh_a_changed_pdf_emits_before_it_is_restaged(recorder: _Recorder):
+    pdf_url = "https://example.com/report.pdf"
+    new_pdf = _PDF + b"% revised\n"
+    state, log = _refresh_state(
+        recorder,
+        {pdf_url: crawler.RefreshDoc(document_id="DOC-pdf", content_hash=crawler._bytes_sha256(_PDF), chunk_count=4)},
+    )
+    handler = _files_handler({ROOT: (_HTML, _page_linking("/report.pdf")), pdf_url: ("application/pdf", new_pdf)})
+
+    await _crawl(recorder, handler, refresh=state)
+
+    pdf_events = [(outcome, puts) for outcome, url, puts in log.events if url == pdf_url]
+    pdf_put_index = recorder.s3_content_types.index("application/pdf")
+    assert pdf_events == [("changed", pdf_put_index)]
+    assert recorder.s3_puts[pdf_put_index][1] == new_pdf
+
+
+@pytest.mark.asyncio
+async def test_refresh_a_known_page_now_serving_a_file_keeps_its_content(recorder: _Recorder):
+    # A page the knowledge base already holds that starts serving something
+    # else is handled like a failed fetch: still seen, never marked failed.
+    known = "https://example.com/a"
+    state, _ = _refresh_state(
+        recorder,
+        {
+            ROOT: crawler.RefreshDoc(document_id="DOC-root", content_hash="stale"),
+            known: crawler.RefreshDoc(document_id="DOC-a", content_hash="h"),
+        },
+    )
+    handler = _files_handler({ROOT: (_HTML, _page_linking("/a")), known: ("image/png", b"x")})
+
+    await _crawl(recorder, handler, refresh=state)
+
+    assert known in state.seen_urls
+    assert ("DOC-a", "failed") not in recorder.status_updates

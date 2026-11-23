@@ -144,12 +144,17 @@ class TestMapping:
         )
         names = {f.path: (f.resource_path, f.filename) for f in b.files}
         assert names == {
-            # Manifest names start with a letter or digit, so each segment is
-            # cleaned as a flat name always was.
-            "scripts/__init__.py": ("init__.py", "init__.py"),
-            "scripts/office/__init__.py": ("office/init__.py", "init__.py"),
+            # A package marker keeps its name, or the package stops importing
+            # (anthropics/skills' office helpers came in as "init__.py").
+            "scripts/__init__.py": ("__init__.py", "__init__.py"),
+            "scripts/office/__init__.py": ("office/__init__.py", "__init__.py"),
             "scripts/office/pack.py": ("office/pack.py", "pack.py"),
         }
+        assert b.skipped == []
+
+    def test_a_name_starting_with_a_dash_is_cleaned_not_kept(self):
+        b = bundle_of({"SKILL.md": SKILL_MD, "references/-rf.md": "x"})
+        assert [f.filename for f in b.files] == ["rf.md"]
 
     def test_hidden_files_and_macos_metadata_are_ignored(self):
         b = bundle_of(
@@ -277,12 +282,13 @@ class TestRefusals:
         """The cap message says where the files are, so the author knows what to leave out."""
         files = {"SKILL.md": SKILL_MD}
         files |= {f"csharp/c{i}.md": "x" for i in range(30)}
-        files |= {f"go/g{i}.md": "x" for i in range(20)}
+        files |= {f"go/g{i}.md": "x" for i in range(30)}
         files |= {f"references/r{i}.md": "x" for i in range(5)}
+        assert len(files) - 1 > MAX_RESOURCES_PER_SKILL
         with pytest.raises(BundleImportError) as e:
             load_bundle(make_zip(files))
         message = str(e.value)
-        assert "Most are in csharp/ (30), go/ (20), references/ (5)." in message
+        assert "Most are in csharp/ (30), go/ (30), references/ (5)." in message
         assert "Upload a .zip" in message
 
     def test_a_missing_skill_folder_says_how_many_more_were_found(self):
@@ -313,7 +319,7 @@ class TestSkips:
         assert skipped(b) == {"references/link.md": "symbolic link"}
         assert b.files == []
 
-    @pytest.mark.parametrize("name", ["assets/icon.svg", "assets/page.html", "schemas/a.xsd", "LICENSE"])
+    @pytest.mark.parametrize("name", ["assets/icon.svg", "assets/page.html", "assets/page.xhtml", "LICENSE"])
     def test_types_off_the_allowlist_are_skipped(self, name):
         b = bundle_of({"SKILL.md": SKILL_MD, name: "<x/>"})
         assert skipped(b)[name].startswith("file type not allowed")
@@ -328,6 +334,46 @@ class TestSkips:
     def test_an_invalid_field_set_is_skipped_with_the_parser_message(self):
         b = bundle_of({"SKILL.md": SKILL_MD, "references/field-set.budget.md": "| name |\n|---|\n| x |\n"})
         assert skipped(b)["references/field-set.budget.md"].startswith("invalid field set:")
+
+    def test_an_over_size_xml_template_is_skipped(self):
+        name = "scripts/templates/comments.xml"
+        b = bundle_of({"SKILL.md": SKILL_MD, name: "<w:comments/>" + "x" * MAX_RESOURCE_BYTES})
+        assert skipped(b) == {name: "larger than 1 MiB"}
+
+    def test_an_office_skill_imports_whole_with_its_schemas(self):
+        """anthropics/skills' xlsx/docx/pptx: 39 OOXML schemas, four of them five
+        folders below scripts/, plus package markers, and docx's five comment part
+        templates. Every file comes across."""
+        files = {"SKILL.md": SKILL_MD, "LICENSE.txt": "license"}
+        files |= {
+            f"scripts/templates/{n}.xml": "<?xml version=\"1.0\"?><w:root/>"
+            for n in ("comments", "commentsExtended", "commentsExtensible", "commentsIds", "people")
+        }
+        files |= {f"scripts/office/helpers/{n}.py": "x" for n in ("__init__", "pptx_chart", "pptx_slide")}
+        files |= {f"scripts/office/validators/{n}.py": "x" for n in ("__init__", "base", "docx", "pptx")}
+        files |= {"scripts/office/validate.py": "x", "scripts/office/soffice.py": "x", "scripts/recalc.py": "x"}
+        files |= {f"scripts/office/schemas/ISO-IEC29500-4_2016/s{i}.xsd": "<xs:schema/>" for i in range(31)}
+        files |= {f"scripts/office/schemas/microsoft/m{i}.xsd": "<xs:schema/>" for i in range(4)}
+        files |= {
+            f"scripts/office/schemas/ecma/fouth-edition/opc-{n}.xsd": "<xs:schema/>"
+            for n in ("contentTypes", "coreProperties", "digSig", "relationships")
+        }
+        b = bundle_of(files)
+        assert b.skipped == []
+        assert len(b.files) == len(files) - 1 <= MAX_RESOURCES_PER_SKILL
+        by_path = {f.path: f for f in b.files}
+        rels = by_path["scripts/office/schemas/ecma/fouth-edition/opc-relationships.xsd"]
+        assert (rels.kind, rels.resource_path, rels.content_type) == (
+            "script",
+            "office/schemas/ecma/fouth-edition/opc-relationships.xsd",
+            "text/plain",
+        )
+        people = by_path["scripts/templates/people.xml"]
+        assert (people.kind, people.resource_path, people.content_type) == (
+            "script",
+            "templates/people.xml",
+            "text/plain",
+        )
 
     def test_a_name_the_manifest_cannot_hold_is_cleaned(self):
         b = bundle_of({"SKILL.md": SKILL_MD, "references/My Notes (v2).md": "x"})
@@ -493,3 +539,53 @@ class TestFetch:
         from apis.app_api.web_sources.public_transport import PublicOnlyTransport
 
         assert github_source.PublicOnlyTransport is PublicOnlyTransport
+
+
+class TestWorkflowSkips:
+    """A saved workflow is checked on import beside a field set (workflow-designer §9.1)."""
+
+    def test_an_invalid_workflow_is_skipped_with_the_parser_message(self):
+        broken = "---\ntitle: T\n---\n\n| step | kind | worker | reads |\n|---|---|---|---|\n| a | agent | AST-1 | a |\n"
+        b = bundle_of({"SKILL.md": SKILL_MD, "references/workflow.review.md": broken})
+        assert skipped(b)["references/workflow.review.md"].startswith("invalid workflow:")
+
+    def test_a_valid_workflow_is_imported(self):
+        ok = "---\ntitle: T\n---\n\n| step | kind | worker | reads |\n|---|---|---|---|\n| a | agent | AST-1 | request |\n"
+        b = bundle_of({"SKILL.md": SKILL_MD, "references/workflow.review.md": ok})
+        assert "references/workflow.review.md" not in skipped(b)
+        assert [f.filename for f in b.files] == ["workflow.review.md"]
+
+    _CHECKLIST = (
+        "---\ntitle: T\n---\n\n| step | kind | worker | reads |\n|---|---|---|---|\n"
+        "| a | checklist | us.anthropic.claude-haiku-5-5-v1:0 | files |\n\n## Step: a\n\nField sets: budget\n"
+    )
+    _BUDGET = (
+        "---\ntitle: Budget\nversion: 1\n---\n\n| name | title | type | find | enum | optional |\n"
+        "|---|---|---|---|---|---|\n| cap | Cap | currency | the cap | | |\n"
+    )
+
+    def test_a_checklist_steps_set_may_come_later_in_the_archive(self):
+        """workflow-designer §22.3: the sets are the import's own, checked once every file is read."""
+        b = bundle_of(
+            {
+                "SKILL.md": SKILL_MD,
+                "references/workflow.review.md": self._CHECKLIST,
+                "references/field-set.budget.md": self._BUDGET,
+            }
+        )
+        assert "references/workflow.review.md" not in skipped(b)
+        assert sorted(f.filename for f in b.files) == ["field-set.budget.md", "workflow.review.md"]
+
+    def test_a_checklist_step_whose_set_is_missing_is_skipped(self):
+        b = bundle_of({"SKILL.md": SKILL_MD, "references/workflow.review.md": self._CHECKLIST})
+        reason = skipped(b)["references/workflow.review.md"]
+        assert reason.startswith("invalid workflow:")
+        assert "the field set 'budget' is not in this skill" in reason
+
+    def test_a_checklist_steps_set_with_a_list_field_is_imported(self):
+        listed = self._BUDGET.replace("| cap | Cap | currency |", "| cap | Cap | list |")
+        assert listed != self._BUDGET
+        b = bundle_of(
+            {"SKILL.md": SKILL_MD, "references/workflow.review.md": self._CHECKLIST, "references/field-set.budget.md": listed}
+        )
+        assert "references/workflow.review.md" not in skipped(b)

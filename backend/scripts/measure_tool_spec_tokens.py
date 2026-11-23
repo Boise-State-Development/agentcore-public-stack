@@ -66,6 +66,9 @@ MEASURE_ENV: Dict[str, str] = {
     "SKILL_AUTHORING_ENABLED": "true",
     "ASK_USER_QUESTION_ENABLED": "true",
     "BROWSER_TAKEOVER_ENABLED": "true",
+    "HANDOFFS_ENABLED": "true",
+    "HANDOFF_SUGGESTIONS_ENABLED": "true",
+    "CODE_SANDBOX_ENABLED": "true",
 }
 
 #: CountTokens accepts only a base foundation-model id. Haiku 4.5 is the
@@ -141,6 +144,8 @@ def _tool_builder() -> Callable[[str], List[Any]]:
         lambda t: routes._build_workspace_tools([t], _SESSION_ID, _USER_ID),
         lambda t: routes._build_excel_spreadsheet_tools([t], _SESSION_ID, _USER_ID),
         lambda t: routes._build_powerpoint_presentation_tools([t], _SESSION_ID, _USER_ID),
+        lambda t: routes._build_suggest_handoff_tools([t], _SESSION_ID, _USER_ID),
+        lambda t: routes._build_code_sandbox_tools([t], _SESSION_ID, _USER_ID),
     ]
 
     def build(tool_id: str) -> List[Any]:

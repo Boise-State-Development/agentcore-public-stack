@@ -336,6 +336,32 @@ class TestFirstTurn:
         assert asyncio.run(first_turn(store, agent_id="someone-else").context_block()) == ""
         assert store.get("alice", "h1").status == "open"
 
+    @pytest.mark.parametrize("agent_id", ["", "rubric"])
+    def test_a_prompt_step_is_never_accepted_by_a_turn(self, store, meta, agent_id):
+        """A prompt step has no Agent and no conversation (workflow-designer §21.3): only the Runtime claims it."""
+        now = datetime.now(timezone.utc).isoformat()
+        store.create(
+            Handoff(
+                handoff_id="p1", user_id="alice", session_id="src", kind="prompt", agent_id="",
+                model_id="us.anthropic.claude-haiku-5-5-v1:0", request="List the budget lines",
+                created_at=now, updated_at=now, run_id="run-1", step_id="s1",
+            )
+        )
+        turn = HandoffTurn.for_turn(
+            user_id="alice",
+            session_id="tgt",
+            agent_id=agent_id,
+            handoff_context=HandoffContextRequest(handoff_id="p1", text=EXCERPT),
+            session_row=None,
+            is_resume=False,
+            is_continuation=False,
+            store=store,
+        )
+
+        assert turn is None or asyncio.run(turn.context_block()) == ""
+        row = store.get("alice", "p1")
+        assert (row.status, row.target_session_id) == ("open", None)
+
     def test_a_second_send_gets_no_context(self, store, meta):
         asyncio.run(first_turn(store).context_block())
         second = first_turn(store)
@@ -441,3 +467,103 @@ class TestStatusWrites:
                 raise RuntimeError("throttled")
 
         self.run_turn(self.later_turn(_Broken()), frame("done"))  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------- a run step's title (workflow-runs §19)
+
+
+def _add_run_step(store: HandoffStore, agent_name: str = "Budget reader") -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    store.create(
+        Handoff(
+            handoff_id="h-step",
+            user_id="alice",
+            session_id="src",
+            kind="mention",
+            agent_id="rubric",
+            agent_name=agent_name,
+            request="review this proposal",
+            source_title="Course planning",
+            excerpt_hash=context_hash(EXCERPT),
+            created_at=now,
+            updated_at=now,
+            run_id="run-1",
+            step_id="step-1",
+        )
+    )
+
+
+def _turn_for(store: HandoffStore, handoff_id: str) -> HandoffTurn:
+    turn = HandoffTurn.for_turn(
+        user_id="alice",
+        session_id="tgt",
+        agent_id="rubric",
+        handoff_context=HandoffContextRequest(handoff_id=handoff_id, text=EXCERPT),
+        session_row=None,
+        is_resume=False,
+        is_continuation=False,
+        store=store,
+    )
+    assert turn is not None
+    return turn
+
+
+class TestRunStepAgentName:
+    def test_a_run_step_names_its_agent_once_the_stream_starts_acceptance(self, store, meta):
+        _add_run_step(store)
+
+        async def run():
+            turn = _turn_for(store, "h-step")
+            waiter = asyncio.create_task(turn.run_step_agent_name())
+            await asyncio.sleep(0)
+            assert not waiter.done()
+            assert turn._acceptance is None  # waiting never starts acceptance itself
+            turn.start()
+            name = await waiter
+            await turn.context_block()
+            await drain()
+            return name
+
+        assert asyncio.run(run()) == "Budget reader"
+
+    def test_a_single_handoff_keeps_its_plain_title(self, store, meta):
+        """A handoff with no runId is today's handoff: no Agent name reaches its title."""
+
+        async def run():
+            turn = first_turn(store)
+            turn.start()
+            name = await turn.run_step_agent_name()
+            await turn.context_block()
+            await drain()
+            return name
+
+        assert asyncio.run(run()) is None
+
+    def test_a_refused_step_keeps_its_plain_title(self, store, meta):
+        _add_run_step(store)
+        store.accept("alice", "h-step", target_session_id="other", context_edited=False, context_removed=False)
+
+        async def run():
+            turn = _turn_for(store, "h-step")
+            turn.start()
+            return await turn.run_step_agent_name()
+
+        assert asyncio.run(run()) is None
+
+    def test_a_turn_that_never_reaches_the_stream_gives_up(self, store, meta):
+        _add_run_step(store)
+        assert asyncio.run(_turn_for(store, "h-step").run_step_agent_name(timeout=0.01)) is None
+
+    def test_a_later_turn_has_no_name_to_give(self, monkeypatch):
+        monkeypatch.setenv("HANDOFFS_ENABLED", "true")
+        turn = HandoffTurn.for_turn(
+            user_id="alice",
+            session_id="tgt",
+            agent_id="rubric",
+            handoff_context=None,
+            session_row={"spawnedFrom": {"sessionId": "src", "handoffId": "h1"}},
+            is_resume=False,
+            is_continuation=False,
+        )
+        assert turn is not None and turn.request is None
+        assert asyncio.run(turn.run_step_agent_name(timeout=0.01)) is None

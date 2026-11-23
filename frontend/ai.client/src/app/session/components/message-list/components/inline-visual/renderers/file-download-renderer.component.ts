@@ -1,16 +1,35 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
+import { NgIcon, provideIcons } from '@ng-icons/core';
+import {
+  heroArrowDownTray,
+  heroCodeBracket,
+  heroDocument,
+  heroDocumentText,
+  heroPhoto,
+  heroPresentationChartBar,
+  heroTableCells,
+} from '@ng-icons/heroicons/outline';
 import { ConfigService } from '../../../../../../services/config.service';
+import { resolveMimeTypeFor } from '../../../../../../services/file-upload';
+import {
+  CONTENT_CARD_ACTION_CLASS,
+  CONTENT_CARD_COMPACT_ACTION_CLASS,
+  ContentCardComponent,
+  OUTPUT_CARD_HOST_CLASS,
+} from '../../../../../../components/content-card/content-card.component';
 import {
   downloadUrlFor,
   uploadIdFromHref,
 } from '../../../../../../shared/utils/file-download-url';
 import { FilePreviewStateService } from '../../../../../services/file-preview/file-preview-state.service';
 import { isPreviewableFilename } from '../../../../../services/file-preview/file-preview.model';
+import { attachmentKind, type AttachmentKind } from '../../../../attachment-card/attachment-kind';
+import { AttachmentPreviewComponent } from '../../../../attachment-card/attachment-preview.component';
 
 /**
  * Payload for the file_download inline visual, produced by the office document
- * tools (create_word_document, create_excel_spreadsheet, ...) and by
- * workspace_write.
+ * tools (create_word_document, modify_word_document, create_excel_spreadsheet,
+ * ...) and by workspace_write.
  *
  * `upload_id` is the current contract; the card resolves it to the durable
  * `/files/{uploadId}/download` route, which mints a presigned URL per click.
@@ -26,150 +45,100 @@ interface FileDownloadPayload {
   size_kb?: string;
 }
 
-/** Per-file-kind icon + accent styling, chosen from the filename extension. */
-interface FileKindStyle {
-  /** SVG path drawn inside the icon badge. */
-  iconPath: string;
-  /** Tailwind classes for the icon badge (bg + text color, light + dark). */
-  badgeClass: string;
-}
-
-const DOCUMENT_ICON =
-  'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z';
-const SPREADSHEET_ICON =
-  'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2';
-const PRESENTATION_ICON =
-  'M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v10a2 2 0 002 2z';
-
-const WORD_STYLE: FileKindStyle = {
-  iconPath: DOCUMENT_ICON,
-  badgeClass: 'bg-filetype-doc-50 text-filetype-doc-700 dark:bg-filetype-doc-900/30 dark:text-filetype-doc-400',
-};
-const EXCEL_STYLE: FileKindStyle = {
-  iconPath: SPREADSHEET_ICON,
-  badgeClass: 'bg-filetype-sheet-50 text-filetype-sheet-700 dark:bg-filetype-sheet-900/30 dark:text-filetype-sheet-400',
-};
-const POWERPOINT_STYLE: FileKindStyle = {
-  iconPath: PRESENTATION_ICON,
-  badgeClass: 'bg-filetype-presentation-50 text-filetype-presentation-700 dark:bg-filetype-presentation-900/30 dark:text-filetype-presentation-400',
-};
-const GENERIC_STYLE: FileKindStyle = {
-  iconPath: DOCUMENT_ICON,
-  badgeClass: 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300',
-};
-
-function styleForFilename(filename: string): FileKindStyle {
-  const lower = filename.toLowerCase();
-  if (lower.endsWith('.xlsx') || lower.endsWith('.xls') || lower.endsWith('.csv')) {
-    return EXCEL_STYLE;
-  }
-  if (lower.endsWith('.docx') || lower.endsWith('.doc')) {
-    return WORD_STYLE;
-  }
-  if (lower.endsWith('.pptx') || lower.endsWith('.ppt')) {
-    return POWERPOINT_STYLE;
-  }
-  return GENERIC_STYLE;
+interface ResolvedFile {
+  filename: string;
+  href: string;
+  uploadId: string;
+  previewable: boolean;
+  mimeType: string;
+  kind: AttachmentKind;
+  meta: string;
 }
 
 /**
- * Inline download card for a generated office file (Word .docx, Excel .xlsx,
- * ...). Rendered as a first-class message block (not inside the collapsed
- * tool-output card), so the download action is always visible and clickable.
- * The icon and accent color are chosen from the filename extension, so a single
- * `file_download` ui_type serves every office file type.
+ * The file a tool made (a Word document, a spreadsheet, a deck, a workspace
+ * file), drawn with the shared content card the attachment, artifact and
+ * browser cards use, so a file the user attached and a file the agent made
+ * read as one family: its preview in the tray, the type in the chrome row,
+ * then the name and a `TYPE · size` line.
  *
- * The download link uses the trailing-! important modifiers (text-white! and
- * no-underline!) because the global ".message-block a" rule in styles.css
- * (dark-blue text + underline) outranks a plain text-white utility by
- * specificity. The ! modifier emits !important, which wins regardless.
+ * Placed under the tool rail that made it (the call itself folds into the
+ * rail), so the download is never hidden inside a collapsed rail.
+ *
+ * The primary action is a compact Preview, rightmost, where the docked pane
+ * renders the format, with a Download icon before it; otherwise Download is
+ * the action. Download is a
+ * real link to the durable route, which 302s to a fresh presigned URL. The
+ * chat's prose rules stop at a content card (`@scope` in styles.css), so the
+ * links take the card's own colours rather than the answer's link style.
  */
 @Component({
   selector: 'app-file-download-renderer',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'block' },
+  imports: [ContentCardComponent, AttachmentPreviewComponent, NgIcon],
+  providers: [
+    provideIcons({
+      heroArrowDownTray,
+      heroCodeBracket,
+      heroDocument,
+      heroDocumentText,
+      heroPhoto,
+      heroPresentationChartBar,
+      heroTableCells,
+    }),
+  ],
+  host: { class: OUTPUT_CARD_HOST_CLASS },
   template: `
     @if (file(); as f) {
-      <div
-        class="flex items-center gap-3 rounded-lg border border-gray-200 dark:border-gray-700
-               bg-white dark:bg-gray-800 p-3"
-      >
-        <!-- File-kind icon -->
-        <div
-          class="flex size-10 shrink-0 items-center justify-center rounded-md {{ f.badgeClass }}"
-        >
-          <svg class="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              [attr.d]="f.iconPath"
-            />
-          </svg>
+      <app-content-card size="lg" [title]="f.filename" [meta]="f.meta">
+        <div contentCardChrome class="flex min-w-0 flex-1 items-center gap-1.5" aria-hidden="true">
+          <span class="flex shrink-0" [class]="f.kind.accent">
+            <ng-icon [name]="f.kind.icon" size="13" />
+          </span>
+          <span
+            class="min-w-0 flex-1 truncate rounded-full bg-gray-100 px-2 text-[10px]/4 text-gray-600 dark:bg-white/5 dark:text-gray-400"
+            >{{ f.kind.name }}</span
+          >
         </div>
 
-        <!-- Filename + size -->
-        <div class="min-w-0 flex-1">
-          <p class="truncate text-sm/6 font-medium text-gray-900 dark:text-white">
-            {{ f.filename }}
-          </p>
-          @if (f.size_kb) {
-            <p class="text-xs/5 text-gray-500 dark:text-gray-400">{{ f.size_kb }}</p>
-          }
-        </div>
+        <app-attachment-preview contentCardPreview [uploadId]="f.uploadId" [mimeType]="f.mimeType" />
 
-        <!-- Preview: only for formats the docked pane can render, and
-             only when an upload id resolved (a malformed legacy card
-             still gets its download link). -->
-        @if (f.previewable && f.uploadId; as uploadId) {
+        <!-- One container per branch: a slot only projects a control-flow
+             block whose root is a single node matching it. -->
+        @if (f.previewable) {
+          <ng-container contentCardAction>
+          <a
+            class="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-100"
+            [href]="f.href"
+            [attr.download]="f.filename"
+            [attr.aria-label]="'Download ' + f.filename"
+            [title]="'Download'"
+            rel="noopener noreferrer"
+          >
+            <ng-icon name="heroArrowDownTray" size="18" aria-hidden="true" />
+          </a>
           <button
             type="button"
-            class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl border border-gray-300 px-3.5 py-1.5
-                   text-sm/5 font-semibold text-gray-700 transition-colors
-                   hover:bg-gray-50
-                   focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500
-                   dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-            (click)="preview(uploadId, f.filename)"
+            [class]="compactActionClass"
+            [attr.aria-label]="'Preview ' + f.filename"
+            (click)="preview(f.uploadId, f.filename)"
           >
-            <svg class="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-              />
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-              />
-            </svg>
-            <span>Preview</span>
+            Preview
           </button>
+          </ng-container>
+        } @else {
+          <a
+            contentCardAction
+            [class]="actionClass"
+            [href]="f.href"
+            [attr.download]="f.filename"
+            [attr.aria-label]="'Download ' + f.filename"
+            rel="noopener noreferrer"
+          >
+            Download
+          </a>
         }
-
-        <!-- Download button -->
-        <a
-          class="inline-flex shrink-0 items-center gap-1.5 rounded-2xl bg-primary-accessible px-3.5 py-1.5
-                 text-sm/5 font-semibold text-white! no-underline! transition-colors
-                 hover:brightness-95
-                 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
-          [href]="f.href"
-          [attr.download]="f.filename"
-          rel="noopener noreferrer"
-        >
-          <svg class="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-            />
-          </svg>
-          <span>Download</span>
-        </a>
-      </div>
+      </app-content-card>
     }
   `,
 })
@@ -180,32 +149,32 @@ export class FileDownloadRendererComponent {
   private readonly config = inject(ConfigService);
   private readonly filePreview = inject(FilePreviewStateService);
 
-  /** Narrowed, validated payload with resolved icon styling (null when malformed). */
-  file = computed<
-    | (FileDownloadPayload &
-        FileKindStyle & { href: string; uploadId: string | null; previewable: boolean })
-    | null
-  >(() => {
+  protected readonly actionClass = CONTENT_CARD_ACTION_CLASS;
+  protected readonly compactActionClass = CONTENT_CARD_COMPACT_ACTION_CLASS;
+
+  /** Narrowed, validated payload with its kind resolved (null when malformed). */
+  file = computed<ResolvedFile | null>(() => {
     const raw = this.payload();
     if (!raw || typeof raw !== 'object') return null;
     const p = raw as Partial<FileDownloadPayload>;
     if (!p.filename) return null;
 
-    const appApiUrl = this.config.appApiUrl();
     // Legacy cards carry only an expired presigned S3 URL; the upload id
     // is still recoverable from its key, and preview needs the id rather
     // than the link, so resolve it once and derive both from it.
     const uploadId = p.upload_id ?? (p.download_url ? uploadIdFromHref(p.download_url) : null);
-    const href = uploadId ? downloadUrlFor(appApiUrl, uploadId) : null;
-    if (!href) return null;
+    if (!uploadId) return null;
 
+    const mimeType = resolveMimeTypeFor(p.filename, '');
+    const kind = attachmentKind(mimeType);
     return {
       filename: p.filename,
-      href,
+      href: downloadUrlFor(this.config.appApiUrl(), uploadId),
       uploadId,
       previewable: isPreviewableFilename(p.filename),
-      size_kb: p.size_kb,
-      ...styleForFilename(p.filename),
+      mimeType,
+      kind,
+      meta: p.size_kb ? `${kind.label} · ${p.size_kb}` : kind.label,
     };
   });
 

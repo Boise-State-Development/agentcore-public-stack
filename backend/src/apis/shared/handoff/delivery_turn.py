@@ -26,6 +26,14 @@ handed back to where it came from) gets no row; its line names the original. ``p
 cards read-only before the lease so the ``document_read`` gate can see a document coming
 (``document_hint``).
 
+**Run results** (``docs/specs/workflow-runs.md`` §7, PR-W.2). A row with ``parts`` is still one
+card and one conditional write. Its block is one wrapper per part, in step order
+(``render_delivery_parts``), each naming that step's Agent and conversation with its own artifact
+and file lines; a part that stopped or still waits is named with its status note. ``parts`` on the
+request carries the edited parts only, ``[{stepId, text}]``, re-capped here like an edited card;
+it is optional, so a send without it (a stale SPA, the terminal client) attaches the stored parts.
+Every part's files are written in the same batched write a card's are.
+
 **Never refused** (§6): an unknown, foreign, already-attached or dismissed id is skipped with a
 warning and the turn runs, so a stale tab can't brick a thread. The same goes for the whole field
 with ``HANDOFFS_ENABLED`` off, on a resume, on a continuation, and on a preview session. **Nothing
@@ -46,8 +54,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from apis.shared.feature_flags import handoffs_enabled
 from apis.shared.files.file_kinds import KIND_DOCUMENT, FileKindHints, file_kinds
 from apis.shared.files.linked_files import OriginalRef, line_for, rows_for, write_reference_rows
-from apis.shared.handoff.context import context_hash, render_delivery_block
+from apis.shared.handoff.context import (
+    DeliveryPartBlock,
+    context_hash,
+    render_delivery_block,
+    render_delivery_parts,
+)
 from apis.shared.handoff.delivery import (
+    DELIVERY_MAX_PARTS,
     DELIVERY_MAX_PER_TURN,
     Delivery,
     DeliveryFile,
@@ -56,6 +70,7 @@ from apis.shared.handoff.delivery import (
     get_delivery_store,
 )
 from apis.shared.handoff.metrics import emit_handoff_metric
+from apis.shared.handoff.models import MODEL_STEP_KINDS
 
 logger = logging.getLogger(__name__)
 
@@ -68,22 +83,34 @@ _DELIVERY_TEXT_FIELD_MAX_CHARS = 200_000
 _background: Set["asyncio.Task[Any]"] = set()
 
 
+class DeliveryPartEdit(BaseModel):
+    """One part of a run result the user edited before sending. Unedited parts are not sent."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    step_id: str = Field(..., alias="stepId", min_length=1, max_length=64)
+    text: str = Field(..., max_length=_DELIVERY_TEXT_FIELD_MAX_CHARS)
+
+
 class DeliveryAttachRequest(BaseModel):
-    """One card a send carries. ``text`` only when the user edited it."""
+    """One card a send carries. ``text`` only when the user edited it; ``parts`` only a run result's
+    edited parts. Both optional, so an older client's send is unchanged."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     delivery_id: str = Field(..., alias="deliveryId", min_length=1, max_length=64)
     text: Optional[str] = Field(None, max_length=_DELIVERY_TEXT_FIELD_MAX_CHARS)
+    parts: Optional[List[DeliveryPartEdit]] = Field(None, max_length=DELIVERY_MAX_PARTS)
 
 
 @dataclass(frozen=True)
 class AttachedDelivery:
-    """A delivery this turn took, and the block the model reads."""
+    """A delivery this turn took, and the block the model reads (a run result's parts, joined)."""
 
     row: Delivery
     block: str
     edited: bool
+    edited_parts: int = 0
 
 
 @dataclass
@@ -146,7 +173,7 @@ class DeliveryTurn:
                 (f.mime_type, f.filename)
                 for row in rows
                 if row.status == "pending" and row.to_session_id == self.session_id
-                for f in row.files
+                for f in [*row.files, *(pf for part in row.parts for pf in part.files)]
             )
 
         self._kinds = FileKindHints(asyncio.ensure_future(classify()))
@@ -215,6 +242,8 @@ class DeliveryTurn:
         if row is None:
             logger.warning("delivery %s ignored: not a pending card on this conversation", request.delivery_id)
             return None
+        if row.parts:
+            return self._attach_parts(row, request)
         text = row.text
         edited = False
         if request.text is not None:
@@ -225,6 +254,59 @@ class DeliveryTurn:
         return AttachedDelivery(
             row=row, block=render_delivery_block(text, row.from_title, row.artifacts, lines), edited=edited
         )
+
+    def _attach_parts(self, row: Delivery, request: DeliveryAttachRequest) -> AttachedDelivery:
+        """A run result's block: one wrapper per part, edited parts as sent, each part's file lines."""
+        edits = {edit.step_id: edit.text for edit in request.parts or []}
+        lines = self._share_part_files(row)
+        blocks: List[DeliveryPartBlock] = []
+        edited_parts = 0
+        for part in row.parts:
+            text = part.text
+            if part.status == "done" and part.step_id in edits:
+                text = cap_delivery_text(edits[part.step_id])
+                if (context_hash(text) if text else "") != part.text_hash:
+                    edited_parts += 1
+            blocks.append(
+                DeliveryPartBlock(
+                    text=text,
+                    agent_name=part.agent_name,
+                    from_title=part.from_title,
+                    status=part.status,
+                    artifacts=part.artifacts,
+                    files=lines.get(part.step_id, []),
+                    prompt=part.kind in MODEL_STEP_KINDS,
+                )
+            )
+        unknown = set(edits) - {p.step_id for p in row.parts if p.status == "done"}
+        if unknown:
+            logger.warning("delivery %s: %d edited parts ignored (no such finished step)", row.delivery_id, len(unknown))
+        return AttachedDelivery(
+            row=row, block=render_delivery_parts(blocks), edited=edited_parts > 0, edited_parts=edited_parts
+        )
+
+    def _share_part_files(self, row: Delivery) -> dict:
+        """Every part's files as reference rows here, in one batched write, and each part's lines.
+        As for a card: a failed write drops every part's lines, never the parts' text."""
+        originals = {part.step_id: [_original(f) for f in part.files] for part in row.parts if part.files}
+        if not originals:
+            return {}
+        rows = [
+            ref
+            for refs in originals.values()
+            for ref in rows_for(
+                refs, user_id=self.user_id, receiving_session_id=self.session_id, link_id=row.delivery_id
+            )
+        ]
+        try:
+            write_reference_rows(rows)
+        except Exception:  # noqa: BLE001 - the parts' text still goes
+            logger.warning("delivery %s: writing its files failed; sent without them", row.delivery_id, exc_info=True)
+            return {}
+        return {
+            step_id: [line_for(o, receiving_session_id=self.session_id, link_id=row.delivery_id) for o in refs]
+            for step_id, refs in originals.items()
+        }
 
     def _share_files(self, row: Delivery) -> list:
         """The card's files as reference rows here, and their lines. Runs only after this request
@@ -247,7 +329,13 @@ class DeliveryTurn:
         """Counts, and the ``edited`` flag on the row, in the background: nothing here waits."""
         emit_handoff_metric("DeliveryAttached", "send_back", session_id=self.session_id, detail=item.row.origin)
         if item.edited:
-            emit_handoff_metric("DeliveryEdited", "send_back", session_id=self.session_id, detail=item.row.origin)
+            emit_handoff_metric(
+                "DeliveryEdited",
+                "send_back",
+                session_id=self.session_id,
+                detail=item.row.origin,
+                count=item.edited_parts or 1,
+            )
             task = asyncio.ensure_future(
                 asyncio.to_thread(self.store.mark_edited, self.user_id, item.row.delivery_id)
             )
@@ -287,6 +375,7 @@ __all__ = [
     "AttachedDelivery",
     "DELIVERY_FIELD_MAX_ITEMS",
     "DeliveryAttachRequest",
+    "DeliveryPartEdit",
     "DeliveryTurn",
     "join_delivery_blocks",
 ]

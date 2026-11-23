@@ -9,7 +9,23 @@ A handoff lives on its **source** session. Its states::
           └─▶ dismissed
 
 ``abandoned`` is never stored: an ``open`` row older than ``ABANDON_AFTER`` reads as abandoned,
-so no sweep job is needed.
+so no sweep job is needed. Two kinds of ``open`` row never do: a suggestion's chip, and a step of
+an approved workflow run (``runApprovedAt``), which waits on the tab's queue rather than on a
+review sheet (``docs/specs/workflow-runs.md`` §19, PR-W.1).
+
+A **prompt step** (``kind="prompt"``, ``docs/specs/workflow-designer.md`` §21.3) is a step of a
+workflow run that is one model call, with no Agent and no conversation. Its row is kept so every
+reader that joins a step on ``handoffId`` keeps working, and it moves only along
+``PROMPT_TRANSITIONS``: ``open → running → done | stopped``, never ``needs_input``, and never with
+a ``targetSessionId``. The Runtime writes those moves (``apis.shared.handoff.prompt_steps``) by
+the field names below (``PROMPT_STEP_FIELDS``); nothing here writes them.
+
+A **checklist step** (``kind="checklist"``, ``docs/specs/workflow-designer.md`` §22.3) is the same
+kind of row: model calls with no Agent and no conversation, one per named field set, on the same
+invocation. It carries the prompt step's fields plus ``fieldSets`` (``CHECKLIST_STEP_FIELDS``), moves
+along the same transitions and stops for the same reasons. Its ``request`` is the step's own
+guidance only, possibly empty. Both kinds are ``MODEL_STEP_KINDS``: every reader that means "a step
+with no conversation" asks ``Handoff.is_model_step``.
 
 Status writes after acceptance happen after the target's ``done`` block (PR-0.2), which is why a
 ``needs_input`` row can go straight to ``done`` or ``stopped``: the intermediate ``running`` is
@@ -26,7 +42,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.sessions.models import PendingInterrupt
 
-HandoffKind = Literal["mention", "suggested", "send_back"]
+HandoffKind = Literal["mention", "suggested", "send_back", "prompt", "checklist"]
+#: A workflow run's prompt step (§21.3): one model call, no Agent, no conversation.
+KIND_PROMPT_STEP = "prompt"
+#: A workflow run's checklist step (§22.3): one model call per field set, no Agent, no conversation.
+KIND_CHECKLIST_STEP = "checklist"
+#: The steps that are model calls on the Runtime, with no Agent and no conversation.
+MODEL_STEP_KINDS: FrozenSet[str] = frozenset({KIND_PROMPT_STEP, KIND_CHECKLIST_STEP})
 WaitingKind = Literal["oauth_consent", "tool_approval", "user_question", "browser_login"]
 HandoffStatus = Literal["open", "running", "needs_input", "done", "stopped", "dismissed"]
 EffectiveHandoffStatus = Literal["open", "running", "needs_input", "done", "stopped", "dismissed", "abandoned"]
@@ -36,6 +58,12 @@ ABANDON_AFTER = timedelta(hours=24)
 HANDOFF_REQUEST_MAX_CHARS = 20_000
 #: Display-only text on the row (titles, the live status line on replay).
 HANDOFF_DISPLAY_MAX_CHARS = 240
+#: A suggestion's chip (``suggest_handoff``, §4.4): its title, its one-line reason, and the
+#: Agent name the model gave, before the SPA matches it against the user's Agents.
+SUGGESTION_TITLE_MAX_CHARS = 60
+SUGGESTION_TLDR_MAX_CHARS = 200
+SUGGESTION_PROMPT_MAX_CHARS = 4_000
+SUGGESTION_AGENT_HINT_MAX_CHARS = 120
 
 #: Allowed moves, by the status being left. ``needs_input`` and ``stopped`` may rewrite
 #: themselves (a second pause with a new ``waitingOn``); ``running`` may not, because the move
@@ -48,6 +76,58 @@ TRANSITIONS: Dict[str, FrozenSet[str]] = {
     "done": frozenset(),
     "dismissed": frozenset(),
 }
+
+
+#: A prompt step's moves (workflow-designer §21.3). Each is one conditional update; ``open → running``
+#: is the claim, so a step never runs twice. ``open → dismissed`` is a step removed at the sheet.
+PROMPT_TRANSITIONS: Dict[str, FrozenSet[str]] = {
+    "open": frozenset({"running", "dismissed"}),
+    "running": frozenset({"done", "stopped"}),
+    "done": frozenset(),
+    "stopped": frozenset(),
+    "dismissed": frozenset(),
+}
+
+#: Why a prompt step stopped (``stoppedReason``), §21.3.
+PromptStopReason = Literal["user_stopped", "too_large", "model_refused", "quota", "timeout", "error"]
+PROMPT_STOP_REASONS: FrozenSet[str] = frozenset(
+    {"user_stopped", "too_large", "model_refused", "quota", "timeout", "error"}
+)
+
+# A prompt step row's own attributes, by their stored (camelCase) names. The contract with the
+# Runtime's writes (PR-D.6b): it names them through these, never as literals of its own.
+#: The model the step runs on, as approved (retirement resolved at create).
+PROMPT_FIELD_MODEL_ID = "modelId"
+#: The answer, capped by ``cap_delivery_text`` at write.
+PROMPT_FIELD_OUTPUT_TEXT = "outputText"
+#: ``context_hash`` of ``outputText``.
+PROMPT_FIELD_OUTPUT_HASH = "outputHash"
+#: The call's output tokens, as the model reported them.
+PROMPT_FIELD_OUTPUT_TOKENS = "outputTokens"
+#: One of ``PROMPT_STOP_REASONS``; the same attribute a handoff row stops with.
+PROMPT_FIELD_STOPPED_REASON = "stoppedReason"
+#: When the row last moved; collect reads a ``done`` row's as its finish time.
+PROMPT_FIELD_UPDATED_AT = "updatedAt"
+PROMPT_STEP_FIELDS = (
+    PROMPT_FIELD_MODEL_ID,
+    PROMPT_FIELD_OUTPUT_TEXT,
+    PROMPT_FIELD_OUTPUT_HASH,
+    PROMPT_FIELD_OUTPUT_TOKENS,
+    PROMPT_FIELD_STOPPED_REASON,
+    PROMPT_FIELD_UPDATED_AT,
+)
+
+# A checklist step's row (workflow-designer §22.3): a prompt step's, plus the sets it runs. The
+# contract with the Runtime's writes (PR-D.7b), as ``PROMPT_STEP_FIELDS`` is for D.6b.
+#: The field-set names the step runs, in authored order. Written at create; the Runtime only reads it.
+CHECKLIST_FIELD_FIELD_SETS = "fieldSets"
+CHECKLIST_STEP_FIELDS = PROMPT_STEP_FIELDS + (CHECKLIST_FIELD_FIELD_SETS,)
+#: A checklist step moves exactly as a prompt step does. A field set that fails on its own does not
+#: stop the step: the step's answer says so, and its ``WFCHK#`` row is ``error``.
+CHECKLIST_TRANSITIONS: Dict[str, FrozenSet[str]] = PROMPT_TRANSITIONS
+#: Why a checklist step stopped: a prompt step's reasons.
+ChecklistStopReason = PromptStopReason
+CHECKLIST_STOP_REASONS: FrozenSet[str] = PROMPT_STOP_REASONS
 
 
 def sources_of(status: str) -> FrozenSet[str]:
@@ -123,9 +203,11 @@ class Handoff(BaseModel):
     session_id: str = Field(..., alias="sessionId", description="The source conversation")
     kind: HandoffKind
     status: HandoffStatus = "open"
-    agent_id: str = Field(..., alias="agentId")
-    agent_name: str = Field("", alias="agentName")
-    request: str = ""
+    agent_id: str = Field("", alias="agentId", description="Empty on a prompt step, which has no Agent")
+    agent_name: str = Field(
+        "", alias="agentName", description="The Agent's name; a prompt step's model's display name"
+    )
+    request: str = Field("", description="What the Agent is asked; a prompt step's instruction")
     source_title: str = Field("", alias="sourceTitle", description="The title the wrapper names, fixed at create")
     source_message_index: int = Field(
         -1, alias="sourceMessageIndex", description="Index of the message the handoff row sits after; -1 for none"
@@ -153,10 +235,80 @@ class Handoff(BaseModel):
     status_line: Optional[str] = Field(None, alias="statusLine")
     waiting_on: Optional[WaitingOn] = Field(None, alias="waitingOn")
     stopped_reason: Optional[str] = Field(None, alias="stoppedReason")
+    # A suggestion's chip (§4.4). Set by ``suggest_handoff``; a mention never has them.
+    title: Optional[str] = None
+    tldr: Optional[str] = None
+    agent_hint: Optional[str] = Field(
+        None, alias="agentHint", description="The Agent name the model gave, unresolved; the SPA matches it"
+    )
+    tool_use_id: Optional[str] = Field(
+        None, alias="toolUseId", description="The suggest_handoff call, which places the chip under its message"
+    )
+    # A step of a workflow run (docs/specs/workflow-runs.md §3.1, §9). A row with no ``runId`` is
+    # a handoff of its own, exactly as before; a step row is a ``mention`` accepted the same way.
+    run_id: Optional[str] = Field(None, alias="runId", description="The WFRUN# run this row is a step of")
+    step_id: Optional[str] = Field(None, alias="stepId", description="The step's id within its run")
+    run_approved_at: Optional[str] = Field(
+        None,
+        alias="runApprovedAt",
+        description="When the step's run was approved; an approved step not yet started never reads as abandoned",
+    )
+    run_steps: Optional[int] = Field(
+        None,
+        alias="runSteps",
+        description=(
+            "How many steps the run kept at approve, fixed from then on. Copied into the step "
+            "conversation's spawnedFrom at acceptance, so the sidebar can tell a finished run "
+            "from one with a step still to start (workflow-runs spec §20.4). Counts only the "
+            "steps that have a conversation: a prompt step never does (workflow-designer §21.3)"
+        ),
+    )
+    # A prompt step (workflow-designer §21.3); absent on every other kind.
+    model_id: Optional[str] = Field(None, alias=PROMPT_FIELD_MODEL_ID, description="A prompt step's model")
+    output_text: Optional[str] = Field(
+        None, alias=PROMPT_FIELD_OUTPUT_TEXT, description="A done prompt step's answer, capped at write"
+    )
+    output_hash: Optional[str] = Field(None, alias=PROMPT_FIELD_OUTPUT_HASH)
+    output_tokens: Optional[int] = Field(None, alias=PROMPT_FIELD_OUTPUT_TOKENS)
+    # A checklist step (workflow-designer §22.3); absent on every other kind.
+    field_sets: Optional[List[str]] = Field(
+        None, alias=CHECKLIST_FIELD_FIELD_SETS, description="A checklist step's field sets, in the order it runs them"
+    )
+    # A pinned Agent step of a saved-workflow run (workflow-designer §23); absent otherwise.
+    agent_version: Optional[int] = Field(
+        None,
+        alias="agentVersion",
+        description=(
+            "The Agent version this step runs for everyone, as the run recorded it. Written only while "
+            "AGENT_VERSION_PINNING_ENABLED is on and the step records one; the step's first turn must "
+            "name the same version"
+        ),
+    )
+
+    @property
+    def is_prompt_step(self) -> bool:
+        """Exactly a prompt step. A reader that means "no conversation" asks :attr:`is_model_step`."""
+        return self.kind == KIND_PROMPT_STEP
+
+    @property
+    def is_checklist_step(self) -> bool:
+        return self.kind == KIND_CHECKLIST_STEP
+
+    @property
+    def is_model_step(self) -> bool:
+        """A prompt or checklist step: model calls on the Runtime, with no Agent and no conversation."""
+        return self.kind in MODEL_STEP_KINDS
 
     def effective_status(self, now: Optional[datetime] = None) -> EffectiveHandoffStatus:
-        """The status as read: an ``open`` row past ``ABANDON_AFTER`` is ``abandoned``."""
-        if self.status != "open":
+        """The status as read: an ``open`` row past ``ABANDON_AFTER`` is ``abandoned``.
+
+        Except a suggestion: its chip stays in the thread for the user to start whenever they
+        like, so an old one is still ``open``. A mention's ``open`` row is a review sheet nobody
+        sent, and a day later it is noise. A step of an approved run is not: the user approved
+        it, and it is waiting on the tab's queue (or a Start after a reload), so it stays ``open``.
+        A step of a run still at its sheet ages like any other mention.
+        """
+        if self.status != "open" or self.kind == "suggested" or self.run_approved_at:
             return self.status
         try:
             created = datetime.fromisoformat(self.created_at)
@@ -199,6 +351,16 @@ class HandoffView(BaseModel):
         alias="relayedPrompts",
         description="A needs_input handoff's prompts, read from its target's breadcrumbs (apis.shared.handoff.relay)",
     )
+    title: Optional[str] = None
+    tldr: Optional[str] = None
+    agent_hint: Optional[str] = Field(None, alias="agentHint")
+    tool_use_id: Optional[str] = Field(None, alias="toolUseId")
+    run_id: Optional[str] = Field(None, alias="runId")
+    step_id: Optional[str] = Field(None, alias="stepId")
+    model_id: Optional[str] = Field(None, alias="modelId", description="A prompt step's model")
+    output_text: Optional[str] = Field(None, alias="outputText", description="A done prompt step's answer")
+    output_tokens: Optional[int] = Field(None, alias="outputTokens")
+    field_sets: Optional[List[str]] = Field(None, alias="fieldSets", description="A checklist step's field sets")
 
     @classmethod
     def from_row(cls, row: Handoff) -> "HandoffView":
@@ -219,6 +381,16 @@ class HandoffView(BaseModel):
             status_line=row.status_line,
             waiting_on=row.waiting_on,
             stopped_reason=row.stopped_reason,
+            title=row.title,
+            tldr=row.tldr,
+            agent_hint=row.agent_hint,
+            tool_use_id=row.tool_use_id,
+            run_id=row.run_id,
+            step_id=row.step_id,
+            model_id=row.model_id,
+            output_text=row.output_text,
+            output_tokens=row.output_tokens,
+            field_sets=row.field_sets,
         )
 
 
@@ -231,7 +403,29 @@ __all__ = [
     "HandoffView",
     "HandoffKind",
     "HandoffStatus",
+    "CHECKLIST_FIELD_FIELD_SETS",
+    "CHECKLIST_STEP_FIELDS",
+    "CHECKLIST_STOP_REASONS",
+    "CHECKLIST_TRANSITIONS",
+    "ChecklistStopReason",
+    "KIND_CHECKLIST_STEP",
+    "KIND_PROMPT_STEP",
+    "MODEL_STEP_KINDS",
+    "PROMPT_FIELD_MODEL_ID",
+    "PROMPT_FIELD_OUTPUT_HASH",
+    "PROMPT_FIELD_OUTPUT_TEXT",
+    "PROMPT_FIELD_OUTPUT_TOKENS",
+    "PROMPT_FIELD_STOPPED_REASON",
+    "PROMPT_FIELD_UPDATED_AT",
+    "PROMPT_STEP_FIELDS",
+    "PROMPT_STOP_REASONS",
+    "PROMPT_TRANSITIONS",
+    "PromptStopReason",
     "RelayedPrompt",
+    "SUGGESTION_AGENT_HINT_MAX_CHARS",
+    "SUGGESTION_PROMPT_MAX_CHARS",
+    "SUGGESTION_TITLE_MAX_CHARS",
+    "SUGGESTION_TLDR_MAX_CHARS",
     "TRANSITIONS",
     "TurnsCovered",
     "WaitingKind",

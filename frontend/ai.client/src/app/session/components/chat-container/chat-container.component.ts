@@ -41,6 +41,9 @@ import { ExpiredSessionNoticeComponent } from '../expired-session-notice/expired
 import { HandoffReviewSheetComponent } from '../handoff/handoff-review-sheet.component';
 import { DeliveryCardsComponent } from '../handoff/delivery-cards.component';
 import { SendBackSheetComponent } from '../handoff/send-back-sheet.component';
+import { WorkflowRunSheetComponent } from '../handoff/workflow-run-sheet.component';
+import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
+import { showsInThread } from '../../services/handoff/workflow-run-progress';
 
 /**
  * Configuration options for ChatContainerComponent.
@@ -89,6 +92,7 @@ export interface ChatContainerConfig {
     HandoffReviewSheetComponent,
     DeliveryCardsComponent,
     SendBackSheetComponent,
+    WorkflowRunSheetComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './chat-container.component.html',
@@ -115,6 +119,7 @@ export class ChatContainerComponent {
   private readonly modelService = inject(ModelService);
   private readonly projectsService = inject(ProjectsService);
   private readonly messageMap = inject(MessageMapService);
+  private readonly workflowRunState = inject(WorkflowRunStateService);
 
   /**
    * What the bound Agent fixes for this conversation, for the indicator.
@@ -300,7 +305,7 @@ export class ChatContainerComponent {
   // `mentionAgentId` and `invokedSkillIds` ride through untouched: the container is a
   // layout shell, and dropping either field here would silently turn every `@`-mention
   // back into a plain turn, or every `/` skill command into ordinary prose.
-  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }>();
+  messageSubmitted = output<{ content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; mentionAgentIds?: string[]; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }>();
   continueRequested = output<void>();
   /** "Try again" after a provider outage: resend the last message. */
   outageRetryRequested = output<void>();
@@ -367,6 +372,18 @@ export class ChatContainerComponent {
 
   // Computed signals
   protected readonly hasMessages = computed(() => this.messages().length > 0);
+  /**
+   * Whether to draw the thread rather than the empty state. A conversation with no turns still
+   * has a thread once a workflow run started from it has been approved (workflow-designer spec
+   * §20.3, PR-D.2's new-conversation start): the run's row, with Bring back results, Stop run and
+   * Save as workflow, and the result card it makes, are drawn only in the thread.
+   */
+  /** A run sheet is open on this conversation: the empty layout makes room for it (PR-D.5b). */
+  protected readonly runSheetOpen = computed(() => !!this.workflowRunState.reviewFor(this.sessionId()));
+
+  protected readonly showsThread = computed(
+    () => this.hasMessages() || this.workflowRunState.runsFor(this.sessionId()).some(showsInThread),
+  );
   /**
    * #111: whether the active agent permits source-document download from citations.
    * Read from the Agent shape first (the Designer surface), falling back to the legacy
@@ -474,7 +491,7 @@ export class ChatContainerComponent {
   }
 
   // Event handlers
-  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }) {
+  onMessageSubmitted(event: { content: string; timestamp: Date; fileUploadIds?: string[]; mentionAgentId?: string; mentionAgentIds?: string[]; invokedSkillIds?: string[]; folders?: FolderAttachmentData[]; pastedChars?: number }) {
     this.messageSubmitted.emit(event);
 
     // Wait for DOM to update (user message to be added) then scroll to it

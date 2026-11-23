@@ -12,6 +12,16 @@ export function toolResultMetadata(value: unknown): Record<string, unknown> | un
 }
 
 /**
+ * Whether a message is the user-role message that carries a tool round's
+ * results and nothing else. The server stores one after every tool round, so
+ * it holds a message index; it is protocol scaffolding, not something a person
+ * said, so nothing renders it and nothing treats it as the start of a turn.
+ */
+export function isToolResultMessage(message: Message): boolean {
+  return message.role === 'user' && message.content.every((block) => block.type === 'toolResult');
+}
+
+/**
  * Match tool results from user messages to their corresponding tool uses in assistant messages.
  * This reconstructs the tool state as it appears during streaming.
  *

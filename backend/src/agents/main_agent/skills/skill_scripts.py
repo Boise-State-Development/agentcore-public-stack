@@ -7,23 +7,26 @@ the whole file into ``modify_word_document.python_code`` on every run, which is
 a 20K-token silent generation before the tool even starts. With it, the model
 names the file and the tool loads it into the sandbox by reference.
 
-**Where it runs.** Only inside AWS Bedrock Code Interpreter, and in a
-dedicated interpreter, not the one model-written python-docx code uses: the
-skill-script interpreter is created with ``networkMode: SANDBOX`` (no public
-internet), and a run is bounded by :data:`SKILL_SCRIPT_TIMEOUT_SECONDS`. Its id
-is service-generated, so it is not in the Runtime's environment (the V2
-budget); :func:`resolve_skill_script_interpreter_id` reads it from the SSM
-parameter ``/<PROJECT_PREFIX>/agentcore/skill-script-interpreter-id`` on the
-first run and keeps it for the process. If it cannot be resolved the tool
-refuses: a skill script never falls back to the public interpreter.
+**Where it runs.** Only inside AWS Bedrock Code Interpreter, in the stack's
+one interpreter, which has no network path out: ``VPC`` mode in an isolated
+VPC with no route, no security-group egress and DNS off
+(``code-interpreter-construct.ts``). A run is
+bounded by :data:`SKILL_SCRIPT_TIMEOUT_SECONDS` in a session of its own. The
+id reaches this module through the SSM parameter
+``/<PROJECT_PREFIX>/agentcore/skill-script-interpreter-id`` rather than the
+Runtime's environment (the V2 budget);
+:func:`resolve_skill_script_interpreter_id` reads it on the first run and
+keeps it for the process. If it cannot be resolved the tool refuses rather
+than guess at an interpreter.
 
 Nothing here imports, ``exec``s or ``compile``s the script on the Runtime host:
 this module reads its bytes from the skill-resources store and hands them to
 the sandbox as a file. That is why a skill script stays inert everywhere else
 (``read_skill_file`` still returns it as text with a notice).
 
-**What can be run.** A resource of kind ``script`` with a ``.py`` filename,
-from a skill bound to this turn. Not a ``reference``, whatever its text says:
+**What can be run.** A resource of kind ``script`` with a ``.py`` filename
+(the Word tools) or one of the caller's ``extensions`` (``run_code`` also runs
+``.js``/``.cjs``/``.mjs`` with Node), from a skill bound to this turn. Not a ``reference``, whatever its text says:
 
 * The kind is the author's declaration, made when the file is added and shown
   in the bundle listing (``scripts/…``), and it matches the agentskills.io
@@ -70,6 +73,9 @@ from agents.main_agent.skills.strands_mapping import (
     _manifest_paths,
     _resolve_resource,
 )
+
+#: What the Word tools run: their skill scripts are Python, run in Code Interpreter.
+PYTHON_SCRIPT_EXTENSIONS: tuple = (".py",)
 
 logger = logging.getLogger(__name__)
 
@@ -174,12 +180,26 @@ def bind_turn_skill_records(tools: Iterable[Any], records: Optional[Iterable[Any
     return bound
 
 
-def resolve_skill_script(records: Iterable[Any], skill_name: str, path: str) -> Any:
+def _named(extensions: tuple) -> str:
+    """``.py``, ``.py and .js``, ``.py, .js and .mjs``."""
+    if len(extensions) < 2:
+        return "".join(extensions) or "no"
+    return ", ".join(extensions[:-1]) + " and " + extensions[-1]
+
+
+def resolve_skill_script(
+    records: Iterable[Any],
+    skill_name: str,
+    path: str,
+    extensions: Iterable[str] = PYTHON_SCRIPT_EXTENSIONS,
+) -> Any:
     """The manifest entry for ``path`` in the bound skill ``skill_name``.
 
     Raises :class:`SkillScriptError` when the skill is not bound on this turn,
-    the path is not in its manifest, or the entry is not a runnable script.
+    the path is not in its manifest, or the entry is not a runnable script
+    with one of ``extensions`` (lowercase, with the dot).
     """
+    allowed = tuple(extensions)
     by_slug = {slugify_skill_name(getattr(r, "skill_id", "")): r for r in records or []}
     record = by_slug.get((skill_name or "").strip())
     if record is None:
@@ -201,16 +221,18 @@ def resolve_skill_script(records: Iterable[Any], skill_name: str, path: str) -> 
 
     kind = getattr(ref, "kind", "reference")
     shown = _manifest_path(ref)
+    stem, ext = os.path.splitext(ref.filename)
     if kind != "script":
+        again = ref.filename if ext.lower() in allowed else f"{stem}.py"
         raise SkillScriptError(
             f"'{shown}' is a {kind} file, not a script, so it cannot be run. Only "
-            "Python files under scripts/ can be run; the skill's author can add "
-            f"it again as scripts/{os.path.splitext(ref.filename)[0]}.py."
+            f"{_named(allowed)} files under scripts/ can be run; the skill's author "
+            f"can add it again as scripts/{again}."
         )
-    if not ref.filename.lower().endswith(".py"):
-        raise SkillScriptError(
-            f"'{shown}' is not a Python file. Only .py scripts can be run."
-        )
+    if ext.lower() not in allowed:
+        if allowed == PYTHON_SCRIPT_EXTENSIONS:
+            raise SkillScriptError(f"'{shown}' is not a Python file. Only .py scripts can be run.")
+        raise SkillScriptError(f"'{shown}' can't be run. Only {_named(allowed)} scripts can be run.")
     size = getattr(ref, "size", 0) or 0
     if size > MAX_RESOURCE_BYTES:
         raise SkillScriptError(
@@ -300,7 +322,7 @@ def _read_interpreter_id_parameter(name: str) -> str:
 
 
 def resolve_skill_script_interpreter_id() -> Optional[str]:
-    """The no-network interpreter's id, or ``None`` when it cannot be found.
+    """The skill-script interpreter's id, or ``None`` when it cannot be found.
 
     Env override first (local development), then SSM, read once per process
     and kept. A failed read is not cached, so a parameter created after this

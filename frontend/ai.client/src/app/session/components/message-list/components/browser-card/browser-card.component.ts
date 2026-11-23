@@ -9,6 +9,7 @@ import {
   CONTENT_CARD_ACTION_CLASS,
   ContentCardComponent,
   type ContentCardMenuItem,
+  OUTPUT_CARD_HOST_CLASS,
 } from '../../../../../components/content-card/content-card.component';
 
 /** One entry in the card's overflow menu. */
@@ -34,9 +35,10 @@ export type BrowserCardMenuItem = ContentCardMenuItem;
   selector: 'app-browser-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [ContentCardComponent],
-  host: { class: 'block w-full max-w-md' },
+  host: { class: OUTPUT_CARD_HOST_CLASS },
   template: `
     <app-content-card
+      size="lg"
       [title]="title()"
       [meta]="host()"
       [status]="status()"

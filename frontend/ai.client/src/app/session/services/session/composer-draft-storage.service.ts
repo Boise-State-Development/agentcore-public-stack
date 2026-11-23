@@ -113,6 +113,11 @@ export interface StoredComposerDraft {
   /** The Agent an `@`-mention bound to the next turn, by id (D11). */
   mentionAgentId?: string;
   /**
+   * Further Agents mentioned for the same handoff, in order, after `mentionAgentId`
+   * (workflow runs, `features.workflowRuns`). Absent for a single mention.
+   */
+  additionalMentionAgentIds?: string[];
+  /**
    * Follow-ups the user queued behind a streaming turn and that were never
    * confirmed as delivered. Text only — on restore they fold back into the
    * composer rather than re-arming, so nothing here carries a queue's promise.
@@ -172,6 +177,7 @@ function isStoredAttachment(value: unknown): value is StoredAttachment {
 @Injectable({ providedIn: 'root' })
 export class ComposerDraftStorageService {
   private readonly _discarded = signal<{ key: string } | null>(null);
+  private readonly _released = signal<{ key: string; uploadIds: readonly string[] } | null>(null);
 
   /**
    * The last draft whose attachments were discarded from outside its composer
@@ -179,6 +185,12 @@ export class ComposerDraftStorageService {
    * too. A fresh object per call, so the same key twice still notifies.
    */
   readonly discarded = this._discarded.asReadonly();
+
+  /**
+   * The last files released from outside their composer ({@link releaseAttachments}), for the
+   * composer showing that draft to take those cards down too. A fresh object per call.
+   */
+  readonly released = this._released.asReadonly();
 
   constructor() {
     this.prune();
@@ -190,8 +202,29 @@ export class ComposerDraftStorageService {
    */
   discardAttachments(key: string): void {
     const draft = this.read(key);
-    this.write(key, { text: draft.text, mentionAgentId: draft.mentionAgentId, queued: draft.queued });
+    this.write(key, {
+      text: draft.text,
+      mentionAgentId: draft.mentionAgentId,
+      additionalMentionAgentIds: draft.additionalMentionAgentIds,
+      queued: draft.queued,
+    });
     this._discarded.set({ key });
+  }
+
+  /**
+   * Take these files off a draft and keep everything else: its text, queued follow-ups, folders
+   * and any other file. For files that already went somewhere else, such as a saved workflow's
+   * file once its run started (workflow-designer.md §20.3, PR-D.5b). The composer showing the
+   * draft follows through {@link released}; one not on screen finds the row already rewritten.
+   */
+  releaseAttachments(key: string, uploadIds: readonly string[]): void {
+    if (uploadIds.length === 0) return;
+    const gone = new Set(uploadIds);
+    const draft = this.read(key);
+    if ((draft.attachments ?? []).some((attachment) => gone.has(attachment.uploadId))) {
+      this.write(key, { ...draft, attachments: draft.attachments?.filter((attachment) => !gone.has(attachment.uploadId)) });
+    }
+    this._released.set({ key, uploadIds: [...uploadIds] });
   }
 
   /** The remembered draft for a conversation; {@link EMPTY_DRAFT} when there is none. */
@@ -330,6 +363,9 @@ export class ComposerDraftStorageService {
         updatedAt: value.updatedAt,
         mentionAgentId:
           typeof value.mentionAgentId === 'string' ? value.mentionAgentId : undefined,
+        additionalMentionAgentIds: Array.isArray(value.additionalMentionAgentIds)
+          ? value.additionalMentionAgentIds.filter((entry): entry is string => typeof entry === 'string')
+          : undefined,
         queued: Array.isArray(value.queued)
           ? value.queued.filter((entry): entry is string => typeof entry === 'string')
           : undefined,

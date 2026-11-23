@@ -31,10 +31,10 @@ Design notes
   only the python-docx specifics (preamble, generate/modify/extract) and the
   four tool factories.
 * A skill script (``skill_name`` + ``path``, ``WORD_SKILL_SCRIPTS_ENABLED``)
-  runs in a separate interpreter with no public network, resolved by
-  ``resolve_skill_script_interpreter_id``, and under
-  ``SKILL_SCRIPT_TIMEOUT_SECONDS``. It never falls back to the interpreter
-  model-written ``python_code`` uses.
+  runs in a session of its own, under ``SKILL_SCRIPT_TIMEOUT_SECONDS``, on the
+  interpreter ``resolve_skill_script_interpreter_id`` names (SSM). That is the
+  same no-egress interpreter ``python_code`` uses; the lookup stays separate
+  so a script is refused, not run elsewhere, when the parameter is missing.
 * Identity (``user_id`` / ``session_id``) is captured by closure via the
   ``make_*`` factories — the same pattern used by the artifacts and
   spreadsheet_analysis tools (the Strands runtime here does NOT populate
@@ -540,9 +540,9 @@ async def _find_word_document(
 async def _interpreter_for(wants_script: bool) -> Optional[str]:
     """The interpreter id for this call, or ``None``.
 
-    A skill script gets the no-network skill-script interpreter (an SSM read
-    on first use, so off the event loop); ``python_code`` gets the existing
-    one. There is no fallback from the first to the second.
+    A skill script's id comes from SSM (read on first use, so off the event
+    loop); ``python_code``'s from the environment. Both name the same
+    no-egress interpreter. A script never falls back to the environment's id.
     """
     if wants_script:
         return await asyncio.to_thread(resolve_skill_script_interpreter_id)

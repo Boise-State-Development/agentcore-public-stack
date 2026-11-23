@@ -50,6 +50,18 @@ class _DocGenError(Exception):
     """Raised when Code Interpreter fails to run the document code."""
 
 
+class StorageQuotaExceededError(Exception):
+    """Saving a file would take the user past their file-storage quota."""
+
+
+def _user_quota_bytes() -> int:
+    """The per-user storage quota, as app-api's upload path reads it."""
+    try:
+        return int(os.environ.get("FILE_UPLOAD_USER_QUOTA_BYTES", 1024 * 1024 * 1024))
+    except ValueError:
+        return 1024 * 1024 * 1024
+
+
 class _StorageNotConfiguredError(Exception):
     """Raised when the user-files S3 bucket is not configured for the runtime."""
 
@@ -360,6 +372,19 @@ async def _store_document(
         get_file_upload_repository,
     )
 
+    # The same quota an upload is held to (app-api ``FileUploadService``), so a
+    # tool cannot write past what the user could upload. Counted below once the
+    # row exists, as uploads are, so deleting the file gives the space back.
+    repository = get_file_upload_repository()
+    quota = await repository.get_user_quota(user_id)
+    limit = _user_quota_bytes()
+    if quota.total_bytes + len(file_bytes) > limit:
+        raise StorageQuotaExceededError(
+            f"saving {filename} would pass the user's file storage limit "
+            f"({quota.total_bytes / (1024 * 1024):.0f} of {limit / (1024 * 1024):.0f} MB used). "
+            "Tell the user to delete files they no longer need."
+        )
+
     bucket = _user_files_bucket()
     timestamp_hex = format(
         int(datetime.now(timezone.utc).timestamp() * 1000), "x"
@@ -386,10 +411,63 @@ async def _store_document(
         s3_bucket=bucket,
         status=FileStatus.READY,
     )
-    await get_file_upload_repository().create_file(metadata)
+    # The card preview goes beside the file while the row is written, so the
+    # tool waits for the slower of the two, not both.
+    await asyncio.gather(
+        repository.create_file(metadata),
+        _store_card_preview(bucket, s3_key, filename, mime_type, file_bytes),
+    )
+    try:
+        await repository.increment_quota(user_id, len(file_bytes))
+    except Exception:  # noqa: BLE001 - the file is saved; a missed count is logged
+        logger.exception("could not count a saved file against the user's quota")
 
     size_kb = f"{len(file_bytes) / 1024:.1f} KB"
     return upload_id, size_kb
+
+
+async def _store_card_preview(
+    bucket: str, s3_key: str, filename: str, mime_type: str, file_bytes: bytes
+) -> None:
+    """Write the download card's preview of a generated file, best-effort.
+
+    An uploaded Word, spreadsheet or deck file gets ``_derived/preview.json``
+    from the prepare Lambda, and its card draws the file's opening lines,
+    first rows or first slide from it. A generated file is written READY here
+    and never passes through that Lambda, so without this its card would only
+    ever show a skeleton. ``GET /files/previews`` serves the object for any
+    ready row with a preview format, and deleting the file removes it with the
+    rest of ``_derived/``, so writing it is all a generated file needs.
+
+    Display only: nothing here reaches the tool result or the model. The parse
+    runs in a worker thread (it reads at most a few MB of the zip), and any
+    failure is logged and swallowed, because a missing preview is a skeleton,
+    never a failed tool.
+    """
+    from apis.shared.files.attachment_preview import (
+        PreviewUnavailable,
+        build_preview,
+        encode_preview,
+        preview_format,
+        preview_key,
+    )
+
+    fmt = preview_format(filename, mime_type)
+    if fmt is None:
+        return
+    try:
+        preview = await asyncio.to_thread(build_preview, fmt, file_bytes)
+        await asyncio.to_thread(
+            _s3().put_object,
+            Bucket=bucket,
+            Key=preview_key(s3_key),
+            Body=encode_preview(preview),
+            ContentType="application/json",
+        )
+    except PreviewUnavailable as e:
+        logger.info("Generated-file preview not built for %s: %s", filename, e)
+    except Exception:  # noqa: BLE001 - a preview is never worth a failed tool
+        logger.warning("Generated-file preview not stored for %s", filename, exc_info=True)
 
 
 def _download_card(filename: str, upload_id: str, size_kb: str, verb: str, details: str = "") -> str:

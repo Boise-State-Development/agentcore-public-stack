@@ -195,6 +195,15 @@
       than the caret: a composer is anchored to the bottom of the viewport, so "above the
       input" is where the menu can always open without being clipped.
     -->
+    @if (mentionLimitReached()) {
+      <!-- Workflow runs: a ninth mention is refused (§20.5). Polite, so the user hears why no menu opened. -->
+      <p
+        role="status"
+        class="absolute bottom-full left-0 z-20 mb-2 rounded-2xl border border-gray-200 bg-white px-3 py-2 text-xs/5 text-gray-700 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+      >
+        Up to 8 Agents in one handoff
+      </p>
+    }
     @if (isMentionMenuOpen()) {
       <app-agent-mention-menu
         [items]="mentionResults()"
@@ -251,7 +260,7 @@
 
         <!-- Screen readers get in words what the tint shows. -->
         <span class="sr-only" role="status">
-          @if (mentionedAgent(); as agent) {
+          @for (agent of mentionedAgents(); track agent.agentId) {
             This message goes to {{ agent.name }}.
           }
           @for (command of invokedSkills(); track command.skillId) {
@@ -350,6 +359,8 @@
             [remainingFolders]="remainingFolderSlots()"
             (sourceFolderPicked)="onSourceFolderPicked($event)"
             (skillPicked)="insertSkillCommand($event)"
+            [showWorkflows]="workflowsOffered()"
+            [sessionId]="sessionId()"
           />
         }
       </div>

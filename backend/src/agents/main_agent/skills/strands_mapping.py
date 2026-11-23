@@ -15,6 +15,7 @@ retired).
 from __future__ import annotations
 
 import logging
+import posixpath
 from typing import Any, List, NamedTuple, Optional
 
 from strands import AgentSkills, Skill, tool
@@ -61,10 +62,30 @@ _WORD_RUNNABLE_SCRIPT_NOTICE = (
 )
 
 
+# The notice while CODE_SANDBOX_ENABLED is on, when ``run_code`` can run any
+# Python script a bound skill ships (docs/specs/skill-code-sandbox.md §5). It
+# names the Word tools too only while WORD_SKILL_SCRIPTS_ENABLED is on. Chosen
+# per deployment, so it is constant for a session.
+_RUN_CODE_SCRIPT_NOTICE = (
+    "[This script is stored with the skill. If you have the run_code tool, run "
+    "it with run_code (skill_name, path and argv as the skill's instructions "
+    "give them) instead of copying it; read it only to learn what it does. "
+    "{word}Otherwise read it to understand the approach, then reproduce the "
+    "steps yourself.]"
+)
+_RUN_CODE_WORD_SENTENCE = (
+    "A Python file that builds or edits a Word document can also run through "
+    "create_word_document or modify_word_document's skill_name and path. "
+)
+
+
 def _script_notice() -> str:
     """The notice ``read_skill_file`` puts ahead of a script's text."""
-    from apis.shared.feature_flags import word_skill_scripts_enabled
+    from apis.shared.feature_flags import code_sandbox_enabled, word_skill_scripts_enabled
 
+    if code_sandbox_enabled():
+        word = _RUN_CODE_WORD_SENTENCE if word_skill_scripts_enabled() else ""
+        return _RUN_CODE_SCRIPT_NOTICE.format(word=word)
     return _WORD_RUNNABLE_SCRIPT_NOTICE if word_skill_scripts_enabled() else _INERT_SCRIPT_NOTICE
 
 
@@ -96,6 +117,40 @@ def _bundled_group(ref: Any) -> str:
     return kind if kind in KIND_DIRS else "reference"
 
 
+#: Files the skill's scripts read and the model has no reason to open, listed
+#: as one line per group instead of one per file. anthropics/skills' Office
+#: bundles ship 39 OOXML schemas: listed singly they cost ~1,000 tokens on every
+#: activation for paths ``validate.py`` reads from disk.
+_COLLAPSED_EXTENSIONS = (".xsd",)
+
+
+def _is_collapsed(ref: Any) -> bool:
+    return _manifest_path(ref).lower().endswith(_COLLAPSED_EXTENSIONS)
+
+
+def _bundled_lines(members: List[Any]) -> List[str]:
+    """One line per file, the collapsed ones as a single line where the first one sits.
+
+    A lone schema keeps its own line: collapsing it saves nothing.
+    """
+    collapsed = [r for r in members if _is_collapsed(r)]
+    if len(collapsed) < 2:
+        return [f"- {_manifest_path(r)}" for r in members]
+    folder = posixpath.commonpath([posixpath.dirname(_manifest_path(r)) for r in collapsed])
+    summary = (
+        f"- {folder}/ holds {len(collapsed)} XML schemas (.xsd) that the scripts read; "
+        "not listed one by one"
+    )
+    lines: List[str] = []
+    for r in members:
+        if not _is_collapsed(r):
+            lines.append(f"- {_manifest_path(r)}")
+        elif summary:
+            lines.append(summary)
+            summary = ""
+    return lines
+
+
 def _reference_files_section(record: Any) -> str:
     """A generated 'Bundled files' block for a skill's instructions.
 
@@ -103,7 +158,8 @@ def _reference_files_section(record: Any) -> str:
     list resources on activation. We append this listing to the instructions so
     the model knows what it can pull with ``read_skill_file`` (spec §5, L3).
     Files are grouped as References, Scripts and Assets, in manifest order
-    within a group, and a group the skill has no files of is left out. Only new
+    within a group, and a group the skill has no files of is left out. Two or
+    more XML schemas in a group are one line naming their folder. Only new
     activation results carry this wording; history already written keeps the
     listing it was written with.
     """
@@ -114,7 +170,7 @@ def _reference_files_section(record: Any) -> str:
     for kind, heading in _BUNDLED_FILE_GROUPS:
         members = [r for r in refs if _bundled_group(r) == kind]
         if members:
-            lines = "\n".join(f"- {_manifest_path(r)}" for r in members)
+            lines = "\n".join(_bundled_lines(members))
             groups.append(f"### {heading}\n{lines}")
     return (
         "\n\n## Bundled files\n"

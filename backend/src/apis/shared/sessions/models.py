@@ -6,10 +6,11 @@ This module contains all session-related data models including:
 - Session preferences and configuration
 """
 
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from apis.shared.scheduled_prompts.models import is_headless_session
 from apis.shared.sessions.session_lease import STEER_QUEUE_MAX_CHARS
@@ -452,6 +453,11 @@ class SessionMetadata(BaseModel):
         alias="contextWindow",
         description="Model max input tokens at the time of the most recent turn",
     )
+    long_context_threshold: Optional[int] = Field(
+        default=None,
+        alias="longContextThreshold",
+        description="Prompt tokens past which the most recent turn's model bills on its long-context row",
+    )
 
     # Cumulative count of turns rolled into a compaction summary across this
     # session's lifetime. Lifted out of the nested `compaction` map at GET
@@ -740,6 +746,31 @@ def derive_awaiting_input(
     return next((kind for kind in _AWAITING_INPUT_ORDER if kind in kinds), None)
 
 
+class SessionSpawnedFromLink(BaseModel):
+    """Where a handoff's target conversation came from, as the session list carries it.
+
+    Read from ``spawnedFrom`` on the row the list already loaded (handoffs spec §4.2), so it costs
+    no read. ``runId`` is set on a workflow run's step (workflow-runs spec §19 PR-W.4c), which the
+    sidebar nests under its source. ``settled`` is set once the handoff is done (a ``done`` row is
+    frozen) and ``runSteps`` is the run's kept step count, so the sidebar can count a run whose
+    steps all started and all settled without reading the run.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+    session_id: str = Field(..., alias="sessionId", description="The source conversation")
+    handoff_id: Optional[str] = Field(None, alias="handoffId", description="The source's HANDOFF# row")
+    run_id: Optional[str] = Field(None, alias="runId", description="Set on a workflow run's step")
+    run_steps: Optional[int] = Field(
+        None,
+        alias="runSteps",
+        description="On a run's step: how many steps the run kept at approve, started or not",
+    )
+    settled: Optional[bool] = Field(
+        None,
+        description="True once this conversation's handoff is done; absent until then",
+    )
+
+
 class SessionMetadataResponse(BaseModel):
     """Response containing session metadata"""
 
@@ -779,6 +810,11 @@ class SessionMetadataResponse(BaseModel):
         None,
         alias="contextWindow",
         description="Model max input tokens at the time of the most recent turn",
+    )
+    long_context_threshold: Optional[int] = Field(
+        default=None,
+        alias="longContextThreshold",
+        description="Prompt tokens past which the most recent turn's model bills on its long-context row",
     )
     total_summarized_turns: Optional[int] = Field(
         default=None,
@@ -824,6 +860,26 @@ class SessionMetadataResponse(BaseModel):
         alias="awaitingInput",
         description="Which prompt this conversation's paused turn is waiting on (OAuth consent, tool approval, a clarifying question, a browser sign-in), only while the pause can still be answered; drives the amber 'needs your input' dot in the session list. Derived from pendingInterrupts + pausedTurn, which are never returned here",
     )
+    spawned_from: Optional[SessionSpawnedFromLink] = Field(
+        default=None,
+        alias="spawnedFrom",
+        description="Set on a handoff's target conversation: {sessionId, handoffId, runId?, runSteps?, settled?}, from the row already loaded. A workflow run's step carries runId, and the sidebar nests it under its source (workflow-runs spec §20.4); settled is true once the handoff is done, so the sidebar reads no finished run",
+    )
+
+    @field_validator("spawned_from", mode="before")
+    @classmethod
+    def _readable_spawned_from(cls, value: Any) -> Any:
+        """A malformed link on one row drops the link, never the whole list."""
+        if not isinstance(value, dict) or not isinstance(value.get("sessionId"), str):
+            return None
+        link = {key: value[key] for key in ("sessionId", "handoffId", "runId") if isinstance(value.get(key), str)}
+        steps = value.get("runSteps")
+        # A stored number comes back as Decimal, or float once the row's numbers are converted.
+        if isinstance(steps, (int, float, Decimal)) and not isinstance(steps, bool) and steps > 0 and steps == int(steps):
+            link["runSteps"] = int(steps)
+        if value.get("settled") is True:
+            link["settled"] = True
+        return link
 
     @model_validator(mode="before")
     @classmethod
@@ -961,6 +1017,17 @@ class PricingSnapshot(BaseModel):
     )
     currency: str = Field(default="USD", description="Currency code")
     snapshot_at: str = Field(..., alias="snapshotAt", description="ISO timestamp when pricing was captured")
+    # The model's long-context row, captured with the rates so a historical
+    # row reprices exactly as it was billed (`CostCalculator.rates_for_call`).
+    long_context_threshold_tokens: Optional[int] = Field(
+        None, alias="longContextThresholdTokens", description="Prompt tokens above which the long-context rates apply"
+    )
+    long_context_input_multiplier: Optional[float] = Field(
+        None, alias="longContextInputMultiplier", description="Long-context multiplier on input and both cache rates"
+    )
+    long_context_output_multiplier: Optional[float] = Field(
+        None, alias="longContextOutputMultiplier", description="Long-context multiplier on the output rate"
+    )
 
 
 class ModelInfo(BaseModel):
@@ -1169,6 +1236,11 @@ class MessagesListResponse(BaseModel):
     deliveries: List[Dict[str, Any]] = Field(
         default_factory=list,
         description="Pending deliveries into this conversation (handoffs spec §4.8), oldest first: {deliveryId, fromSessionId, fromTitle, handoffId, origin, text, artifacts: [{artifactId, version, title, contentType}], createdAt}. The SPA shows each as a card on the composer, labelled \"From {fromTitle}\", and the next send carries it as `deliveries: [{deliveryId, text?}]`. An attached card is not listed: its block is in the user message it was sent with. Empty while HANDOFFS_ENABLED is off. Returned only on the first page.",
+    )
+    workflow_runs: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        alias="workflowRuns",
+        description="Workflow runs started from this conversation (workflow-runs spec §9), oldest first, each shaped like `GET /sessions/{id}/workflow-runs/{runId}` ({runId, status, request, steps: [{stepId, handoffId, agentId, agentName, request, removed, handoff}], fileIds, limits, sourceMessageIndex, approvedAt, ...}). `status` is the run's own (`open`, `approved`, `dismissed`, `stopped`, or `abandoned` for an open run a day old); each step's `handoff` is its row's view, without `relayedPrompts` (a sent step is in `handoffs` too, with them). UI only. Empty while WORKFLOW_RUNS_ENABLED is off. Returned only on the first page.",
     )
     from_archive: bool = Field(
         False,

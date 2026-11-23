@@ -60,6 +60,16 @@ MEETING_TASKS_TOOL_IDS = frozenset(
     {"google_calendar_meetings", "zoom_meeting_transcripts", "github_issues_local"}
 )
 
+# Skill scripts and model-written Python in the isolated Code Interpreter
+# (bound to session/user, plus the turn's skill records). Additionally gated
+# on ``code_sandbox_enabled()`` (docs/specs/skill-code-sandbox.md).
+CODE_SANDBOX_TOOL_IDS = frozenset({"run_code"})
+
+# Suggested handoffs (bound to session/user): ``suggest_handoff`` offers the
+# user a chip for a separate conversation (docs/specs/agent-handoffs-and-consults.md
+# §4.4). Additionally gated on ``handoff_suggestions_enabled()``.
+SUGGEST_HANDOFF_TOOL_IDS = frozenset({"suggest_handoff"})
+
 # Document retrieval (bound to session/user). Listed for the record, and
 # deliberately NOT folded into ``INJECTED_TOOL_IDS`` below: ``document_read``
 # is gated on the session having a readable attachment, not on
@@ -83,6 +93,8 @@ INJECTED_TOOL_IDS = frozenset(
     | WORKSPACE_TOOL_IDS
     | SKILL_AUTHORING_TOOL_IDS
     | MEETING_TASKS_TOOL_IDS
+    | SUGGEST_HANDOFF_TOOL_IDS
+    | CODE_SANDBOX_TOOL_IDS
 )
 
 
@@ -150,6 +162,19 @@ INJECTED_TOOL_IDS = frozenset(
 #     the next turn. The tools read the user's token live from the OAuth token
 #     cache on every call, so a (re)connection never needs a rebuild either.
 #
+#   - CODE_SANDBOX (`_build_code_sandbox_tools`) closes over
+#     `(session_id, user_id)` and a `TurnSkillRecords` holder filled from the
+#     turn's skill records, exactly as WORD's script path does; the records
+#     derive from `skills_hash`, a key element. Its sandbox is looked up per
+#     call from the turn-scoped pool, never held by the closure.
+#
+#   - SUGGEST_HANDOFF (`_build_suggest_handoff_tools`) closes over
+#     `(session_id, user_id)` only, like ARTIFACT. Its per-turn limit lives in
+#     Strands' invocation state, which is new on every turn, so a cached agent
+#     starts each turn at zero. Admitted with the family for the reason
+#     SKILL_AUTHORING was: an opt-in family left out rebuilds the agent on
+#     every turn that enables it.
+#
 # Memory-Space tools are not in any set here (they are not gated on
 # `enabled_tools`), but they are described too: they close over the resolved
 # binding (space id, name, access) plus `(user_id, user_email)`, and
@@ -168,6 +193,8 @@ KEY_DESCRIBED_INJECTED_TOOL_IDS = frozenset(
     | SPREADSHEET_TOOL_IDS
     | SKILL_AUTHORING_TOOL_IDS
     | MEETING_TASKS_TOOL_IDS
+    | SUGGEST_HANDOFF_TOOL_IDS
+    | CODE_SANDBOX_TOOL_IDS
 )
 
 

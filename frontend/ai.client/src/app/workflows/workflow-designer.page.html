@@ -1,0 +1,177 @@
+<div class="fixed inset-0 flex flex-col bg-gray-50 dark:bg-gray-900">
+  <header class="shrink-0 border-b border-gray-200/80 bg-white/80 backdrop-blur dark:border-gray-700/60 dark:bg-gray-900/80">
+    <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 sm:px-6 lg:px-8">
+      <div class="flex min-w-[15rem] flex-1 items-center gap-3">
+        <a
+          routerLink="/workflows"
+          aria-label="Back to workflows"
+          class="rounded-2xl p-1.5 text-gray-600 transition hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+        >
+          <ng-icon name="heroArrowLeft" class="size-5" aria-hidden="true" />
+        </a>
+        <div class="min-w-0 flex-1">
+          <h1 class="sr-only">Workflow designer</h1>
+          @if (store.load() === 'ready') {
+            <label for="wf-title" class="sr-only">Workflow name</label>
+            <input
+              id="wf-title"
+              type="text"
+              maxlength="200"
+              [value]="store.draft().title"
+              [readOnly]="!store.isOwned()"
+              (input)="store.setTitle(titleOf($event))"
+              class="block w-full max-w-md truncate rounded-2xl border border-transparent bg-transparent px-2 py-0.5 text-base/7 font-semibold text-gray-900 hover:border-gray-300 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:focus:ring-primary-accessible-dark dark:text-white dark:hover:border-gray-600"
+            />
+            <p class="flex items-center gap-1 px-2 text-xs/5 text-gray-600 dark:text-gray-400" role="status">
+              @if (store.savedState() === 'saved') {
+                <ng-icon name="heroCheckCircle" class="size-3.5" aria-hidden="true" />
+              } @else if (store.savedState() === 'unsaved' || store.savedState() === 'new') {
+                <ng-icon name="heroPencilSquare" class="size-3.5" aria-hidden="true" />
+              }
+              {{ savedLabel() }}
+            </p>
+          }
+        </div>
+      </div>
+      @if (store.load() === 'ready' && store.isOwned()) {
+        <div class="ml-auto flex items-center gap-2">
+          @if (store.ref()) {
+            <button
+              type="button"
+              (click)="confirmDelete()"
+              class="inline-flex items-center gap-1.5 rounded-2xl px-3 py-2 text-sm/6 font-medium text-gray-700 transition hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:text-gray-300 dark:hover:bg-gray-800"
+            >
+              <ng-icon name="heroTrash" class="size-4" aria-hidden="true" />
+              Delete
+            </button>
+          }
+          <button
+            type="button"
+            (click)="save()"
+            [disabled]="!store.canSave()"
+            [attr.aria-describedby]="store.saveBlockedReason() ? 'wf-save-blocked' : null"
+            class="inline-flex items-center gap-1.5 rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-semibold text-white shadow-xs transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <ng-icon name="heroCheck" class="size-4" aria-hidden="true" />
+            {{ store.saving() ? 'Saving…' : 'Save workflow' }}
+          </button>
+        </div>
+      }
+    </div>
+    @if (store.load() === 'ready') {
+      @if (store.saveBlockedReason(); as reason) {
+        <p id="wf-save-blocked" class="px-4 pb-2 text-xs/5 text-gray-600 sm:px-6 lg:px-8 dark:text-gray-400">{{ reason }}</p>
+      }
+      @if (store.conflict(); as conflict) {
+        <div role="alert" class="mx-4 mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-state-warning-200 bg-state-warning-50 px-4 py-2 text-sm/6 text-state-warning-800 sm:mx-6 lg:mx-8 dark:border-state-warning-800/60 dark:bg-state-warning-900/20 dark:text-state-warning-200">
+          <ng-icon name="heroExclamationTriangle" class="size-5 shrink-0" aria-hidden="true" />
+          <span class="min-w-0 flex-1">{{ conflict.message }} Your edits here weren’t saved.</span>
+          <span class="flex items-center gap-2">
+            <button
+              type="button"
+              (click)="store.reloadStored()"
+              class="rounded-2xl bg-primary-accessible px-3 py-1 text-sm/6 font-semibold text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark"
+            >
+              {{ conflict.document ? 'Reload the saved workflow' : 'Reload' }}
+            </button>
+            <button
+              type="button"
+              (click)="store.dismissConflict()"
+              class="rounded-2xl px-3 py-1 text-sm/6 font-medium hover:bg-state-warning-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark dark:hover:bg-state-warning-800/40"
+            >
+              Not now
+            </button>
+          </span>
+        </div>
+      }
+      @if (store.saveError(); as error) {
+        <p role="alert" class="mx-4 mb-3 rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-2 text-sm/6 text-state-danger-800 sm:mx-6 lg:mx-8 dark:border-state-danger-800/60 dark:bg-state-danger-900/20 dark:text-state-danger-300">{{ error }}</p>
+      }
+    }
+  </header>
+
+  @switch (store.load()) {
+    @case ('loading') {
+      <div class="flex flex-1 items-center justify-center" role="status">
+        <p class="text-sm/6 text-gray-600 dark:text-gray-400">Loading the workflow…</p>
+      </div>
+    }
+    @case ('not_found') {
+      <div class="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
+        <p class="text-sm/6 text-gray-700 dark:text-gray-300">This workflow doesn’t exist, or isn’t shared with you.</p>
+        <a routerLink="/workflows" class="text-sm/6 font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Back to workflows</a>
+      </div>
+    }
+    @case ('broken') {
+      <div class="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
+        <p class="max-w-lg text-sm/6 text-gray-700 dark:text-gray-300">This workflow’s file no longer reads as a workflow: {{ store.loadMessage() }}</p>
+        <p class="max-w-lg text-xs/5 text-gray-600 dark:text-gray-400">Its raw file is under the skill’s Supporting files in Customize.</p>
+        <a routerLink="/workflows" class="text-sm/6 font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Back to workflows</a>
+      </div>
+    }
+    @case ('error') {
+      <div class="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center" role="alert">
+        <p class="text-sm/6 text-gray-700 dark:text-gray-300">The workflow couldn’t be loaded.</p>
+        <a routerLink="/workflows" class="text-sm/6 font-medium text-primary-accessible hover:underline dark:text-primary-accessible-dark">Back to workflows</a>
+      </div>
+    }
+    @default {
+      <main class="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
+        <app-workflow-graph
+          class="shrink-0 md:h-[30rem] lg:h-auto lg:min-w-0 lg:flex-1 lg:shrink"
+          [stages]="graphStages()"
+          [edges]="graphEdges()"
+          [start]="startCard()"
+          [result]="resultCard()"
+          [selected]="tab() === 'step' ? store.selected() : null"
+          [stepCount]="store.stepCount()"
+          [maxSteps]="maxSteps"
+          [mode]="graphMode()"
+          [status]="graphStatus()"
+          [finished]="graphFinished()"
+          (selectNode)="selectNode($event)"
+          (add)="addStep($event)"
+        />
+
+        <aside class="flex shrink-0 flex-col border-t border-gray-200/80 bg-gray-50 lg:w-[28rem] lg:border-l lg:border-t-0 dark:border-gray-700/60 dark:bg-gray-900" aria-label="Workflow panel">
+          <div class="flex gap-1 border-b border-gray-200 px-4 dark:border-gray-700" role="tablist" aria-label="Panel">
+            @for (t of tabs(); track t) {
+              <button
+                [id]="'wf-tab-' + t"
+                type="button"
+                role="tab"
+                [attr.aria-controls]="'wf-panel-' + t"
+                [attr.aria-selected]="tab() === t"
+                [attr.tabindex]="tab() === t ? 0 : -1"
+                (click)="setTab(t)"
+                (keydown)="onTabKeydown($event)"
+                class="-mb-px inline-flex items-center gap-1.5 border-b-2 border-b-transparent px-3 py-2 text-sm/6 font-medium text-gray-600 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-accessible-dark aria-selected:border-b-primary-accessible aria-selected:font-semibold aria-selected:text-primary-accessible dark:text-gray-400 dark:hover:text-white dark:aria-selected:border-b-primary-accessible-dark dark:aria-selected:text-primary-accessible-dark"
+              >
+                @switch (t) {
+                  @case ('step') { Step }
+                  @case ('preview') { Preview }
+                  @default { Test run }
+                }
+              </button>
+            }
+          </div>
+          <div class="min-h-0 flex-1 p-4 lg:overflow-y-auto">
+            @if (tab() === 'step') {
+              <div id="wf-panel-step" role="tabpanel" aria-labelledby="wf-tab-step">
+                <app-workflow-step-tab (focusCanvas)="focusCanvas($event)" />
+              </div>
+            } @else if (tab() === 'preview') {
+              <div id="wf-panel-preview" role="tabpanel" aria-labelledby="wf-tab-preview">
+                <app-workflow-preview-tab (testRunOpened)="showTestRun()" />
+              </div>
+            } @else if (store.ref(); as ref) {
+              <div id="wf-panel-test" role="tabpanel" aria-labelledby="wf-tab-test">
+                <app-workflow-test-run-panel [ref]="ref" />
+              </div>
+            }
+          </div>
+        </aside>
+      </main>
+    }
+  }
+</div>

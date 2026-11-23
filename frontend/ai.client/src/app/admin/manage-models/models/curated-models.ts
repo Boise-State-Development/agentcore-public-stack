@@ -50,14 +50,20 @@ import { ManagedModelFormData, ModelProvider, SupportedParams } from './managed-
  * Opus 4.7 use the first, Haiku 4.5 and Sonnet 4.6 the second — so a query
  * written for one silently returns nothing for the other. Match both.
  *
- * The one real gap: the **hosted OpenAI family** (`openai.gpt-5.4`,
- * `us.openai.gpt-5.[56]*`, `us.openai.gpt-6-*`) is absent from BOTH offer
- * files, so its cards remain the only source. Reading that absence as
- * "unpublished" once put three rows into the dev catalog at GovCloud prices,
- * over-charging by 20%. Note the old explanation for it — "those models bill
- * through AWS Marketplace, which no pricing API covers" — is wrong: Claude's
- * rows are `MP:` Marketplace usagetypes and are covered. Only `gpt-oss`, the
- * open-weight family, appears; the hosted GPT models genuinely do not.
+ * The **hosted OpenAI family** (`openai.gpt-5.4`, `us.openai.gpt-5.[56]*`,
+ * `us.openai.gpt-6*`) was absent from both offer files until at least
+ * 2026-09, and reading that absence as "unpublished" once put three rows into
+ * the dev catalog at GovCloud prices, over-charging by 20%. **As of 2026-11-20
+ * it is in `AmazonBedrockFoundationModels`** ("OpenAI GPT-6 Sol (Amazon Bedrock
+ * Edition)" and so on), standard and `*_long_ctx_*` rows both, and every
+ * curated GPT rate below matches it. The card is still the only source for the
+ * 272K long-context line itself, which no usage type names.
+ *
+ * **Long-context rows.** A model whose card has a second rate table for large
+ * prompts declares it with `longContextThresholdTokens` and two multipliers
+ * (see the Haiku 5.5 row and {@link openaiLongContext}); cost metering applies
+ * them per call. Find them with a `long_ctx` match on `usagetype`. As of
+ * 2026-11-20 the only Claude model with one is Haiku 5.5.
  */
 export interface CuratedModel {
   /** Stable key for tracking + tests. Not persisted on the model itself. */
@@ -370,13 +376,22 @@ export const CURATED_BEDROCK_MODELS: CuratedModel[] = [
       // `us.` because dev's SCP denies every `global.*` profile. Prod has no
       // SCP: `global.anthropic.claude-haiku-5-5` at $0.10 / $0.50 is cheaper.
       modelId: 'us.anthropic.claude-haiku-5-5',
-      // **Load-bearing pricing, not the window.** The card says 1M tokens, but
-      // a prompt over 100,000 tokens is billed on the "Long Context" row, 5x on
-      // every bucket, and `CuratedModel` holds one flat rate per bucket (the
-      // same reason the GPT-5.6 rows pin 272K). Compaction reads this value:
-      // it cuts at 50K, aims for 12.5K, and forces a cut at 70K, so a turn
-      // never reaches the step. Raising it past ~142K would let the hard
-      // ceiling (0.7x the window) cross 100K.
+      // The card says 1M tokens, but a prompt over 100,000 tokens (input +
+      // cache read + cache write) bills on the "Long Context" row, 5x on every
+      // bucket: Price List `USW2_*_long_ctx_standard` is $0.55 / $2.75 /
+      // $0.6875 write / $0.055 read, and dev's Cost Explorer bills 8-token-input
+      // calls there once their cache reads pass 100K. The three fields below
+      // meter that (`CostCalculator.rates_for_call`); before them every such
+      // call was charged at one fifth of its price.
+      longContextThresholdTokens: 100_000,
+      longContextInputMultiplier: 5,
+      longContextOutputMultiplier: 5,
+      // The window compaction works to, kept at the pricing line so a turn
+      // rarely reaches it: compaction cuts at 50K, aims for 12.5K and forces a
+      // cut at 70K. It cannot cut a tool prefix, though — a ~90K connector
+      // `toolConfig` puts turns over 100K anyway, and those are now priced
+      // honestly. Raising it past ~142K would let the hard ceiling (0.7x the
+      // window) cross 100K on every long conversation.
       maxInputTokens: 100_000,
       modelName: 'Claude Haiku 5.5',
       shortDescription: 'Fast and low-cost, with effort control',
@@ -528,6 +543,28 @@ const mantleDefaults = (): Pick<
   supportsCaching: false,
 });
 
+/**
+ * The OpenAI family's second price card, as metered. Every curated GPT row's
+ * card prices a request over 272K input tokens on a "Long Context" table that
+ * is **2x input, 2x cache read, 2x cache write and 1.5x output**, applied to
+ * the whole request. Verified 2026-11-20 for each curated id against the Price
+ * List API's `*_long_ctx_*` usage types in `AmazonBedrockFoundationModels`
+ * (see the note at the top of this file). The 272K line is the GPT-6 Sol card's
+ * ("Long-context rates apply to the full request when input exceeds 272,000
+ * tokens"). `CostCalculator.rates_for_call` applies it per call.
+ *
+ * Not in {@link bedrockResponsesDefaults}: Kimi K3 rides that transport with
+ * one price table and no long-context row.
+ */
+const openaiLongContext = (): Pick<
+  ManagedModelFormData,
+  'longContextThresholdTokens' | 'longContextInputMultiplier' | 'longContextOutputMultiplier'
+> => ({
+  longContextThresholdTokens: 272_000,
+  longContextInputMultiplier: 2,
+  longContextOutputMultiplier: 1.5,
+});
+
 // Pricing verified against the AWS Bedrock pricing page (2026-06); modalities,
 // capabilities, context, and endpoint path verified against each model card.
 // Mantle per-token pricing equals the bedrock-runtime price for the same model.
@@ -539,6 +576,9 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
     capabilities: ['Reasoning', 'Vision', 'Long context'],
     template: {
       ...mantleDefaults(),
+      // Its card's long-context table is the family's 2x / 1.5x above 272K
+      // (Price List: $5.50 / $24.75 / $0.55 cache read against $2.75 / $16.50).
+      ...openaiLongContext(),
       modelId: 'openai.gpt-5.4',
       modelName: 'GPT-5.4',
       shortDescription: 'Multimodal reasoning',
@@ -614,11 +654,11 @@ export const CURATED_MANTLE_MODELS: CuratedModel[] = [
  * way (`_resolve_supports_caching`, forced for this provider), as it does
  * `apiMode: 'responses'`.
  *
- * `maxInputTokens: 272_000` is **load-bearing pricing**, not just a cap. These
- * models have a 1M window, but AWS prices them on two cards: above 272K, input
- * costs 2x and output 1.5x. `CuratedModel` holds one flat rate per bucket, so
- * the cap is what keeps that single rate correct. Raising it silently opens
- * the second price card and under-charges every long turn.
+ * `maxInputTokens: 272_000` keeps compaction under the OpenAI family's
+ * long-context line. These models have a 1M window, but AWS prices a request
+ * over 272K at 2x input and 1.5x output; {@link openaiLongContext} meters that
+ * second card on the rows that have it, so a turn that does cross is priced
+ * honestly, and this pin keeps turns from crossing in the first place.
  */
 const bedrockResponsesDefaults = (): Pick<
   ManagedModelFormData,
@@ -674,11 +714,11 @@ const bedrockResponsesDefaults = (): Pick<
  * ours, is read only for compaction and telemetry, and never reaches a
  * Bedrock request.
  *
- * That is exactly why `maxInputTokens: 272_000` is load-bearing. It does not
- * protect us from being over-charged — nothing here does. It keeps the single
- * flat rate per bucket that `CuratedModel` can hold **arithmetically true**,
- * because a request that crosses 272K bills input at 2x, output at 1.5x and
- * both cache buckets at 2x. Raising it silently UNDER-charges every long turn.
+ * A request that crosses 272K bills input at 2x, output at 1.5x and both
+ * cache buckets at 2x. Each row below meters that with
+ * {@link openaiLongContext}, so the rates stay true on either side of the
+ * line; `maxInputTokens: 272_000` keeps compaction working below it. As of
+ * 2026-11-20 no prod or dev call on this family has crossed it (largest 212K).
  *
  * `supportedParams` was deliberately absent here until 2026-09-12, when it was
  * MEASURED — the bar this comment has always set. AWS still publishes no
@@ -856,6 +896,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
     pricingTier: 'regional',
     template: {
       ...bedrockResponsesDefaults(),
+      ...openaiLongContext(),
       // UNVERIFIED, and the one thing here worth re-checking before anyone
       // banks cache savings on this row: Astra's card lists Implicit and
       // Explicit Prompt Caching under `bedrock-mantle` ONLY. Caching appears
@@ -870,8 +911,8 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
       modelName: 'GPT-6 Astra',
       shortDescription: 'Frontier reasoning, coding and research',
       // Geo CRIS Short Context: $11.00 / $55.00. Global CRIS is $10.00 /
-      // $50.00. Long Context (1.05M) would be $22.00 / $82.50 — unreachable
-      // while maxInputTokens stays pinned at the 272K boundary.
+      // $50.00. Long Context (above 272K, to 1.05M) is $22.00 / $82.50,
+      // metered by `openaiLongContext()`.
       ...ratesWithDerivedCache(11.0, 55.0),
       // Astra departs from its GPT-5.6 siblings here: its card publishes a
       // real cap (`Max output tokens: 128,000`) where theirs say N/A, so this
@@ -891,6 +932,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
     pricingTier: 'regional',
     template: {
       ...bedrockResponsesDefaults(),
+      ...openaiLongContext(),
       // Launched 2026-09-29. `bedrock-runtime` offers it only as the `us.` and
       // `global.` profiles (no In-Region); Mantle serves it in us-east-1 only.
       modelId: 'us.openai.gpt-6.1-sol',
@@ -934,6 +976,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
     pricingTier: 'regional',
     template: {
       ...bedrockResponsesDefaults(),
+      ...openaiLongContext(),
       modelId: 'us.openai.gpt-6-sol',
       modelName: 'GPT-6 Sol',
       shortDescription: 'Previous-generation Sol',
@@ -954,6 +997,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
     pricingTier: 'regional',
     template: {
       ...bedrockResponsesDefaults(),
+      ...openaiLongContext(),
       modelId: 'us.openai.gpt-6-luna',
       modelName: 'GPT-6 Luna',
       shortDescription: 'Fast and affordable, for focused tasks',
@@ -971,6 +1015,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
     pricingTier: 'regional',
     template: {
       ...bedrockResponsesDefaults(),
+      ...openaiLongContext(),
       // The card lists `bedrock-mantle` only, In-Region in us-east-1/2. That is
       // stale: `us.openai.gpt-5.5` is an ACTIVE profile in us-west-2 and
       // answered over bedrock-runtime Responses on 2026-09-25, while Mantle
@@ -1005,6 +1050,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
     pricingTier: 'regional',
     template: {
       ...bedrockResponsesDefaults(),
+      ...openaiLongContext(),
       modelId: 'us.openai.gpt-5.6-sol',
       modelName: 'GPT-5.6 Sol',
       shortDescription: 'Strong reasoning and agentic work',
@@ -1023,6 +1069,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
     pricingTier: 'regional',
     template: {
       ...bedrockResponsesDefaults(),
+      ...openaiLongContext(),
       modelId: 'us.openai.gpt-5.6-terra',
       modelName: 'GPT-5.6 Terra',
       shortDescription: 'Balanced performance per dollar',
@@ -1042,6 +1089,7 @@ export const CURATED_BEDROCK_RESPONSES_MODELS: CuratedModel[] = [
     pricingTier: 'regional',
     template: {
       ...bedrockResponsesDefaults(),
+      ...openaiLongContext(),
       modelId: 'us.openai.gpt-5.6-luna',
       modelName: 'GPT-5.6 Luna',
       shortDescription: 'Fast and affordable, for high volume',

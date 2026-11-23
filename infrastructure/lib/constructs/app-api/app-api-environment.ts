@@ -7,7 +7,7 @@
  * objects it can pass to the task definition and IAM grants module.
  */
 
-import { AppConfig, buildCorsOrigins } from '../../config';
+import { AppConfig, agentVersionPinningOn, buildCorsOrigins, checklistStepsOn, promptStepsOn } from '../../config';
 import { managedKbMetricNamespace } from '../managed-kb/managed-kb-role-construct';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 
@@ -398,6 +398,27 @@ export function buildAppApiEnvironment(
     AWS_LIMITS_ENABLED: config.awsLimits.enabled ? 'true' : 'false',
     // Handoffs (opt-in while in development): gates /sessions/{id}/handoffs.
     HANDOFFS_ENABLED: config.handoffs.enabled ? 'true' : 'false',
+    // Workflow runs (opt-in while in development): gates
+    // /sessions/{id}/workflow-runs, and only while handoffs are on too.
+    // app-api only; a step is an ordinary handoff turn on the Runtime.
+    WORKFLOW_RUNS_ENABLED: config.handoffs.enabled && config.workflowRuns.enabled ? 'true' : 'false',
+    // Saved workflows (opt-in while in development): gates /workflows, and only
+    // while workflow runs (and so handoffs) are on too. app-api only.
+    WORKFLOWS_ENABLED:
+      config.handoffs.enabled && config.workflowRuns.enabled && config.workflows.enabled ? 'true' : 'false',
+    // Prompt steps (opt-in while in development): run create accepts a workflow's
+    // prompt steps, and only while saved workflows (and so runs and handoffs) are
+    // on too. The Runtime gets its own copy (inference-agentcore-construct.ts).
+    PROMPT_STEPS_ENABLED: promptStepsOn(config) ? 'true' : 'false',
+    // Checklist steps (opt-in while in development): run create accepts a
+    // workflow's checklist steps, only while prompt steps (and their chain) are on.
+    // The Runtime gets its own copy (inference-agentcore-construct.ts).
+    CHECKLIST_STEPS_ENABLED: checklistStepsOn(config) ? 'true' : 'false',
+    // Agent version pinning (opt-in while in development): a saved workflow's Agent
+    // step runs the version its file records, and only while saved workflows (and
+    // so runs and handoffs) are on too. The Runtime gets its own copy
+    // (inference-agentcore-construct.ts).
+    AGENT_VERSION_PINNING_ENABLED: agentVersionPinningOn(config) ? 'true' : 'false',
     // Conversation rewind (default on): gates
     // POST /sessions/{id}/rewind and GET /messages' hiding of rewound turns.
     SESSION_REWIND_ENABLED: config.sessionRewind.enabled ? 'true' : 'false',

@@ -195,6 +195,18 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     handoffs: {
       enabled: false,
       briefEnabled: false,
+      suggestionsEnabled: false,
+    },
+    workflowRuns: {
+      enabled: false,
+    },
+    workflows: {
+      enabled: false,
+      promptStepsEnabled: false,
+      checklistStepsEnabled: false,
+    },
+    agentVersionPinning: {
+      enabled: false,
     },
     sessionRewind: {
       enabled: false,
@@ -273,6 +285,12 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       enabled: false,
     },
     wordSkillScripts: {
+      enabled: false,
+    },
+    codeSandbox: {
+      enabled: false,
+    },
+    codeSandboxOffice: {
       enabled: false,
     },
     converseDocumentsAsText: {

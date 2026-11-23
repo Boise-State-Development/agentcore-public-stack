@@ -28,7 +28,15 @@ import { ConversationForkService } from '../../../services/session/conversation-
 import { TooltipDirective } from '../../../../components/tooltip';
 import { parseIso } from '../../../../utils/date';
 import { HandoffStateService } from '../../../services/handoff/handoff-state.service';
-import { extractDeliveryBlocks, extractHandoffContext } from '../../../services/handoff/handoff-prompt';
+import {
+  BubbleDelivery,
+  extractDeliveryBlocks,
+  extractHandoffContext,
+  groupRunResults,
+  RunResultPartBlock,
+} from '../../../services/handoff/handoff-prompt';
+import { WorkflowRunStateService } from '../../../services/handoff/workflow-run-state.service';
+import { promptWorkerLabel, stepNameLabel, stepsLabel } from '../../../services/handoff/workflow-run-progress';
 import { DeliveryBlock } from '../../../services/handoff/handoff.models';
 import { DeliveryArtifactChipsComponent } from '../../handoff/delivery-artifact-chips.component';
 import { DeliveryFileChipsComponent } from '../../handoff/delivery-file-chips.component';
@@ -92,13 +100,55 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
           </div>
         }
 
-        <!-- Results this message carried from other conversations (handoffs spec §4.8). -->
-        @for (block of deliveryBlocks(); track $index; let i = $index) {
+        <!-- Results this message carried from other conversations (handoffs spec §4.8). A workflow
+             run's one result shows as one line for all its Agents (workflow-runs spec §20.3). -->
+        @for (item of bubbleDeliveries(); track $index; let i = $index) {
+          @if (item.kind === 'run') {
+            <div class="flex max-w-[80%] flex-col items-end gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
+              <span class="flex items-center gap-1">
+                <ng-icon name="heroArrowUturnLeft" class="size-3.5" aria-hidden="true" />
+                From <span class="font-medium text-gray-700 dark:text-gray-300">{{ runPartsLabel(item.parts) }}</span>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  class="font-medium text-gray-700 underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-300"
+                  [attr.aria-expanded]="openDelivery() === i"
+                  (click)="toggleDelivery(i)"
+                >
+                  {{ openDelivery() === i ? 'Hide results' : 'Show results' }}
+                </button>
+              </span>
+              @if (openDelivery() === i) {
+                <ul role="list" [attr.aria-label]="'Results from ' + runPartsLabel(item.parts)" class="w-full divide-y divide-gray-200 rounded-lg bg-gray-100 text-left dark:divide-white/10 dark:bg-white/5">
+                  @for (part of item.parts; track $index) {
+                    <li class="p-2">
+                      @if (part.status === 'done') {
+                        <p class="font-medium text-gray-800 dark:text-gray-200">{{ partTitle(part) }}</p>
+                        @if (part.block.text) {
+                          <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + partName(part)" class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-gray-200">{{ part.block.text }}</pre>
+                        }
+                        @if (part.block.artifacts.length > 0) {
+                          <div class="mt-1"><app-delivery-artifact-chips [artifacts]="part.block.artifacts" [label]="'Artifacts from ' + partName(part)" /></div>
+                        }
+                        @if (part.block.files.length > 0) {
+                          <div class="mt-1"><app-delivery-file-chips [files]="part.block.files" [label]="'Files from ' + partName(part)" /></div>
+                        }
+                      } @else {
+                        <p class="text-gray-600 dark:text-gray-400">
+                          {{ partName(part) }} · {{ part.status === 'stopped' ? 'Stopped, not included' : 'Still waiting, not included' }}
+                        </p>
+                      }
+                    </li>
+                  }
+                </ul>
+              }
+            </div>
+          } @else {
           <div class="flex max-w-[80%] flex-col items-end gap-1 pr-1 text-xs text-gray-500 dark:text-gray-400">
             <span class="flex items-center gap-1">
               <ng-icon name="heroArrowUturnLeft" class="size-3.5" aria-hidden="true" />
-              From <span class="font-medium text-gray-700 dark:text-gray-300">{{ block.fromTitle }}</span>
-              @if (block.text) {
+              From <span class="font-medium text-gray-700 dark:text-gray-300">{{ item.block.fromTitle }}</span>
+              @if (item.block.text) {
                 <span aria-hidden="true">·</span>
                 <button
                   type="button"
@@ -111,15 +161,16 @@ const FORK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="
               }
             </span>
             @if (openDelivery() === i) {
-              <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + block.fromTitle" class="max-h-64 w-full overflow-auto whitespace-pre-wrap rounded-lg bg-gray-100 p-2 text-left text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200">{{ block.text }}</pre>
+              <pre tabindex="0" role="region" [attr.aria-label]="'Result from ' + item.block.fromTitle" class="max-h-64 w-full overflow-auto whitespace-pre-wrap rounded-lg bg-gray-100 p-2 text-left text-xs text-gray-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/5 dark:text-gray-200">{{ item.block.text }}</pre>
             }
-            @if (block.artifacts.length > 0) {
-              <app-delivery-artifact-chips [artifacts]="block.artifacts" [label]="'Artifacts from ' + block.fromTitle" />
+            @if (item.block.artifacts.length > 0) {
+              <app-delivery-artifact-chips [artifacts]="item.block.artifacts" [label]="'Artifacts from ' + item.block.fromTitle" />
             }
-            @if (block.files.length > 0) {
-              <app-delivery-file-chips [files]="block.files" [label]="'Files from ' + block.fromTitle" />
+            @if (item.block.files.length > 0) {
+              <app-delivery-file-chips [files]="item.block.files" [label]="'Files from ' + item.block.fromTitle" />
             }
           </div>
+          }
         }
 
         @if (message().steering) {
@@ -350,7 +401,26 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   protected readonly handoffContext = computed((): string | null => {
     if (!this.handoffOrigin()) return null;
     const text = this.message().content.find((block) => block.type === 'text' && block.text)?.text;
-    return text ? extractHandoffContext(text) : null;
+    if (!text) return null;
+    // A step sent with no card opens with the earlier steps' results, which are not its context.
+    const read = this.readResults();
+    if (read && text.startsWith(read.head.trimEnd())) return null;
+    return extractHandoffContext(text);
+  });
+
+  /**
+   * A workflow step's first message that carries earlier steps' results (PR-D.5a): the text it was
+   * sent with opens with their blocks, then its request. Read from what was sent (`displayText`
+   * once stored, the live text before), so the bubble shows cards and the request, never the tags.
+   */
+  private readonly readResults = computed((): { blocks: DeliveryBlock[]; rest: string; head: string } | null => {
+    if (!this.handoffOrigin()) return null;
+    const metadata = this.message().metadata;
+    const stored = typeof metadata?.['displayText'] === 'string' ? (metadata['displayText'] as string) : null;
+    const sent = stored ?? this.message().content.find((block) => block.type === 'text' && block.text)?.text;
+    if (!sent) return null;
+    const { blocks, rest } = extractDeliveryBlocks(sent);
+    return blocks.length ? { blocks, rest, head: sent.slice(0, sent.length - rest.length) } : null;
   });
 
   /**
@@ -359,9 +429,52 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
    * reloaded one show the same cards. Never on a handoff's first message, whose block is its context.
    */
   protected readonly deliveryBlocks = computed((): DeliveryBlock[] => {
-    if (this.handoffOrigin() || !this.message().metadata?.['displayText']) return [];
+    if (this.handoffOrigin()) return this.readResults()?.blocks ?? [];
+    if (!this.message().metadata?.['displayText']) return [];
     const text = this.message().content.find((block) => block.type === 'text' && block.text)?.text;
     return text ? extractDeliveryBlocks(text).blocks : [];
+  });
+
+  private readonly workflowRuns = inject(WorkflowRunStateService);
+
+  /** "From 6 Agents", or "From 6 steps" once a part is a prompt step's, which has no Agent (§21.3). */
+  protected runPartsLabel(parts: readonly RunResultPartBlock[]): string {
+    return stepsLabel(parts.length, parts.some((part) => part.promptStep !== undefined));
+  }
+
+  /** What a part is called: its Agent, or a prompt step's own name (several can share one model). */
+  protected partName(part: RunResultPartBlock): string {
+    if (part.promptStep === undefined) return part.agentName;
+    return stepNameLabel(part.promptStep) || promptWorkerLabel(part.agentName, part.checklist ? 'checklist' : 'prompt');
+  }
+
+  /** A finished part's heading: as its block names it, or "Generalist · Prompt · Sonnet 5.5". */
+  protected partTitle(part: RunResultPartBlock): string {
+    if (part.promptStep === undefined) return part.block.fromTitle;
+    const name = stepNameLabel(part.promptStep);
+    const worker = promptWorkerLabel(part.agentName, part.checklist ? 'checklist' : 'prompt');
+    return name ? `${name} · ${worker}` : worker;
+  }
+
+  /**
+   * The delivery blocks as the bubble shows them: a workflow run's result (one block per part) as
+   * one "From *N* Agents", told apart by this conversation's runs' step Agents (§20.3).
+   */
+  protected readonly bubbleDeliveries = computed((): BubbleDelivery[] => {
+    const blocks = this.deliveryBlocks();
+    if (blocks.length === 0) return [];
+    const id = this.message().id;
+    const dash = id.lastIndexOf('-');
+    const sessionId = id.startsWith('msg-') && dash > 4 ? id.slice(4, dash) : '';
+    const runs = this.workflowRuns.runsFor(sessionId).map((run) => ({
+      runId: run.runId,
+      agentNames: run.steps.filter((step) => !step.removed).map((step) => step.agentName),
+      promptSteps: run.steps
+        .filter((step) => !step.removed)
+        .map((step) => (step.kind === 'prompt' || step.kind === 'checklist' ? (step.stepName ?? '') : null)),
+      checklistSteps: run.steps.filter((step) => !step.removed).map((step) => step.kind === 'checklist'),
+    }));
+    return groupRunResults(blocks, runs);
   });
 
   protected readonly openDelivery = signal<number | null>(null);
@@ -384,6 +497,8 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
    * setting, which only changes what the bubble shows.
    */
   copyText = computed((): string => {
+    const read = this.readResults();
+    if (read?.rest.trim()) return read.rest;
     const display = this.message().metadata?.['displayText'];
     if (typeof display === 'string' && display.trim()) return display;
     return this.message()
@@ -485,6 +600,9 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
   /** Original user message before prompt modification — skipped when debug output is enabled */
   displayText = computed((): string | null => {
     if (this.localSettings.showDebugOutput()) return null;
+    // A step's request without the earlier results it was sent with, which show as cards above.
+    const read = this.readResults();
+    if (read) return read.rest;
     const metadata = this.message().metadata;
     if (metadata && typeof metadata['displayText'] === 'string') {
       return metadata['displayText'];

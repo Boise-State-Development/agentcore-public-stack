@@ -13,6 +13,9 @@ import { SkillCommand, SkillCommandService } from '../../../services/skill/skill
 import { ToastService } from '../../../services/toast/toast.service';
 import { Tool, ToolService } from '../../../services/tool/tool.service';
 import { Project } from '../../../projects/models/project.model';
+import { WorkflowStartService } from '../../../services/workflows/workflow-start.service';
+import { WorkflowsApiService } from '../../../services/workflows/workflows-api.service';
+import { WorkflowSummary } from '../../../services/workflows/workflow.models';
 import { ConversationBindingService } from '../../services/session/conversation-binding.service';
 import { ComposerAddMenuComponent } from './composer-add-menu.component';
 
@@ -89,8 +92,16 @@ describe('ComposerAddMenuComponent', () => {
   let tools: ReturnType<typeof signal<Tool[]>>;
   let boundProject: ReturnType<typeof signal<Project | null>>;
   let states: Record<string, 'connected' | 'disconnected' | 'unknown'>;
+  let listWorkflows: ReturnType<typeof vi.fn>;
+  let startWorkflow: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
+    listWorkflows = vi.fn(async (): Promise<WorkflowSummary[]> => [
+      { skillId: 'k1', name: 'review', skillName: 'Review', title: 'Proposal review', stepCount: 4, isOwned: true, designerMade: true },
+      { skillId: 'k2', name: 'audit', skillName: 'Audit', title: 'Grant audit', stepCount: 2, isOwned: false, designerMade: true },
+      { skillId: 'k3', name: 'broken', skillName: 'Broken', isOwned: true, designerMade: true, problem: 'bad table' },
+    ]);
+    startWorkflow = vi.fn(async () => 'src');
     listFileSources = vi.fn(async () => [DRIVE]);
     dialogResult = undefined;
     dialogOpen = vi.fn(() => ({ closed: of(dialogResult) }));
@@ -138,6 +149,8 @@ describe('ComposerAddMenuComponent', () => {
         { provide: ToastService, useValue: { error: vi.fn(), warning: vi.fn(), info: vi.fn(), success: vi.fn() } },
         { provide: FileSourceService, useValue: { listFileSources } },
         { provide: ConversationBindingService, useValue: { boundProject } },
+        { provide: WorkflowsApiService, useValue: { list: listWorkflows } },
+        { provide: WorkflowStartService, useValue: { start: startWorkflow } },
         {
           provide: SkillCommandService,
           useValue: { commands: skillCommands, agentLocked: skillsLocked, load: vi.fn(async () => undefined) },
@@ -208,6 +221,43 @@ describe('ComposerAddMenuComponent', () => {
     (menu()!.querySelector(`[data-testid="${testId}"]`) as HTMLButtonElement).click();
     await settle();
   }
+
+  describe('Workflows (workflow-designer.md §8.3, PR-D.2)', () => {
+    it('is hidden while the composer does not offer it (the flag off, a project, a preview)', async () => {
+      await openMenu();
+      expect(menu()!.querySelector('[data-testid="composer-add-workflows"]')).toBeNull();
+      expect(listWorkflows).not.toHaveBeenCalled();
+    });
+
+    it('lists the caller’s workflows, theirs first, skipping a file that no longer parses', async () => {
+      fixture.componentRef.setInput('showWorkflows', true);
+      await openMenu();
+      await openSubmenu('composer-add-workflows');
+
+      const rows = [...overlay('composer-workflows-menu')!.querySelectorAll('[data-workflow]')];
+      expect(rows.map((r) => r.getAttribute('data-workflow'))).toEqual(['k1/review', 'k2/audit']);
+      expect(rows[0].textContent).toContain('Proposal review');
+      expect(rows[0].textContent).toContain('4 steps');
+      expect(rows[1].textContent).toContain('Shared with you');
+    });
+
+    it('a pick opens the sheet in this conversation', async () => {
+      fixture.componentRef.setInput('showWorkflows', true);
+      fixture.componentRef.setInput('sessionId', 'src');
+      await openMenu();
+      await openSubmenu('composer-add-workflows');
+      (overlay('composer-workflows-menu')!.querySelector('[data-workflow="k1/review"]') as HTMLButtonElement).click();
+      expect(startWorkflow).toHaveBeenCalledWith({ skillId: 'k1', name: 'review' }, { sessionId: 'src' });
+    });
+
+    it('with no conversation yet, a pick starts a new one', async () => {
+      fixture.componentRef.setInput('showWorkflows', true);
+      await openMenu();
+      await openSubmenu('composer-add-workflows');
+      (overlay('composer-workflows-menu')!.querySelector('[data-workflow="k2/audit"]') as HTMLButtonElement).click();
+      expect(startWorkflow).toHaveBeenCalledWith({ skillId: 'k2', name: 'audit' }, {});
+    });
+  });
 
   it('loads the file sources on open, not on render, and lists one row per source', async () => {
     expect(listFileSources).not.toHaveBeenCalled();

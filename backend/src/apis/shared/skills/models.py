@@ -17,7 +17,7 @@ Persistence).
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -285,6 +285,16 @@ class SkillDefinition(BaseModel):
     # never moves a pinned version (skill-bundle-import.md D5).
     import_source: Optional[SkillImportSource] = Field(default=None)
 
+    # What the skill is for, when it is not an ordinary skill. ``"workflow"``
+    # marks a skill the workflow designer created to carry one saved workflow
+    # (docs/specs/workflow-designer.md §3.2, §20.3): Customize badges it, and
+    # ``DELETE /workflows`` removes it with its last file. Display only: it is
+    # never read by an access check or on a turn, and it is not a snapshot
+    # field, so it never moves a pinned version. Absent on every other row.
+    kind: Optional[Literal["workflow"]] = Field(
+        default=None, description="'workflow' for a skill the workflow designer made; absent otherwise"
+    )
+
     # Lifecycle / grouping
     status: SkillStatus = Field(default=SkillStatus.ACTIVE)
     category: Optional[str] = Field(
@@ -357,6 +367,8 @@ class SkillDefinition(BaseModel):
                 if self.import_source
                 else {}
             ),
+            # Written only when set, so every other row is byte-for-byte as before.
+            **({"kind": self.kind} if self.kind else {}),
         }
 
     @classmethod
@@ -390,6 +402,7 @@ class SkillDefinition(BaseModel):
             import_source=SkillImportSource.model_validate(item["importSource"])
             if item.get("importSource")
             else None,
+            kind=item.get("kind") if item.get("kind") == "workflow" else None,
         )
 
 

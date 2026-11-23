@@ -47,12 +47,19 @@ XSS_PAYLOAD = (
     b"</script></body></html>"
 )
 
+# An XHTML document under an .xml name: served as an XML type it would run.
+XML_XSS_PAYLOAD = (
+    b'<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">'
+    b"<script>alert(document.domain)</script></html>"
+)
+
 # Every extension that turns a response body into a scriptable document.
+# ``.xml`` is not here: it is allowed, and stored and served as text/plain
+# (TestXmlIsInertText), so no XML type is ever reflected.
 ACTIVE_DOCUMENT_FILENAMES = [
     "vx.html",
     "vx.htm",
     "vx.xhtml",
-    "vx.xml",
     "vx.svg",
     "vx.shtml",
     "vx.mhtml",
@@ -100,6 +107,23 @@ class TestResourceTypePolicy:
         """D5: script resources are stored, listed, and never executable."""
         for ext in ("js", "mjs", "ts", "py", "sh", "css"):
             assert resolve_upload_content_type(f"example.{ext}") == "text/plain"
+
+    def test_xml_schemas_store_and_serve_as_inert_plain_text(self):
+        """Office skills ship OOXML schemas; never stored or served as an XML type."""
+        assert resolve_upload_content_type("office/schemas/sml.xsd") == "text/plain"
+        assert safe_download_content_type("sml.xsd") == "text/plain"
+        assert resolve_upload_content_type("SML.XSD") == "text/plain"
+
+    def test_xml_templates_store_and_serve_as_inert_plain_text(self):
+        """anthropics/skills' docx comment.py copies OOXML part templates."""
+        assert resolve_upload_content_type("templates/comments.xml") == "text/plain"
+        assert safe_download_content_type("people.xml") == "text/plain"
+        assert resolve_upload_content_type("COMMENTS.XML") == "text/plain"
+
+    def test_a_double_extension_ending_in_xml_is_still_inert(self):
+        assert resolve_upload_content_type("page.html.xml") == "text/plain"
+        with pytest.raises(SkillResourceTypeError):
+            resolve_upload_content_type("comments.xml.html")
 
     def test_ordinary_bundle_types_still_work(self):
         assert resolve_upload_content_type("forms.md") == "text/markdown"
@@ -398,6 +422,40 @@ class TestLegacyRowIsNeutralizedOnRead:
 
         resp = author_client.get(f"/skills/mine/{skill_id}/resources/vx.html")
         _assert_response_cannot_execute(resp)
+
+
+class TestXmlIsInertText:
+    """``.xml`` is allowed only because it never leaves as an XML type."""
+
+    def test_an_xhtml_payload_under_an_xml_name_is_stored_as_plain_text(
+        self, author_client
+    ):
+        skill_id = _create_my_skill(author_client, "Xml Skill")
+        resp = _upload_mine(
+            author_client,
+            skill_id,
+            "vx.xml",
+            XML_XSS_PAYLOAD,
+            "application/xhtml+xml",
+            kind="script",
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["resources"][0]["contentType"] == "text/plain"
+
+    def test_reading_it_back_serves_inert_text_as_an_attachment(self, author_client):
+        skill_id = _create_my_skill(author_client, "Xml Read Skill")
+        _upload_mine(
+            author_client, skill_id, "vx.xml", XML_XSS_PAYLOAD, "application/xml"
+        )
+
+        resp = author_client.get(f"/skills/mine/{skill_id}/resources/vx.xml")
+        assert resp.status_code == 200, resp.text
+        assert resp.content == XML_XSS_PAYLOAD
+        assert resp.headers["content-type"].startswith("text/plain")
+        assert "xml" not in resp.headers["content-type"]
+        assert resp.headers["content-disposition"].startswith("attachment;")
+        assert resp.headers["x-content-type-options"] == "nosniff"
+        assert "default-src 'none'" in resp.headers["content-security-policy"]
 
 
 class TestHardenedHeadersOnOrdinaryReads:

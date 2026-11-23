@@ -428,16 +428,36 @@ def _extract_cache_usage(message_metadata: MessageMetadata) -> Tuple[int, int]:
     )
 
 
+def _usage_dict(message_metadata: MessageMetadata) -> Dict[str, int]:
+    """The call's token usage in the calculator's camelCase shape."""
+    usage = message_metadata.token_usage
+    if usage is None:
+        return {}
+    return {
+        "inputTokens": usage.input_tokens or 0,
+        "outputTokens": usage.output_tokens or 0,
+        "cacheReadInputTokens": usage.cache_read_input_tokens or 0,
+        "cacheWriteInputTokens": usage.cache_write_input_tokens or 0,
+    }
+
+
 def _extract_pricing_dict(message_metadata: MessageMetadata) -> Optional[Dict[str, Any]]:
-    """Return the pricingSnapshot as a camelCase dict, or None."""
+    """Return the rates this call was billed at, as a camelCase dict, or None.
+
+    The row's ``pricingSnapshot`` passed through ``CostCalculator.rates_for_call``,
+    so a call over its model's long-context threshold prices its ``wastedUsd`` at
+    the long-context rates its cost was charged at.
+    """
     if not message_metadata.model_info:
         return None
     pricing = message_metadata.model_info.pricing_snapshot
     if pricing is None:
         return None
     if hasattr(pricing, "model_dump"):
-        return pricing.model_dump(by_alias=True)
-    return pricing
+        pricing = pricing.model_dump(by_alias=True)
+    from apis.shared.costs.calculator import CostCalculator
+
+    return CostCalculator.rates_for_call(_usage_dict(message_metadata), pricing)
 
 
 def _derive_cache_observability(
@@ -883,6 +903,10 @@ async def _update_cost_summary_async(
                         pricing_dict = pricing.model_dump(by_alias=True)
                     else:
                         pricing_dict = pricing
+                    # A long-context call saved against long-context rates.
+                    from apis.shared.costs.calculator import CostCalculator
+
+                    pricing_dict = CostCalculator.rates_for_call(_usage_dict(message_metadata), pricing_dict)
 
                     logger.debug(f"🔍 Pricing dict: {pricing_dict}")
 
@@ -2293,6 +2317,7 @@ async def _bump_session_aggregates(
 
         values: Dict[str, Any] = {":c": Decimal(str(cost_value))}
         update_parts_set: List[str] = []
+        update_parts_remove: List[str] = []
         # A call that is not a turn (``callKind``, e.g. a handoff brief) reads the history plus
         # its own instruction, so its input is not the conversation's context size. It adds to
         # the cost and cache rollups, and leaves the context meter to the turns.
@@ -2302,6 +2327,17 @@ async def _bump_session_aggregates(
             if context_window:
                 update_parts_set.append("contextWindow = :w")
                 values[":w"] = int(context_window)
+            # The model's long-context pricing line, last-write-wins beside the
+            # window, so a reloaded conversation's meter names it too. A turn on
+            # a model with no line removes it, so a switch away from Haiku 5.5
+            # never leaves its 100K on the row.
+            extra = getattr(message_metadata, "model_extra", None)
+            threshold = extra.get("longContextThreshold") if isinstance(extra, dict) else None
+            if isinstance(threshold, int) and threshold > 0:
+                update_parts_set.append("longContextThreshold = :lct")
+                values[":lct"] = threshold
+            elif context_window:
+                update_parts_remove.append("longContextThreshold")
 
         # Per-session cache-efficiency rollups (next to totalCost). Zero
         # deltas are added unconditionally so the attributes exist (as 0)
@@ -2366,6 +2402,8 @@ async def _bump_session_aggregates(
         update_expression = "ADD " + ", ".join(update_parts_add)
         if update_parts_set:
             update_expression += " SET " + ", ".join(update_parts_set)
+        if update_parts_remove:
+            update_expression += " REMOVE " + ", ".join(update_parts_remove)
 
         response = table.update_item(
             Key={"PK": f"USER#{user_id}", "SK": sk},
@@ -2595,7 +2633,14 @@ async def _backfill_session_aggregates(
         logger.warning("backfill_session_aggregates failed for %s: %s", session_id, e)
 
 
-def set_session_spawned_from(session_id: str, user_id: str, source_session_id: str, handoff_id: str) -> bool:
+def set_session_spawned_from(
+    session_id: str,
+    user_id: str,
+    source_session_id: str,
+    handoff_id: str,
+    run_id: Optional[str] = None,
+    run_steps: Optional[int] = None,
+) -> bool:
     """Record on a handoff's target conversation where it came from (handoffs spec §4.2).
 
     ``spawnedFrom: {sessionId, handoffId}`` on the target's ``META`` row. It is how every later
@@ -2603,18 +2648,28 @@ def set_session_spawned_from(session_id: str, user_id: str, source_session_id: s
     B1 snapshot, with no extra read. A field-level ``SET`` on the static SK, so the full-row
     writes elsewhere (which only ``SET`` their own fields) never remove it. Synchronous: callers
     run it in a worker thread, after the first token. Returns False when the row is missing.
+
+    A workflow run's step also gets ``runId`` (workflow-runs spec §19 PR-W.4c), in this same
+    write, so the session list can nest the step under its source with no read of its own, and
+    ``runSteps``, the run's kept step count, so the sidebar can tell a finished run from one with a
+    step still to start (§20.4).
     """
     from botocore.exceptions import ClientError
 
     table_name = os.environ.get('DYNAMODB_SESSIONS_METADATA_TABLE_NAME')
     if not table_name:
         return False
+    spawned: Dict[str, Any] = {"sessionId": source_session_id, "handoffId": handoff_id}
+    if run_id:
+        spawned["runId"] = run_id
+        if run_steps and run_steps > 0:
+            spawned["runSteps"] = run_steps
     try:
         get_dynamodb_table(table_name).update_item(
             Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
             UpdateExpression="SET spawnedFrom = :sf",
             ConditionExpression="attribute_exists(PK)",
-            ExpressionAttributeValues={":sf": {"sessionId": source_session_id, "handoffId": handoff_id}},
+            ExpressionAttributeValues={":sf": spawned},
         )
         return True
     except ClientError as e:

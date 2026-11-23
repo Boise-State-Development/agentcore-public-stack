@@ -153,10 +153,12 @@ from apis.shared.tools.always_on import (
 )
 from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
+    CODE_SANDBOX_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
     MEETING_TASKS_TOOL_IDS,
     POWERPOINT_PRESENTATION_TOOL_IDS,
     SKILL_AUTHORING_TOOL_IDS,
+    SUGGEST_HANDOFF_TOOL_IDS,
     SPREADSHEET_TOOL_IDS,
     WORD_DOCUMENT_TOOL_IDS,
     WORKSPACE_TOOL_IDS,
@@ -198,6 +200,7 @@ from apis.shared.security.log_sanitize import scrub_log
 if TYPE_CHECKING:
     from apis.inference_api.chat.project_memory import ProjectMemoryTurn
     from apis.shared.handoff.models import Handoff
+    from apis.shared.handoff.runs import WorkflowRun
     from apis.shared.projects.models import Project
 
 logger = logging.getLogger(__name__)
@@ -1113,6 +1116,30 @@ def _build_word_document_tools(
     return tools
 
 
+def _build_code_sandbox_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create ``run_code`` if the turn enables it and ``CODE_SANDBOX_ENABLED`` is on.
+
+    Closes over ``(session_id, user_id)`` and a ``TurnSkillRecords`` holder that
+    ``ChatAgent`` fills from the turn's skill records, as the Word tools' script
+    path does (``docs/specs/skill-code-sandbox.md``). Off, the spec never
+    reaches ``toolConfig``.
+    """
+    if not enabled_tools or not CODE_SANDBOX_TOOL_IDS.intersection(enabled_tools):
+        return []
+    from apis.shared.feature_flags import code_sandbox_enabled
+
+    if not code_sandbox_enabled():
+        return []
+    from agents.builtin_tools.code_sandbox import make_run_code_tool
+    from agents.main_agent.skills.skill_scripts import TurnSkillRecords
+
+    return [make_run_code_tool(session_id, user_id, TurnSkillRecords())]
+
+
 # ============================================================
 # Skill Authoring Tool Injection
 # ============================================================
@@ -1150,6 +1177,33 @@ def _build_skill_authoring_tools(
     tools = build_skill_authoring_tools(session_id, user_id, user_email)
     logger.info(f"Created {len(tools)} skill authoring tools")
     return tools
+
+
+def _build_suggest_handoff_tools(
+    enabled_tools: list | None,
+    session_id: str,
+    user_id: str,
+) -> list:
+    """Create the context-bound ``suggest_handoff`` tool if enabled (handoffs spec §4.4).
+
+    Gated on the ``suggest_handoff`` catalog id in the turn's tools (seeded
+    ``enabledByDefault: false``) and on ``HANDOFF_SUGGESTIONS_ENABLED``, which
+    needs ``HANDOFFS_ENABLED`` too. No IO. Closes over ``(session_id,
+    user_id)`` only, which is why the id is in
+    ``KEY_DESCRIBED_INJECTED_TOOL_IDS``. Built last among the catalog-gated
+    families, so turning it on appends to the existing specs.
+    """
+    if not enabled_tools or not SUGGEST_HANDOFF_TOOL_IDS.intersection(enabled_tools):
+        return []
+
+    from apis.shared.feature_flags import handoff_suggestions_enabled
+
+    if not handoff_suggestions_enabled():
+        return []
+
+    from agents.builtin_tools.suggest_handoff_tool import make_suggest_handoff_tool
+
+    return [make_suggest_handoff_tool(session_id, user_id)]
 
 
 # ============================================================
@@ -4667,6 +4721,10 @@ async def _build_turn_tools(
         enabled_tools=effective_enabled_tools,
         session_id=input_data.session_id,
         user_id=user_id,
+    ) + _build_code_sandbox_tools(
+        enabled_tools=effective_enabled_tools,
+        session_id=input_data.session_id,
+        user_id=user_id,
     ) + _build_account_tools(effective_enabled_tools, current_user) + _build_skill_authoring_tools(
         enabled_tools=effective_enabled_tools,
         session_id=input_data.session_id,
@@ -4680,6 +4738,10 @@ async def _build_turn_tools(
     # carries one of the ids — and a set intersection on every other turn.
     extra_tools = extra_tools + await _build_meeting_tools(
         enabled_tools=effective_enabled_tools,
+        user_id=user_id,
+    ) + _build_suggest_handoff_tools(
+        enabled_tools=effective_enabled_tools,
+        session_id=input_data.session_id,
         user_id=user_id,
     )
 
@@ -5622,15 +5684,33 @@ class HandoffBriefResponse(StreamingResponse):
     """
 
 
-def _brief_fallback_response(handoff_id: str, kind: str, session_id: str, reason: str) -> HandoffBriefResponse:
-    """A brief that will not be written: one fallback frame and ``done``. The card stays the excerpt."""
+def _brief_fallback_response(
+    handoff_id: str,
+    kind: str,
+    session_id: str,
+    reason: str,
+    *,
+    run_id: Optional[str] = None,
+    run_step_count: int = 0,
+) -> HandoffBriefResponse:
+    """A brief that will not be written: one fallback frame and ``done``. The card stays the excerpt.
+
+    ``run_id`` marks a run brief's fallback (``runId`` on both frames, ``briefScope: "run"`` on the
+    metric, with ``run_step_count`` once the run has been read).
+    """
     from apis.shared.handoff.brief import brief_done_frame, brief_fallback_frame
     from apis.shared.handoff.metrics import emit_handoff_metric
 
     async def _frames() -> AsyncGenerator[str, None]:
-        emit_handoff_metric("HandoffBriefFallback", kind, session_id=session_id, detail=reason)
-        yield brief_fallback_frame(handoff_id, reason)
-        yield brief_done_frame(handoff_id, brief_hash=None, cache_status=None)
+        emit_handoff_metric(
+            "HandoffBriefFallback",
+            kind,
+            session_id=session_id,
+            detail=reason,
+            run_step_count=run_step_count if run_id else None,
+        )
+        yield brief_fallback_frame(handoff_id, reason, run_id=run_id)
+        yield brief_done_frame(handoff_id, brief_hash=None, cache_status=None, run_id=run_id)
 
     return HandoffBriefResponse(_frames(), media_type="text/event-stream", headers=_sse_headers(session_id))
 
@@ -5652,6 +5732,24 @@ async def _handoff_target_description(agent_id: str, current_user: User) -> Opti
     return getattr(agent, "description", None) if agent is not None else None
 
 
+async def _run_step_descriptions(run: "WorkflowRun", current_user: User) -> list[Optional[str]]:
+    """Each kept step's Agent description, read concurrently, in step order (workflow-runs.md §6.3).
+
+    A prompt or checklist step has no Agent to read, so its slot is ``None`` without a read.
+    """
+    async def _none() -> Optional[str]:
+        return None
+
+    return list(
+        await asyncio.gather(
+            *(
+                _none() if step.is_model_step else _handoff_target_description(step.agent_id, current_user)
+                for step in run.kept_steps()
+            )
+        )
+    )
+
+
 async def _handoff_brief_invocation(request: InvocationRequest, current_user: User):
     """A ``handoff_brief`` invocation (agent-handoffs-and-consults.md §4.5.1).
 
@@ -5665,37 +5763,93 @@ async def _handoff_brief_invocation(request: InvocationRequest, current_user: Us
     from apis.shared.handoff import get_handoff_store
 
     handoff_id = request.handoff_brief.handoff_id
+    run_id = request.handoff_brief.run_id
     if not handoff_brief_enabled():
-        return _brief_fallback_response(handoff_id, "mention", request.session_id, "flag_off")
-    try:
-        handoff = await asyncio.to_thread(get_handoff_store().get, current_user.user_id, handoff_id)
-    except Exception:
-        logger.warning("handoff brief: reading the handoff failed", exc_info=True)
-        handoff = None
+        return _brief_fallback_response(handoff_id, "mention", request.session_id, "flag_off", run_id=run_id)
+    reads = [asyncio.to_thread(get_handoff_store().get, current_user.user_id, handoff_id)]
+    if run_id:
+        # A run's brief (workflow-runs.md §6.3) also reads the run row, beside the handoff read.
+        # Only here: an ordinary turn and a single handoff's brief never reach this read.
+        from apis.shared.handoff.runs import get_workflow_run_store
+
+        reads.append(asyncio.to_thread(get_workflow_run_store().get, current_user.user_id, run_id))
+    handoff, run = None, None
+    results = await asyncio.gather(*reads, return_exceptions=True)
+    if isinstance(results[0], BaseException):
+        logger.warning("handoff brief: reading the handoff failed", exc_info=results[0])
+    else:
+        handoff = results[0]
+    if run_id:
+        if isinstance(results[1], BaseException):
+            logger.warning("handoff brief: reading the workflow run failed", exc_info=results[1])
+        else:
+            run = results[1]
+    steps = len(run.kept_steps()) if run is not None else 0
     if handoff is None or handoff.session_id != request.session_id or handoff.effective_status() != "open":
         kind = handoff.kind if handoff is not None else "mention"
-        return _brief_fallback_response(handoff_id, kind, request.session_id, "not_open")
+        return _brief_fallback_response(
+            handoff_id, kind, request.session_id, "not_open", run_id=run_id, run_step_count=steps
+        )
+    if run_id and not _is_open_run_step(run, handoff_id, request.session_id):
+        return _brief_fallback_response(
+            handoff_id, handoff.kind, request.session_id, "not_open", run_id=run_id, run_step_count=steps
+        )
 
     try:
-        response = await _run_invocation(request, current_user, brief=handoff)
+        response = await _run_invocation(request, current_user, brief=handoff, brief_run=run)
     except HTTPException as exc:
         reason = "busy" if exc.status_code == status.HTTP_409_CONFLICT else "refused"
-        return _brief_fallback_response(handoff_id, handoff.kind, request.session_id, reason)
+        return _brief_fallback_response(
+            handoff_id, handoff.kind, request.session_id, reason, run_id=run_id, run_step_count=steps
+        )
     if isinstance(response, HandoffBriefResponse):
         return response
     body = getattr(response, "body_iterator", None)
     if body is not None and hasattr(body, "aclose"):
         await body.aclose()
-    return _brief_fallback_response(handoff_id, handoff.kind, request.session_id, "refused")
+    return _brief_fallback_response(
+        handoff_id, handoff.kind, request.session_id, "refused", run_id=run_id, run_step_count=steps
+    )
+
+
+def _is_open_run_step(run: Optional["WorkflowRun"], handoff_id: str, session_id: str) -> bool:
+    """Whether ``run`` (already read under the caller's partition) can be briefed for ``handoff_id``.
+
+    It must start from this conversation, still be at its sheet (``open``), and keep ``handoff_id``
+    as one of its steps. Anything else is the ``not_open`` fallback, as a handoff that is not this
+    conversation's open one is.
+    """
+    if run is None or run.session_id != session_id or run.effective_status() != "open":
+        return False
+    return any(step.handoff_id == handoff_id for step in run.kept_steps())
+
+
+def _workflow_prompt_invocation(request: InvocationRequest, current_user: User) -> StreamingResponse:
+    """A ``workflow_prompt`` invocation (workflow-designer.md §21.3): a run's prompt steps.
+
+    Never a turn and never ``_run_invocation``: no agent build, no history, no tools, no session
+    lease. ``inference_api/chat/workflow_prompt.py`` runs its own checks and claims each step; the
+    stream carries its frames and ``done``.
+    """
+    from apis.inference_api.chat.workflow_prompt import stream_workflow_prompt
+
+    return StreamingResponse(
+        stream_workflow_prompt(request.workflow_prompt, current_user, request.session_id),
+        media_type="text/event-stream",
+        headers=_sse_headers(request.session_id),
+    )
 
 
 @router.post("/invocations")
 async def invocations(request: InvocationRequest, current_user: User = Depends(get_current_user_trusted)):
-    """The AgentCore Runtime invocation endpoint: a conversation turn, or a handoff brief.
+    """The AgentCore Runtime invocation endpoint: a conversation turn, a handoff brief, or a run's prompt steps.
 
-    A ``handoff_brief`` request goes through ``_handoff_brief_invocation``; everything else is a
-    turn, ``_run_invocation``.
+    A ``workflow_prompt`` request goes through ``_workflow_prompt_invocation`` and a
+    ``handoff_brief`` request through ``_handoff_brief_invocation``; everything else is a turn,
+    ``_run_invocation``.
     """
+    if request.workflow_prompt is not None and not request.warm:
+        return _workflow_prompt_invocation(request, current_user)
     if request.handoff_brief is not None and not request.warm:
         return await _handoff_brief_invocation(request, current_user)
     return await _run_invocation(request, current_user)
@@ -5706,8 +5860,12 @@ async def _run_invocation(
     current_user: User,
     *,
     brief: Optional["Handoff"] = None,
+    brief_run: Optional["WorkflowRun"] = None,
 ):
     """One conversation turn, or with ``brief`` the agent build for a handoff brief.
+
+    ``brief_run`` makes that brief a workflow run's (``brief`` is one of its kept steps): the
+    agent build is the same, only the side call's final message differs.
 
     Runs the sequence docs/specs/turn-path-ttft.md maps, in this order. The
     marks are the `turn_prelude` stage names; everything up to `stream_setup`
@@ -6071,6 +6229,23 @@ async def _run_invocation(
     # the post-stream _update_session_metadata write. The task handle is
     # kept so stream_with_quota_warning can push the finished title to the
     # client mid-stream as a `session_title` SSE event.
+    # Handoffs (docs/specs/agent-handoffs-and-consults.md §4.2): decided here with no IO, from
+    # the request and the B1 snapshot. Acceptance starts at the head of the stream, beside the
+    # agent build, and is awaited only where the message is assembled. Decided before the title
+    # task so a workflow run step's title can name its Agent (workflow-runs spec §19): the task
+    # waits on that same acceptance after Nova answers, and reads nothing of its own.
+    handoff_turn = HandoffTurn.for_turn(
+        user_id=user_id,
+        session_id=input_data.session_id,
+        agent_id=input_data.rag_assistant_id,
+        handoff_context=input_data.handoff_context,
+        session_row=session_meta.row,
+        is_resume=is_resume,
+        is_continuation=is_continuation,
+        is_preview=is_preview_session(input_data.session_id),
+        user_email=current_user.email,
+    )
+
     title_task: Optional["asyncio.Task[str]"] = None
     if is_new_session and input_data.message:
         title_task = asyncio.create_task(
@@ -6078,6 +6253,11 @@ async def _run_invocation(
                 session_id=input_data.session_id,
                 user_id=user_id,
                 user_input=input_data.message,
+                agent_name_for_title=(
+                    handoff_turn.run_step_agent_name
+                    if handoff_turn is not None and handoff_turn.request is not None
+                    else None
+                ),
             )
         )
 
@@ -6472,20 +6652,6 @@ async def _run_invocation(
     # already ended, so they take the lease with force=True (never blocked, but
     # still install it so a fresh duplicate during them is rejected). Preview
     # sessions and the local no-DynamoDB path (lease None) skip the guard.
-    # Handoffs (docs/specs/agent-handoffs-and-consults.md §4.2): decided here with no IO, from
-    # the request and the B1 snapshot. Acceptance starts at the head of the stream, beside the
-    # agent build, and is awaited only where the message is assembled.
-    handoff_turn = HandoffTurn.for_turn(
-        user_id=user_id,
-        session_id=input_data.session_id,
-        agent_id=input_data.rag_assistant_id,
-        handoff_context=input_data.handoff_context,
-        session_row=session_meta.row,
-        is_resume=is_resume,
-        is_continuation=is_continuation,
-        is_preview=is_preview_session(input_data.session_id),
-        user_email=current_user.email,
-    )
     # Deliveries (§4.8): the composer cards this send carries. Decided with no IO; the attaches
     # start beside the agent build and are awaited only where the message is assembled.
     delivery_turn = DeliveryTurn.for_turn(
@@ -6844,11 +7010,15 @@ async def _run_invocation(
                         build_agent=_build_main_agent,
                         release_lease=lambda: _release_turn_lease(None, session_lease),
                         lease=session_lease,
-                        agent_description=asyncio.create_task(
+                        agent_description=None if brief_run is not None else asyncio.create_task(
                             _handoff_target_description(brief.agent_id, current_user)
                         ),
                         turn_agent_id=input_data.rag_assistant_id,
                         turn_project_id=turn_project_id,
+                        run=brief_run,
+                        run_descriptions=None if brief_run is None else asyncio.create_task(
+                            _run_step_descriptions(brief_run, current_user)
+                        ),
                     ),
                     media_type="text/event-stream",
                     headers=_sse_headers(input_data.session_id),

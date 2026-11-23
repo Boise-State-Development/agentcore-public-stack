@@ -100,9 +100,9 @@ send-back is a row we can count. **§7 turns those counts into the go/no-go for 
 
 | Phase | What the user gets | New plumbing | Status |
 |---|---|---|---|
-| **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | In progress: PR-0.1–0.3 built (§11) |
-| **0b — Handoff row + send back** | A row in the original thread tracks the handoff (*running / needs your input / done*) and offers **Bring back result** when it finishes; the new conversation offers "Send to *original conversation*" too, without leaving | Status on `HANDOFF#`; `DELIVERY#` rows and the `deliveries` request field (§4.8); file reference rows in both directions (§4.9) | Proposed |
-| **0c — Suggested handoffs** | The model can offer a chip ("Hand off to Rubric Builder →") without stopping its turn; Start opens the same review sheet | `suggest_handoff` tool, `handoff_suggested` SSE event | Proposed, opt-in |
+| **0a — Handoff with context** | A mid-thread mention opens a **review sheet** in place. On Send, the Agent's conversation starts **in the background** with a **context card** from this thread; the user stays put | `HANDOFF#` rows, excerpt renderer, `handoff_context` on the request, a no-navigate send | Built and dev-validated: PR-0.1–0.3c (§11) |
+| **0b — Handoff row + send back** | A row in the original thread tracks the handoff (*running / needs your input / done*) and offers **Bring back result** when it finishes; the new conversation offers "Send to *original conversation*" too, without leaving | Status on `HANDOFF#`; `DELIVERY#` rows and the `deliveries` request field (§4.8); file reference rows in both directions (§4.9) | Built and dev-validated: PR-0.4, PR-0.4a (§11) |
+| **0c — Suggested handoffs** | The model can offer a chip ("Hand off to Rubric Builder →") without stopping its turn; Start opens the same review sheet | `suggest_handoff` tool, `handoff_suggested` SSE event | In progress, opt-in: PR-0.5 backend built (§11) |
 | **Gate** | — | — | §7 |
 | **1 — Consult** | A mid-thread mention runs the Agent **in place** and its report comes back automatically | Hidden consult sessions, nested streaming, agent-resolution refactor | Only if the gate passes |
 | **Gate** | — | — | §7.1, independent of §7 |
@@ -302,6 +302,14 @@ ticks on the review sheet are carried over by reference: never copied, never inl
 If the user navigates away with the sheet open, the handoff stays `open`, and one older than 24h reads as
 `abandoned` (derived when read, so no sweep job is needed). A removed context card still sends the handoff;
 `contextRemoved` records the choice.
+
+> *Amended 2026-11-20 (workflow runs, PR-W.1).* A handoff row may be a **step of a workflow run**
+> (`docs/specs/workflow-runs.md`): an ordinary `mention` row that also carries `runId` and `stepId`, written by the
+> same helper as a single mention and accepted by the same `HandoffTurn`, so nothing in this section changes for it.
+> A row with no `runId` is a handoff of its own, exactly as before. One exception to the 24-hour rule: once the
+> user approves the run, each kept step's row gets `runApprovedAt`, and an approved step that has not been sent yet
+> stays `open` however old it is, because it waits on the tab's queue, not on a sheet. A step of a run still at its
+> sheet ages out like any other mention. `runId` and `stepId` are on the replayed view too; `runApprovedAt` is not.
 
 **Inside a Shared Project.** A mention in a project task hands off to an ordinary conversation with the Agent. It
 does not inherit `projectId` and doesn't appear in the project's Tasks list; the handoff row in the project task
@@ -619,6 +627,31 @@ brief isn't streamed for chips the user dismisses.
 **Dismiss**. Once started, it becomes that handoff's row (§4.3). Chips replay on reload with the rest of
 `handoffs`. Dismiss is `POST /sessions/{id}/handoffs/{handoffId}/dismiss`.
 
+*Backend built (2026-11-19, PR-0.5).* `apis/shared/handoff/suggestions.py` and
+`agents/builtin_tools/suggest_handoff_tool.py`. Where it differs from the text above:
+- **The SPA matches the Agent, not the server.** The pin list lives in app-api's Agent Designer, which the Runtime
+  may not import, and the SPA already holds exactly the set the text names (the Agents the user can `@`-mention).
+  So the row stores the model's `agentHint` unresolved, the event's `agentName` is that hint, and no `agentId` is
+  sent. The chip names the Agent the hint matched (exact name, then case-insensitive), or Start offers a picker.
+- **Start is its own route.** `POST /sessions/{id}/handoffs/{handoffId}/start {agentId}` writes the Agent and the
+  card onto the `open` row and answers exactly like the mention create, so the SPA opens the same sheet and sends
+  the same way, and acceptance needs no special case. The excerpt is rendered then, from the conversation as it is
+  at Start. The row is placed under the message holding the suggestion's `toolUseId` (falling back to the last
+  message), so the chip and the row it becomes sit in one place. A cancelled sheet leaves the row `open`, so the
+  chip can be started again; 409 once it was sent or dismissed.
+- **`toolUseId` places the chip.** It is on the event, the row and the replay. A suggestion has no
+  `sourceMessageIndex` until Start (`-1`): the turn that made it is not persisted while it streams.
+- **A suggestion never reads as abandoned.** Its chip stays for the user to start whenever they like; only a
+  mention's unsent review sheet ages out after `ABANDON_AFTER`.
+- **The replay leaves the prompt out too.** An open chip replays with `title`, `tldr`, `agentHint` and an empty
+  `request`; Start returns the prompt.
+- **Limits.** One a turn is a count in Strands' invocation state (new each invocation, so a cached agent starts
+  every turn at zero); three a conversation is counted from the `HANDOFF#` rows, dismissed chips included.
+- **Cost.** Marginal CountTokens on Haiku 4.5: **278 tokens**, in the cached `toolConfig` of a user who has the
+  tool. Agent-cache eligible: the closure is `(session, user)`. No system-prompt clause yet, as planned.
+- **Metrics.** `HandoffCreated` and `HandoffCancelled` (Dismiss) with `handoffKind: suggested`, plus
+  `HandoffSuggestionStarted` and `HandoffSuggestionLimited` (`turn` / `session`).
+
 ### 4.5 The context card: a brief from the source's cache, the excerpt as fallback
 
 *Rewritten 2026-10-22.* The card is a **brief** written for the request by the source conversation's own model, from
@@ -664,6 +697,12 @@ for byte, up to a new final message.
 
   The instruction is a constant, versioned per deployment; only the request and the Agent's name and description
   vary. It names the sections and a length bound (about 800 words), and says to answer in text without tools.
+  *A workflow run's brief* (`workflow-runs.md` §6.3, PR-W.3): `handoff_brief: {handoffId, runId}` asks for one
+  brief shared by every step of an `open` run, so several Agents start from one brief rather than several that
+  disagree. Everything above is unchanged, the agent build included; the only difference is the appended message,
+  the run variant of the instruction (its own version, `BRIEF_RUN_INSTRUCTION_VERSION`), which names the shared
+  request and each kept step's Agent, description and own request, bounded at 18,000 chars in all. The brief is
+  recorded on the run row and on every kept step's `HANDOFF#` row, so each step's acceptance compares against it.
 - **Nothing reaches the source.** The copy is never assigned back, no `MessageAddedEvent` fires, no session-manager
   write happens, and hooks don't run. The source's next real turn has the same `historyHash` lineage it would have
   had. `apply_pending_compaction` is **not** run: the brief reads the history the cache holds, and a pending cut
@@ -835,7 +874,7 @@ EMF, under the existing PromptCache namespace so the cost dashboard can show it:
 - `HandoffBriefWritten` by `briefCacheStatus` (`hit`, `partial_miss`, `miss`), with `HandoffBriefMs` and
   `HandoffBriefTokens`; `HandoffBriefFallback` by reason (`flag_off`, `not_open`, `busy`, `preempted`, `quota`,
   `refused`, `timeout`, `error`, `tool_use_only`, `short_source`, `history_ends_on_user`). `not_open`: the handoff
-  is not this conversation's open one. `refused`: the turn path ended before the model (an Agent or model refusal,
+  is not this conversation's open one (for a run's brief, also: the run is not this conversation's `open` run keeping that step). Both counts carry `briefScope: "run"` and `runStepCount` on a workflow run's brief. `refused`: the turn path ended before the model (an Agent or model refusal,
   a retired model, an error building the turn), which the brief discards unstreamed so nothing persists. A high
   `miss` share decides §13's cold-cache question
 - `HandoffContextEdited` / `HandoffContextRemoved`
@@ -886,6 +925,7 @@ running one.** It waits until the user sends.
 | `status` | `pending` → `attached` \| `dismissed`. Phase 2b adds `claimed` (§9.4) |
 | `attachedVia`, `attachedAt`, `edited` | How and when it reached the model (`turn` in Phase 0; `steer` or `wake` in Phase 2) |
 | `hop` | The hop of the turn that sent it, for Phase 2c's loop budget (§9.5). Always 0 for `origin: user` |
+| `runId?`, `parts` | A workflow run's result (`workflow-runs.md` §7, PR-W.2): one part per step, each with its own sender, title, status, text, artifacts and files. Empty on every other delivery; see **Parts** below |
 
 **Creating one.** Only through `create_delivery(user, from_session_id, to_session_id, text, origin, ...)`. It
 checks that **the same user owns both sessions**, keyed on `(session, user)` as every live-state lookup is. In
@@ -920,6 +960,31 @@ if the card was edited. Before the first token the server:
    `original_message` stays what the user typed, so the bubble shows their words and the card.
 
 A turn carries at most `DELIVERY_MAX_PER_TURN = 3` blocks. Extra cards stay pending for the next send.
+
+**Parts.** *Added 2026-11-20 (`workflow-runs.md` PR-W.2).* A workflow run returns one delivery, not one per
+step. Its row carries `parts: [{stepId, agentName, fromSessionId, fromTitle, status, text, textHash, artifacts,
+files}]` in step order, and its own `text`, `artifacts` and `files` stay empty. A row without parts is a delivery
+exactly as above.
+
+- **One implementation still.** `create_delivery(parts=…)` holds **each** part to this section's and §4.9's rules
+  against that part's own sending conversation: both conversations the caller's, the sender linked to the
+  receiver, neither a Shared Project task, every artifact and file made in the sender. The receiver is read once.
+  Only a `done` part carries anything, so only its conversation is checked as a sender; a part that `stopped`,
+  is `needs_input` or `running` carries its status and nothing else.
+- **Bounds.** Each part's text is capped like a card's. At most `DELIVERY_MAX_ARTIFACTS` artifacts and
+  `DELIVERY_MAX_FILES` files a part, `RUN_RESULT_MAX_FILES = 10` files a row, and `DELIVERY_MAX_PARTS = 8` parts.
+  The worst case row is ~290 KB (eight parts of four-byte text at the cap) against DynamoDB's 400 KB; plain
+  English text is under 100 KB.
+- **The model reads one block per part**, in step order, each 0a's wrapper as for a card. Its
+  `from_conversation` names the Agent and then the step conversation's title (`Generalist · Review of the
+  proposal`), because every step starts from the same card and the titles read alike. A part with no result is the
+  same wrapper around a fixed status note, so a missing step is named, never silently absent. The blocks are one
+  card: one of the three per-send slots.
+- **Attaching is unchanged:** one conditional `UpdateItem` per row, however many parts. The request's
+  `deliveries[].parts: [{stepId, text}]` carries only edited parts, re-capped and counted (`DeliveryEdited`,
+  with the number of edited parts as its value); it is optional, so a send without it attaches the stored parts.
+  Every part's files are written as reference rows in the same batched write a card's are (in chunks of 25,
+  `BatchWriteItem`'s limit).
 
 **TTFT.** A send that carries `deliveries` pays one `BatchGetItem` and one conditional write before the first
 token. That is the same order of cost as 0a's acceptance read, and it should run in the same phase so a turn
@@ -1195,6 +1260,7 @@ on demand and bounded by the readers' existing caps.
 | `HANDOFFS_ENABLED` / `FEATURES.handoffs` | backend / SPA | off | yes; off = today's immediate handoff |
 | `HANDOFF_SUGGESTIONS_ENABLED` | backend | off | yes; off = `suggest_handoff` never registered |
 | `HANDOFF_BRIEF_ENABLED` | backend (Runtime) | off | yes; off = the card is the excerpt. A **feature switch**: it spends model tokens per handoff, a choice a deployment may decline |
+| `WORKFLOW_RUNS_ENABLED` / `FEATURES.workflowRuns` | backend (app-api) / SPA | off | yes; off = one Agent per handoff. Needs `HANDOFFS_ENABLED`. A **feature switch** (`docs/specs/workflow-runs.md` §13) |
 | `AGENT_CONSULT_ENABLED` / `FEATURES.agentConsult` | backend / SPA | off | yes; off = Phase 0 behaviour |
 | `CONVERSATION_MESSAGES_ENABLED` / `FEATURES.conversationMessages` | backend / SPA | off | yes; off = `send_to_conversation` never registered, agent-sent cards hidden |
 | `CONVERSATION_MESSAGE_STEER_ENABLED` | backend | off | yes; off = a message to a streaming conversation stays pending (2a) |
@@ -2228,6 +2294,18 @@ has started", and the only one that spends money while nobody is watching.
     `axe-core` installed.
 - **PR-0.5 — `suggest_handoff`.** Tool, `handoff_suggested` event, chip UI that opens the review sheet, replay,
   `CLAUDE.md` SSE table. Marginal CountTokens measured and recorded in the PR.
+  *Backend built (2026-11-19)*: the tool behind `HANDOFF_SUGGESTIONS_ENABLED` and the `suggest_handoff` catalog
+  row, the `handoff_suggested` event, the chip replay and the Start route (§4.4, *Backend built*). 278 tokens
+  measured. The chip UI is its own PR.
+  *SPA built (2026-11-19)*: `HandoffSuggestionChipComponent`, placed by `toolUseId` under the message holding the
+  call (or at the tail when that message isn't in the loaded page). `matchSuggestedAgent` matches the hint against
+  `AgentMentionService.mentionable()`: an exact name, then a single case-insensitive one, never a partial name.
+  Otherwise the chip shows a labelled Agent select and Start waits for a pick; a user with no Agents at all is told
+  so, with a link to browse them, and offered only Dismiss. Start is
+  `AgentHandoffService.startSuggestion`, which opens the same review sheet through `POST …/start`. Cancel closes the
+  sheet and keeps the chip (no dismiss, nothing back in the composer). Dismiss hides the chip at once and posts
+  `/dismiss`. Send turns the chip into a `suggested` handoff row in the same place. No SPA flag of its own: chips
+  arrive only from a backend with suggestions on, and render under `features.handoffs`.
 - **Dev validation.**
   - A mid-thread mention with an edited card, previewed, sent, and finished while the user stays in the source.
   - A handoff that needs OAuth consent: *needs your input* on the row and in the bell, a browser notification with

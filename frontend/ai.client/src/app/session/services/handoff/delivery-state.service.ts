@@ -5,6 +5,8 @@ import { DeliveryView, SendBackReview } from './handoff.models';
 export interface ComposerCard extends DeliveryView {
   /** The card's text as the user edited it; absent while unedited. */
   editedText?: string;
+  /** A run result's edited parts, by step id; a part not listed is unedited (PR-W.4b). */
+  editedParts?: Readonly<Record<string, string>>;
 }
 
 /** What the next send carries for one card (`deliveries` on `/invocations`). */
@@ -12,6 +14,8 @@ export interface DeliveryAttach {
   deliveryId: string;
   /** Present only when the card was edited, as the Runtime expects. */
   text?: string;
+  /** A run result's edited parts only (workflow-runs spec §19 PR-W.2); absent when none was edited. */
+  parts?: { stepId: string; text: string }[];
 }
 
 /** At most this many cards ride one send; the rest wait for the next (handoffs spec §4.8). */
@@ -51,8 +55,14 @@ export class DeliveryStateService {
     this.cardsBySession.update((map) => {
       const local = map.get(sessionId) ?? [];
       if (server.length === 0 && local.length === 0) return map;
-      const edits = new Map(local.map((card) => [card.deliveryId, card.editedText]));
-      const merged = sortCards(server.map((d) => ({ ...d, editedText: edits.get(d.deliveryId) })));
+      const edits = new Map(local.map((card) => [card.deliveryId, card]));
+      const merged = sortCards(
+        server.map((d) => ({
+          ...d,
+          editedText: edits.get(d.deliveryId)?.editedText,
+          editedParts: edits.get(d.deliveryId)?.editedParts,
+        })),
+      );
       return new Map(map).set(sessionId, merged);
     });
   }
@@ -85,6 +95,24 @@ export class DeliveryStateService {
     });
   }
 
+  /** The user's edit of one part of a run result; text equal to the part's own reads as unedited. */
+  editPart(sessionId: string, deliveryId: string, stepId: string, text: string): void {
+    this.cardsBySession.update((map) => {
+      const cards = map.get(sessionId);
+      if (!cards) return map;
+      const next = cards.map((c) => {
+        if (c.deliveryId !== deliveryId) return c;
+        const part = c.parts?.find((p) => p.stepId === stepId);
+        if (!part || part.status !== 'done') return c;
+        const edited = { ...(c.editedParts ?? {}) };
+        if (text === part.text) delete edited[stepId];
+        else edited[stepId] = text;
+        return { ...c, editedParts: Object.keys(edited).length ? edited : undefined };
+      });
+      return new Map(map).set(sessionId, next);
+    });
+  }
+
   /**
    * Take the cards the next send carries off the composer, oldest first and at most
    * `DELIVERY_MAX_PER_TURN`. The rest stay for the send after. `restore` puts them back when the
@@ -97,10 +125,7 @@ export class DeliveryStateService {
     this.cardsBySession.update((map) =>
       new Map(map).set(sessionId, (map.get(sessionId) ?? []).filter((c) => !taken.has(c.deliveryId))),
     );
-    const attach = cards.map((c) =>
-      c.editedText === undefined ? { deliveryId: c.deliveryId } : { deliveryId: c.deliveryId, text: c.editedText },
-    );
-    return { attach, cards };
+    return { attach: cards.map(attachFor), cards };
   }
 
   restore(sessionId: string, cards: readonly ComposerCard[]): void {
@@ -129,6 +154,17 @@ export class DeliveryStateService {
       return next;
     });
   }
+}
+
+/** One card as a send carries it: a run result names its edited parts, a plain card its edited text. */
+function attachFor(card: ComposerCard): DeliveryAttach {
+  if (card.parts) {
+    const parts = card.parts
+      .filter((part) => card.editedParts?.[part.stepId] !== undefined)
+      .map((part) => ({ stepId: part.stepId, text: card.editedParts![part.stepId] }));
+    return parts.length ? { deliveryId: card.deliveryId, parts } : { deliveryId: card.deliveryId };
+  }
+  return card.editedText === undefined ? { deliveryId: card.deliveryId } : { deliveryId: card.deliveryId, text: card.editedText };
 }
 
 function sortCards<T extends DeliveryView>(cards: T[]): T[] {

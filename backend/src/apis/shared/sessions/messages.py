@@ -592,13 +592,19 @@ async def get_messages_from_cloud(
 
             Reads the raw META row: the ``SessionMetadata`` model behind
             ``get_pending_interrupts`` doesn't carry ``spawnedFrom``. Nothing
-            at all while ``HANDOFFS_ENABLED`` is off.
+            at all while ``HANDOFFS_ENABLED`` is off. Workflow runs (workflow-runs
+            spec §9) ride beside them, first page only, and only while
+            ``WORKFLOW_RUNS_ENABLED`` is on.
             """
             from apis.shared.feature_flags import handoffs_enabled
 
             if not handoffs_enabled():
-                return [], None, []
-            from apis.shared.handoff.replay import load_delivery_replay, load_handoff_replay
+                return [], None, [], []
+            from apis.shared.handoff.replay import (
+                load_delivery_replay,
+                load_handoff_replay,
+                load_workflow_run_replay,
+            )
 
             from .metadata import load_session_meta
 
@@ -606,10 +612,15 @@ async def get_messages_from_cloud(
                 meta = await load_session_meta(session_id, user_id)
                 return await load_handoff_replay(session_id, user_id, meta.row)
 
-            (handoffs, spawned), deliveries = await asyncio.gather(
-                handoff_rows(), load_delivery_replay(session_id, user_id)
+            async def workflow_runs():
+                if next_token:
+                    return []
+                return await load_workflow_run_replay(session_id, user_id)
+
+            (handoffs, spawned), deliveries, runs = await asyncio.gather(
+                handoff_rows(), load_delivery_replay(session_id, user_id), workflow_runs()
             )
-            return handoffs, spawned, deliveries
+            return handoffs, spawned, deliveries, runs
 
         async def fetch_rewind():
             """Which stored messages a rewind has hidden (rewind spec §4).
@@ -775,7 +786,9 @@ async def get_messages_from_cloud(
         # the replays above; the SPA places rows by index, not by page.
         # Pending deliveries are composer cards, not thread content, so they ride
         # the first page with the rest.
-        handoff_rows, spawned_from, deliveries = handoff_replay if not next_token else ([], None, [])
+        handoff_rows, spawned_from, deliveries, workflow_runs = (
+            handoff_replay if not next_token else ([], None, [], [])
+        )
 
         return MessagesListResponse(
             messages=message_responses,
@@ -788,6 +801,7 @@ async def get_messages_from_cloud(
             handoffs=handoff_rows,
             spawned_from=spawned_from,
             deliveries=deliveries,
+            workflow_runs=workflow_runs,
             next_message_index=len(messages_raw) if rewind_state is not None else None,
         )
 

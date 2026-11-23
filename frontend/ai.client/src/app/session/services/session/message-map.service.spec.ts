@@ -53,6 +53,135 @@ describe('MessageMapService', () => {
     expect(service).toBeTruthy();
   });
 
+  describe('a turn that calls a tool, numbered as the server stores it', () => {
+    // The server stores a tool round as user → assistant (toolUse) → user
+    // (toolResult) → assistant, and the stream has no frame for the third:
+    // its results arrive as `tool_result` events on the assistant message.
+    // Counting only the frames put every answer after a tool one index behind
+    // the stored one until a reload, so Send to found no answer there (404).
+    function toolRound(parser: StreamParserService, sessionId: string, streamId: string | null, id: string): void {
+      const ev = (event: string, data: unknown) => parser.parseEventSourceMessage(sessionId, event, data, streamId);
+      ev('message_start', { role: 'assistant' });
+      ev('content_block_start', { contentBlockIndex: 0, type: 'tool_use', toolUse: { toolUseId: id, name: 'search_documents' } });
+      ev('content_block_delta', { contentBlockIndex: 0, type: 'tool_use', input: '{"q":"aims"}' });
+      ev('content_block_stop', { contentBlockIndex: 0 });
+      ev('message_stop', { stopReason: 'tool_use' });
+      ev('tool_result', { tool_result: { toolUseId: id, content: [{ text: '3 matches' }], status: 'success' } });
+    }
+
+    function answer(parser: StreamParserService, sessionId: string, streamId: string | null): void {
+      const ev = (event: string, data: unknown) => parser.parseEventSourceMessage(sessionId, event, data, streamId);
+      ev('message_start', { role: 'assistant' });
+      ev('content_block_start', { contentBlockIndex: 0, type: 'text' });
+      ev('content_block_delta', { contentBlockIndex: 0, type: 'text', text: 'The aims are strong.' });
+      ev('content_block_stop', { contentBlockIndex: 0 });
+      ev('message_stop', { stopReason: 'end_turn' });
+      ev('metadata', { usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } });
+      ev('done', {});
+    }
+
+    /** A handoff target's first turn, streamed the way `submitHandoffRequest` streams it. */
+    function streamTarget(sessionId: string, rounds: number): void {
+      const parser = TestBed.inject(StreamParserService);
+      service.addUserMessage(sessionId, 'Review the proposal');
+      service.startStreaming(sessionId);
+      const streamId = parser.getCurrentStreamId(sessionId);
+      for (let round = 0; round < rounds; round++) {
+        toolRound(parser, sessionId, streamId, `t${round}`);
+        TestBed.tick();
+      }
+      answer(parser, sessionId, streamId);
+      TestBed.tick();
+      service.endStreaming(sessionId);
+    }
+
+    it('gives the answer and the next message the ids the server gives them', () => {
+      streamTarget('tgt', 1);
+
+      expect(service.getMessagesForSession('tgt')().map((m) => [m.id, m.role])).toEqual([
+        ['msg-tgt-0', 'user'],
+        ['msg-tgt-1', 'assistant'],
+        ['msg-tgt-2', 'user'],
+        ['msg-tgt-3', 'assistant'],
+      ]);
+      expect(service.nextMessageIndex('tgt')).toBe(4);
+      expect(service.addUserMessage('tgt', 'Now the budget').id).toBe('msg-tgt-4');
+    });
+
+    it('keeps counting across several tool rounds, and the usage stays on the answer', () => {
+      streamTarget('tgt', 2);
+
+      const messages = service.getMessagesForSession('tgt')();
+      expect(messages.map((m) => m.id)).toEqual(['msg-tgt-0', 'msg-tgt-1', 'msg-tgt-2', 'msg-tgt-3', 'msg-tgt-4', 'msg-tgt-5']);
+      expect(messages[2].content).toEqual([
+        { type: 'toolResult', toolResult: { toolUseId: 't0', content: [{ text: '3 matches' }], status: 'success' } },
+      ]);
+      expect(messages[5].metadata?.['tokenUsage']).toBeDefined();
+      expect(service.nextMessageIndex('tgt')).toBe(6);
+    });
+
+    it('lists the stored results of a turn stopped before its next model call', () => {
+      const parser = TestBed.inject(StreamParserService);
+      service.addUserMessage('tgt', 'Review the proposal');
+      service.startStreaming('tgt');
+      toolRound(parser, 'tgt', parser.getCurrentStreamId('tgt'), 't0');
+      TestBed.tick();
+      service.endStreaming('tgt');
+
+      expect(service.getMessagesForSession('tgt')().map((m) => m.id)).toEqual(['msg-tgt-0', 'msg-tgt-1', 'msg-tgt-2']);
+      expect(service.nextMessageIndex('tgt')).toBe(3);
+    });
+
+    it('lets a steer stand in for the results message it rides inside', () => {
+      const parser = TestBed.inject(StreamParserService);
+      service.addUserMessage('tgt', 'Review the proposal');
+      service.startStreaming('tgt');
+      const streamId = parser.getCurrentStreamId('tgt');
+      toolRound(parser, 'tgt', streamId, 't0');
+      parser.parseEventSourceMessage(
+        'tgt',
+        'steering_applied',
+        { type: 'steering_applied', sessionId: 'tgt', entryId: 'e1', text: 'focus on the budget' },
+        streamId,
+      );
+      answer(parser, 'tgt', streamId);
+      TestBed.tick();
+      service.endStreaming('tgt');
+
+      expect(service.getMessagesForSession('tgt')().map((m) => m.id)).toEqual([
+        'msg-tgt-0',
+        'msg-tgt-1',
+        'steer-tgt-e1',
+        'msg-tgt-3',
+      ]);
+      expect(service.nextMessageIndex('tgt')).toBe(4);
+    });
+
+    it('reads the same ids from a reload as from the live stream', async () => {
+      mockSessionService.getMessages.mockResolvedValue({
+        messages: [
+          { id: 'msg-tgt-0', role: 'user', content: [{ type: 'text', text: 'Review the proposal' }] },
+          {
+            id: 'msg-tgt-1',
+            role: 'assistant',
+            content: [{ type: 'toolUse', toolUse: { toolUseId: 't0', name: 'search_documents', input: { q: 'aims' } } }],
+          },
+          {
+            id: 'msg-tgt-2',
+            role: 'user',
+            content: [{ type: 'toolResult', toolResult: { toolUseId: 't0', content: [{ text: '3 matches' }], status: 'success' } }],
+          },
+          { id: 'msg-tgt-3', role: 'assistant', content: [{ type: 'text', text: 'The aims are strong.' }] },
+        ],
+      });
+
+      await service.loadMessagesForSession('tgt');
+
+      expect(service.getMessagesForSession('tgt')().map((m) => m.id)).toEqual(['msg-tgt-0', 'msg-tgt-1', 'msg-tgt-2', 'msg-tgt-3']);
+      expect(service.nextMessageIndex('tgt')).toBe(4);
+    });
+  });
+
   describe('a turn that force-stopped mid-stream, then the next send', () => {
     // The frames the Runtime streams for a model read timeout (captured from
     // `StreamCoordinator`): Bedrock's `messageStart` and an empty block for the

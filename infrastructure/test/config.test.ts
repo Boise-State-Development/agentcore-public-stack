@@ -887,6 +887,58 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Code sandbox office mount flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CODE_SANDBOX_ENABLED;
+      delete process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED;
+      expect(loadConfig(app).codeSandboxOffice.enabled).toBe(false);
+      process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED = '';
+      expect(loadConfig(app).codeSandboxOffice.enabled).toBe(false);
+    });
+
+    test('only "true" enables it, with the code sandbox on', () => {
+      process.env.CDK_CODE_SANDBOX_ENABLED = 'true';
+      process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED = 'True';
+      expect(loadConfig(app).codeSandboxOffice.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED = value;
+        expect(loadConfig(app).codeSandboxOffice.enabled).toBe(false);
+      }
+    });
+
+    test('refuses to synthesize without the code sandbox, whose DNS Firewall it relies on', () => {
+      delete process.env.CDK_CODE_SANDBOX_ENABLED;
+      process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED = 'true';
+      expect(() => loadConfig(app)).toThrow(/requires CDK_CODE_SANDBOX_ENABLED=true/);
+    });
+  });
+
+  describe('Code sandbox feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CODE_SANDBOX_ENABLED;
+    });
+
+    test('defaults to disabled, and "" (unset GitHub variable) is disabled', () => {
+      delete process.env.CDK_CODE_SANDBOX_ENABLED;
+      expect(loadConfig(app).codeSandbox.enabled).toBe(false);
+      process.env.CDK_CODE_SANDBOX_ENABLED = '';
+      expect(loadConfig(app).codeSandbox.enabled).toBe(false);
+    });
+
+    test('only "true" enables it', () => {
+      process.env.CDK_CODE_SANDBOX_ENABLED = 'True';
+      expect(loadConfig(app).codeSandbox.enabled).toBe(true);
+      for (const value of ['yes', '1', 'on', 'enabled', 'false']) {
+        process.env.CDK_CODE_SANDBOX_ENABLED = value;
+        expect(loadConfig(app).codeSandbox.enabled).toBe(false);
+      }
+    });
+  });
+
   describe('Concurrent tool execution feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_CONCURRENT_TOOL_EXECUTION_ENABLED;
@@ -1200,6 +1252,136 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Workflow runs feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_WORKFLOW_RUNS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_WORKFLOW_RUNS_ENABLED is unset', () => {
+      delete process.env.CDK_WORKFLOW_RUNS_ENABLED;
+      expect(loadConfig(app).workflowRuns.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_WORKFLOW_RUNS_ENABLED = '';
+      expect(loadConfig(app).workflowRuns.enabled).toBe(false);
+    });
+
+    test('CDK_WORKFLOW_RUNS_ENABLED="true" turns it on', () => {
+      process.env.CDK_WORKFLOW_RUNS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).workflowRuns.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_WORKFLOW_RUNS_ENABLED = 'yes';
+      expect(loadConfig(app).workflowRuns.enabled).toBe(false);
+    });
+  });
+
+  describe('Workflows feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_WORKFLOWS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_WORKFLOWS_ENABLED is unset', () => {
+      delete process.env.CDK_WORKFLOWS_ENABLED;
+      expect(loadConfig(app).workflows.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_WORKFLOWS_ENABLED = '';
+      expect(loadConfig(app).workflows.enabled).toBe(false);
+    });
+
+    test('CDK_WORKFLOWS_ENABLED="true" turns it on', () => {
+      process.env.CDK_WORKFLOWS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).workflows.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_WORKFLOWS_ENABLED = 'yes';
+      expect(loadConfig(app).workflows.enabled).toBe(false);
+    });
+  });
+
+  describe('Prompt steps feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_PROMPT_STEPS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_PROMPT_STEPS_ENABLED is unset', () => {
+      delete process.env.CDK_PROMPT_STEPS_ENABLED;
+      expect(loadConfig(app).workflows.promptStepsEnabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_PROMPT_STEPS_ENABLED = '';
+      expect(loadConfig(app).workflows.promptStepsEnabled).toBe(false);
+    });
+
+    test('CDK_PROMPT_STEPS_ENABLED="true" turns it on', () => {
+      process.env.CDK_PROMPT_STEPS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).workflows.promptStepsEnabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_PROMPT_STEPS_ENABLED = 'yes';
+      expect(loadConfig(app).workflows.promptStepsEnabled).toBe(false);
+    });
+  });
+
+  describe('Agent version pinning feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_AGENT_VERSION_PINNING_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_AGENT_VERSION_PINNING_ENABLED is unset', () => {
+      delete process.env.CDK_AGENT_VERSION_PINNING_ENABLED;
+      expect(loadConfig(app).agentVersionPinning.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_AGENT_VERSION_PINNING_ENABLED = '';
+      expect(loadConfig(app).agentVersionPinning.enabled).toBe(false);
+    });
+
+    test('CDK_AGENT_VERSION_PINNING_ENABLED="true" turns it on', () => {
+      process.env.CDK_AGENT_VERSION_PINNING_ENABLED = ' TRUE ';
+      expect(loadConfig(app).agentVersionPinning.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_AGENT_VERSION_PINNING_ENABLED = 'yes';
+      expect(loadConfig(app).agentVersionPinning.enabled).toBe(false);
+    });
+  });
+
+  describe('Checklist steps feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_CHECKLIST_STEPS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_CHECKLIST_STEPS_ENABLED is unset', () => {
+      delete process.env.CDK_CHECKLIST_STEPS_ENABLED;
+      expect(loadConfig(app).workflows.checklistStepsEnabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_CHECKLIST_STEPS_ENABLED = '';
+      expect(loadConfig(app).workflows.checklistStepsEnabled).toBe(false);
+    });
+
+    test('CDK_CHECKLIST_STEPS_ENABLED="true" turns it on', () => {
+      process.env.CDK_CHECKLIST_STEPS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).workflows.checklistStepsEnabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_CHECKLIST_STEPS_ENABLED = 'yes';
+      expect(loadConfig(app).workflows.checklistStepsEnabled).toBe(false);
+    });
+  });
+
   describe('Handoff brief feature flag', () => {
     afterEach(() => {
       delete process.env.CDK_HANDOFF_BRIEF_ENABLED;
@@ -1218,6 +1400,27 @@ describe('RAG Ingestion Configuration', () => {
     test('CDK_HANDOFF_BRIEF_ENABLED="true" turns it on', () => {
       process.env.CDK_HANDOFF_BRIEF_ENABLED = ' TRUE ';
       expect(loadConfig(app).handoffs.briefEnabled).toBe(true);
+    });
+  });
+
+  describe('Handoff suggestions feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_HANDOFF_SUGGESTIONS_ENABLED is unset', () => {
+      delete process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED;
+      expect(loadConfig(app).handoffs.suggestionsEnabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED = '';
+      expect(loadConfig(app).handoffs.suggestionsEnabled).toBe(false);
+    });
+
+    test('CDK_HANDOFF_SUGGESTIONS_ENABLED="true" turns it on', () => {
+      process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).handoffs.suggestionsEnabled).toBe(true);
     });
   });
 

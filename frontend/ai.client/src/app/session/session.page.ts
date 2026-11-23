@@ -42,8 +42,16 @@ import { ConversationBindingService } from './services/session/conversation-bind
 import { AgentService } from '../agents/services/agent.service';
 import { AgentBindingLocksService } from '../agents/services/agent-binding-locks.service';
 import { AgentMentionService } from '../agents/services/agent-mention.service';
-import { routeMention, stripMention } from './services/chat/mention-routing';
+import {
+  mentionsOpenRunSheet,
+  routeMention,
+  runMentionTargets,
+  stripMention,
+  stripMentions,
+} from './services/chat/mention-routing';
 import { AgentHandoffService } from './services/handoff/agent-handoff.service';
+import { WorkflowRunService } from './services/handoff/workflow-run.service';
+import { WorkflowRunMergeService } from './services/handoff/workflow-run-merge.service';
 import { ToastService } from '../services/toast/toast.service';
 import { Agent, AgentRunnability } from '../agents/models/agent.model';
 import { ChatContainerComponent, ChatContainerConfig } from './components/chat-container/chat-container.component';
@@ -101,6 +109,8 @@ export class ConversationPage implements OnDestroy {
   private toast = inject(ToastService);
   private features = inject(FEATURES);
   private agentHandoff = inject(AgentHandoffService);
+  private workflowRuns = inject(WorkflowRunService);
+  private readonly workflowMerge = inject(WorkflowRunMergeService);
   private projectApi = inject(ProjectApiService);
   /** Protected: the template hands the URL binding to the composer's voice control (#625). */
   protected readonly binding = inject(ConversationBindingService);
@@ -339,6 +349,16 @@ export class ConversationPage implements OnDestroy {
       this.chatStateService.setViewedSession(this.effectiveSessionId());
     });
 
+    // A saved workflow's merge starts by itself only in the conversation on screen (PR-D.5b): it
+    // is sent here, as Send would send it, with this page's binding and its restored model. Not in
+    // a Shared Project, where workflows are never offered.
+    effect((onCleanup) => {
+      const sessionId = this.sessionId();
+      if (!sessionId || !this.features.workflows || this.binding.queryProjectId()) return;
+      const unregister = this.workflowMerge.register(sessionId, (text) => this.sendMergeTurn(sessionId, text));
+      onCleanup(unregister);
+    });
+
     // Control header visibility based on whether there are messages
     effect(() => {
       if (this.hasMessages()) {
@@ -403,6 +423,7 @@ export class ConversationPage implements OnDestroy {
         totalCost: aggregates.totalCost,
         lastContextTokens: aggregates.lastContextTokens,
         contextWindow: aggregates.contextWindow,
+        longContextThreshold: aggregates.longContextThreshold,
       });
     });
 
@@ -810,7 +831,7 @@ export class ConversationPage implements OnDestroy {
       });
   }
 
-  async onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, invokedSkillIds?: string[], folders?: FolderAttachmentData[], pastedChars?: number }) {
+  async onMessageSubmitted(message: { content: string, timestamp: Date, fileUploadIds?: string[], mentionAgentId?: string, mentionAgentIds?: string[], invokedSkillIds?: string[], folders?: FolderAttachmentData[], pastedChars?: number }) {
     // Use the effective session ID (route sessionId or staged sessionId)
     const sessionIdToUse = this.effectiveSessionId();
 
@@ -833,6 +854,30 @@ export class ConversationPage implements OnDestroy {
       return;
     }
     const boundAssistantId = urlAgentId || this.assistant()?.assistantId || undefined;
+
+    // Workflow runs (docs/specs/workflow-runs.md §20.1): several Agents mentioned mid-thread open
+    // one review sheet for all of them. Nothing is sent yet; Start hands the work to each.
+    if (message.mentionAgentIds?.length && this.features.handoffs && this.features.workflowRuns) {
+      const targets = runMentionTargets(message.mentionAgentIds, boundAssistantId);
+      const names = message.mentionAgentIds.map((id) => this.mentionedAgentName(id));
+      if (sessionIdToUse && mentionsOpenRunSheet(targets.length, sessionIdToUse, this.hasMessages())) {
+        void this.workflowRuns.open(sessionIdToUse, {
+          agents: targets.map((agentId) => this.runDraftAgent(agentId)),
+          request: stripMentions(message.content, names),
+          fileUploadIds: message.fileUploadIds,
+          invokedSkillIds: message.invokedSkillIds,
+          folders: message.folders,
+          sourceAssistantId: boundAssistantId,
+        });
+        return;
+      }
+      // One Agent left once the bound one is set aside: today's single handoff, with every
+      // mention's name taken out of the request.
+      if (targets.length === 1) {
+        const others = names.filter((_, i) => message.mentionAgentIds?.[i] !== targets[0]);
+        message = { ...message, mentionAgentId: targets[0], content: stripMentions(message.content, others) };
+      }
+    }
 
     // An `@`-mention means "talk to this Agent", and always yields a conversation the
     // Agent keeps its tools in — never the one-turn borrow that used to leave the *next*
@@ -952,6 +997,12 @@ export class ConversationPage implements OnDestroy {
     );
   }
 
+  /** A mentioned Agent as the run sheet shows it: its name and icon from the mention list. */
+  private runDraftAgent(agentId: string): { agentId: string; agentName: string; emoji?: string; iconUrl?: string } {
+    const match = this.agentMentionService.mentionable().find((candidate) => candidate.agentId === agentId);
+    return { agentId, agentName: match?.name || 'this agent', emoji: match?.emoji, iconUrl: match?.iconUrl };
+  }
+
   /**
    * Display name for a mentioned Agent, for the hand-off notice.
    *
@@ -980,6 +1031,15 @@ export class ConversationPage implements OnDestroy {
       .catch((error) => {
         console.error('Error continuing truncated turn:', error);
       });
+  }
+
+  /**
+   * The one turn that merges a saved workflow's results (PR-D.5b): its instruction as the text, with
+   * the run's card riding it from the composer, exactly as Try again sends a turn from this page.
+   */
+  private sendMergeTurn(sessionId: string, text: string): Promise<void> {
+    const assistantIdToUse = this.binding.boundAgentId() || this.assistant()?.assistantId || undefined;
+    return this.chatRequestService.submitChatRequest(text, sessionId, undefined, assistantIdToUse);
   }
 
   /**

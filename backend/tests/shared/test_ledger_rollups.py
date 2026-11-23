@@ -11,6 +11,7 @@ import pytest
 from apis.shared.observability import content_policy as cp
 from apis.shared.sessions import ledger_rollups as lr
 from apis.shared.sessions.ledger_rollups import (
+    CALL_KINDS,
     LedgerUpdate,
     call_kind,
     ledger_updates,
@@ -158,6 +159,7 @@ def test_an_empty_answer_needs_the_turn_row():
     "overrides, kind",
     [
         pytest.param({"callKind": "handoff_brief", "messageId": None}, "handoff_brief", id="brief"),
+        pytest.param({"callKind": "workflow_prompt", "messageId": None}, "workflow_prompt", id="workflow-prompt"),
         pytest.param({"messageId": "voice:12"}, "voice", id="voice"),
         pytest.param({"sessionId": "api-converse-key9", "messageId": 0}, "api_converse", id="api-converse"),
         pytest.param({"messageId": "extract:tooluse-1"}, "document_extract", id="extract"),
@@ -173,6 +175,10 @@ def test_a_call_that_is_not_a_turn_counts_under_its_kind(overrides, kind):
     # Even with a duration on the row, only a chat call is a turn.
     assert "turns" not in version
     assert "outcomeTurns" not in version
+
+
+def test_every_known_kind_is_listed():
+    assert {"chat", "handoff_brief", "workflow_prompt", "document_extract", "other"} <= set(CALL_KINDS)
 
 
 def test_cache_status_counters_split_explained_misses_like_the_anatomy():
@@ -394,3 +400,8 @@ def test_nothing_here_runs_before_the_first_token():
         if path.name != "ledger_rollups.py" and "bump_ledger_for_row" in path.read_text(encoding="utf-8")
     )
     assert callers == ["apis/shared/sessions/metadata.py"]
+
+
+def test_a_checklist_call_counts_under_its_own_kind():
+    assert "workflow_checklist" in CALL_KINDS
+    assert call_kind(_row(callKind="workflow_checklist", messageId=None)) == "workflow_checklist"

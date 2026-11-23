@@ -15,6 +15,9 @@ against this doc and queues "Spec sync" items for `kaizen-review-prep` (§10)
   `Binding.kind` enum, D5 block-on-missing
 - `docs/specs/agent-version-snapshots.md`: immutable published versions, which any composition must pin
 - `docs/specs/shared-projects.md` §9.6: the one place a harness degrades instead of blocking
+- `docs/specs/structured-extraction.md` and `docs/specs/decision-primitive.md`: the side-call fan-out that §11's
+  worked example leans on instead of a sub-agent runner
+- `docs/specs/workflow-runs.md`: a proposal to group handoffs into runs the user approves once (§11.5)
 - *5 Multi-Agent Patterns in Strands Agents* (dev.to, AWS Heroes): the five-pattern framing used here
 
 ---
@@ -88,6 +91,9 @@ Notes on each:
 - **Workflow.** This is a *tool*, not an SDK orchestrator. Its unit is a task, not an agent. It's the least natural
   fit for a designer whose unit is the Agent, and is the lowest priority here.
 - **A2A.** If we ever expose an A2A server, the `streaming=True` rule in `CLAUDE.md` applies.
+
+The first outside workflow we were asked to host (§11) is a Graph whose nodes are single prompts, not agents. It is
+the case this table covers least.
 
 ## 4. The substrate every in-turn pattern needs
 
@@ -222,6 +228,10 @@ Drag-and-drop is the authoring UI for this record, not the record itself. Follow
 consumption first; the Designer follows"), the first version can be a form, "Add an agent as a tool", long before
 a canvas exists.
 
+*2026-11-20:* the first canvas proposed is for the cross-conversation layer, not this record:
+`docs/specs/workflow-designer.md`. Its graph arranges itself from what each step reads. If this record gets a
+canvas, it should reuse that component and that rule.
+
 ### 6.3 Engine: the runner, plus the rules a composition must keep
 
 - **Pin versions.** A composed agent references published version snapshots of its nodes, never live drafts. An
@@ -273,6 +283,9 @@ Nothing here should jump the handoffs spec's gates. The point is to make each st
 6. **Durable pipelines on the cross-conversation layer** (§5), if Phase 2 shows linked conversations get used.
 7. **The drag-and-drop canvas**, when there are enough composition kinds that a form stops being enough.
 
+Outside this sequence: a fan-out of prompt nodes over one document (§11.5) uses the side-call engine, not the
+runner, so it can be built before or after any step above.
+
 ## 9. Open questions
 
 1. **Layer per composition, or per node?** Can one composition mix in-turn nodes and conversation nodes (a Graph
@@ -313,6 +326,10 @@ Nothing here should jump the handoffs spec's gates. The point is to make each st
    holds between turns; and every child call writes a priced `C#` row.
 6. **Cost ceilings.** Should a composition carry a per-run `maxCostUsd` enforced by the runner, on top of the
    user's quota?
+7. **Are prompt nodes a composition, or a tool?** §11's graph needs no agent per node. Is a prompt fan-out a
+   `prompt` node kind in the `Composition` record (§6.2), authored on the canvas, or only a panel in a skill's
+   references, authored like a field set, with no composition record at all? The second is far less to build. The
+   first is what lets an author mix prompt nodes and agent nodes in one graph.
 
 ## 10. Keeping this current
 
@@ -333,6 +350,108 @@ The claims most likely to go stale, and what makes each one stale:
 | Handoffs, deliveries, consults and messages are unbuilt | §2, §3, §5 | Any of their PRs merge (the handoffs spec's §11 lists them) |
 | `Binding.kind` has no `'agent'` value | §6.1 | A composition binding lands in the Agent Designer |
 | The cost and TTFT directions in §7 are unmeasured | §7 | Any pattern is measured in dev |
+| `document_extract` takes one field set per call and is not in `PARALLEL_SAFE_TOOLS` | §11.4 G1 | Its signature or that set changes |
+| The decision primitive is a draft, and its `document` adapter starts from a 24,000-character cap | §11.4 G2 | A decisions PR merges, or `decision-primitive.md` §6.2 is revised |
+| No prompt-panel fan-out exists, and no builtin tool writes a PDF | §11.3, §11.4 G3 and G4 | Either lands |
+| An external MCP tool has no way to receive or return a conversation's file | §11.4 G5 | The verify-first is settled, or a file hand-off to MCP servers lands |
 
 When implementation starts on anything in §8, update this doc in the same PR as the code, as the handoffs spec does
 for its own phases. The kaizen watch is the backstop, not the primary mechanism.
+
+## 11. Worked example: a fixed fan-out over one document (2026-11-19)
+
+The first outside workflow we were asked to host. A student collaborator built a research-proposal reviewer on
+LangGraph. It runs on a laptop, takes a proposal PDF, returns a marked-up PDF, and is traced in Langfuse. They want
+it usable from chat. It is recorded here because it tests §3's map against something an author built without us.
+Nothing in this section is scheduled.
+
+### 11.1 The graph
+
+| Stage | What it does | Fan-out |
+|---|---|---|
+| `ingest` | Turns the PDF into numbered text | — |
+| Review lane | Four reviewer personas read the whole proposal, on two model tiers | 4 in parallel |
+| `review_summary` | One call merges the four reviews into inline notes | fan-in |
+| `pull_criteria` | Loads the audit criteria from JSON | — |
+| Audit lane | One branch per audit section (LangGraph `Send`): 15 sections of 4 to 13 pass/fail criteria, 114 in all | 15 in parallel |
+| `aggregate_audits` | Collects pass or fail per criterion | fan-in |
+| `build_review` | Writes the marked-up PDF from both lanes (the audit results are not in the report yet) | — |
+
+### 11.2 What it shows about §3
+
+- **The developer sets the order.** All 19 branches run on every proposal, and no model chooses among them. That
+  is Graph or Workflow, the two rows §3 marks "not proposed" in-turn and §8 puts fifth. Agents as Tools, which §8
+  builds first, cannot express it.
+- **The branches look like prompts, not agents.** As drawn, each one is an instruction plus the same document in,
+  and a bounded answer out: no tool loop, no history, no question for the user. Built as an `Agent` per branch
+  through `resolve_turn_agent`, each would get a sub-session, a session manager and an interrupt path it never
+  uses. §4's substrate is the wrong weight for this. ⚠️ **Verify first:** the author describes RAG and tool use
+  somewhere in the pipeline. Confirm which nodes, if any, loop on tools before relying on this.
+- **The fan-out is over instructions, not documents.** One document meets many instruction sets. Our one built
+  fan-out, `document_extract`, runs the other way: one field set over N documents.
+- **The result is a file marked at positions**, not a chat answer.
+- **The cross-conversation layer does not fit.** A handoff is started by the user, one at a time; a send carries at
+  most three deliveries; every step waits on a button. That review is the point of the layer (§2), and it is wrong
+  for 19 unattended branches that belong to one run.
+
+### 11.3 Node by node
+
+| Their node | Closest thing here | State |
+|---|---|---|
+| `ingest`, retrieval | Attachments, `document_read`, a project knowledge base | Shipped |
+| Audit branch | `document_extract` with one field set per audit section: a typed value per criterion with a quote, a locator and a `source_provenance` state. Every section fits `MAX_FIELDS = 14` (`apis/shared/extraction/field_sets.py`); the largest has 13 | In development (`DOCUMENT_EXTRACT_ENABLED`), with gaps G1 and G2 |
+| `aggregate_audits` | The extraction table and workbook | Same |
+| Reviewer branch | Nothing. One agent can play the four personas in sequence in a turn, which loses their independence, the per-branch model and the parallel wall-clock | Gap G3 |
+| `review_summary` | The turn's own answer; the reduce is markdown in a skill (`structured-extraction.md` §17.3) | Shipped |
+| `build_review` | No builtin tool writes a PDF. `redline_word_document` is the nearest output | Gap G4 |
+
+### 11.4 Gaps
+
+- **G1. Several field sets over one document.** `document_extract(upload_ids, field_set, pages?)` takes one set. The
+  audit is 15 sets over one document, so today it is 15 tool calls. They would not overlap even with
+  `CONCURRENT_TOOL_EXECUTION_ENABLED` on, because `document_extract` is not in `PARALLEL_SAFE_TOOLS`
+  (`agents/main_agent/core/tool_concurrency.py`), and each call writes its own artifact and workbook. Merging the
+  sets is not an option: 114 fields is far past the 14 Bedrock will compile.
+  *2026-11-22:* `workflow-designer.md` §22 plans checklist steps that run several field sets on one step, one call
+  per set over a shared cached document, which answers this for workflows without changing `document_extract`.
+- **G2. A verdict needs a third answer.** An audit criterion is pass, fail or "cannot tell", with evidence. A
+  `boolean` field has no way to decline, and its provenance state is `unassessed` by construction, since a yes/no
+  cannot be matched against a passage. `Uncertain` in `decision-primitive.md` is the right answer, but that spec
+  is a draft built around many items and a few questions. Its `document` adapter starts from a 24,000-character
+  cap (§6.2 there, to be measured), which is smaller than a full proposal. This case is one item and 114
+  questions.
+- **G3. A prompt panel.** N free-text instructions over one document, with bounded concurrency, a model per branch
+  and one reduce. Nothing here does it. A sketch that reuses what exists: a named panel in a skill's reference
+  bundle, authored like a field set; one tool whose spec is constant per deployment, so `toolConfig` never moves;
+  side calls through extraction's `run_bounded`, each writing a priced `C#` row under its own `callKind`; bounded
+  outputs returned to the turn's model, which does the reduce. ⚠️ **Measure first:** whether the branches read the
+  document from a shared cached prefix (document first, one call warmed before the rest, as extraction warms a
+  grammar). Caches are per model, so two tiers pay two writes. Without that, each of 19 branches pays for the whole
+  proposal at the uncached rate. *Measured 2026-11-21* (`workflow-designer.md` §21.1): with the document first, a
+  cachePoint after it and one warm call, 16 of 16 branches read it on Haiku 5.5 and Sonnet 5.5, for 3.6–3.9× less
+  input; in a turn's layout none did. Prompt steps are being built as that side call (§21.3 there).
+- **G4. An annotated PDF.** A `source_provenance` locator (`kind`, `value`, `precision`) plus its quote is the
+  anchor an annotator needs, and nothing consumes it for output yet. Skill scripts could carry the annotator, but
+  they run only under the Word tools today (`WORD_SKILL_SCRIPTS_ENABLED`).
+- **G5. Hosting an orchestrator we did not build.** The path that exists is an external MCP server in the tool
+  catalog, with the whole pipeline behind one tool. ⚠️ **Verify first:** how such a tool receives the conversation's
+  uploaded file and returns one. Nothing in `agents/main_agent/integrations/` hands a file to an MCP server today.
+  The MCP server config has no per-call timeout field, so a run of about 20 model calls needs a start-then-poll
+  pair of tools, not one long call. A2A is still client config only (§3). The author also loses per-node traces:
+  we export nothing to Langfuse, and `C#` rows cover only calls the platform makes.
+- **G6. Run length.** Unmeasured. If a full run does not fit a turn comfortably, the durable form is §5's: a
+  headless run (`run_agent_headless`) that delivers into the conversation.
+
+### 11.5 What this suggests
+
+- **A second kind of node.** §6.2's `Composition` assumes every node is an agent. A `prompt` node kind, run on the
+  side-call engine (`extraction/batch.py` today, `decisions/batch.py` once that spec lands), would cover this graph
+  without §4's runner. It needs neither of §4.2's verify-firsts, so it does not wait on the Phase 1 gate (§9 Q7).
+- **Reviewers as Agents, under one approval.** `docs/specs/workflow-runs.md` (proposal, 2026-11-19) takes the
+  other route for the review lane: each reviewer is an Agent in a conversation the user can continue, several
+  handoffs start from one review sheet, and their results return as one card. It keeps prompt and checklist nodes
+  as cheaper step kinds, so the two designs meet in one record. If it is accepted, it is where §5's durable
+  pipeline gets built.
+- **Order for this collaboration.** First, host the pipeline as it is behind an external MCP tool (G5). Second,
+  rebuild the audit lane as 15 field sets on dev and score it against the graph's own output, which is a ready
+  baseline. Third, let that comparison decide which of G1 to G4 are worth building.

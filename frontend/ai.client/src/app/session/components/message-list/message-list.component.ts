@@ -1,6 +1,7 @@
 import { Component, computed, effect, input, output, inject, signal, untracked, PLATFORM_ID, ChangeDetectionStrategy } from '@angular/core';
 import { isPlatformBrowser, NgTemplateOutlet } from '@angular/common';
-import { Message, ToolUseData } from '../../services/models/message.model';
+import { Message, ToolUseData, isToolUseContentBlock } from '../../services/models/message.model';
+import { isToolResultMessage } from '../../services/session/tool-results';
 import type { Artifact } from '../../services/artifacts/artifact.model';
 import { UserMessageComponent } from './components/user-message.component';
 import { AssistantMessageComponent } from './components/assistant-message.component';
@@ -16,8 +17,13 @@ import { BrowserPanelComponent } from './components/browser-panel/browser-panel.
 import { CompactionSummaryComponent } from './components/compaction-summary/compaction-summary.component';
 import { ArtifactCardComponent } from './components/artifact/artifact-card.component';
 import { HandoffRowComponent } from '../handoff/handoff-row.component';
+import { WorkflowRunRowComponent } from '../handoff/workflow-run-row.component';
+import { HandoffSuggestionChipComponent } from '../handoff/handoff-suggestion-chip.component';
 import { HandoffStateService } from '../../services/handoff/handoff-state.service';
-import { HandoffView } from '../../services/handoff/handoff.models';
+import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
+import { showsInThread } from '../../services/handoff/workflow-run-progress';
+import { WorkflowRunView } from '../../services/handoff/workflow-run.models';
+import { HandoffView, isModelStep, isSuggestionChip } from '../../services/handoff/handoff.models';
 import { ArtifactPanelComponent } from './components/artifact/artifact-panel.component';
 import { FilePreviewPanelComponent } from './components/file-preview/file-preview-panel.component';
 import { ArtifactStateService } from '../../services/artifacts/artifact-state.service';
@@ -105,7 +111,7 @@ interface Turn {
 function isProtocolScaffolding(message: Message): boolean {
   if (message.role !== 'user') return false;
   if (message.continuation) return true;
-  return message.content.every((block) => block.type === 'toolResult');
+  return isToolResultMessage(message);
 }
 
 function segmentTurn(messages: readonly Message[]): TurnSegment[] {
@@ -149,6 +155,8 @@ function segmentTurn(messages: readonly Message[]): TurnSegment[] {
     McpAppActionsComponent,
     AgentFeedbackLinkComponent,
     HandoffRowComponent,
+    WorkflowRunRowComponent,
+    HandoffSuggestionChipComponent,
   ],
   templateUrl: './message-list.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -260,6 +268,7 @@ export class MessageListComponent {
 
   private consentService = inject(OAuthConsentService);
   private handoffState = inject(HandoffStateService);
+  private workflowRunState = inject(WorkflowRunStateService);
   private toolApprovalService = inject(ToolApprovalService);
   private userQuestionService = inject(UserQuestionService);
   private browserLoginService = inject(BrowserLoginService);
@@ -865,9 +874,106 @@ export class MessageListComponent {
   // message that was last when the handoff was sent.
   // ----------------------------------------------------------------
 
-  private readonly handoffRows = computed<readonly HandoffView[]>(() =>
-    this.handoffState.rowsFor(this.sessionId()),
+  private readonly handoffRows = computed<readonly HandoffView[]>(() => {
+    // A workflow run's steps are lines in the run's own row, never rows of their own (§20.2).
+    const inRuns = this.runStepIds();
+    return this.handoffState
+      .rowsFor(this.sessionId())
+      // A prompt step (§21.3) has no conversation to open: it only ever draws in its run's row.
+      .filter((row) => !isSuggestionChip(row) && !isModelStep(row) && !inRuns.has(row.handoffId));
+  });
+
+  // Workflow runs (workflow-runs spec §20.2): one row per approved run, anchored like a handoff row
+  // after the message that was last when it was approved. Replayed from `workflowRuns`.
+  private readonly threadRuns = computed<readonly WorkflowRunView[]>(() =>
+    this.workflowRunState.runsFor(this.sessionId()).filter(showsInThread),
   );
+
+  /** Whether the thread draws a run, which a conversation with no turns can (a saved workflow's). */
+  protected readonly hasThreadRuns = computed(() => this.threadRuns().length > 0);
+
+  private readonly runStepIds = computed<ReadonlySet<string>>(
+    () => new Set(this.threadRuns().flatMap((run) => run.steps.map((step) => step.handoffId))),
+  );
+
+  private readonly runRowsByMessageIndex = computed<ReadonlyMap<number, WorkflowRunView[]>>(() => {
+    const loaded = this.loadedMessageIndices();
+    const map = new Map<number, WorkflowRunView[]>();
+    for (const run of this.threadRuns()) {
+      if (!loaded.has(run.sourceMessageIndex)) continue;
+      const list = map.get(run.sourceMessageIndex);
+      if (list) list.push(run);
+      else map.set(run.sourceMessageIndex, [run]);
+    }
+    return map;
+  });
+
+  /**
+   * Whether the thread's start is on screen: nothing loaded yet, or the first message is. A run
+   * started from a conversation with no turns (a saved workflow's new conversation) has
+   * `sourceMessageIndex: -1`, which no message matches, so it goes above the first turn while
+   * that turn is loaded, and only falls back to the tail while an older page hides it.
+   */
+  private readonly threadStartLoaded = computed(
+    () => this.messages().length === 0 || this.loadedMessageIndices().has(0),
+  );
+
+  /** Runs approved before the conversation's first turn, drawn above it. */
+  protected readonly leadingRunRows = computed<readonly WorkflowRunView[]>(() =>
+    this.threadStartLoaded() ? this.threadRuns().filter((run) => run.sourceMessageIndex < 0) : [],
+  );
+
+  /** Runs whose anchor isn't in the loaded page, at the tail. */
+  protected readonly unanchoredRunRows = computed<readonly WorkflowRunView[]>(() => {
+    const loaded = this.loadedMessageIndices();
+    const leading = this.threadStartLoaded();
+    return this.threadRuns().filter(
+      (run) => !loaded.has(run.sourceMessageIndex) && !(leading && run.sourceMessageIndex < 0),
+    );
+  });
+
+  protected runRowsForMessageId(id: string): readonly WorkflowRunView[] {
+    const n = this.parseMessageIndex(id);
+    if (n === null) return [];
+    return this.runRowsByMessageIndex().get(n) ?? [];
+  }
+
+  // Suggestion chips (handoffs spec §4.4): an offer nobody has sent yet, placed under the message
+  // holding its `suggest_handoff` call. Matched on the tool use id rather than a message index,
+  // because the answer that made it is still streaming, and unsaved, when the chip arrives.
+  private readonly suggestionChips = computed<readonly HandoffView[]>(() =>
+    this.handoffState
+      .rowsFor(this.sessionId())
+      .filter((row) => isSuggestionChip(row) && row.status === 'open'),
+  );
+
+  private readonly suggestionChipsByMessageId = computed<ReadonlyMap<string, HandoffView[]>>(() => {
+    const chips = this.suggestionChips();
+    const map = new Map<string, HandoffView[]>();
+    if (chips.length === 0) return map;
+    const byToolUse = new Map(chips.filter((chip) => chip.toolUseId).map((chip) => [chip.toolUseId!, chip]));
+    for (const message of this.messages()) {
+      for (const block of message.content ?? []) {
+        if (!isToolUseContentBlock(block)) continue;
+        const chip = byToolUse.get(String(block.toolUse['toolUseId'] ?? ''));
+        if (!chip) continue;
+        const list = map.get(message.id);
+        if (list) list.push(chip);
+        else map.set(message.id, [chip]);
+      }
+    }
+    return map;
+  });
+
+  /** Chips whose suggestion isn't in the loaded page, at the tail. */
+  protected readonly unanchoredSuggestionChips = computed<readonly HandoffView[]>(() => {
+    const placed = new Set([...this.suggestionChipsByMessageId().values()].flat().map((chip) => chip.handoffId));
+    return this.suggestionChips().filter((chip) => !placed.has(chip.handoffId));
+  });
+
+  protected suggestionChipsForMessageId(id: string): readonly HandoffView[] {
+    return this.suggestionChipsByMessageId().get(id) ?? [];
+  }
 
   private readonly handoffRowsByMessageIndex = computed<ReadonlyMap<number, HandoffView[]>>(() => {
     const loaded = this.loadedMessageIndices();

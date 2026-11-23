@@ -50,9 +50,11 @@ type MessageItem =
   host: { class: 'block w-full @container' },
   template: `
     @if (items().length === 1) {
-      <!-- A lone card gets the browser card's width class (max-w-sm here), not
-           a mosaic cell's: with Files or Preview and a menu beside it, 18rem
-           left a folder's name cut to a dozen characters. -->
+      <!-- A lone card gets max-w-sm, not a mosaic cell's width: with Files
+           or Preview and a menu beside it, 18rem left a folder's name cut to
+           a dozen characters. It stays narrower than an output card
+           (OUTPUT_CARD_HOST_CLASS), so what the user attached and what the
+           agent made are told apart by size as well as side. -->
       <div class="flex justify-end">
         <div class="w-full max-w-sm">
           <ng-container [ngTemplateOutlet]="card" [ngTemplateOutletContext]="{ $implicit: items()[0], fill: true }" />

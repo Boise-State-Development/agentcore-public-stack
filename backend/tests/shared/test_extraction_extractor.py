@@ -103,8 +103,11 @@ class FakeModel:
         # it did: an earlier revision read `event["metadata"]["usage"]`, which
         # process_stream never produces, so metering silently recorded nothing.
         yield ModelStreamChunkEvent({"metadata": {"usage": dict(USAGE)}})
+        # Strands yields `stop` before `output`, as `structured_output` does:
+        # it reads the stop event to decide how to build the output.
+        stop_reason = "end_turn" if self._behaviour == "text" else "tool_use"
+        yield ModelStopReason(stop_reason, {}, dict(USAGE), {"latencyMs": 10})
         yield {"output": output_model.model_validate(ANSWER)}
-        yield ModelStopReason("tool_use", {}, dict(USAGE), {"latencyMs": 10})
 
 
 def install(monkeypatch, *behaviours: Any) -> None:
@@ -184,6 +187,88 @@ class TestTheHappyPath:
         text = prompt[0]["content"][0]["text"]
         assert "DOCUMENT BODY" in text
         assert "the deadline" in text  # the field set's own find phrases
+
+
+class TestEnforcementIsReadFromTheAnswer:
+    """A model that refuses forced tool choice (Sonnet 5.5, Opus 5.5) gets auto
+    tool choice with the strict tool, where it may answer in text instead.
+    Strands parses that text as JSON and returns it like a tool call; no
+    grammar constrained it, so the run must not say it was enforced.
+    Measured on dev 2026-11-22 (structured-extraction §16.13).
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_text_answer_on_the_strict_call_is_marked_unenforced(
+        self, monkeypatch, field_set
+    ) -> None:
+        install(monkeypatch, "text")
+        result = await ex.extract_fields(
+            field_set, "a document", filename="nsf.pdf", model_id="us.model"
+        )
+        assert result.schema_enforced is False
+        assert result.rows["budget_cap"]["value"] == "$500,000"
+        # The answer validated, so there is nothing to retry: one call.
+        assert [b["strict"] for b in FakeModel.built] == [True]
+
+    @pytest.mark.asyncio
+    async def test_a_tool_answer_on_the_strict_call_is_enforced(
+        self, monkeypatch, field_set
+    ) -> None:
+        install(monkeypatch, "ok")
+        result = await ex.extract_fields(
+            field_set, "a document", filename="nsf.pdf", model_id="us.model"
+        )
+        assert result.schema_enforced is True
+
+    def test_only_a_stop_event_says_how_the_answer_arrived(self) -> None:
+        assert ex._answered_by_tool({"stop": ("tool_use", {}, {}, {})}) is True
+        assert ex._answered_by_tool({"stop": ("end_turn", {}, {}, {})}) is False
+        assert ex._answered_by_tool({"output": object()}) is None
+        assert ex._answered_by_tool({"stop": None}) is None
+
+
+class TestMechanismOrderOnTheInstalledSdk:
+    """Pins what Strands will send for the model `_build_model` builds.
+
+    No request is made: ``structured_output_mechanisms`` is the function
+    ``BedrockModel._converse_structured_output`` consults before sending.
+    Native output must never be on the list, because Strands sends it beside
+    the strict tool and Bedrock compiles both: a 14-field set is refused as
+    "compiled grammar is too large" that way, on Sonnet, Haiku and Opus 5.5.
+    """
+
+    def _mechanisms(self, model_id: str, field_set) -> List[str]:
+        from strands.models._native_output import structured_output_mechanisms
+
+        model = ex._build_model(model_id, strict=True)
+        return structured_output_mechanisms(
+            set(), {"any": {}}, model_for_field_set(field_set), model.model_info
+        )
+
+    @pytest.mark.parametrize(
+        "model_id",
+        [
+            "us.anthropic.claude-sonnet-5-5",
+            "us.anthropic.claude-opus-5-5",
+            "us.anthropic.claude-haiku-5-5",
+        ],
+    )
+    def test_a_model_that_refuses_forcing_goes_straight_to_auto(
+        self, model_id, field_set
+    ) -> None:
+        assert self._mechanisms(model_id, field_set) == ["auto"]
+
+    def test_a_model_that_accepts_forcing_still_forces_first(self, field_set) -> None:
+        assert self._mechanisms(
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0", field_set
+        ) == ["forced", "auto"]
+
+    def test_both_builds_turn_native_output_off(self) -> None:
+        for strict in (True, False):
+            model = ex._build_model("us.anthropic.claude-sonnet-5-5", strict=strict)
+            assert model.model_info.capabilities.native_structured_output is False
+        assert ex._build_model("us.x", strict=True).config.get("strict_tools") is True
+        assert not ex._build_model("us.x", strict=False).config.get("strict_tools")
 
 
 class TestUsageIsActuallyRead:
@@ -398,6 +483,14 @@ class TestSchemaCapacityIsAnAuthoringError:
             "exceeds maximum allowed size (300MB). Simplify your JSON schema to reduce "
             "grammar complexity.",
             id="grammar-size",
+        ),
+        # Sonnet, Haiku and Opus 5.5, 2026-11-22: a 16-field strict tool on
+        # auto tool choice (§16.13). A new wording of the perf pre-check.
+        pytest.param(
+            "The model returned the following errors: The compiled grammar is too "
+            "large, which would cause performance issues. Simplify your tool schemas "
+            "or reduce the number of strict tools.",
+            id="grammar-too-large-5x",
         ),
     ]
 

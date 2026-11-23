@@ -12,7 +12,8 @@ Everything here is pure and deterministic.
 from __future__ import annotations
 
 import hashlib
-from typing import Protocol, Sequence
+from dataclasses import dataclass
+from typing import Optional, Protocol, Sequence, Tuple
 
 
 class DeliveryArtifactLine(Protocol):
@@ -159,6 +160,135 @@ def render_delivery_block(
     )
 
 
+#: What a run result's part says when its step has no result (``docs/specs/workflow-runs.md`` §7).
+#: Constant, and in the TypeScript copy (``DELIVERY_PART_STATUS_NOTES``), so the model is told
+#: which steps are missing and the sent bubble can tell such a part from a result.
+DELIVERY_PART_STATUS_NOTES = {
+    "stopped": "This Agent stopped before it finished, so there is no result from it.",
+    "needs_input": "This Agent is still waiting on the user, so there is no result from it yet.",
+    "running": "This Agent was still working when the results were brought back, so there is no result from it yet.",
+}
+
+#: The same notes for a prompt step's part (workflow-designer §21.3), which has no Agent. Constant,
+#: and in the TypeScript copy (``PROMPT_PART_STATUS_NOTES``). A prompt step never waits on the user,
+#: so ``needs_input`` is here only so every status has a note.
+PROMPT_PART_STATUS_NOTES = {
+    "stopped": "This step stopped before it finished, so there is no result from it.",
+    "needs_input": "This step is still waiting on the user, so there is no result from it yet.",
+    "running": "This step was still working when the results were brought back, so there is no result from it yet.",
+}
+
+
+@dataclass(frozen=True)
+class DeliveryPartBlock:
+    """One part of a run result as its block is rendered: the text sent, and the lines it names."""
+
+    text: str
+    agent_name: str
+    from_title: str
+    status: str
+    artifacts: Sequence[DeliveryArtifactLine] = ()
+    files: Sequence[FileLine] = ()
+    #: A prompt step's part: its status note names a step, not an Agent (``PROMPT_PART_STATUS_NOTES``).
+    #: Its label is built as any part's is, from ``prompt_part_names``.
+    prompt: bool = False
+
+
+#: Between an Agent's name and the rest, in a run step's title and in a run result's part label.
+AGENT_TITLE_SEPARATOR = " · "
+
+#: A conversation title's cap, the whole title included (``generate_conversation_title``).
+CONVERSATION_TITLE_MAX_CHARS = 50
+
+#: The least of a generated title a run step's title keeps beside its Agent's name. A longer name
+#: leaves the title as generated, since naming the Agent would mean cutting the name.
+RUN_STEP_TITLE_MIN_GENERATED_CHARS = 15
+
+#: The title a conversation keeps when generation fails. Never prefixed.
+PLACEHOLDER_TITLE = "New Conversation"
+
+
+def run_step_title(agent_name: str, generated: str) -> str:
+    """A workflow run step's title: ``"{Agent} · {generated}"`` (workflow-runs spec §19).
+
+    Every step of a run gets the same request and card, so a generated title alone reads the same
+    for every step. The cap covers the whole title, and the generated part is the one shortened,
+    so the Agent's name is never cut. A name too long to leave ``RUN_STEP_TITLE_MIN_GENERATED_CHARS``
+    of the generated title, an empty name and the placeholder all keep the title as generated; the
+    run result's part label still names the Agent then (``delivery_part_label``).
+    """
+    agent, title = agent_name.strip(), generated.strip()
+    if not agent or not title or title == PLACEHOLDER_TITLE or title.startswith(f"{agent}{AGENT_TITLE_SEPARATOR}"):
+        return generated
+    room = CONVERSATION_TITLE_MAX_CHARS - len(agent) - len(AGENT_TITLE_SEPARATOR)
+    if room < RUN_STEP_TITLE_MIN_GENERATED_CHARS:
+        return generated
+    if len(title) > room:
+        title = title[: room - 3].rstrip() + "..."
+    return f"{agent}{AGENT_TITLE_SEPARATOR}{title}"
+
+
+def delivery_part_label(agent_name: str, from_title: str) -> str:
+    """What a part's block names as ``from_conversation``: the Agent, then its conversation's title.
+
+    Every step of a run starts from the same card and usually the same request, so their titles
+    read alike; the Agent's name is what tells the model whose answer is whose. A step's title
+    already starts with its Agent's name (``run_step_title``), so the name is written once.
+
+    A prompt step's part (workflow-designer §21.3) has no conversation, so it is labelled with its
+    model's name in place of the Agent's and its step's name in place of the title
+    (``prompt_part_names``): ``"{model} · {step}"``. A checklist step's part (§22.3) is labelled the
+    same way.
+    """
+    agent, title = agent_name.strip(), from_title.strip()
+    if not agent or not title:
+        return agent or title
+    if agent == title or title.startswith(f"{agent}{AGENT_TITLE_SEPARATOR}"):
+        return title
+    return f"{agent}{AGENT_TITLE_SEPARATOR}{title}"
+
+
+#: A prompt step's block names its step by this when the run kept no step name for it.
+PROMPT_STEP_FALLBACK_NAME = "Prompt step"
+#: A checklist step's block names its step by this when the run kept no step name for it (§22.3).
+CHECKLIST_STEP_FALLBACK_NAME = "Checklist step"
+
+
+def prompt_part_names(
+    model_name: str, step_name: Optional[str], *, fallback: str = PROMPT_STEP_FALLBACK_NAME
+) -> Tuple[str, str]:
+    """``(agent_name, from_title)`` for a prompt or checklist step's part: its model, then its step.
+
+    A prompt step (§21.3) and a checklist step (§22.3) have no Agent and no conversation, so the two
+    names a part's label is built from (``delivery_part_label``) are the model's display name and
+    the step's name. Feeding them through the same fields keeps the rendered block, and its
+    TypeScript twin, unchanged. ``fallback`` names a step the run kept no name for.
+    """
+    return model_name.strip(), (step_name or "").strip() or fallback
+
+
+def render_delivery_parts(parts: Sequence[DeliveryPartBlock]) -> str:
+    """A run result as the receiving model reads it: one delivery block per part, in step order.
+
+    A ``done`` part is ``render_delivery_block`` of its text, artifacts and files, and a part with
+    nothing left (the user emptied it) gives no block. Any other part is the same wrapper around
+    its status note, so a step that stopped or still waits is named, never silently missing. The
+    blocks are joined as separate cards are (``join_delivery_blocks``): a blank line between.
+    """
+    blocks = [
+        render_delivery_block(
+            part.text, delivery_part_label(part.agent_name, part.from_title), part.artifacts, part.files
+        )
+        if part.status == "done"
+        else render_delivery_block(
+            (PROMPT_PART_STATUS_NOTES if part.prompt else DELIVERY_PART_STATUS_NOTES).get(part.status, ""),
+            delivery_part_label(part.agent_name, part.from_title),
+        )
+        for part in parts
+    ]
+    return "\n\n".join(b for b in blocks if b)
+
+
 def build_handoff_message(context_block: str, request: str) -> str:
     """The target's first model message: the wrapped context, a blank line, then the request."""
     request = request.strip()
@@ -185,18 +315,26 @@ def _neutralize_inner(body: str) -> str:
 
 __all__ = [
     "ARTIFACT_TAG",
+    "DELIVERY_PART_STATUS_NOTES",
     "DeliveryArtifactLine",
+    "DeliveryPartBlock",
     "EXCERPT_TAG",
     "FILE_TAG",
     "FileLine",
     "HANDOFF_CONTEXT_TAG",
+    "CHECKLIST_STEP_FALLBACK_NAME",
+    "PROMPT_PART_STATUS_NOTES",
+    "PROMPT_STEP_FALLBACK_NAME",
     "build_handoff_message",
     "context_hash",
+    "delivery_part_label",
     "escape_attr",
     "format_file_size",
     "neutralize_close_tags",
     "normalize_context_text",
+    "prompt_part_names",
     "render_delivery_block",
+    "render_delivery_parts",
     "render_file_line",
     "wrap_handoff_context",
 ]

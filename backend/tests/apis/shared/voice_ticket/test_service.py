@@ -50,7 +50,12 @@ async def test_invalid_signature_does_not_consume_jti() -> None:
     service = _make_service()
     ticket, claims = service.issue(user_id="user-1", session_id="sess-A")
     body, _, sig = ticket.partition(".")
-    forged = f"{body}.{sig[:-2]}AA"  # tamper sig
+    # Change the first character, which always encodes 6 bits of the digest.
+    # Overwriting the tail with a fixed "AA" left the ticket unchanged about
+    # once in 1,024 runs: whenever the real signature already ended in "AA".
+    forged_sig = ("B" if sig[0] == "A" else "A") + sig[1:]
+    forged = f"{body}.{forged_sig}"
+    assert forged != ticket
     with pytest.raises(VoiceTicketError):
         await service.verify_and_consume(forged)
     # The legitimate ticket must still be redeemable.

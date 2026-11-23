@@ -9,8 +9,8 @@ conversation left behind goes in a cascade of six cleanups:
 4. Artifact shares from the session, scoped to the owner.
 5. The session's archived turns. Each S3 deletion raises *Object Deleted*,
    which is how the conversation-search index drops the turn.
-6. Handoffs opened from the session (``HANDOFF#`` rows), which carry the
-   request the user typed for the Agent. The Agent's own conversation is a
+6. Handoffs and workflow runs opened from the session (``HANDOFF#``,
+   ``WFRUN#`` and a checklist step's ``WFCHK#`` rows), which carry the request the user typed for the Agent. The Agent's own conversation is a
    conversation of its own and is not touched.
 
 Three callers run it: the single delete route, the bulk delete route, and the
@@ -39,12 +39,17 @@ logger = logging.getLogger(__name__)
 
 
 def delete_session_handoffs(user_id: str, session_id: str) -> int:
-    """Delete the ``HANDOFF#`` rows opened from a conversation, and the ``DELIVERY#`` rows sent into it."""
+    """Delete the ``HANDOFF#``, ``WFRUN#`` and ``WFCHK#`` rows opened from a conversation, and the ``DELIVERY#`` rows sent into it."""
     from apis.shared.handoff import get_handoff_store
+    from apis.shared.handoff.checklist_rows import get_checklist_row_store
     from apis.shared.handoff.delivery import get_delivery_store
+    from apis.shared.handoff.runs import get_workflow_run_store
 
     handoffs = get_handoff_store().delete_for_session(user_id, session_id)
-    return handoffs + get_delivery_store().delete_for_session(user_id, session_id)
+    runs = get_workflow_run_store().delete_for_session(user_id, session_id)
+    # A checklist step's display rows (workflow-designer §22.3) carry quotes from the user's files.
+    checklists = get_checklist_row_store().delete_for_session(user_id, session_id)
+    return handoffs + runs + checklists + get_delivery_store().delete_for_session(user_id, session_id)
 
 
 @dataclass(frozen=True)

@@ -26,6 +26,13 @@ import {
   isAwaitingUserCall,
   isFailedCall,
 } from './tool-summary';
+import {
+  memoryCallKind,
+  memoryWriteDetail,
+  memoryWriteLabel,
+  type MemoryCallKind,
+  type MemoryWriteDetail,
+} from './memory-call';
 import { PinScrollToBottomDirective } from './pin-scroll-to-bottom.directive';
 import { ToolResultContent } from '../../../../services/models/message.model';
 
@@ -127,6 +134,36 @@ export class ToolRailComponent {
     if (n > 1) return `${n} tools`;
     return n === 1 && this.thinkingSteps().length ? '1 tool' : null;
   });
+
+  /**
+   * The header's memory readout ("saved a memory"), counting finished writes
+   * that did not fail. A save is the one step that outlives the conversation,
+   * so it is named even when the headline is a model summary of something
+   * else, the way the thinking readout is.
+   *
+   * Suppressed when the headline is already the deterministic line for that
+   * single call, where it would only repeat "Saved a memory".
+   */
+  memoryLabel = computed<string | null>(() => {
+    const group = this.group();
+    const kinds = group.calls
+      .filter((c) => c.status !== 'pending' && !isFailedCall(c))
+      .map(memoryCallKind)
+      .filter((k): k is MemoryCallKind => k !== null);
+    const label = memoryWriteLabel(kinds);
+    if (!label) return null;
+    const restates =
+      group.calls.length === 1 &&
+      !group.groupSummary &&
+      !this.thinkingSteps().length &&
+      !this.batches().some((b) => !!b.summary);
+    return restates ? null : label;
+  });
+
+  /** What a memory write saved, for its opened row; null for any other call. */
+  memoryDetail(call: ToolCallDisplay): MemoryWriteDetail | null {
+    return memoryWriteDetail(call);
+  }
 
   /** The header button's accessible name. */
   toggleLabel = computed(() => {

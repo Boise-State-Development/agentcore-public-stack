@@ -20,8 +20,8 @@ So the check happens here, in the application, on the way in.
 
 Why this lives in ``apis.shared.assistants`` and not in ``kb_backend``
 ---------------------------------------------------------------------
-It reuses :func:`apis.shared.assistants.service.resolve_assistant_permission`
-rather than introducing a parallel permission model (Requirement 25.2), and
+It reuses the assistant permission model in :mod:`apis.shared.assistants.service`
+rather than introducing a parallel one (Requirement 25.2), and
 ``kb_backend`` may not import the assistants package — that boundary is what keeps
 the migration Lambda images small, and it is enforced by
 ``tests/architecture/test_kb_backend_boundary.py``. Authorization is also
@@ -154,10 +154,20 @@ async def resolve_kb_access(
 ) -> Optional[KbAccess]:
     """Resolve a grant from the assistant permission model, failing closed.
 
-    For callers that do not already hold a permission. Delegates to
-    ``resolve_assistant_permission`` — the same function the document routes and
-    the listing service gate on — so owner/editor/viewer semantics are whatever
-    that function says they are and cannot drift here (Requirement 25.2).
+    For callers on the turn path that do not already hold a permission: the
+    ``knowledge_files`` / ``project_files`` tool, and a resumed turn's
+    full-context reload. Delegates to ``get_assistant_with_access_check`` — the
+    same function that admitted the turn and whose permission its retrieval
+    runs under — so owner/editor/viewer semantics are whatever that function
+    says they are and cannot drift here (Requirement 25.2).
+
+    It must be *that* function and not ``resolve_assistant_permission``. The
+    latter answers the write routes' question ("does this user hold a share?")
+    and so returns no permission for a PUBLIC Agent's ordinary user. The turn
+    admits that user as a viewer and retrieves for them, so the tool denied
+    them a corpus their own turn had just read: every non-owner call of
+    ``knowledge_files`` on a PUBLIC Agent failed with "You don't have access",
+    which was 40 of the tool's 54 failed calls in production in November 2026.
 
     **Any** failure denies: a missing table, an unreachable table, a malformed
     record. This is the opposite of the resolver's choice to treat an unreadable
@@ -169,10 +179,10 @@ async def resolve_kb_access(
     # Function-local: importing ``.service`` at module scope would run inside the
     # package ``__init__``'s own import of ``rag_service``, and the ordering that
     # makes that work today is not a property worth depending on.
-    from apis.shared.assistants.service import resolve_assistant_permission
+    from apis.shared.assistants.service import get_assistant_with_access_check
 
     try:
-        _assistant, permission = await resolve_assistant_permission(
+        _assistant, permission = await get_assistant_with_access_check(
             assistant_id=assistant_id, user_id=user_id, user_email=user_email
         )
     except Exception as exc:

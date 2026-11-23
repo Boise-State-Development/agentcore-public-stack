@@ -23,6 +23,7 @@ import re
 import threading
 import time
 from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -201,6 +202,72 @@ async def _token_for_retry(
     return record.cognito_access_token
 
 
+# A raw 409 from the AgentCore Runtime data plane. Our container's own 409
+# (the single-flight lease) never arrives raw: the data plane rewrites any
+# non-2xx from the container to 424 (`_resolve_upstream_error_status`). So a
+# raw 409 is the Runtime refusing the invocation before the container sees it,
+# which on dev (2026-11-21) is a turn that arrives while another invocation is
+# still starting the same runtime session: the composer's prewarm fired on the
+# first keystroke, the Runtime began a V2 snapshot restore (2,017 ms), and a
+# send 270 ms later was answered 409 and shown as "Already responding". Nothing
+# ran, so the turn can be sent again. Only that failing path waits; a turn
+# that is accepted first time pays nothing.
+_RUNTIME_STARTING_BUDGET_SECONDS = 15.0
+# Between polls when no warm call of this task's own is in flight to wait on (the warm call
+# went through another app-api task). Capped at 0.5 s: on dev a 1.5 s step left a turn waiting
+# 1.8 s after the session had started, and a refused resend is a cheap, fast 409.
+_RUNTIME_STARTING_POLL_SECONDS = (0.25, 0.5)
+
+
+def _is_runtime_target(target_url: str) -> bool:
+    """Whether the proxy talks to the AgentCore Runtime data plane (not local inference-api)."""
+    return urlsplit(target_url).netloc.startswith("bedrock-agentcore.")
+
+
+async def _wait_out_runtime_session_start(
+    client: httpx.AsyncClient,
+    target_url: str,
+    headers: Dict[str, str],
+    body: bytes,
+    response: httpx.Response,
+    warm_key: Tuple[str, Optional[str]],
+) -> httpx.Response:
+    """Resend a turn the Runtime refused with a raw 409 until its session has started.
+
+    Waits on this task's own in-flight warm call for the same runtime session when
+    there is one (the usual cause), else polls. Bounded by
+    ``_RUNTIME_STARTING_BUDGET_SECONDS``; the last answer is returned either way,
+    so a 409 that outlasts the budget is relayed as before.
+    """
+    started = time.monotonic()
+    attempts = 0
+    while response.status_code == status.HTTP_409_CONFLICT:
+        remaining = _RUNTIME_STARTING_BUDGET_SECONDS - (time.monotonic() - started)
+        if remaining <= 0:
+            break
+        await response.aread()
+        await response.aclose()
+        warm = _prewarm_inflight.get(warm_key)
+        if warm is not None and not warm.done():
+            # `asyncio.wait` never cancels the warm call it waits on.
+            await asyncio.wait({warm}, timeout=remaining)
+        else:
+            delay = _RUNTIME_STARTING_POLL_SECONDS[min(attempts, len(_RUNTIME_STARTING_POLL_SECONDS) - 1)]
+            await asyncio.sleep(min(delay, remaining))
+        attempts += 1
+        response = await client.send(
+            client.build_request("POST", target_url, headers=headers, content=body),
+            stream=True,
+        )
+    logger.info(
+        "Runtime session was still starting (409); resent the turn %d times over %d ms -> %s",
+        attempts,
+        int((time.monotonic() - started) * 1000),
+        response.status_code,
+    )
+    return response
+
+
 def _build_upstream_client() -> httpx.AsyncClient:
     """Single seam where the proxy's upstream client is constructed.
 
@@ -277,10 +344,12 @@ async def chat_stream(
             affinity_id = pinned if isinstance(pinned, str) and pinned else None
     except (ValueError, TypeError):
         logger.debug("chat proxy: body is not JSON; skipping runtime-session pinning")
-    if affinity_id is not None and session_id is not None and session_fork_enabled():
-        apply_runtime_session_header(headers, affinity_id, current_user.user_id)
-    else:
-        apply_runtime_session_header(headers, session_id, current_user.user_id)
+    pinned_id = (
+        affinity_id
+        if affinity_id is not None and session_id is not None and session_fork_enabled()
+        else session_id
+    )
+    apply_runtime_session_header(headers, pinned_id, current_user.user_id)
 
     # Forward OAuth2CallbackUrl when the SPA supplies it. Inference-api's
     # AgentCoreContextMiddleware reads this header to scope the on-tool
@@ -333,6 +402,10 @@ async def chat_stream(
                     token_kind,
                     response.status_code,
                 )
+        if response.status_code == status.HTTP_409_CONFLICT and _is_runtime_target(target_url):
+            response = await _wait_out_runtime_session_start(
+                client, target_url, headers, body, response, (current_user.user_id, pinned_id)
+            )
     except httpx.ConnectError:
         await client.aclose()
         logger.error(f"Cannot reach Inference API at {target_url}")
@@ -561,6 +634,9 @@ class _PrewarmLedger:
 _prewarm_ledger = _PrewarmLedger()
 # Strong references to in-flight forwards: the event loop holds tasks weakly.
 _prewarm_tasks: Set[asyncio.Task] = set()
+# This task's warm calls still in flight, by (user, runtime-pinned session id): a turn the Runtime
+# refuses while one starts the same session waits on it (`_wait_out_runtime_session_start`).
+_prewarm_inflight: Dict[Tuple[str, Optional[str]], asyncio.Task] = {}
 
 
 def _build_prewarm_client() -> httpx.AsyncClient:
@@ -620,6 +696,11 @@ async def chat_prewarm(
         )
         _prewarm_tasks.add(task)
         task.add_done_callback(_prewarm_tasks.discard)
+        key = (current_user.user_id, warm_id)
+        _prewarm_inflight[key] = task
+        task.add_done_callback(
+            lambda done, key=key: _prewarm_inflight.pop(key, None) if _prewarm_inflight.get(key) is done else None
+        )
     return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": outcome})
 
 

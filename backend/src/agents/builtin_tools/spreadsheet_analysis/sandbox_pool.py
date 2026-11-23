@@ -143,20 +143,56 @@ class SandboxEntry:
         #: Completed tool calls served by this session. A "session gone" error
         #: is only retried when the session had a previous life.
         self.calls = 0
+        #: Whether the remote session was started with ``run_code``'s office
+        #: mount (``code_sandbox/office_mount.py``).
+        self.mounted = False
         self._client: Any = None
 
-    async def start(self, ci_id: str) -> None:
+    @property
+    def started(self) -> bool:
+        return self._client is not None
+
+    async def start(self, ci_id: str, filesystem_configurations: Optional[List[Dict[str, Any]]] = None) -> None:
+        """Start the remote session, once. Raises if the start (or a mount) fails.
+
+        ``filesystemConfigurations`` is a ``StartCodeInterpreterSession``
+        parameter the SDK's ``CodeInterpreter.start`` does not take (1.24), so a
+        mounted start calls the same data-plane API itself and records the
+        session on the client exactly as ``start`` would.
+        """
         if self._client is not None:
             return
         from bedrock_agentcore.tools.code_interpreter_client import CodeInterpreter
 
         region = os.getenv("AWS_REGION", "us-west-2")
         client = CodeInterpreter(region)
-        kwargs: Dict[str, Any] = {"identifier": ci_id}
-        if self.pooled:
-            kwargs["session_timeout_seconds"] = sandbox_timeout_seconds()
-        await asyncio.to_thread(client.start, **kwargs)
+        if filesystem_configurations:
+            timeout = sandbox_timeout_seconds() if self.pooled else _DEFAULT_TIMEOUT_SECONDS
+            await asyncio.to_thread(_start_mounted, client, ci_id, timeout, filesystem_configurations)
+        else:
+            kwargs: Dict[str, Any] = {"identifier": ci_id}
+            if self.pooled:
+                kwargs["session_timeout_seconds"] = sandbox_timeout_seconds()
+            await asyncio.to_thread(client.start, **kwargs)
         self._client = client
+        self.mounted = bool(filesystem_configurations)
+
+    async def reset(self) -> None:
+        """Stop the remote session but keep the entry, so the next ``start`` makes a new one.
+
+        For a ``run_code`` call that needs the office mount on a session this
+        turn's ``analyze_spreadsheet`` started without it. What was staged is
+        gone with the session, so it is forgotten here and re-staged on demand.
+        """
+        client, self._client = self._client, None
+        self.mounted = False
+        self.staged.clear()
+        if client is None:
+            return
+        try:
+            await asyncio.to_thread(client.stop)
+        except Exception:  # noqa: BLE001 - best effort, the remote timeout covers it
+            logger.debug("analyze_sandbox reset stop failed", exc_info=True)
 
     async def invoke(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Call the sandbox and drain the response stream, all off the loop."""
@@ -180,6 +216,18 @@ class SandboxEntry:
             await asyncio.to_thread(client.stop)
         except Exception:  # noqa: BLE001 - best effort, the remote timeout covers it
             logger.debug("analyze_sandbox stop failed", exc_info=True)
+
+
+def _start_mounted(client: Any, ci_id: str, timeout: int, filesystem_configurations: List[Dict[str, Any]]) -> None:
+    """``CodeInterpreter.start`` with ``filesystemConfigurations``. Blocking."""
+    response = client.data_plane_client.start_code_interpreter_session(
+        codeInterpreterIdentifier=ci_id,
+        name=f"code-session-{uuid.uuid4().hex[:8]}",
+        sessionTimeoutSeconds=timeout,
+        filesystemConfigurations=filesystem_configurations,
+    )
+    client.identifier = response["codeInterpreterIdentifier"]
+    client.session_id = response["sessionId"]
 
 
 def new_transient_entry(session_id: str, user_id: str) -> SandboxEntry:

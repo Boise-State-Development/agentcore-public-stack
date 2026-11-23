@@ -218,7 +218,7 @@ The blog's tip is to start the session as soon as the user engages, for example 
 3. **SPA:**
    - Stage the ID and fire the warm call on intent.
    - Make it fire-and-forget: a failure or a slow warm call must never delay or block the send.
-   - A send that arrives mid-warm simply lands on the same microVM while it restores, which is no worse than today.
+   - A send that arrives mid-warm does **not** share the start: the Runtime data plane answers it **409** before the container sees it (dev, 2026-11-21: a warm forward that took 2,017 ms for a snapshot restore, and a send 270 ms after the first keystroke refused, shown as "Already responding"). Our container's own 409 never arrives raw (the data plane rewrites it to 424), so app-api's chat proxy treats a raw Runtime 409 as "still starting": it waits on its own in-flight warm call for that `(user, session)` when it has one, else polls, then resends the turn, within 15 s (`_wait_out_runtime_session_start`). Only that refused path waits, so the send path is unchanged.
 4. **Optional:** warm on opening an existing conversation whose last activity is older than the idle timeout. That microVM has been reaped, so its next turn is also cold.
 
 **What it hides.** On today's cold path it hides:
@@ -559,3 +559,53 @@ Mirrors §9.2, so the two readouts are comparable.
   3. The turnless-warm share (§9.4 item 1), which bounds the per-session numbers on both environments.
   4. The vCPU question (§9.3 item 5), which prod widened rather than narrowed.
 - **The decision this should be taken on is latency, not cost.** The Runtime line is ~$1,450/year on V1 and the plausible V2 range is roughly ±$600 of it. Prewarm cut dev's median first token by 1.5 s and depends on V2's cheap idle. That is worth more than the money either way, which is what §9.4 already concluded — prod's numbers make the cost side of it closer to free than dev's did.
+
+## 11. Runtime versions: what creates them, and recreating a Runtime at its quota
+
+Every `UpdateAgentRuntime` call creates an immutable Runtime version, including one whose request changes nothing. Service Quotas caps them at **1,000 per Runtime** ("Versions per Agent", `L-61A3A6D8`, adjustable), and AWS has no API to delete a single version. At the cap, every update fails with `ServiceQuotaExceededException: maxAgentVersions`: `backend.yml`'s image step, and any `platform.yml` deploy that touches the Runtime. CloudFormation's rollback of that update fails the same way and leaves the stack `UPDATE_ROLLBACK_FAILED`. Dev reached the cap on 2026-11-21, 151 days after its Runtime was created.
+
+### 11.1 What made dev's versions (2026-11-10 → 2026-11-21, 129 versions, 10.5 days)
+
+| Kind | Versions | Per day | Made by | Real change? |
+|---|---:|---:|---|---|
+| Image, Runtime code changed | 96 | 9.1 | `backend.yml` → `deploy-runtime-image-one.sh` | Yes |
+| Image, only `apis/app_api` changed | 12 | 1.1 | `backend.yml` → `deploy-runtime-image-one.sh` | No: the image hashed and copied all of `backend/src`, and the Runtime never imports `app_api` |
+| Nothing changed | 17 | 1.6 | `platform.yml` → CloudFormation | No |
+| Environment changed (a flag turned on or off) | 3 | 0.3 | `platform.yml` → CloudFormation | Yes |
+
+Method: `list_agent_runtime_versions` and `get_agent_runtime(agentRuntimeVersion=…)` for the last 130 versions, every field diffed against the previous version, then each version matched by timestamp to the job window of `backend.yml`'s "Deploy inference-api image" or `platform.yml`'s "Deploy PlatformStack" (every one matched exactly one). CloudTrail's `UpdateAgentRuntime` events show the "nothing changed" calls come from CloudFormation and carry the image `backend.yml` had set about ten minutes earlier. The Runtime's `ContainerUri` was an `AWS::SSM::Parameter::Value<String>` template parameter, which CloudFormation re-reads on every stack update; `backend.yml` rewrites that parameter on every push, so nearly every `platform.yml` run saw a changed property and re-sent the image the Runtime already ran. For the app-api-only row, each image version's commit was diffed against the previous image version's commit.
+
+### 11.2 What stops the no-op versions
+
+- **CloudFormation:** `ContainerUri` is a `{{resolve:ssm:/<prefix>/inference-api/image-tag}}` dynamic reference. Its template text never changes, so CloudFormation updates the Runtime only when one of the Runtime's own properties changes, and then resolves the URI the pipeline wrote last. A real update is unchanged. The app-api task definition keeps its parameter: task definition revisions have no comparable quota.
+- **The image:** `Dockerfile.inference-api` copies `agents`, `apis/shared` and `apis/inference_api` only, and `build-one.sh` hashes the same three, so an app-api-only merge keeps the tag and the deploy script skips. `TestInferenceApiImageBundlesOnlyRuntimePackages` holds the two lists together and refuses an import of `apis.app_api` or `lambdas` from them.
+- **The deploy script:** `deploy-runtime-image-if-changed.sh` already skipped an identical URI. It now also skips when the live URI and the new one name the same image digest. The payload is the live configuration with only the image swapped, so an equal digest is a call that would change nothing.
+
+Expected on dev: **12.3 → 9.4 versions a day** (the two "No" rows gone), so 1,000 versions last about 106 days instead of 81. What remains is real Runtime code reaching dev about nine times a day; fewer than that means batching dev's Runtime deploys or raising the quota. Expected on prod (from the code; prod's history was not read): a release made two versions (a no-op from `platform.yml`, then the image), and now makes one, and none for a release that changes only app-api. The first `platform.yml` run after this ships makes one more, because the template's text for `ContainerUri` changes once.
+
+### 11.3 Recreating the Runtime: `CDK_AGENTCORE_RUNTIME_GENERATION`
+
+Unset by default, and unset leaves the template unchanged. When set (1–8 lowercase letters or digits, e.g. `g2`), the Runtime is named `{prefix}_agentcore_runtime_{generation}`. CloudFormation cannot replace a Runtime under the same name; a new name makes it create the new Runtime (from the live image in SSM and the current environment), update everything that references it, and delete the old Runtime during cleanup. The new Runtime starts with no versions.
+
+What follows the new Runtime by reference, with no other change (`test/runtime-generation.test.ts` asserts the set template differs from the unset one only by the name):
+
+- the `/<prefix>/inference-api/runtime-id` SSM parameter, which `backend.yml`, `smoke_turns.py`, the eval and spike scripts and `scripts/memory-audit` read;
+- app-api's `INFERENCE_API_URL` and `AGENTCORE_RUNTIME_LOG_GROUP` (the task definition re-registers, and the service rolls before cleanup deletes the old Runtime), and the scheduled-runs Lambdas' endpoint;
+- the alarms' and dashboard's `Name` dimension (`runtimeMetricName`), the log-retention custom resource, and the retention sweep's prefix (the old generation's groups keep the retention already set);
+- the `AgentCoreRuntimeArn` / `AgentCoreRuntimeId` stack exports, which no stack imports.
+
+What does not change: the Runtime's IAM execution role (its log grants are a wildcard over `/aws/bedrock-agentcore/runtimes/*`), the shared `{prefix}-platform-workload` identity (`PlatformIdentityConstruct`), and so the OAuth token vault and every user's connector tokens; AgentCore Memory; every DynamoDB table and bucket.
+
+**What users see:** live Runtime sessions end, so the next turn in an open conversation starts on a cold microVM (prewarm covers the next page load); a turn paused on an interrupt (OAuth consent, a question, a browser handover, an approval) cannot be resumed and asks the user to send the message again. Conversations, files, memories and connector tokens are all kept.
+
+**Runbook (dev).** Run each step only once the previous one has succeeded.
+
+0. **If the stack is `UPDATE_ROLLBACK_FAILED` on the Runtime** (dev was, from 2026-11-21 05:58 UTC), recover it first. The failed update never changed the Runtime, so skipping it is accurate:
+   `aws cloudformation continue-update-rollback --stack-name <prefix>-PlatformStack --resources-to-skip InferenceApiAgentCoreRuntime42085C46`
+   and wait for `UPDATE_ROLLBACK_COMPLETE`.
+1. Set `CDK_AGENTCORE_RUNTIME_GENERATION=g2` in the `development` GitHub environment **before the change that introduces it merges**, or before the next `platform.yml` run after that. A `platform.yml` run with the generation unset would update the at-quota Runtime in place (the `ContainerUri` text changes once) and fail again.
+2. Run `platform.yml` (merging the change runs it). Expect `AWS::BedrockAgentCore::Runtime` `CREATE_*` for the new name, the app-api service to roll, and the old Runtime's `DELETE_COMPLETE` in cleanup.
+3. Run `backend.yml` (or re-run the last one). The new Runtime already runs the image in SSM, so its Runtime step should report "skipping"; the other services deploy as usual.
+4. Check: one Runtime under `{prefix}_agentcore_runtime_g2` with one version; a turn on dev streams; the smoke matrix passes (`/smoke-regression`).
+
+The next recreation uses a new value (`g3`). Going back to unset is also a new name, so it recreates the Runtime too.

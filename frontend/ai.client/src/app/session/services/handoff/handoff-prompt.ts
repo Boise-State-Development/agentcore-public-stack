@@ -140,6 +140,80 @@ export function renderDeliveryBlock(
   return `<${HANDOFF_CONTEXT_TAG} from_conversation="${title}">\n${CONTEXT_NOTE}\n${inner}\n</${HANDOFF_CONTEXT_TAG}>`;
 }
 
+/** A run result part's step, as the server stores it (workflow-runs spec §7). Only `done` carries a result. */
+export type DeliveryPartStatus = 'done' | 'stopped' | 'needs_input' | 'running';
+
+/**
+ * What a part with no result says, inside its block (`DELIVERY_PART_STATUS_NOTES` in `context.py`).
+ * Exported so a sent bubble can tell such a part from an answer.
+ */
+export const DELIVERY_PART_STATUS_NOTES: Readonly<Record<Exclude<DeliveryPartStatus, 'done'>, string>> = {
+  stopped: 'This Agent stopped before it finished, so there is no result from it.',
+  needs_input: 'This Agent is still waiting on the user, so there is no result from it yet.',
+  running: 'This Agent was still working when the results were brought back, so there is no result from it yet.',
+};
+
+/**
+ * The same notes for a prompt step's part, which has no Agent (`PROMPT_PART_STATUS_NOTES` in
+ * `context.py`). A prompt step never waits on the user; `needs_input` is here so every status has one.
+ */
+export const PROMPT_PART_STATUS_NOTES: Readonly<Record<Exclude<DeliveryPartStatus, 'done'>, string>> = {
+  stopped: 'This step stopped before it finished, so there is no result from it.',
+  needs_input: 'This step is still waiting on the user, so there is no result from it yet.',
+  running: 'This step was still working when the results were brought back, so there is no result from it yet.',
+};
+
+/** One part of a run result as its block is rendered (`DeliveryPartBlock` in `context.py`). */
+export interface DeliveryPartBlockInput {
+  text: string;
+  agentName: string;
+  fromTitle: string;
+  status: DeliveryPartStatus;
+  artifacts?: readonly DeliveryArtifact[];
+  files?: readonly FileLine[];
+  /** A prompt step's part: its note names a step, not an Agent (`PROMPT_PART_STATUS_NOTES`). */
+  prompt?: boolean;
+}
+
+/** What a part's block names: the Agent, then its conversation's title (`delivery_part_label`). */
+export function deliveryPartLabel(agentName: string, fromTitle: string): string {
+  const agent = agentName.trim();
+  const title = fromTitle.trim();
+  if (!agent || !title) return agent || title;
+  // A run step's title already leads with its Agent (`run_step_title`), so the name is written once.
+  if (agent === title || title.startsWith(`${agent} · `)) return title;
+  return `${agent} · ${title}`;
+}
+
+/**
+ * A part's conversation title without its Agent's name in front, for a line that already shows the
+ * Agent (the composer's result card). Empty when the title says nothing more than the name.
+ */
+export function partTitleAfterAgent(agentName: string, fromTitle: string): string {
+  const agent = agentName.trim();
+  const title = fromTitle.trim();
+  if (!title || title === agent) return '';
+  const prefix = `${agent} · `;
+  return agent && title.startsWith(prefix) ? title.slice(prefix.length) : title;
+}
+
+/**
+ * A run result as the receiving model reads it (`render_delivery_parts` in `context.py`): one
+ * delivery block per part, in step order, joined by a blank line. A part with no result is named
+ * with its status note; a finished part the user emptied gives no block. Pinned by the fixture.
+ */
+export function renderDeliveryParts(parts: readonly DeliveryPartBlockInput[]): string {
+  return parts
+    .map((part) => {
+      const label = deliveryPartLabel(part.agentName, part.fromTitle);
+      return part.status === 'done'
+        ? renderDeliveryBlock(part.text, label, part.artifacts ?? [], part.files ?? [])
+        : renderDeliveryBlock((part.prompt ? PROMPT_PART_STATUS_NOTES : DELIVERY_PART_STATUS_NOTES)[part.status] ?? '', label);
+    })
+    .filter((block) => block)
+    .join('\n\n');
+}
+
 /** The user message with the cards before it, each followed by a blank line (`join_delivery_blocks`). */
 export function joinDeliveryBlocks(blocks: readonly string[], message: string): string {
   const head = blocks.filter((b) => b).join('\n\n');
@@ -222,4 +296,126 @@ function restoreDefusedTags(text: string): string {
     out = out.split(`<\\/${tag}`).join(`</${tag}`).split(`<\\${tag}`).join(`<${tag}`);
   }
   return out;
+}
+
+/** A run's step Agents, in step order: what tells a run result's blocks from separate cards. */
+export interface RunResultAgents {
+  runId: string;
+  agentNames: readonly string[];
+  /**
+   * Per step, in the same order: a prompt step's name, or `null` for an Agent step. A prompt
+   * step's block is labelled "{model} · {step}" (`prompt_part_names`), so it is matched on that
+   * whole label, never on the model alone, which several prompt steps can share (§21.3).
+   */
+  promptSteps?: readonly (string | null)[];
+  /**
+   * Per step, in the same order: true for a checklist step (§22.3). Its block is labelled like a
+   * prompt step's, by its model and its step, but "Checklist step" when the run kept no name
+   * (`CHECKLIST_STEP_FALLBACK_NAME`). Its name belongs in `promptSteps` too.
+   */
+  checklistSteps?: readonly boolean[];
+}
+
+/** One part of a run result read back for a sent bubble. */
+export interface RunResultPartBlock {
+  agentName: string;
+  /** `done` for an answer; else the status whose note the block holds (it was not included). */
+  status: DeliveryPartStatus;
+  block: DeliveryBlock;
+  /** A prompt or checklist step's part: the step's name. Its `agentName` is then the model's name. */
+  promptStep?: string;
+  /** A checklist step's part (§22.3), named "{step} · Checklist · {model}". */
+  checklist?: boolean;
+}
+
+/** What a sent bubble shows for its delivery blocks: separate cards, and any run result as one. */
+export type BubbleDelivery = { kind: 'card'; block: DeliveryBlock } | { kind: 'run'; runId: string; parts: RunResultPartBlock[] };
+
+/**
+ * Group a message's delivery blocks (`extractDeliveryBlocks`) for its bubble (workflow-runs spec
+ * §20.3): a run result's blocks, which the model reads one per part, show as one "From *N* Agents"
+ * ("*N* steps" once one is a prompt step).
+ *
+ * The stored text carries no run marker, so a run's blocks are recognised by what
+ * `renderDeliveryParts` writes: consecutive blocks each labelled for the next of one run's step
+ * Agents in step order (`deliveryPartLabel`: the Agent, or "Agent · title"; a prompt step's whole
+ * "model · step" label, since its model alone can't tell it from another step on that model). A finished part the
+ * user emptied gave no block, so steps may be skipped, never reordered. A lone block is grouped
+ * only for a run of one, so an ordinary card from a conversation named like an Agent stays a card.
+ * Anything not matched is a card, as before.
+ */
+export function groupRunResults(blocks: readonly DeliveryBlock[], runs: readonly RunResultAgents[]): BubbleDelivery[] {
+  const out: BubbleDelivery[] = [];
+  let i = 0;
+  while (i < blocks.length) {
+    let best: { runId: string; parts: RunResultPartBlock[] } | null = null;
+    for (const run of runs) {
+      const parts = matchRun(blocks, i, run.agentNames, run.promptSteps ?? [], run.checklistSteps ?? []);
+      const minimum = Math.min(2, run.agentNames.length);
+      if (parts.length >= minimum && parts.length > (best?.parts.length ?? 0)) best = { runId: run.runId, parts };
+    }
+    if (best) {
+      out.push({ kind: 'run', runId: best.runId, parts: best.parts });
+      i += best.parts.length;
+    } else {
+      out.push({ kind: 'card', block: blocks[i] });
+      i += 1;
+    }
+  }
+  return out;
+}
+
+function matchRun(
+  blocks: readonly DeliveryBlock[],
+  start: number,
+  agentNames: readonly string[],
+  promptSteps: readonly (string | null)[],
+  checklistSteps: readonly boolean[],
+): RunResultPartBlock[] {
+  const parts: RunResultPartBlock[] = [];
+  let step = 0;
+  for (let j = start; j < blocks.length && step < agentNames.length; j++) {
+    const label = blocks[j].fromTitle;
+    let found = -1;
+    for (let k = step; k < agentNames.length; k++) {
+      if (labelMatchesStep(label, agentNames[k].trim(), promptSteps[k] ?? null, !!checklistSteps[k])) {
+        found = k;
+        break;
+      }
+    }
+    if (found < 0) break;
+    const promptStep = promptSteps[found];
+    parts.push({
+      agentName: agentNames[found],
+      status: partStatusOf(blocks[j], promptStep != null),
+      block: blocks[j],
+      ...(promptStep != null ? { promptStep } : {}),
+      ...(promptStep != null && checklistSteps[found] ? { checklist: true } : {}),
+    });
+    step = found + 1;
+  }
+  return parts;
+}
+
+/** A prompt step's block when the run kept no step name for it (`PROMPT_STEP_FALLBACK_NAME`). */
+const PROMPT_STEP_FALLBACK_NAME = 'Prompt step';
+/** A checklist step's block when the run kept no step name for it (`CHECKLIST_STEP_FALLBACK_NAME`). */
+const CHECKLIST_STEP_FALLBACK_NAME = 'Checklist step';
+
+function labelMatchesStep(label: string, agent: string, promptStep: string | null, checklist: boolean): boolean {
+  if (promptStep !== null) {
+    const fallback = checklist ? CHECKLIST_STEP_FALLBACK_NAME : PROMPT_STEP_FALLBACK_NAME;
+    return label === deliveryPartLabel(agent, promptStep.trim() || fallback);
+  }
+  return !!agent && (label === agent || label.startsWith(`${agent} · `));
+}
+
+function partStatusOf(block: DeliveryBlock, prompt: boolean): DeliveryPartStatus {
+  if (block.artifacts.length || block.files.length) return 'done';
+  // A prompt part sent before its notes named a step still reads as the status it was.
+  const notes = prompt ? [PROMPT_PART_STATUS_NOTES, DELIVERY_PART_STATUS_NOTES] : [DELIVERY_PART_STATUS_NOTES];
+  for (const [status, note] of notes.flatMap((n) => Object.entries(n))) {
+    if (block.text === note) return status as DeliveryPartStatus;
+  }
+  return 'done';
 }

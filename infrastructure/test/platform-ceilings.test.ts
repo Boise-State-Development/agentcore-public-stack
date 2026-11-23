@@ -236,7 +236,10 @@ function allFlagsOn(base: AppConfig): AppConfig {
     sessionPrewarm: { enabled: true },
     quotaRequests: { enabled: true },
     awsLimits: { enabled: true },
-    handoffs: { enabled: true, briefEnabled: true },
+    handoffs: { enabled: true, briefEnabled: true, suggestionsEnabled: true },
+    workflowRuns: { enabled: true },
+    workflows: { enabled: true, promptStepsEnabled: true, checklistStepsEnabled: true },
+    agentVersionPinning: { enabled: true },
     sessionRewind: { enabled: true },
     sessionFork: { enabled: true },
     clientTurnTiming: { enabled: true },
@@ -285,6 +288,11 @@ function allFlagsOn(base: AppConfig): AppConfig {
     // Concurrent tool execution: one Runtime variable, written only while on.
     concurrentToolExecution: { enabled: true },
     wordSkillScripts: { enabled: true },
+    // Code sandbox (run_code): one Runtime variable, written only while on.
+    codeSandbox: { enabled: true },
+    // LibreOffice for run_code: ~14 resources plus the firewall's allow list,
+    // one Runtime variable and one SSM read on the Runtime role.
+    codeSandboxOffice: { enabled: true },
     // Documents as text: one Runtime variable, written only while on.
     converseDocumentsAsText: { enabled: true },
     // Project file readiness: one Runtime variable, written only while on.

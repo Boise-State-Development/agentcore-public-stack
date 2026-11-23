@@ -4,6 +4,7 @@
  */
 
 import { FolderAttachmentData } from '../models/message.model';
+import type { DeliveryPartStatus } from './handoff-prompt';
 
 export type HandoffStatus =
   | 'open'
@@ -54,7 +55,11 @@ export interface TurnsCovered {
 export interface HandoffView {
   handoffId: string;
   sessionId: string;
-  kind: 'mention' | 'suggested' | 'send_back';
+  /**
+   * `prompt` is a workflow run's prompt step (workflow-designer §21.3), `checklist` its checklist
+   * step (§22.3): no Agent, no conversation.
+   */
+  kind: 'mention' | 'suggested' | 'send_back' | 'prompt' | 'checklist';
   status: HandoffStatus;
   agentId: string;
   agentName: string;
@@ -72,6 +77,42 @@ export interface HandoffView {
   stoppedReason?: string;
   /** A `needs_input` handoff's prompts, read from its target. Never on any other status. */
   relayedPrompts?: RelayedPrompt[];
+  /** Set on a workflow run's step (workflow-runs spec §3.1). */
+  runId?: string;
+  stepId?: string;
+  /** A suggestion's chip (`suggest_handoff`, §4.4): what the model offered. */
+  title?: string;
+  tldr?: string;
+  /** The Agent name as the model wrote it, unresolved; matched by `matchSuggestedAgent`. */
+  agentHint?: string;
+  /** The `suggest_handoff` call, which places the chip under the message holding it. */
+  toolUseId?: string;
+  /** A prompt or checklist step's model (§21.3). Its `agentName` is the model's display name and `agentId` is empty. */
+  modelId?: string;
+  /** A checklist step's field sets, in the order it runs them (§22.3). */
+  fieldSets?: string[];
+  /** A done prompt step's answer, as stored (capped at write, with the cut-off marker when cut). */
+  outputText?: string;
+  outputTokens?: number;
+}
+
+/** Why a prompt step stopped (`stoppedReason` on its row, workflow-designer §21.3). */
+export type PromptStopReason = 'user_stopped' | 'too_large' | 'model_refused' | 'quota' | 'timeout' | 'error';
+
+/**
+ * A workflow run's model step: a prompt step (one model call, §21.3) or a checklist step (one call
+ * per field set, §22.3), each with no Agent and no conversation.
+ */
+export function isModelStep(row: Pick<HandoffView, 'kind'> | null | undefined): boolean {
+  return row?.kind === 'prompt' || row?.kind === 'checklist';
+}
+
+/**
+ * A suggestion the user hasn't sent yet: rendered as a chip under its message, not as a row.
+ * Once sent it has a target and becomes an ordinary handoff row.
+ */
+export function isSuggestionChip(row: HandoffView): boolean {
+  return row.kind === 'suggested' && !row.targetSessionId;
 }
 
 /** `POST /sessions/{id}/handoffs`: the card to review and the exact prompt it makes. */
@@ -110,6 +151,11 @@ export interface HandoffDraft {
    * there would carry, so the Runtime builds the same agent and reads the source's prompt cache.
    */
   sourceAssistantId?: string;
+  /**
+   * Set when the sheet was opened from a suggestion chip's Start (§4.4): the suggested row to
+   * start, instead of opening a new mention. Cancel then leaves the chip in place.
+   */
+  suggestionId?: string;
 }
 
 /** Why no brief was written (`handoff_brief_fallback`); the card keeps the excerpt. */
@@ -218,6 +264,34 @@ export interface DeliveryView {
   /** Files the card shares by reference (§4.9). Absent from rows written before PR-0.4a. */
   files?: DeliveryFile[];
   createdAt: string;
+  /** Set on a workflow run's one result (workflow-runs spec §7, PR-W.2). */
+  runId?: string;
+  /**
+   * A run result's parts, one per kept step in step order. The row's own `text`, `artifacts` and
+   * `files` are empty then. Absent (not empty) on a plain card.
+   */
+  parts?: DeliveryPart[];
+}
+
+/** One step's part of a run result. Only a `done` part carries text, artifacts and files. */
+export interface DeliveryPart {
+  stepId: string;
+  /** A prompt step's part: its model's name. */
+  agentName: string;
+  /** Empty on a prompt step's part, which comes from no conversation. */
+  fromSessionId: string;
+  /** The step conversation's title; empty on a part with no result. */
+  fromTitle: string;
+  status: DeliveryPartStatus;
+  text: string;
+  artifacts: DeliveryArtifact[];
+  files: DeliveryFile[];
+  /**
+   * `prompt` for a prompt step's part (workflow-designer §21.3): text alone, from no conversation,
+   * with its step's name as `fromTitle`. `checklist` for a checklist step's part (§22.3), the same
+   * text-only shape. Absent on an Agent step's part.
+   */
+  kind?: 'prompt' | 'checklist';
 }
 
 /** `POST /sessions/{targetId}/handoffs/send-back`: a target's answer, offered back to its source. */

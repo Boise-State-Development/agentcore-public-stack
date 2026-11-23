@@ -168,6 +168,13 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         category=ToolCategory.UTILITIES,
         icon="question-mark-circle",
     ),
+    "suggest_handoff": ToolMetadata(
+        tool_id="suggest_handoff",
+        name="Suggested Handoffs",
+        description="Offer to move a separate piece of work into its own conversation with one of your Agents. You see a chip under the answer and decide whether to start it.",
+        category=ToolCategory.UTILITIES,
+        icon="arrow-top-right-on-square",
+    ),
 
     # --- Built-in Tools (Browser) ---
     "browse_web": ToolMetadata(
@@ -193,6 +200,14 @@ TOOL_CATALOG: Dict[str, ToolMetadata] = {
         description="Generate diagrams, charts, and visualizations using Python code in a sandboxed environment.",
         category=ToolCategory.CODE,
         icon="code-bracket",
+    ),
+
+    "run_code": ToolMetadata(
+        tool_id="run_code",
+        name="Run Code",
+        description="Run a skill's Python scripts, or short programs the assistant writes, in an isolated sandbox with no network access, on files from this conversation.",
+        category=ToolCategory.CODE,
+        icon="command-line",
     ),
 
     # --- Built-in Tools (Spreadsheet Analysis) ---

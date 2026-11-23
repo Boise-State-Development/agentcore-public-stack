@@ -243,4 +243,29 @@ describe('ComposerDraftStorageService', () => {
     expect(() => service.write('s1', draft({ text: 'lost, but quietly' }))).not.toThrow();
     setItem.mockRestore();
   });
+
+  describe('releaseAttachments', () => {
+    const file = (uploadId: string) => ({ uploadId, filename: `${uploadId}.pdf`, mimeType: 'application/pdf', sizeBytes: 1 });
+
+    it('takes only the named files off the stored draft and says so', () => {
+      const service = TestBed.inject(ComposerDraftStorageService);
+      service.write('s1', { text: 'hi', queued: ['q'], attachments: [file('a'), file('b')], folders: [{ folderAttachId: 'f', name: 'F', source: 'drive' }] });
+
+      service.releaseAttachments('s1', ['a', 'zzz']);
+
+      const draft = service.read('s1');
+      expect(draft.attachments?.map((a) => a.uploadId)).toEqual(['b']);
+      expect([draft.text, draft.queued, draft.folders?.length]).toEqual(['hi', ['q'], 1]);
+      expect(service.released()).toEqual({ key: 's1', uploadIds: ['a', 'zzz'] });
+    });
+
+    it('a draft left with nothing is forgotten, and an empty list does nothing', () => {
+      const service = TestBed.inject(ComposerDraftStorageService);
+      service.write('s1', { text: '', attachments: [file('a')] });
+      service.releaseAttachments('s1', []);
+      expect(service.released()).toBeNull();
+      service.releaseAttachments('s1', ['a']);
+      expect(localStorage.getItem('composer-draft:s1')).toBeNull();
+    });
+  });
 });

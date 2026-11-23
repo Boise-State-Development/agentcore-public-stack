@@ -86,6 +86,15 @@ import {
       <!-- Raised out of the row link's after:inset-0 overlay so both stay
            reachable — same control-in-control rule as CustomizeCardComponent. -->
       <div class="relative z-10 flex shrink-0 items-center gap-1">
+        @if (workflowLink(); as link) {
+          <a
+            [routerLink]="link"
+            [attr.aria-label]="'Open ' + name() + ' in the workflow designer'"
+            class="rounded-2xl px-2.5 py-1 text-sm/6 font-medium text-primary-accessible hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-primary-accessible-dark"
+          >
+            Open in designer
+          </a>
+        }
         @if (toggleable() && !enabled()) {
           <button
             type="button"
@@ -187,6 +196,8 @@ export class SkillRowComponent {
   readonly owned = input<boolean>(false);
   readonly detailLink = input.required<string>();
   readonly editLink = input<string>('');
+  /** A saved workflow's carrier links to its designer (workflow-designer.md §17, question 1). */
+  readonly workflowLink = input<string[] | null>(null);
 
   readonly toggled = output<void>();
   readonly deleted = output<void>();

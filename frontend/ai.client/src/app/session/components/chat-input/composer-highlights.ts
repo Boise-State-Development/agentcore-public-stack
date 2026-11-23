@@ -13,9 +13,10 @@ export interface ComposerSegment {
 /**
  * Where the live tokens sit in `text`.
  *
- * - The mention is the first `@Name` for the Agent this turn is handed to. The
+ * - The mention is the first `@Name` for the Agent this turn is handed to (or,
+ *   with several Agents mentioned for one handoff, for each of them). The
  *   binding is a separate pick, not a read of the text, so only the picked
- *   Agent's own name marks — a hand-typed `@Someone` that was never picked is
+ *   Agents' own names mark — a hand-typed `@Someone` that was never picked is
  *   prose and stays plain.
  * - Skills use the same token rule as `findSkillCommands`: a `/slug` that
  *   starts a word and is one of `slugs`. Anything else with a slash (dates,
@@ -25,13 +26,15 @@ export interface ComposerSegment {
  */
 export function findHighlightRanges(
   text: string,
-  mentionName: string | null,
+  mentionName: string | readonly string[] | null,
   slugs: readonly string[],
 ): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
 
-  if (mentionName) {
-    const token = `@${mentionName}`;
+  const names = mentionName === null ? [] : typeof mentionName === 'string' ? [mentionName] : mentionName;
+  for (const name of names) {
+    if (!name) continue;
+    const token = `@${name}`;
     const at = text.indexOf(token);
     if (at !== -1) ranges.push([at, at + token.length]);
   }

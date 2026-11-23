@@ -24,6 +24,8 @@ import { CustomizeCardComponent } from '../components/customize-card.component';
 import { SkillRowComponent } from './components/skill-row.component';
 import { MySkillService } from './services/my-skill.service';
 import { MySkill } from './models/my-skill.model';
+import { FEATURES } from '../../services/features';
+import { designerLink, workflowNameFor } from '../../workflows/workflow.models';
 import { confirmSkillReach, DELETE_REACH_LABELS } from '../../shared/skills/confirm-skill-reach';
 import { reachConfirmationFrom } from '../../shared/skills/skill-provenance';
 
@@ -45,6 +47,8 @@ interface SkillRow {
   owned: boolean;
   detailLink: string;
   editLink: string;
+  /** A saved workflow's carrier: its designer, while workflows are on in this build. */
+  workflowLink: string[] | null;
 }
 
 /** A skill resolved for the **Discover** grid. */
@@ -327,6 +331,7 @@ interface SkillCard {
                       [pending]="pending().has(row.skillId)"
                       [detailLink]="row.detailLink"
                       [editLink]="row.editLink"
+                      [workflowLink]="row.workflowLink"
                       (toggled)="onToggleById(row.skillId)"
                       (deleted)="confirmDelete(row.skillId, row.name)"
                     />
@@ -437,6 +442,7 @@ export class CustomizeSkillsPage {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private readonly dialog = inject(Dialog);
+  private readonly features = inject(FEATURES);
 
   /** The chip meaning "don't filter". Not a category id, so it can never collide. */
   protected readonly ALL = '__all__';
@@ -500,6 +506,16 @@ export class CustomizeSkillsPage {
     return map;
   });
 
+  /** The designer of the workflow a carrying skill holds (its first), while workflows are on. */
+  private workflowLink(skill: MySkill): string[] | null {
+    if (!this.features.workflows || skill.kind !== 'workflow') return null;
+    const name = skill.resources
+      .filter(r => r.kind === 'reference')
+      .map(r => workflowNameFor(r.path ?? r.filename))
+      .find((n): n is string => n !== null);
+    return name ? designerLink({ skillId: skill.skillId, name }) : null;
+  }
+
   /**
    * Your own skills, at every status. Sorted most-recently-touched first: this
    * is a working list, and the thing you just edited is the thing you came back
@@ -515,7 +531,8 @@ export class CustomizeSkillsPage {
       byline: 'by you',
       // A non-active skill is absent from `GET /skills/` entirely, so the row
       // has to say why it can never be on rather than showing a dead switch.
-      badge: skill.status !== 'active' ? skill.status : null,
+      // An active one that carries a saved workflow says so instead.
+      badge: skill.status !== 'active' ? skill.status : skill.kind === 'workflow' ? 'workflow' : null,
       meta: this.dateLabel(skill.updatedAt ?? skill.createdAt),
       fileCount: skill.resources.length,
       enabled: enabled.get(skill.skillId) ?? false,
@@ -525,6 +542,7 @@ export class CustomizeSkillsPage {
       owned: true,
       detailLink: this.detailLink(skill.skillId),
       editLink: this.editLink(skill.skillId),
+      workflowLink: this.workflowLink(skill),
     }));
     return rows.sort((a, b) => a.name.localeCompare(b.name));
   });
@@ -548,6 +566,7 @@ export class CustomizeSkillsPage {
         owned: false,
         detailLink: this.detailLink(skill.skillId),
         editLink: '',
+        workflowLink: null,
       }));
   });
 

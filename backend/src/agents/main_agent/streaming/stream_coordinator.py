@@ -1054,6 +1054,11 @@ class StreamCoordinator:
                         session_id, user_id
                     ):
                         yield extraction_sse
+                    # And for a handoff chip offered in the final batch.
+                    for suggestion_sse in self._drain_handoff_suggestions(
+                        session_id, user_id
+                    ):
+                        yield suggestion_sse
                     await self._persist_paused_turn_snapshot(
                         agent,
                         session_id=session_id,
@@ -1218,6 +1223,12 @@ class StreamCoordinator:
                                 window, _source = resolve_context_window(model_id, max_input_tokens)
                                 if window:
                                     final_metadata["contextWindow"] = window
+                                # The prompt size past which the model bills on its
+                                # long-context row (Haiku 5.5: 100K at 5x). The meter
+                                # names that line rather than reading it as "full".
+                                threshold = getattr(model_record, "long_context_threshold_tokens", None)
+                                if isinstance(threshold, int) and threshold > 0:
+                                    final_metadata["longContextThreshold"] = threshold
                             except Exception as ctx_err:
                                 logger.debug(f"Skipping contextWindow lookup: {ctx_err}")
 
@@ -1623,6 +1634,16 @@ class StreamCoordinator:
                 # Format as SSE event and yield (including done event after metadata)
                 sse_event = self._format_sse_event(event)
                 yield sse_event
+
+                # Suggested handoffs: `suggest_handoff` parked its chip on its
+                # broker (a tool has no route to the stream). Drained after the
+                # event, so the chip follows the `tool_result` that made it
+                # (handoffs spec §4.4). The row is already written, so a dropped
+                # connection costs only the live chip; a reload replays it.
+                for suggestion_sse in self._drain_handoff_suggestions(
+                    session_id, user_id
+                ):
+                    yield suggestion_sse
 
                 # MCP Apps PR #5: interleave any app-initiated tool events
                 # (a `tools/call` proxied from an embedded App, dispatched
@@ -2118,6 +2139,14 @@ class StreamCoordinator:
                 discard_provenance(user_id, session_id)
             except Exception:  # noqa: BLE001
                 logger.debug("source provenance discard failed", exc_info=True)
+
+            # Same for handoff chips: the `HANDOFF#` row is what a reload reads.
+            try:
+                from apis.shared.handoff.suggestions import discard_suggestions
+
+                discard_suggestions(user_id, session_id)
+            except Exception:  # noqa: BLE001
+                logger.debug("handoff suggestion discard failed", exc_info=True)
 
             # Stop the turn's analyze_spreadsheet sandbox (#259). The agent's
             # AfterInvocationEvent normally does this; a dropped client can
@@ -3867,6 +3896,26 @@ class StreamCoordinator:
             return None
 
     @staticmethod
+    def _drain_handoff_suggestions(session_id: str, user_id: str) -> List[str]:
+        """Harvest `suggest_handoff` chips into `handoff_suggested` SSEs (handoffs spec §4.4).
+
+        The rows are already written by the tool, so this is the live view only. Keyed on
+        `(user_id, session_id)`, because a chip carries the user's own conversation's words.
+        Nothing is queued unless the tool ran, so a turn without it pays one dict lookup.
+        """
+        try:
+            from apis.shared.handoff.suggestions import take_suggestions
+
+            payloads = take_suggestions(user_id, session_id)
+        except Exception:  # noqa: BLE001 - never worth breaking the stream
+            logger.debug("handoff suggestion drain failed", exc_info=True)
+            return []
+        return [
+            f"event: handoff_suggested\ndata: {json.dumps({'type': 'handoff_suggested', **payload})}\n\n"
+            for payload in payloads
+        ]
+
+    @staticmethod
     async def _drain_source_provenance_events(session_id: str, user_id: str) -> List[str]:
         """Harvest `verify_sources` verdicts into `source_provenance` SSEs.
 
@@ -4599,6 +4648,7 @@ class StreamCoordinator:
         prefix_fingerprint: Optional[Dict[str, Any]] = None,
         turn_outcome: Optional[str] = None,
         empty_answer: bool = False,
+        call_attributes: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Store message-level metadata (token usage, latency, model info, citations)
@@ -4620,6 +4670,9 @@ class StreamCoordinator:
             call_kind: Set for a call that is not a turn (``"handoff_brief"``):
                 recorded as ``callKind``, and the row is written with no
                 ``messageId`` when ``message_id`` is None.
+            call_attributes: With ``call_kind`` only: ids and numbers recorded on
+                that call's row as they are (a brief's ``briefInstruction`` and
+                ``briefInstructionVersion``). Never content.
             prefix_fingerprint: This call's fingerprint, for a caller that ran no
                 hooks (the brief computes it over the request it sent).
             turn_outcome: How the turn this call belongs to ended, recorded as
@@ -4700,6 +4753,8 @@ class StreamCoordinator:
             pricing_snapshot = None
             cost = None
             context_window: Optional[int] = None
+            long_context_threshold: Optional[int] = None
+            long_context = False
 
             if agent and hasattr(agent, "model_config"):
                 model_id = agent.model_config.model_id
@@ -4718,6 +4773,9 @@ class StreamCoordinator:
                         max_input_tokens = getattr(model_record, "max_input_tokens", None)
                         if max_input_tokens:
                             context_window = int(max_input_tokens)
+                        threshold = getattr(model_record, "long_context_threshold_tokens", None)
+                        if isinstance(threshold, int) and threshold > 0:
+                            long_context_threshold = threshold
                 except Exception as ctx_err:
                     logger.debug(f"Skipping contextWindow capture for storage: {ctx_err}")
 
@@ -4745,6 +4803,9 @@ class StreamCoordinator:
                     )
                     if cost_result is not None:
                         cost = cost_result
+                        long_context = self._is_long_context_call(
+                            accumulated_metadata.get("usage", {}), pricing_snapshot
+                        )
 
                 # Tokens spent, nothing charged: the row is written with no
                 # cost, so the rollups and the user's quota never see it.
@@ -4782,6 +4843,13 @@ class StreamCoordinator:
                 )
                 if context_window is not None:
                     metadata_kwargs["contextWindow"] = context_window
+                if long_context_threshold is not None:
+                    metadata_kwargs["longContextThreshold"] = long_context_threshold
+                # Priced on the model's long-context row (every bucket at its
+                # multiplier). Present only when true, so a scan can count the
+                # calls that crossed the line without re-deriving the rule.
+                if long_context:
+                    metadata_kwargs["longContext"] = True
                 # This call's usage was estimated, not reported: a field ->
                 # method map naming what produced each figure. Present only on
                 # the interrupted call's row (see `interrupted_usage`); its
@@ -4810,6 +4878,8 @@ class StreamCoordinator:
                     metadata_kwargs["prefixFingerprints"] = prefix_fingerprint
                 if call_kind:
                     metadata_kwargs["callKind"] = call_kind
+                    for key, value in (call_attributes or {}).items():
+                        metadata_kwargs.setdefault(key, value)
                 # How the turn ended (release-ledger spec §5.1): a closed
                 # vocabulary, no content. `emptyAnswer` is written only when
                 # true, so its absence is the normal case and costs nothing.
@@ -5068,6 +5138,17 @@ class StreamCoordinator:
         except Exception as e:
             logger.error(f"Failed to get pricing snapshot for {model_id}: {e}")
             return None
+
+    @staticmethod
+    def _is_long_context_call(usage: Dict[str, Any], pricing: Any) -> bool:
+        """Whether this call billed on its model's long-context row."""
+        try:
+            from apis.shared.costs.calculator import CostCalculator
+
+            pricing_dict = pricing.model_dump(by_alias=True) if hasattr(pricing, "model_dump") else (pricing or {})
+            return CostCalculator.is_long_context(usage or {}, pricing_dict)
+        except Exception:  # noqa: BLE001
+            return False
 
     def _calculate_message_cost(
         self,

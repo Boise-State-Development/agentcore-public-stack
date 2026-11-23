@@ -82,7 +82,14 @@ case "$SERVICE" in
         ;;
     inference-api)
         DOCKERFILE="backend/Dockerfile.inference-api"
-        SOURCE_DIRS=("backend/src")
+        # Exactly the Dockerfile's COPY list, so an app-api-only change keeps
+        # the tag and deploy-runtime-image-if-changed.sh makes no new Runtime
+        # version. test_import_boundaries.py holds the two lists together.
+        SOURCE_DIRS=(
+            "backend/src/agents"
+            "backend/src/apis/shared"
+            "backend/src/apis/inference_api"
+        )
         MANIFESTS=("backend/pyproject.toml" "backend/uv.lock")
         # Inference API runs on AgentCore Runtime (arm64).
         PLATFORM="linux/arm64"
@@ -268,6 +275,10 @@ case "$SERVICE" in
             "backend/src/apis/shared/extraction/field_sets.py"
             "backend/src/apis/shared/extraction/schema.py"
             "backend/src/apis/shared/models/assistant_prefill.py"
+            # sessions/metadata.py's long-context pricing (CostCalculator.rates_for_call).
+            "backend/src/apis/shared/costs/__init__.py"
+            "backend/src/apis/shared/costs/models.py"
+            "backend/src/apis/shared/costs/calculator.py"
         )
         # Both scheduled-runs Lambdas are arm64 (see the scheduled-runs
         # CDK construct).

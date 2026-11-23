@@ -11,7 +11,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { Construct } from 'constructs';
-import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins } from '../../config';
+import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getAgentRuntimeName, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins, checklistStepsOn, promptStepsOn, agentVersionPinningOn } from '../../config';
 import { AlarmFactory } from '../observability/alarm-factory';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import {
@@ -48,12 +48,17 @@ export interface InferenceAgentCoreConstructProps {
   /** AgentCore Code Interpreter ID — same provenance as codeInterpreterArn. */
   codeInterpreterId: string;
   /**
-   * ARN of the no-network interpreter skill scripts run in. Its id is NOT an
-   * environment variable: the Runtime reads it from the SSM parameter below.
+   * ARN of the SSM parameter holding the interpreter id skill scripts use (the
+   * same interpreter as codeInterpreterArn). The Runtime reads it rather than
+   * an environment variable, which costs V2 budget bytes.
    */
-  skillScriptInterpreterArn: string;
-  /** ARN of the SSM parameter holding the skill-script interpreter's id. */
   skillScriptInterpreterIdParameterArn: string;
+  /**
+   * ARN of the SSM parameter naming the code sandbox's LibreOffice mount
+   * (file system and read-only access point). Present only while
+   * `codeSandboxOffice` is on.
+   */
+  officeMountParameterArn?: string;
   /**
    * AgentCore Browser ARN. Sourced from PlatformStack as a typed
    * typed construct ref (Browser hoisted to Platform).
@@ -159,10 +164,25 @@ export class InferenceAgentCoreConstruct extends Construct {
       value: bootstrapImage.assetHash,
     });
 
+    // A `{{resolve:ssm:…}}` dynamic reference, NOT valueForStringParameter.
+    // Both resolve the live URI whenever CloudFormation updates the Runtime.
+    // They differ on a stack update where nothing else about the Runtime
+    // changed. An `AWS::SSM::Parameter::Value<String>` template parameter is
+    // re-read on every stack update, and backend.yml rewrites it on every
+    // image push, so CloudFormation saw a "changed" ContainerUri on almost
+    // every platform.yml run and sent UpdateAgentRuntime with the image the
+    // Runtime was already running. Each such call is a new immutable Runtime
+    // version: 17 of dev's 129 versions between 2026-11-10 and 2026-11-21, and
+    // a Runtime stops accepting updates at its 1,000-version quota. A dynamic
+    // reference leaves the template text unchanged, so CloudFormation updates
+    // the Runtime only when one of its own properties changes, and then
+    // resolves the URI the pipeline wrote last. The app-api task definition
+    // keeps its template parameter: task definition revisions have no such
+    // quota.
     const inferenceApiImageTagSsmPath = `/${config.projectPrefix}/inference-api/image-tag`;
-    const inferenceApiImageUri = ssm.StringParameter.valueForStringParameter(
-      this, inferenceApiImageTagSsmPath,
-    );
+    const inferenceApiImageUri = new cdk.CfnDynamicReference(
+      cdk.CfnDynamicReferenceService.SSM, inferenceApiImageTagSsmPath,
+    ).toString();
 
     // The project's ECR repo (where the workflow ships real images
     // to). Imported for IAM grants only — CDK doesn't reference any
@@ -225,27 +245,17 @@ export class InferenceAgentCoreConstruct extends Construct {
       resources: [props.codeInterpreterArn],
     }));
 
-    // The skill-script interpreter (SANDBOX network): the same session actions
-    // as above, on that interpreter only, plus a read of the one parameter that
-    // names it, so its id never enters the Runtime's environment.
-    runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'SkillScriptInterpreterAccess',
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'bedrock-agentcore:StartCodeInterpreterSession',
-        'bedrock-agentcore:InvokeCodeInterpreter',
-        'bedrock-agentcore:StopCodeInterpreterSession',
-        'bedrock-agentcore:GetCodeInterpreter',
-        'bedrock-agentcore:GetCodeInterpreterSession',
-        'bedrock-agentcore:ListCodeInterpreterSessions',
-      ],
-      resources: [props.skillScriptInterpreterArn],
-    }));
+    // Skill scripts name the same interpreter through an SSM parameter, so its
+    // id never enters the Runtime's environment.
     runtimeExecutionRole.addToPolicy(new iam.PolicyStatement({
       sid: 'SkillScriptInterpreterIdRead',
       effect: iam.Effect.ALLOW,
       actions: ['ssm:GetParameter'],
-      resources: [props.skillScriptInterpreterIdParameterArn],
+      resources: [
+        props.skillScriptInterpreterIdParameterArn,
+        // run_code's read-only LibreOffice mount, only while it exists.
+        ...(props.officeMountParameterArn ? [props.officeMountParameterArn] : []),
+      ],
     }));
 
     // Grant Runtime permission to use Browser.
@@ -322,8 +332,11 @@ export class InferenceAgentCoreConstruct extends Construct {
     // ============================================================
 
     // Also the basis of the CloudWatch `Name` dimension on every runtime
-    // metric, so both derive from one expression.
-    const agentRuntimeName = getResourceName(config, 'agentcore_runtime').replace(/-/g, '_');
+    // metric and of the log-retention sweep's prefix, so all of them derive
+    // from one expression. `inferenceApi.runtimeGeneration` suffixes it, which
+    // replaces the Runtime (create new, repoint, delete old); unset, the name
+    // and the template are unchanged.
+    const agentRuntimeName = getAgentRuntimeName(config);
 
     this.runtime = new bedrock.CfnRuntime(this, 'AgentCoreRuntime', {
       agentRuntimeName,
@@ -490,6 +503,9 @@ export class InferenceAgentCoreConstruct extends Construct {
         // skill's scripts/*.py in Code Interpreter. Written only while ON, so
         // the default costs nothing against the V2 payload budget.
         ...(config.wordSkillScripts.enabled ? { WORD_SKILL_SCRIPTS_ENABLED: 'true' } : {}),
+        ...(config.codeSandbox.enabled ? { CODE_SANDBOX_ENABLED: 'true' } : {}),
+        // run_code mounts LibreOffice read-only. Written only while ON.
+        ...(config.codeSandboxOffice.enabled ? { CODE_SANDBOX_OFFICE_ENABLED: 'true' } : {}),
         // Documents as text: non-PDF attachments reach a Converse model as
         // rendered text, not document blocks. Written only while ON, so the
         // default costs nothing against the V2 payload budget.
@@ -506,6 +522,21 @@ export class InferenceAgentCoreConstruct extends Construct {
         // context card from its prompt cache. Meaningless without handoffs, so
         // written only while both are ON; the default costs nothing.
         ...(config.handoffs.enabled && config.handoffs.briefEnabled ? { HANDOFF_BRIEF_ENABLED: 'true' } : {}),
+        ...(config.handoffs.enabled && config.handoffs.suggestionsEnabled ? { HANDOFF_SUGGESTIONS_ENABLED: 'true' } : {}),
+        // Prompt steps (in development): the Runtime answers a `workflow_prompt`
+        // invocation. The first workflow flag on the Runtime, which has no copy of
+        // the flags it needs, so it is written only while the whole chain is ON
+        // (`promptStepsOn`) and the default costs nothing against the V2 budget.
+        ...(promptStepsOn(config) ? { PROMPT_STEPS_ENABLED: 'true' } : {}),
+        // Checklist steps (in development): the same invocation runs a run's
+        // checklist steps. Written only while it and prompt steps' whole chain are
+        // ON (`checklistStepsOn`), so the default costs nothing against the V2 budget.
+        ...(checklistStepsOn(config) ? { CHECKLIST_STEPS_ENABLED: 'true' } : {}),
+        // Agent version pinning (in development): a workflow step's turns run the
+        // Agent version its file records. Written only while it and the whole
+        // workflow chain are ON (`agentVersionPinningOn`), so the default costs
+        // nothing against the V2 budget.
+        ...(agentVersionPinningOn(config) ? { AGENT_VERSION_PINNING_ENABLED: 'true' } : {}),
         // Conversation rewind (default on): the Runtime filters rewound
         // messages at restore and cuts a warm agent's list in place. Spread in
         // only while OFF: the code reads unset as on, so the default costs

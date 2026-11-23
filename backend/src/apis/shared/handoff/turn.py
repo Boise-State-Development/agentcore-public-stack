@@ -171,6 +171,10 @@ class HandoffTurnObserver:
         return TurnOutcome("done", status_line=self.latest_summary)
 
 
+#: How long a run step's title waits for the stream to start acceptance (``run_step_agent_name``).
+RUN_STEP_TITLE_WAIT_SECONDS = 30.0
+
+
 @dataclass
 class HandoffTurn:
     """This request's part in a handoff. Build with ``for_turn``; ``None`` means none."""
@@ -189,6 +193,8 @@ class HandoffTurn:
     _kinds: Optional[FileKindHints] = None
     #: The target is a Shared Project task (its row names a project): no file crosses into it.
     target_is_project_task: bool = False
+    #: Set by ``start``, so a waiter (``run_step_agent_name``) never starts acceptance itself.
+    _started: asyncio.Event = field(default_factory=asyncio.Event)
 
     @classmethod
     def for_turn(
@@ -324,6 +330,7 @@ class HandoffTurn:
             return
         if self._prefetch is None:
             self._acceptance = asyncio.create_task(asyncio.to_thread(self._accept))
+            self._started.set()
             return
 
         async def accept_after_prefetch() -> Tuple[Optional[Handoff], str]:
@@ -331,6 +338,26 @@ class HandoffTurn:
             return await asyncio.to_thread(self._accept, (row, files))
 
         self._acceptance = asyncio.create_task(accept_after_prefetch())
+        self._started.set()
+
+    async def run_step_agent_name(self, timeout: float = RUN_STEP_TITLE_WAIT_SECONDS) -> Optional[str]:
+        """The Agent's name when this turn took a workflow run's step, else ``None``.
+
+        For the step's title (workflow-runs spec §19), which the title task awaits after Nova
+        answers. It reads nothing: it waits for the acceptance the stream's head starts beside the
+        agent build, and never starts it, so the first token is unaffected. A turn that never
+        reaches the stream (refused before it) gives up after ``timeout`` and keeps the plain title.
+        """
+        if self.request is None:
+            return None
+        try:
+            await asyncio.wait_for(self._started.wait(), timeout)
+            accepted, _ = await self._acceptance  # type: ignore[misc]
+        except Exception:  # noqa: BLE001 - a title without the name is today's title
+            return None
+        if accepted is None or not accepted.run_id:
+            return None
+        return accepted.agent_name.strip() or None
 
     async def context_block(self) -> str:
         """The wrapped context to prepend to the model message, or ``""``.
@@ -371,6 +398,11 @@ class HandoffTurn:
         row, files = prefetched if prefetched is not None else (self.store.get(self.user_id, request.handoff_id), {})
         if row is None:
             logger.warning("handoff_context ignored: no such handoff for this user")
+            return None, ""
+        if row.is_model_step:
+            # A prompt or checklist step has no Agent and no conversation (workflow-designer §21.3,
+            # §22.3): only the Runtime's workflow_prompt invocation claims it, never a turn.
+            logger.warning("handoff_context ignored: the handoff is a prompt or checklist step")
             return None, ""
         if row.agent_id != self.agent_id:
             logger.warning("handoff_context ignored: the handoff is for a different Agent")
@@ -432,7 +464,15 @@ class HandoffTurn:
     def _link_target(self, accepted: Handoff) -> None:
         from apis.shared.sessions.metadata import set_session_spawned_from
 
-        set_session_spawned_from(self.session_id, self.user_id, accepted.session_id, accepted.handoff_id)
+        args = [self.session_id, self.user_id, accepted.session_id, accepted.handoff_id]
+        if accepted.run_id:
+            # A run's step (workflow-runs spec §19 PR-W.4c): the sidebar nests it under its source.
+            # Same background write, after acceptance, so nothing moves onto the first-token path.
+            # The run's kept step count rides along from the accepted row (§20.4), with no read.
+            args.append(accepted.run_id)
+            if accepted.run_steps:
+                args.append(accepted.run_steps)
+        set_session_spawned_from(*args)
 
     async def _write_status(self, outcome: TurnOutcome) -> None:
         handoff_id = self.handoff_id

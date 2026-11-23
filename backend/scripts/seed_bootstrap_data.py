@@ -464,6 +464,26 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "forwardAuthToken": False,
     },
     {
+        # Context-bound: enabling it injects run_code at runtime (see
+        # CODE_SANDBOX_TOOL_IDS and _build_code_sandbox_tools in
+        # apis/inference_api/chat/routes.py), and only while
+        # CODE_SANDBOX_ENABLED is on. Off by default: it runs code a user can
+        # steer, so a role is granted it on purpose
+        # (docs/specs/skill-code-sandbox.md §7).
+        "toolId": "run_code",
+        "displayName": "Run Code",
+        "description": (
+            "Run a skill's Python scripts, or short programs the assistant "
+            "writes, in an isolated sandbox with no network access, on files "
+            "from this conversation."
+        ),
+        "category": "code",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
         "toolId": "generate_diagram_and_validate",
         "displayName": "Code Interpreter",
         "description": "Generate diagrams, charts, and visualizations using Python code in a sandboxed environment.",
@@ -530,6 +550,23 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "toolId": "my_skill_create",
         "displayName": "Skill Authoring",
         "description": "Create and edit your own skills from the conversation: list and read your skills, create one, change its instructions, and add, replace or remove its text files. Every change asks for your approval first.",
+        "category": "utility",
+        "protocol": "local",
+        "enabledByDefault": False,
+        "isPublic": False,
+        "forwardAuthToken": False,
+    },
+    {
+        # Suggested handoffs (docs/specs/agent-handoffs-and-consults.md §4.4).
+        # Context-bound: enabling it injects suggest_handoff at runtime, see
+        # SUGGEST_HANDOFF_TOOL_IDS and _build_suggest_handoff_tools in
+        # apis/inference_api/chat/routes.py. Also gated on
+        # HANDOFF_SUGGESTIONS_ENABLED. Off by default and not public until the
+        # feedback cohort has lived with it: a chip-happy model is worse than
+        # no chips.
+        "toolId": "suggest_handoff",
+        "displayName": "Suggested Handoffs",
+        "description": "Offer to move a separate piece of work into its own conversation with one of your Agents. You see a chip under the answer and decide whether to start it.",
         "category": "utility",
         "protocol": "local",
         "enabledByDefault": False,

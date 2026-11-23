@@ -139,6 +139,12 @@ class AuditAction:
     SKILL_EXPORTED = "skill.exported"
     SKILL_SCRIPT_RUN = "skill.script_run"
 
+    # ``run_code`` (docs/specs/skill-code-sandbox.md §8), target
+    # ``conversation`` keyed by the session id: Python the model wrote, run in
+    # the isolated sandbox. The code's hash and size, never its text. A skill
+    # script run through ``run_code`` writes ``skill.script_run`` instead.
+    SANDBOX_CODE_RUN = "sandbox.code_run"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -158,6 +164,7 @@ TARGET_QUOTA_EXTENSION = "quota_extension"
 TARGET_QUOTA_PERIOD = "quota_period"
 TARGET_AWS_LIMIT_REQUEST = "aws_limit_request"
 TARGET_SKILL = "skill"
+TARGET_CONVERSATION = "conversation"
 
 
 @dataclass

@@ -26,7 +26,16 @@
 /* CDK Overlay styles - required for proper overlay positioning */
 @import "@angular/cdk/overlay-prebuilt.css";
 
-.message-block {
+/*
+ * Chat prose. Scoped to stop at a content card: a card (a file, an artifact,
+ * the page the agent browsed) draws its own preview, and the prose rules for
+ * tables, paragraphs and links used to reach into it, so a spreadsheet card's
+ * first rows rendered as a markdown table and its links turned link-blue. The
+ * `:scope` wrapper keeps every selector's specificity as it was (`:scope table`
+ * weighs what `.message-block table` did), so nothing outside a card moves.
+ */
+@scope (.message-block) to (app-content-card) {
+:scope {
 
     ul, ol {
         margin-bottom: 0.75rem;
@@ -221,6 +230,7 @@
         font-style: italic;
     }
 }
+}
 
 /* Chat prose: a step below the 16px default so answers read as text, not slides. */
 .message-block.text-block {
@@ -228,7 +238,8 @@
 }
 
 /* Dark mode styles */
-html.dark .message-block {
+@scope (.message-block) to (app-content-card) {
+html.dark :scope {
     /* Table */
     table {
         border-color: var(--color-gray-600);
@@ -303,6 +314,7 @@ html.dark .message-block {
     a strong {
         color: inherit;
     }
+}
 }
   
 

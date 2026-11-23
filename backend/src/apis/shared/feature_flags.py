@@ -108,6 +108,47 @@ def word_skill_scripts_enabled() -> bool:
     return os.environ.get("WORD_SKILL_SCRIPTS_ENABLED", "").strip().lower() == "true"
 
 
+def code_sandbox_enabled() -> bool:
+    """Whether ``run_code`` exists: a skill's scripts, or Python the model writes,
+    run in the stack's isolated Code Interpreter (``docs/specs/skill-code-sandbox.md``).
+
+    On, a turn whose tools include the ``run_code`` catalog row (seeded
+    ``enabledByDefault: false``) gets the tool, and ``read_skill_file`` tells the
+    model to run a script with it instead of copying it. The tool itself refuses
+    to run unless the interpreter is in ``VPC`` network mode, so a deployment
+    that has not taken the isolation update gets a refusal, never a run.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it on the AgentCore Runtime only, and only while on, from
+    ``config.codeSandbox.enabled``. No SPA switch: results arrive as download
+    cards and images in the tool result. A **feature switch** once finished: it
+    runs code users can steer, which a deployment may not want.
+    """
+    return os.environ.get("CODE_SANDBOX_ENABLED", "").strip().lower() == "true"
+
+
+def code_sandbox_office_enabled() -> bool:
+    """Whether ``run_code``'s sessions mount LibreOffice read-only at ``/mnt/office``
+    (``docs/specs/skill-code-sandbox.md`` D9).
+
+    On, a ``run_code`` session is started with the read-only EFS access point
+    named in ``/<PROJECT_PREFIX>/agentcore/code-sandbox-office-mount`` and runs
+    with LibreOffice's ``program/`` folder first on ``PATH``, so a skill's own
+    ``soffice`` steps (the xlsx skill's ``recalc.py``, conversion to PDF) work as
+    written. A mount that fails falls back to a session without it. Nothing
+    reaches the prompt or ``toolConfig``.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it. CDK writes it to the AgentCore
+    Runtime only while ``config.codeSandboxOffice.enabled``, which also builds
+    the file system and turns the sandbox VPC's DNS on behind its DNS Firewall.
+    A **feature switch** once finished: it adds resources and turns DNS on in
+    the sandbox, which a deployment may not want.
+    """
+    return os.environ.get("CODE_SANDBOX_OFFICE_ENABLED", "").strip().lower() == "true"
+
+
 def assistant_kb_full_context_enabled() -> bool:
     """Whether a small assistant knowledge base reaches the model whole
     (``apis/shared/assistants/kb_full_context.py``).
@@ -856,6 +897,145 @@ def handoff_brief_enabled() -> bool:
     which a deployment may decline.
     """
     return handoffs_enabled() and os.environ.get("HANDOFF_BRIEF_ENABLED", "").strip().lower() == "true"
+
+
+def handoff_suggestions_enabled() -> bool:
+    """Whether the model may offer a handoff chip with ``suggest_handoff``.
+
+    ``docs/specs/agent-handoffs-and-consults.md`` §4.4 (Phase 0c). While on, a
+    turn whose tools include the ``suggest_handoff`` catalog id gets the tool,
+    which writes a ``suggested`` ``HANDOFF#`` row and queues a
+    ``handoff_suggested`` event; the turn continues. While off the tool is never
+    built, so ``toolConfig`` is unchanged. Meaningless without
+    ``HANDOFFS_ENABLED``, so both must be on. The catalog row is seeded
+    ``enabledByDefault: false``, so nobody gets the tool until a role grants it
+    and the user turns it on. **Opt-in while in development**: only ``"true"``
+    enables it. AgentCore Runtime only, written there only while on.
+
+    A **feature switch** once finished: a chip-happy model is worse than none,
+    so whether to offer suggestions is a deployment's product choice.
+    """
+    return handoffs_enabled() and os.environ.get("HANDOFF_SUGGESTIONS_ENABLED", "").strip().lower() == "true"
+
+
+def workflow_runs_enabled() -> bool:
+    """Whether several Agents can be handed work from one review sheet, approved once.
+
+    ``docs/specs/workflow-runs.md`` §13 (step 1). Gates app-api's
+    ``/sessions/{id}/workflow-runs`` routes (404 after authentication while
+    off) and the ``workflowRuns`` replay on ``GET /messages``. A step is an
+    ordinary handoff turn, so the Runtime needs no copy. Meaningless without
+    ``HANDOFFS_ENABLED``, so both must be on. **Opt-in while in development**:
+    only ``"true"`` enables it; an unset GitHub variable arrives as ``""`` and
+    is off. CDK sets it on app-api from ``config.workflowRuns.enabled``. The
+    SPA's matching switch is ``features.workflowRuns``.
+
+    A **feature switch** once finished: it multiplies what one click can
+    spend, which a deployment may decline.
+    """
+    return handoffs_enabled() and os.environ.get("WORKFLOW_RUNS_ENABLED", "").strip().lower() == "true"
+
+
+def workflows_enabled() -> bool:
+    """Whether a user can save, read and edit workflows: a run's shape, kept to start again.
+
+    ``docs/specs/workflow-designer.md`` §13. Gates app-api's ``/workflows``
+    routes (404 after authentication while off). A workflow is a
+    ``references/workflow.<name>.md`` file in a skill, and the check that such a
+    file parses runs on every skill-file write whether or not this is on. A
+    saved workflow runs as a workflow run, so this needs
+    ``WORKFLOW_RUNS_ENABLED`` (and so ``HANDOFFS_ENABLED``) too. **Opt-in while
+    in development**: only ``"true"`` enables it; an unset GitHub variable
+    arrives as ``""`` and is off. CDK sets it on app-api from
+    ``config.workflows.enabled``; the Runtime needs no copy. The SPA's matching
+    switch is ``features.workflows``.
+
+    The spec recommends folding it into ``WORKFLOW_RUNS_ENABLED`` once finished
+    rather than keeping a second permanent switch (§13, open question 5).
+    """
+    return workflow_runs_enabled() and os.environ.get("WORKFLOWS_ENABLED", "").strip().lower() == "true"
+
+
+def prompt_steps_enabled() -> bool:
+    """Whether a saved workflow's prompt steps can run: one model call each, no Agent.
+
+    ``docs/specs/workflow-designer.md`` §21. On app-api, run create accepts a
+    workflow's prompt steps and opens a ``kind=prompt`` step row for each
+    (refused as a sheet blocker while off); on the AgentCore Runtime, a
+    ``workflow_prompt`` invocation runs them. **Opt-in while in development**:
+    only ``"true"`` enables it; an unset GitHub variable arrives as ``""`` and
+    is off. It needs ``WORKFLOWS_ENABLED`` (and so runs and handoffs) too.
+
+    CDK writes ``PROMPT_STEPS_ENABLED`` on both services only while the whole
+    chain is on (``promptStepsOn`` in ``infrastructure/lib/config.ts``). app-api
+    also has ``WORKFLOWS_ENABLED``, so there this needs ``workflows_enabled()``.
+    The Runtime has no copy of the workflow flags and gets none (it is near its
+    50-variable cap), so where ``WORKFLOWS_ENABLED`` is absent from the
+    environment this variable carries the chain by itself, behind
+    ``HANDOFFS_ENABLED``. The SPA's matching switch is ``features.promptSteps``.
+
+    A **feature switch** once finished: each step is a model call a run makes
+    with no Agent's governance around it, which a deployment may decline.
+    """
+    if os.environ.get("PROMPT_STEPS_ENABLED", "").strip().lower() != "true":
+        return False
+    if "WORKFLOWS_ENABLED" in os.environ:
+        return workflows_enabled()
+    return handoffs_enabled()
+
+
+def checklist_steps_enabled() -> bool:
+    """Whether a saved workflow's checklist steps can run: named field sets over the run's files.
+
+    ``docs/specs/workflow-designer.md`` §22. A checklist step runs one model call per field set,
+    on the prompt-step invocation (§21), and returns typed values with quotes and
+    ``source_provenance`` states. On app-api, run create accepts a workflow's checklist steps and
+    opens a ``kind=checklist`` step row for each (refused as a sheet blocker while off); on the
+    AgentCore Runtime, the ``workflow_prompt`` invocation runs them. **Opt-in while in
+    development**: only ``"true"`` enables it; an unset GitHub variable arrives as ``""`` and is
+    off. It runs on prompt steps' invocation, so it holds only while ``prompt_steps_enabled()``
+    does, through the same chain (on app-api ``WORKFLOWS_ENABLED`` and its parents; on the Runtime,
+    which has no workflow flags, ``PROMPT_STEPS_ENABLED`` behind ``HANDOFFS_ENABLED``).
+
+    CDK writes ``CHECKLIST_STEPS_ENABLED`` on both services only while the whole chain is on
+    (``checklistStepsOn`` in ``infrastructure/lib/config.ts``), so the Runtime's default spends none
+    of the V2 environment budget. The SPA's matching switch is ``features.checklistSteps``.
+
+    A **feature switch** once finished: each set is a model call a run makes with no Agent's
+    governance around it, which a deployment may decline.
+    """
+    if os.environ.get("CHECKLIST_STEPS_ENABLED", "").strip().lower() != "true":
+        return False
+    return prompt_steps_enabled()
+
+
+def agent_version_pinning_enabled() -> bool:
+    """Whether a saved workflow's Agent step runs the Agent version its file records.
+
+    ``docs/specs/workflow-designer.md`` §23. On app-api, the sheet judges each Agent step's
+    recorded version by the pin rule (``apis.shared.assistants.version_pins``) and run create
+    records the file's version on the run step and its ``HANDOFF#`` row; on the AgentCore Runtime,
+    the step conversation's turns run that version for everyone, the Agent's owner included.
+    **Opt-in while in development**: only ``"true"`` enables it; an unset GitHub variable arrives
+    as ``""`` and is off. Off, everything is as before: a run records the Agent's current
+    published version and runs it.
+
+    CDK writes ``AGENT_VERSION_PINNING_ENABLED`` on app-api, and on the Runtime only while the
+    whole chain is on (``agentVersionPinningOn`` in ``infrastructure/lib/config.ts``), so the
+    Runtime's default spends none of the V2 environment budget. app-api also has
+    ``WORKFLOWS_ENABLED``, so there this needs ``workflows_enabled()``; the Runtime has no copy
+    of the workflow flags, so where ``WORKFLOWS_ENABLED`` is absent this variable carries the
+    chain by itself, behind ``HANDOFFS_ENABLED`` (``prompt_steps_enabled``'s rule). The SPA's
+    matching switch is ``features.agentVersionPinning``.
+
+    A **feature switch** once finished: it decides whose review a workflow step runs under,
+    which is a product choice a deployment may make differently.
+    """
+    if os.environ.get("AGENT_VERSION_PINNING_ENABLED", "").strip().lower() != "true":
+        return False
+    if "WORKFLOWS_ENABLED" in os.environ:
+        return workflows_enabled()
+    return handoffs_enabled()
 
 
 def session_rewind_enabled() -> bool:

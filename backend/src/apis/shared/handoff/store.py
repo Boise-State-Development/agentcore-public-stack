@@ -266,6 +266,119 @@ class HandoffStore:
             raise
         return _from_item(resp["Attributes"])
 
+    def start_suggested(
+        self,
+        user_id: str,
+        handoff_id: str,
+        *,
+        agent_id: str,
+        agent_name: str,
+        source_title: str,
+        source_message_index: int,
+        excerpt_hash: str,
+        excerpt_tokens: int,
+        turns_covered: Optional[Dict[str, int]],
+        source_project_id: Optional[str],
+    ) -> Optional[Handoff]:
+        """A suggestion's Start: give the ``open`` row its Agent and the card it is reviewed with (§4.4).
+
+        The row stays ``open``: Start opens the review sheet, and the target's first turn accepts it
+        exactly as it accepts a mention, against the Agent written here. Start can run again after a
+        cancelled sheet (the card is re-rendered from the conversation as it is then). ``None`` when
+        the row isn't the caller's, isn't a suggestion, or was already sent or dismissed.
+        """
+        table = self._require_table()
+        names = {"#status": "status", "#updatedAt": "updatedAt", "#kind": "kind"}
+        values: Dict[str, Any] = {
+            ":open": "open",
+            ":suggested": "suggested",
+            ":agentId": agent_id,
+            ":agentName": agent_name[:HANDOFF_DISPLAY_MAX_CHARS],
+            ":sourceTitle": source_title,
+            ":sourceMessageIndex": int(source_message_index),
+            ":excerptHash": excerpt_hash,
+            ":excerptTokens": int(excerpt_tokens),
+            ":now": datetime.now(timezone.utc).isoformat(),
+        }
+        sets = [
+            "agentId = :agentId",
+            "agentName = :agentName",
+            "sourceTitle = :sourceTitle",
+            "sourceMessageIndex = :sourceMessageIndex",
+            "excerptHash = :excerptHash",
+            "excerptTokens = :excerptTokens",
+            "#updatedAt = :now",
+        ]
+        removes = []
+        for attr, value in (("turnsCovered", turns_covered), ("sourceProjectId", source_project_id)):
+            if value is None:
+                removes.append(attr)
+            else:
+                values[f":{attr}"] = value
+                sets.append(f"{attr} = :{attr}")
+        update = "SET " + ", ".join(sets) + (" REMOVE " + ", ".join(removes) if removes else "")
+        try:
+            resp = table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{handoff_id}"},
+                UpdateExpression=update,
+                ConditionExpression="attribute_exists(SK) AND #status = :open AND #kind = :suggested",
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if _is_conditional_failure(exc):
+                return None
+            raise
+        return _from_item(resp["Attributes"])
+
+    def approve_run_step(
+        self,
+        user_id: str,
+        handoff_id: str,
+        *,
+        run_id: str,
+        approved_at: str,
+        request: Optional[str] = None,
+        run_steps: Optional[int] = None,
+    ) -> Optional[Handoff]:
+        """Mark an ``open`` step row of ``run_id`` approved, and set its request if it was edited.
+
+        ``run_steps`` is how many steps the run kept; acceptance carries it into the step
+        conversation's ``spawnedFrom`` (workflow-runs spec §20.4), with no read of the run.
+
+        The row stays ``open``: the tab's queue sends it, and the target's first turn accepts it
+        exactly as it accepts any mention. ``runApprovedAt`` is what keeps it from reading as
+        ``abandoned`` while it waits (``Handoff.effective_status``). The run id is part of the
+        condition, so a handoff of its own can't be marked this way. ``None`` when the row isn't
+        the caller's, isn't a step of this run, or was already sent or dismissed.
+        """
+        table = self._require_table()
+        names = {"#status": "status", "#updatedAt": "updatedAt", "#runId": "runId"}
+        values: Dict[str, Any] = {":open": "open", ":run": run_id, ":approved": approved_at, ":now": approved_at}
+        sets = ["runApprovedAt = :approved", "#updatedAt = :now"]
+        if run_steps is not None and run_steps > 0:
+            values[":steps"] = run_steps
+            sets.append("runSteps = :steps")
+        if request is not None:
+            names["#request"] = "request"
+            values[":request"] = request
+            sets.append("#request = :request")
+        try:
+            resp = table.update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"{_SK_PREFIX}{handoff_id}"},
+                UpdateExpression="SET " + ", ".join(sets),
+                ConditionExpression="attribute_exists(SK) AND #status = :open AND #runId = :run",
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if _is_conditional_failure(exc):
+                return None
+            raise
+        return _from_item(resp["Attributes"])
+
     def record_brief(
         self,
         user_id: str,
@@ -330,7 +443,7 @@ class HandoffStore:
 
 def _from_item(item: Dict[str, Any]) -> Handoff:
     data = {k: v for k, v in item.items() if k not in _KEY_ATTRS}
-    for key in ("sourceMessageIndex", "excerptTokens"):
+    for key in ("sourceMessageIndex", "excerptTokens", "runSteps", "outputTokens", "agentVersion"):
         if key in data:
             data[key] = int(data[key])
     turns = data.get("turnsCovered")

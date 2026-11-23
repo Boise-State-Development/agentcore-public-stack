@@ -16,8 +16,8 @@ async function render(inputs: Record<string, unknown>): Promise<HTMLElement> {
 }
 
 /**
- * The shell's own inputs. The browser card's specs cover the conversation size
- * (`md`, no bar, default tone), which is all it uses.
+ * The shell's own inputs. The output cards' specs cover the `lg` size they
+ * all use; the attachment card's cover `md` and `sm`.
  */
 describe('ContentCardComponent', () => {
   it('names the card and joins meta and status, with a pause for screen readers', async () => {
@@ -41,6 +41,39 @@ describe('ContentCardComponent', () => {
     const sm = await render({ size: 'sm' });
     expect(md.querySelector('.border-b')).not.toBeNull();
     expect(sm.querySelector('.border-b')).toBeNull();
+  });
+
+  it('lays an output card on its side: the tray on the left half, a two-line name beside it', async () => {
+    const md = await render({});
+    const lg = await render({ size: 'lg' });
+    const article = (el: HTMLElement) => el.querySelector('article')!;
+    const tray = (el: HTMLElement) => article(el).firstElementChild!.className;
+    const foot = (el: HTMLElement) => article(el).lastElementChild!.className;
+
+    expect(article(md).className).toContain('flex-col');
+    expect(tray(md)).toContain('h-36');
+    expect(foot(md)).toContain('border-t');
+
+    expect(article(lg).className).toContain('flex-row');
+    expect(tray(lg)).toContain('h-24');
+    expect(tray(lg)).toContain('@md:w-1/2');
+    expect(foot(lg)).toContain('border-l');
+    expect(lg.querySelector('.border-b')).not.toBeNull();
+    expect(lg.querySelector('p')?.className).toContain('line-clamp-2');
+  });
+
+  it('moves the meta line of a wide output card into its actions row, left of the actions', async () => {
+    const md = await render({ meta: 'DOCX · 13 KB' });
+    const lg = await render({ size: 'lg', meta: 'DOCX · 13 KB' });
+    const metaLines = (el: HTMLElement) =>
+      [...el.querySelectorAll('p')].filter((p) => p.textContent?.includes('DOCX · 13 KB'));
+
+    expect(metaLines(md).length).toBe(1);
+    const [underName, inRow] = metaLines(lg);
+    expect(underName.className).toContain('@md:hidden');
+    expect(inRow.className).toContain('@md:flex');
+    expect(inRow.className).toContain('mr-auto');
+    expect(inRow.parentElement?.className).toContain('@md:w-full');
   });
 
   it('marks a danger tone on the frame', async () => {

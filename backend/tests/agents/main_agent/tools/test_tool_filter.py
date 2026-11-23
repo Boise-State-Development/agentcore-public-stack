@@ -11,12 +11,14 @@ import pytest
 from agents.main_agent.tools.tool_filter import ToolFilter, ToolFilterResult
 from apis.shared.tools.injected import (
     ARTIFACT_TOOL_IDS,
+    CODE_SANDBOX_TOOL_IDS,
     EXCEL_SPREADSHEET_TOOL_IDS,
     INJECTED_TOOL_IDS,
     MEETING_TASKS_TOOL_IDS,
     POWERPOINT_PRESENTATION_TOOL_IDS,
     SKILL_AUTHORING_TOOL_IDS,
     SPREADSHEET_TOOL_IDS,
+    SUGGEST_HANDOFF_TOOL_IDS,
     WORD_DOCUMENT_TOOL_IDS,
     WORKSPACE_TOOL_IDS,
 )
@@ -303,6 +305,8 @@ class TestInjectedToolIdsContract:
             | WORKSPACE_TOOL_IDS
             | SKILL_AUTHORING_TOOL_IDS
             | MEETING_TASKS_TOOL_IDS
+            | SUGGEST_HANDOFF_TOOL_IDS
+            | CODE_SANDBOX_TOOL_IDS
         )
 
     def test_ids_are_gate_keys_not_tool_names(self):

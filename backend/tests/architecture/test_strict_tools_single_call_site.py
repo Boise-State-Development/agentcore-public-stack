@@ -32,11 +32,15 @@ from typing import Iterator, List, Tuple
 _BACKEND = Path(__file__).resolve().parent.parent.parent
 _ROOTS = (_BACKEND / "src", _BACKEND / "scripts")
 
-#: The only module allowed to set it, and why: it constructs a dedicated
-#: ``BedrockModel`` for a request carrying exactly one tool — the generated
-#: field schema — so "every tool spec in the request" is that one schema, which
-#: we author and whose subset compliance is unit-tested.
-_ALLOWED = {"src/apis/shared/extraction/extractor.py"}
+#: The only modules allowed to set it, and why: each constructs a dedicated
+#: ``BedrockModel`` for a request carrying exactly one tool we author, whose
+#: subset compliance is unit-tested — the generated field schema
+#: (``extractor``), and the one constant ``record_checklist`` tool of a workflow
+#: checklist call (``checklist``, workflow-designer §22.3).
+_ALLOWED = {
+    "src/apis/shared/extraction/extractor.py",
+    "src/apis/shared/extraction/checklist.py",
+}
 
 #: Where a chat agent's model is built. Named explicitly because this is the
 #: path the flag must never reach, and naming it makes the failure legible.

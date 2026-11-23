@@ -8,6 +8,7 @@ import {
   heroClock,
   heroDocumentText,
   heroFolderOpen,
+  heroRectangleGroup,
   heroSparkles,
 } from '@ng-icons/heroicons/outline';
 import { DialogShellComponent } from '../../dialog/dialog-shell.component';
@@ -31,6 +32,7 @@ import { SidebarEntry, SidebarLayoutService } from '../sidebar-layout.service';
       heroClock,
       heroDocumentText,
       heroFolderOpen,
+      heroRectangleGroup,
       heroSparkles,
     }),
   ],
@@ -63,7 +65,7 @@ import { SidebarEntry, SidebarLayoutService } from '../sidebar-layout.service';
               [id]="'sidebar-reorder-' + entry.id"
               (keydown)="onHandleKeydown($event, i)"
               [attr.aria-label]="'Reorder ' + entry.label + ', position ' + (i + 1) + ' of ' + layout.entries().length + '. Use the arrow keys to move.'"
-              class="flex size-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 active:cursor-grabbing dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              class="flex size-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-2xl text-gray-400 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-300 active:cursor-grabbing dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-200"
             >
               <ng-icon name="heroBars2" class="size-4" aria-hidden="true" />
             </button>
@@ -94,7 +96,7 @@ import { SidebarEntry, SidebarLayoutService } from '../sidebar-layout.service';
         <button
           type="button"
           (click)="close()"
-          class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+          class="rounded-2xl bg-primary-accessible px-4 py-2 text-sm/6 font-medium text-white hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:focus-visible:outline-primary-300"
         >
           Done
         </button>

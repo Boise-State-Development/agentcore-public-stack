@@ -55,6 +55,11 @@ export interface MySkill {
   updatedAt: string | null;
   /** Set once the skill was imported from a bundle (skill-bundle-import.md §3). */
   importSource?: SkillImportSource | null;
+  /**
+   * `"workflow"` for a saved workflow's carrying skill (workflow-designer.md §20.3, PR-D.1):
+   * Customize marks it Workflow and links it to its designer. Null for any other skill.
+   */
+  kind?: 'workflow' | null;
 }
 
 /** Where a skill was last imported from. Display and refresh only; never versioned. */
@@ -204,4 +209,4 @@ export const RESOURCE_KINDS: { value: SkillResourceKind; label: string; hint: st
 export const MAX_RESOURCE_BYTES = 1_048_576;
 
 /** Per-skill file ceiling, mirroring the backend `MAX_RESOURCES_PER_SKILL`. */
-export const MAX_RESOURCES_PER_SKILL = 50;
+export const MAX_RESOURCES_PER_SKILL = 64;

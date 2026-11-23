@@ -153,6 +153,13 @@ jobs:
       # reverts to V1 if this variable is deleted. See
       # docs/specs/agentcore-runtime-v2.md.
       CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION: ${{ vars.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION }}
+      # AgentCore Runtime generation: unset by default. Setting it (e.g. `g2`)
+      # renames the Runtime, so this deploy creates a new one with no versions,
+      # repoints everything at it and deletes the old one. Live sessions and
+      # paused turns drop; conversations and connector tokens persist. For a
+      # Runtime at its 1,000-version quota. Runbook:
+      # docs/specs/agentcore-runtime-v2.md §11.
+      CDK_AGENTCORE_RUNTIME_GENERATION: ${{ vars.CDK_AGENTCORE_RUNTIME_GENERATION }}
       # Escape hatch for scripts/platform/check-runtime-env-contract.sh: set to
       # `true` only after confirming the live inference-api image derives its
       # resource names (docs/specs/agentcore-runtime-v2.md §8).
@@ -293,6 +300,42 @@ jobs:
       # development; set `CDK_HANDOFF_BRIEF_ENABLED` to "true" to turn it on.
       # AgentCore Runtime only, and only while handoffs are on too.
       CDK_HANDOFF_BRIEF_ENABLED: ${{ vars.CDK_HANDOFF_BRIEF_ENABLED }}
+      # Suggested handoffs: the model may offer a chip with `suggest_handoff`
+      # (agent-handoffs-and-consults.md §4.4). Opt-in while in development; set
+      # `CDK_HANDOFF_SUGGESTIONS_ENABLED` to "true" to turn it on. AgentCore
+      # Runtime only, and only while handoffs are on too. Nobody gets the tool
+      # until a role is granted the `suggest_handoff` catalog row.
+      CDK_HANDOFF_SUGGESTIONS_ENABLED: ${{ vars.CDK_HANDOFF_SUGGESTIONS_ENABLED }}
+      # Workflow runs: several Agents handed work from one review sheet, approved
+      # once (docs/specs/workflow-runs.md). Opt-in while in development; set
+      # `CDK_WORKFLOW_RUNS_ENABLED` to "true" to turn it on. app-api only, and
+      # only while handoffs are on too. The SPA's matching switch is
+      # `features.workflowRuns`.
+      CDK_WORKFLOW_RUNS_ENABLED: ${{ vars.CDK_WORKFLOW_RUNS_ENABLED }}
+      # Saved workflows: a run's shape kept to start again, edited through
+      # `/workflows` (docs/specs/workflow-designer.md). Opt-in while in
+      # development; set `CDK_WORKFLOWS_ENABLED` to "true" to turn it on. app-api
+      # only, and only while workflow runs are on too. The SPA's matching switch
+      # is `features.workflows`.
+      CDK_WORKFLOWS_ENABLED: ${{ vars.CDK_WORKFLOWS_ENABLED }}
+      # Prompt steps: a workflow step that is one model call over the run's
+      # files, with no Agent (docs/specs/workflow-designer.md §21). Opt-in while
+      # in development; set `CDK_PROMPT_STEPS_ENABLED` to "true" to turn it on.
+      # Needs CDK_WORKFLOWS_ENABLED (and so workflow runs and handoffs) too.
+      # app-api, and the AgentCore Runtime only while on.
+      CDK_PROMPT_STEPS_ENABLED: ${{ vars.CDK_PROMPT_STEPS_ENABLED }}
+      # Checklist steps: a workflow step that runs named field sets over the
+      # run's files, one model call per set (docs/specs/workflow-designer.md
+      # §22). Opt-in while in development; set `CDK_CHECKLIST_STEPS_ENABLED` to
+      # "true" to turn it on. Needs CDK_PROMPT_STEPS_ENABLED (and its whole
+      # chain) too. app-api, and the AgentCore Runtime only while on.
+      CDK_CHECKLIST_STEPS_ENABLED: ${{ vars.CDK_CHECKLIST_STEPS_ENABLED }}
+      # Agent version pinning: a saved workflow's Agent step runs the version its
+      # file records, for everyone who starts it (docs/specs/workflow-designer.md
+      # §23). Opt-in while in development; set `CDK_AGENT_VERSION_PINNING_ENABLED`
+      # to "true" to turn it on. Needs CDK_WORKFLOWS_ENABLED (and so workflow runs
+      # and handoffs) too. app-api, and the AgentCore Runtime only while on.
+      CDK_AGENT_VERSION_PINNING_ENABLED: ${{ vars.CDK_AGENT_VERSION_PINNING_ENABLED }}
       # Conversation rewind: "Rewind to here" on a user message
       # (docs/specs/conversation-rewind-and-fork.md §4). Default ON with a kill
       # switch: set `CDK_SESSION_REWIND_ENABLED` to "false" in an environment to
@@ -452,6 +495,16 @@ jobs:
       # "true" enables. Sets the flag on the AgentCore Runtime only, and only
       # while on; no resources.
       CDK_WORD_SKILL_SCRIPTS_ENABLED: ${{ vars.CDK_WORD_SKILL_SCRIPTS_ENABLED }}
+      # Code sandbox (run_code): a skill's scripts, or Python the model writes,
+      # run in the isolated Code Interpreter. In development, so only "true"
+      # enables. Sets the flag on the AgentCore Runtime only, and only while
+      # on, and puts a DNS Firewall (4 resources) on the sandbox VPC.
+      CDK_CODE_SANDBOX_ENABLED: ${{ vars.CDK_CODE_SANDBOX_ENABLED }}
+      # LibreOffice for run_code (in development, off unless "true"; needs the
+      # code sandbox on): a read-only EFS mount in the sandbox, with the VPC's
+      # DNS on behind the DNS Firewall. Turn it on in a deploy AFTER the one that
+      # turned the code sandbox on, so the firewall is already associated.
+      CDK_CODE_SANDBOX_OFFICE_ENABLED: ${{ vars.CDK_CODE_SANDBOX_OFFICE_ENABLED }}
       # Documents as text on Converse: non-PDF attachments (docx, txt, md, csv,
       # html) reach a Bedrock Converse model as rendered text instead of
       # document blocks; PDFs stay native. In development, so only "true"

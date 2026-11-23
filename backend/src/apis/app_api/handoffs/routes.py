@@ -2,7 +2,8 @@
 
     POST /sessions/{session_id}/handoffs                         render the excerpt, open a handoff
     GET  /sessions/{session_id}/handoffs/{handoff_id}            read one
-    POST /sessions/{session_id}/handoffs/{handoff_id}/dismiss    cancel an open one
+    POST /sessions/{session_id}/handoffs/{handoff_id}/dismiss    cancel an open one, or dismiss a chip
+    POST /sessions/{session_id}/handoffs/{handoff_id}/start      a suggestion chip's Start (§4.4)
     POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/read    mark its inbox entries read
     POST /sessions/{session_id}/handoffs/{handoff_id}/notifications/events  count a browser-side fact
     POST /sessions/{session_id}/handoffs/send-back                send a target's answer back (§4.3)
@@ -24,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -51,12 +53,13 @@ from apis.shared.handoff.delivery import (
     DeliveryStore,
     get_delivery_store,
 )
-from apis.shared.handoff.excerpt import CHARS_PER_TOKEN
+from apis.shared.handoff.excerpt import CHARS_PER_TOKEN, Excerpt
 from apis.shared.handoff.metrics import emit_handoff_metric
 from apis.shared.handoff.models import HANDOFF_REQUEST_MAX_CHARS, HandoffView
 from apis.shared.handoff.send_back import (
     DeliveryRefused,
     LinkedPair,
+    answer_message,
     load_linked_pair,
     offered_artifacts,
     offered_files,
@@ -147,6 +150,94 @@ async def create_handoff(
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
+    card = await _render_source_card(session_id, user)
+    row = await _open_mention(
+        store, user, session_id, source, card, agent_id=body.agent_id, agent_name=agent.name or "", request=body.request
+    )
+    emit_handoff_metric("HandoffCreated", body.kind, session_id=session_id)
+    return _card_response(row, card)
+
+
+async def _open_mention(
+    store: HandoffStore,
+    user: User,
+    session_id: str,
+    source: Any,
+    card: "_SourceCard",
+    *,
+    agent_id: str,
+    agent_name: str,
+    request: str,
+    run_id: Optional[str] = None,
+    step_id: Optional[str] = None,
+    agent_version: Optional[int] = None,
+) -> Handoff:
+    """Write one ``open`` ``mention`` row for ``card``: a handoff of its own, or a workflow run's step.
+
+    The one place a mention row is built, so a run's step is accepted by ``HandoffTurn`` exactly as
+    a single mention is. ``agent_version`` is a pinned workflow step's version (workflow-designer
+    §23), absent from the row when ``None``. 503 when the store isn't configured.
+    """
+    now = utc_now_iso()
+    row = Handoff(
+        handoff_id=str(uuid.uuid4()),
+        user_id=user.user_id,
+        session_id=session_id,
+        kind="mention",
+        status="open",
+        agent_id=agent_id,
+        agent_name=agent_name,
+        request=request.strip(),
+        source_title=source.title or "",
+        source_message_index=card.last_index,
+        excerpt_hash=context_hash(card.excerpt.text),
+        excerpt_tokens=card.excerpt.estimated_tokens,
+        turns_covered=card.turns,
+        source_project_id=_source_project_id(source),
+        created_at=now,
+        updated_at=now,
+        run_id=run_id,
+        step_id=step_id,
+        agent_version=agent_version,
+    )
+    try:
+        await asyncio.to_thread(store.create, row)
+    except HandoffStoreUnavailable:
+        logger.error("Handoff store is not configured")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Handoffs are unavailable")
+    return row
+
+
+def _card_response(row: Handoff, card: "_SourceCard") -> CreateHandoffResponse:
+    """The review sheet's answer for a mention row: the card and the exact prompt the Agent receives."""
+    context_block = wrap_handoff_context(card.excerpt.text, row.source_title)
+    return CreateHandoffResponse(
+        handoff_id=row.handoff_id,
+        excerpt=card.excerpt.text,
+        excerpt_hash=row.excerpt_hash or "",
+        excerpt_tokens=card.excerpt.estimated_tokens,
+        turns_covered=card.turns,
+        context_block=context_block,
+        prompt=build_handoff_message(context_block, row.request),
+        request=row.request,
+        source_message_index=row.source_message_index,
+        source_title=row.source_title,
+    )
+
+
+@dataclass(frozen=True)
+class _SourceCard:
+    """The source conversation as a card: its excerpt, and where a row placed after it sits."""
+
+    excerpt: Excerpt
+    turns: Optional[TurnsCovered]
+    messages: List[Dict[str, Any]]
+    #: The last visible message's index; -1 for an empty conversation.
+    last_index: int
+
+
+async def _render_source_card(session_id: str, user: User) -> _SourceCard:
+    """Render the excerpt from the persisted conversation (compaction-aware, bounded)."""
     try:
         listing = await get_messages(session_id=session_id, user_id=user.user_id)
     except FileNotFoundError:
@@ -157,11 +248,7 @@ async def create_handoff(
     # hides messages without renumbering, so the two differ once one has run.
     anchor = parse_message_index(session_id, visible[-1].id) if visible else None
     checkpoint, summary = await get_session_compaction(session_id, user.user_id)
-
     excerpt = render_excerpt(messages, compaction_checkpoint=checkpoint, compaction_summary=summary)
-    source_title = source.title or ""
-    context_block = wrap_handoff_context(excerpt.text, source_title)
-    request = body.request.strip()
     turns = (
         TurnsCovered(
             first=excerpt.first_turn, last=excerpt.last_turn, of=excerpt.total_turns, omitted=excerpt.omitted_turns
@@ -169,45 +256,25 @@ async def create_handoff(
         if not excerpt.is_empty
         else None
     )
-
-    now = utc_now_iso()
-    row = Handoff(
-        handoff_id=str(uuid.uuid4()),
-        user_id=user.user_id,
-        session_id=session_id,
-        kind=body.kind,
-        status="open",
-        agent_id=body.agent_id,
-        agent_name=agent.name or "",
-        request=request,
-        source_title=source_title,
-        source_message_index=anchor if anchor is not None else len(messages) - 1,
-        excerpt_hash=context_hash(excerpt.text),
-        excerpt_tokens=excerpt.estimated_tokens,
-        turns_covered=turns,
-        source_project_id=_source_project_id(source),
-        created_at=now,
-        updated_at=now,
+    return _SourceCard(
+        excerpt=excerpt,
+        turns=turns,
+        messages=messages,
+        last_index=anchor if anchor is not None else len(messages) - 1,
     )
-    try:
-        await asyncio.to_thread(store.create, row)
-    except HandoffStoreUnavailable:
-        logger.error("Handoff store is not configured")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Handoffs are unavailable")
 
-    emit_handoff_metric("HandoffCreated", body.kind, session_id=session_id)
-    return CreateHandoffResponse(
-        handoff_id=row.handoff_id,
-        excerpt=excerpt.text,
-        excerpt_hash=row.excerpt_hash or "",
-        excerpt_tokens=excerpt.estimated_tokens,
-        turns_covered=turns,
-        context_block=context_block,
-        prompt=build_handoff_message(context_block, request),
-        request=request,
-        source_message_index=row.source_message_index,
-        source_title=source_title,
-    )
+
+def _message_index_with_tool_use(session_id: str, messages: List[Dict[str, Any]], tool_use_id: str) -> Optional[int]:
+    """The index of the message holding a ``toolUse`` block with this id, from its message id."""
+    if not tool_use_id:
+        return None
+    for message in messages:
+        for block in message.get("content") or []:
+            tool_use = block.get("toolUse") if isinstance(block, dict) else None
+            if isinstance(tool_use, dict) and tool_use.get("toolUseId") == tool_use_id:
+                message_id = message.get("id")
+                return parse_message_index(session_id, message_id) if isinstance(message_id, str) else None
+    return None
 
 
 def _source_project_id(source: Any) -> Optional[str]:
@@ -260,6 +327,84 @@ async def dismiss_handoff(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This handoff was already sent")
     emit_handoff_metric("HandoffCancelled", row.kind, session_id=session_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+class StartSuggestionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(..., alias="agentId", min_length=1, max_length=256)
+
+
+@router.post(
+    "/{session_id}/handoffs/{handoff_id}/start",
+    response_model=CreateHandoffResponse,
+    response_model_by_alias=True,
+)
+async def start_suggestion(
+    session_id: str,
+    handoff_id: str,
+    body: StartSuggestionRequest,
+    user: User = Depends(require_handoffs_user),
+    store: HandoffStore = Depends(get_handoff_store),
+) -> CreateHandoffResponse:
+    """A suggestion chip's **Start** (§4.4, PR-0.5): the review sheet for a ``suggest_handoff`` row.
+
+    Answers exactly as ``POST /handoffs`` does for a mention, with the model's ``prompt`` as the
+    request, so the SPA opens the same sheet and sends the same way. The SPA names the Agent: it
+    matched the model's ``agentHint`` against the Agents the user can mention, or the user picked
+    one. The card is rendered from the conversation as it is now, and the row is placed under the
+    message that holds the suggestion. The row stays ``open``, so a cancelled sheet can be started
+    again. 404 for a row that isn't the caller's from this conversation or an Agent they can't use;
+    409 once the suggestion was sent or dismissed.
+    """
+    row = await _owned_row(store, user, session_id, handoff_id)
+    if row.kind != "suggested":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Handoff not found")
+    if row.status != "open":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This suggestion was already sent or dismissed")
+    source = await get_session_metadata(session_id, user.user_id)
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    agent, _permission = await get_assistant_with_access_check(
+        assistant_id=body.agent_id, user_id=user.user_id, user_email=user.email
+    )
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    card = await _render_source_card(session_id, user)
+    anchor = _message_index_with_tool_use(session_id, card.messages, row.tool_use_id or "")
+    source_title = source.title or ""
+    excerpt_hash = context_hash(card.excerpt.text)
+    started = await asyncio.to_thread(
+        store.start_suggested,
+        user.user_id,
+        handoff_id,
+        agent_id=body.agent_id,
+        agent_name=agent.name or "",
+        source_title=source_title,
+        source_message_index=anchor if anchor is not None else card.last_index,
+        excerpt_hash=excerpt_hash,
+        excerpt_tokens=card.excerpt.estimated_tokens,
+        turns_covered=card.turns.model_dump() if card.turns else None,
+        source_project_id=_source_project_id(source),
+    )
+    if started is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This suggestion was already sent or dismissed")
+
+    emit_handoff_metric("HandoffSuggestionStarted", "suggested", session_id=session_id)
+    context_block = wrap_handoff_context(card.excerpt.text, source_title)
+    return CreateHandoffResponse(
+        handoff_id=handoff_id,
+        excerpt=card.excerpt.text,
+        excerpt_hash=excerpt_hash,
+        excerpt_tokens=card.excerpt.estimated_tokens,
+        turns_covered=card.turns,
+        context_block=context_block,
+        prompt=build_handoff_message(context_block, started.request),
+        request=started.request,
+        source_message_index=started.source_message_index,
+        source_title=source_title,
+    )
 
 
 HandoffNotificationKind = Literal["handoff_needs_input", "handoff_done", "handoff_stopped"]
@@ -658,18 +803,10 @@ async def _deliver(
 
 async def _send_back_message(session_id: str, user_id: str, message_index: Optional[int]) -> Tuple[Dict[str, Any], int]:
     """The assistant message a send-back carries, and its index. 404 if there is no such answer."""
-    try:
-        listing = await get_messages(session_id=session_id, user_id=user_id)
-    except FileNotFoundError:
-        listing = None
-    for message in reversed(listing.messages if listing else []):
-        if message.role != "assistant":
-            continue
-        index = parse_message_index(session_id, message.id)
-        if index is None or (message_index is not None and index != message_index):
-            continue
-        return message.model_dump(by_alias=True, exclude_none=True), index
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    found = await answer_message(session_id, user_id, message_index=message_index)
+    if found is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+    return found
 
 
 async def _owned_row(store: HandoffStore, user: User, session_id: str, handoff_id: str) -> Handoff:

@@ -81,6 +81,33 @@ export class HandoffStateService {
     }
   }
 
+  /**
+   * Take rows read from the server since, never moving a row backwards: a row this tab doesn't
+   * hold is added, and one it holds is replaced only by a copy written later (`updatedAt`). A row
+   * `isLive` says this tab is streaming is left alone, since its stream is newer than any read.
+   * For a run's steps re-read after a reload, when the tab's copy still says "running" for a step
+   * that finished on the server (`WorkflowRunRefreshService`). Returns how many rows moved.
+   */
+  advanceRows(rows: readonly HandoffView[], isLive: (row: HandoffView) => boolean = () => false): number {
+    let moved = 0;
+    this.rowsBySource.update((map) => {
+      let next: Map<string, readonly HandoffView[]> | null = null;
+      for (const row of rows) {
+        const held = (next ?? map).get(row.sessionId) ?? [];
+        const index = held.findIndex((existing) => existing.handoffId === row.handoffId);
+        if (index >= 0) {
+          const current = held[index];
+          if (isLive(current) || !isNewer(row, current)) continue;
+        }
+        next ??= new Map(map);
+        next.set(row.sessionId, index < 0 ? [...held, row] : held.map((existing, i) => (i === index ? row : existing)));
+        moved += 1;
+      }
+      return next ?? map;
+    });
+    return moved;
+  }
+
   /** Add or replace one row (a send in this tab, or a refreshed status). */
   upsertRow(row: HandoffView): void {
     this.rowsBySource.update((map) => {
@@ -88,6 +115,26 @@ export class HandoffStateService {
       const index = rows.findIndex((existing) => existing.handoffId === row.handoffId);
       const next = index < 0 ? [...rows, row] : rows.map((existing, i) => (i === index ? row : existing));
       return new Map(map).set(row.sessionId, next);
+    });
+  }
+
+  /**
+   * Add rows this tab doesn't hold yet, and never replace one it does: a row this tab holds is
+   * kept current by its stream and end-of-turn re-read, so a copy read elsewhere may be older.
+   * For a source whose messages were never loaded here (the designer's test run, read by id after
+   * a reload), so the relay can register a waiting step's prompts.
+   */
+  seedRows(rows: readonly HandoffView[]): void {
+    if (rows.length === 0) return;
+    this.rowsBySource.update((map) => {
+      let next: Map<string, readonly HandoffView[]> | null = null;
+      for (const row of rows) {
+        const held = (next ?? map).get(row.sessionId) ?? [];
+        if (held.some((existing) => existing.handoffId === row.handoffId)) continue;
+        next ??= new Map(map);
+        next.set(row.sessionId, [...held, row]);
+      }
+      return next ?? map;
     });
   }
 
@@ -113,4 +160,12 @@ export class HandoffStateService {
       return next;
     });
   }
+}
+
+/** `candidate` was written after `current`. A time that can't be read never counts as newer. */
+function isNewer(candidate: HandoffView, current: HandoffView): boolean {
+  const next = Date.parse(candidate.updatedAt);
+  const held = Date.parse(current.updatedAt);
+  if (Number.isNaN(next)) return false;
+  return Number.isNaN(held) || next > held;
 }

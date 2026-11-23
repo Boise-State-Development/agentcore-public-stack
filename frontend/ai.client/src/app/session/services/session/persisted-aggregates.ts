@@ -10,6 +10,7 @@ export interface PersistedAggregates {
   totalCost?: number;
   lastContextTokens?: number;
   contextWindow?: number;
+  longContextThreshold?: number;
 }
 
 /** Project a session row onto its aggregates, or `null` for no session. */
@@ -22,6 +23,7 @@ export function persistedAggregatesOf(
     totalCost: session.totalCost,
     lastContextTokens: session.lastContextTokens,
     contextWindow: session.contextWindow,
+    longContextThreshold: session.longContextThreshold,
   };
 }
 
@@ -44,6 +46,7 @@ export function samePersistedAggregates(
     a?.sessionId === b?.sessionId &&
     a?.totalCost === b?.totalCost &&
     a?.lastContextTokens === b?.lastContextTokens &&
-    a?.contextWindow === b?.contextWindow
+    a?.contextWindow === b?.contextWindow &&
+    a?.longContextThreshold === b?.longContextThreshold
   );
 }

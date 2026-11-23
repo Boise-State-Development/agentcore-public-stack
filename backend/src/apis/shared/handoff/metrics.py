@@ -22,6 +22,7 @@ def emit_handoff_metric(
     detail: Optional[str] = None,
     surface: Optional[str] = None,
     count: int = 1,
+    run_step_count: Optional[int] = None,
 ) -> None:
     """One count of ``name`` (``HandoffCreated``, ``HandoffCancelled`` …), with ``kind`` as a property.
 
@@ -29,11 +30,18 @@ def emit_handoff_metric(
     ``HandoffStopped``, the interrupt kind on the ``RelayedPrompt*`` counts. ``surface`` is where a
     relayed prompt was answered (``source`` / ``target``). ``count`` is the value for a metric
     that counts things (``HandoffFiles``, ``DeliveryFiles``). Properties, not dimensions, like
-    every other caller of ``emit_emf_metrics``.
+    every other caller of ``emit_emf_metrics``. ``run_step_count`` marks a workflow run's brief
+    (``HandoffBriefWritten`` / ``HandoffBriefFallback``): ``briefScope: "run"`` and ``runStepCount``,
+    the run's kept steps, or ``0`` for a fallback decided before the run was read (then only
+    ``briefScope`` is set). A single handoff's brief carries neither.
     """
-    properties = {"handoffKind": kind, "sessionId": session_id, "handoffDetail": detail}
+    properties: dict = {"handoffKind": kind, "sessionId": session_id, "handoffDetail": detail}
     if surface is not None:
         properties["relaySurface"] = surface
+    if run_step_count is not None:
+        properties["briefScope"] = "run"
+        if run_step_count > 0:
+            properties["runStepCount"] = run_step_count
     emit_emf_metrics(
         _NAMESPACE,
         metrics={name: count},
@@ -42,4 +50,37 @@ def emit_handoff_metric(
     )
 
 
-__all__ = ["emit_handoff_metric"]
+def emit_workflow_run_metric(
+    name: str,
+    *,
+    session_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    step_count: Optional[int] = None,
+    detail: Optional[str] = None,
+    count: int = 1,
+    run_source: str = "user",
+) -> None:
+    """One count of a workflow run's ``name`` (``docs/specs/workflow-runs.md`` §15).
+
+    ``WorkflowRunCreated`` carries the run's ``stepCount`` and its ``runSource``: ``user`` for a run
+    of mentions, ``workflow`` for one started from a saved workflow (PR-D.2); model proposals come
+    later. ``WorkflowRunApproved`` carries the steps
+    left, ``WorkflowRunEdited`` what the approval changed as ``runDetail`` (``request``,
+    ``step_removed``, ``file_unticked``; one count each), ``WorkflowRunCancelled`` a run dismissed
+    at its sheet, and ``WorkflowRunStopped`` an approved run stopped. Properties, not dimensions.
+    Best-effort: never raises.
+    """
+    properties: dict = {"sessionId": session_id, "runId": run_id, "runSource": run_source}
+    if step_count is not None:
+        properties["stepCount"] = step_count
+    if detail is not None:
+        properties["runDetail"] = detail
+    emit_emf_metrics(
+        _NAMESPACE,
+        metrics={name: count},
+        properties=properties,
+        units={name: "Count"},
+    )
+
+
+__all__ = ["emit_handoff_metric", "emit_workflow_run_metric"]

@@ -88,6 +88,9 @@ export interface AppConfig {
   userGrants: UserGrantsConfig;
   sessionPrewarm: SessionPrewarmConfig;
   handoffs: HandoffsConfig;
+  workflowRuns: WorkflowRunsConfig;
+  workflows: WorkflowsConfig;
+  agentVersionPinning: AgentVersionPinningConfig;
   sessionRewind: SessionRewindConfig;
   sessionFork: SessionForkConfig;
   quotaRequests: QuotaRequestsConfig;
@@ -119,6 +122,8 @@ export interface AppConfig {
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
   concurrentToolExecution: ConcurrentToolExecutionConfig;
   wordSkillScripts: WordSkillScriptsConfig;
+  codeSandbox: CodeSandboxConfig;
+  codeSandboxOffice: CodeSandboxOfficeConfig;
   converseDocumentsAsText: ConverseDocumentsAsTextConfig;
   projectFileReadiness: ProjectFileReadinessConfig;
   agents: AgentsConfig;
@@ -289,6 +294,18 @@ export interface InferenceApiConfig {
    * docs/specs/agentcore-runtime-v2.md.
    */
   runtimePlatformVersion: string;
+  /**
+   * Runtime generation (CDK_AGENTCORE_RUNTIME_GENERATION), unset by default.
+   * When set, it is appended to the Runtime's name (`{prefix}_agentcore_runtime_{generation}`).
+   * A new name makes CloudFormation create a new Runtime, repoint everything
+   * that references it, then delete the old one. That is the only way to get
+   * a Runtime with no versions, because AWS cannot delete a single version
+   * and a Runtime stops accepting updates at the account's "Versions per
+   * Agent" quota (1,000 by default). Unset keeps the original name, so the
+   * template is unchanged. Use 1-8 lowercase letters or digits, for example
+   * `g2`. Runbook: docs/specs/agentcore-runtime-v2.md §11.
+   */
+  runtimeGeneration?: string;
 }
 
 export interface RagIngestionConfig {
@@ -530,6 +547,73 @@ export interface AwsLimitsConfig {
 }
 
 /**
+ * Workflow runs, step 1 (docs/specs/workflow-runs.md §13): several Agents handed
+ * work from one review sheet, approved once. **Opt-in while the feature is in
+ * development**: off unless CDK_WORKFLOW_RUNS_ENABLED=true (or a
+ * `workflowRuns.enabled: true` cdk.json context), and it needs `handoffs.enabled`
+ * too. Sets WORKFLOW_RUNS_ENABLED on **app-api only**, which serves
+ * `/sessions/{id}/workflow-runs`; a step is an ordinary handoff turn, so the
+ * Runtime needs no copy. No new resources: `WFRUN#` rows live in
+ * sessions-metadata on the existing SessionLookupIndex.
+ */
+export interface WorkflowRunsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Saved workflows (docs/specs/workflow-designer.md §13): a run's shape, kept in a
+ * skill as `references/workflow.<name>.md` and edited through `/workflows`.
+ * **Opt-in while the feature is in development**: off unless
+ * CDK_WORKFLOWS_ENABLED=true (or a `workflows.enabled: true` cdk.json context),
+ * and it needs `workflowRuns.enabled` (and so `handoffs.enabled`) too. Sets
+ * WORKFLOWS_ENABLED on **app-api only**; the Runtime needs no copy. No new
+ * resources: a workflow is a skill reference file.
+ */
+export interface WorkflowsConfig {
+  enabled: boolean;
+  /**
+   * Prompt steps (docs/specs/workflow-designer.md §21): a workflow step that is one
+   * model call over the run's files, with no Agent and no conversation, run as a
+   * side call on its own Runtime invocation. **Opt-in while in development**: off
+   * unless CDK_PROMPT_STEPS_ENABLED=true (or a `workflows.promptStepsEnabled: true`
+   * cdk.json context), and it needs `enabled` (and so `workflowRuns.enabled` and
+   * `handoffs.enabled`) too. Sets PROMPT_STEPS_ENABLED on **app-api** and on the
+   * **AgentCore Runtime**, each only while the whole chain is on; the Runtime copy is
+   * written only while on, so the default spends none of the V2 environment budget.
+   * The Runtime has no copy of the workflow flags it depends on, so its copy alone
+   * carries the chain. No new resources.
+   */
+  promptStepsEnabled: boolean;
+  /**
+   * Checklist steps (docs/specs/workflow-designer.md §22): a workflow step that runs
+   * named field sets over the run's files, one model call per set, on prompt steps'
+   * Runtime invocation. **Opt-in while in development**: off unless
+   * CDK_CHECKLIST_STEPS_ENABLED=true (or a `workflows.checklistStepsEnabled: true`
+   * cdk.json context), and it needs `promptStepsEnabled` (and its whole chain) too.
+   * Sets CHECKLIST_STEPS_ENABLED on **app-api** and on the **AgentCore Runtime**,
+   * each only while the whole chain is on (`checklistStepsOn`); the Runtime copy is
+   * written only while on, so the default spends none of the V2 environment budget.
+   * No new resources (`WFCHK#` rows in sessions-metadata).
+   */
+  checklistStepsEnabled: boolean;
+}
+
+/**
+ * Agent version pinning for saved workflows (docs/specs/workflow-designer.md §23):
+ * an Agent step runs the version its file records (`@ <n>`), for everyone who
+ * starts it, the Agent's owner included, while that version may still run.
+ * **Opt-in while in development**: off unless CDK_AGENT_VERSION_PINNING_ENABLED=true
+ * (or an `agentVersionPinning.enabled: true` cdk.json context), and it needs saved
+ * workflows (and so workflow runs and handoffs) too. Sets
+ * AGENT_VERSION_PINNING_ENABLED on **app-api** always, and on the **AgentCore
+ * Runtime** only while the whole chain is on (`agentVersionPinningOn`), so the
+ * default spends none of the V2 environment budget. No new resources.
+ */
+export interface AgentVersionPinningConfig {
+  enabled: boolean;
+}
+
+/**
  * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0). **Opt-in while
  * the feature is in development**: off unless CDK_HANDOFFS_ENABLED=true (or a
  * `handoffs.enabled: true` cdk.json context). Sets HANDOFFS_ENABLED on **app-api**,
@@ -549,6 +633,15 @@ export interface HandoffsConfig {
    * so the default spends none of the V2 environment budget. No new resources.
    */
   briefEnabled: boolean;
+  /**
+   * Suggested handoffs: the model may offer a chip with `suggest_handoff` (spec §4.4).
+   * **Opt-in while in development**: off unless CDK_HANDOFF_SUGGESTIONS_ENABLED=true (or a
+   * `handoffs.suggestionsEnabled: true` cdk.json context). Sets HANDOFF_SUGGESTIONS_ENABLED on
+   * the **AgentCore Runtime** only, and only while both it and `enabled` are on, so the default
+   * spends none of the V2 environment budget. No new resources. Nobody gets the tool until a
+   * role grants the `suggest_handoff` catalog row (seeded `enabledByDefault: false`).
+   */
+  suggestionsEnabled: boolean;
 }
 
 /**
@@ -1040,6 +1133,47 @@ export interface WordSkillScriptsConfig {
 }
 
 /**
+ * Code sandbox (`run_code`). On, a turn whose tools include the `run_code`
+ * catalog row (seeded `enabledByDefault: false`) can run a bound skill's
+ * `scripts/*.py` or Python the model writes in the stack's isolated Code
+ * Interpreter (docs/specs/skill-code-sandbox.md). The tool refuses to run
+ * unless that interpreter is in `VPC` network mode. **Opt-in while in
+ * development**: off unless CDK_CODE_SANDBOX_ENABLED=true (or a
+ * `codeSandbox.enabled: true` cdk.json context). Sets CODE_SANDBOX_ENABLED on
+ * the AgentCore Runtime only, and **only while on**, so the default spends none
+ * of the V2 payload budget. No IAM: the Runtime already runs sessions on the
+ * interpreter and reads skill resources and user files. Adds a DNS Firewall
+ * (4 resources) on the sandbox VPC that answers no name while DNS is off and
+ * only the office file system's name once `codeSandboxOffice` turns it on, so
+ * it is in place before DNS ever is.
+ */
+export interface CodeSandboxConfig {
+  enabled: boolean;
+}
+
+/**
+ * LibreOffice for the code sandbox. On, `run_code`'s sessions mount a
+ * read-only EFS access point holding a LibreOffice build at `/mnt/office`, so
+ * a skill's own checks (the xlsx skill's `recalc.py`, docx/pptx → PDF) run as
+ * written (docs/specs/skill-code-sandbox.md D9). AgentCore mounts EFS by its
+ * DNS name, so this turns the sandbox VPC's DNS support and hostnames on,
+ * behind the DNS Firewall the code sandbox always carries, which answers only
+ * the file system's own name. **Opt-in while in development**: off unless
+ * CDK_CODE_SANDBOX_OFFICE_ENABLED=true (or a `codeSandboxOffice.enabled: true`
+ * cdk.json context), and it requires CDK_CODE_SANDBOX_ENABLED. **Turn it on in
+ * a deploy after the one that turned the code sandbox on**: CloudFormation
+ * updates the VPC before it creates the firewall's association, so turning
+ * both on at once leaves the sandbox with public DNS for about a minute.
+ * Adds ~14 resources (file system, 2 mount targets, 2 access points, a
+ * mount-target security group and its 2 rules, the seeding interpreter, its
+ * role and policy, the mount parameter, the firewall's allow list), and
+ * CODE_SANDBOX_OFFICE_ENABLED on the AgentCore Runtime only while on.
+ */
+export interface CodeSandboxOfficeConfig {
+  enabled: boolean;
+}
+
+/**
  * Documents as text on Converse. On, the per-call document projection the
  * Runtime installs on every Bedrock Converse model sends each non-PDF
  * attachment (docx, txt, md, csv, html) as text the deployment rendered,
@@ -1334,6 +1468,27 @@ export const AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT = 'V1';
  * ships one.
  */
 export const AGENTCORE_RUNTIME_PLATFORM_VERSIONS = ['V1', 'V2'] as const;
+
+/**
+ * What `inferenceApi.runtimeGeneration` may be: legal in a Runtime name
+ * (`[a-zA-Z][a-zA-Z0-9_]{0,47}`) and short enough that the longest name fits.
+ * A project prefix is at most 21 characters, so 21 + `_agentcore_runtime` (18)
+ * + `_` + 8 is exactly AgentCore's 48.
+ */
+export const AGENTCORE_RUNTIME_GENERATION_PATTERN = /^[a-z0-9]{1,8}$/;
+
+/**
+ * The AgentCore Runtime's name: `{prefix}_agentcore_runtime`, plus
+ * `_{generation}` when `inferenceApi.runtimeGeneration` is set. Runtime names
+ * cannot contain `-`, hence the replace. Everything that keys on the name
+ * (the CloudWatch `Name` dimension, the log-retention sweep's prefix) reads it
+ * from here, so it follows a new generation.
+ */
+export function getAgentRuntimeName(config: AppConfig): string {
+  const base = getResourceName(config, 'agentcore_runtime').replace(/-/g, '_');
+  const generation = config.inferenceApi.runtimeGeneration;
+  return generation ? `${base}_${generation}` : base;
+}
 
 /**
  * Default for `appApi.apiConverseMaxInFlight` (CDK_APP_API_CONVERSE_MAX_IN_FLIGHT).
@@ -1715,6 +1870,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
         || scope.node.tryGetContext('inferenceApi.runtimePlatformVersion')
         || scope.node.tryGetContext('inferenceApi')?.runtimePlatformVersion
         || AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT,
+      // Same chain. Unset (or '', an unset GitHub variable) keeps the
+      // original Runtime name, so the template is unchanged.
+      runtimeGeneration:
+        process.env.CDK_AGENTCORE_RUNTIME_GENERATION?.trim()
+        || scope.node.tryGetContext('inferenceApi.runtimeGeneration')
+        || scope.node.tryGetContext('inferenceApi')?.runtimeGeneration
+        || undefined,
     },
     ragIngestion: {
       additionalCorsOrigins: process.env.CDK_RAG_CORS_ORIGINS || scope.node.tryGetContext('ragIngestion')?.additionalCorsOrigins,
@@ -1913,6 +2075,33 @@ export function loadConfig(scope: cdk.App): AppConfig {
       briefEnabled: process.env.CDK_HANDOFF_BRIEF_ENABLED
         ? process.env.CDK_HANDOFF_BRIEF_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('handoffs')?.briefEnabled ?? false,
+      suggestionsEnabled: process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED
+        ? process.env.CDK_HANDOFF_SUGGESTIONS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('handoffs')?.suggestionsEnabled ?? false,
+    },
+    workflowRuns: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_WORKFLOW_RUNS_ENABLED
+        ? process.env.CDK_WORKFLOW_RUNS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('workflowRuns')?.enabled ?? false,
+    },
+    workflows: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_WORKFLOWS_ENABLED
+        ? process.env.CDK_WORKFLOWS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('workflows')?.enabled ?? false,
+      promptStepsEnabled: process.env.CDK_PROMPT_STEPS_ENABLED
+        ? process.env.CDK_PROMPT_STEPS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('workflows')?.promptStepsEnabled ?? false,
+      checklistStepsEnabled: process.env.CDK_CHECKLIST_STEPS_ENABLED
+        ? process.env.CDK_CHECKLIST_STEPS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('workflows')?.checklistStepsEnabled ?? false,
+    },
+    agentVersionPinning: {
+      // Opt-in while in development, same parsing as sessionPrewarm above.
+      enabled: process.env.CDK_AGENT_VERSION_PINNING_ENABLED
+        ? process.env.CDK_AGENT_VERSION_PINNING_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('agentVersionPinning')?.enabled ?? false,
     },
     sessionRewind: {
       // Default ON with a kill switch, same parsing as projects above.
@@ -2100,6 +2289,20 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED
         ? process.env.CDK_WORD_SKILL_SCRIPTS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('wordSkillScripts')?.enabled ?? false,
+    },
+    codeSandbox: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_CODE_SANDBOX_ENABLED
+        ? process.env.CDK_CODE_SANDBOX_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('codeSandbox')?.enabled ?? false,
+    },
+    codeSandboxOffice: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED
+        ? process.env.CDK_CODE_SANDBOX_OFFICE_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('codeSandboxOffice')?.enabled ?? false,
     },
     converseDocumentsAsText: {
       // In development: only "true" enables, and an unset GitHub variable
@@ -2807,6 +3010,15 @@ export function validateAwsRegion(region: string): void {
  * Validate configuration values
  */
 function validateConfig(config: AppConfig): void {
+  // The office mount turns the sandbox VPC's DNS on, which is safe only behind
+  // the DNS Firewall the code sandbox carries.
+  if (config.codeSandboxOffice.enabled && !config.codeSandbox.enabled) {
+    throw new Error(
+      'CDK_CODE_SANDBOX_OFFICE_ENABLED=true requires CDK_CODE_SANDBOX_ENABLED=true: '
+      + 'LibreOffice is mounted for run_code, and the DNS Firewall that keeps the sandbox closed '
+      + 'once its DNS is on exists only while the code sandbox does.',
+    );
+  }
   // The attachments KB rides the large-document pipeline (its queue and Lambda).
   if (config.attachmentKb.enabled && !config.largeDocumentAttachments.enabled) {
     throw new Error(
@@ -2946,6 +3158,13 @@ function validateConfig(config: AppConfig): void {
     throw new Error(
       `Invalid inferenceApi.runtimePlatformVersion: "${String(config.inferenceApi.runtimePlatformVersion)}". ` +
       `Expected one of ${AGENTCORE_RUNTIME_PLATFORM_VERSIONS.join(', ')} (CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION).`
+    );
+  }
+  const runtimeGeneration = config.inferenceApi.runtimeGeneration;
+  if (runtimeGeneration !== undefined && !AGENTCORE_RUNTIME_GENERATION_PATTERN.test(String(runtimeGeneration))) {
+    throw new Error(
+      `Invalid inferenceApi.runtimeGeneration: "${String(runtimeGeneration)}". ` +
+      'Expected 1-8 lowercase letters or digits, for example "g2" (CDK_AGENTCORE_RUNTIME_GENERATION).'
     );
   }
   if (!config.appApi.maxCapacity) {
@@ -3125,6 +3344,47 @@ export function applyStandardTags(stack: cdk.Stack, config: AppConfig): void {
  * @param config  The top-level AppConfig
  * @param additionalOrigins  Optional comma-separated extra origins to append
  */
+/**
+ * Whether prompt steps are on for this deployment: their own switch and every flag
+ * they need (saved workflows, workflow runs, handoffs). The one answer both
+ * services' environments are written from, so app-api and the Runtime never
+ * disagree about it.
+ */
+export function promptStepsOn(config: Pick<AppConfig, 'handoffs' | 'workflowRuns' | 'workflows'>): boolean {
+  return (
+    config.handoffs.enabled &&
+    config.workflowRuns.enabled &&
+    config.workflows.enabled &&
+    config.workflows.promptStepsEnabled
+  );
+}
+
+/**
+ * Whether checklist steps are on for this deployment: their own switch and prompt
+ * steps' whole chain, since they run on prompt steps' invocation. The one answer
+ * both services' environments are written from.
+ */
+export function checklistStepsOn(config: Pick<AppConfig, 'handoffs' | 'workflowRuns' | 'workflows'>): boolean {
+  return promptStepsOn(config) && config.workflows.checklistStepsEnabled;
+}
+
+/**
+ * Whether Agent version pinning is on for this deployment: its own switch and every
+ * flag it needs (saved workflows, workflow runs, handoffs). The Runtime has no copy
+ * of the workflow flags, so its copy of AGENT_VERSION_PINNING_ENABLED is written from
+ * this alone; app-api gets the switch as set and checks WORKFLOWS_ENABLED itself.
+ */
+export function agentVersionPinningOn(
+  config: Pick<AppConfig, 'handoffs' | 'workflowRuns' | 'workflows' | 'agentVersionPinning'>,
+): boolean {
+  return (
+    config.handoffs.enabled &&
+    config.workflowRuns.enabled &&
+    config.workflows.enabled &&
+    config.agentVersionPinning.enabled
+  );
+}
+
 export function buildCorsOrigins(config: AppConfig, additionalOrigins?: string): string[] {
   const origins = new Set<string>();
   if (config.corsOrigins) {

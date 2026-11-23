@@ -160,6 +160,44 @@ export interface FeatureFlags {
   handoffBrief: boolean;
 
   /**
+   * Workflow runs, step 1 (docs/specs/workflow-runs.md): several Agents
+   * mentioned in one message are handed work from one review sheet, approved
+   * once, and their results come back as one card. Only meaningful with
+   * `handoffs`. Backend: WORKFLOW_RUNS_ENABLED (app-api serves
+   * `/sessions/{id}/workflow-runs`). In development, so `false` unless the
+   * environment has turned the backend on.
+   */
+  workflowRuns: boolean;
+
+  /**
+   * Saved workflows (docs/specs/workflow-designer.md): a run's shape kept to
+   * start again, designed on the Workflows page. Only meaningful with
+   * `workflowRuns`. Backend: WORKFLOWS_ENABLED (app-api serves `/workflows`).
+   * In development, so `false` unless the environment has turned the backend on.
+   */
+  workflows: boolean;
+
+  /**
+   * Prompt steps (docs/specs/workflow-designer.md §21): a workflow step that is
+   * one model call over the run's files, with no Agent and no conversation.
+   * The designer offers it, and a run sends its prompt steps on their own
+   * invocation. Only meaningful with `workflows`. Backend: PROMPT_STEPS_ENABLED
+   * (app-api and the AgentCore Runtime). In development, so `false` unless the
+   * environment has turned the backend on.
+   */
+  promptSteps: boolean;
+
+  /**
+   * Checklist steps (docs/specs/workflow-designer.md §22): a workflow step that
+   * runs named field sets over the run's files, one model call per set, on
+   * prompt steps' invocation. The designer offers it, the sheet and the run
+   * row show its sets and its table. Only meaningful with `promptSteps`.
+   * Backend: CHECKLIST_STEPS_ENABLED (app-api and the AgentCore Runtime). In
+   * development, so `false` unless the environment has turned the backend on.
+   */
+  checklistSteps: boolean;
+
+  /**
    * Conversation rewind (docs/specs/conversation-rewind-and-fork.md §4): a
    * user message offers "Rewind to here", which hides it and everything after
    * it and puts its text back in the composer to edit and resend. Backend:

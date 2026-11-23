@@ -1,4 +1,4 @@
-import { Component, inject, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector } from '@angular/core';
+import { Component, inject, input, ChangeDetectionStrategy, computed, signal, afterNextRender, Injector } from '@angular/core';
 import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
@@ -7,6 +7,7 @@ import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroChevronDown, heroTrash, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen } from '@ng-icons/heroicons/outline';
 import { SessionService } from '../../session/services/session/session.service';
+import { partTitleAfterAgent } from '../../session/services/handoff/handoff-prompt';
 import { ChatStateService } from '../../session/services/chat/chat-state.service';
 import { ShareModalComponent, ShareModalData } from '../../session/components/share-modal';
 import { FEATURES } from '../../services/features';
@@ -16,6 +17,15 @@ import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ConfirmationDialogComponent, ConfirmationDialogData } from '../confirmation-dialog';
 import { appPin, appPinOff } from '../sidenav/components/session-list/pin-icons';
+
+/**
+ * A title shown right after a breadcrumb chip naming `crumbName`: without a leading
+ * "{crumbName} · ", which the chip already says. Any other title, or no chip, is unchanged, and
+ * a title that is only the name stays whole rather than going blank.
+ */
+export function titleBesideCrumb(title: string, crumbName: string | null): string {
+  return crumbName ? partTitleAfterAgent(crumbName, title) || title : title;
+}
 
 @Component({
   selector: 'app-topnav',
@@ -71,10 +81,23 @@ export class Topnav {
     return this.chatStateService.isSessionLoading(session.sessionId);
   });
 
+  /**
+   * The name on the breadcrumb chip projected before the title (`topnavCrumb`), or null when
+   * none is shown. Lets the title drop a leading "{name} · " the chip already says.
+   */
+  readonly crumbName = input<string | null>(null);
+
   /** Header label once a title is no longer pending — real title or fallback. */
   protected readonly displayTitle = computed(
     () => this.currentSession().title || 'Untitled Session'
   );
+
+  /**
+   * The title as shown beside the crumb. A workflow run step's title leads with its Agent's name
+   * (workflow-runs spec §19), and the Agent's chip sits right before it, so the name is shown once.
+   * Rename and the sidebar keep the full title.
+   */
+  protected readonly visibleTitle = computed(() => titleBesideCrumb(this.displayTitle(), this.crumbName()));
 
   /** True while the title is being edited inline. */
   protected readonly renaming = signal(false);

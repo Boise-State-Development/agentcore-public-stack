@@ -344,3 +344,55 @@ async def test_list_by_state_filters_and_ignores_unsubmitted_records(table):
     assert len(await list_by_state()) == 1
     assert len(await list_by_state("in_review")) == 1
     assert await list_by_state("published") == []
+
+
+# ── publishedAt (workflow-designer §23.2) ────────────────────────────────────────────
+
+
+def _version_item(table, number: int):
+    return table.get_item(Key={"PK": f"AST#{AGENT_ID}", "SK": f"VERSION#{number:08d}"})["Item"]
+
+
+@pytest.mark.asyncio
+async def test_publishing_a_version_stamps_published_at_once(table):
+    """The pin rule's only mark that a superseded version was ever published."""
+    from apis.shared.assistants.version_repository import get_version
+
+    number = await publish_agent_version(AGENT_ID, "Administration", CREATED)
+    stamped = _version_item(table, number)["publishedAt"]
+    assert stamped
+    assert (await get_version(AGENT_ID, number)).published_at == stamped
+
+    # A re-promotion (a recategorization, a rollback back to it) keeps the first stamp.
+    await set_version_index(AGENT_ID, number, gsi5_keys("published", "Teaching", CREATED))
+    assert _version_item(table, number)["publishedAt"] == stamped
+
+
+@pytest.mark.asyncio
+async def test_unpublishing_keeps_the_stamp(table):
+    """A takedown changes what is published now, not what was."""
+    number = await publish_agent_version(AGENT_ID, "Administration", CREATED)
+    stamped = _version_item(table, number)["publishedAt"]
+
+    await unpublish_agent_version(AGENT_ID, "Administration", CREATED)
+
+    item = _version_item(table, number)
+    assert "GSI5_PK" not in item
+    assert item["publishedAt"] == stamped
+
+
+@pytest.mark.asyncio
+async def test_a_cut_version_carries_no_published_at_attribute(table):
+    """Absent, not NULL: ``if_not_exists`` treats a stored NULL as set, so it could never be stamped."""
+    from apis.shared.assistants.version_repository import create_version
+    from apis.shared.assistants.versions import snapshot_of
+    from apis.shared.assistants.serialization import from_ddb
+
+    item = table.get_item(Key={"PK": f"AST#{AGENT_ID}", "SK": "METADATA"})["Item"]
+    version = await create_version(AGENT_ID, snapshot_of(Assistant.model_validate(from_ddb(item))))
+
+    assert "publishedAt" not in _version_item(table, version.version)
+    assert version.published_at is None
+
+    await set_version_index(AGENT_ID, version.version, gsi5_keys("published", "Teaching", CREATED))
+    assert _version_item(table, version.version)["publishedAt"]
