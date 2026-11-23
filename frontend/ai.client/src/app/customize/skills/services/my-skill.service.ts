@@ -18,6 +18,11 @@ import {
 } from '../models/my-skill.model';
 import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
 import { reachConfirmationFrom } from '../../../shared/skills/skill-provenance';
+import {
+  SkillBundleImportApi,
+  describeSkillApiError,
+  skillImportForm,
+} from '../../../shared/skills/skill-bundle-import.model';
 
 /**
  * Signal-based state for the user-authored skills tier (Skills v2 PR-3).
@@ -38,7 +43,7 @@ import { reachConfirmationFrom } from '../../../shared/skills/skill-provenance';
  * missing there until a reload. A user report found exactly that gap.
  */
 @Injectable({ providedIn: 'root' })
-export class MySkillService {
+export class MySkillService implements SkillBundleImportApi<MySkill> {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
   private agents = inject(AgentService);
@@ -219,7 +224,7 @@ export class MySkillService {
 
   /** What importing `input` would do, against `skillId` when given. Writes nothing. */
   previewImport(input: SkillImportInput, skillId?: string | null): Promise<ImportPreview> {
-    const form = importForm(input);
+    const form = skillImportForm(input);
     if (skillId) {
       form.append('skillId', skillId);
     }
@@ -235,7 +240,7 @@ export class MySkillService {
     input: SkillImportInput,
     options: { displayName?: string; expectedBundleHash?: string | null },
   ): Promise<ImportApplyResult> {
-    const form = importForm(input);
+    const form = skillImportForm(input);
     if (options.displayName) {
       form.append('displayName', options.displayName);
     }
@@ -267,7 +272,7 @@ export class MySkillService {
       confirmReach?: boolean;
     },
   ): Promise<ImportApplyResult> {
-    const form = importForm(input);
+    const form = skillImportForm(input);
     if (options.confirmReach) {
       form.append('confirmReach', 'true');
     }
@@ -299,27 +304,6 @@ export class MySkillService {
    * cap or validation failure reads as written, not as a generic HTTP error.
    */
   private messageFor(err: unknown, fallback: string): string {
-    const detail = (err as { error?: { detail?: unknown } } | null)?.error?.detail;
-    if (typeof detail === 'string' && detail.trim()) {
-      return detail;
-    }
-    const message = (detail as { message?: unknown } | null)?.message;
-    if (typeof message === 'string' && message.trim()) {
-      return message;
-    }
-    return err instanceof Error ? err.message : fallback;
+    return describeSkillApiError(err, fallback);
   }
-}
-
-function importForm(input: SkillImportInput): FormData {
-  const form = new FormData();
-  if (input.file) {
-    form.append('file', input.file, input.file.name);
-  } else if (input.url) {
-    form.append('url', input.url.trim());
-  }
-  if (input.path !== undefined && input.path !== null) {
-    form.append('path', input.path);
-  }
-  return form;
 }

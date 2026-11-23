@@ -20,7 +20,7 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from apis.app_api.skills import bundle_import_routes
+from apis.app_api.skills import bundle_import_core, bundle_import_routes
 from apis.app_api.skills import routes as my_skill_routes
 from apis.shared.auth import get_current_user_from_session
 from apis.shared.skills.bundle_import import MAX_DIFF_LINES, text_diff
@@ -176,7 +176,7 @@ class TestRefreshDiff:
                 zf.comment = next(shas).encode()
             return buf.getvalue()
 
-        monkeypatch.setattr(bundle_import_routes, "fetch_archive", fake_fetch)
+        monkeypatch.setattr(bundle_import_core, "fetch_archive", fake_fetch)
         url = "https://github.com/example/repo/tree/main/s"
         created = client.post("/skills/mine/import", data={"url": url}).json()["skill"]
         preview = client.post(

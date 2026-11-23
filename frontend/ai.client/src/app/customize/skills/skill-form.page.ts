@@ -12,7 +12,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { FEATURES } from '../../services/features';
 import { FieldSetsSectionComponent } from './components/field-sets-section.component';
-import { SkillBundleImportComponent } from './components/skill-bundle-import.component';
+import { SkillBundleImportComponent } from '../../shared/skills/skill-bundle-import.component';
 import { fieldSetNameFor } from './models/field-set.model';
 import {
   SkillMdDiagnostic,
@@ -75,7 +75,7 @@ export class SkillFormPage {
   private fb = inject(FormBuilder);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
-  private skillService = inject(MySkillService);
+  protected readonly skillService = inject(MySkillService);
   private dialog = inject(Dialog);
   protected readonly features = inject(FEATURES);
 

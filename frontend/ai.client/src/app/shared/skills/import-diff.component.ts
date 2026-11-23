@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
-import { ImportTextDiff } from '../models/my-skill.model';
+import { ImportTextDiff } from './skill-bundle-import.model';
 
 type DiffLineKind = 'added' | 'removed' | 'hunk' | 'header' | 'context';
 
