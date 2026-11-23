@@ -98,6 +98,7 @@ A catalog row now declares `longContextThresholdTokens` and two multipliers, and
 - **Structured extraction no longer fails on Sonnet 5.5 or Opus 5.5 as the extraction model** (#2291). These models refuse forced tool choice, so Strands sent native output beside the strict tool. Bedrock then refused both grammars together as too large (`SchemaTooComplexError`). The extractor now turns native output off and uses auto tool choice with the strict tool, and it reads `schemaEnforced` from the stop reason. Haiku 4.5, the default, is unchanged.
 - **A new web-crawl knowledge base's first re-crawl no longer re-indexes every page** (#2262). The first crawl now stores `contentHash`. In prod, eight new policies had re-staged all 185 pages on their first refresh, which throttled ingestion and set off `lambda-errors-group-1`. Crawl projects created before this deploy re-stage once more, as before.
 - **Send to *{title}*, feedback, rewind and fork name the right message without a reload** (#2212). Each tool round left the live message ids one behind the server's, so Send to returned "Message not found".
+- **The chat's file preview shows decks the pptx skill builds** (#2331, #2333). Since the pptx skill moved to pptxgenjs, every deck of two or more slides had previewed as "This file couldn't be read as a PowerPoint presentation", though PowerPoint and LibreOffice open them. pptxgenjs lists one slide master per slide in `[Content_Types].xml` but writes only the first, and `pptx-preview` 1.0.7 then returns no slides. The preview now drops overrides for parts the file doesn't contain. It also resolves scheme colours in a layout's background through the colour map, so dark title slides preview dark rather than white. Only the preview's copy is repaired; the downloaded file is unchanged.
 - **The sidebar's focus rings meet 3:1 in dark mode** (#2210). The user menu's ring is visible on the light sidebar, and the first nav entry's ring is no longer clipped.
 - **Workflow-run fixes found in dev checks**, all behind the in-development flags: #2203, #2234, #2238, #2242, #2243, #2247, #2256, #2260, #2277, #2289, #2307 (**Stop run** now stops a run's Agent steps in every tab, not only this one), and #2315.
 
@@ -121,7 +122,7 @@ A catalog row now declares `longContextThresholdTokens` and two multipliers, and
 
 ## 📦 Dependencies
 
-No package upgrades in this release. `run_code`'s office mount pins its own Node packages (`docx`, `pptxgenjs` 4.0.1, `react-icons` 5.7.0, `sharp` 0.35.5 with its WebAssembly build) in `backend/scripts/code_sandbox_office_node/package-lock.json`. They are installed only by the seed script, never into an image.
+No package upgrades in this release. The SPA now pins `jszip` 3.10.2 as a direct dependency for the deck preview's repair (#2331); it was already installed at that version through `docx-preview`. `run_code`'s office mount pins its own Node packages (`docx`, `pptxgenjs` 4.0.1, `react-icons` 5.7.0, `sharp` 0.35.5 with its WebAssembly build) in `backend/scripts/code_sandbox_office_node/package-lock.json`. They are installed only by the seed script, never into an image.
 
 ## 🚩 Feature flags
 
