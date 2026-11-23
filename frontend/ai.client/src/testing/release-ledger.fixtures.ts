@@ -45,6 +45,10 @@ export function readoutFixture(overrides: Partial<LedgerReadout> = {}): LedgerRe
       emptyAnswerShare: kpi(0.004, null, null, [900, 14]),
       meanFirstTokenMs: kpi(1810, 1790, -0.011, [956, 117]),
     },
+    callKinds: [
+      { kind: 'chat', calls: [956, 117], cost: [null, 1.43], meanFirstTokenMs: [null, 300], firstTokenN: [0, 117] },
+      { kind: 'workflow_prompt', calls: [0, 45], cost: [null, 0.76], meanFirstTokenMs: [null, 12000], firstTokenN: [0, 45] },
+    ],
     tools: [
       {
         toolId: 'fetch_url_content',

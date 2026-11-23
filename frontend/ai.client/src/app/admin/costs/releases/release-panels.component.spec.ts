@@ -6,6 +6,7 @@ import { ReleaseKpiCardsComponent } from './release-kpi-cards.component';
 import { ReleaseCompareHeaderComponent } from './release-compare-header.component';
 import { ReleaseQualityPanelComponent } from './release-quality-panel.component';
 import { ReleaseToolsTableComponent } from './release-tools-table.component';
+import { ReleaseCallKindsTableComponent } from './release-call-kinds-table.component';
 import { ReleaseVersionStripComponent } from './release-version-strip.component';
 import { unitChips } from './release-ledger.util';
 import { readoutFixture, versionsFixture } from '../../../../testing/release-ledger.fixtures';
@@ -142,6 +143,29 @@ describe('ReleaseToolsTableComponent', () => {
     expect(text(rows[1])).toContain('— → $0.0500');
     expect(text(rows[1])).toContain('310');
     expect(text(fixture.nativeElement)).toContain('Not recorded by the tool census yet: awaiting-user share.');
+  });
+});
+
+describe('ReleaseCallKindsTableComponent', () => {
+  it('lists chat as the turn KPIs and the other kinds as calls, with "—" before the split', () => {
+    const fixture = render(ReleaseCallKindsTableComponent, { kinds: readoutFixture().callKinds });
+    const chat = fixture.nativeElement.querySelector('[data-kind="chat"]');
+    const prompt = fixture.nativeElement.querySelector('[data-kind="workflow_prompt"]');
+    expect(text(chat)).toContain('Chat (turn KPIs)');
+    expect(text(prompt)).toContain('Workflow prompt step');
+    expect(text(prompt)).toContain('0 → 45');
+    // A baseline whose rows predate the split reads "—", never "$0.00".
+    expect(text(prompt)).toContain('— → $0.760');
+    expect(text(prompt)).toContain('— → 12,000 ms');
+  });
+});
+
+describe('ReleaseKpiCardsComponent hints', () => {
+  it('says the turn KPIs read chat calls only', () => {
+    const fixture = render(ReleaseKpiCardsComponent, { readout: readoutFixture() });
+    const card = fixture.nativeElement.querySelector('[data-kpi="meanFirstTokenMs"]');
+    expect(text(card)).toContain('Chat calls only');
+    expect(text(card)).toContain('chat calls');
   });
 });
 

@@ -70,10 +70,12 @@ def _family(family: str, label: str, day: str, version: str, build: str, key: st
 
 BASE = dict(calls=40, turns=30, cost="0.30", outcomeTurns=30, completedTurns=29, stoppedTurns=1,
             cacheReadTokens=9000, cacheWriteTokens=1000, toolCalls=25, toolErrors=1, firstTokenMsSum=40000,
-            firstTokenCount=40)
+            firstTokenCount=40, splitCalls=40, splitTurns=30, chatCost="0.30", chatFirstTokenMsSum=40000,
+            chatFirstTokenCount=40)
 CAND = dict(calls=44, turns=30, cost="0.36", outcomeTurns=30, completedTurns=28, emptyAnswerTurns=2,
             cacheReadTokens=8000, cacheWriteTokens=2000, toolCalls=25, toolErrors=3, estimatedCalls=1,
-            firstTokenMsSum=48000, firstTokenCount=44)
+            firstTokenMsSum=48000, firstTokenCount=44, splitCalls=44, splitTurns=30, chatCost="0.36",
+            chatFirstTokenMsSum=48000, chatFirstTokenCount=44)
 
 VERSION_ROWS = [
     _v("2026-10-01", "1.32.0", "aaaa", **BASE),
@@ -86,7 +88,8 @@ VERSION_ROWS = [
 ]
 MODEL_ROWS = [
     _family("MODEL", "modelId", r["date"], r["appVersion"], r["build"], "us.anthropic.claude-haiku-5-5",
-            calls=int(r["calls"]), turns=int(r["turns"]), cost=r["cost"])
+            calls=int(r["calls"]), turns=int(r["turns"]), cost=r["cost"],
+            splitTurns=int(r["turns"]), chatCost=r["cost"])
     for r in VERSION_ROWS
 ]
 TOOL_ROWS = [

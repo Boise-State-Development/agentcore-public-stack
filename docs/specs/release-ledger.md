@@ -102,8 +102,8 @@ All counters are `ADD`ed; all are integers or `Decimal` dollars. `<v>` is `appVe
 
 | PK | SK | Counters |
 |---|---|---|
-| `LEDGER#VERSION` | `<date>#<v>#<b>` | `calls`, `turns` (a chat turn's **last** row, see below), `cost`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `wastedUsd`, `partialMissCount`, `partialMissUsd`, `avoidableMissCount`, `agentSwitchMissCount`, `agentSwitchUsd`, `modelSwitchMissCount`, `modelSwitchUsd`, `uncachedCalls`, `estimatedCalls`, `unmeteredCalls`, `toolCalls`, `toolErrors`, `toolResultChars`, `toolInputChars`, `documentTurns`, `documentReads`, `documentTokens`, `compactionEvents` (`checkpoint` events), `forcedCompactions`, `floorUnreachableCompactions`, `firstTokenMsSum`, `firstTokenCount`, `turnDurationMsSum`, `outcomeTurns`, `completedTurns`, `pausedTurns`, `stoppedTurns`, `errorTurns`, `interruptedTurns`, `emptyAnswerTurns`, `callKind.<kind>` (chat, handoff_brief, voice, api_converse, document_extract, other) |
-| `LEDGER#MODEL#<month>` | `<date>#<v>#<b>#<modelId>` | `calls`, `turns`, `cost`, the four token buckets, `wastedUsd`, `partialMissCount`, `firstTokenMsSum`, `firstTokenCount` |
+| `LEDGER#VERSION` | `<date>#<v>#<b>` | `calls`, `turns` (a chat turn's **last** row, see below), `cost`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `wastedUsd`, `partialMissCount`, `partialMissUsd`, `avoidableMissCount`, `agentSwitchMissCount`, `agentSwitchUsd`, `modelSwitchMissCount`, `modelSwitchUsd`, `uncachedCalls`, `estimatedCalls`, `unmeteredCalls`, `toolCalls`, `toolErrors`, `toolResultChars`, `toolInputChars`, `documentTurns`, `documentReads`, `documentTokens`, `compactionEvents` (`checkpoint` events), `forcedCompactions`, `floorUnreachableCompactions`, `firstTokenMsSum`, `firstTokenCount`, `turnDurationMsSum`, `outcomeTurns`, `completedTurns`, `pausedTurns`, `stoppedTurns`, `errorTurns`, `interruptedTurns`, `emptyAnswerTurns`, `callKind.<kind>` (chat, handoff_brief, workflow_prompt, workflow_checklist, voice, api_converse, document_extract, other); the chat split (§5.2.1): `splitCalls`, `splitTurns`, `chatCost`, `chatFirstTokenMsSum`, `chatFirstTokenCount`, and for every other kind `callKindCost.<kind>`, `callKindFirstTokenMsSum.<kind>`, `callKindFirstTokenCount.<kind>` |
+| `LEDGER#MODEL#<month>` | `<date>#<v>#<b>#<modelId>` | `calls`, `turns`, `cost`, the four token buckets, `wastedUsd`, `partialMissCount`, `firstTokenMsSum`, `firstTokenCount`, `splitCalls`, `splitTurns`, `chatCost`, `chatFirstTokenMsSum`, `chatFirstTokenCount` |
 | `LEDGER#TOOL#<month>` | `<date>#<v>#<b>#<toolId>` | `calls`, `errors`, `resultChars`, `inputChars`, `durationMsSum`, `timedCalls`, `estInputUsd` |
 | `LEDGER#AGENT#<month>` | `<date>#<v>#<b>#<agentId>` | `calls`, `turns`, `cost`, `wastedUsd`, `toolCalls`, `toolErrors`, `agentSwitched` |
 | `LEDGER#PROJECT#<month>` | `<date>#<v>#<b>#<projectId>` | `calls`, `turns`, `cost`, `wastedUsd`, `toolCalls`, `documentReads` |
@@ -123,6 +123,20 @@ Every row of the five per-call families also `SET`s its labels (`date`, `appVers
 - **Not on the `C#` row, so not in PR-3:** `provenanceClaims` / `provenanceUnsupported` (verdicts are `SRCV#` rows, joined at read time in PR-4 the way thumbs are), the tool row's `awaitingUser` and `callsWithUi` (the census does not record either), and the project row's `kbQueries` (no tool or row field records a project KB query: project search-ahead runs in the prelude, not as a tool call). Each is a census or row field first, then a counter.
 - **`firstTokenMs*` is the model's time to first byte per call** (`latency.timeToFirstToken`), not the turn's server TTFT, which includes the prelude and comes from CloudWatch at read time (§6.1).
 - **`compactionEvents` counts `checkpoint` events**, the ones that cut a new summary; `forcedCompactions` and `floorUnreachableCompactions` count their own kinds.
+
+#### 5.2.1 The chat split (2026-11-23)
+
+`cost` and `firstTokenMsSum` / `firstTokenCount` add **every** call, whatever its kind, while `turns` counts chat turns only. So `cost / turns` and the mean first byte grew with workflow use when nothing about turns had changed. Dev's 1.38.0-vs-1.37.0 readout showed `meanFirstTokenMs` up 160% (731 → 1,904 ms), and 45 `workflow_prompt` calls (about 11.5 s to first byte each) and 21 `workflow_checklist` calls (about 5.6 s) carried a large part of that rise. Those are calls, not turns.
+
+The same `ledger_updates` mapping now splits by kind, for the live writer and the backfill alike:
+
+- a **chat** call adds `chatCost` and `chatFirstTokenMsSum` / `chatFirstTokenCount`, on the version and model rows;
+- **any other kind** adds `callKindCost.<kind>` and `callKindFirstTokenMsSum.<kind>` / `callKindFirstTokenCount.<kind>` on the version row. These are flat, dotted attributes, like `callKind.<kind>`;
+- **every** call adds `splitCalls`, and every turn adds `splitTurns`, on both rows.
+
+The `split*` counters are what tell a row this mapping wrote from one written before it. An older row has no split counters at all, so it adds nothing to either side of a chat-only ratio. A KPI built on them covers exactly the rows that have them, and a window with none reads `None`. Old rows are never mixed in and never read as zero. `cost`, `firstTokenMsSum` and `firstTokenCount` are unchanged and still count every call, so `costPerCall` and the totals keep their meaning.
+
+The agent and project rows are not split yet: their `costPerTurn` still divides every call's cost under that agent or project by its turns.
 - **The writer lives in `apis/shared/sessions/ledger_rollups.py`**, beside the metadata writer that calls it, because `sessions/` is already copied whole into the scheduled-runs image; a module under `costs/` would have pulled that package's `__init__` into the Lambda. `TURN_OUTCOMES` moved there from the coordinator, since app-api runs the writer too and may not import `agents`.
 
 Per call the writer issues one `VERSION` update, one `MODEL` update, one per distinct tool (the census cap is 64), one `AGENT` update when the call ran under an agent, one `PROJECT` update when under a project: typically three to five writes, each on a worker thread and all in one `asyncio.gather`, gathered in turn with the existing `ROLLUP#` bumps inside the fire-and-forget `_update_system_rollups_async` task, so neither side can skip the other, and swallowing and logging failures exactly as those do. At prod volume (about 2,200 calls a day) that is under 10k writes a day, or about $0.01.
@@ -176,19 +190,21 @@ TTFT percentiles come from one `cloudwatch:GetMetricData` call per request over 
 
 | KPI | Definition | Reads |
 |---|---|---|
-| Cost per turn | `cost / turns` | the headline, always shown per model too |
+| Cost per turn | `chatCost / splitTurns` (chat calls only, §5.2.1) | the headline, always shown per model too |
 | Cache efficiency | `cacheRead / (cacheRead + cacheWrite)` | the roadmap's write:read ratio |
 | Unexplained-waste share | `(wastedUsd − agentSwitchUsd − modelSwitchUsd) / cost` | the roadmap's north star, now per version |
 | Partial-miss share of calls | `partialMissCount / calls` | the §833 instrument |
 | Tool error rate | `toolErrors / toolCalls` | per tool in the tools table |
 | Tool payload per call | `toolResultChars / toolCalls` | the D4 measure |
 | Document turn share | `documentTurns / turns` | the attachments cohort |
-| Mean server TTFT | `firstTokenMsSum / firstTokenCount` | with p50/p90 beside it from CloudWatch |
+| Mean model first byte (`meanFirstTokenMs`) | `chatFirstTokenMsSum / chatFirstTokenCount` (chat calls only, §5.2.1) | with server TTFT p50/p90 beside it from CloudWatch |
 | Empty-answer share | `emptyAnswerTurns / outcomeTurns` | D6 |
 | Interrupted share | `(stopped + error + interrupted) / outcomeTurns` (`paused` is not interrupted) | D6 |
 | Forced-compaction rate | `forcedCompactions / compactionEvents` | the `floor_unreachable` tell |
 
 Built in PR-3 (`version_kpis`, `tool_kpis`, `group_kpis`, `relative_delta`). Every KPI is `{value, n}`, `n` being the denominator. A **share** needs `n ≥ 20` (`MIN_SHARE_N`, the feedback arm's floor) and a **mean** a non-zero `n`; either way a missing denominator is `None`, never `0`. Three were added beside the table: `costPerCall`, `meanTurnDurationMs` and `pausedShare`. The outcome and empty-answer shares divide by `outcomeTurns`, not `turns` (§5.2). The tool table's mean latency divides by `timedCalls`, never `calls`.
+
+`costPerTurn` and `meanFirstTokenMs` read the chat split (`CHAT_SPLIT_KPIS`), in `version_kpis` and `model_kpis` alike. `costPerCall` stays over every call. `call_kind_kpis` gives calls, cost and mean model first byte per kind: `chat` from the chat counters, and every other kind from its own. Calls per kind exist on every row. The cost per kind is `None` for a window with no split rows, because a dollar total is a value too and `0` would be believed. `chat_split_coverage` returns `{splitTurns, turns, splitCalls, calls}` for the readout's caveat.
 
 ### 6.3 The readout bundle
 
@@ -209,7 +225,14 @@ Built in PR-3 (`version_kpis`, `tool_kpis`, `group_kpis`, `relative_delta`). Eve
 }
 ```
 
-Every pair is `[baseline, candidate]`; every `delta` is relative; `null` is a value below its floor, never a zero. **Built in PR-4** (`apis/shared/costs/ledger_readout.py`) with three corrections: each caveat is `{code, message}`, the code from a fixed set (`CAVEAT_CODES`: `no_baseline`, `no_full_day`, `short_window`, `deploy_in_window`, `mix_shift`, `below_floor`, `thumbs_below_floor`, `estimated_rows`, `unmetered_rows`, `commit_attributed`, `payload_not_measured`, `latency_unavailable`, `latency_mixed_window`, `coverage_truncated`), so a page can style one and a model can match one; a **full day** is a UTC date before today on which the unit was the only one of its granularity to write a row, and a unit with none (a dev build that lived an hour) falls back to its observed days with `no_full_day`; and the mix-shift test is relative (a model's call share or the mean daily active users moving by more than 20% of the larger side), ignoring models under 5% of calls in both windows. `caveats` is generated, not free text: each line is one of a fixed set of conditions the endpoint detects (short window, mix shift, floor, estimated rows, a deploy inside the window, a model with no catalog row), because the reader of this bundle may be a page, a script or a model, and all three need the same warnings in the same words.
+Every pair is `[baseline, candidate]`; every `delta` is relative; `null` is a value below its floor, never a zero. **Built in PR-4** (`apis/shared/costs/ledger_readout.py`) with three corrections: each caveat is `{code, message}`, the code from a fixed set (`CAVEAT_CODES`: `no_baseline`, `no_full_day`, `short_window`, `deploy_in_window`, `mix_shift`, `below_floor`, `thumbs_below_floor`, `estimated_rows`, `unmetered_rows`, `commit_attributed`, `payload_not_measured`, `latency_unavailable`, `latency_mixed_window`, `coverage_truncated`, and since §5.2.1 `predates_chat_split`), so a page can style one and a model can match one; a **full day** is a UTC date before today on which the unit was the only one of its granularity to write a row, and a unit with none (a dev build that lived an hour) falls back to its observed days with `no_full_day`; and the mix-shift test is relative (a model's call share or the mean daily active users moving by more than 20% of the larger side), ignoring models under 5% of calls in both windows. `caveats` is generated, not free text: each line is one of a fixed set of conditions the endpoint detects (short window, mix shift, floor, estimated rows, a deploy inside the window, a model with no catalog row), because the reader of this bundle may be a page, a script or a model, and all three need the same warnings in the same words.
+
+**Calls by kind (§5.2.1).** The bundle carries `callKinds`: one entry per kind, `{kind, calls, cost, meanFirstTokenMs, firstTokenN}`, each a pair, with chat first and then the rest by candidate cost. This keeps workflow spend visible now that it no longer sits inside cost per turn. `predates_chat_split` fires on a side whose rows were written, in whole or in part, before the split:
+
+- **none of the side's rows are split:** the chat KPIs and the by-kind cost read `—` for it;
+- **some are split:** the message says how many turns and calls the chat KPIs cover, for example "40 of 80 turns and 120 of 240 calls".
+
+On a side with no split rows, `costPerTurn` and `meanFirstTokenMs` are exempt from `below_floor`, because their `None` comes from missing counters, not a small `n`. The first readout after the split ships has a `—` baseline for both KPIs, and so no delta. That is the intended cost: the alternative, a chat-only candidate against an every-call baseline, compares two different things.
 
 ### 6.4 The Releases tab
 
@@ -221,8 +244,9 @@ A sixth tab on `/admin/costs` (`CostTab` gains `'releases'`), gated by `features
 4. **Trend chart.** The daily series with shaded version bands, selectable by KPI; the same `CostTrendsChart` component with bands added.
 5. **Tools table.** Sorted by estimated input dollars; error rate, payload per call and latency as deltas; the spec-token column from the committed measurement.
 6. **Agents and projects tables.** Same shape, cost and waste per turn, top twenty.
-7. **Quality panel.** The eval table for each version (the §8 table, verbatim, linking to the Evaluations page of `eval-harness.md` §16), smoke pass/fail, the thumbs arm, empty answers, interrupted share, provenance share, forced compactions.
-8. **Export.** The readout JSON and the NDJSON range, as downloads.
+7. **Calls by kind** (§5.2.1, added 2026-11-23; it renders between the trend chart and the tools table). The readout's `callKinds` as pairs. Chat is marked as the turn KPIs' source, and each other kind is labelled in words, such as *Workflow prompt step*. The cost-per-turn and mean-first-byte cards say "Chat calls only; other kinds are under Calls by kind."
+8. **Quality panel.** The eval table for each version (the §8 table, verbatim, linking to the Evaluations page of `eval-harness.md` §16), smoke pass/fail, the thumbs arm, empty answers, interrupted share, provenance share, forced compactions.
+9. **Export.** The readout JSON and the NDJSON range, as downloads.
 
 No fleet-wide quality score appears anywhere on the tab (D6). A delta whose `n` is under floor renders as "—" with the `n`, never as a number.
 
@@ -247,9 +271,19 @@ Verified on dev's ledger 2026-11-07, from this branch's app-api against dev's ta
 - **`/quality` and `/tools` are not fetched.** The readout bundle already carries each side's eval and smoke rows, the outcome shares, provenance and thumbs (`quality`), and the top 30 tools with spec tokens (`tools`), so a second request would add nothing the readout lacks.
 - **The markdown leaves agent and project ids out.** The bundle is ids and numbers (D7), but an agent or project id names something a user made, and the readout is meant for a public PR body, so those rows print by rank (`agent 1`) unless `--show-ids` is given for a local read. Model, tool and build ids stay.
 
-The markdown is caveats first: windows, then every caveat, then the mix shift, then the KPI table (`—` for a value under its floor), per-model cost per turn, a *Moved* line, latency, tools, agents, projects and quality, thumbs last. *Moved* lists the KPIs whose bundle `delta` is at least 10% with both sides over their floor, with a mechanical worse/better word from a fixed polarity table. It is a reading aid for the skill, which weighs it against the caveats and `n` and ends in ship, watch or investigate.
+The markdown is caveats first: windows, then every caveat, then the mix shift, then the KPI table (`—` for a value under its floor), per-model cost per turn, *Calls by kind* (§5.2.1), a *Moved* line, latency, tools, agents, projects and quality, thumbs last. *Moved* lists the KPIs whose bundle `delta` is at least 10% with both sides over their floor, with a mechanical worse/better word from a fixed polarity table. It is a reading aid for the skill, which weighs it against the caveats and `n` and ends in ship, watch or investigate.
 
 Run on dev 2026-11-08, `--version 1.34.0 --baseline 1.33.0`: the candidate had one partial day (1.34.0 reached dev that morning) and the baseline two full days. Ten caveats came back: `no_full_day`, `short_window`, `commit_attributed`, `mix_shift` ×2 (Haiku 5.5 0.64 → 1.00 of calls; mean daily active users 3.5 → 1.0), `below_floor` ×2, `payload_not_measured` and `thumbs_below_floor` ×2. The skill's verdict was **watch**: every delta sits behind a one-day candidate window with one model and one active user.
+
+**The chat split on dev, 2026-11-23** (1.38.0 vs 1.37.0, before the split had shipped):
+
+- **Readout from the deployed rows.** Run with `--profile` from the PR branch. Both sides carry `predates_chat_split`, and `costPerTurn` and `meanFirstTokenMs` read `—` with `n 0 / 0`. *Calls by kind* lists calls only: chat 1,927 → 1,654, `workflow_prompt` 0 → 45, `workflow_checklist` 0 → 21, `handoff_brief` 0 → 2, voice 1 → 0.
+- **Replay through the new mapping.** Every `C#` row the live writer had counted (`ledgered`) was replayed through the new `ledger_updates`, read-only, into an export. It reproduced the live ledger exactly: calls 1,928 / 1,722, turns 1,138 / 910, and every KPI the split does not touch. The chat split then changed two numbers:
+  - `meanFirstTokenMs` became 731 → **1,534 ms**, not 1,904;
+  - `costPerTurn` became $0.0164 → **$0.0147** (−10%), not $0.0157.
+
+  *Calls by kind* showed `workflow_prompt` at $0.83 and 11,474 ms mean first byte, `workflow_checklist` at $0.06 and 5,626 ms, and `handoff_brief` at $0.003 and 4,066 ms.
+- **What the split leaves.** Chat-only mean first byte still rose (+110%): Haiku 5.5 went 601 → 1,865 ms and Sonnet 5.5 545 → 1,285 ms, while Opus 5.5 held at 957 → 1,013 ms. That rise is in chat calls themselves. The chat median held near 300 ms on Haiku 5.5 and Sonnet 5.5, and server TTFT per turn was flat day to day, so it is a tail that moves the mean and not the median. The ledger keeps no per-call distribution to name it.
 
 ### 6.6 PR-4 on dev, 2026-11-07
 

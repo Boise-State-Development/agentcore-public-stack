@@ -39,6 +39,19 @@ four-call turn adds 4 to ``calls`` and 1 to ``turns``. A call that is not a chat
 turn's (a handoff brief, a voice session, an api-converse request, a
 ``document_extract`` side call) carries no ``turnDurationMs`` and is counted
 under ``callKind.<kind>``, never as a turn.
+
+**Turn KPIs read chat calls only.** ``cost`` and ``firstTokenMsSum`` /
+``firstTokenCount`` add every call, whatever its kind, so a cost per turn
+built on them grows with workflow use while nothing about turns moved (the
+1.38.0 readout read a 160% rise in mean first byte that was 66 prompt and
+checklist steps). So a chat call also adds ``chatCost`` and
+``chatFirstTokenMsSum`` / ``chatFirstTokenCount``, and any other kind adds
+``callKindCost.<kind>`` and ``callKindFirstTokenMsSum.<kind>`` /
+``callKindFirstTokenCount.<kind>`` (flat, dotted, like ``callKind.<kind>``).
+Every call adds ``splitCalls`` and every turn ``splitTurns``: they are what
+tells a row this mapping wrote from one written before it, which carries none
+of these, so a KPI over them covers exactly the calls and turns that have them
+(``ledger_kpis``) and an older row is left out rather than read as zero.
 """
 
 from __future__ import annotations
@@ -299,8 +312,22 @@ def ledger_updates(row: Mapping[str, Any]) -> List[LedgerUpdate]:
     if first_token_ms > 0:
         version_row.bump("firstTokenMsSum", first_token_ms)
         version_row.bump("firstTokenCount", 1)
+    # The by-kind split the turn KPIs read (module docstring): chat into
+    # `chat*`, every other kind into `callKind*.<kind>`.
+    version_row.bump("splitCalls", 1)
+    if kind == "chat":
+        version_row.bump("chatCost", cost)
+        if first_token_ms > 0:
+            version_row.bump("chatFirstTokenMsSum", first_token_ms)
+            version_row.bump("chatFirstTokenCount", 1)
+    else:
+        version_row.bump(f"callKindCost.{kind}", cost)
+        if first_token_ms > 0:
+            version_row.bump(f"callKindFirstTokenMsSum.{kind}", first_token_ms)
+            version_row.bump(f"callKindFirstTokenCount.{kind}", 1)
     if turn:
         version_row.bump("turns", 1)
+        version_row.bump("splitTurns", 1)
         version_row.bump("turnDurationMsSum", _int(row.get("turnDurationMs")))
         if row.get("hasDocuments") or _int(row.get("documentDigests")) > 0:
             version_row.bump("documentTurns", 1)
@@ -323,7 +350,8 @@ def ledger_updates(row: Mapping[str, Any]) -> List[LedgerUpdate]:
     model_row.bump("calls", 1)
     model_row.bump("turns", 1 if turn else 0)
     for name in ("cost", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens",
-                 "wastedUsd", "partialMissCount", "firstTokenMsSum", "firstTokenCount"):
+                 "wastedUsd", "partialMissCount", "firstTokenMsSum", "firstTokenCount",
+                 "splitCalls", "splitTurns", "chatCost", "chatFirstTokenMsSum", "chatFirstTokenCount"):
         model_row.bump(name, version_row.add.get(name, 0))
     updates.append(model_row)
 

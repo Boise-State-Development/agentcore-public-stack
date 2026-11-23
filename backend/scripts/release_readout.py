@@ -265,7 +265,7 @@ def render_markdown(
 
     # -- KPIs ------------------------------------------------------------------------
     kpis = bundle.get("kpis") or {}
-    out += ["**KPIs** (`—` is under its floor, never zero)", "",
+    out += ["**KPIs** (`—` is under its floor, never zero; costPerTurn and meanFirstTokenMs read chat calls only)", "",
             "| KPI | Baseline | Candidate | Δ | n (b / c) |", "|---|---:|---:|---:|---:|"]
     for name, kpi in kpis.items():
         kind = _FORMATS.get(name, "num")
@@ -282,6 +282,18 @@ def render_markdown(
             out.append(f"| `{model_id}` | {fmt(kpi.get('baseline'), 'usd')} | {fmt(kpi.get('candidate'), 'usd')} "
                        f"| {fmt_delta(kpi.get('delta'))} | {fmt(n[0], 'int')} / {fmt(n[1], 'int')} |")
     out.append("")
+
+    # -- calls by kind -----------------------------------------------------------------
+    kinds = list(bundle.get("callKinds") or [])
+    if kinds:
+        out += ["**Calls by kind** (turn KPIs read `chat` only; the rest are calls, not turns)", "",
+                "| Kind | Calls | Cost | Mean model first byte | n first byte (b / c) |",
+                "|---|---:|---:|---:|---:|"]
+        for kind in kinds:
+            n = kind.get("firstTokenN") or [0, 0]
+            out.append(f"| `{kind.get('kind')}` | {pair(kind.get('calls'), 'int')} | {pair(kind.get('cost'), 'usd')} "
+                       f"| {pair(kind.get('meanFirstTokenMs'), 'ms')} | {fmt(n[0], 'int')} / {fmt(n[1], 'int')} |")
+        out.append("")
 
     movers = moved(bundle)
     if movers:

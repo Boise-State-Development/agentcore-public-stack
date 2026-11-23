@@ -30,6 +30,10 @@ def _version_row(day: str, unit, **counters):
     base = {"calls": 40, "turns": 25, "cost": 0.5, "outcomeTurns": 25, "completedTurns": 25,
             "cacheReadTokens": 9000, "cacheWriteTokens": 1000, "toolCalls": 30, "toolErrors": 1}
     base.update(counters)
+    # A row today's writer wrote: every call a chat call, split (ledger_rollups).
+    base.setdefault("splitCalls", base["calls"])
+    base.setdefault("splitTurns", base["turns"])
+    base.setdefault("chatCost", base["cost"])
     return {"PK": "LEDGER#VERSION", "SK": f"{day}#{v}#{b}", "date": day, "appVersion": v, "build": b, **base}
 
 
@@ -43,12 +47,12 @@ def _rows():
     rows = []
     for day in ("2026-10-01", "2026-10-02", "2026-10-03"):
         rows.append(_version_row(day, OLD))
-        rows.append(_family_row("MODEL", "modelId", "model-a", day, OLD, calls=40, turns=25, cost=0.5))
+        rows.append(_family_row("MODEL", "modelId", "model-a", day, OLD, calls=40, turns=25, cost=0.5, splitTurns=25, chatCost=0.5))
         rows.append(_family_row("TOOL", "toolId", "calculator", day, OLD, calls=30, errors=1, resultChars=900, timedCalls=30, durationMsSum=300))
         rows.append(_family_row("AGENT", "agentId", AGENT_ID, day, OLD, calls=4, turns=2, cost=0.1))
     for day in ("2026-10-04", "2026-10-05", "2026-10-06"):
         rows.append(_version_row(day, NEW, cost=0.8, emptyAnswerTurns=3, toolErrors=6))
-        rows.append(_family_row("MODEL", "modelId", "model-b", day, NEW, calls=40, turns=25, cost=0.8))
+        rows.append(_family_row("MODEL", "modelId", "model-b", day, NEW, calls=40, turns=25, cost=0.8, splitTurns=25, chatCost=0.8))
         rows.append(_family_row("TOOL", "toolId", "calculator", day, NEW, calls=30, errors=6, resultChars=900, timedCalls=30, durationMsSum=300))
         rows.append(_family_row("PROJECT", "projectId", PROJECT_ID, day, NEW, calls=4, turns=2, cost=0.2))
     rows.append({"PK": "LEDGER#DEPLOY", "SK": f"app-api#{NEW[1]}", "service": "app-api", "appVersion": NEW[0],
@@ -166,3 +170,17 @@ def test_http_source_needs_a_session(monkeypatch):
     monkeypatch.delenv(readout.COOKIE_ENV, raising=False)
     with pytest.raises(SystemExit, match=readout.COOKIE_ENV):
         readout.readout_from_http(base_url="https://example.invalid/api", version=None, baseline=None, days=7)
+
+
+def test_markdown_lists_calls_by_kind_after_the_kpis():
+    rows = _rows()
+    for row in rows:
+        if row["PK"] == "LEDGER#VERSION" and row["appVersion"] == NEW[0]:
+            row.update({"callKind.chat": 36, "callKind.workflow_prompt": 4, "callKindCost.workflow_prompt": 0.2,
+                        "callKindFirstTokenMsSum.workflow_prompt": 48_000,
+                        "callKindFirstTokenCount.workflow_prompt": 4})
+    bundle = readout.readout_from_export(rows, version="1.1.0", baseline="1.0.0", days=7, today=TODAY)
+    md = readout.render_markdown(bundle, source="test")
+    assert md.index("**KPIs**") < md.index("**Calls by kind**") < md.index("**Moved")
+    line = next(l for l in md.splitlines() if l.startswith("| `workflow_prompt` |"))
+    assert "0 → 12" in line and "$0.6000" in line and "12,000 ms" in line

@@ -17,6 +17,17 @@ is not evidence of anything, and printing ``0.33`` would read as if it were. A
 *mean* (dollars per turn, characters per call, milliseconds per first token)
 needs only a non-zero denominator. Either way a missing denominator is
 ``None`` with ``n: 0``, because ``0`` is a value a reader would believe.
+
+**Turn KPIs are chat-only.** ``costPerTurn`` and ``meanFirstTokenMs`` read the
+writer's chat split (``chatCost`` over ``splitTurns``, ``chatFirstTokenMsSum``
+over ``chatFirstTokenCount``), never ``cost`` or ``firstTokenMsSum``, which
+add every call kind: a workflow prompt step is a call, not a turn, and its
+seconds-long first byte is not a regression of the turn path. A row written
+before the split carries none of those counters, so it adds nothing to either
+side of the ratio and the KPI covers only the rows that have them; a window
+with none reads ``None``. :func:`chat_split_coverage` says how much of a
+window that is, for the readout's ``predates_chat_split`` caveat. The other
+kinds are reported on their own by :func:`call_kind_kpis`.
 """
 
 from __future__ import annotations
@@ -79,6 +90,58 @@ def share(totals: Mapping[str, Any], numerator: str, denominator: str, floor: in
     return _ratio(_num(totals.get(numerator)), _num(totals.get(denominator)), floor)
 
 
+#: The KPIs that read the chat-only split instead of every call.
+CHAT_SPLIT_KPIS = ("costPerTurn", "meanFirstTokenMs")
+
+#: The counter prefixes of the by-kind split (``ledger_rollups``): calls per
+#: kind exist on every row; cost and first byte only on rows the split wrote.
+_KIND_CALLS = "callKind."
+_KIND_COST = "callKindCost."
+_KIND_FT_SUM = "callKindFirstTokenMsSum."
+_KIND_FT_COUNT = "callKindFirstTokenCount."
+CHAT_KIND = "chat"
+
+
+def chat_split_coverage(totals: Mapping[str, Any]) -> Dict[str, int]:
+    """How much of a window the chat split covers: ``{splitTurns, turns, splitCalls, calls}``.
+
+    ``splitTurns < turns`` (or ``splitCalls < calls``) means some rows predate
+    the split; the chat-only KPIs cover the ``split`` part only.
+    """
+    return {name: int(_num(totals.get(name))) for name in ("splitTurns", "turns", "splitCalls", "calls")}
+
+
+def call_kind_kpis(totals: Mapping[str, Any]) -> Dict[str, Dict[str, KPI]]:
+    """Calls, cost and mean model first byte per call kind, from summed ``LEDGER#VERSION`` counters.
+
+    ``chat`` reads the same split the turn KPIs read; every other kind (a
+    workflow prompt or checklist step, a handoff brief, voice, api-converse,
+    ``document_extract``) reads its ``callKindCost.<kind>`` and
+    ``callKindFirstTokenMs*.<kind>``. ``calls`` counts every row's calls; the
+    cost and first byte only the rows the split wrote, so a window with none
+    reads ``None`` for both (a dollar total is a value too, and ``0`` would be
+    believed).
+    """
+    t = totals
+    split = _num(t.get("splitCalls")) > 0
+    kinds = sorted({name[len(_KIND_CALLS):] for name in t if name.startswith(_KIND_CALLS)} | (
+        {name[len(_KIND_COST):] for name in t if name.startswith(_KIND_COST)}
+    ))
+    out: Dict[str, Dict[str, KPI]] = {}
+    for kind in kinds:
+        calls = int(_num(t.get(f"{_KIND_CALLS}{kind}")))
+        if kind == CHAT_KIND:
+            cost, ft_sum, ft_count = "chatCost", "chatFirstTokenMsSum", "chatFirstTokenCount"
+        else:
+            cost, ft_sum, ft_count = f"{_KIND_COST}{kind}", f"{_KIND_FT_SUM}{kind}", f"{_KIND_FT_COUNT}{kind}"
+        out[kind] = {
+            "calls": {"value": float(calls), "n": calls},
+            "cost": {"value": _num(t.get(cost)) if split else None, "n": calls},
+            "meanFirstTokenMs": mean(t, ft_sum, ft_count),
+        }
+    return out
+
+
 def version_kpis(totals: Mapping[str, Any]) -> Dict[str, KPI]:
     """The §6.2 KPIs from summed ``LEDGER#VERSION`` counters.
 
@@ -86,8 +149,9 @@ def version_kpis(totals: Mapping[str, Any]) -> Dict[str, KPI]:
     (turns whose row carries an ``outcome``), not by ``turns``: rows written
     before the outcome existed would otherwise count as clean answers.
     ``paused`` is not an interruption. ``meanFirstTokenMs`` is the model's own
-    time to first byte per call; the turn's server TTFT percentiles come from
-    CloudWatch at read time (§6.1).
+    time to first byte per **chat** call; the turn's server TTFT percentiles
+    come from CloudWatch at read time (§6.1). It and ``costPerTurn`` read the
+    chat split only (module docstring); ``costPerCall`` stays over every call.
     """
     t = totals
     cache_read = _num(t.get("cacheReadTokens"))
@@ -101,7 +165,7 @@ def version_kpis(totals: Mapping[str, Any]) -> Dict[str, KPI]:
     )
     outcome_turns = _num(t.get("outcomeTurns"))
     return {
-        "costPerTurn": mean(t, "cost", "turns"),
+        "costPerTurn": mean(t, "chatCost", "splitTurns"),
         "costPerCall": mean(t, "cost", "calls"),
         "cacheEfficiency": _ratio(cache_read, cache_read + cache_write, 1),
         # A share of dollars, so its `n` is the calls those dollars came from.
@@ -113,7 +177,7 @@ def version_kpis(totals: Mapping[str, Any]) -> Dict[str, KPI]:
         "toolErrorRate": share(t, "toolErrors", "toolCalls"),
         "toolPayloadPerCall": mean(t, "toolResultChars", "toolCalls"),
         "documentTurnShare": share(t, "documentTurns", "turns"),
-        "meanFirstTokenMs": mean(t, "firstTokenMsSum", "firstTokenCount"),
+        "meanFirstTokenMs": mean(t, "chatFirstTokenMsSum", "chatFirstTokenCount"),
         "meanTurnDurationMs": mean(t, "turnDurationMsSum", "turns"),
         "emptyAnswerShare": share(t, "emptyAnswerTurns", "outcomeTurns"),
         "interruptedShare": _ratio(cut_off, outcome_turns, MIN_SHARE_N),
@@ -146,16 +210,20 @@ def tool_kpis(totals: Mapping[str, Any]) -> Dict[str, KPI]:
 
 
 def model_kpis(totals: Mapping[str, Any]) -> Dict[str, KPI]:
-    """Per-model KPIs from summed ``LEDGER#MODEL`` counters (the readout's per-model break-out)."""
+    """Per-model KPIs from summed ``LEDGER#MODEL`` counters (the readout's per-model break-out).
+
+    ``costPerTurn`` and ``meanFirstTokenMs`` read the chat split, as
+    :func:`version_kpis` does.
+    """
     t = totals
     cache_read = _num(t.get("cacheReadTokens"))
     cache_write = _num(t.get("cacheWriteTokens"))
     return {
-        "costPerTurn": mean(t, "cost", "turns"),
+        "costPerTurn": mean(t, "chatCost", "splitTurns"),
         "costPerCall": mean(t, "cost", "calls"),
         "cacheEfficiency": _ratio(cache_read, cache_read + cache_write, 1),
         "partialMissShare": share(t, "partialMissCount", "calls"),
-        "meanFirstTokenMs": mean(t, "firstTokenMsSum", "firstTokenCount"),
+        "meanFirstTokenMs": mean(t, "chatFirstTokenMsSum", "chatFirstTokenCount"),
     }
 
 

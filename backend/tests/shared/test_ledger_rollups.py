@@ -113,6 +113,11 @@ def test_version_counters():
         "turnDurationMsSum": 4200,
         "outcomeTurns": 1,
         "completedTurns": 1,
+        "splitCalls": 1,
+        "splitTurns": 1,
+        "chatCost": Decimal("0.0123"),
+        "chatFirstTokenMsSum": 800,
+        "chatFirstTokenCount": 1,
     }
 
 
@@ -405,3 +410,52 @@ def test_nothing_here_runs_before_the_first_token():
 def test_a_checklist_call_counts_under_its_own_kind():
     assert "workflow_checklist" in CALL_KINDS
     assert call_kind(_row(callKind="workflow_checklist", messageId=None)) == "workflow_checklist"
+
+
+# ---------------------------------------------------------------------------
+# The chat split the turn KPIs read
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", ["workflow_prompt", "workflow_checklist", "handoff_brief"])
+def test_a_non_turn_call_adds_its_cost_and_first_byte_to_its_kind_never_to_chat(kind):
+    row = _row(callKind=kind, messageId=None, latency={"timeToFirstToken": 12_000})
+    version, model = ledger_updates(row)[0].add, ledger_updates(row)[1].add
+    assert version["splitCalls"] == 1
+    assert version[f"callKindCost.{kind}"] == Decimal("0.0123")
+    assert version[f"callKindFirstTokenMsSum.{kind}"] == 12_000
+    assert version[f"callKindFirstTokenCount.{kind}"] == 1
+    # Still in the every-call totals, but nowhere a turn KPI reads.
+    assert version["cost"] == Decimal("0.0123") and version["firstTokenMsSum"] == 12_000
+    for counter in ("chatCost", "chatFirstTokenMsSum", "chatFirstTokenCount", "splitTurns"):
+        assert counter not in version
+        assert counter not in model
+    assert model["splitCalls"] == 1
+
+
+def test_a_chat_call_adds_the_chat_split_on_the_version_and_model_rows():
+    earlier = _row()
+    earlier.pop("turnDurationMs")
+    updates = ledger_updates(earlier)
+    for counters in (updates[0].add, updates[1].add):
+        assert counters["chatCost"] == Decimal("0.0123")
+        assert counters["chatFirstTokenMsSum"] == 800
+        assert counters["chatFirstTokenCount"] == 1
+        assert counters["splitCalls"] == 1
+        assert "splitTurns" not in counters  # not the turn's last row
+    assert not any(name.startswith("callKindCost.") for name in updates[0].add)
+    last = ledger_updates(_row())
+    assert last[0].add["splitTurns"] == 1 and last[1].add["splitTurns"] == 1
+
+
+def test_a_call_with_no_first_byte_adds_no_first_byte_sample():
+    row = _row(callKind="workflow_prompt", messageId=None, latency={})
+    version = ledger_updates(row)[0].add
+    assert "callKindFirstTokenCount.workflow_prompt" not in version
+    assert version["callKindCost.workflow_prompt"] == Decimal("0.0123")
+
+
+def test_the_split_counters_are_aliased_like_call_kind():
+    update = ledger_updates(_row(callKind="workflow_prompt", messageId=None))[0]
+    names = update_item_kwargs(update)["ExpressionAttributeNames"].values()
+    assert "callKindCost.workflow_prompt" in names
