@@ -16,6 +16,7 @@ as an A2A server, its advertised ``capabilities`` MUST include
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -35,9 +36,27 @@ from apis.shared.scheduled_prompts.models import HEADLESS_SESSION_PREFIX
 
 logger = logging.getLogger(__name__)
 
-# Matches the app-api chat proxy's budget for a full agent turn; the runtime
-# data plane itself enforces a hard cap in the same range.
-DEFAULT_TIMEOUT_SECONDS = 300.0
+# Connect, write and pool timeouts for the Runtime request, as on the app-api
+# chat proxy (`_PROXY_TIMEOUT_SECONDS`).
+CONNECT_TIMEOUT_SECONDS = 300.0
+
+# Longest gap between bytes from the Runtime. This is a *silence* limit, not a
+# total: httpx applies it to each read. The Runtime sends nothing while a slow
+# tool runs or a model thinks without streaming it (the Claude 5.x models
+# stream a summary, see `_apply_thinking_binding`), so it must outlast the Runtime's own model read timeout
+# (`RETRY_READ_TIMEOUT`, 600s) by enough for that timeout's explained error to
+# arrive. Kept equal to the chat proxy's `_PROXY_READ_TIMEOUT_SECONDS`, so a
+# headless run survives exactly the silences an attended turn survives
+# (`test_harness_timeouts.py`).
+DEFAULT_READ_TIMEOUT_SECONDS = 660.0
+
+# Wall-clock cap on one run, however steadily it streams. The scheduled-runs
+# worker Lambda times out at 15 minutes, and the dispatcher invokes it
+# asynchronously, so a run Lambda kills is retried by Lambda and the prompt
+# runs again. Ending the run a minute early lets the worker record a timeout
+# instead. The SPA's `RUN_LOST_AFTER_MS` waits past this before it gives a
+# "Run now" up as lost.
+DEFAULT_MAX_DURATION_SECONDS = 840.0
 
 OnEvent = Callable[[str, Dict[str, Any]], Awaitable[None]]
 
@@ -113,14 +132,23 @@ def apply_runtime_session_header(
     return headers
 
 
-def _build_http_client(timeout_seconds: float) -> httpx.AsyncClient:
+def _build_http_client(read_timeout_seconds: float) -> httpx.AsyncClient:
     """Single seam where the runner's upstream client is constructed.
 
     Tests substitute a MockTransport-backed client here without patching
     the global ``httpx.AsyncClient`` symbol (same pattern as the chat
     proxy's ``_build_upstream_client``).
     """
-    return httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds))
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(CONNECT_TIMEOUT_SECONDS, read=read_timeout_seconds)
+    )
+
+
+def _minutes(seconds: float) -> str:
+    """``660.0`` → ``"11 minutes"``; under two minutes stays in seconds."""
+    if seconds < 120:
+        return f"{seconds:.0f} seconds"
+    return f"{seconds / 60:g} minutes"
 
 
 def _now_iso() -> str:
@@ -177,7 +205,8 @@ async def run_agent_headless(
     interrupt_responses: Optional[List[Dict[str, Any]]] = None,
     trigger: str = "manual",
     invocations_base_url: Optional[str] = None,
-    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    read_timeout_seconds: float = DEFAULT_READ_TIMEOUT_SECONDS,
+    max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS,
     governance: Optional[GovernanceFloor] = None,
     on_event: Optional[OnEvent] = None,
     audit_started: bool = False,
@@ -278,7 +307,9 @@ async def run_agent_headless(
     sent_at = time.monotonic()
     first_text_at: Optional[float] = None
     try:
-        async with _build_http_client(timeout_seconds) as client:
+        async with asyncio.timeout(max_duration_seconds), _build_http_client(
+            read_timeout_seconds
+        ) as client:
             async with client.stream(
                 "POST",
                 url,
@@ -314,7 +345,15 @@ async def run_agent_headless(
                             await on_event(name, data)
     except httpx.TimeoutException:
         result.status = "timeout"
-        result.error = f"stream exceeded {timeout_seconds:.0f}s budget"
+        result.error = (
+            f"The agent sent nothing for {_minutes(read_timeout_seconds)}, "
+            "so the run was stopped."
+        )
+    except TimeoutError:
+        result.status = "timeout"
+        result.error = (
+            f"The run hit its {_minutes(max_duration_seconds)} limit and was stopped."
+        )
     except httpx.HTTPError as exc:
         result.error = f"transport: {type(exc).__name__}: {exc}"
 

@@ -1,7 +1,8 @@
 """The model read timeout must fit inside app-api's proxy read timeout.
 
-Nothing reaches app-api while a model thinks silently (Opus 5.5's thinking
-display defaults to "omitted"), so the Runtime-to-app-api hop sees the same
+Nothing reaches app-api while a model thinks without streaming it (the API's
+default display is "omitted"; we ask the Claude 5.x models for "summarized"),
+so the Runtime-to-app-api hop sees the same
 silence as the Bedrock socket. If the Bedrock read timeout were the longer of
 the two, the proxy would cut the stream first and the user would get a lost
 connection instead of the explained timeout error.

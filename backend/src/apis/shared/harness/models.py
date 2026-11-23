@@ -13,7 +13,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 # completed        — stream drained to `done` with no stream-level error
 # error            — HTTP error, `stream_error`/`error` event, or transport failure
-# timeout          — the SSE stream exceeded the caller's budget
+# timeout          — the Runtime went silent past the read timeout, or the run
+#                    passed its wall-clock cap
 # oauth_required   — the turn finished but at least one connector tool needs
 #                    user consent (headless runs cannot pop a consent window;
 #                    callers should surface the authorization URL to the user)

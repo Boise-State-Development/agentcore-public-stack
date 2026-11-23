@@ -15,11 +15,12 @@ import { RunApiService } from './run-api.service';
 export const RUN_POLL_INTERVAL_MS = 3000;
 
 /**
- * When a still-`started` run counts as lost. The harness gives a turn 300s,
- * so a run with no outcome after 6 minutes died with its app-api task
- * (a deploy or restart) and will never write one.
+ * When a still-`started` run counts as lost. The harness stops a run at 14
+ * minutes (`DEFAULT_MAX_DURATION_SECONDS` in `harness/runner.py`), so a run
+ * with no outcome after 16 minutes died with its app-api task (a deploy or
+ * restart) and will never write one.
  */
-export const RUN_LOST_AFTER_MS = 6 * 60 * 1000;
+export const RUN_LOST_AFTER_MS = 16 * 60 * 1000;
 
 const TERMINAL = new Set<string>(TERMINAL_RUN_STATUSES);
 
