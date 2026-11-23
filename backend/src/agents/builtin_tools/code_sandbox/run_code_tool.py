@@ -25,10 +25,14 @@ a private sandbox that it stops itself.
 
 **Whose scripts.** A ``scripts/*.py`` file of a skill bound to the turn, or a
 ``.js``/``.cjs``/``.mjs`` one run by Node (spec D2), by the same strict lookup
-the Word tools use (``resolve_skill_script``, which keeps them to ``.py``). Until the
-approval card for other authors' scripts exists (spec D4, PR-2), a script runs
-only from a skill the user owns or an admin-catalog skill; anything else is
-refused with a message that says why.
+the Word tools use (``resolve_skill_script``, which keeps them to ``.py``). It
+runs only when ``apis.shared.skills.script_trust`` allows it for this user on
+this call (spec §8): the user's own or imported skill, an admin-catalog skill,
+or someone else's skill reviewed for the turn's Agent or project at its
+script-set hash, with no switch turned off. The rows are read on every call,
+never kept. The staged bytes are checked against the manifest hashes the
+verdict used, and a mismatch refuses (``changed``). Anything refused says why,
+and is audited as ``refused``.
 """
 
 from __future__ import annotations
@@ -41,8 +45,9 @@ import os
 import re
 import threading
 import time
+import dataclasses
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from strands import tool
 
@@ -62,8 +67,11 @@ from agents.main_agent.skills.skill_scripts import (
     SkillScriptError,
     TurnSkillRecords,
     attach_turn_skill_records,
+    record_for,
     resolve_skill_script,
+    trust_refusal,
 )
+from apis.shared.skills import script_trust
 from agents.main_agent.skills.strands_mapping import _manifest_path
 from apis.shared.files.models import ALLOWED_EXTENSIONS as _SAVEABLE_EXTENSIONS
 from apis.shared.skills.bundle import slugify_skill_name
@@ -358,26 +366,6 @@ def _check_arguments(
 # ---------------------------------------------------------------------------
 
 
-def _record_for(records: Iterable[Any], skill_name: str) -> Any:
-    wanted = (skill_name or "").strip()
-    for record in records or []:
-        if slugify_skill_name(getattr(record, "skill_id", "")) == wanted:
-            return record
-    return None
-
-
-def _may_run_scripts_of(record: Any, user_id: str) -> bool:
-    """Whether a script of ``record`` may run for ``user_id`` before PR-2.
-
-    The user's own skills and admin-catalog skills (``owner_id == "system"``,
-    curated by the deployment's administrators) run. A skill another user
-    wrote, reaching this turn through a shared Agent or project, waits for the
-    approval card (spec D4).
-    """
-    owner = getattr(record, "owner_id", "system") or "system"
-    return owner in (user_id, "system")
-
-
 async def _stage_skill(entry: Any, state: _SandboxState, record: Any, slug: str) -> str:
     """Write a skill's whole bundle once per sandbox; returns its folder."""
     folder = state.skills.get(slug)
@@ -528,8 +516,19 @@ async def _preview_blocks(entry: Any, previews: List[Dict[str, Any]]) -> Tuple[L
 # ---------------------------------------------------------------------------
 
 
-def _audit_script_run(user_id: str, record: Any, script_path: str, sha256: str, outcome: str) -> None:
-    """``skill.script_run``, as the Word tools write it. Blocking; never raises."""
+def _audit_script_run(
+    user_id: str,
+    record: Any,
+    script_path: str,
+    sha256: str,
+    outcome: str,
+    verdict: Optional[script_trust.ScriptVerdict] = None,
+) -> None:
+    """``skill.script_run``, as the Word tools write it, with the trust verdict (spec §9).
+
+    ``outcome`` is ``refused`` when the verdict (or the staged-bytes check)
+    stopped the run. Blocking; never raises.
+    """
     try:
         from apis.shared.audit.models import TARGET_SKILL, AuditAction
         from apis.shared.audit.service import get_audit_service
@@ -541,7 +540,13 @@ def _audit_script_run(user_id: str, record: Any, script_path: str, sha256: str, 
             target_id=getattr(record, "skill_id", "") or "",
             target_type=TARGET_SKILL,
             changes=["scriptRun"],
-            after={"scriptPath": script_path, "scriptSha256": sha256, "outcome": outcome, "tool": TOOL_NAME},
+            after={
+                "scriptPath": script_path,
+                "scriptSha256": sha256,
+                "outcome": outcome,
+                "tool": TOOL_NAME,
+                **(verdict.audit_fields() if verdict is not None else {}),
+            },
         )
     except Exception:  # noqa: BLE001 - an audit gap never fails the tool
         logger.exception("run_code: skill.script_run audit record could not be written")
@@ -592,6 +597,7 @@ class _RunRecord:
     exit_code: Optional[int] = None
     outcome: str = "error"
     sha256: str = ""
+    verdict: Optional[script_trust.ScriptVerdict] = None
 
 
 async def _run(
@@ -615,18 +621,26 @@ async def _run(
 
     record = None
     script_ref = None
+    verdict: Optional[script_trust.ScriptVerdict] = None
     if skill_name:
         slug = skill_name.strip()
         try:
             script_ref = resolve_skill_script(skill_records.records, slug, path or "", SCRIPT_EXTENSIONS)
         except SkillScriptError as exc:
             return _error(str(exc))
-        record = _record_for(skill_records.records, slug)
-        if record is None or not _may_run_scripts_of(record, user_id):
+        record = record_for(skill_records.records, slug)
+        if record is None:
+            return _error(f"Skill '{slug}' is not available in this conversation.")
+        # Decided on every call from rows read now, never from anything the
+        # agent or this tool kept: a revocation changes no configuration.
+        verdict = await script_trust.decide(record, user_id, skill_records.scope_id)
+        if not verdict.allowed:
+            shown = _manifest_path(script_ref)
+            await asyncio.to_thread(
+                _audit_script_run, user_id, record, shown, "", "refused", verdict
+            )
             return _error(
-                f"'{slug}' was written by another user, and run_code doesn't run other "
-                "users' scripts yet, so nothing was run. Tell the user the script "
-                "can run once they make their own copy of the skill."
+                trust_refusal(verdict.refused_reason or "", slug, shown, skill_records.scope_kind)
             )
 
     interpreter_id, problem = await asyncio.to_thread(_isolated_interpreter_id)
@@ -638,7 +652,7 @@ async def _run(
     if entry is None:
         entry = sandbox_pool.new_transient_entry(session_id, user_id)
 
-    run = _RunRecord()
+    run = _RunRecord(verdict=verdict if script_ref is not None else None)
     started = time.monotonic()
     try:
         async with entry.lock:
@@ -675,7 +689,7 @@ async def _run(
             await entry.stop()
         if run.attempted and script_ref is not None:
             await asyncio.to_thread(
-                _audit_script_run, user_id, record, _manifest_path(script_ref), run.sha256, run.outcome
+                _audit_script_run, user_id, record, _manifest_path(script_ref), run.sha256, run.outcome, run.verdict
             )
         elif run.attempted and code:
             await asyncio.to_thread(_audit_code_run, user_id, session_id, code, run.exit_code, duration_ms, lang)
@@ -741,6 +755,20 @@ async def _run_in_sandbox(
         folder = await _stage_skill(entry, state, record, slug)
         target = f"{folder}/{_manifest_path(script_ref)}"
         run.sha256 = state.hashes.get(target, "")
+        # The bytes about to run must be the ones the verdict judged (spec §8.2).
+        staged = {
+            path[len(folder) + 1:]: digest
+            for path, digest in state.hashes.items()
+            if path.startswith(folder + "/")
+        }
+        if script_trust.changed_scripts(record, staged):
+            run.outcome = "refused"
+            run.attempted = True
+            if run.verdict is not None:
+                run.verdict = dataclasses.replace(
+                    run.verdict, allowed=False, trusted_by=None, refused_reason=script_trust.REFUSED_CHANGED
+                )
+            raise RunCodeError(trust_refusal(script_trust.REFUSED_CHANGED, slug, _manifest_path(script_ref)))
         ran = f"Ran {target}" + (f" with argv {json.dumps(argv_list)}" if argv_list else "")
     else:
         target = SNIPPET_TARGETS[lang]
@@ -780,6 +808,9 @@ async def _run_in_sandbox(
     lines = [
         f"{ran}: {'finished' if exit_code == 0 else 'failed'} (exit code {exit_code}).",
     ]
+    if script_ref is not None and run.verdict is not None and run.verdict.scripts_hash:
+        # The rail reads this line (spec §8.11); the model can cite it.
+        lines.append(f"Script version: {script_trust.short_hash(run.verdict.scripts_hash)}")
     if timed_out:
         lines.append(f"It was stopped after {CALL_TIMEOUT_SECONDS} seconds. {NO_NETWORK_NOTE}")
     if staged_inputs:

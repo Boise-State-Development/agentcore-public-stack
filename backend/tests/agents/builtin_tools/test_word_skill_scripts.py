@@ -902,6 +902,29 @@ class TestScriptRunAudit:
         ) == (b"docx", "")
 
     @pytest.mark.asyncio
+    async def test_the_shadow_verdict_is_recorded_and_the_script_still_runs(
+        self, sandbox, audit_items, trust_rows
+    ):
+        """skill-code-sandbox D14: one release of verdicts on the record, no refusals."""
+        import hashlib
+
+        record = _record()
+        record.owner_id = "someone-else"
+        # The manifest hash matches the bytes the store serves, so only trust decides.
+        record.resources[0] = record.resources[0].model_copy(update={"content_hash": hashlib.sha256(ENGINE).hexdigest()})
+        holder = TurnSkillRecords("agent-1", "agent")
+        holder.bind([record])
+        tool = make_create_word_document_tool("s", "user-9", holder)
+        result = await tool._tool_func(document_name="fresh", skill_name="contract-redliner", path="engine.py")
+        assert "Created" in _summary(result)
+        (item,) = audit_items
+        after = item["after"]
+        assert after["outcome"] == "ok"
+        assert (after["verdict"], after["wouldRefuse"], after["refusedReason"]) == ("not_reviewed", True, "not_reviewed")
+        assert after["scopeId"] == "agent-1" and after["scriptsHash"]
+        assert trust_rows.calls == [{"skill_id": "contract-redliner", "invoker": "user-9", "scope": "agent-1"}]
+
+    @pytest.mark.asyncio
     async def test_the_tool_records_the_turns_user_and_skill(self, sandbox, audit_items):
         tool = make_create_word_document_tool("s", "user-9", _bound_holder())
         await tool._tool_func(document_name="fresh", skill_name="contract-redliner", path="engine.py")

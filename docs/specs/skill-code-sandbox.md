@@ -373,7 +373,7 @@ Members see no prompts.
 
 ### 8.7 Refusals
 
-Refusals are tool results only. The model relays them. Each one names what didn't run, why, and who can fix it, and tells the model not to retype the script. Every one ends with the same two sentences: "Nothing ran. Don't copy the script into `code`." Each refusal also writes `skill.script_run` with `outcome: refused` (§9).
+Refusals are tool results only. The model relays them. Each one names what didn't run, why, and who can fix it, and tells the model not to retype the script. Every one ends with the same two sentences: "Nothing ran. Don't copy the script into `code` or `python_code`." The second names the Word tools' argument too, since they return the same texts. The wording lives once, in `skill_scripts.trust_refusal`. Each refusal also writes `skill.script_run` with `outcome: refused` (§9).
 
 | Code | When | Text (before the common ending) |
 |---|---|---|
@@ -384,6 +384,7 @@ Refusals are tool results only. The model relays them. Each one names what didn'
 | `not_trusted` | Someone else's skill with no scope (plain chat), which can only happen once direct sharing exists and before acceptance | "'{skill}/{path}' didn't run: it's another user's skill, and its scripts haven't been turned on for this account. Tell the user they can turn them on in Settings → Skills." |
 | `changed` | Staged bytes don't match the manifest (§8.2) | "'{skill}/{path}' didn't run: its files changed while the run was being prepared. Try once more, and tell the user if it happens again." |
 | `unreviewable` | A script with no `contentHash`, before the backfill | "'{skill}/{path}' didn't run: this skill's scripts need to be saved again before they can run for other people. Tell the user to ask its author." |
+| `check_failed` | The trust rows couldn't be read (a DynamoDB error). It refuses rather than guesses, for every path, the user's own skills included | "'{skill}/{path}' didn't run: whether this skill's scripts may run couldn't be checked. Try once more, and tell the user if it happens again." |
 
 The Word tools return the same texts.
 
@@ -554,7 +555,7 @@ Throwaway resources on dev (their own role, security groups and interpreters; th
      - the `(session, user)` key and turn-end stop
 2. **PR-2, trust at adoption (§8, D4, D5, D10–D17).** This replaces the approval card. PR-2b to PR-2e and PR-2f's switch come before production; the admin policy and the allowlist can follow it.
    - **PR-2a, this spec revision** (docs only).
-   - **PR-2b, the verdict (backend, Runtime).**
+   - **PR-2b, the verdict (backend, Runtime).** Issue #2351.
      - `apis/shared/skills/script_trust.py` holds the script-set hash (§8.2), the row shapes (§8.4) and one verdict function, `script_verdict(record, invoker_id, scope, rows) -> Verdict`. It's pure, so the Runtime and app-api share it, and a test reads the rows for it.
      - `run_code` replaces `_may_run_scripts_of` with it: one `BatchGetItem` per script call, the staged-bytes check, the `Script version:` line, and the §8.7 refusals.
      - The holder carries the turn's scope from the build.

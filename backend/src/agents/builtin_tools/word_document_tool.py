@@ -47,6 +47,7 @@ Design notes
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import logging
 import threading
@@ -57,6 +58,7 @@ from strands import tool
 from apis.shared.audit.models import TARGET_SKILL, AuditAction
 from apis.shared.audit.service import get_audit_service
 from apis.shared.auth.models import User
+from apis.shared.skills import script_trust
 
 from agents.builtin_tools.office.docx_compare import DEFAULT_AUTHOR, NoDifferences, compare
 from agents.builtin_tools.office.docx_redline import (
@@ -74,6 +76,7 @@ from agents.main_agent.skills.skill_scripts import (
     TurnSkillRecords,
     attach_turn_skill_records,
     load_skill_script,
+    record_for,
     parse_script_params,
     resolve_skill_script_interpreter_id,
 )
@@ -332,6 +335,9 @@ def _record_script_run(actor_user_id: str, script: Any, outcome: str) -> None:
                 "scriptPath": getattr(script, "path", ""),
                 "scriptSha256": hashlib.sha256(source).hexdigest(),
                 "outcome": outcome,
+                # The shadow trust verdict (skill-code-sandbox D14): recorded,
+                # never enforced, for one release.
+                **dict(getattr(script, "trust_audit", None) or {}),
             },
         )
     except Exception:  # noqa: BLE001 - an audit gap never fails the tool
@@ -579,8 +585,13 @@ async def _load_script(
     skill_name: str,
     path: str,
     params: Optional[Dict[str, Any]],
+    user_id: str = "",
 ) -> Tuple[Optional[SkillScript], str, Optional[Dict[str, Any]]]:
-    """``(script, params_json, error)``: the skill script resolved on this turn's skills."""
+    """``(script, params_json, error)``: the skill script resolved on this turn's skills.
+
+    The script carries its **shadow** trust verdict for the audit record
+    (:func:`_shadow_trust`). It never stops the run in this release.
+    """
     try:
         params_json = parse_script_params(params)
         script = await asyncio.to_thread(
@@ -588,7 +599,41 @@ async def _load_script(
         )
     except SkillScriptError as exc:
         return None, "", _error(f"❌ {exc}")
+    trust = await _shadow_trust(skill_records, skill_name, script, user_id)
+    if trust is not None:
+        script = dataclasses.replace(script, trust_audit=trust)
     return script, params_json, None
+
+
+async def _shadow_trust(
+    skill_records: TurnSkillRecords, skill_name: str, script: SkillScript, user_id: str
+) -> Optional[Dict[str, Any]]:
+    """What ``run_code``'s gate would decide for this script, for the audit only.
+
+    ``docs/specs/skill-code-sandbox.md`` D14: the Word tools ran every bound
+    skill's script for anyone, in production, so they spend one release in
+    shadow. The verdict (and the loaded bytes' check against the manifest
+    hash) is written to ``skill.script_run`` as ``verdict`` / ``wouldRefuse``,
+    and the script runs regardless. The next release enforces it. Never raises.
+    """
+    try:
+        record = record_for(skill_records.records, skill_name)
+        if record is None:
+            return None
+        verdict = await script_trust.decide(record, user_id, skill_records.scope_id)
+        expected = dict(script_trust.script_entries(record)).get(script.path, "")
+        if expected and hashlib.sha256(script.source).hexdigest() != expected:
+            verdict = dataclasses.replace(
+                verdict, allowed=False, trusted_by=None, refused_reason=script_trust.REFUSED_CHANGED
+            )
+        return {
+            **verdict.audit_fields(),
+            "verdict": verdict.label,
+            "wouldRefuse": not verdict.allowed,
+        }
+    except Exception:  # noqa: BLE001 - the shadow never touches the run
+        logger.exception("Word skill script: shadow trust verdict failed")
+        return None
 
 
 def _script_details(script: Optional[SkillScript], output: str) -> str:
@@ -629,7 +674,7 @@ async def _create_word_document(
     params_json = "{}"
     if wants_script:
         script, params_json, problem = await _load_script(
-            skill_records, skill_name or "", path or "", params
+            skill_records, skill_name or "", path or "", params, user_id
         )
         if problem is not None:
             return problem
@@ -705,7 +750,7 @@ async def _modify_word_document(
     params_json = "{}"
     if wants_script:
         script, params_json, problem = await _load_script(
-            skill_records, skill_name or "", path or "", params
+            skill_records, skill_name or "", path or "", params, user_id
         )
         if problem is not None:
             return problem
