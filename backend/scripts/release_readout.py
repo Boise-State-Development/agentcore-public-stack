@@ -115,7 +115,7 @@ _FORMATS: Dict[str, str] = {
 }
 
 #: What an export cannot carry, named in the markdown's *Source* line.
-EXPORT_GAPS = ("CloudWatch latency", "thumbs", "provenance", "active users", "platform cost")
+EXPORT_GAPS = ("CloudWatch latency", "prelude stages", "thumbs", "provenance", "active users", "platform cost")
 
 Bundle = Dict[str, Any]
 
@@ -219,6 +219,38 @@ def _smoke_lines(rows: Sequence[Mapping[str, Any]]) -> List[str]:
     ]
 
 
+def _prelude_lines(prelude: Mapping[str, Any]) -> List[str]:
+    """The per-build harness stages before the first token, and which moved (the bundle decides)."""
+    if not prelude.get("available"):
+        return ["**Prelude (harness time before the first token):** not available for this readout", ""]
+    rule = prelude.get("rule") or {}
+    scope = prelude.get("scope") or "version"
+    lines = [
+        f"**Prelude** (harness time before the first token, model excluded; Logs Insights, by {scope})",
+        "",
+        "| Stage | p50 | p90 | Δ p50 | n (b / c) |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for name, stage in (prelude.get("stages") or {}).items():
+        n = stage.get("n") or [0, 0]
+        delta = stage.get("deltaMs")
+        mark = {"worse": " ⚠", "better": " ✓"}.get(stage.get("moved") or "", "")
+        lines.append(
+            f"| {name} | {pair(stage.get('p50'), 'ms')} | {pair(stage.get('p90'), 'ms')} "
+            f"| {DASH if delta is None else f'{delta:+,.0f} ms'}{mark} | {fmt(n[0], 'int')} / {fmt(n[1], 'int')} |"
+        )
+    mix = prelude.get("mix") or {}
+    if mix:
+        lines += ["", f"Prelude mix: Agent turns {pair(mix.get('assistantShare'), 'pct')}, "
+                      f"resumes {pair(mix.get('resumeShare'), 'pct')} of {pair(mix.get('turns'), 'int')} turns."]
+    movers = prelude.get("moved") or []
+    bar = (f"p50 Δ > max({fmt(rule.get('minMs'), 'ms')}, {fmt(rule.get('minRelative'), 'pct')}), "
+           f"n ≥ {fmt(rule.get('minN'), 'int')} a side")
+    lines += ["", f"**Prelude moved ({bar}):** " + ("; ".join(
+        f"{m['stage']} {m['deltaMs']:+,.0f} ms ({m['direction']})" for m in movers) if movers else "none"), ""]
+    return lines
+
+
 def render_markdown(
     bundle: Mapping[str, Any],
     *,
@@ -316,6 +348,8 @@ def render_markdown(
     else:
         out.append("**Latency:** not available for this readout")
     out.append("")
+
+    out += _prelude_lines(bundle.get("prelude") or {})
 
     # -- tools -----------------------------------------------------------------------
     tools = list(bundle.get("tools") or [])
@@ -496,6 +530,13 @@ def readout_from_aws(
     from apis.shared.config.runtime_environment import hydrate_derived_environment
 
     hydrate_derived_environment()
+    # A terminal read is not behind the ALB's 60 s idle timeout, and a prod
+    # week of Runtime logs is several GB to scan.
+    os.environ.setdefault("LEDGER_PRELUDE_QUERY_TIMEOUT_SECONDS", "240")
+    if not os.environ.get("AGENTCORE_RUNTIME_LOG_GROUP"):
+        log_group = runtime_log_group(prefix, region)
+        if log_group:
+            os.environ["AGENTCORE_RUNTIME_LOG_GROUP"] = log_group
     from fastapi import HTTPException
 
     from apis.app_api.admin.costs import ledger_routes
@@ -511,6 +552,23 @@ def readout_from_aws(
     except HTTPException as exc:
         raise SystemExit(f"readout refused ({exc.status_code}): {exc.detail}")
     return result.model_dump(by_alias=True, mode="json")
+
+
+def runtime_log_group(prefix: str, region: str) -> Optional[str]:
+    """The Runtime's log group, from ``/<prefix>/inference-api/runtime-id`` (turn-path spec §6C R1).
+
+    app-api is given the name by CDK; a terminal read is not, and a guessed
+    prefix-named group returns zero rows rather than an error. ``None`` when
+    the parameter cannot be read, which the readout reports as a caveat.
+    """
+    try:
+        import boto3
+
+        runtime_id = boto3.client("ssm", region_name=region).get_parameter(
+            Name=f"/{prefix}/inference-api/runtime-id")["Parameter"]["Value"]
+    except Exception:  # noqa: BLE001 - the prelude panel is optional
+        return None
+    return f"/aws/bedrock-agentcore/runtimes/{runtime_id}-DEFAULT"
 
 
 def readout_from_http(

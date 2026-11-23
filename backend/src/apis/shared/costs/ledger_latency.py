@@ -114,14 +114,18 @@ def fetch_window_latency(window: Window, client: Any = None) -> Latency:
     return {"available": True, "metrics": metrics}
 
 
-class _LatencyCache:
-    """TTL + single flight, per window (the config-cache pattern, with its own TTL)."""
+class LatencyCache:
+    """TTL + single flight, per key (the config-cache pattern, with its own TTL).
+
+    Keyed by window here and by ``(unit, window)`` in :mod:`ledger_prelude`;
+    the loader is called with the key and runs in a thread.
+    """
 
     def __init__(self) -> None:
-        self._entries: Dict[Window, Tuple[float, Latency]] = {}
-        self._locks: Dict[Window, asyncio.Lock] = {}
+        self._entries: Dict[Any, Tuple[float, Latency]] = {}
+        self._locks: Dict[Any, asyncio.Lock] = {}
 
-    async def get(self, window: Window, loader: Callable[[Window], Latency]) -> Latency:
+    async def get(self, window: Any, loader: Callable[[Any], Latency]) -> Latency:
         entry = self._entries.get(window)
         if entry and entry[0] > time.monotonic():
             return entry[1]
@@ -142,7 +146,7 @@ class _LatencyCache:
         self._locks.clear()
 
 
-_cache = _LatencyCache()
+_cache = LatencyCache()
 
 
 async def window_latency(window: Window, loader: Optional[Callable[[Window], Latency]] = None) -> Latency:

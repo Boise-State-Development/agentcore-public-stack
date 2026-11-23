@@ -263,9 +263,13 @@ jobs:
         run: swift format lint --strict --recursive --parallel AgentCore AgentCoreKit
       - name: Pick the newest iPhone simulator on the image
         id: sim
+        # Numbered models only ("iPhone 17 Pro Max"), sorted by the model
+        # number. A plain name sort put "iPhone Duo" after every numbered
+        # model ("D" > "1"), and xctest hangs before connecting to that
+        # foldable simulator on the xcode-27 image.
         run: |
           udid="$(xcrun simctl list devices available --json \
-            | jq -r '[.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | select(.name | startswith("iPhone"))] | sort_by(.name) | last | .udid')"
+            | jq -r '[.devices | to_entries[] | select(.key | contains("iOS")) | .value[] | (.name | capture("^iPhone (?<model>[0-9]+)( |$)")) as $m | {name, udid, model: ($m.model | tonumber)}] | sort_by(.model, .name) | last | .udid')"
           if [ -z "$udid" ] || [ "$udid" = "null" ]; then
             echo "::error::no available iPhone simulator on this image"
             xcrun simctl list devices available
