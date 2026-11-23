@@ -1,6 +1,6 @@
 # Skill code sandbox: running a skill's scripts, and the code its instructions ask for, with no network
 
-**Status:** **Revised 2026-11-23, awaiting approval:** §8 replaces D4's per-conversation approval card with trust decided once, when someone adopts a skill. D4 and D5 are revised, D10–D16 are new, and §12 has a new plan from PR-2 on. Three choices were settled with the author before writing: the Word tools share the gate, with a backfill; a review pins the version; and the strict policy is deploy config. **Since the first approval:** PR-1 (`run_code`, #2254), Node scripts (#2312), LibreOffice (#2285), docx-js (#2304) and the pptx packages (#2323) are merged and validated on dev. #2245 shipped to production in 1.39.0. `CODE_SANDBOX_ENABLED` is on in dev only.
+**Status:** **Revised 2026-11-23, awaiting approval:** §8 replaces D4's per-conversation approval card with trust decided once, when someone adopts a skill. D4 and D5 are revised, D10–D17 are new, and §12 has a new plan from PR-2 on. Three choices were settled with the author before writing: the Word tools share the gate, with a backfill; a review pins the version; and the strict policy is deploy config. **Since the first approval:** PR-1 (`run_code`, #2254), Node scripts (#2312), LibreOffice (#2285), docx-js (#2304) and the pptx packages (#2323) are merged and validated on dev. #2245 shipped to production in 1.39.0. `CODE_SANDBOX_ENABLED` is on in dev only.
 
 Approved 2026-11-20, with every §10 recommendation accepted. **PR-0 (D8) is merged (#2245) and validated on dev (2026-11-21):** one `VPC`-mode interpreter in an isolated VPC replaced both the `PUBLIC` and `SANDBOX` ones. Every Code Interpreter tool ran on it with every network probe failing. Production verification waits for the next release. **PR-1 (`run_code`) is in progress (#2252).** **D9 (LibreOffice from a read-only mount, with DNS back on behind a DNS Firewall) was accepted 2026-11-22 after a dev spike; its PR is open (#2280).**
 **Author:** Phil Merrell (with Claude Code)
@@ -175,7 +175,7 @@ A script runs when **one path holds for the exact script set it belongs to** (§
 | The invoker wrote it (`owner_id` is the invoker) | The invoker | By writing it | `own` |
 | The invoker imported it (`import_source` is set) | The invoker | At import (§8.5). Skills imported before the import sheet existed count too: the importer still chose the source; the sheet only makes that choice informed | `imported` |
 | Admin catalog (`owner_id == "system"`) | Admins | By curating it. The invoker still needs the RBAC grant, as today | `admin` |
-| Bound to an Agent or a project harness, written by someone else | The person who bound it, on behalf of everyone who uses it | When binding, and at each Update that changes the scripts (§8.3) | `reviewed` |
+| Bound to an Agent or a project harness, written by someone else | The person who bound it, on behalf of everyone who uses it | When binding, and at each Update that changes the scripts (§8.3). Binding a hand-written skill of your own *is* the decision, with no sheet; an imported skill, or one someone else wrote, shows the review sheet (§8.5, D17) | `reviewed` |
 | Shared directly with the invoker | The recipient | When they turn it on | `accepted` |
 
 Notes on the table:
@@ -199,7 +199,7 @@ Notes on the table:
 
 - **Projects** already pin every added skill (`_pin_and_attribute_added_skills`). **Agents** pin only imported skills today (`pin_imported_skill_bindings`). That rule widens to **imported skills and any skill with scripts**. Hand-written skills without scripts keep running live, as now.
 - **When the author edits the skill**, members go on running the pinned version, as pins already guarantee. `pin_status` reports `updateAvailable`:
-  - If the scripts hash changed, **Update** opens the review sheet with the script diff (§8.5).
+  - If the scripts hash changed, **Update** opens the review sheet with the script diff (§8.5). For a hand-written skill of the binder's own, it moves the pin with no sheet (D17).
   - If only instructions or references changed, Update works as it does today, with no sheet.
 - **Agent Designer gains the Update control** projects already have ("Update", "Pinned to v3 · since Oct 8, 2026 · A newer version is available."). It's the only new piece. Everything else this decision needs exists already, which is why it costs less than the alternative.
 - **The alternative, pausing until re-review, was weighed and rejected.** With bindings left live, each save the author made would stop every member's scripts until the owner re-reviewed, and members would meet refusals for changes they never saw. It needs no pin, but it trades the author's convenience for everyone else's.
@@ -211,7 +211,7 @@ The rows live in the AppRoles table beside the skill's own rows. There's no new 
 
 | Row | Key | Holds | Written by |
 |---|---|---|---|
-| Review | `PK=SKILL#{skillId}`, `SK=SCRIPTS_REVIEW#AST#{assistantId}#{scriptsHash}` | `reviewedBy`, `reviewedAt`, `version` (the pin's number), `scripts` (`{path: sha256}`), `method` (`review`, `update` or `backfill`), `state` (`approved`, or `pending` under the admin policy), `approvedBy`, `approvedAt` | app-api, on an Agent save, a project skills save or an Update; the backfill |
+| Review | `PK=SKILL#{skillId}`, `SK=SCRIPTS_REVIEW#AST#{assistantId}#{scriptsHash}` | `reviewedBy`, `reviewedAt`, `version` (the pin's number), `scripts` (`{path: sha256}`), `method` (`review`, `update`, `authored` or `backfill`), `state` (`approved`, or `pending` under the admin policy), `approvedBy`, `approvedAt` | app-api, on an Agent save, a project skills save or an Update; the backfill |
 | Acceptance (with direct sharing) | `PK=SKILL#{skillId}`, `SK=SCRIPTS_REVIEW#USER#{userId}#{scriptsHash}` | The same fields | app-api, when the recipient turns the skill on |
 | Switch | `PK=SKILL#{skillId}`, `SK=SCRIPTS_SWITCH` | `off`, `by` (`author` or `admin`), `byUserId`, `at`, `reason`, and optional `hashes` (only those versions are off) | The author, from their skill's settings; an admin (§8.10) |
 | Review queue (admin policy only) | `PK=SCRIPTS_REVIEW_QUEUE`, `SK={requestedAt}#{skillId}#{scriptsHash}` | A pointer to the pending review | app-api, with the pending review; deleted on approve or decline |
@@ -238,7 +238,11 @@ The rows live in the AppRoles table beside the skill's own rows. There's no new 
 
 **The review sheet, at binding.**
 
-*When it appears:* saving an Agent (create or update), saving a project's skills (add or Update), or confirming an Update, whenever a skill with scripts has no approved review for this assistant at its hash.
+*When it appears:* saving an Agent (create or update), saving a project's skills (add or Update), or confirming an Update, whenever a skill with scripts has no approved review for this assistant at its hash, **and the binder didn't write those scripts by hand**. That means an imported skill (`import_source` set), or a skill someone else wrote (with direct sharing). D17 explains why.
+
+*A hand-written skill of the binder's own gets no sheet.* The save records the review itself, with `method: authored`, `reviewedBy` the binder and the current hash, and pins the binding as any review does. The binder learns of it from a one-line note on the binding row, not from a dialog: "Scripts run for everyone who uses {Agent name} · version 3f2a9c1e". In a project, that's "for everyone in {project name}". Update on such a skill moves the pin and records a new `authored` review in the same click, with no diff. The author made the change, so there's nothing for them to review. "Stop allowing scripts" on the row withdraws it, as for any review.
+
+*The gate is the provenance of the scripts, not the skill.* A hand-written skill that has had a script imported into it, through a refresh or a bundle merge, carries `import_source`, so it shows the sheet. Writing a script by hand into an imported skill doesn't clear `import_source`, so that skill keeps showing the sheet too.
 
 *How it works:* app-api answers `409` with `code: skill_scripts_unreviewed` and a body. The SPA shows the sheet, then resends the save with `scriptsReviewed: {skillId: scriptsHash}`. This is the reach-confirmation pattern (`confirmReach`, `skill_reach_unconfirmed`). If a hash no longer matches because an edit raced the save, app-api answers `409` again with the new diff.
 
@@ -293,8 +297,9 @@ The body:
 
 **The binding row, afterwards** (Agent Designer and the project's skills page):
 
-- "Scripts allowed · version 3f2a9c1e · Nov 23, 2026"
-- "Scripts changed since your review · Review"
+- "Scripts allowed · version 3f2a9c1e · Nov 23, 2026" (an imported skill, after the sheet)
+- "Scripts run for everyone who uses {Agent name} · version 3f2a9c1e" (a hand-written skill of the binder's own, with no sheet)
+- "Scripts changed since your review · Review" (imported skills only; a hand-written skill shows the existing "A newer version is available" and Update)
 - "Scripts not allowed · Review"
 - "Scripts waiting for an administrator's review"
 - "An administrator declined these scripts"
@@ -331,6 +336,8 @@ Members see no prompts.
 
 > **Runs scripts in a sandbox with no internet access** · Reviewed by {reviewer}, {date}
 
+- For a hand-written skill, the last part reads "Shared by {author}, {date}" instead. A `method: authored` review is a person vouching for their own code, not a review of someone else's, so the badge says so.
+
 - When skills were reviewed by different people, or there are several skills: "Runs scripts from {n} skills in a sandbox with no internet access". Its details list "{skill} · version 3f2a9c1e · Reviewed by {reviewer}, {date}", or "· From the admin catalog".
 - It appears only when a bound skill has scripts that can run for the viewer, meaning an approved review or the admin catalog.
 
@@ -346,7 +353,7 @@ Members see no prompts.
 - **The trust line:**
   - "You wrote this skill"
   - "You imported this skill from {owner}/{repo}" (or "from a zip file")
-  - "Reviewed by {reviewer}, {date}"
+  - "Reviewed by {reviewer}, {date}" (or "Shared by {author}, {date}" for `method: authored`)
   - "From the admin catalog"
 - **Where the data comes from:**
   - `skill_name` and `path` come from the tool input.
@@ -433,7 +440,7 @@ An admin reaches a skill from a report, from the queue, or by its id in an audit
   - `outcome`, now `ok`, `failed` or `refused`, with `refusedReason` (§8.7) on a refusal
   - `verdict` and `wouldRefuse`, during the Word tools' shadow release (D14)
 - **A `code` run** writes a `sandbox.code_run` record: ids, the code's length and hash, duration and exit status. No code text, no file content.
-- **`skill.scripts_reviewed`** (new) is written for a review, an Update, an admin approval or decline, and each backfilled binding. The actor is the reviewer. Target: the skill. `after`: `scriptsHash`, `scripts` (`{path: sha256}`), `scopeType` (`agent`, `project` or `user`), `scopeId`, `version`, `method` (`review`, `update`, `backfill`, `admin_approve` or `admin_decline`) and `state`.
+- **`skill.scripts_reviewed`** (new) is written for a review, an Update, a hand-written skill's binding (`authored`), an admin approval or decline, and each backfilled binding. The actor is the reviewer. Target: the skill. `after`: `scriptsHash`, `scripts` (`{path: sha256}`), `scopeType` (`agent`, `project` or `user`), `scopeId`, `version`, `method` (`review`, `update`, `authored`, `backfill`, `admin_approve` or `admin_decline`) and `state`.
 - **`skill.scripts_review_withdrawn`** (new) is written when "Stop allowing scripts" is used or the skill is removed from a binding. It carries the same keys.
 - **`skill.scripts_switched`** (new) is written when the author or an admin turns scripts off or on. `after`: `off`, `by`, `hashes` and `reason`.
 - **`skill.imported` and `skill.refreshed`** already carry `importSource`, which now holds `scriptsHash` and `scripts`. That's the import acknowledgement, with its provenance.
@@ -441,7 +448,7 @@ An admin reaches a skill from a report, from the queue, or by its id in an audit
 
 ## 10. Decisions
 
-D1–D9 were accepted on 2026-11-20 and 2026-11-22. D4 and D5 were revised, and D10–D16 added, on 2026-11-23, pending approval of this revision. D4 reverses the conformance plan's "out of plan by decision" for §6.6 item 3.
+D1–D9 were accepted on 2026-11-20 and 2026-11-22. D4 and D5 were revised, and D10–D17 added, on 2026-11-23, pending approval of this revision. D4 reverses the conformance plan's "out of plan by decision" for §6.6 item 3.
 
 | # | Decision | Accepted |
 |---|---|---|
@@ -461,6 +468,7 @@ D1–D9 were accepted on 2026-11-20 and 2026-11-22. D4 and D5 were revised, and 
 | **D14** (§8, §12) | Do the Word tools share the gate? | **Yes, with a backfill.** Today `create_word_document` and `modify_word_document` run any bound skill's script for anyone, and they're on in production, so two rules for the same file would be the gap. A backfill pins every existing binding of a user skill with scripts and records a review by the binding's owner at its current hash (`method: backfill`), so live Agents keep working on the deploy that adds the gate. The Word tools then spend one release in **shadow**: they compute the verdict and write it to `skill.script_run` (`verdict`, `wouldRefuse`), and run anyway. The next release enforces it, once every `wouldRefuse` in the shadow is explained. There's no flag: the shadow release is the undo window, and a revert of one small PR is the undo after it. `run_code` is off in production, so it enforces from the start |
 | **D15** (§8.6) | What do members get beyond the badge and the rail? | **Clear refusals and a report path, and no once-per-member note or per-skill opt-out in v1.** A note would repeat the badge. An opt-out would add a read to every run for a choice better made by leaving the Agent, or by reporting it, which reaches the people who can act. Reports reuse the marketplace's report storage and queue, with a `script` reason and the skill and hash attached |
 | **D16** (§8.2) | What does the trust hash cover? | **The `scripts/` set only: every `script` manifest entry's path and sha256.** The instructions and references already steer the model's own `code`, which runs for everyone without review, so hashing them would ask for a review on every edit to the instructions and train owners to click through. The sheet lists the files each script reads, so the reviewer sees them |
+| **D17** (§8.5, added 2026-11-23) | Does an owner binding their own hand-written skill see the review sheet? | **No. The sheet shows only for scripts the binder didn't write by hand: an imported skill, or, with direct sharing, someone else's.** Today the binder is always the author, so for a hand-written skill the sheet would ask people to confirm their own code to themselves. That's a dialog they'd learn to dismiss, and it would teach them to dismiss the one that matters. Where the sheet earns its place is an import: the `pdf` skill from GitHub is code the binder never wrote, about to run for everyone in the project. A hand-written binding still records a review (`method: authored`) and still pins, so members, the badge ("Shared by"), audit and revocation work the same. The test is `import_source`, which a later import sets and a hand edit never clears, so a skill with imported scripts never loses the sheet |
 
 ## 11. Dev checks (run 2026-11-20)
 
@@ -544,7 +552,7 @@ Throwaway resources on dev (their own role, security groups and interpreters; th
      - sibling imports and `argv`
      - each cap
      - the `(session, user)` key and turn-end stop
-2. **PR-2, trust at adoption (§8, D4, D5, D10–D16).** This replaces the approval card. PR-2b to PR-2e and PR-2f's switch come before production; the admin policy and the allowlist can follow it.
+2. **PR-2, trust at adoption (§8, D4, D5, D10–D17).** This replaces the approval card. PR-2b to PR-2e and PR-2f's switch come before production; the admin policy and the allowlist can follow it.
    - **PR-2a, this spec revision** (docs only).
    - **PR-2b, the verdict (backend, Runtime).**
      - `apis/shared/skills/script_trust.py` holds the script-set hash (§8.2), the row shapes (§8.4) and one verdict function, `script_verdict(record, invoker_id, scope, rows) -> Verdict`. It's pure, so the Runtime and app-api share it, and a test reads the rows for it.
@@ -559,6 +567,7 @@ Throwaway resources on dev (their own role, security groups and interpreters; th
        - both tool spec digests unchanged
    - **PR-2c, recording reviews (backend, app-api).**
      - Agent create and update, project skills saves and Update accept `scriptsReviewed`, and write review rows and `skill.scripts_reviewed`.
+     - A hand-written skill of the binder's own gets its `authored` review on save, with no `scriptsReviewed` needed (D17).
      - Agent auto-pin widens to skills with scripts.
      - `GET /skills/{skillId}/script-trust`; the author switch (`PUT /skills/mine/{skillId}/scripts`).
      - Import and refresh record `scriptsHash` and `scripts` in `import_source`, and the preview returns the script list.
@@ -587,6 +596,7 @@ Throwaway resources on dev (their own role, security groups and interpreters; th
    - Measure the spec's tokens and a form fill's total tokens against a run with scripts inert.
    - **Trust, with the persona stack** (an author and a member):
      - The author binds an imported skill with scripts to an Agent and to a project, and sees the sheet.
+     - The author binds a hand-written skill with scripts and sees no sheet, only the row note. The member's badge reads "Shared by".
      - The member runs its scripts in a new conversation with no prompt, and sees the badge and the rail line.
      - The author edits a script. The member still runs the reviewed version (the same `Script version:`), and the author's Update shows the diff.
      - "Add without scripts" refuses `not_reviewed` for the member.
