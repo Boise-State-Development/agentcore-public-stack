@@ -330,6 +330,7 @@ def explain_family(
         if base is None or bool(base.get("passed")) == run.passed:
             continue
         direction = "LOST" if base.get("passed") else "GAINED"
+        uncovered = sorted({str(note) for r in samples_by_case[case_id] for note in (r.get("uncovered") or [])})
         lines = [
             f"{direction}  {case_id}  ({run.passes}/{run.samples} samples passed)",
             f"  failures: {'; '.join(run.failures) or '—'}",
@@ -337,6 +338,8 @@ def explain_family(
             f"  baseline: {str(base.get('answer') or '')[:max_chars]!r}",
             f"  run:      {run.answer[:max_chars]!r}",
         ]
+        if uncovered:
+            lines.insert(3, f"  uncovered: {'; '.join(uncovered)}")
         if calls_by_session is not None:
             lines.append("  calls:")
             for sample in sorted(samples_by_case[case_id], key=lambda r: int(r.get("sample") or 0)):
@@ -349,6 +352,28 @@ def explain_family(
                 lines.append(f"    [{sample.get('sample')}] {outcome}  {detail}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks) or f"no flipped cases in {family}"
+
+
+def format_uncovered(rows: Iterable[Mapping[str, Any]]) -> str:
+    """The cases with samples whose conditional check had no scenario to test (``SampleScore.uncovered``).
+
+    One line per case: how many of its samples were uncovered and why, so a
+    pass that tested nothing is never read as coverage. Empty when none were.
+    """
+    by_case: Dict[str, List[Mapping[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_case[str(row.get("case_id"))].append(row)
+    lines = []
+    for case_id in sorted(by_case):
+        samples = by_case[case_id]
+        notes = sorted({str(note) for r in samples for note in (r.get("uncovered") or [])})
+        if not notes:
+            continue
+        count = sum(1 for r in samples if r.get("uncovered"))
+        lines.append(f"  {case_id}  {count}/{len(samples)} samples: {'; '.join(notes)}")
+    if not lines:
+        return ""
+    return "uncovered (passed without the scenario under test happening):\n" + "\n".join(lines)
 
 
 def any_gate_failed(comparisons: Iterable[FamilyComparison]) -> bool:

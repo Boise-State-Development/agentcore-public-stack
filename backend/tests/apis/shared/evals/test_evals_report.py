@@ -17,6 +17,7 @@ from apis.shared.evals.report import (
     compare_run,
     explain_family,
     format_table,
+    format_uncovered,
     load_baseline,
     read_rows,
 )
@@ -181,3 +182,17 @@ class TestCaseLedgerEntries:
     def test_case_ids_are_sorted_for_a_stable_row(self):
         assert list(case_ledger_entries(list(reversed(self._rows())))) == [
             "tool_selection.a", "tool_selection.b", "tool_selection.c"]
+
+
+def test_format_uncovered_names_each_case_and_its_vacuous_samples():
+    note = "skill.reloads_after_cut skill_creator: no cut after its activation"
+    rows = [
+        {**_row("a", 0, True), "uncovered": [note]},
+        {**_row("a", 1, True), "uncovered": [note]},
+        _row("a", 2, True),
+        _row("b", 0, True),
+    ]
+    text = format_uncovered(rows)
+    assert "tool_selection.a  2/3 samples: " + note in text
+    assert "tool_selection.b" not in text
+    assert format_uncovered([_row("b", 0, True)]) == ""

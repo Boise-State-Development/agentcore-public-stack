@@ -137,6 +137,7 @@ from apis.shared.evals.report import (  # noqa: E402
     explain_family,
     format_judge_table,
     format_table,
+    format_uncovered,
     load_baseline,
     merge_family_baseline,
     read_rows,
@@ -1253,6 +1254,8 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     print(f"run {out} on {meta['model_id']} (k={meta['k']}) vs baseline promoted {baseline.get('promotedAt')}\n")
     print(format_table(comparisons))
+    if uncovered := format_uncovered(rows):
+        print("\n" + uncovered)
     judgements = read_rows(out / JUDGEMENTS_FILE)
     judge_comparisons = []
     models: List[str] = []
@@ -1350,10 +1353,17 @@ def cmd_rescore(args: argparse.Namespace) -> int:
             tool_calls=row.get("tool_calls") or [],
             status=str(row.get("status") or "completed"),
             memory_state=row.get("memory"),
+            turns=row.get("turns") or [],
         )
-        if (scored.passed, list(scored.failures)) != (bool(row.get("passed")), list(row.get("failures") or [])):
+        if (scored.passed, list(scored.failures), list(scored.uncovered)) != (
+            bool(row.get("passed")), list(row.get("failures") or []), list(row.get("uncovered") or [])
+        ):
             rescored += 1
         row["passed"], row["failures"] = scored.passed, list(scored.failures)
+        if scored.uncovered:
+            row["uncovered"] = list(scored.uncovered)
+        else:
+            row.pop("uncovered", None)
     after = case_outcomes(rows)
     backup = results_path.with_suffix(".jsonl.bak")
     backup.write_text(results_path.read_text(encoding="utf-8"), encoding="utf-8")
@@ -1362,6 +1372,8 @@ def cmd_rescore(args: argparse.Namespace) -> int:
     (out / META_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     flipped = sorted(cid for cid, o in after.items() if before.get(cid) != o.passed)
     print(f"rescored {out}: {rescored} sample(s) changed; case outcomes flipped: {', '.join(flipped) or 'none'}")
+    if uncovered := format_uncovered(rows):
+        print(uncovered)
     return 0
 
 
