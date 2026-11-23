@@ -25,6 +25,7 @@
     @if (features.skillBundleImport) {
       <div class="mt-8">
         <app-skill-bundle-import
+          [api]="skillService"
           [skillId]="skillId()"
           [importSource]="importSource()"
           (imported)="onBundleImported($event)"

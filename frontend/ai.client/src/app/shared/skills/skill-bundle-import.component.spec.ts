@@ -3,9 +3,12 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ImportPreview, MySkill, SkillImportSource } from '../models/my-skill.model';
-import { MySkillService } from '../services/my-skill.service';
+import { ImportPreview, SkillBundleImportApi, SkillImportSource } from './skill-bundle-import.model';
 import { SkillBundleImportComponent } from './skill-bundle-import.component';
+
+interface FakeSkill {
+  skillId: string;
+}
 
 function preview(overrides: Partial<ImportPreview> = {}): ImportPreview {
   return {
@@ -36,30 +39,29 @@ function preview(overrides: Partial<ImportPreview> = {}): ImportPreview {
   };
 }
 
-const SKILL = { skillId: 'contract_redline' } as MySkill;
+const SKILL: FakeSkill = { skillId: 'contract_redline' };
 
 describe('SkillBundleImportComponent', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   async function render(
-    service: Partial<Record<keyof MySkillService, unknown>>,
-    inputs: { skillId?: string | null; importSource?: SkillImportSource | null } = {},
+    service: Partial<Record<keyof SkillBundleImportApi<FakeSkill>, unknown>>,
+    inputs: { skillId?: string | null; importSource?: SkillImportSource | null; createNote?: string | null } = {},
     extraProviders: unknown[] = [],
   ) {
     TestBed.configureTestingModule({
       imports: [SkillBundleImportComponent],
-      providers: [
-        {
-          provide: MySkillService,
-          useValue: { describeError: (_: unknown, fallback: string) => fallback, ...service },
-        },
-        ...(extraProviders as never[]),
-      ],
+      providers: [...(extraProviders as never[])],
     });
-    const fixture = TestBed.createComponent(SkillBundleImportComponent);
+    const fixture = TestBed.createComponent(SkillBundleImportComponent<FakeSkill>);
+    fixture.componentRef.setInput('api', {
+      describeError: (_: unknown, fallback: string) => fallback,
+      ...service,
+    });
+    fixture.componentRef.setInput('createNote', inputs.createNote ?? null);
     fixture.componentRef.setInput('skillId', inputs.skillId ?? null);
     fixture.componentRef.setInput('importSource', inputs.importSource ?? null);
-    const emitted: MySkill[] = [];
+    const emitted: FakeSkill[] = [];
     fixture.componentInstance.imported.subscribe((s) => emitted.push(s));
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
@@ -108,6 +110,15 @@ describe('SkillBundleImportComponent', () => {
       { displayName: 'Contract redline', expectedBundleHash: 'hash-1' },
     );
     expect(r.emitted).toEqual([SKILL]);
+  });
+
+  it('shows the tier\'s note when creating', async () => {
+    const previewImport = vi.fn().mockResolvedValue(preview());
+    const r = await render({ previewImport }, { createNote: 'Imported as a draft.' });
+    r.typeUrl('https://github.com/acme/skills/tree/main/skills/redline');
+    r.button('Preview')!.click();
+    await r.settle();
+    expect(r.el.textContent).toContain('Imported as a draft.');
   });
 
   it('asks which skill when the archive holds several, and previews the one picked', async () => {

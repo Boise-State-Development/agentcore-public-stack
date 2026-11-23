@@ -11,19 +11,18 @@ import {
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowPath, heroArrowUpTray } from '@ng-icons/heroicons/outline';
 import {
+  ImportApplyResult,
   ImportFileRow,
   ImportFileStatus,
-  ImportApplyResult,
   ImportPreview,
   MAX_IMPORT_ZIP_BYTES,
-  MySkill,
+  SkillBundleImportApi,
   SkillImportInput,
   SkillImportSource,
-} from '../models/my-skill.model';
-import { confirmSkillReach } from '../../../shared/skills/confirm-skill-reach';
-import { reachConfirmationFrom } from '../../../shared/skills/skill-provenance';
-import { MySkillService } from '../services/my-skill.service';
-import { SkillMdDiagnosticsComponent } from '../../../shared/skills/skill-md-diagnostics.component';
+} from './skill-bundle-import.model';
+import { confirmSkillReach } from './confirm-skill-reach';
+import { reachConfirmationFrom } from './skill-provenance';
+import { SkillMdDiagnosticsComponent } from './skill-md-diagnostics.component';
 import { ImportDiffComponent } from './import-diff.component';
 
 type SourceMode = 'github' | 'zip';
@@ -57,7 +56,12 @@ const STATUS_CLASSES: Record<ImportFileStatus, string> = {
  * writes the live skill only. A Shared Project pinned to a version of the skill
  * keeps that version until someone clicks Update on the project's Skills page.
  *
- * Rendered by the skill form only when `features.skillBundleImport` is on.
+ * Tier-neutral: the tier's service comes in as `api` (`MySkillService` on
+ * Customize, `AdminSkillService` on the admin catalog), and `imported` emits
+ * that tier's skill. A 409 carrying a reach summary (My Skills only) asks
+ * before writing; any other error is shown as the backend wrote it.
+ *
+ * Rendered by both skill forms only when `features.skillBundleImport` is on.
  */
 @Component({
   selector: 'app-skill-bundle-import',
@@ -285,6 +289,8 @@ const STATUS_CLASSES: Record<ImportFileStatus, string> = {
                 Projects that use this skill keep their current version until someone clicks Update
                 on the project's Skills page.
               </p>
+            } @else if (createNote(); as note) {
+              <p class="mt-3 text-xs/5 text-gray-600 dark:text-gray-400">{{ note }}</p>
             }
 
             <div class="mt-4 flex items-center gap-3">
@@ -310,16 +316,19 @@ const STATUS_CLASSES: Record<ImportFileStatus, string> = {
     </section>
   `,
 })
-export class SkillBundleImportComponent {
-  private readonly skills = inject(MySkillService);
+export class SkillBundleImportComponent<TSkill = unknown> {
   private readonly dialog = inject(Dialog);
 
+  /** The tier's import routes. */
+  readonly api = input.required<SkillBundleImportApi<TSkill>>();
+  /** A line shown above Import when creating, for what happens next on this tier. */
+  readonly createNote = input<string | null>(null);
   /** The skill to re-import into; null creates a new skill. */
   readonly skillId = input<string | null>(null);
   /** The skill's last import, when it has one. */
   readonly importSource = input<SkillImportSource | null>(null);
   /** The created or re-imported skill. */
-  readonly imported = output<MySkill>();
+  readonly imported = output<TSkill>();
 
   protected readonly modes: { value: SourceMode; label: string }[] = [
     { value: 'github', label: 'GitHub' },
@@ -426,7 +435,7 @@ export class SkillBundleImportComponent {
     this.error.set(null);
     this.notice.set(null);
     try {
-      const preview = await this.skills.previewImport(input, this.skillId());
+      const preview = await this.api().previewImport(input, this.skillId());
       this.preview.set(preview);
       if (preview.skill && !this.skillId()) {
         this.displayName.set(preview.skill.displayName);
@@ -436,7 +445,7 @@ export class SkillBundleImportComponent {
       }
     } catch (err) {
       this.preview.set(null);
-      this.error.set(this.skills.describeError(err, "We couldn't read that bundle."));
+      this.error.set(this.api().describeError(err, "We couldn't read that bundle."));
     } finally {
       this.busy.set(false);
     }
@@ -456,7 +465,7 @@ export class SkillBundleImportComponent {
       const id = this.skillId();
       const result = id
         ? await this.reimportConfirmingReach(id, chosen, p)
-        : await this.skills.importSkill(chosen, {
+        : await this.api().importSkill(chosen, {
             displayName: this.displayName().trim() || undefined,
             expectedBundleHash: p.bundleHash,
           });
@@ -467,7 +476,7 @@ export class SkillBundleImportComponent {
       this.notice.set(id ? 'Re-imported.' : null);
       this.imported.emit(result.skill);
     } catch (err) {
-      this.error.set(this.skills.describeError(err, "We couldn't import that bundle."));
+      this.error.set(this.api().describeError(err, "We couldn't import that bundle."));
     } finally {
       this.busy.set(false);
     }
@@ -482,15 +491,15 @@ export class SkillBundleImportComponent {
     id: string,
     chosen: SkillImportInput,
     p: ImportPreview,
-  ): Promise<ImportApplyResult | null> {
+  ): Promise<ImportApplyResult<TSkill> | null> {
     const options = { expectedBundleHash: p.bundleHash, expectedUpdatedAt: p.targetUpdatedAt };
     try {
-      return await this.skills.reimportSkill(id, chosen, options);
+      return await this.api().reimportSkill(id, chosen, options);
     } catch (err) {
       const reach = reachConfirmationFrom(err);
       if (reach === null) throw err;
       if (!(await confirmSkillReach(this.dialog, reach))) return null;
-      return this.skills.reimportSkill(id, chosen, { ...options, confirmReach: true });
+      return this.api().reimportSkill(id, chosen, { ...options, confirmReach: true });
     }
   }
 

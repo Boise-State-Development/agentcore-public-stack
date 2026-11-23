@@ -639,6 +639,8 @@ class AdminSkillResponse(BaseModel):
     updated_at: str = Field("", alias="updatedAt")
     created_by: Optional[str] = Field(None, alias="createdBy")
     updated_by: Optional[str] = Field(None, alias="updatedBy")
+    # Set once the skill was imported from a bundle (skill-bundle-import.md §3).
+    import_source: Optional[SkillImportSource] = Field(None, alias="importSource")
 
     model_config = {"populate_by_name": True, "use_enum_values": True}
 
@@ -665,6 +667,7 @@ class AdminSkillResponse(BaseModel):
             updated_at=to_iso(skill.updated_at) if skill.updated_at else "",
             created_by=skill.created_by,
             updated_by=skill.updated_by,
+            import_source=skill.import_source,
         )
 
 

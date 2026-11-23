@@ -1682,8 +1682,9 @@ def skill_bundle_import_enabled() -> bool:
 
     On, app-api serves ``POST /skills/mine/import/preview``,
     ``POST /skills/mine/import`` and ``POST /skills/mine/{skill_id}/import``,
-    which 404 after authentication while off. The SPA's matching switch is
-    ``features.skillBundleImport``.
+    and their admin-catalog twins under ``/admin/skills/`` (``admin.skills``,
+    spec §6a), all of which 404 after authentication while off. The SPA's
+    matching switch is ``features.skillBundleImport``.
 
     **app-api only.** The Runtime gets no variable: an imported skill is stored
     exactly like a hand-built one, so a turn reads it the same way.
