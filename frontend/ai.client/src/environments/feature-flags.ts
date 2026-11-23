@@ -138,6 +138,18 @@ export interface FeatureFlags {
   skillBundleImport: boolean;
 
   /**
+   * Skill version history (docs/specs/skill-version-history.md): a skill's
+   * History section lists every version, shows what restoring one would
+   * change, downloads it, and restores it as a new version. Backend:
+   * SKILL_VERSION_HISTORY_ENABLED (app-api serves `/skills/mine/{id}/versions*`
+   * and `/admin/skills/{id}/versions*`, which 404 while off). The UI's share is
+   * the History section on an owned skill's Customize page and on the admin
+   * skill edit form. In development: off everywhere until an environment turns
+   * the backend on.
+   */
+  skillVersionHistory: boolean;
+
+  /**
    * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0): a mid-thread
    * `@`-mention opens a review sheet instead of sending, then starts the Agent's
    * conversation in the background while the user stays put, tracked by a

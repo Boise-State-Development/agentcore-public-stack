@@ -19,6 +19,12 @@ import {
 import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
 import { reachConfirmationFrom } from '../../../shared/skills/skill-provenance';
 import {
+  SkillRestoreResult,
+  SkillVersionDetail,
+  SkillVersionHistoryApi,
+  SkillVersionList,
+} from '../../../shared/skills/skill-version-history.model';
+import {
   SkillBundleImportApi,
   describeSkillApiError,
   skillImportForm,
@@ -43,7 +49,9 @@ import {
  * missing there until a reload. A user report found exactly that gap.
  */
 @Injectable({ providedIn: 'root' })
-export class MySkillService implements SkillBundleImportApi<MySkill> {
+export class MySkillService
+  implements SkillBundleImportApi<MySkill>, SkillVersionHistoryApi<MySkill>
+{
   private http = inject(HttpClient);
   private config = inject(ConfigService);
   private agents = inject(AgentService);
@@ -286,6 +294,60 @@ export class MySkillService implements SkillBundleImportApi<MySkill> {
       this.http.post<ImportApplyResult>(`${this.baseUrl()}/${skillId}/import`, form, {
         withCredentials: true,
       }),
+    );
+    this.skills.update((current) =>
+      current.map((s) => (s.skillId === skillId ? result.skill : s)),
+    );
+    this.agents.invalidateBindable('skill');
+    return result;
+  }
+
+  // ---- version history (skill-version-history.md §6) ----------------------
+
+  /** A page of an owned skill's history, newest first. */
+  listVersions(
+    skillId: string,
+    options: { limit?: number; before?: number | null } = {},
+  ): Promise<SkillVersionList> {
+    const params: Record<string, string> = {};
+    if (options.limit) params['limit'] = String(options.limit);
+    if (options.before) params['before'] = String(options.before);
+    return firstValueFrom(
+      this.http.get<SkillVersionList>(`${this.baseUrl()}/${encodeURIComponent(skillId)}/versions`, {
+        params,
+        withCredentials: true,
+      }),
+    );
+  }
+
+  /** One version, with the change from the live skill to it. */
+  getVersion(skillId: string, version: number): Promise<SkillVersionDetail> {
+    return firstValueFrom(
+      this.http.get<SkillVersionDetail>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/versions/${version}`,
+        { withCredentials: true },
+      ),
+    );
+  }
+
+  /**
+   * Put a version back as a new version. 409s with the reach summary until the
+   * user confirms, as an edit does; pins do not move.
+   */
+  async restoreVersion(
+    skillId: string,
+    version: number,
+    options: { expectedUpdatedAt?: string | null; confirmReach?: boolean },
+  ): Promise<SkillRestoreResult<MySkill>> {
+    const result = await firstValueFrom(
+      this.http.post<SkillRestoreResult<MySkill>>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/versions/${version}/restore`,
+        {
+          expectedUpdatedAt: options.expectedUpdatedAt ?? null,
+          confirmReach: options.confirmReach ?? false,
+        },
+        { withCredentials: true },
+      ),
     );
     this.skills.update((current) =>
       current.map((s) => (s.skillId === skillId ? result.skill : s)),
