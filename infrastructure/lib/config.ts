@@ -1595,6 +1595,29 @@ export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD = 10;
 /** Dollars of fleet prompt-cache waste per 5-minute period. */
 export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD = 1;
 
+/**
+ * Harness time before the first token (`PreludeTotalMs`, handler entry to the
+ * model call, model excluded): the 6-hour p50, in ms, above which the
+ * `turn-prelude-p50` alarm fires. `0` creates no alarm.
+ *
+ * A gross-regression detector, not a fine one; the release readout's per-build
+ * prelude table is the fine one (docs/specs/turn-path-ttft.md §6E). Tuned
+ * against 14 days of 6-hour periods with at least 200 turns (2026-11-09 →
+ * 11-22): dev 955–1,088 ms, prod 510–1,366 ms, prod's swing being traffic mix
+ * (Agent turns run retrieval). 1,500 clears prod's worst healthy period by
+ * ~10% and is ~50% over dev's median, so it fires on a regression of roughly
+ * half a second on dev and never on a mix swing seen so far. A deployment
+ * whose prelude sits lower can tighten it.
+ */
+export const OBSERVABILITY_DEFAULT_TURN_PRELUDE_P50_MS = 1500;
+
+/**
+ * Turns a 6-hour period must hold before its `PreludeTotalMs` p50 counts
+ * toward the alarm. Below it the period reads as healthy: a quiet period's p50
+ * is its cold starts (a dev day of 11 turns read 7.4 s), not the harness.
+ */
+export const OBSERVABILITY_DEFAULT_TURN_PRELUDE_MIN_TURNS = 200;
+
 /** Cumulative partial-miss waste for one session, in dollars. A fleet sum
  *  cannot see a single conversation re-writing its prefix every turn. */
 export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD = 5;
@@ -1660,6 +1683,11 @@ export interface ObservabilityConfig {
   promptCacheAvoidableMissThreshold: number;
   promptCacheWastedUsdThreshold: number;
   promptCacheSessionWastedUsdThreshold: number;
+
+  /** 6-hour `PreludeTotalMs` p50 (ms) that fires `turn-prelude-p50`; `0` creates no alarm. */
+  turnPreludeP50Ms: number;
+  /** Turns a 6-hour period needs before its p50 counts toward that alarm. */
+  turnPreludeMinTurns: number;
 
   /** Percent of a model's TPM quota at which its usage alarm fires. */
   bedrockTpmQuotaPercent: number;
@@ -2616,6 +2644,16 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseFloatEnv(scope.node.tryGetContext('observability.promptCacheSessionWastedUsdThreshold'))
         ?? scope.node.tryGetContext('observability')?.promptCacheSessionWastedUsdThreshold
         ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+      turnPreludeP50Ms:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.turnPreludeP50Ms'))
+        ?? scope.node.tryGetContext('observability')?.turnPreludeP50Ms
+        ?? OBSERVABILITY_DEFAULT_TURN_PRELUDE_P50_MS,
+      turnPreludeMinTurns:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_TURN_PRELUDE_MIN_TURNS)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.turnPreludeMinTurns'))
+        ?? scope.node.tryGetContext('observability')?.turnPreludeMinTurns
+        ?? OBSERVABILITY_DEFAULT_TURN_PRELUDE_MIN_TURNS,
       bedrockTpmQuotaPercent:
         parseIntEnv(process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT)
         ?? parseIntEnv(scope.node.tryGetContext('observability.bedrockTpmQuotaPercent'))

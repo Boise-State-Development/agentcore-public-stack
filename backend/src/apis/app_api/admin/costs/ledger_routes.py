@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from apis.shared.auth import User, require_admin_scope
-from apis.shared.costs import ledger_kpis, ledger_latency, ledger_provenance, ledger_readout
+from apis.shared.costs import ledger_kpis, ledger_latency, ledger_prelude, ledger_provenance, ledger_readout
 from apis.shared.costs.ledger_reader import (
     FAMILY_LABELS,
     TOOL_FIELDS_NOT_MEASURED,
@@ -371,7 +371,7 @@ async def get_ledger_readout(
     storage: DynamoDBStorage = Depends(get_storage),
 ):
     """The §6.3 comparison bundle: windows, mix shift, KPIs, tools, agents, projects,
-    latency, quality, platform and the generated caveats. Every pair is
+    latency, the per-build prelude stages, quality, platform and the generated caveats. Every pair is
     ``[baseline, candidate]``; ``null`` is below a floor, never zero."""
     today = today_utc()
     lookback = ledger_readout.lookback_start(today, READOUT_LOOKBACK_DAYS)
@@ -397,9 +397,11 @@ async def get_ledger_readout(
         _read(store.smoke_rows, lookback, today.isoformat()),
     )
     cand, base = selection["candidate"], selection["baseline"]
-    latency_c, latency_b, thumbs, provenance, platform = await asyncio.gather(
+    latency_c, latency_b, prelude_c, prelude_b, thumbs, provenance, platform = await asyncio.gather(
         ledger_latency.window_latency(tuple(cand["window"])),
         ledger_latency.window_latency(tuple(base["window"])) if base else _none(),
+        ledger_prelude.unit_prelude(cand["unit"], tuple(cand["window"])),
+        ledger_prelude.unit_prelude(base["unit"], tuple(base["window"])) if base else _none(),
         _thumbs(storage, start, end),
         _provenance(storage, start, end, tool_rows),
         _platform(cand["window"][1][:7]),
@@ -409,6 +411,7 @@ async def get_ledger_readout(
         version_rows=version_rows, model_rows=model_rows, tool_rows=tool_rows,
         agent_rows=agent_rows, project_rows=project_rows, daily_rollups=daily,
         latency={"candidate": latency_c, "baseline": latency_b},
+        prelude={"candidate": prelude_c, "baseline": prelude_b},
         eval_rows=eval_rows, smoke_rows=smoke_rows, thumbs=thumbs, provenance=provenance, platform=platform,
     )
     return LedgerReadout.model_validate(bundle)

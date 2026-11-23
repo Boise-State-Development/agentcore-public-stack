@@ -30,6 +30,28 @@ interface ModelRow {
   n: string;
 }
 
+interface PreludeRow {
+  key: string;
+  label: string;
+  p50: string;
+  p90: string;
+  delta: string;
+  tone: DeltaTone;
+  n: string;
+}
+
+/** Readout stage key -> label, in the order the turn runs them. */
+const PRELUDE_LABELS: Record<string, string> = {
+  preludeTotalMs: 'Prelude total',
+  preambleMs: 'Preamble',
+  ragMs: 'Retrieval',
+  toolsMs: 'Tools',
+  agentBuildMs: 'Agent build',
+  streamSetupMs: 'Stream setup',
+  headOfTurnMs: 'Head of turn',
+  preModelMs: 'Before the model call',
+};
+
 interface LatencyRow {
   label: string;
   p50: string;
@@ -176,6 +198,48 @@ const TONE_TEXT: Record<DeltaTone, string> = {
           </div>
         </div>
       }
+
+      @if (prelude(); as p) {
+        <div class="rounded-2xl border border-gray-200 bg-white shadow-xs dark:border-gray-700 dark:bg-gray-800" data-testid="release-prelude">
+          <div class="px-6 pt-4">
+            <p class="text-sm/6 font-medium text-gray-600 dark:text-gray-300">Harness time before the first token</p>
+            <p class="text-xs/5 text-gray-500 dark:text-gray-400">
+              Model excluded. From the Runtime's logs, by {{ p.scope }}, so a deploy day splits cleanly.
+              {{ p.rule }}
+            </p>
+            @if (p.mix) {
+              <p class="text-xs/5 text-gray-500 dark:text-gray-400">{{ p.mix }}</p>
+            }
+          </div>
+          <div class="overflow-x-auto">
+            <table class="mt-2 min-w-full text-sm/6">
+              <caption class="sr-only">Harness stages before the first token, baseline to candidate</caption>
+              <thead>
+                <tr class="text-left text-xs/5 font-medium text-gray-500 dark:text-gray-400">
+                  <th scope="col" class="px-6 py-2">Stage</th>
+                  <th scope="col" class="px-3 py-2 text-right">p50</th>
+                  <th scope="col" class="px-3 py-2 text-right">p90</th>
+                  <th scope="col" class="px-3 py-2 text-right">Δ p50</th>
+                  <th scope="col" class="px-6 py-2 text-right">n (turns)</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
+                @for (row of p.rows; track row.key) {
+                  <tr [attr.data-stage]="row.key">
+                    <th scope="row" class="px-6 py-2 text-left font-normal text-gray-700 dark:text-gray-300">{{ row.label }}</th>
+                    <td class="px-3 py-2 text-right tabular-nums text-gray-900 dark:text-white">{{ row.p50 }}</td>
+                    <td class="px-3 py-2 text-right tabular-nums text-gray-900 dark:text-white">{{ row.p90 }}</td>
+                    <td class="px-3 py-2 text-right tabular-nums" [class]="toneClass(row.tone)">
+                      {{ row.delta }}<span class="sr-only">, {{ toneText(row.tone) }}</span>
+                    </td>
+                    <td class="px-6 py-2 text-right text-xs/5 tabular-nums text-gray-500 dark:text-gray-400">{{ row.n }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
     </section>
   `,
 })
@@ -222,6 +286,32 @@ export class ReleaseKpiCardsComponent {
         p90: `${formatKpiValue(m.p90[0], 'ms')} → ${formatKpiValue(m.p90[1], 'ms')}`,
         n: formatN(m.n),
       }));
+  });
+
+  /**
+   * The bundle decides what moved; this only labels it. A stage the rule did
+   * not flag is neutral whatever its sign, so a 3 ms wobble is never coloured.
+   */
+  protected readonly prelude = computed(() => {
+    const p = this.readout().prelude;
+    if (!p?.available) return null;
+    const rows: PreludeRow[] = Object.entries(p.stages).map(([key, s]) => ({
+      key,
+      label: PRELUDE_LABELS[key] ?? key,
+      p50: `${formatKpiValue(s.p50[0], 'ms')} → ${formatKpiValue(s.p50[1], 'ms')}`,
+      p90: `${formatKpiValue(s.p90[0], 'ms')} → ${formatKpiValue(s.p90[1], 'ms')}`,
+      delta: s.deltaMs === null ? '—' : `${s.deltaMs > 0 ? '+' : ''}${Math.round(s.deltaMs).toLocaleString('en-US')} ms`,
+      tone: s.moved ?? (s.deltaMs === null ? 'none' : 'neutral'),
+      n: formatN(s.n),
+    }));
+    const rule = p.rule
+      ? `A stage is flagged when its p50 moves by more than ${p.rule.minMs} ms or ${Math.round(p.rule.minRelative * 100)}%, whichever is larger, with ${p.rule.minN} turns a side.`
+      : '';
+    const mix = p.mix
+      ? `Agent turns ${formatKpiValue(p.mix.assistantShare[0], 'percent')} → ${formatKpiValue(p.mix.assistantShare[1], 'percent')}, ` +
+        `resumes ${formatKpiValue(p.mix.resumeShare[0], 'percent')} → ${formatKpiValue(p.mix.resumeShare[1], 'percent')}.`
+      : '';
+    return { scope: p.scope ?? 'version', rule, mix, rows };
   });
 
   protected toneClass(tone: DeltaTone): string {

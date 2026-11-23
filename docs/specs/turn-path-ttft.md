@@ -910,6 +910,14 @@ test whose assertion never ran.
 Every row above pins behaviour; only I11 pins cost, and it is the one a change on this path
 is most likely to move without noticing.
 
+**Two detectors, one before merge and one after.** I11 is the pre-merge one: it fails CI
+when a change adds a round trip before the first token, and it cannot see time. The
+post-merge one reads time from the stage metrics (§6E, *Detecting a regression after
+merge*): the release readout's per-build prelude table, which lists a stage whose p50
+moved by more than max(30 ms, 5%), and the `turn-prelude-p50` alarm for a step nobody
+ran a readout for. Between them, an added call fails a PR and slower work on the path
+reaches a reader within a build.
+
 ### 6B. Per-change checklist
 
 For each plan item, the cheaper model should: (0) run I11's inventory test, whose diff
@@ -998,7 +1006,47 @@ How the probe runs (`apis/app_api/telemetry/ttft_probe.py`, `TtftProbeConstruct`
 - One alarm, `ttft-probe-not-reporting`: no complete run for 3 hours, missing data breaching. A lapsed grant, an exhausted quota, a broken image and a stopped schedule all look the same from here; the task's `ttft probe` log line in the app-api log group says which.
 - First manual run on dev (2026-10-10): cold 9,004 ms, prewarmed 2,321 ms, follow-up 1,533 ms, warm call 2,024 ms. One sample is not a baseline; set latency alarms on the probe's daily median after one to two weeks of it.
 
-Reading drift: compare the daily medians on the dashboard's trend widget, first turns and follow-ups separately, and when one moves, slice it by `modelId` in Logs Insights before calling it a regression; a change of default model moves every percentile. Alarms wait for a baseline (see the probe).
+#### Detecting a regression after merge
+
+§6F catches an added round trip before merge; nothing there sees time. Two readers of
+`PreludeTotalMs` and its top-level stages do, after the fact. Neither adds anything to the
+turn path: both read the EMF records `turn_timing.py` already writes.
+
+| Detector | Reads | Fires on | Where |
+|---|---|---|---|
+| **Release readout, *Prelude* table** | Logs Insights over the Runtime log group, filtered to each side's `appVersion` (and `build`, for a build readout): every EMF record carries both stamps, so a deploy day splits cleanly | A stage whose p50 moved by more than **max(30 ms, 5% of the baseline p50)** with **≥ 200 turns a side**, listed under *Prelude moved*; `prelude_mix_shift` when the share of Agent turns or resumes moved | `apis/shared/costs/ledger_prelude.py`, `ledger_readout.compare_prelude`; `release_readout.py`, the Releases tab, the `/release-readout` skill |
+| **`turn-prelude-p50` alarm** | `PreludeTotalMs` p50 over 6-hour periods, `IF(SampleCount >= 200, p50, 0)` | Over **1,500 ms** in 2 of the last 4 periods (one day) | `TurnLatencyObservabilityConstruct`; `CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS` (`0` = no alarm) and `…_MIN_TURNS` |
+
+**The noise band they were tuned against** (dev, 2026-11-11 → 11-22, and prod for the
+alarm):
+
+- On dev days with ≥ 200 turns, `PreludeTotalMs`'s daily p50 sat in **966–1,027 ms**
+  (`PreambleMs` 343–368, `HeadOfTurnMs` 50–56), about ±3%, and a ~20 ms drop in
+  `PreModelMs` and `AgentBuildMs` on 11-19 was plainly visible. A day with 11 turns read
+  **7.4 s**: a quiet period's p50 is its cold starts, which is why both detectors carry a
+  turn floor. The readout's 5% bar on a ~1 s prelude is 50 ms, outside that band; the
+  30 ms floor keeps a 40 ms stage from "moving" on a few milliseconds.
+- Per version on dev, 1.38.0 → 1.39.0 read 983 → 942 ms (n 873 / 556): −41 ms, inside
+  the bar, not listed.
+- 6-hour periods with ≥ 200 turns over 14 days: dev **955–1,088 ms**, prod
+  **510–1,366 ms**. Prod swings with traffic mix: per version, 1.37.0 → 1.38.0 read
+  564 → 769 ms p50, with `RagMs` 215 → 50 ms because Agent turns fell from most turns
+  to about a quarter, while `PreambleMs` (101 → 281) and `PreModelMs` (90 → 240) rose on
+  every turn. The alarm's 1,500 ms clears prod's worst healthy period by about 10%, so
+  it is a gross-regression detector (about half a second on dev); the readout is the
+  fine one.
+
+**Why a fixed threshold, not anomaly detection.** A harness regression is a level shift
+that persists. An anomaly model treats a persistent level as the new normal within days
+and stops alarming, and a band trained on prod's mix swings and on low-volume cold-start
+periods would be wider than the step it is meant to catch. A fixed threshold reads the same
+in a PR as on the console, and the readout covers the small steps per build.
+
+**What they cannot see.** Everything before handler entry (§2A: the SPA, app-api,
+Runtime routing, session start), which only the client metric and the probe measure; and
+the model's own first byte, which `PreludeTotalMs` excludes by design.
+
+Reading drift: compare the daily medians on the dashboard's trend widget, first turns and follow-ups separately, and when one moves, slice it by `modelId` in Logs Insights before calling it a regression; a change of default model moves every percentile. The probe's latency alarms still wait for its baseline (see the probe); the prelude has one (above).
 
 #### Recorded comparisons
 
@@ -1030,9 +1078,10 @@ not a six-turn smoke run.
 
 ### 6F. The call inventory (I11)
 
-Every other signal on this path is post-merge and advisory: the eval harness's
-`firstTokenMs` moves 20–115% a night per family on its own, the smoke pass prints a client
-median, the stage metrics have no alarm and the TTFT probe is not enabled everywhere. So a
+Every other signal on this path is post-merge: the eval harness's `firstTokenMs` moves
+20–115% a night per family on its own, the smoke pass prints a client median, the TTFT
+probe is not enabled everywhere, and the stage metrics are read per build by the release
+readout and alarmed only on a gross step (§6E, *Detecting a regression after merge*). So a
 harness regression is found after it ships to dev, if someone looks. The inventory turns the
 TTFT rule in CLAUDE.md into a CI failure without a clock: it counts round trips.
 

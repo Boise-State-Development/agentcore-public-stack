@@ -330,6 +330,26 @@ export interface ReadoutLatency {
   probeFollowUpFirstTokenMs?: ReadoutLatencyMetric | null;
 }
 
+/** One harness stage before the first token, per build (`ledger_prelude`). */
+export interface ReadoutPreludeStage {
+  p50: LedgerPair<number | null>;
+  p90: LedgerPair<number | null>;
+  n: LedgerPair<number>;
+  deltaMs: number | null;
+  /** Set only when the stage cleared the moved rule (`rule`). */
+  moved: 'worse' | 'better' | null;
+}
+
+export interface ReadoutPrelude {
+  available: boolean;
+  /** `build` when both sides were filtered to one stamped build, else `version`. */
+  scope: 'build' | 'version' | null;
+  stages: Record<string, ReadoutPreludeStage>;
+  moved: { stage: string; deltaMs: number; direction: 'worse' | 'better' }[];
+  rule: { minMs: number; minRelative: number; minN: number } | null;
+  mix: { turns: LedgerPair<number>; assistantShare: LedgerPair<number | null>; resumeShare: LedgerPair<number | null> } | null;
+}
+
 export interface ReadoutPairs<T> {
   baseline: T[];
   candidate: T[];
@@ -392,6 +412,8 @@ export interface LedgerReadout {
   agents: ReadoutGroup[];
   projects: ReadoutGroup[];
   latency: ReadoutLatency;
+  /** Absent from a readout saved before the prelude panel. */
+  prelude?: ReadoutPrelude;
   quality: ReadoutQuality;
   platform: ReadoutPlatform | null;
   caveats: ReadoutCaveat[];
