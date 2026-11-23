@@ -905,11 +905,16 @@ test whose assertion never ran.
 | I8 | **`turn_prelude` shape.** One line per agent turn with `stages`, `groups` (`preamble`, `agent_build`), `totalMs`, `isResume`, `deferredBuild`, `hasAssistant`; EMF metric names derived from stage names; disabled by `TURN_LATENCY_METRICS_ENABLED=false`. | `test_turn_timing.py` |
 | I9 | **No network in tests.** | the socket guard in `tests/conftest.py` (fails at teardown) |
 | I10 | **Warm-up never opens a connection** (until P2 deliberately adds the one strategy-id read). | `test_warmup.py` (`boto3.client` patched, assert no call methods invoked) |
+| I11 | **No new round trip before the first token goes unseen.** Every AWS API call and HTTP request a turn makes before the model's first byte matches a committed inventory, per scenario and lane; and no `Before*` hook does awaited I/O before a later model call of a tool round. Counted, never timed. See §6F. | `tests/apis/inference_api/test_turn_path_io_inventory.py` against `turn_io/inventory.json`; regenerate with `UPDATE_TURN_IO_INVENTORY=1` |
+
+Every row above pins behaviour; only I11 pins cost, and it is the one a change on this path
+is most likely to move without noticing.
 
 ### 6B. Per-change checklist
 
-For each plan item, the cheaper model should: (1) run the named tests before touching
-anything and record the count; (2) make the change; (3) run the same tests plus the new
+For each plan item, the cheaper model should: (0) run I11's inventory test, whose diff
+says which round trips the change adds or removes before anyone reads a timing; (1) run the
+named tests before touching anything and record the count; (2) make the change; (3) run the same tests plus the new
 ones; (4) run the full suite once; (5) run the dev recipe and paste the numbers into the
 PR with the *before* numbers from the same recipe on the same day.
 
@@ -1022,6 +1027,83 @@ passed this comparison unnoticed. The budget in §1 is not satisfied by this
 number; it is merely not contradicted by it. Anything claiming a TTFT effect at
 finer resolution needs the probe's daily medians (above) or a purpose-built A/B,
 not a six-turn smoke run.
+
+### 6F. The call inventory (I11)
+
+Every other signal on this path is post-merge and advisory: the eval harness's
+`firstTokenMs` moves 20–115% a night per family on its own, the smoke pass prints a client
+median, the stage metrics have no alarm and the TTFT probe is not enabled everywhere. So a
+harness regression is found after it ships to dev, if someone looks. The inventory turns the
+TTFT rule in CLAUDE.md into a CI failure without a clock: it counts round trips.
+
+**What runs.** `tests/apis/inference_api/turn_io/driver.py` drives four turns through the
+real `invocations` handler in a fresh process (a first turn on a new microVM meets every
+per-process cache empty; inside a pytest worker its inventory would depend on which tests
+ran first): every route phase in §2B, the real agent build (§2D, Strands included), and the
+head of the stream (§2C) up to the model call. The deployment is seeded through real code
+(`turn_io/world.py`): the bootstrap seeder's catalog (24 default tools, all granted, the
+default models, the quota tier, the bundled skills), a user with full-length personal
+instructions, an Agent with a knowledge base and tool bindings, a Shared Project, and a PDF.
+
+| Scenario | The turn |
+|---|---|
+| `first_turn` | New conversation, cold process: every default tool, a skill, a PDF |
+| `warm_follow_up` | Same conversation and configuration: an agent-cache hit. Its model calls a tool first |
+| `tool_round` | The window between `warm_follow_up`'s first and second model calls |
+| `agent_mention` | Same conversation, `@`-mentioning the knowledge-base Agent |
+| `project_turn` | New conversation on the project's harness |
+
+**How it records.** `turn_io/recorder.py` registers a botocore `before-call` handler on
+every client at its first call (clients on any `boto3.Session`, so the Memory SDK's and
+Strands' fresh sessions included) and answers from an in-memory fake, so nothing reaches a
+socket and `after-call` still deserializes; `httpx` transports are patched to record and
+refuse. Each call carries its innermost `src/` frame as its origin and, when it ran inside
+a Strands hook callback, the event and callback.
+
+**Lanes.** Every task spawned during the turn, and every piece of work handed to a thread
+pool, is a link in a *lineage* held in a context variable. A call is **awaited** when it ran
+on the model call's own lineage before the next link was spawned, or in pool work its
+submitter blocked on with nothing in between (`asyncio.to_thread`, an awaited
+`run_in_executor`, `submit(...).result()`). Anything else is **concurrent**: a task or
+thread beside the path, which costs first-token time only if it outlasts what it overlaps.
+Both are decided from program order, not timing, so five parallel runs produce the same
+file. Four small tests in the same module pin the split on toy code.
+
+**What fails.** Any difference from `turn_io/inventory.json`, with a message naming the
+scenario, lane, call and origin, and pointing here; and any awaited call inside a `Before*`
+hook before a later model call of a tool round (those hooks repeat on every round). Adding
+one `get_item` to `_prepare_session_state` fails all four turn scenarios as
+`awaited +1: dynamodb.GetItem sessions-metadata <- …routes.py:_prepare_session_state`. A
+deliberate change regenerates the file, and the diff is what review reads:
+
+```bash
+cd backend && UPDATE_TURN_IO_INVENTORY=1 uv run python -m pytest tests/apis/inference_api/test_turn_path_io_inventory.py
+```
+
+**What it cannot see.** Time: it counts round trips, so a call that got slower, or a
+concurrent one that started outlasting its overlap, is invisible (that is §6E's job). Code
+the fixture does not reach: MCP servers (no network, so none are configured; the §2D
+pre-flight is not covered), resume, continuation, handoffs, workflow runs, folders,
+spreadsheets and decks. Branches the fake answers differently from AWS: it applies key
+conditions and `SET`/`ADD`/`REMOVE` updates but ignores filter and most condition
+expressions, so a path that depends on one is recorded as this fixture takes it. A fake
+failure is reported as a problem, never swallowed, because the code under test often
+catches the exception and quietly takes another branch.
+
+**First readout** (develop @ `72115810`, 2026-11-22), awaited / concurrent calls before the
+first byte: `first_turn` 31 / 12, `warm_follow_up` 9 / 3, `agent_mention` 14 / 8,
+`project_turn` 23 / 14, `tool_round` 3 / 3, and no `Before*` hook I/O on the second model
+call. What the file shows, read off it rather than measured:
+
+- A cold first turn reads the tool catalog row by row: 24 awaited `GetItem`s from
+  `ToolCatalogRepository.get_tool` (the registry stage, §2D) beside 24 concurrent ones from
+  `get_tool_updated_at` (the freshness hash). A warm follow-up reads none.
+- A warm follow-up still makes three `SessionLookupIndex` queries before the model:
+  `load_session_meta` (B1), `_get_session_metadata_cloud` and the session manager's
+  `_get_session_via_gsi` (compaction state, re-read per turn by I5).
+- An Agent turn writes before the model on every turn: `bump_last_used_at` and, on a
+  project harness, `_store_session_metadata_cloud` and `_backfill_session_aggregates`
+  (B8's bookkeeping; §5 P4).
 
 ## 7. Clarity refactors
 
