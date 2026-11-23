@@ -143,7 +143,7 @@ describe('PptxViewerComponent', () => {
     // pptxgenjs lists one slideMaster per slide but writes only the
     // first; the real library reads the missing part, throws inside its
     // own try block and resolves with zero slides. The repair itself is
-    // covered by pptx-content-types.spec.ts; this pins that the viewer
+    // covered by pptx-preview-repair.spec.ts; this pins that the viewer
     // feeds the library its output.
     const master = 'application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml';
     const zip = new JSZip();

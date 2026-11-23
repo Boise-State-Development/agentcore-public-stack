@@ -8,7 +8,7 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { dropOverridesForMissingParts } from './pptx-content-types';
+import { repairDeckForPreview } from './pptx-preview-repair';
 
 /**
  * Width, in CSS px, the deck is rendered at before it is scaled to fit.
@@ -185,12 +185,13 @@ export class PptxViewerComponent {
 
     try {
       PptxViewerComponent.libraryPromise ??= import('pptx-preview');
-      // pptxgenjs decks list slide masters they never write, which
-      // `pptx-preview` turns into zero slides; see pptx-content-types.ts.
-      // Repaired beside the library load, so neither waits on the other.
+      // pptxgenjs decks carry flaws PowerPoint tolerates and `pptx-preview`
+      // does not (missing slide masters, layout background aliases); see
+      // pptx-preview-repair.ts. Repaired beside the library load, so
+      // neither waits on the other.
       const [{ init }, deck] = await Promise.all([
         PptxViewerComponent.libraryPromise,
-        dropOverridesForMissingParts(data),
+        repairDeckForPreview(data),
       ]);
       if (seq !== this.renderSeq) return;
 
