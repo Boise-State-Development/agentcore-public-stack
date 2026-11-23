@@ -26,6 +26,7 @@ export const environment = {
         documentExtract: false,
         fieldSetAuthoring: false,
         skillBundleImport: false,
+        skillVersionHistory: false,
         handoffs: false,
         handoffBrief: false,
         workflowRuns: false,

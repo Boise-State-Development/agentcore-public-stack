@@ -7,6 +7,7 @@ import {
   inject,
   input,
   signal,
+  untracked,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -31,6 +32,9 @@ import {
   skillExportFilename,
 } from '../../shared/skills/skill-export';
 import { MySkillService } from './services/my-skill.service';
+import { MySkill } from './models/my-skill.model';
+import { FEATURES } from '../../services/features';
+import { SkillVersionHistoryComponent } from '../../shared/skills/skill-version-history.component';
 import { skillFilePath } from '../../shared/utils/skill-resource-path';
 
 /** Bundle-directory labels, in the order agentskills.io lists them. */
@@ -74,7 +78,7 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
 @Component({
   selector: 'app-customize-skill-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, SpinnerComponent, MarkdownComponent],
+  imports: [NgIcon, RouterLink, SpinnerComponent, MarkdownComponent, SkillVersionHistoryComponent],
   providers: [
     provideIcons({ heroArrowDownTray, heroArrowLeft, heroDocumentText, heroPencilSquare }),
   ],
@@ -317,6 +321,19 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
             </section>
           }
 
+          <!-- Version history (skill-version-history.md): owned skills only -->
+          @if (features.skillVersionHistory && s.isOwned && liveStamp(); as live) {
+            <div class="mt-8">
+              <app-skill-version-history
+                [api]="mySkillsApi"
+                [skillId]="s.skillId"
+                [updatedAt]="live.updatedAt"
+                [currentName]="live.name"
+                (restored)="onVersionRestored($event)"
+              />
+            </div>
+          }
+
           <!-- About -->
           <section class="mt-8">
             <h2 class="text-base/7 font-semibold text-gray-900 dark:text-white">About</h2>
@@ -378,6 +395,16 @@ export class CustomizeSkillDetailPage {
   protected readonly skillService = inject(SkillService);
   protected readonly detailService = inject(SkillDetailService);
   private readonly mySkills = inject(MySkillService);
+  protected readonly mySkillsApi = this.mySkills;
+  protected readonly features = inject(FEATURES);
+
+  /**
+   * An owned skill's `updatedAt` and name, read fresh from My Skills for the
+   * History section. The detail record is cached across navigation, and an
+   * edit made on the skill form does not refresh it, so its `updatedAt` could
+   * make a restore refuse a change the user made themselves.
+   */
+  protected readonly liveStamp = signal<{ updatedAt: string | null; name: string } | null>(null);
 
   /** Bound from the `:skillId` route param by `withComponentInputBinding()`. */
   readonly skillId = input.required<string>();
@@ -396,6 +423,32 @@ export class CustomizeSkillDetailPage {
     }
 
     effect(() => void this.detailService.ensure(this.skillId()));
+
+    effect(() => {
+      const s = this.skill();
+      if (!this.features.skillVersionHistory || !s?.isOwned) {
+        return;
+      }
+      untracked(() => void this.loadLiveStamp(s.skillId));
+    });
+  }
+
+  private async loadLiveStamp(skillId: string): Promise<void> {
+    try {
+      const live = await this.mySkills.getSkill(skillId);
+      if (live.skillId === this.skillId()) {
+        this.liveStamp.set({ updatedAt: live.updatedAt, name: live.displayName });
+      }
+    } catch {
+      this.liveStamp.set(null);
+    }
+  }
+
+  /** A restore wrote the skill: show it, and re-read the detail it changed. */
+  protected onVersionRestored(skill: MySkill): void {
+    this.liveStamp.set({ updatedAt: skill.updatedAt, name: skill.displayName });
+    this.detailService.invalidate(skill.skillId);
+    void this.detailService.ensure(skill.skillId);
   }
 
   protected readonly skill = computed<SkillDetail | null>(() =>

@@ -48,6 +48,7 @@ import {
 } from '../../../shared/skills/skill-resource-types';
 import { skillFilePath } from '../../../shared/utils/skill-resource-path';
 import { SkillBundleImportComponent } from '../../../shared/skills/skill-bundle-import.component';
+import { SkillVersionHistoryComponent } from '../../../shared/skills/skill-version-history.component';
 import { SkillImportSource } from '../../../shared/skills/skill-bundle-import.model';
 import { FEATURES } from '../../../services/features';
 
@@ -61,6 +62,7 @@ import { FEATURES } from '../../../services/features';
     SpinnerComponent,
     SkillMdDiagnosticsComponent,
     SkillBundleImportComponent,
+    SkillVersionHistoryComponent,
   ],
   providers: [
     provideIcons({
@@ -165,6 +167,19 @@ import { FEATURES } from '../../../services/features';
                 [importSource]="importSource()"
                 createNote="The skill is created as a draft with no roles. Review it, set it Active and grant it to roles before anyone can use it."
                 (imported)="onBundleImported($event)"
+              />
+            </div>
+          }
+
+          <!-- Version history (skill-version-history.md), shared with My Skills -->
+          @if (features.skillVersionHistory && isEditMode() && catalogLoaded()) {
+            <div class="mb-8">
+              <app-skill-version-history
+                [api]="adminSkillService"
+                [skillId]="skillId()!"
+                [updatedAt]="liveUpdatedAt()"
+                [currentName]="liveName()"
+                (restored)="onVersionRestored($event)"
               />
             </div>
           }
@@ -479,6 +494,9 @@ export class SkillFormPage implements OnInit {
   skillId = signal<string | null>(null);
   /** The skill's last bundle import (skill-bundle-import.md), shown on edit. */
   readonly importSource = signal<SkillImportSource | null>(null);
+  /** The loaded skill's `updatedAt` and name, as written: the History section's inputs. */
+  readonly liveUpdatedAt = signal<string | null>(null);
+  readonly liveName = signal('');
 
   readonly isEditMode = computed(() => !!this.skillId());
   /**
@@ -548,6 +566,30 @@ export class SkillFormPage implements OnInit {
     });
     this.resources.set([...skill.resources]);
     this.importSource.set(skill.importSource ?? null);
+    this.liveUpdatedAt.set(skill.updatedAt);
+    this.liveName.set(skill.displayName);
+  }
+
+  /**
+   * A file write changes the skill's `updatedAt` but returns only the manifest.
+   * Re-read the stamp (not the form: that would drop unsaved edits) so History
+   * reloads and a restore does not 409 on a change made on this same page.
+   */
+  private async refreshLiveStamp(id: string): Promise<void> {
+    if (!this.features.skillVersionHistory) return;
+    try {
+      const skill = await this.adminSkillService.fetchSkill(id);
+      this.liveUpdatedAt.set(skill.updatedAt);
+      this.liveName.set(skill.displayName);
+    } catch {
+      // History reloads on the next change; a restore would say the skill moved.
+    }
+  }
+
+  /** A restore already wrote the skill; show what it wrote, as a re-import does. */
+  protected onVersionRestored(skill: AdminSkill): void {
+    this.applySkill(skill);
+    this.form.markAsPristine();
   }
 
   /**
@@ -683,6 +725,7 @@ export class SkillFormPage implements OnInit {
           manifest = await this.adminSkillService.uploadResource(id, file);
         }
         this.resources.set(manifest);
+        await this.refreshLiveStamp(id);
       } catch (err: unknown) {
         this.error.set(err instanceof Error ? err.message : 'Failed to upload reference file.');
       } finally {
@@ -726,6 +769,7 @@ export class SkillFormPage implements OnInit {
     try {
       const manifest = await this.adminSkillService.deleteResource(id, skillFilePath(res));
       this.resources.set(manifest);
+      await this.refreshLiveStamp(id);
       if (this.viewing()?.filename === skillFilePath(res)) {
         this.viewing.set(null);
       }

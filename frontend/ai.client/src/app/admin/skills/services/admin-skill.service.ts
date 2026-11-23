@@ -14,6 +14,12 @@ import {
 } from '../models/admin-skill.model';
 import { SkillMdParseResult } from '../../../shared/skills/skill-md-parse';
 import {
+  SkillRestoreResult,
+  SkillVersionDetail,
+  SkillVersionHistoryApi,
+  SkillVersionList,
+} from '../../../shared/skills/skill-version-history.model';
+import {
   ImportApplyResult,
   ImportPreview,
   SkillBundleImportApi,
@@ -33,7 +39,9 @@ import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
 @Injectable({
   providedIn: 'root',
 })
-export class AdminSkillService implements SkillBundleImportApi<AdminSkill> {
+export class AdminSkillService
+  implements SkillBundleImportApi<AdminSkill>, SkillVersionHistoryApi<AdminSkill>
+{
   private http = inject(HttpClient);
   private config = inject(ConfigService);
 
@@ -146,6 +154,51 @@ export class AdminSkillService implements SkillBundleImportApi<AdminSkill> {
       this.http.post<ImportApplyResult<AdminSkill>>(
         `${this.baseUrl()}/${encodeURIComponent(skillId)}/import`,
         form,
+      ),
+    );
+    this.skillsResource.reload();
+    return result;
+  }
+
+  // ===========================================================================
+  // Version history (skill-version-history.md §6) — the catalog twin of My
+  // Skills', rendered by the shared SkillVersionHistoryComponent.
+  // ===========================================================================
+
+  /** A page of a catalog skill's history, newest first. */
+  listVersions(
+    skillId: string,
+    options: { limit?: number; before?: number | null } = {},
+  ): Promise<SkillVersionList> {
+    const params: Record<string, string> = {};
+    if (options.limit) params['limit'] = String(options.limit);
+    if (options.before) params['before'] = String(options.before);
+    return firstValueFrom(
+      this.http.get<SkillVersionList>(`${this.baseUrl()}/${encodeURIComponent(skillId)}/versions`, {
+        params,
+      }),
+    );
+  }
+
+  /** One version, with the change from the live skill to it. */
+  getVersion(skillId: string, version: number): Promise<SkillVersionDetail> {
+    return firstValueFrom(
+      this.http.get<SkillVersionDetail>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/versions/${version}`,
+      ),
+    );
+  }
+
+  /** Put a version back as a new version. No reach confirmation, as for an admin edit. */
+  async restoreVersion(
+    skillId: string,
+    version: number,
+    options: { expectedUpdatedAt?: string | null },
+  ): Promise<SkillRestoreResult<AdminSkill>> {
+    const result = await firstValueFrom(
+      this.http.post<SkillRestoreResult<AdminSkill>>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/versions/${version}/restore`,
+        { expectedUpdatedAt: options.expectedUpdatedAt ?? null },
       ),
     );
     this.skillsResource.reload();

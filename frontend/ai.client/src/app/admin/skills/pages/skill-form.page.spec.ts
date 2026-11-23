@@ -313,3 +313,74 @@ describe('SkillFormPage (admin) — bundle import', () => {
     expect(refresh).toBeTruthy();
   });
 });
+
+describe('SkillFormPage (admin) — version history', () => {
+  let http: HttpTestingController;
+
+  function configure(skillId: string | null, skillVersionHistory: boolean): void {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        { provide: ConfigService, useValue: { appApiUrl: signal(API) } },
+        { provide: FEATURES, useValue: { ...environment.features, skillVersionHistory } },
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { paramMap: convertToParamMap(skillId ? { skillId } : {}) } },
+        },
+      ],
+    });
+    http = TestBed.inject(HttpTestingController);
+  }
+
+  afterEach(() => {
+    http.match(() => true);
+    TestBed.resetTestingModule();
+  });
+
+  async function render(load?: object): Promise<HTMLElement> {
+    const fixture = TestBed.createComponent(SkillFormPage);
+    fixture.detectChanges();
+    await settle();
+    if (load) http.expectOne(`${API}/admin/skills/pdf_workflows`).flush(load);
+    http.match(`${API}/admin/skills/`).forEach(req => req.flush({ skills: [], total: 0 }));
+    for (let i = 0; i < 3; i++) {
+      await fixture.whenStable();
+      await settle();
+      fixture.detectChanges();
+      http
+        .match(req => req.url === `${API}/admin/skills/pdf_workflows/versions`)
+        .forEach(req =>
+          req.flush({
+            versions: [
+              {
+                version: 2,
+                trigger: 'save',
+                displayName: 'PDF Workflows',
+                fileCount: 0,
+                isCurrent: true,
+                createdByEmail: 'admin@example.com',
+              },
+            ],
+          }),
+        );
+    }
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('shows History on a catalog skill being edited while the flag is on', async () => {
+    configure('pdf_workflows', true);
+    const el = await render({ ...CATALOG_SKILL, updatedAt: '2026-11-23T10:00:00+00:00' });
+    expect(el.querySelector('#skill-history-heading')).not.toBeNull();
+    expect(el.textContent).toContain('Saved · admin@example.com');
+  });
+
+  it('shows no History on the create form, or while the flag is off', async () => {
+    configure(null, true);
+    expect((await render()).querySelector('#skill-history-heading')).toBeNull();
+    configure('pdf_workflows', false);
+    expect((await render(CATALOG_SKILL)).querySelector('#skill-history-heading')).toBeNull();
+  });
+});

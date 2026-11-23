@@ -37,6 +37,7 @@ export const environment = {
         documentExtract: true,
         fieldSetAuthoring: true,
         skillBundleImport: false,
+        skillVersionHistory: false,
         handoffs: false,
         handoffBrief: false,
         workflowRuns: false,

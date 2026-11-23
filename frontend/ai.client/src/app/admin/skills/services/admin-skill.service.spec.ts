@@ -29,6 +29,26 @@ describe('AdminSkillService', () => {
     TestBed.resetTestingModule();
   });
 
+  it('lists, reads and restores a catalog skill\'s versions', async () => {
+    const list = service.listVersions('pdf_tools', { before: 4 });
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne((r) => r.url === 'http://localhost:8000/admin/skills/pdf_tools/versions');
+      expect(req.request.params.get('before')).toBe('4');
+      req.flush({ versions: [] });
+    });
+    expect(await list).toEqual({ versions: [] });
+
+    const one = service.getVersion('pdf_tools', 2);
+    httpMock.expectOne('http://localhost:8000/admin/skills/pdf_tools/versions/2').flush({ version: 2 });
+    expect((await one).version).toBe(2);
+
+    const restore = service.restoreVersion('pdf_tools', 1, { expectedUpdatedAt: 'then' });
+    const req = httpMock.expectOne('http://localhost:8000/admin/skills/pdf_tools/versions/1/restore');
+    expect(req.request.body).toEqual({ expectedUpdatedAt: 'then' });
+    req.flush({ skill: { skillId: 'pdf_tools' }, importSourceRestored: true });
+    expect((await restore).skill).toEqual({ skillId: 'pdf_tools' });
+  });
+
   it('should fetch skills', async () => {
     const mockResponse = { skills: [], total: 0 };
     const promise = service.fetchSkills();
