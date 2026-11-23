@@ -88,4 +88,20 @@ describe('WorkflowsPage', () => {
     await settle(again);
     expect(el.textContent).toContain('My review, renamed');
   });
+
+  it('shows skeleton rows on first load, hidden from screen readers, with a status that says it is loading', async () => {
+    list.mockReturnValue(new Promise<WorkflowSummary[]>(() => undefined));
+    const fixture = TestBed.createComponent(WorkflowsPage);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.querySelector('[role="status"]')?.textContent?.trim()).toBe('Loading workflows…');
+    const skeleton = el.querySelector('[aria-hidden="true"].animate-pulse');
+    expect(skeleton?.querySelectorAll('li').length).toBe(3);
+    expect(skeleton?.classList).toContain('motion-reduce:animate-none');
+    const titleBar = skeleton?.querySelector('li .h-3\\.5');
+    expect(titleBar?.className).toContain('rounded-sm');
+    expect(titleBar?.className).toContain('w-2/5');
+    expect(el.querySelectorAll('li a').length).toBe(0);
+  });
 });
