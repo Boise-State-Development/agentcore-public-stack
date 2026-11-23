@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 
 from apis.shared.audit.models import AuditAction
 from apis.shared.auth.models import User
+from apis.shared.skills.bundle_import import ParsedBundle
 from apis.shared.rbac.admin_service import (
     AppRoleAdminService,
     get_app_role_admin_service,
@@ -22,8 +23,10 @@ from apis.shared.rbac.service import AppRoleService, get_app_role_service
 from apis.shared.skills.models import (
     SYSTEM_OWNER_ID,
     SkillDefinition,
+    SkillImportSource,
     SkillResourceRef,
     SkillRoleAssignment,
+    SkillStatus,
 )
 from apis.shared.skills.repository import (
     SkillCatalogRepository,
@@ -37,12 +40,21 @@ from apis.shared.skills.resource_store import (
     SkillResourceStore,
     get_skill_resource_store,
 )
+from apis.shared.skills.user_service import (
+    bundle_original_name,
+    skill_id_from_frontmatter_name,
+    slugify_skill_id,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class SkillNameConflictError(ValueError):
     """A new ``skill_id`` would activate under the same name as an existing skill (409)."""
+
+
+class SkillImportConflictError(ValueError):
+    """The source or the skill moved since the import was previewed (409, spec D3)."""
 
 
 class SkillCatalogService:
@@ -392,6 +404,163 @@ class SkillCatalogService:
     def write_skill_md(self, skill: SkillDefinition) -> None:
         """Write the skill's SKILL.md projection to S3 (best-effort)."""
         self.bundle_files.write_skill_md(skill)
+
+    # =========================================================================
+    # Admin Methods - Bundle import (docs/specs/skill-bundle-import.md)
+    #
+    # The catalog twin of ``UserSkillService.import_bundle``: the same file
+    # writer (``SkillBundleFiles.put_imported_files``), the same row shape and
+    # the same audit actions, scoped to catalog skills instead of ownership.
+    # =========================================================================
+
+    async def import_bundle(
+        self,
+        admin: User,
+        bundle: ParsedBundle,
+        *,
+        source: SkillImportSource,
+        skill_id: Optional[str] = None,
+        display_name: Optional[str] = None,
+        expected_bundle_hash: Optional[str] = None,
+        expected_updated_at: Optional[str] = None,
+    ) -> SkillDefinition:
+        """Create a catalog skill from ``bundle``, or re-import it into one.
+
+        A new skill is created as a **draft** with no role grants, so nobody's
+        agent sees it until an admin reviews it, activates it and grants it. A
+        re-import replaces the description, instructions, advisory tools,
+        frontmatter and files (dropping files the bundle no longer has) and
+        keeps the display name, status, category and grants. Like an admin edit
+        it writes the live row and cuts no version.
+
+        Raises:
+            SkillImportConflictError: ``expected_bundle_hash`` or
+                ``expected_updated_at`` no longer match.
+            ValueError: ``skill_id`` is not a catalog skill ("not found"), or a
+                file breaks a bundle rule.
+        """
+        if expected_bundle_hash and expected_bundle_hash != bundle.bundle_hash:
+            raise SkillImportConflictError(
+                "The source changed since you previewed it. Review the import again."
+            )
+        source = source.model_copy(update={"original_name": bundle_original_name(bundle)})
+        if skill_id is None:
+            return await self._create_from_bundle(admin, bundle, source, display_name)
+
+        skill = await self.require_catalog_skill(skill_id)
+        if expected_updated_at and skill.updated_at.isoformat() != expected_updated_at:
+            raise SkillImportConflictError(
+                "This skill changed since you previewed the import. Review it again."
+            )
+
+        old_refs = list(skill.resources)
+        new_refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, old_refs)
+        updated = await self.repository.update_skill(
+            skill_id,
+            {
+                "description": bundle.description,
+                "instructions": bundle.instructions,
+                "allowed_tools": list(bundle.allowed_tools),
+                "skill_metadata": dict(bundle.skill_metadata),
+                "resources": new_refs,
+                "import_source": source,
+            },
+            admin_user_id=admin.user_id,
+        )
+        if updated is None:
+            raise ValueError(f"Skill '{skill_id}' not found")
+        self.bundle_files.write_skill_md(updated)
+        await self.bundle_files.gc_orphaned(old_refs, new_refs)
+        if not is_no_op(skill, updated):
+            await record_skill_event(
+                AuditAction.SKILL_REFRESHED, admin, skill_id, before=skill, after=updated
+            )
+        self._log_import(admin, skill_id, source, old_refs, new_refs, created=False)
+        return updated
+
+    async def _create_from_bundle(
+        self,
+        admin: User,
+        bundle: ParsedBundle,
+        source: SkillImportSource,
+        display_name: Optional[str],
+    ) -> SkillDefinition:
+        skill_id = await self.plan_import_skill_id(bundle, display_name)
+        refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, [])
+        skill = SkillDefinition(
+            skill_id=skill_id,
+            display_name=(display_name or "").strip() or bundle.display_name,
+            description=bundle.description,
+            instructions=bundle.instructions,
+            allowed_tools=list(bundle.allowed_tools),
+            skill_metadata=dict(bundle.skill_metadata),
+            resources=refs,
+            status=SkillStatus.DRAFT,
+            created_by=admin.user_id,
+            updated_by=admin.user_id,
+            import_source=source,
+        )
+        try:
+            created = await self.repository.create_skill(skill)
+        except Exception:
+            # The row never existed, so nothing names these objects.
+            await self.bundle_files.gc_orphaned(refs, [])
+            raise
+        self.bundle_files.write_skill_md(created)
+        await record_skill_event(AuditAction.SKILL_IMPORTED, admin, skill_id, after=created)
+        self._log_import(admin, skill_id, source, [], refs, created=True)
+        return created
+
+    async def plan_import_skill_id(
+        self, bundle: ParsedBundle, display_name: Optional[str] = None
+    ) -> str:
+        """The ``skill_id`` creating a catalog skill from ``bundle`` would get now.
+
+        From the frontmatter ``name`` when it can be an id, else from the display
+        name, suffixed until neither the id nor its activation name
+        (``slugify_skill_name``) is taken, the rule ``create_skill`` enforces.
+        Nothing is reserved, so the preview's answer can move on by a suffix.
+        """
+        stem = skill_id_from_frontmatter_name(bundle_original_name(bundle))
+        if stem is None:
+            stem = slugify_skill_id((display_name or "").strip() or bundle.display_name)
+        existing = await self.repository.list_skills()
+        taken_ids = {s.skill_id for s in existing}
+        taken_slugs = {slugify_skill_name(s.skill_id) for s in existing}
+        candidate = stem
+        for suffix in range(2, 100):
+            if candidate not in taken_ids and slugify_skill_name(candidate) not in taken_slugs:
+                return candidate
+            tail = f"_{suffix}"
+            candidate = f"{stem[: 50 - len(tail)].rstrip('_')}{tail}"
+        raise ValueError(f"Could not find a free skill id for '{stem}'. Rename the skill.")
+
+    @staticmethod
+    def _log_import(
+        admin: User,
+        skill_id: str,
+        source: SkillImportSource,
+        old_refs: List[SkillResourceRef],
+        new_refs: List[SkillResourceRef],
+        *,
+        created: bool,
+    ) -> None:
+        old = {r.path: r.content_hash for r in old_refs}
+        new = {r.path: r.content_hash for r in new_refs}
+        logger.info(
+            f"Admin {scrub_log(admin.email)} imported a skill bundle into {scrub_log(skill_id)}",
+            extra={
+                "event": "skill_imported",
+                "skill_id": scrub_log(skill_id),
+                "admin_user_id": admin.user_id,
+                # NB: not "created" — reserved on LogRecord.
+                "new_skill": created,
+                "source_type": source.type,
+                "files_added": len(set(new) - set(old)),
+                "files_changed": sum(1 for k in set(new) & set(old) if new[k] != old[k]),
+                "files_removed": len(set(old) - set(new)),
+            },
+        )
 
     # =========================================================================
     # Admin Methods - Role Sync

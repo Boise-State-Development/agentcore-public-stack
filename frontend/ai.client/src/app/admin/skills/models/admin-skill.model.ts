@@ -5,6 +5,8 @@
  * (CLAUDE.md cross-package contract).
  */
 
+import { SkillImportSource } from '../../../shared/skills/skill-bundle-import.model';
+
 /**
  * Availability status of a skill (mirrors backend SkillStatus).
  */
@@ -49,6 +51,8 @@ export interface AdminSkill {
   updatedAt: string;
   createdBy: string | null;
   updatedBy: string | null;
+  /** Set once the skill was imported from a bundle (skill-bundle-import.md §3). */
+  importSource?: SkillImportSource | null;
 }
 
 /**

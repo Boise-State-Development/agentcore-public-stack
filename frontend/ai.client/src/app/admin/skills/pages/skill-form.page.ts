@@ -21,6 +21,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { AdminSkillService } from '../services/admin-skill.service';
 import {
+  AdminSkill,
   SkillResourceRef,
   SkillStatus,
   SKILL_STATUSES,
@@ -46,11 +47,21 @@ import {
   isAllowedResourceFilename,
 } from '../../../shared/skills/skill-resource-types';
 import { skillFilePath } from '../../../shared/utils/skill-resource-path';
+import { SkillBundleImportComponent } from '../../../shared/skills/skill-bundle-import.component';
+import { SkillImportSource } from '../../../shared/skills/skill-bundle-import.model';
+import { FEATURES } from '../../../services/features';
 
 @Component({
   selector: 'app-skill-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, ReactiveFormsModule, NgIcon, SpinnerComponent, SkillMdDiagnosticsComponent],
+  imports: [
+    RouterLink,
+    ReactiveFormsModule,
+    NgIcon,
+    SpinnerComponent,
+    SkillMdDiagnosticsComponent,
+    SkillBundleImportComponent,
+  ],
   providers: [
     provideIcons({
       heroArrowDownTray,
@@ -142,6 +153,19 @@ import { skillFilePath } from '../../../shared/utils/skill-resource-path';
           @if (error()) {
             <div class="mb-6 rounded-lg border border-state-danger-200 bg-state-danger-50 p-3 text-sm/6 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
               {{ error() }}
+            </div>
+          }
+
+          <!-- Whole-bundle import (skill-bundle-import.md), shared with My Skills -->
+          @if (features.skillBundleImport && (!isEditMode() || catalogLoaded())) {
+            <div class="mb-8">
+              <app-skill-bundle-import
+                [api]="adminSkillService"
+                [skillId]="skillId()"
+                [importSource]="importSource()"
+                createNote="The skill is created as a draft with no roles. Review it, set it Active and grant it to roles before anyone can use it."
+                (imported)="onBundleImported($event)"
+              />
             </div>
           }
 
@@ -433,7 +457,8 @@ export class SkillFormPage implements OnInit {
   private fb = inject(FormBuilder);
   private router = inject(Router);
   private route = inject(ActivatedRoute);
-  private adminSkillService = inject(AdminSkillService);
+  protected readonly adminSkillService = inject(AdminSkillService);
+  protected readonly features = inject(FEATURES);
 
   readonly statuses = SKILL_STATUSES;
   readonly categories = SKILL_CATEGORIES;
@@ -452,6 +477,8 @@ export class SkillFormPage implements OnInit {
   readonly importedAllowedTools = signal<string[]>([]);
   readonly importedSkillMetadata = signal<Record<string, unknown>>({});
   skillId = signal<string | null>(null);
+  /** The skill's last bundle import (skill-bundle-import.md), shown on edit. */
+  readonly importSource = signal<SkillImportSource | null>(null);
 
   readonly isEditMode = computed(() => !!this.skillId());
   /**
@@ -501,22 +528,40 @@ export class SkillFormPage implements OnInit {
   async loadSkill(skillId: string): Promise<void> {
     this.loading.set(true);
     try {
-      const skill = await this.adminSkillService.fetchSkill(skillId);
-      this.form.patchValue({
-        skillId: skill.skillId,
-        displayName: skill.displayName,
-        description: skill.description,
-        instructions: skill.instructions,
-        status: skill.status,
-        category: skill.category ?? '',
-      });
-      this.resources.set([...skill.resources]);
+      this.applySkill(await this.adminSkillService.fetchSkill(skillId));
       this.catalogLoaded.set(true);
     } catch (err: unknown) {
       this.error.set(err instanceof Error ? err.message : 'Failed to load skill.');
     } finally {
       this.loading.set(false);
     }
+  }
+
+  private applySkill(skill: AdminSkill): void {
+    this.form.patchValue({
+      skillId: skill.skillId,
+      displayName: skill.displayName,
+      description: skill.description,
+      instructions: skill.instructions,
+      status: skill.status,
+      category: skill.category ?? '',
+    });
+    this.resources.set([...skill.resources]);
+    this.importSource.set(skill.importSource ?? null);
+  }
+
+  /**
+   * A bundle import already wrote the skill server-side. A new one opens its
+   * edit page (to activate and grant it); a re-import refreshes this form from
+   * what was written, so a later Save cannot put the old instructions back.
+   */
+  protected async onBundleImported(skill: AdminSkill): Promise<void> {
+    if (!this.isEditMode()) {
+      await this.router.navigate(['/admin/skills/edit', skill.skillId]);
+      return;
+    }
+    this.applySkill(skill);
+    this.form.markAsPristine();
   }
 
   /** Download the catalog skill as an agentskills.io bundle (`{slug}.zip`). */
