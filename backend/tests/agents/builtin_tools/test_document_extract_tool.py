@@ -111,7 +111,7 @@ def wired(monkeypatch):
 
     from apis.shared.extraction.extractor import ExtractionResult
 
-    async def fake_extract(field_set, document_text, *, filename, model_id):
+    async def fake_extract(field_set, document_text, *, filename, model_id, effort=None):
         state["extract_text"] = document_text
         if state.get("extract_raises"):
             raise state["extract_raises"]

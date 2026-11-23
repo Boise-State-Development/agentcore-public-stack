@@ -29,6 +29,7 @@ import type { ManagedModel } from './models/managed-model.model';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 import { ModelIconComponent } from '../../components/model-icon/model-icon.component';
 import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
+import { ModelsTabsComponent } from './components/models-tabs.component';
 
 @Component({
   selector: 'app-manage-models-page',
@@ -39,6 +40,7 @@ import { TooltipDirective } from '../../components/tooltip/tooltip.directive';
     ModelIconComponent,
     SpinnerComponent,
     TooltipDirective,
+    ModelsTabsComponent,
     CdkDropList,
     CdkDrag,
     CdkDragHandle,

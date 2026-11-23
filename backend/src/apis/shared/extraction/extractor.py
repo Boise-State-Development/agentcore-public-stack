@@ -146,7 +146,7 @@ class ExtractionResult:
     usage: Dict[str, int]
 
 
-def _build_model(model_id: str, *, strict: bool):
+def _build_model(model_id: str, *, strict: bool, effort: Optional[str] = None):
     """A ``BedrockModel`` for the constrained call, built per call.
 
     Imported lazily so this module stays importable (and the parser and schema
@@ -163,11 +163,17 @@ def _build_model(model_id: str, *, strict: bool):
     # falls to auto with the strict tool instead of to native output sent
     # beside it, which Bedrock refuses at 14 fields (module docstring). A model
     # that accepts forcing (Haiku 4.5) still takes the forced call first.
+    #
+    # effort: the admin's Task models setting (Anthropic ``output_config.effort``),
+    # omitted when unset so the request is byte-identical to before.
+    extra: Dict[str, Any] = {}
+    if effort:
+        extra["additional_request_fields"] = {"output_config": {"effort": effort}}
     if strict:
         return BedrockModel(
-            model_id=model_id, max_tokens=None, strict_tools=True, model_info=no_native_output
+            model_id=model_id, max_tokens=None, strict_tools=True, model_info=no_native_output, **extra
         )
-    return BedrockModel(model_id=model_id, max_tokens=None, model_info=no_native_output)
+    return BedrockModel(model_id=model_id, max_tokens=None, model_info=no_native_output, **extra)
 
 
 def _prompt(field_set: FieldSet, document_text: str, filename: str) -> List[Dict[str, Any]]:
@@ -389,6 +395,7 @@ async def extract_fields(
     *,
     filename: str,
     model_id: str,
+    effort: Optional[str] = None,
 ) -> ExtractionResult:
     """Run *field_set* over *document_text* on its own constrained request.
 
@@ -401,8 +408,8 @@ async def extract_fields(
     """
     if not model_id:
         raise ExtractionError(
-            "DOCUMENT_EXTRACT_MODEL_ID is not set on this runtime, so there is "
-            "no model to run the extraction on."
+            "no extraction model is configured: an administrator can assign one "
+            "under Manage Models → Task models, or set DOCUMENT_EXTRACT_MODEL_ID."
         )
     text = (document_text or "").strip()
     if not text:
@@ -422,7 +429,7 @@ async def extract_fields(
 
     try:
         output, usage, by_tool = await _run_once(
-            _build_model(model_id, strict=True),
+            _build_model(model_id, strict=True, effort=effort),
             output_model,
             prompt,
             STRICT_TIMEOUT_SECONDS,
@@ -459,7 +466,7 @@ async def extract_fields(
         )
         try:
             output, usage, _ = await _run_once(
-                _build_model(model_id, strict=False),
+                _build_model(model_id, strict=False, effort=effort),
                 output_model,
                 prompt,
                 FALLBACK_TIMEOUT_SECONDS,

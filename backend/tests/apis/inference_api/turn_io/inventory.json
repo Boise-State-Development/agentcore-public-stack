@@ -72,6 +72,7 @@
         "1x dynamodb.GetItem app-roles  <- apis/shared/rbac/repository.py:AppRoleRepository.get_user_grant  [task AppRoleService._load_active_grant]",
         "1x dynamodb.GetItem app-roles  <- apis/shared/skills/repository.py:SkillCatalogRepository.get_skill  [task get_skill_updated_at]",
         "24x dynamodb.GetItem app-roles  <- apis/shared/tools/repository.py:ToolCatalogRepository.get_tool  [task get_tool_updated_at]",
+        "1x dynamodb.GetItem managed-models  <- apis/shared/models/task_models.py:_read_item  [task generate_conversation_title]",
         "1x dynamodb.GetItem user-file-uploads  <- apis/shared/files/repository.py:FileUploadRepository.get_file  [task FileResolver._resolve_single_file]",
         "1x dynamodb.Query user-file-uploads/SessionIndex  <- apis/shared/files/repository.py:FileUploadRepository.list_session_files_sync  [task _auto_enabled_spreadsheet_tool_ids]",
         "1x dynamodb.Query user-quotas/UserAssignmentIndex  <- agents/main_agent/quota/repository.py:QuotaRepository.get_active_extensions  [task QuotaResolver._load_active_extensions]",

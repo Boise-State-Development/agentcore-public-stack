@@ -471,9 +471,14 @@ export function buildAppApiEnvironment(
     // Typed structured extraction (docs/specs/structured-extraction.md).
     // app-api's share is the read side: `GET /messages` replays the stored
     // `EXTR#` rows, which the SSE event does not re-stream. In development, so
-    // only "true" enables. The model id is deliberately NOT set here — app-api
-    // never makes the extraction call.
+    // only "true" enables. app-api never makes the extraction call; it reads the
+    // model id only to show the deployment's default on the admin Task models tab
+    // (docs/specs/admin-model-assignments.md), so it rides along only while on,
+    // exactly as the Runtime's copy does.
     DOCUMENT_EXTRACT_ENABLED: config.documentExtract.enabled ? 'true' : 'false',
+    ...(config.documentExtract.enabled
+      ? { DOCUMENT_EXTRACT_MODEL_ID: config.documentExtract.modelId }
+      : {}),
 
     // Field-set authoring (docs/specs/field-set-authoring.md §7): the
     // `/skills/mine/{id}/field-sets` routes. app-api only; the Runtime resolves

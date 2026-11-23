@@ -432,3 +432,19 @@ describe('buildAppApiEnvironment — MCP elicitation', () => {
     expect(on.MCP_ELICITATION_ENABLED).toBe('true');
   });
 });
+
+describe('buildAppApiEnvironment — structured extraction model id', () => {
+  // The admin Task models tab shows the deployment's extraction default, which only
+  // the Runtime used to receive. Same value, same on-only rule as the Runtime's copy.
+  it('forwards the model id only while extraction is on', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.DOCUMENT_EXTRACT_MODEL_ID).toBeUndefined();
+
+    const on = buildAppApiEnvironment(
+      createMockConfig({ documentExtract: { enabled: true, modelId: 'us.anthropic.test-model' } }),
+      stubParams(),
+    );
+    expect(on.DOCUMENT_EXTRACT_ENABLED).toBe('true');
+    expect(on.DOCUMENT_EXTRACT_MODEL_ID).toBe('us.anthropic.test-model');
+  });
+});

@@ -214,6 +214,31 @@ def _salvage(text: str, budget_tokens: int) -> Optional[str]:
     return _keep_head_lines(head, budget_tokens) if head else None
 
 
+def _effort_fields(effort: Optional[str]) -> Dict[str, Any]:
+    """Converse kwargs for an admin-assigned effort level (Anthropic ``output_config.effort``)."""
+    if not effort:
+        return {}
+    return {"additionalModelRequestFields": {"output_config": {"effort": effort}}}
+
+
+def _inference_config(temperature: float, max_tokens: int, send_temperature: bool) -> Dict[str, Any]:
+    """``inferenceConfig``, without ``temperature`` for a model whose catalog row leaves it out
+    (the Claude 5.x rows; Bedrock refuses it for them). ``TaskModelChoice.supports_temperature``."""
+    config: Dict[str, Any] = {"maxTokens": max_tokens}
+    if send_temperature:
+        config["temperature"] = temperature
+    return config
+
+
+def _first_text(response: Dict[str, Any]) -> str:
+    """The first text block: an assigned reasoning model may open with a reasoning block."""
+    for block in response["output"]["message"]["content"]:
+        text = block.get("text")
+        if isinstance(text, str):
+            return text
+    return ""
+
+
 def _converse(region: Optional[str], **kwargs: Any) -> Dict[str, Any]:
     """Run in a worker thread, so a first-use client build stays off the event loop.
 
@@ -231,6 +256,8 @@ async def _compress(
     *,
     model_id: str,
     region: Optional[str],
+    effort: Optional[str] = None,
+    send_temperature: bool = True,
 ) -> Tuple[Optional[str], bool]:
     """``compress_with_model``, plus whether its text was salvaged from a cut-off generation."""
     text = _compression_input(records)
@@ -244,15 +271,15 @@ async def _compress(
             _converse,
             region,
             modelId=model_id,
+            **_effort_fields(effort),
             system=[{"text": _COMPRESSION_SYSTEM_PROMPT.replace("{word_budget}", f"{word_budget:,}")}],
             messages=[{"role": "user", "content": [{"text": "Summary notes, oldest first:\n\n" + text}]}],
             # Temperature only: Claude 4.5+ rejects `temperature` and `topP`
             # together, and the blanket except below would turn that into a
             # silent fall back to truncation on every compression.
-            inferenceConfig={
-                "temperature": 0.1,
-                "maxTokens": min(_max_output_tokens(model_id), max(256, int(budget_tokens))),
-            },
+            inferenceConfig=_inference_config(
+                0.1, min(_max_output_tokens(model_id), max(256, int(budget_tokens))), send_temperature
+            ),
         )
         stop_reason = response.get("stopReason")
         if stop_reason not in _ACCEPTED_STOP_REASONS:
@@ -260,7 +287,7 @@ async def _compress(
                 "compaction_summary_model_refused: stopReason=%s; falling back to truncation", stop_reason,
             )
             return None, False
-        out = response["output"]["message"]["content"][0]["text"].strip()
+        out = _first_text(response).strip()
         if stop_reason == "max_tokens":
             salvaged = _salvage(out, budget_tokens)
             logger.info(
@@ -280,6 +307,8 @@ async def compress_with_model(
     *,
     model_id: str,
     region: Optional[str] = None,
+    effort: Optional[str] = None,
+    send_temperature: bool = True,
 ) -> Optional[str]:
     """One bounded Bedrock ``converse`` call. Returns ``None`` on any failure.
 
@@ -288,7 +317,10 @@ async def compress_with_model(
 
     Side-channel by construction: its own messages, never ``agent.messages``.
     """
-    compressed, _ = await _compress(records, budget_tokens, model_id=model_id, region=region)
+    compressed, _ = await _compress(
+        records, budget_tokens, model_id=model_id, region=region, effort=effort,
+        send_temperature=send_temperature,
+    )
     return compressed
 
 
@@ -302,6 +334,8 @@ async def extract_with_model(
     *,
     model_id: str,
     region: Optional[str] = None,
+    effort: Optional[str] = None,
+    send_temperature: bool = True,
 ) -> Optional[str]:
     """The verbatim extraction call. Returns ``None`` on any failure.
 
@@ -316,9 +350,10 @@ async def extract_with_model(
             _converse,
             region,
             modelId=model_id,
+            **_effort_fields(effort),
             system=[{"text": _EXTRACTION_SYSTEM_PROMPT}],
             messages=[{"role": "user", "content": [{"text": "Summary notes, oldest first:\n\n" + text}]}],
-            inferenceConfig={"temperature": 0.0, "maxTokens": max(256, int(max_tokens))},
+            inferenceConfig=_inference_config(0.0, max(256, int(max_tokens)), send_temperature),
         )
         stop_reason = response.get("stopReason")
         if stop_reason not in _ACCEPTED_STOP_REASONS:
@@ -326,7 +361,7 @@ async def extract_with_model(
                 "compaction_summary_extract_refused: stopReason=%s; falling back to plain compression", stop_reason,
             )
             return None
-        out = response["output"]["message"]["content"][0]["text"].strip()
+        out = _first_text(response).strip()
         if stop_reason == "max_tokens":
             logger.info("compaction_summary_extract_truncated: keeping the complete lines")
             cut = out.rfind("\n")
@@ -344,6 +379,8 @@ async def _extract_then_compress(
     *,
     model_id: str,
     region: Optional[str],
+    effort: Optional[str] = None,
+    send_temperature: bool = True,
 ) -> BoundedSummary:
     """Pinned facts and the compressed narrative, from two concurrent calls.
 
@@ -360,8 +397,13 @@ async def _extract_then_compress(
             min(_EXTRACTION_MAX_OUTPUT_TOKENS, pinned_cap),
             model_id=model_id,
             region=region,
+            effort=effort,
+            send_temperature=send_temperature,
         ),
-        compress_with_model(records, narrative_budget, model_id=model_id, region=region),
+        compress_with_model(
+            records, narrative_budget, model_id=model_id, region=region, effort=effort,
+            send_temperature=send_temperature,
+        ),
     )
     if pinned:
         # The pinned block, header included, stays inside its half.
@@ -408,6 +450,8 @@ async def bound_summary(
     model_id: str,
     region: Optional[str] = None,
     extract_enabled: bool = False,
+    effort: Optional[str] = None,
+    send_temperature: bool = True,
 ) -> BoundedSummary:
     """Hold the summary built from ``records`` at or under ``budget_tokens``.
 
@@ -423,10 +467,16 @@ async def bound_summary(
         return BoundedSummary(joined, "within_budget", before, before)
 
     if model_enabled and extract_enabled:
-        return await _extract_then_compress(records, budget_tokens, before, model_id=model_id, region=region)
+        return await _extract_then_compress(
+            records, budget_tokens, before, model_id=model_id, region=region, effort=effort,
+            send_temperature=send_temperature,
+        )
 
     if model_enabled:
-        compressed, salvaged = await _compress(records, budget_tokens, model_id=model_id, region=region)
+        compressed, salvaged = await _compress(
+            records, budget_tokens, model_id=model_id, region=region, effort=effort,
+            send_temperature=send_temperature,
+        )
         if compressed is not None:
             after = approx_tokens(compressed)
             if after <= budget_tokens:
