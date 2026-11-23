@@ -275,6 +275,7 @@ from apis.app_api.assistants.knowledge_mode import router as knowledge_mode_rout
 from apis.app_api.assistants.knowledge_mode import voice_router as voice_knowledge_mode_router
 from apis.app_api.users.routes import router as users_router
 from apis.app_api.user_settings.routes import router as user_settings_router
+from apis.app_api.arrangements.routes import router as arrangements_router
 from apis.app_api.connectors.routes import router as connectors_router
 from apis.app_api.file_sources.routes import router as file_sources_router
 from apis.app_api.export_targets.routes import router as export_targets_router
@@ -313,6 +314,7 @@ app.include_router(voice_knowledge_mode_router)  # Agent Designer: how voice mod
 app.include_router(kb_upgrade_router)  # Owner-facing KB upgrade card; phase "none" (renders nothing) while MANAGED_KB_MIGRATION_ENABLED is off
 app.include_router(users_router)
 app.include_router(user_settings_router)
+app.include_router(arrangements_router)  # /users/me/arrangements/*; 404s while ORGANIZE_LISTS_ENABLED is off
 app.include_router(models_router)
 app.include_router(costs_router)
 app.include_router(quota_requests_router)  # /quota/* quota requests; 404s while QUOTA_REQUESTS_ENABLED is off

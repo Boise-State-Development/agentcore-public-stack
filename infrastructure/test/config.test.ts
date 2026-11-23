@@ -1225,6 +1225,36 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Organize lists feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Organize lists feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_ORGANIZE_LISTS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_ORGANIZE_LISTS_ENABLED is unset', () => {
+      delete process.env.CDK_ORGANIZE_LISTS_ENABLED;
+      expect(loadConfig(app).organizeLists.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_ORGANIZE_LISTS_ENABLED = '';
+      expect(loadConfig(app).organizeLists.enabled).toBe(false);
+    });
+
+    test('CDK_ORGANIZE_LISTS_ENABLED="true" turns it on', () => {
+      process.env.CDK_ORGANIZE_LISTS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).organizeLists.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_ORGANIZE_LISTS_ENABLED = 'yes';
+      expect(loadConfig(app).organizeLists.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
   // Handoffs feature flag — opt-in while in development
   // ============================================================
 

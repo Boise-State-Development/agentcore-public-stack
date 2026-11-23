@@ -1148,6 +1148,25 @@ def aws_limits_enabled() -> bool:
     return os.environ.get("AWS_LIMITS_ENABLED", "").strip().lower() == "true"
 
 
+def organize_lists_enabled() -> bool:
+    """Whether members can hide and reorder items on the Agents and Projects pages.
+
+    ``docs/specs/agent-project-organization.md``. Gates app-api's
+    ``/users/me/arrangements/{surface}`` routes, which 404 after authentication
+    while off. An arrangement is a personal view preference (sort, custom order,
+    hidden ids); it never changes access.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it, so an unset GitHub variable
+    (``""``) is off. CDK sets it on app-api from ``config.organizeLists.enabled``.
+    The SPA's matching switch will be ``features.organizeLists``.
+
+    **app-api only.** Nothing on the turn path reads an arrangement, so the
+    Runtime gets no variable.
+    """
+    return os.environ.get("ORGANIZE_LISTS_ENABLED", "").strip().lower() == "true"
+
+
 def user_grants_enabled() -> bool:
     """Whether the admin surface for direct user grants is mounted on app-api.
 

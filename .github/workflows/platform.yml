@@ -289,6 +289,12 @@ jobs:
       # turn it on there. app-api only; the Service Quotas IAM grants exist only
       # while on. The SPA's matching switch is `features.awsLimits`.
       CDK_AWS_LIMITS_ENABLED: ${{ vars.CDK_AWS_LIMITS_ENABLED }}
+      # Organizing the Agents and Projects pages: members hide items and set a
+      # custom order (docs/specs/agent-project-organization.md). Opt-in while in
+      # development: set `CDK_ORGANIZE_LISTS_ENABLED` to "true" in an
+      # environment to turn it on there. app-api only. The SPA's matching
+      # switch will be `features.organizeLists` in src/environments/*.ts.
+      CDK_ORGANIZE_LISTS_ENABLED: ${{ vars.CDK_ORGANIZE_LISTS_ENABLED }}
       # Handoffs: a mid-thread @-mention hands off to an Agent with reviewed
       # context (docs/specs/agent-handoffs-and-consults.md, Phase 0). Opt-in
       # while in development: set `CDK_HANDOFFS_ENABLED` to "true" in an

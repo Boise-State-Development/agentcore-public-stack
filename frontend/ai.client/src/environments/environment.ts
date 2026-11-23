@@ -37,6 +37,7 @@ export const environment = {
         quotaRequests: false,
         projectFileReadiness: false,
         awsLimits: false,
+        organizeLists: false,
         knowledgeBaseMode: false,
         releaseLedger: false,
         attachmentCards: false,

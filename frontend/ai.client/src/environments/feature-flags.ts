@@ -247,6 +247,13 @@ export interface FeatureFlags {
    * 404s while off). In development, so `false` locally and in prod.
    */
   awsLimits: boolean;
+  /**
+   * Organizing the Agents and Projects pages: Hide, a Hidden filter and a
+   * custom order (docs/specs/agent-project-organization.md). Backend:
+   * ORGANIZE_LISTS_ENABLED (app-api; `/users/me/arrangements/*` 404s while
+   * off). In development, so `false` everywhere until the UI lands.
+   */
+  organizeLists: boolean;
 
   /**
    * Knowledge-base mode line: one read-only line on the Agent Designer's
