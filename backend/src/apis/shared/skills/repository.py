@@ -28,7 +28,13 @@ from botocore.exceptions import ClientError
 from apis.shared.blocking_io import run_blocking
 
 from .models import SkillDefinition, SkillStatus, UserSkillPreference
-from .versions import VERSION_SK_PREFIX, SkillVersion, version_sk
+from .versions import (
+    SUMMARY_ATTRIBUTES,
+    VERSION_SK_PREFIX,
+    SkillVersion,
+    SkillVersionSummary,
+    version_sk,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -231,14 +237,19 @@ class SkillCatalogRepository:
         skill_id: str,
         updates: Dict[str, Any],
         admin_user_id: Optional[str] = None,
+        *,
+        clear_fields: Tuple[str, ...] = (),
     ) -> Optional[SkillDefinition]:
         """
         Update a skill's metadata.
 
         Args:
             skill_id: The skill identifier
-            updates: Dictionary of fields to update
+            updates: Dictionary of fields to update. A ``None`` value is skipped,
+                so a caller can pass a partial DTO.
             admin_user_id: ID of admin performing the update
+            clear_fields: Optional fields to set to None, which ``updates`` can't
+                (a restore clearing ``import_source``).
 
         Returns:
             Updated SkillDefinition or None if not found
@@ -252,6 +263,9 @@ class SkillCatalogRepository:
             for field, value in updates.items():
                 if hasattr(existing, field) and value is not None:
                     setattr(existing, field, value)
+            for field in clear_fields:
+                if hasattr(existing, field):
+                    setattr(existing, field, None)
 
             # Update audit fields
             existing.updated_at = datetime.now(timezone.utc)
@@ -405,6 +419,50 @@ class SkillCatalogRepository:
         )
         items = response.get("Items", [])
         return SkillVersion.from_dynamo_item(items[0]) if items else None
+
+    async def get_skill_version(self, skill_id: str, number: int) -> Optional[SkillVersion]:
+        """One version, whole; None when that number was never cut."""
+        return await run_blocking(self._get_skill_version_sync, skill_id, number)
+
+    def _get_skill_version_sync(self, skill_id: str, number: int) -> Optional[SkillVersion]:
+        item = self._table.get_item(
+            Key={"PK": f"SKILL#{skill_id}", "SK": version_sk(number)}
+        ).get("Item")
+        return SkillVersion.from_dynamo_item(item) if item else None
+
+    async def list_skill_versions(
+        self, skill_id: str, *, limit: int, before: Optional[int] = None
+    ) -> Tuple[List[SkillVersionSummary], Optional[int]]:
+        """Newest first, at most ``limit``, projected without the instructions.
+
+        ``before`` continues a list: only versions numbered below it. Returns the
+        page and the cursor for the next one (the last number returned), or None
+        when there is no more.
+        """
+        return await run_blocking(self._list_skill_versions_sync, skill_id, limit, before)
+
+    def _list_skill_versions_sync(
+        self, skill_id: str, limit: int, before: Optional[int]
+    ) -> Tuple[List[SkillVersionSummary], Optional[int]]:
+        if before is not None and before <= 1:
+            return [], None
+        names = {f"#a{i}": name for i, name in enumerate(SUMMARY_ATTRIBUTES)}
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("PK").eq(f"SKILL#{skill_id}")
+            & (
+                Key("SK").between(version_sk(1), version_sk(before - 1))
+                if before
+                else Key("SK").begins_with(VERSION_SK_PREFIX)
+            ),
+            "ScanIndexForward": False,
+            "Limit": limit,
+            "ProjectionExpression": ", ".join(names),
+            "ExpressionAttributeNames": names,
+        }
+        response = self._table.query(**kwargs)
+        rows = [SkillVersionSummary.from_dynamo_item(i) for i in response.get("Items", [])]
+        more = "LastEvaluatedKey" in response and rows
+        return rows, (rows[-1].version if more else None)
 
     async def batch_get_skill_versions(
         self, refs: List[Tuple[str, int]]

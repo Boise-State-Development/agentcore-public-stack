@@ -54,6 +54,7 @@ const ACTION_LABELS: Record<string, string> = {
   'skill.updated': 'Skill updated',
   'skill.imported': 'Skill imported',
   'skill.refreshed': 'Skill re-imported',
+  'skill.restored': 'Skill version restored',
   'skill.deleted': 'Skill deleted',
   'skill.exported': 'Skill exported',
   'skill.script_run': 'Skill script run',

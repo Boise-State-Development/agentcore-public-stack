@@ -37,7 +37,7 @@ from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.audit import is_no_op, record_skill_event
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.bundle_files import SkillBundleFiles
-from apis.shared.skills.versions import SNAPSHOT_FIELDS
+from apis.shared.skills.versions import SNAPSHOT_FIELDS, SkillVersion, SkillVersionSummary
 from apis.shared.skills.resource_store import (
     SkillResourceStore,
     get_skill_resource_store,
@@ -578,6 +578,47 @@ class SkillCatalogService:
                 "files_changed": sum(1 for k in set(new) & set(old) if new[k] != old[k]),
                 "files_removed": len(set(old) - set(new)),
             },
+        )
+
+    # =========================================================================
+    # Version history: list, read, restore (docs/specs/skill-version-history.md §5, §6)
+    # =========================================================================
+
+    async def list_versions(
+        self, skill_id: str, *, limit: int, before: Optional[int] = None
+    ) -> Tuple[SkillDefinition, List[SkillVersionSummary], Optional[int]]:
+        """A catalog skill, a page of its history (newest first) and the next cursor."""
+        live = await self.require_catalog_skill(skill_id)
+        rows, cursor = await self.repository.list_skill_versions(skill_id, limit=limit, before=before)
+        return live, rows, cursor
+
+    async def get_version(self, skill_id: str, number: int) -> Tuple[SkillDefinition, SkillVersion]:
+        """A catalog skill and one of its versions, whole."""
+        live = await self.require_catalog_skill(skill_id)
+        version = await self.repository.get_skill_version(skill_id, number)
+        if version is None:
+            raise history.SkillVersionNotFoundError(f"Version {number} of this skill was not found.")
+        return live, version
+
+    async def restore_version(
+        self,
+        skill_id: str,
+        number: int,
+        admin: User,
+        *,
+        expected_updated_at: Optional[str] = None,
+    ) -> history.RestoreResult:
+        """Put a catalog skill's version ``number`` back as a new version (spec D3).
+
+        No reach confirmation, as for an admin edit (spec D7).
+        """
+        live = await self.require_catalog_skill(skill_id)
+        return await history.restore_version(
+            live,
+            number,
+            user=admin,
+            bundle_files=self.bundle_files,
+            expected_updated_at=expected_updated_at,
         )
 
     # =========================================================================
