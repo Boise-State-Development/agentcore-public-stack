@@ -60,6 +60,7 @@ Workflow runs and the workflow designer, all in development and off by default. 
 
 - Kaizen research and review prep for 2026-11-20, and the 2026-11-20 efficiency review (#2198, #2297, #2196)
 - Workflow runs step 1 and step 2 outcomes recorded in their specs (#2217, #2265)
+- Benchmarks republished from this release's runs: Claude Haiku 5.5, Sonnet 5.5 (replacing Sonnet 5) and Opus 5.5, 146 cases at k=3, in `docs-site/src/data/benchmarks.json` and the README table
 
 ## [1.38.0] - 2026-11-19
 

@@ -81,13 +81,13 @@ Every rule below is code you can read and test, not a vendor's promise. The [gov
 
 ### 📊 Measured in the open
 
-**We publish our results; most platforms keep theirs private.** Every release runs 145 synthetic cases, three times each, on every model we list, and publishes what passed, what it cost and how long it took, failing cases included. The cases are synthetic, so nothing is withheld, and on the Benchmarks page every number links back to the case and commit that produced it.
+**We publish our results; most platforms keep theirs private.** Every release runs 146 synthetic cases, three times each, on every model we list, and publishes what passed, what it cost and how long it took, failing cases included. The cases are synthetic, so nothing is withheld, and on the Benchmarks page every number links back to the case and commit that produced it.
 
 | Model | Cases passing | Cost per task | Median task time | Median first token | Measured |
 |---|---:|---:|---:|---:|---|
-| `us.anthropic.claude-haiku-5-5` | 142 of 145 (k=3) | $0.0008 | 7.2 s | 2.8 s | 2026-11-18, v1.36.1 |
-| `us.anthropic.claude-sonnet-5` | 142 of 145 (k=3) | $0.0131 | 6.4 s | 1.5 s | 2026-11-18, v1.36.1 |
-| `us.anthropic.claude-opus-5-5` | 143 of 145 (k=3) | $0.0273 | 7.5 s | 2.4 s | 2026-11-18, v1.36.1 |
+| `us.anthropic.claude-haiku-5-5` | 142 of 146 (k=3) | $0.0009 | 6.7 s | 2.7 s | 2026-11-23, v1.38.0 |
+| `us.anthropic.claude-sonnet-5-5` | 141 of 146 (k=3) | $0.0140 | 4.2 s | 0.7 s | 2026-11-23, v1.38.0 |
+| `us.anthropic.claude-opus-5-5` | 143 of 146 (k=3) | $0.0315 | 7.6 s | 2.1 s | 2026-11-23, v1.38.0 |
 
 Cost per task is what the platform metered for every model call of a task, at Regional rates on the development deployment. Full tables by workflow, the methodology and the command that reruns the benchmark on your own deployment are on the [Benchmarks](https://boise-state-development.github.io/agentcore-public-stack/benchmarks/) page.
 
