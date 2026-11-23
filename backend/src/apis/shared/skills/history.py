@@ -24,17 +24,31 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict, List, Literal, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional
 
+from apis.shared.audit.models import AuditAction
+from apis.shared.auth.models import User
 from apis.shared.feature_flags import skill_version_history_enabled
 from apis.shared.observability.emf import emit_emf_metrics
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.timestamps import to_iso, utc_now_iso
 
+from .audit import record_skill_event
 from .models import SkillDefinition, SkillResourceRef
 from .repository import SkillCatalogRepository, SkillVersionExistsError, get_skill_catalog_repository
-from .resource_store import SkillResourceStore, get_skill_resource_store
-from .versions import SkillVersion, content_hash, snapshot_of
+from .resource_paths import validate_resource_path
+from .resource_store import (
+    SkillResourceStore,
+    SkillResourceStoreError,
+    compute_content_hash,
+    get_skill_resource_store,
+)
+from .resource_types import resolve_upload_content_type
+from .versions import SNAPSHOT_FIELDS, SkillVersion, content_hash, snapshot_of
+
+if TYPE_CHECKING:
+    from .bundle_files import SkillBundleFiles
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +76,14 @@ class SkillVersionSourceMissingError(ValueError):
 
 class SkillCheckpointError(RuntimeError):
     """A required checkpoint failed, so the write that needed it must not run."""
+
+
+class SkillVersionNotFoundError(LookupError):
+    """That version of the skill was never cut."""
+
+
+class SkillRestoreConflictError(ValueError):
+    """The skill changed since the caller looked at its history (409)."""
 
 
 async def capture_current(
@@ -260,4 +282,135 @@ def _report_failure(skill_id: str, trigger: str, exc: Exception) -> None:
         metrics={"SkillVersionCaptureFailed": 1},
         properties={"trigger": trigger, "errorType": type(exc).__name__},
         units={"SkillVersionCaptureFailed": "Count"},
+    )
+
+
+# =============================================================================
+# Restore (spec §5, D3, D5, D6)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class _RestoredFile:
+    """A frozen file read back for ``put_imported_files`` (its ``ImportedFile`` shape)."""
+
+    filename: str
+    kind: str
+    content: bytes
+    content_hash: str
+    resource_path: str
+
+
+@dataclass(frozen=True)
+class RestoreResult:
+    skill: SkillDefinition
+    # The version the restore was kept as; None when that capture failed.
+    version: Optional[SkillVersion]
+    # False when the version predates full import sources, so the live one was kept (D6).
+    import_source_restored: bool
+
+
+async def restore_version(
+    live: SkillDefinition,
+    number: int,
+    *,
+    user: User,
+    bundle_files: "SkillBundleFiles",
+    expected_updated_at: Optional[str] = None,
+) -> RestoreResult:
+    """Put version ``number`` back as the live skill, as a new version (D3).
+
+    The caller has already decided ``user`` may write ``live`` (ownership or the
+    catalog scope, and the reach confirmation). A restore is a write, not a pointer
+    move: it checkpoints the live content (failing closed), writes the version's
+    files back to the live bundle keys and its fields onto the row, display name
+    included (D5), then captures the result with ``restored_from=number``. Pins do
+    not move (D4).
+
+    Raises:
+        SkillVersionNotFoundError: No such version.
+        SkillRestoreConflictError: ``expected_updated_at`` no longer matches.
+        SkillCheckpointError: The live content could not be kept first.
+        ValueError: A file of the version breaks today's file rules. Checked for
+            every file before anything is written.
+        SkillResourceStoreError: A frozen copy is missing or does not match.
+    """
+    from .freshness import invalidate
+
+    skill_id = live.skill_id
+    repo = bundle_files.repository
+    store = bundle_files.resource_store
+    version = await repo.get_skill_version(skill_id, number)
+    if version is None:
+        raise SkillVersionNotFoundError(f"Version {number} of this skill was not found.")
+    if expected_updated_at and expected_updated_at not in _timestamp_forms(live):
+        raise SkillRestoreConflictError(
+            "This skill changed since you opened its history. Review it again."
+        )
+
+    for ref in version.resources:
+        validate_resource_path(ref.path or ref.filename)
+        resolve_upload_content_type(ref.filename)
+    files = await asyncio.gather(*(_read_frozen(store, ref) for ref in version.resources))
+
+    await checkpoint(
+        skill_id, actor=user.user_id, required=True, live=live,
+        repository=repo, resource_store=store,
+    )
+
+    new_refs = await bundle_files.put_imported_files(skill_id, files, list(live.resources))
+    updates = {field: getattr(version, field) for field in SNAPSHOT_FIELDS if field != "resources"}
+    updates["resources"] = new_refs
+    clear: tuple = ()
+    restored_source = True
+    if version.import_source_record is not None:
+        updates["import_source"] = version.import_source_record
+    elif version.import_source is None:
+        clear = ("import_source",)  # hand-written when it was cut
+    else:
+        restored_source = False  # cut before full sources were kept: leave the live one
+
+    updated = await repo.update_skill(
+        skill_id, updates, admin_user_id=user.user_id, clear_fields=clear
+    )
+    if updated is None:
+        raise SkillVersionNotFoundError(f"Skill '{skill_id}' was not found.")
+    bundle_files.write_skill_md(updated)
+    invalidate(skill_id)
+    await bundle_files.gc_orphaned(list(live.resources), new_refs)
+
+    kept = await capture(
+        skill_id, actor=user.user_id, trigger="restore", live=updated,
+        restored_from=number, repository=repo, resource_store=store,
+    )
+    await record_skill_event(
+        AuditAction.SKILL_RESTORED,
+        user,
+        skill_id,
+        before=live,
+        after=updated,
+        extra_after={"restoredFrom": number, "version": kept.version if kept else None},
+    )
+    return RestoreResult(updated, kept, restored_source)
+
+
+def _timestamp_forms(skill: SkillDefinition) -> set:
+    """``updated_at`` as either API serves it (``to_iso`` or ``isoformat``)."""
+    if skill.updated_at is None:
+        return set()
+    return {to_iso(skill.updated_at), skill.updated_at.isoformat()}
+
+
+async def _read_frozen(store: SkillResourceStore, ref: SkillResourceRef) -> _RestoredFile:
+    content = await asyncio.to_thread(store.get, ref.s3_key)
+    if content is None or compute_content_hash(content) != ref.content_hash:
+        raise SkillResourceStoreError(
+            f"The saved copy of '{ref.path or ref.filename}' could not be read back."
+        )
+    return _RestoredFile(
+        filename=ref.filename,
+        kind=ref.kind,
+        content=content,
+        content_hash=ref.content_hash,
+        resource_path=ref.path or ref.filename,
     )

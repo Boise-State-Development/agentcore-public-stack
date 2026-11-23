@@ -7,7 +7,7 @@ finds each call that writes a skill row or bundle files (``create_skill``,
 ``update_skill``, ``put_imported_files``, and ``SkillBundleFiles``' ``add_resource`` /
 ``delete_resource``) on a repository or bundle-files receiver, and requires its
 enclosing function to be listed below: either as capturing (and it must call
-``_capture``) or with the reason it is exempt.
+``_capture``, or ``capture`` inside ``history``) or with the reason it is exempt.
 
 When this fails on a new site: call the service's ``_capture`` after the write (and
 ``_checkpoint`` before it, ``required=True`` if it replaces the whole skill), then add
@@ -40,6 +40,7 @@ CAPTURES: Set[Site] = {
     ("apis/shared/skills/user_service.py", "UserSkillService.delete_resource"),
     ("apis/shared/skills/user_service.py", "UserSkillService.import_bundle"),
     ("apis/shared/skills/user_service.py", "UserSkillService._create_from_bundle"),
+    ("apis/shared/skills/history.py", "restore_version"),
 }
 
 EXEMPT: Dict[Site, str] = {
@@ -80,11 +81,15 @@ def _visit(node: ast.AST, rel: str, stack: list) -> Iterator[Tuple[Site, ast.AST
         yield from _visit(child, rel, stack)
 
 
-def _calls(function: ast.AST, name: str) -> bool:
-    return any(
-        isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == name
-        for n in ast.walk(function)
-    )
+def _calls_capture(function: ast.AST) -> bool:
+    """A call to a service's ``_capture`` or to ``history.capture`` itself."""
+    for n in ast.walk(function):
+        if not isinstance(n, ast.Call):
+            continue
+        name = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", None)
+        if name in ("_capture", "capture"):
+            return True
+    return False
 
 
 def test_every_skill_write_site_is_listed():
@@ -107,6 +112,6 @@ def test_capturing_sites_call_capture():
     missing = sorted(
         site
         for site, function in _write_sites()
-        if site in CAPTURES and not _calls(function, "_capture")
+        if site in CAPTURES and not _calls_capture(function)
     )
     assert not missing, f"These skill writes are listed as capturing but never call _capture: {missing}"

@@ -42,7 +42,7 @@ from apis.shared.skills.resource_types import (
     resolve_upload_content_type,
 )
 from apis.shared.skills.skill_md import validate_frontmatter
-from apis.shared.skills.versions import SNAPSHOT_FIELDS
+from apis.shared.skills.versions import SNAPSHOT_FIELDS, SkillVersion, SkillVersionSummary
 
 logger = logging.getLogger(__name__)
 
@@ -583,6 +583,51 @@ class UserSkillService:
                 "files_removed": len(set(old) - set(new)),
             },
         )
+
+    # =========================================================================
+    # Version history: list, read, restore (docs/specs/skill-version-history.md §5, §6)
+    # =========================================================================
+
+    async def list_versions(
+        self, skill_id: str, user: User, *, limit: int, before: Optional[int] = None
+    ) -> Tuple[SkillDefinition, List[SkillVersionSummary], Optional[int]]:
+        """An owned skill, a page of its history (newest first) and the next cursor."""
+        live = await self.require_owned(skill_id, user)
+        rows, cursor = await self.repository.list_skill_versions(skill_id, limit=limit, before=before)
+        return live, rows, cursor
+
+    async def get_version(
+        self, skill_id: str, number: int, user: User
+    ) -> Tuple[SkillDefinition, SkillVersion]:
+        """An owned skill and one of its versions, whole."""
+        live = await self.require_owned(skill_id, user)
+        version = await self.repository.get_skill_version(skill_id, number)
+        if version is None:
+            raise history.SkillVersionNotFoundError(f"Version {number} of this skill was not found.")
+        return live, version
+
+    async def restore_version(
+        self,
+        skill_id: str,
+        number: int,
+        user: User,
+        *,
+        expected_updated_at: Optional[str] = None,
+    ) -> history.RestoreResult:
+        """Put an owned skill's version ``number`` back as a new version (spec D3).
+
+        The route asks for the reach confirmation first, as for any edit.
+        """
+        live = await self.require_owned(skill_id, user)
+        result = await history.restore_version(
+            live,
+            number,
+            user=user,
+            bundle_files=self.bundle_files,
+            expected_updated_at=expected_updated_at,
+        )
+        self._invalidate(skill_id)
+        return result
 
     # =========================================================================
     # Version history (docs/specs/skill-version-history.md D1/D2)

@@ -14,12 +14,13 @@ therefore apply the catalog predicate (``get_catalog_skill`` /
 tests/apis/app_api/skills/test_admin_skill_routes.py.
 """
 
+import asyncio
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from apis.shared.audit.models import AuditAction
 from apis.shared.auth import User, require_admin_scope
@@ -55,6 +56,18 @@ from apis.app_api.skills.bundle_import_core import (
     load_source,
     require_bundle,
     require_import_enabled,
+)
+from apis.app_api.skills.version_history_core import (
+    RestoreRequest,
+    VersionDetailResponse,
+    VersionListResponse,
+    VersionSummaryResponse,
+    detail_response,
+    history_error,
+    page_size,
+    require_history_enabled,
+    summarize,
+    summary_response,
 )
 from apis.app_api.skills.service import (
     SkillImportConflictError,
@@ -596,3 +609,126 @@ async def delete_skill_resource(
     invalidate_freshness(skill_id)
 
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
+
+
+# =============================================================================
+# Version history (docs/specs/skill-version-history.md §6.1) — the catalog twin
+# of /skills/mine/{id}/versions*, sharing ``version_history_core``. Catalog-scoped
+# like every route here; 404 after auth while SKILL_VERSION_HISTORY_ENABLED is off.
+# =============================================================================
+
+
+class AdminRestoreResponse(BaseModel):
+    skill: AdminSkillResponse
+    version: Optional[VersionSummaryResponse] = None
+    import_source_restored: bool = Field(True, alias="importSourceRestored")
+
+    model_config = {"populate_by_name": True}
+
+
+def _history_error(e: Exception) -> HTTPException:
+    mapped = history_error(e)
+    if mapped is not None:
+        return mapped
+    if isinstance(e, ValueError):
+        return _skill_value_error(e)
+    raise e
+
+
+async def _emails(user_ids: List[Optional[str]]) -> Dict[str, Optional[str]]:
+    """Each distinct author's email, None when the profile can't be read."""
+    from apis.shared.users.repository import UserRepository
+
+    ids = sorted({uid for uid in user_ids if uid})
+    if not ids:
+        return {}
+    repo = UserRepository()
+    profiles = await asyncio.gather(*(repo.get_user(uid) for uid in ids), return_exceptions=True)
+    return {
+        uid: (p.email if p is not None and not isinstance(p, BaseException) else None)
+        for uid, p in zip(ids, profiles)
+    }
+
+
+@router.get(
+    "/{skill_id}/versions",
+    response_model=VersionListResponse,
+    response_model_exclude_none=True,
+)
+async def admin_list_skill_versions(
+    skill_id: str,
+    limit: Optional[int] = Query(None, ge=1, le=50),
+    before: Optional[int] = Query(None, ge=1, description="Continue below this version"),
+    admin: User = Depends(require_skills_admin),
+) -> VersionListResponse:
+    """A page of a catalog skill's history, newest first."""
+    require_history_enabled()
+    try:
+        live, rows, cursor = await get_skill_catalog_service().list_versions(
+            skill_id, limit=page_size(limit), before=before
+        )
+    except Exception as e:  # noqa: BLE001 - mapped, or re-raised
+        raise _history_error(e)
+    emails = await _emails([r.created_by for r in rows])
+    return VersionListResponse(
+        versions=[
+            summary_response(row, live, created_by_email=emails.get(row.created_by or ""))
+            for row in rows
+        ],
+        next_cursor=cursor,
+    )
+
+
+@router.get(
+    "/{skill_id}/versions/{number}",
+    response_model=VersionDetailResponse,
+    response_model_exclude_none=True,
+)
+async def admin_get_skill_version(
+    skill_id: str,
+    number: int,
+    admin: User = Depends(require_skills_admin),
+) -> VersionDetailResponse:
+    """One version of a catalog skill, with what restoring it would change."""
+    require_history_enabled()
+    try:
+        live, version = await get_skill_catalog_service().get_version(skill_id, number)
+    except Exception as e:  # noqa: BLE001 - mapped, or re-raised
+        raise _history_error(e)
+    emails = await _emails([version.created_by])
+    return detail_response(version, live, created_by_email=emails.get(version.created_by or ""))
+
+
+@router.post(
+    "/{skill_id}/versions/{number}/restore",
+    response_model=AdminRestoreResponse,
+    response_model_exclude_none=True,
+)
+async def admin_restore_skill_version(
+    skill_id: str,
+    number: int,
+    body: RestoreRequest,
+    admin: User = Depends(require_skills_admin),
+) -> AdminRestoreResponse:
+    """Put version ``number`` back as a new version. Moves no pins and asks for no
+    reach confirmation, as for an admin edit (spec D4, D7)."""
+    require_history_enabled()
+    logger.info("Admin restoring a skill version")
+    service = get_skill_catalog_service()
+    try:
+        result = await service.restore_version(
+            skill_id, number, admin, expected_updated_at=body.expected_updated_at
+        )
+    except Exception as e:  # noqa: BLE001 - mapped, or re-raised
+        raise _history_error(e)
+    roles = await service.get_roles_for_skill(skill_id)
+    allowed_roles = [r.role_id for r in roles if r.grant_type == "direct"]
+    return AdminRestoreResponse(
+        skill=AdminSkillResponse.from_skill_definition(result.skill, allowed_roles),
+        version=summary_response(
+            summarize(result.version), result.skill, created_by_email=admin.email
+        )
+        if result.version
+        else None,
+        import_source_restored=result.import_source_restored,
+    )

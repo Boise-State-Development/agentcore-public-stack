@@ -201,6 +201,58 @@ class SkillVersion(BaseModel):
         )
 
 
+# What a history list reads: everything but the instructions and the frozen keys,
+# so a page of fifty versions stays small however long the skill is (spec §6.1).
+SUMMARY_ATTRIBUTES: Tuple[str, ...] = (
+    "skillId",
+    "version",
+    "contentHash",
+    "createdAt",
+    "createdBy",
+    "displayName",
+    "resources",
+    "importSource",
+    "trigger",
+    "restoredFrom",
+)
+
+
+class SkillVersionSummary(BaseModel):
+    """One row of a skill's history: a version without its instructions.
+
+    A distinct type from ``SkillVersion`` on purpose, so nothing can restore or
+    apply a projected row whose instructions were never read.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    skill_id: str
+    version: int
+    content_hash: str
+    created_at: Optional[str] = None
+    created_by: Optional[str] = None
+    display_name: str = ""
+    file_count: int = 0
+    import_source: Optional[Dict[str, str]] = None
+    trigger: Optional[str] = None
+    restored_from: Optional[int] = None
+
+    @classmethod
+    def from_dynamo_item(cls, item: Dict[str, Any]) -> "SkillVersionSummary":
+        return cls(
+            skill_id=item.get("skillId", ""),
+            version=int(item["version"]),
+            content_hash=item.get("contentHash", ""),
+            created_at=item.get("createdAt"),
+            created_by=item.get("createdBy"),
+            display_name=item.get("displayName", ""),
+            file_count=len(item.get("resources") or []),
+            import_source=dict(item["importSource"]) if item.get("importSource") else None,
+            trigger=item.get("trigger"),
+            restored_from=int(item["restoredFrom"]) if item.get("restoredFrom") is not None else None,
+        )
+
+
 def snapshot_of(
     skill: SkillDefinition,
     *,

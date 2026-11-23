@@ -135,6 +135,7 @@ class AuditAction:
     SKILL_UPDATED = "skill.updated"
     SKILL_IMPORTED = "skill.imported"
     SKILL_REFRESHED = "skill.refreshed"
+    SKILL_RESTORED = "skill.restored"
     SKILL_DELETED = "skill.deleted"
     SKILL_EXPORTED = "skill.exported"
     SKILL_SCRIPT_RUN = "skill.script_run"
