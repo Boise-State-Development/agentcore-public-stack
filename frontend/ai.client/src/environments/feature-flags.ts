@@ -263,7 +263,7 @@ export interface FeatureFlags {
    * Organizing the Agents and Projects pages: Hide, a Hidden filter and a
    * custom order (docs/specs/agent-project-organization.md). Backend:
    * ORGANIZE_LISTS_ENABLED (app-api; `/users/me/arrangements/*` 404s while
-   * off). In development, so `false` everywhere until the UI lands.
+   * off). In development: `true` only in `environment.development.ts`, `false` locally and in prod.
    */
   organizeLists: boolean;
 

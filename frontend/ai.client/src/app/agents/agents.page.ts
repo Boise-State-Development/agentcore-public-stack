@@ -1,4 +1,4 @@
-import { Component, ChangeDetectionStrategy, inject, OnInit, signal } from '@angular/core';
+import { Component, ChangeDetectionStrategy, computed, inject, OnInit, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { NgTemplateOutlet } from '@angular/common';
 import { Router } from '@angular/router';
@@ -16,6 +16,8 @@ import {
   heroBars3,
   heroDocumentDuplicate,
   heroLockClosed,
+  heroEye,
+  heroEyeSlash,
 } from '@ng-icons/heroicons/outline';
 import { AGENT_DUPLICATED_TOAST, AgentService } from './services/agent.service';
 import { ToastService } from '../services/toast/toast.service';
@@ -32,6 +34,18 @@ import { AgentIconComponent } from './components/agent-icon.component';
 import { AgentPinService } from './services/agent-pin.service';
 import { appPin } from '../components/sidenav/components/session-list/pin-icons';
 import { AgentsViewMode, LocalSettingsService } from '../services/local-settings.service';
+import { FEATURES } from '../services/features';
+import { ListArrangementService } from '../services/list-arrangement/list-arrangement.service';
+import { arrangeList } from '../services/list-arrangement/list-arrangement.models';
+
+type AgentFilter = 'all' | 'mine' | 'shared' | 'hidden';
+
+const AGENT_FILTERS: { value: AgentFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'mine', label: 'Mine' },
+  { value: 'shared', label: 'Shared with me' },
+  { value: 'hidden', label: 'Hidden' },
+];
 
 /**
  * Agent Designer — the list surface.
@@ -71,6 +85,8 @@ import { AgentsViewMode, LocalSettingsService } from '../services/local-settings
       heroBars3,
       heroDocumentDuplicate,
       heroLockClosed,
+      heroEye,
+      heroEyeSlash,
     }),
   ],
 })
@@ -81,6 +97,8 @@ export class AgentsPage implements OnInit {
   private localSettings = inject(LocalSettingsService);
   private dialog = inject(Dialog);
   private toast = inject(ToastService);
+  private arrangements = inject(ListArrangementService);
+  protected readonly features = inject(FEATURES);
   /** The agent currently being duplicated; disables the Duplicate buttons meanwhile. */
   readonly duplicatingId = signal<string | null>(null);
   /** The agent whose pin is being toggled; disables that row's Pin button meanwhile. */
@@ -98,11 +116,102 @@ export class AgentsPage implements OnInit {
    */
   readonly viewMode = this.localSettings.agentsViewMode;
 
+  /** The agent being hidden or unhidden; disables that row's Hide button meanwhile. */
+  readonly hidingId = signal<string | null>(null);
+
+  /**
+   * Which agents to show (docs/specs/agent-project-organization.md §6.2). Only offered with
+   * `features.organizeLists`; without it the page lists every agent, as before.
+   */
+  readonly filter = signal<AgentFilter>('all');
+
+  private readonly arranged = computed(() =>
+    arrangeList(this.agents(), (agent) => agent.agentId, this.arrangements.hiddenIds('agents')()),
+  );
+
+  readonly hiddenCount = computed(() => this.arranged().hidden.length);
+
+  /** The chips: Hidden appears once something is hidden, or while it is the chosen filter. */
+  readonly filters = computed(() =>
+    AGENT_FILTERS.filter((f) => f.value !== 'hidden' || this.hiddenCount() > 0 || this.filter() === 'hidden'),
+  );
+
+  /** The agents the current filter shows, in the list's own order. */
+  readonly shownAgents = computed(() => {
+    if (!this.features.organizeLists) return this.agents();
+    const { visible, hidden } = this.arranged();
+    switch (this.filter()) {
+      case 'hidden':
+        return hidden;
+      case 'mine':
+        return visible.filter((agent) => !agent.isSharedWithMe);
+      case 'shared':
+        return visible.filter((agent) => agent.isSharedWithMe === true);
+      default:
+        return visible;
+    }
+  });
+
   ngOnInit(): void {
     void this.load();
     // Session-wide and loaded once, so this is free when the sidebar already asked. A
     // failure leaves every row reading "not pinned", which is the safe direction.
     void this.pinService.load();
+    this.arrangements.open('agents');
+  }
+
+  setFilter(value: AgentFilter): void {
+    this.filter.set(value);
+  }
+
+  filterLabel(f: { value: AgentFilter; label: string }): string {
+    return f.value === 'hidden' ? `${f.label} (${this.hiddenCount()})` : f.label;
+  }
+
+  isHidden(agent: Agent): boolean {
+    return this.arrangements.hiddenIds('agents')().has(agent.agentId);
+  }
+
+  /**
+   * Hide or unhide one agent from this list (spec D1). Access is untouched: it still opens
+   * from a link, runs, and answers to `@` by name. Hiding a pinned agent unpins it first
+   * (D8), so the sidebar never shows something the user took off the page; Undo puts both
+   * back. A locked role pin is never offered Hide.
+   */
+  async onToggleHidden(agent: Agent): Promise<void> {
+    if (this.hidingId()) return;
+    const hide = !this.isHidden(agent);
+    if (hide && this.isPinLocked(agent)) return;
+    const wasPinned = hide && this.isPinned(agent);
+    this.hidingId.set(agent.agentId);
+    try {
+      if (wasPinned) await this.pinService.unpin(agent.agentId);
+      await this.arrangements.setHidden('agents', agent.agentId, hide, this.agentIds());
+      if (hide) {
+        this.toast.info(
+          `Hid ${agent.name}`,
+          wasPinned ? 'It is unpinned from your sidebar too. Find it under Hidden.' : 'Find it under Hidden.',
+          { action: { label: 'Undo', handler: () => void this.undoHide(agent, wasPinned) } },
+        );
+      }
+    } catch {
+      this.toast.error(hide ? 'Could not hide agent' : 'Could not unhide agent', 'Please try again.');
+    } finally {
+      this.hidingId.set(null);
+    }
+  }
+
+  private async undoHide(agent: Agent, repin: boolean): Promise<void> {
+    try {
+      await this.arrangements.setHidden('agents', agent.agentId, false, this.agentIds());
+      if (repin) await this.pinService.pin(agent.agentId);
+    } catch {
+      this.toast.error('Could not undo', 'Please try again.');
+    }
+  }
+
+  private agentIds(): ReadonlySet<string> {
+    return new Set(this.agents().map((agent) => agent.agentId));
   }
 
   private async load(): Promise<void> {

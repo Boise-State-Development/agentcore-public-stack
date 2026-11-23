@@ -28,7 +28,7 @@
       @if (hasAny()) {
         <div class="mb-6 inline-flex flex-wrap gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800"
           role="radiogroup" aria-label="Show">
-          @for (f of filters; track f.value) {
+          @for (f of filters(); track f.value) {
             <button
               type="button"
               role="radio"
@@ -36,7 +36,7 @@
               (click)="setFilter(f.value)"
               class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-checked:bg-white aria-checked:text-gray-900 aria-checked:shadow-xs dark:text-gray-400 dark:hover:text-white dark:aria-checked:bg-gray-900 dark:aria-checked:text-white"
             >
-              {{ f.label }}
+              {{ filterLabel(f) }}
             </button>
           }
         </div>
@@ -77,12 +77,14 @@
           </div>
         } @else if (visible().length === 0) {
           <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
-            <p class="text-sm/6 text-gray-600 dark:text-gray-400">No projects here.</p>
+            <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+              {{ filter() === 'hidden' ? 'Nothing hidden. Hide a project to take it off this list; you stay a member.' : 'No projects here.' }}
+            </p>
           </div>
         } @else {
           <ul class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             @for (project of visible(); track project.projectId) {
-              <li>
+              <li class="relative">
                 <a
                   [routerLink]="['/projects', project.projectId]"
                   class="flex h-full flex-col rounded-2xl border border-gray-200 bg-white p-5 shadow-xs transition hover:border-gray-300 hover:shadow-md focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600"
@@ -92,6 +94,11 @@
                       <ng-icon name="heroFolder" class="size-6" aria-hidden="true" />
                     </span>
                     <span class="flex flex-wrap justify-end gap-1.5">
+                      @if (features.organizeLists && project.status === 'archived' && isHidden(project)) {
+                        <span class="inline-flex items-center gap-1 rounded-full border border-gray-300 bg-white px-2.5 py-0.5 text-xs/5 font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200">
+                          <ng-icon name="heroEyeSlash" class="size-3.5" aria-hidden="true" />Hidden
+                        </span>
+                      }
                       @if (project.status === 'archived') {
                         <span class="inline-flex items-center gap-1 rounded-full border border-gray-300 bg-white px-2.5 py-0.5 text-xs/5 font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200">
                           <ng-icon name="heroArchiveBox" class="size-3.5" aria-hidden="true" />Archived
@@ -107,13 +114,27 @@
                   @if (project.description) {
                     <span class="mt-1 line-clamp-2 text-sm/6 text-gray-600 dark:text-gray-400">{{ project.description }}</span>
                   }
-                  <span class="mt-auto flex items-center justify-between gap-3 pt-5 text-xs/5 text-gray-600 dark:text-gray-400">
+                  <span class="mt-auto flex items-center justify-between gap-3 pt-5 text-xs/5 text-gray-600 dark:text-gray-400" [class.pr-9]="features.organizeLists">
                     <span>{{ people(project) }}</span>
                     @if (project.role !== 'owner') {
                       <span class="truncate" [attr.title]="project.ownerName ? project.ownerEmail : null">Owner: {{ personLabel(project.ownerName, project.ownerEmail) }}</span>
                     }
                   </span>
                 </a>
+                <!-- Outside the link, so it is its own control rather than a button inside a link. -->
+                @if (features.organizeLists) {
+                  <button
+                    type="button"
+                    (click)="onToggleHidden(project)"
+                    [disabled]="hidingId() !== null"
+                    [attr.aria-label]="(isHidden(project) ? 'Unhide ' : 'Hide ') + project.name"
+                    class="absolute right-3 bottom-3 rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:hover:bg-gray-700"
+                    [appTooltip]="isHidden(project) ? 'Unhide' : 'Hide from this list'"
+                    appTooltipPosition="top"
+                  >
+                    <ng-icon [name]="isHidden(project) ? 'heroEye' : 'heroEyeSlash'" class="size-4" aria-hidden="true" />
+                  </button>
+                }
               </li>
             }
           </ul>

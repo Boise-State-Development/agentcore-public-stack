@@ -10,6 +10,10 @@ import { Router } from '@angular/router';
 import { ToastService } from '../services/toast/toast.service';
 import { LocalSettingsService } from '../services/local-settings.service';
 import { ConfigService } from '../services/config.service';
+import { environment } from '../../environments/environment';
+import { FEATURES } from '../services/features';
+import { ListArrangementService } from '../services/list-arrangement/list-arrangement.service';
+import { listArrangementStub } from '../../testing/list-arrangement';
 
 const AGENT = {
   agentId: 'ast-a1b2c3d4e5f6',
@@ -32,6 +36,14 @@ function pinServiceStub() {
     load: vi.fn().mockResolvedValue([]),
     isPinned: (id: string) => pinned().has(id),
     isLocked: (id: string) => locked().has(id),
+    pin: vi.fn(async (id: string) => {
+      pinned.set(new Set([...pinned(), id]));
+    }),
+    unpin: vi.fn(async (id: string) => {
+      const next = new Set(pinned());
+      next.delete(id);
+      pinned.set(next);
+    }),
     toggle: vi.fn(async (id: string) => {
       const next = new Set(pinned());
       if (next.has(id)) next.delete(id);
@@ -44,11 +56,15 @@ function pinServiceStub() {
 describe('AgentsPage row actions', () => {
   const viewMode = signal<'grid' | 'list'>('grid');
   let pins: ReturnType<typeof pinServiceStub>;
+  let arrangements: ReturnType<typeof listArrangementStub>;
+  let organizeLists = false;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
     viewMode.set('grid');
     pins = pinServiceStub();
+    arrangements = listArrangementStub();
+    organizeLists = false;
     TestBed.configureTestingModule({
       imports: [AgentsPage],
       providers: [
@@ -69,6 +85,8 @@ describe('AgentsPage row actions', () => {
           useValue: { agentsViewMode: viewMode, setAgentsViewMode: (v: 'grid' | 'list') => viewMode.set(v) },
         },
         { provide: ConfigService, useValue: { appApiUrl: () => '' } },
+        { provide: ListArrangementService, useFactory: () => arrangements },
+        { provide: FEATURES, useFactory: () => ({ ...environment.features, organizeLists }) },
       ],
     });
   });
@@ -166,5 +184,107 @@ describe('AgentsPage row actions', () => {
     expect(TestBed.inject(AgentService).duplicateAgent).toHaveBeenCalledWith('ast-a1b2c3d4e5f6');
     expect(navigate).toHaveBeenCalledWith(['/agents', 'ast-copy', 'edit']);
     expect(info).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Hide and filters (docs/specs/agent-project-organization.md) ────────────────
+  const SHARED = { ...AGENT, agentId: 'ast-0000000000bb', name: 'Lab Helper', userPermission: 'viewer', isSharedWithMe: true } as Agent;
+
+  function renderOrganized(mode: 'grid' | 'list' = 'grid', agents: Agent[] = [AGENT, SHARED]) {
+    organizeLists = true;
+    TestBed.overrideProvider(AgentService, {
+      useValue: { agents$: signal(agents), loading$: signal(false), error$: signal(null), loadAgents: vi.fn().mockResolvedValue(undefined) },
+    });
+    return render(mode);
+  }
+
+  const shownNames = (el: HTMLElement) =>
+    [...el.querySelectorAll('h3, li span.truncate.font-semibold')].map(n => n.textContent?.trim());
+  const chips = (el: HTMLElement) => [...el.querySelectorAll('[role=radiogroup][aria-label=Show] [role=radio]')];
+  const chip = (el: HTMLElement, label: string) => chips(el).find(b => b.textContent?.trim() === label) as HTMLButtonElement;
+  const hideButton = (el: HTMLElement, name: string) => el.querySelector<HTMLButtonElement>(`button[aria-label="Hide ${name}"]`);
+
+  it('offers no filters and no Hide while the flag is off', () => {
+    const el = render('grid').nativeElement as HTMLElement;
+    expect(chips(el)).toHaveLength(0);
+    expect(hideButton(el, 'Rubric Builder')).toBeNull();
+  });
+
+  it.each(['grid', 'list'] as const)('splits Mine from Shared with me (%s view)', mode => {
+    const fixture = renderOrganized(mode);
+    const el = fixture.nativeElement as HTMLElement;
+    expect(arrangements.open).toHaveBeenCalledWith('agents');
+    expect(chips(el).map(b => b.textContent?.trim())).toEqual(['All', 'Mine', 'Shared with me']);
+    expect(shownNames(el)).toEqual(['Rubric Builder', 'Lab Helper']);
+
+    chip(el, 'Mine').click();
+    fixture.detectChanges();
+    expect(shownNames(el)).toEqual(['Rubric Builder']);
+    chip(el, 'Shared with me').click();
+    fixture.detectChanges();
+    expect(shownNames(el)).toEqual(['Lab Helper']);
+  });
+
+  it.each(['grid', 'list'] as const)('names the Hide action after its agent (%s view)', mode => {
+    const el = renderOrganized(mode, [AGENT]).nativeElement as HTMLElement;
+    const labels = Array.from(el.querySelectorAll('button'))
+      .filter(b => b.querySelector('ng-icon') && !b.textContent?.trim())
+      .map(b => b.getAttribute('aria-label'));
+    expect(labels).toContain('Hide Rubric Builder');
+  });
+
+  it('hides a pinned agent by unpinning it first, and Undo puts both back', async () => {
+    pins.pinned.set(new Set([SHARED.agentId]));
+    const fixture = renderOrganized();
+    const el = fixture.nativeElement as HTMLElement;
+    const info = vi.spyOn(TestBed.inject(ToastService), 'info');
+
+    hideButton(el, 'Lab Helper')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(pins.unpin).toHaveBeenCalledWith(SHARED.agentId);
+    expect(arrangements.setHidden).toHaveBeenCalledWith('agents', SHARED.agentId, true, expect.any(Set));
+    expect(shownNames(el)).toEqual(['Rubric Builder']);
+    expect(chip(el, 'Hidden (1)')).toBeTruthy();
+    const [title, message, options] = info.mock.calls[0];
+    expect(title).toBe('Hid Lab Helper');
+    expect(message).toContain('unpinned from your sidebar');
+
+    options!.action!.handler();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(shownNames(el)).toEqual(['Rubric Builder', 'Lab Helper']);
+    expect(pins.pin).toHaveBeenCalledWith(SHARED.agentId);
+  });
+
+  it('lists hidden agents under Hidden and unhides them there', async () => {
+    arrangements.hidden.agents.set(new Set([AGENT.agentId]));
+    const fixture = renderOrganized();
+    const el = fixture.nativeElement as HTMLElement;
+    chip(el, 'Hidden (1)').click();
+    fixture.detectChanges();
+    expect(shownNames(el)).toEqual(['Rubric Builder']);
+
+    el.querySelector<HTMLButtonElement>('button[aria-label="Unhide Rubric Builder"]')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(el.textContent).toContain('Nothing hidden.');
+    expect(pins.unpin).not.toHaveBeenCalled();
+  });
+
+  it('never offers Hide on a locked role pin', () => {
+    pins.pinned.set(new Set([AGENT.agentId]));
+    pins.locked.set(new Set([AGENT.agentId]));
+    const el = renderOrganized('grid', [AGENT]).nativeElement as HTMLElement;
+    expect(hideButton(el, 'Rubric Builder')).toBeNull();
+  });
+
+  it('says so when a hide fails', async () => {
+    const fixture = renderOrganized();
+    const error = vi.spyOn(TestBed.inject(ToastService), 'error');
+    arrangements.fail();
+    await fixture.componentInstance.onToggleHidden(AGENT);
+    expect(error).toHaveBeenCalledWith('Could not hide agent', 'Please try again.');
+    expect(fixture.componentInstance.hidingId()).toBeNull();
   });
 });

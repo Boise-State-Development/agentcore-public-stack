@@ -84,6 +84,27 @@
       </div>
     </div>
 
+    <!-- Filters (docs/specs/agent-project-organization.md §6.2), the Projects page's chips. -->
+    @if (features.organizeLists && agents().length > 0) {
+      <div
+        class="mb-6 inline-flex flex-wrap gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800"
+        role="radiogroup"
+        aria-label="Show"
+      >
+        @for (f of filters(); track f.value) {
+          <button
+            type="button"
+            role="radio"
+            [attr.aria-checked]="filter() === f.value"
+            (click)="setFilter(f.value)"
+            class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-checked:bg-white aria-checked:text-gray-900 aria-checked:shadow-xs dark:text-gray-400 dark:hover:text-white dark:aria-checked:bg-gray-900 dark:aria-checked:text-white"
+          >
+            {{ filterLabel(f) }}
+          </button>
+        }
+      </div>
+    }
+
     <!-- Content -->
     <main>
       @if (loading()) {
@@ -128,10 +149,16 @@
             New Agent
           </button>
         </div>
+      } @else if (shownAgents().length === 0) {
+        <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
+          <p class="text-sm/6 text-gray-600 dark:text-gray-400">
+            {{ filter() === 'hidden' ? 'Nothing hidden. Hide an agent to take it off this list without losing access to it.' : 'No agents here.' }}
+          </p>
+        </div>
       } @else if (viewMode() === 'list') {
         <!-- List view. Same agents, same controls, less air: one line each. -->
         <ul class="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:divide-gray-700 dark:border-gray-700 dark:bg-gray-800">
-          @for (agent of agents(); track agent.agentId) {
+          @for (agent of shownAgents(); track agent.agentId) {
             <li class="px-4 py-3">
               <div class="flex items-center gap-4">
                 <button type="button" (click)="onEdit(agent)" class="flex min-w-0 flex-1 items-center gap-3 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500">
@@ -159,6 +186,7 @@
                     <ng-icon name="heroChatBubbleLeftRight" class="size-4" aria-hidden="true" />
                   </button>
                   <ng-container *ngTemplateOutlet="pinControl; context: { $implicit: agent }" />
+                  <ng-container *ngTemplateOutlet="hideControl; context: { $implicit: agent }" />
                   <button type="button" (click)="onEdit(agent)" [attr.aria-label]="'Edit ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Edit'" appTooltipPosition="top">
                     <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                   </button>
@@ -182,7 +210,7 @@
         </ul>
       } @else {
         <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          @for (agent of agents(); track agent.agentId) {
+          @for (agent of shownAgents(); track agent.agentId) {
             <div class="group flex flex-col overflow-hidden rounded-2xl border border-gray-200/80 bg-white p-5 shadow-xs transition-all duration-200 hover:border-gray-300 hover:shadow-sm dark:border-gray-700/60 dark:bg-gray-800/80 dark:hover:border-gray-600">
               <!-- Head -->
               <button type="button" (click)="onEdit(agent)" class="flex items-start gap-3 text-left">
@@ -216,6 +244,7 @@
                     <ng-icon name="heroChatBubbleLeftRight" class="size-4" aria-hidden="true" />
                   </button>
                   <ng-container *ngTemplateOutlet="pinControl; context: { $implicit: agent }" />
+                  <ng-container *ngTemplateOutlet="hideControl; context: { $implicit: agent }" />
                   <button type="button" (click)="onEdit(agent)" [attr.aria-label]="'Edit ' + agent.name" class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-gray-700" [appTooltip]="'Edit'" appTooltipPosition="top">
                     <ng-icon name="heroPencilSquare" class="size-4" aria-hidden="true" />
                   </button>
@@ -266,6 +295,27 @@
       appTooltipPosition="top"
     >
       <ng-icon name="appPin" class="size-4" aria-hidden="true" />
+    </button>
+  }
+</ng-template>
+
+<!--
+  Hide from this list (docs/specs/agent-project-organization.md D1), shared by both views like
+  the pin control. Nothing changes about access. A locked role pin can't be hidden: its pin
+  slot already shows the lock, so this slot stays empty.
+-->
+<ng-template #hideControl let-agent>
+  @if (features.organizeLists && !isPinLocked(agent)) {
+    <button
+      type="button"
+      (click)="onToggleHidden(agent)"
+      [disabled]="hidingId() !== null"
+      [attr.aria-label]="(isHidden(agent) ? 'Unhide ' : 'Hide ') + agent.name"
+      class="rounded-md p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-primary-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50 dark:hover:bg-gray-700"
+      [appTooltip]="isHidden(agent) ? 'Unhide' : 'Hide from this list'"
+      appTooltipPosition="top"
+    >
+      <ng-icon [name]="isHidden(agent) ? 'heroEye' : 'heroEyeSlash'" class="size-4" aria-hidden="true" />
     </button>
   }
 </ng-template>
