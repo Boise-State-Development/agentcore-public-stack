@@ -1,6 +1,6 @@
 # Organizing the Agents and Projects pages
 
-**Status:** Proposed. Nothing built. Spec written 2026-11-23 against `develop` @ `b510150b1`.
+**Status:** PR-1 (backend storage and routes) merged in #2363; PR-2 (Hide, the Hidden filter, My agents filters) in review. Spec written 2026-11-23 against `develop` @ `b510150b1`.
 
 **Flag:** `ORGANIZE_LISTS_ENABLED` / `CDK_ORGANIZE_LISTS_ENABLED`, app-api only, `features.organizeLists`.
 In development: off by default and in prod, on in the `development` GitHub environment and
@@ -90,8 +90,8 @@ pin and survives the role pin's removal).
 
 **D8. Hiding a pinned Agent unpins it.** Otherwise the sidebar would show an Agent the user hid from
 the page. The SPA calls the existing `DELETE /agents/{id}/pin` before writing the arrangement, so the
-dismissal tombstone is written as for any unpin. A **locked** pin cannot be hidden: the row shows the
-lock in the Hide slot, as it does in the Pin slot today.
+dismissal tombstone is written as for any unpin. A **locked** pin cannot be hidden: the row offers no
+Hide, since its Pin slot already shows the lock. Undo after hiding a pinned Agent re-pins it.
 
 **D9. Anything in the list can be hidden, owned items included.** One rule is easier to explain than
 "shared only", and an author with a pile of abandoned drafts has the same problem. Owners still have
