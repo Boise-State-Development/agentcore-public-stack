@@ -191,8 +191,10 @@ def _preview_diagnostics(
     diagnostics += [
         as_import_diagnostic(d) for d in validate_frontmatter(bundle.frontmatter, strict=False)
     ]
+    # A leading U+FEFF is a byte-order mark, an encoding marker the reader never
+    # sees (SKILL.md's is dropped the same way), so only one past the start warns.
     sources = [("SKILL.md", bundle.instructions)] + [
-        (f.path, f.content.decode("utf-8", errors="replace"))
+        (f.path, f.content.decode("utf-8-sig", errors="replace"))
         for f in bundle.files
         if is_text_content_type(f.content_type)
     ]

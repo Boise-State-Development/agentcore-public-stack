@@ -241,6 +241,18 @@ class TestPreviewDiagnostics:
         assert "SKILL.md" in messages[0] and "U+202E" in messages[0] and "line 2, column 2" in messages[0]
         assert "references/notes.md" in messages[1] and "U+200B" in messages[1]
 
+    def test_a_leading_byte_order_mark_is_not_flagged_but_a_later_one_is(self, client):
+        files = {
+            "s/SKILL.md": _skill_md("bom-skill"),
+            "s/scripts/office/schemas/opc-contentTypes.xsd": "﻿<?xml version='1.0'?>\n<schema/>\n",
+            "s/references/notes.md": "﻿intro\nmid﻿word\n",
+        }
+        preview = _preview(client, files)
+        messages = [d["message"] for d in preview["diagnostics"] if d["code"] == "unsafe_character"]
+        assert len(messages) == 1
+        assert "references/notes.md" in messages[0] and "U+FEFF" in messages[0]
+        assert "line 2, column 4" in messages[0]
+
     def test_only_the_first_20_are_listed_and_the_rest_counted(self, client):
         files = {"s/SKILL.md": _skill_md("many-unsafe", body="​" * 25)}
         preview = _preview(client, files)
