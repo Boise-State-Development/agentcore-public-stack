@@ -309,6 +309,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     skillBundleImport: {
       enabled: false,
     },
+    skillVersionHistory: {
+      enabled: false,
+    },
     agents: {
       enabled: false,
     },

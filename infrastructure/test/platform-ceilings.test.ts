@@ -282,6 +282,9 @@ function allFlagsOn(base: AppConfig): AppConfig {
     fieldSetAuthoring: { enabled: true },
     // Skill bundle import: one app-api variable and routes, no resources.
     skillBundleImport: { enabled: true },
+    // Skill version history: one app-api variable and one Runtime variable
+    // (written only while on), no resources.
+    skillVersionHistory: { enabled: true },
     // Web Search's result default is one Runtime variable, written only while
     // on: here for the environment-variable ceilings and flag coverage.
     webSearchDefaultMaxResults: { enabled: true },

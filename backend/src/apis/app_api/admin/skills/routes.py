@@ -62,6 +62,7 @@ from apis.app_api.skills.service import (
     get_skill_catalog_service,
 )
 from apis.shared.skills.bundle import slugify_skill_name
+from apis.shared.skills.history import SkillCheckpointError
 from apis.app_api.skills.skill_md_parse import parse_uploaded_skill_md
 from apis.shared.skills.skill_md_import import SkillMdParseResponse
 
@@ -225,6 +226,8 @@ async def admin_reimport_skill(
             expected_bundle_hash=expected_bundle_hash,
             expected_updated_at=expected_updated_at,
         )
+    except SkillCheckpointError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise _import_error(e)
 

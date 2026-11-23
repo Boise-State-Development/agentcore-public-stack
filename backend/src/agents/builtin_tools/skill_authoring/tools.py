@@ -394,6 +394,7 @@ def make_my_skill_create_tool(session_id: str, user_id: str, user_email: Optiona
                     instructions=instructions or "",
                     category=category or None,
                     skill_metadata=skill_metadata or None,
+                    trigger="authoring",
                 )
             )
         except UserSkillLimitError as exc:
@@ -466,7 +467,7 @@ def make_my_skill_update_tool(session_id: str, user_id: str, user_email: Optiona
         try:
             skill = _run(
                 get_user_skill_service().update_my_skill(
-                    skill_id, updates, _user(user_id, user_email)
+                    skill_id, updates, _user(user_id, user_email), trigger="authoring"
                 )
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
@@ -537,7 +538,12 @@ def make_my_skill_write_file_tool(session_id: str, user_id: str, user_email: Opt
         try:
             refs = _run(
                 get_user_skill_service().write_text_file(
-                    skill_id, kind, filename, content or "", _user(user_id, user_email)
+                    skill_id,
+                    kind,
+                    filename,
+                    content or "",
+                    _user(user_id, user_email),
+                    trigger="authoring",
                 )
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as a tool result
@@ -574,7 +580,7 @@ def make_my_skill_delete_file_tool(session_id: str, user_id: str, user_email: Op
         try:
             refs = _run(
                 get_user_skill_service().delete_resource(
-                    skill_id, filename, _user(user_id, user_email)
+                    skill_id, filename, _user(user_id, user_email), trigger="authoring"
                 )
             )
         except Exception as exc:  # noqa: BLE001 - surfaced as a tool result

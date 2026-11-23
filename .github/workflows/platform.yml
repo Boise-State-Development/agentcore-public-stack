@@ -527,6 +527,10 @@ jobs:
       # GitHub path). In development, so only "true" enables. app-api only; no
       # resources. The SPA half is features.skillBundleImport.
       CDK_SKILL_BUNDLE_IMPORT_ENABLED: ${{ vars.CDK_SKILL_BUNDLE_IMPORT_ENABLED }}
+      # Skill version history: every skill content write is kept as a version.
+      # In development, so only "true" enables. app-api and the Runtime (written
+      # there only while on); no resources.
+      CDK_SKILL_VERSION_HISTORY_ENABLED: ${{ vars.CDK_SKILL_VERSION_HISTORY_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —

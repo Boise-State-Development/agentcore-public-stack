@@ -474,6 +474,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // runs the check and emits `source_provenance`. Written only while ON,
         // so the default costs nothing against the V2 payload budget.
         ...(config.sourceProvenance.enabled ? { SOURCE_PROVENANCE_ENABLED: 'true' } : {}),
+        // Skill version history: the `my_skill_*` authoring tools write skills
+        // here, and each write is kept as a version. Written only while ON, so
+        // the default costs nothing against the V2 payload budget.
+        ...(config.skillVersionHistory.enabled ? { SKILL_VERSION_HISTORY_ENABLED: 'true' } : {}),
         // Attachment planner's token profile: the Runtime plans each turn's
         // attachments against a per-model document budget. Written only while
         // ON, so the default costs nothing against the V2 payload budget.

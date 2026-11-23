@@ -1192,6 +1192,26 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Skill version history feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_SKILL_VERSION_HISTORY_ENABLED;
+    });
+
+    test('defaults to disabled when unset or empty', () => {
+      delete process.env.CDK_SKILL_VERSION_HISTORY_ENABLED;
+      expect(loadConfig(app).skillVersionHistory.enabled).toBe(false);
+      process.env.CDK_SKILL_VERSION_HISTORY_ENABLED = '';
+      expect(loadConfig(app).skillVersionHistory.enabled).toBe(false);
+    });
+
+    test('only "true" turns it on', () => {
+      process.env.CDK_SKILL_VERSION_HISTORY_ENABLED = ' True ';
+      expect(loadConfig(app).skillVersionHistory.enabled).toBe(true);
+      process.env.CDK_SKILL_VERSION_HISTORY_ENABLED = 'yes';
+      expect(loadConfig(app).skillVersionHistory.enabled).toBe(false);
+    });
+  });
+
   // ============================================================
   // AWS Limits feature flag — opt-in while in development
   // ============================================================

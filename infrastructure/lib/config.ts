@@ -119,6 +119,7 @@ export interface AppConfig {
   documentExtract: DocumentExtractConfig;
   fieldSetAuthoring: FieldSetAuthoringConfig;
   skillBundleImport: SkillBundleImportConfig;
+  skillVersionHistory: SkillVersionHistoryConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
   concurrentToolExecution: ConcurrentToolExecutionConfig;
   wordSkillScripts: WordSkillScriptsConfig;
@@ -1282,6 +1283,24 @@ export interface SkillBundleImportConfig {
 }
 
 /**
+ * Skill version history (docs/specs/skill-version-history.md): every content
+ * write to a skill is kept as a version, and owners and admins can list and
+ * restore them. **Opt-in while in development**: off unless
+ * CDK_SKILL_VERSION_HISTORY_ENABLED=true (or a `skillVersionHistory.enabled:
+ * true` cdk.json context). A feature switch once finished: restore widens what
+ * users can do.
+ *
+ * Sets SKILL_VERSION_HISTORY_ENABLED on app-api (the REST writes) and on the
+ * AgentCore Runtime (the `my_skill_*` authoring tools write skills there).
+ * Written to the Runtime's environment **only while on**, so the default spends
+ * none of the V2 payload budget. No resources: versions are rows in the existing
+ * skill catalog table and frozen files in the existing skill-resources bucket.
+ */
+export interface SkillVersionHistoryConfig {
+  enabled: boolean;
+}
+
+/**
  * Agent Designer feature flag. Default ON with a kill switch — the governed
  * `/agents/*` surface ships everywhere now that the Designer is complete; only
  * CDK_AGENTS_API_ENABLED=false (or an `agents.enabled: false` cdk.json context)
@@ -2357,6 +2376,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED
         ? process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('skillBundleImport')?.enabled ?? false,
+    },
+    skillVersionHistory: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_SKILL_VERSION_HISTORY_ENABLED
+        ? process.env.CDK_SKILL_VERSION_HISTORY_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('skillVersionHistory')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /

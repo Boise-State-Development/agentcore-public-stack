@@ -25,6 +25,8 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
+from apis.shared.blocking_io import run_blocking
+
 from .models import SkillDefinition, SkillStatus, UserSkillPreference
 from .versions import VERSION_SK_PREFIX, SkillVersion, version_sk
 
@@ -372,8 +374,11 @@ class SkillCatalogRepository:
         """Write one numbered version, refusing to overwrite an existing number.
 
         Raises ``SkillVersionExistsError`` when that number is taken, so the caller
-        can re-pick (see ``pinning.pin_current``).
+        can re-pick (see ``history.capture_current``).
         """
+        return await run_blocking(self._put_skill_version_sync, version)
+
+    def _put_skill_version_sync(self, version: SkillVersion) -> SkillVersion:
         try:
             self._table.put_item(
                 Item=version.to_dynamo_item(),
@@ -389,6 +394,9 @@ class SkillCatalogRepository:
 
     async def get_latest_skill_version(self, skill_id: str) -> Optional[SkillVersion]:
         """The highest-numbered version, read as the last key of the partition."""
+        return await run_blocking(self._get_latest_skill_version_sync, skill_id)
+
+    def _get_latest_skill_version_sync(self, skill_id: str) -> Optional[SkillVersion]:
         response = self._table.query(
             KeyConditionExpression=Key("PK").eq(f"SKILL#{skill_id}")
             & Key("SK").begins_with(VERSION_SK_PREFIX),
@@ -402,6 +410,11 @@ class SkillCatalogRepository:
         self, refs: List[Tuple[str, int]]
     ) -> Dict[Tuple[str, int], SkillVersion]:
         """Versions by ``(skill_id, number)``; a missing one is simply absent."""
+        return await run_blocking(self._batch_get_skill_versions_sync, refs)
+
+    def _batch_get_skill_versions_sync(
+        self, refs: List[Tuple[str, int]]
+    ) -> Dict[Tuple[str, int], SkillVersion]:
         wanted = list(dict.fromkeys(refs))
         found: Dict[Tuple[str, int], SkillVersion] = {}
         for i in range(0, len(wanted), 100):
@@ -423,6 +436,9 @@ class SkillCatalogRepository:
         a skill id can be reused, and a stale pin on a project would otherwise run
         the deleted skill's instructions under the new skill's live status.
         """
+        return await run_blocking(self._delete_skill_versions_sync, skill_id)
+
+    def _delete_skill_versions_sync(self, skill_id: str) -> List[SkillVersion]:
         deleted: List[SkillVersion] = []
         kwargs: Dict[str, Any] = {
             "KeyConditionExpression": Key("PK").eq(f"SKILL#{skill_id}")
