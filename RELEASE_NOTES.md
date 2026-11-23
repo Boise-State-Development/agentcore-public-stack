@@ -20,7 +20,7 @@ Also in this release:
 - A generated file shows as one output card under the tool rail.
 - Web crawls ingest the PDFs they link to.
 
-**Action required:** run the platform (CDK) deploy **before** the backend deploy. The new interpreter and its VPC are infrastructure. Then do the post-deploy steps under Manual steps: check one generated document, edit the long-context pricing on prod's catalog rows, and re-seed bootstrap data. Eight new flags, all in development and off by default.
+**Action required:** run the platform (CDK) deploy **before** the backend deploy. The new interpreter and its VPC are infrastructure. Then do the post-deploy steps under Manual steps: check one generated document, edit the long-context pricing on prod's catalog rows, and re-seed bootstrap data. Eight new flags, all in development and off by default. Our prod turns on three existing flags with this release (release ledger, concurrent tool execution, project file readiness); see Feature flags.
 
 ---
 
@@ -148,7 +148,12 @@ The following need no flag of their own. Each extends something a deployment alr
 - long-context metering (#2235);
 - the isolated interpreter (#2245).
 
-**On in our `development` environment only:** all of the above except `HANDOFF_SUGGESTIONS_ENABLED`, plus `HANDOFFS_ENABLED`, `HANDOFF_BRIEF_ENABLED`, `SKILL_BUNDLE_IMPORT_ENABLED`, `RELEASE_LEDGER_ENABLED` and `CONCURRENT_TOOL_EXECUTION_ENABLED`. Our dev Runtime is on generation `g2` (`CDK_AGENTCORE_RUNTIME_GENERATION`).
+**On in our `development` environment only:** all of the above except `HANDOFF_SUGGESTIONS_ENABLED`, plus `HANDOFFS_ENABLED`, `HANDOFF_BRIEF_ENABLED` and `SKILL_BUNDLE_IMPORT_ENABLED`. Our dev Runtime is on generation `g2` (`CDK_AGENTCORE_RUNTIME_GENERATION`).
+
+**Turned on in our prod with this release** (#1798). All three stay off by default for other deployments:
+- `RELEASE_LEDGER_ENABLED` / `CDK_RELEASE_LEDGER_ENABLED` with `features.releaseLedger` (app-api, and the AgentCore Runtime while on; the SPA flag shows the Releases tab on `/admin/costs`): each cost row also counts into version-keyed ledger rows, so a release can be compared with the one before it from prod's own turns. Turns written before the deploy are not counted until the prod backfill runbook runs (`docs/specs/release-ledger.md` §7.2). No resources, 28 bytes of the Runtime's environment, and nothing before the first token. A feature switch once finished.
+- `CONCURRENT_TOOL_EXECUTION_ENABLED` / `CDK_CONCURRENT_TOOL_EXECUTION_ENABLED` (AgentCore Runtime only, no SPA flag): a model's batch of read-only tool calls runs at the same time; every other call still runs one at a time. On in dev since 2026-11-14. A rollout switch once promoted.
+- `PROJECT_FILE_READINESS_ENABLED` / `CDK_PROJECT_FILE_READINESS_ENABLED` with `features.projectFileReadiness` (AgentCore Runtime and the SPA build; set both): a project turn names files still being prepared, and the project chat shows their progress. A feature switch once finished.
 
 **Still opt-in, on in our prod** (#1798). None is promoted in this release:
 - `sessionPrewarm`: waits on the Runtime V2 readout of what turnless warms cost.
@@ -166,6 +171,9 @@ No backfill scripts in this release.
 
 ### 0. Before the platform deploy: check prod's Runtime version count (production)
 The first `platform.yml` after this release cuts one Runtime version for the `ContainerUri` change, and the interpreter swap updates the Runtime's environment too. A Runtime at its 1,000-version quota fails that update and rolls back the whole stack, which is what happened to dev on 2026-11-21. Check prod's count in the AgentCore console, or with an AWS CLI new enough to have `bedrock-agentcore-control list-agent-runtime-versions`. If it is near 1,000, set `CDK_AGENTCORE_RUNTIME_GENERATION=g2` on the `production` GitHub environment first. Doing so recreates the Runtime: live sessions and paused turns drop, and conversations, files, memories and connector tokens are kept (`docs/specs/agentcore-runtime-v2.md` §11).
+
+### 0b. Before the platform deploy: production flag variables (production)
+Set on the `production` GitHub environment on 2026-11-23: `CDK_RELEASE_LEDGER_ENABLED=true`, `CDK_CONCURRENT_TOOL_EXECUTION_ENABLED=true` and `CDK_PROJECT_FILE_READINESS_ENABLED=true`. They take effect on the platform deploy, and the SPA build carries the matching `features.*` fields. Other deployments leave them unset unless they choose otherwise.
 
 ### 1. Confirm Code Interpreter tools still work (each environment, after both deploys)
 All of them now run in the new isolated interpreter. In a **new conversation**:
@@ -214,11 +222,11 @@ Turn on the chain in order: `CDK_HANDOFFS_ENABLED`, `CDK_WORKFLOW_RUNS_ENABLED`,
 
 - **Platform** adds the sandbox VPC and the new interpreter, repoints the Runtime's environment variable, the skill-script SSM parameter and the alarm at it, and deletes the old two interpreters during cleanup. That is net +8 resources and one more VPC. It also cuts one Runtime version for the `ContainerUri` text change. Live Runtime sessions roll, so the next turn may start cold.
 - **Backend** builds one new inference-api image even with no code change, because the Dockerfile and its hash inputs changed (#2240).
-- **Backend before frontend.** The SPA's output cards read the preview the backend now stores. Everything else new in the SPA is behind flags that are off in prod.
+- **Backend before frontend.** The SPA's output cards read the preview the backend now stores. The prod SPA also turns on the Releases tab and the project-file readiness strip, which need their backend flags from the platform deploy. Everything else new in the SPA is behind flags that are off in prod.
 - **No expected prompt-cache rewrites** for default-on tools. The only spec changes are `run_code` (886 tokens) and `suggest_handoff` (278), both behind flags and catalog rows that are off. Turn-path code is unchanged for a send with no run delivery.
-- **Watch after deploy:** Code Interpreter tool error rates (Word, Excel, PowerPoint, `analyze_spreadsheet`), `knowledge_files` failures (should fall from ~41%), and the `UnmeteredModelCall` and AvoidableMiss alarms.
+- **Watch after deploy:** Code Interpreter tool error rates (Word, Excel, PowerPoint, `analyze_spreadsheet`), `knowledge_files` failures (should fall from ~41%), and the `UnmeteredModelCall` and AvoidableMiss alarms. With concurrent tool execution on, also the tool error rate and turn duration; `CDK_CONCURRENT_TOOL_EXECUTION_ENABLED=false` and a platform deploy turn it back off. `LEDGER#VERSION` rows for 1.39.0 should appear in prod's `system-cost-rollup` table after the first turns.
 
-**Ledger readout of the outgoing release** (1.38.0 vs 1.37.0) is in the release PR body. It is read from dev, because the ledger is not on in prod yet.
+**Ledger readout of the outgoing release** (1.38.0 vs 1.37.0) is in the release PR body. It is read from dev, because the ledger was not on in prod before this release.
 
 ---
 

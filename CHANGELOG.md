@@ -53,6 +53,7 @@ Workflow runs and the workflow designer, all in development and off by default. 
 - While `CODE_SANDBOX_ENABLED` is on: a Route 53 Resolver DNS Firewall on the sandbox VPC (4 resources). While `CODE_SANDBOX_OFFICE_ENABLED` is also on: an EFS file system, its read-only access point and a seeding interpreter on its own role (about 14 resources) (#2285)
 - `ContainerUri` is no longer an SSM-resolved template parameter, and `CDK_AGENTCORE_RUNTIME_GENERATION` is forwarded in `platform.yml` (#2240)
 - New `CDK_*_ENABLED` variables forwarded in `platform.yml`: `HANDOFF_SUGGESTIONS`, `WORKFLOW_RUNS`, `WORKFLOWS`, `PROMPT_STEPS`, `CHECKLIST_STEPS`, `AGENT_VERSION_PINNING`, `CODE_SANDBOX`, `CODE_SANDBOX_OFFICE`
+- Our prod turns on three existing in-development flags: the release ledger, concurrent tool execution and project file readiness. `environment.production.ts` sets `features.releaseLedger` and `features.projectFileReadiness`. All three stay off by default (#1798)
 - Shipped defaults: 437/500 resources. With every opt-in flag on: 466/500 (#2326)
 
 ### 📚 Docs
