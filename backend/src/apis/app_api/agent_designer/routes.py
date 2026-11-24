@@ -17,7 +17,9 @@ Phase-4 concern when the Designer consumes it.
 """
 
 import logging
-from typing import Optional
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
 
 from fastapi import (
     APIRouter,
@@ -110,6 +112,11 @@ from apis.app_api.agent_designer.services.pin_service import (
     unpin_agent,
 )
 from apis.app_api.agent_designer.services.report_service import ReportError, file_report
+from apis.app_api.agent_designer.services.skill_pins import (
+    AgentSkillPinError,
+    agent_skill_pins,
+    pin_agent_skill,
+)
 from apis.app_api.agent_designer.services.share_disclosure import skills_exposed_by_sharing
 from apis.app_api.agent_designer.services.store_service import (
     browse_all,
@@ -131,7 +138,11 @@ from apis.shared.assistants.models import (
 )
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.feature_flags import agent_marketplace_enabled, agents_enabled
+from apis.shared.feature_flags import (
+    agent_marketplace_enabled,
+    agents_enabled,
+    skill_version_history_enabled,
+)
 from apis.shared.security.log_sanitize import scrub_log
 
 logger = logging.getLogger(__name__)
@@ -514,6 +525,74 @@ async def get_agent_skills_endpoint(agent_id: str, current_user: User = Depends(
     except Exception as e:
         logger.error(f"Error resolving agent skills: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to resolve agent skills: {str(e)}")
+
+
+class AgentSkillPinRow(BaseModel):
+    skill_id: str = Field(..., alias="skillId")
+    version: int
+    update_available: bool = Field(..., alias="updateAvailable")
+
+    model_config = {"populate_by_name": True}
+
+
+class AgentSkillPinsResponse(BaseModel):
+    pins: List[AgentSkillPinRow]
+
+
+class AgentSkillPinMoved(BaseModel):
+    skill_id: str = Field(..., alias="skillId")
+    # The version the binding now pins. The Agent form keeps it as the binding's
+    # config, so a later save sends this pin rather than the old one.
+    version: int
+
+    model_config = {"populate_by_name": True}
+
+
+@router.get(
+    "/{agent_id}/skills/pins", response_model=AgentSkillPinsResponse, response_model_by_alias=True
+)
+async def get_agent_skill_pins_endpoint(
+    agent_id: str, current_user: User = Depends(require_agents_enabled)
+):
+    """Each pinned skill binding's version and whether the skill has moved on
+    (skill-version-history.md D9), for the Agent form's Update. Owner or editor;
+    404 while SKILL_VERSION_HISTORY_ENABLED is off."""
+    if not skill_version_history_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    assistant, permission = await resolve_assistant_permission(
+        assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
+    )
+    if not assistant:
+        raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+    if permission not in ("owner", "editor"):
+        raise HTTPException(status_code=403, detail="You do not have permission to edit this agent")
+    pins = await agent_skill_pins(assistant)
+    return AgentSkillPinsResponse(
+        pins=[
+            AgentSkillPinRow(skill_id=p.skill_id, version=p.version, update_available=p.update_available)
+            for p in pins
+        ]
+    )
+
+
+@router.post(
+    "/{agent_id}/skills/{skill_id}/pin",
+    response_model=AgentSkillPinMoved,
+    response_model_by_alias=True,
+)
+async def pin_agent_skill_endpoint(
+    agent_id: str, skill_id: str, current_user: User = Depends(require_agents_enabled)
+):
+    """Move this Agent's pin on a skill to the skill's current content: the Agent twin
+    of a project's Update (skill-version-history.md D9). Owner or editor; a store
+    Agent's update lands on its draft. 404 while SKILL_VERSION_HISTORY_ENABLED is off."""
+    if not skill_version_history_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        _, version = await pin_agent_skill(agent_id, current_user, skill_id)
+    except AgentSkillPinError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    return AgentSkillPinMoved(skill_id=skill_id, version=version)
 
 
 @router.put("/{agent_id}", response_model=AgentResponse, response_model_exclude_none=True)

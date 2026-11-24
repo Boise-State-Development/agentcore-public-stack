@@ -364,6 +364,7 @@ if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":
 if skills_enabled():
     from apis.app_api.skills.bundle_import_routes import router as skill_import_router
     from apis.app_api.skills.routes import router as user_skills_router
+    from apis.app_api.skills.uses_routes import router as skill_uses_router
     from apis.app_api.skills.version_routes import router as skill_versions_router
     # Bundle import (skill-bundle-import.md); its routes 404 while
     # SKILL_BUNDLE_IMPORT_ENABLED is off.
@@ -371,6 +372,8 @@ if skills_enabled():
     # Version history (skill-version-history.md); 404 while
     # SKILL_VERSION_HISTORY_ENABLED is off.
     app.include_router(skill_versions_router)
+    # Where a skill is used, and moving pins behind it (D9); same flag.
+    app.include_router(skill_uses_router)
     app.include_router(user_skills_router)
     logger.info("Skills routes enabled")
 
