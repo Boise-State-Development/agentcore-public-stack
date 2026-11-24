@@ -66,6 +66,9 @@ import { SettingsCardComponent } from '../../components/settings-card/settings-c
 import { ToolSelectorItem } from '../../components/tool-selector/tool-selector.model';
 import { isItemSelected } from '../../components/tool-selector/tool-selection';
 import { AgentPreviewComponent } from './components/agent-preview.component';
+import { AgentSkillPinsComponent } from './components/agent-skill-pins.component';
+import { FEATURES } from '../../services/features';
+import { AgentSkillPinMoved } from '../models/agent.model';
 import { AgentIconComponent } from '../components/agent-icon.component';
 import {
   AgentIconDialogComponent,
@@ -177,6 +180,7 @@ function skillOwnershipRank(item: BindableItem): number {
     AgentPreviewComponent,
     AgentIconComponent,
     KnowledgeBaseSectionComponent,
+    AgentSkillPinsComponent,
   ],
   providers: [
     provideIcons({
@@ -265,6 +269,11 @@ export class AgentFormPage implements OnInit, OnDestroy {
   readonly models = signal<BindableItem[]>([]);
   readonly tools = signal<BindableItem[]>([]);
   readonly skills = signal<BindableItem[]>([]);
+  protected readonly features = inject(FEATURES);
+  /** Skill names by ref, for the pinned-skills Update strip. */
+  protected readonly skillLabels = computed<Record<string, string>>(() =>
+    Object.fromEntries(this.skills().map((s) => [s.ref, s.label])),
+  );
 
   readonly selectedModelId = signal<string | null>(null);
   /** Author-set inference params (temperature/maxTokens/effort/…), governed by the
@@ -1195,6 +1204,18 @@ export class AgentFormPage implements OnInit, OnDestroy {
         };
       }),
   );
+
+  /**
+   * A pin the Update strip moved (skill-version-history.md D9). Keep it as the
+   * binding's stored config, since a save sends that config back: without this,
+   * the next save would put the old pin back.
+   */
+  protected onSkillPinMoved(moved: AgentSkillPinMoved): void {
+    this.skillBindingConfigs.update((configs) => ({
+      ...configs,
+      [moved.skillId]: { ...(configs[moved.skillId] ?? {}), version: moved.version },
+    }));
+  }
 
   onSkillSelectionChange(next: ReadonlySet<string>): void {
     if (sameRefs(next, this.selectedSkillRefs())) return;

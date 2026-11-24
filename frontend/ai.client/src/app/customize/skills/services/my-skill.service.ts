@@ -19,6 +19,12 @@ import {
 import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
 import { reachConfirmationFrom } from '../../../shared/skills/skill-provenance';
 import {
+  SkillUseTarget,
+  SkillUseUpdateResult,
+  SkillUses,
+  SkillUsesApi,
+} from '../../../shared/skills/skill-uses.model';
+import {
   SkillRestoreResult,
   SkillVersionDetail,
   SkillVersionHistoryApi,
@@ -50,7 +56,7 @@ import {
  */
 @Injectable({ providedIn: 'root' })
 export class MySkillService
-  implements SkillBundleImportApi<MySkill>, SkillVersionHistoryApi<MySkill>
+  implements SkillBundleImportApi<MySkill>, SkillVersionHistoryApi<MySkill>, SkillUsesApi
 {
   private http = inject(HttpClient);
   private config = inject(ConfigService);
@@ -354,6 +360,32 @@ export class MySkillService
     );
     this.agents.invalidateBindable('skill');
     return result;
+  }
+
+  // ---- where it's used (skill-version-history.md D9) -----------------------
+
+  /** The owner's Agents and projects that bind the skill, current and behind. */
+  getUses(skillId: string): Promise<SkillUses> {
+    return firstValueFrom(
+      this.http.get<SkillUses>(`${this.baseUrl()}/${encodeURIComponent(skillId)}/uses`, {
+        withCredentials: true,
+      }),
+    );
+  }
+
+  /** Move the named pins to the skill's current content; one result per target. */
+  async updateUses(skillId: string, targets: SkillUseTarget[]): Promise<SkillUseUpdateResult[]> {
+    const response = await firstValueFrom(
+      this.http.post<{ results: SkillUseUpdateResult[] }>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/uses/update`,
+        { targets },
+        { withCredentials: true },
+      ),
+    );
+    if (response.results.some((r) => r.ok && r.kind === 'agent')) {
+      this.agents.invalidateBindable('skill');
+    }
+    return response.results;
   }
 
   /** The backend's message for a failed call, or `fallback`. */

@@ -5,6 +5,7 @@ import {
   Agent,
   AgentRunnability,
   AgentBoundSkill,
+  AgentSkillPin,
   BindableItem,
   BindableKind,
   CreateAgentDraftRequest,
@@ -113,6 +114,16 @@ export class AgentService {
     const agent = await firstValueFrom(this.api.duplicateAgent(id));
     this.agents.update((current) => [agent, ...current]);
     return agent;
+  }
+
+  /** Each pinned skill binding's version and whether the skill moved on. */
+  async getSkillPins(id: string): Promise<AgentSkillPin[]> {
+    return (await firstValueFrom(this.api.getSkillPins(id))).pins;
+  }
+
+  /** Move this Agent's pin on a skill to its current content; resolves to the new version. */
+  async updateSkillPin(id: string, skillId: string): Promise<number> {
+    return (await firstValueFrom(this.api.pinSkill(id, skillId))).version;
   }
 
   async updateAgent(id: string, request: UpdateAgentRequest): Promise<Agent> {

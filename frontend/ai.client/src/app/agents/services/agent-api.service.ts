@@ -6,6 +6,8 @@ import {
   Agent,
   AgentRunnability,
   AgentBoundSkill,
+  AgentSkillPinMoved,
+  AgentSkillPinsResponse,
   AgentSkillsResponse,
   AgentsListResponse,
   AgentSharesResponse,
@@ -77,6 +79,19 @@ export class AgentApiService {
    */
   getRunnability(id: string): Observable<AgentRunnability> {
     return this.http.get<AgentRunnability>(`${this.baseUrl()}/${id}/runnability`);
+  }
+
+  /** Each pinned skill binding's version and whether the skill moved on (skill-version-history D9). */
+  getSkillPins(id: string): Observable<AgentSkillPinsResponse> {
+    return this.http.get<AgentSkillPinsResponse>(`${this.baseUrl()}/${id}/skills/pins`);
+  }
+
+  /** Move this Agent's pin on a skill to the skill's current content. */
+  pinSkill(id: string, skillId: string): Observable<AgentSkillPinMoved> {
+    return this.http.post<AgentSkillPinMoved>(
+      `${this.baseUrl()}/${id}/skills/${encodeURIComponent(skillId)}/pin`,
+      {},
+    );
   }
 
   /** The Agent's bound skills that will run for the signed-in user, in binding order. */
