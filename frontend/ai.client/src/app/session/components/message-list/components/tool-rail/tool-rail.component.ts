@@ -34,6 +34,8 @@ import {
   type MemoryWriteDetail,
 } from './memory-call';
 import { PinScrollToBottomDirective } from './pin-scroll-to-bottom.directive';
+import { skillScriptCall } from './skill-script-call';
+import { SkillScriptTrustComponent } from './skill-script-trust.component';
 import { ToolResultContent } from '../../../../services/models/message.model';
 
 @Component({
@@ -41,7 +43,7 @@ import { ToolResultContent } from '../../../../services/models/message.model';
   templateUrl: './tool-rail.component.html',
   styleUrl: './tool-rail.component.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [JsonSyntaxHighlightPipe, KeyValuePipe, PinScrollToBottomDirective, NgIcon],
+  imports: [JsonSyntaxHighlightPipe, KeyValuePipe, PinScrollToBottomDirective, NgIcon, SkillScriptTrustComponent],
   providers: [provideIcons({ heroExclamationTriangle })],
 })
 export class ToolRailComponent {
@@ -159,6 +161,11 @@ export class ToolRailComponent {
       !this.batches().some((b) => !!b.summary);
     return restates ? null : label;
   });
+
+  /** A call that ran a skill's own script by name (`run_code`, the Word tools). */
+  isSkillScript(call: ToolCallDisplay): boolean {
+    return skillScriptCall(call) !== null;
+  }
 
   /** What a memory write saved, for its opened row; null for any other call. */
   memoryDetail(call: ToolCallDisplay): MemoryWriteDetail | null {

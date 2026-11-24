@@ -138,6 +138,14 @@ def short_hash(value: Optional[str]) -> str:
     return (value or "")[:SHORT_HASH_CHARS]
 
 
+def script_version_line(value: Optional[str]) -> Optional[str]:
+    """The line a script run's result carries (§8.11), or ``None`` without a hash.
+
+    The rail parses it; ``script-version.fixture.json`` pins both sides.
+    """
+    return f"Script version: {short_hash(value)}" if value else None
+
+
 def changed_scripts(record: Any, staged_sha256: Dict[str, str]) -> List[str]:
     """Manifest paths whose staged bytes don't match their manifest hash (§8.2).
 
@@ -174,6 +182,8 @@ class ScriptSwitch:
     by: str = SWITCH_BY_AUTHOR
     by_user_id: str = ""
     hashes: Tuple[str, ...] = ()
+    #: When it was last switched (ISO 8601), for "turned off … on {date}".
+    at: str = ""
 
     def applies_to(self, scripts_hash_value: Optional[str]) -> bool:
         """Off for this script set: off with no ``hashes``, or with this hash among them."""
@@ -188,6 +198,7 @@ class ScriptSwitch:
             by=str(item.get("by") or SWITCH_BY_AUTHOR),
             by_user_id=str(item.get("byUserId") or ""),
             hashes=tuple(str(h) for h in item.get("hashes") or ()),
+            at=str(item.get("at") or ""),
         )
 
 

@@ -7,6 +7,8 @@ import {
   OnInit,
   signal,
 } from '@angular/core';
+import { SkillScriptsBadgeComponent } from '../../shared/skills/components/skill-scripts-badge.component';
+import { SkillScriptStatus } from '../../shared/skills/script-review.model';
 import { Router } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -69,7 +71,7 @@ import { modelRetirementDetail } from '../../shared/utils/retirement';
 @Component({
   selector: 'app-agent-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AgentIconComponent, NgIcon, TooltipDirective, SpinnerComponent],
+  imports: [AgentIconComponent, NgIcon, TooltipDirective, SpinnerComponent, SkillScriptsBadgeComponent],
   providers: [
     provideIcons({
       heroArrowLeft,
@@ -336,6 +338,14 @@ import { modelRetirementDetail } from '../../shared/utils/retirement';
                   </p>
                 }
 
+                <!-- skill-code-sandbox §8.6: what a member sees instead of a prompt. -->
+                @if (skillScripts().length) {
+                  <app-skill-scripts-badge
+                    class="mt-3 border-t border-gray-200 pt-3 dark:border-gray-700"
+                    [skills]="skillScripts()"
+                  />
+                }
+
                 <!-- D6: the one line the shelf deliberately does not carry. -->
                 @if (runnability(); as r) {
                   <p
@@ -404,6 +414,8 @@ export class AgentDetailPage implements OnInit {
 
   readonly agent = signal<Agent | null>(null);
   readonly runnability = signal<AgentRunnability | null>(null);
+  /** Bound skills whose scripts run for the viewer, for the badge (skill-code-sandbox §8.6). */
+  readonly skillScripts = signal<SkillScriptStatus[]>([]);
   readonly loading = signal(true);
   readonly error = signal<string | null>(null);
   readonly pinBusy = signal(false);
@@ -458,6 +470,13 @@ export class AgentDetailPage implements OnInit {
       this.runnability.set(await firstValueFrom(this.api.getRunnability(this.id())));
     } catch {
       this.runnability.set(null);
+    }
+
+    // Advisory too: no badge rather than an error when it can't be read.
+    try {
+      this.skillScripts.set((await firstValueFrom(this.api.getSkillScripts(this.id()))).skills);
+    } catch {
+      this.skillScripts.set([]);
     }
   }
 

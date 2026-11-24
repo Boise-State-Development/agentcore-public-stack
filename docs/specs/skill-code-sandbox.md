@@ -605,9 +605,22 @@ Throwaway resources on dev (their own role, security groups and interpreters; th
        - Agent Designer's Update control, out from behind version history's flag
      - **PR-2e.2, what members and authors see:**
        - the badges on Agent details, project details and the marketplace listing
+         - Agent details is also the store's listing page.
+         - The badge reads the member view of `…/skill-scripts`.
        - the import step's scripts block
+         - It sits above **Import**, with no checkbox.
+         - On a refresh it lists only the scripts that change.
        - the author switch
+         - It's on the skill's page.
+         - An administrator's switch replaces it with "An administrator turned off this skill's scripts on {date}". `ScriptSwitch` and the switch read now carry `at`.
        - the rail entry, with the fixture for the version line
+         - The collapsed lines are "Running/Ran/Didn't run {file} from {skill}".
+         - Opening a row reads `GET /skills/scripts/trust?name=&sessionId=&version=`.
+           - The rail knows only the run's `skill_name` and short version, so the route finds the skill by activation name.
+           - It looks first in the conversation's Agent or project bindings, at their pin, and then in the caller's reachable skills.
+           - The conversation is read for the caller only.
+         - `script_trust.script_version_line` writes the line, and `script-version.fixture.json` pins it against the SPA's parse.
+         - **Report this skill** is PR-2f's reports part, after production.
    - **PR-2f, admin and reports.**
      - The `admin.skill_scripts` scope and page (§8.10), with the switch.
      - `ReportReason.script` with `skillId` and `scriptsHash`, the rail's **Report this skill**, and the report route accepting a project harness.

@@ -51,6 +51,8 @@ class ScriptSwitchResponse(BaseModel):
 
 class ScriptsOff(BaseModel):
     by: str
+    #: When it was turned off, for "An administrator turned off this skill's scripts on {date}".
+    at: Optional[str] = None
 
 
 class ScriptTrustResponse(BaseModel):
@@ -120,6 +122,103 @@ def _trust(record: Any, user: User, review: Optional[Dict[str, Any]]) -> Tuple[O
     return None, None
 
 
+async def _trust_response(
+    record: Any,
+    user: User,
+    assistant_id: Optional[str],
+    digest: Optional[str],
+    shown_version: Optional[str] = None,
+) -> ScriptTrustResponse:
+    """What the rail and the badges show for ``record``'s scripts at ``digest``."""
+    review = None
+    if assistant_id and digest:
+        review = await asyncio.to_thread(script_reviews.read_review, record.skill_id, assistant_id, digest)
+    switch = await asyncio.to_thread(script_reviews.read_switch, record.skill_id)
+    trusted_by, method = _trust(record, user, review)
+    if digest is None and trusted_by == st.TRUSTED_REVIEWED:
+        trusted_by, method = None, None
+    author, reviewer = await asyncio.gather(
+        _display_name(record.owner_id),
+        _display_name(str(review.get("reviewedBy")) if review and trusted_by == st.TRUSTED_REVIEWED else None),
+    )
+    off = switch is not None and switch.applies_to(digest)
+    return ScriptTrustResponse(
+        skill_id=record.skill_id,
+        display_name=record.display_name,
+        author=author,
+        scripts_hash=digest,
+        version=st.short_hash(digest) or shown_version or None,
+        trusted_by=trusted_by,
+        method=method,
+        reviewer=reviewer,
+        reviewed_at=str(review.get("reviewedAt")) if review and trusted_by == st.TRUSTED_REVIEWED else None,
+        provenance=skill_provenance(record),
+        scripts_off=ScriptsOff(by=switch.by, at=getattr(switch, "at", "") or None) if off else None,
+    )
+
+
+@router.get("/scripts/trust", response_model=ScriptTrustResponse, response_model_by_alias=True)
+async def get_script_run_trust(
+    name: str = Query(..., min_length=1, max_length=128),
+    session_id: str = Query(..., alias="sessionId", min_length=1, max_length=128),
+    version: Optional[str] = Query(None, max_length=st.SHORT_HASH_CHARS),
+    user: User = Depends(get_current_user_from_session),
+) -> ScriptTrustResponse:
+    """Who let a script that ran in this conversation run: the rail's opened row (§8.6).
+
+    ``name`` is the run's ``skill_name`` and ``version`` its ``Script version:``.
+    When that version is not the one bound now (the pin moved since), the answer
+    still names the skill and its author, and says nothing about a review it
+    can't match. Declared before ``/{skill_id}/script-trust`` so ``scripts`` is
+    never read as a skill id.
+    """
+    record, assistant_id = await _session_skill_record(name, session_id, user)
+    digest = st.scripts_hash(record)
+    matches = not version or (digest is not None and st.short_hash(digest) == version)
+    return await _trust_response(record, user, assistant_id, digest if matches else None, version)
+
+
+async def _session_skill_record(name: str, session_id: str, user: User) -> Tuple[Any, Optional[str]]:
+    """The record a script run in this conversation named, and the assistant it ran as.
+
+    The rail knows only what the model passed (``skill_name``, the skill's
+    activation name) and the conversation. The conversation is looked up for the
+    caller only, so another user's session is a 404. Its Agent or project's
+    bindings are searched first, at the version they pin, then the skills the
+    caller reaches directly (their own, imported or the catalog).
+    """
+    from apis.shared.assistants.service import get_assistant_with_access_check, resolve_assistant_permission
+    from apis.shared.sessions.metadata import get_session_metadata
+    from apis.shared.skills.access import resolve_accessible_skill_ids
+    from apis.shared.skills.bundle import slugify_skill_name
+    from apis.shared.skills.pinning import load_skill_records
+
+    not_found = HTTPException(status_code=404, detail="Skill not found")
+    session = await get_session_metadata(session_id, user.user_id)
+    if session is None:
+        raise not_found
+    wanted = name.strip()
+    assistant_id = getattr(session, "assistant_id", None)
+    if assistant_id:
+        assistant, permission = await resolve_assistant_permission(assistant_id, user.user_id, user.email)
+        if assistant is not None and permission is None:
+            assistant, permission = await get_assistant_with_access_check(assistant_id, user.user_id, user.email)
+        bindings = (assistant.bindings or []) if assistant is not None and permission is not None else []
+        for binding in bindings:
+            if binding.kind != "skill":
+                continue
+            skill_id, ref_version = split_pinned_ref(binding.ref)
+            if slugify_skill_name(skill_id) != wanted:
+                continue
+            records = await load_skill_records([pinned_ref(skill_id, binding_pin(binding.config) or ref_version)])
+            if records:
+                return records[0], assistant_id
+    for skill_id in sorted(await resolve_accessible_skill_ids(user)):
+        if slugify_skill_name(skill_id) == wanted:
+            return await _require_accessible_skill(skill_id, user), None
+    raise not_found
+
+
 @router.get("/{skill_id}/script-trust", response_model=ScriptTrustResponse, response_model_by_alias=True)
 async def get_script_trust(
     skill_id: str,
@@ -132,30 +231,7 @@ async def get_script_trust(
         record = await _bound_record(skill_id, assistant_id, user)
     else:
         record = await _require_accessible_skill(skill_id, user)
-
-    digest = scripts_hash or st.scripts_hash(record)
-    review = None
-    if assistant_id and digest:
-        review = await asyncio.to_thread(script_reviews.read_review, skill_id, assistant_id, digest)
-    switch = await asyncio.to_thread(script_reviews.read_switch, skill_id)
-    trusted_by, method = _trust(record, user, review)
-    author, reviewer = await asyncio.gather(
-        _display_name(record.owner_id),
-        _display_name(str(review.get("reviewedBy")) if review and trusted_by == st.TRUSTED_REVIEWED else None),
-    )
-    return ScriptTrustResponse(
-        skill_id=skill_id,
-        display_name=record.display_name,
-        author=author,
-        scripts_hash=digest,
-        version=st.short_hash(digest) or None,
-        trusted_by=trusted_by,
-        method=method,
-        reviewer=reviewer,
-        reviewed_at=str(review.get("reviewedAt")) if review and trusted_by == st.TRUSTED_REVIEWED else None,
-        provenance=skill_provenance(record),
-        scripts_off=ScriptsOff(by=switch.by) if switch is not None and switch.applies_to(digest) else None,
-    )
+    return await _trust_response(record, user, assistant_id, scripts_hash or st.scripts_hash(record))
 
 
 @router.put("/mine/{skill_id}/scripts", response_model=ScriptSwitchResponse)

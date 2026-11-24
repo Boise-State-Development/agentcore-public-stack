@@ -112,6 +112,37 @@ describe('SkillBundleImportComponent', () => {
     expect(r.emitted).toEqual([SKILL]);
   });
 
+  it('says a bundle has scripts, and where they come from, above Import (skill-code-sandbox §8.5)', async () => {
+    const previewImport = vi.fn().mockResolvedValue(
+      preview({
+        source: { ...preview().source, owner: 'acme', repo: 'skills', commitSha: 'e4bb5d9aa1' },
+        files: [
+          { path: 'references/nda.md', status: 'added', filename: 'nda.md', kind: 'reference', size: 3, reason: null },
+          { path: 'scripts/fill.py', status: 'added', filename: 'fill.py', kind: 'script', size: 4096, reason: null },
+        ],
+      }),
+    );
+    const r = await render({ previewImport });
+    r.typeUrl('https://github.com/acme/skills/tree/main/skills/redline');
+    r.button('Preview')!.click();
+    await r.settle();
+
+    const block = r.el.querySelector('section[aria-labelledby="bundle-import-scripts"]')!;
+    const text = block.textContent!.replace(/\s+/g, ' ');
+    expect(text).toContain('This skill includes 1 script');
+    expect(text).toContain('Scripts run in a sandbox with no internet access');
+    expect(text).toContain('From acme/skills @ e4bb5d9');
+    expect(text).toMatch(/scripts\/fill\.py\s*· 4 KB/);
+  });
+
+  it('a bundle with no scripts shows no scripts block', async () => {
+    const r = await render({ previewImport: vi.fn().mockResolvedValue(preview()) });
+    r.typeUrl('https://github.com/acme/skills/tree/main/skills/redline');
+    r.button('Preview')!.click();
+    await r.settle();
+    expect(r.el.querySelector('section[aria-labelledby="bundle-import-scripts"]')).toBeNull();
+  });
+
   it('shows the tier\'s note when creating', async () => {
     const previewImport = vi.fn().mockResolvedValue(preview());
     const r = await render({ previewImport }, { createNote: 'Imported as a draft.' });
@@ -162,6 +193,7 @@ describe('SkillBundleImportComponent', () => {
     expect(previewImport).toHaveBeenCalledWith({ url: source.url, path: 'skills/redline' }, 'contract_redline');
     expect(r.el.textContent).toContain('Changes: instructions.');
     expect(r.el.textContent).toContain('1 file is not in the bundle and will be deleted');
+    expect(r.el.textContent).toContain('1 script changed in this update');
     expect(r.el.textContent).toContain('keep their current version until someone clicks Update');
 
     r.button('Re-import')!.click();

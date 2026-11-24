@@ -1,4 +1,5 @@
 import { Dialog } from '@angular/cdk/dialog';
+import { fileSize } from './script-review.model';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -249,6 +250,36 @@ const STATUS_CLASSES: Record<ImportFileStatus, string> = {
               [diagnostics]="p.diagnostics ?? []"
             />
 
+            @if (scriptRows().length > 0) {
+              <!-- skill-code-sandbox §8.5: importing is the acknowledgement, so the
+                   block sits above Import rather than behind a checkbox. -->
+              <section
+                aria-labelledby="bundle-import-scripts"
+                class="mt-4 rounded-2xl border border-state-warning-200 bg-state-warning-50 p-3 dark:border-state-warning-500/30 dark:bg-state-warning-900/20"
+              >
+                <h3 id="bundle-import-scripts" class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                  {{ scriptsHeading() }}
+                </h3>
+                <p class="mt-1 text-sm/6 text-gray-700 dark:text-gray-300">
+                  Scripts run in a sandbox with no internet access. They can read the files you give
+                  them and write new ones, and they could still produce wrong or misleading results.
+                  Only import skills from authors you trust.
+                </p>
+                <p class="mt-1 text-xs/5 text-gray-600 dark:text-gray-400">{{ scriptsSource() }}</p>
+                <ul role="list" class="mt-2 space-y-0.5">
+                  @for (row of scriptRows(); track row.path) {
+                    <li class="flex items-center gap-2 text-xs/5">
+                      <code class="min-w-0 truncate text-gray-900 dark:text-white">{{ row.path }}</code>
+                      <span class="shrink-0 text-gray-600 dark:text-gray-400">· {{ size(row.size) }}</span>
+                      @if (skillId() && row.status !== 'unchanged') {
+                        <span class="shrink-0 font-medium text-state-warning-800 dark:text-state-warning-300">· {{ statusLabel(row) }}</span>
+                      }
+                    </li>
+                  }
+                </ul>
+              </section>
+            }
+
             <h3 class="mt-4 text-sm/6 font-medium text-gray-900 dark:text-white">Files</h3>
             @if (p.files.length === 0) {
               <p class="text-sm/6 text-gray-600 dark:text-gray-400">Only a SKILL.md.</p>
@@ -347,6 +378,34 @@ export class SkillBundleImportComponent<TSkill = unknown> {
   protected readonly notice = signal<string | null>(null);
 
   protected readonly zipName = computed(() => this.zip()?.name ?? null);
+
+  /**
+   * The bundle's scripts (skill-code-sandbox §8.5). On a refresh only the ones that
+   * change are listed, under "{n} scripts changed in this update".
+   */
+  protected readonly scriptRows = computed(() => {
+    const files = (this.preview()?.files ?? []).filter((f) => f.kind === 'script' && f.status !== 'skipped');
+    return this.skillId() ? files.filter((f) => f.status !== 'unchanged') : files.filter((f) => f.status !== 'removed');
+  });
+
+  protected readonly scriptsHeading = computed(() => {
+    const n = this.scriptRows().length;
+    const noun = n === 1 ? 'script' : 'scripts';
+    return this.skillId() ? `${n} ${noun} changed in this update` : `This skill includes ${n} ${noun}`;
+  });
+
+  protected readonly scriptsSource = computed(() => {
+    const source = this.preview()?.source;
+    if (source?.type === 'github' && source.owner && source.repo) {
+      const sha = source.commitSha ? ` @ ${source.commitSha.slice(0, 7)}` : '';
+      return `From ${source.owner}/${source.repo}${sha}`;
+    }
+    return 'From a zip file. No source is recorded.';
+  });
+
+  protected size(bytes: number): string {
+    return fileSize(bytes);
+  }
 
   protected readonly removedCount = computed(
     () => this.preview()?.files.filter((f) => f.status === 'removed').length ?? 0,

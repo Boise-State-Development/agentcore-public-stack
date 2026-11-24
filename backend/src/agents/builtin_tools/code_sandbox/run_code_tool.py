@@ -810,7 +810,7 @@ async def _run_in_sandbox(
     ]
     if script_ref is not None and run.verdict is not None and run.verdict.scripts_hash:
         # The rail reads this line (spec §8.11); the model can cite it.
-        lines.append(f"Script version: {script_trust.short_hash(run.verdict.scripts_hash)}")
+        lines.append(script_trust.script_version_line(run.verdict.scripts_hash))
     if timed_out:
         lines.append(f"It was stopped after {CALL_TIMEOUT_SECONDS} seconds. {NO_NETWORK_NOTE}")
     if staged_inputs:
