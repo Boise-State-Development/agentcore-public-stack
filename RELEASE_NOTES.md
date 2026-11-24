@@ -1,3 +1,191 @@
+# Release Notes — v1.40.0
+
+**Release Date:** November 23, 2026
+**Previous Release:** v1.39.0 (November 22, 2026)
+
+---
+
+## Highlights
+
+**Skill scripts are trusted once, at adoption.**
+- The person who binds a skill to an Agent or project reviews its scripts once, in a sheet. Members are never asked.
+- Members see a badge naming who reviewed the scripts, and the tool rail names each script run with its author and version.
+- Admins can turn any skill's scripts off, and authors can turn off their own.
+
+That was the last thing `run_code` needed before production, so **our prod turns on `run_code` and skill bundle import** with this release. Both stay off by default for other deployments.
+
+**Two features land in development, off by default:**
+- **Skill version history:** every change to a skill is kept, can be restored, and comes with an offer to update the Agents and projects still pinned to an older version.
+- **Organizing the Agents and Projects pages:** hide, sort and arrange items, and reorder pinned agents in the sidebar.
+
+Also in this release:
+- **Admins choose the task models** that write titles, tool summaries and compaction summaries and run structured extraction.
+- **Those side calls are metered.** They now count against the user's quota, at the rate of the model that ran.
+- **The harness's time before the first token** is shown per release and alarmed.
+- Long scheduled runs no longer fail on a quiet agent.
+
+**Action required:**
+- No CDK-before-backend ordering is needed this time. The only infrastructure changes are one alarm and, in our prod, the code sandbox's DNS Firewall.
+- After both deploys, run the script-review backfill on each existing deployment that binds skills with scripts.
+- Add catalog rows for the default side-call models, so titles and summaries are priced.
+- See Manual steps.
+
+---
+
+## Skill scripts: trusted at adoption
+
+Skills such as Anthropic's PDF, docx, pptx and xlsx skills ship scripts, and `run_code` (1.39.0) runs them. 1.39.0 ran a script only from the user's own skills or the admin catalog. The question was who decides that someone else's scripts may run for a project's members. The answer is the person who adopts the skill, once, for the exact set of scripts they saw (`docs/specs/skill-code-sandbox.md` §8, revised in #2346).
+
+- **One verdict** (#2354). `apis/shared/skills/script_trust.py` decides on every call whether a script may run for this person:
+  - the user's own or imported skill;
+  - an admin-catalog skill;
+  - someone else's skill with an approved review for the turn's Agent or project at its script-set hash;
+  - refused while a switch row turns it off.
+
+  The rows sit beside the skill in the AppRoles table, so there is no new table or index. They are read with one `BatchGetItem` in the tool call and never cached, because a revocation changes nothing the agent cache keys on. An unreadable read refuses. `run_code` enforces it. The Word tools run it **in shadow** for one release: `skill.script_run` gets `verdict` and `wouldRefuse`, and nothing is stopped. Enforcement there comes in a later release, after the backfill.
+- **Reviews are recorded on bind** (#2371). Saving an Agent or project records one `SCRIPTS_REVIEW#AST#{assistantId}#{hash}` row per pinned binding of a skill with scripts:
+  - the binder's own hand-written skill records an `authored` review automatically, with no sheet;
+  - an imported skill records a `review` only when the save names the exact hash;
+  - unbinding withdraws the reviews.
+- **The review sheet and its 409** (#2385). A save that adds or moves a binding to scripts the binder didn't write, with no review at that hash, answers 409 `skill_scripts_unreviewed`. This covers Agent create and update, the Agent's per-skill Update, the project skills save and the project Update. The sheet answers it with **Allow** or **Add without scripts**. A binding the save leaves alone is never asked about, so an unrelated edit doesn't reopen the sheet and existing bindings keep working. The sheet and the 409 ship together, so no save breaks in between. Agent Designer's skill **Update** control no longer waits on the version-history flag.
+- **What members see** (#2386, #2387, #2389).
+  - **A badge** on Agent details, which is also the store listing, and on project pages: "Runs scripts in a sandbox with no internet access · Reviewed by {reviewer}, {date}", "Shared by {author}" or "From the admin catalog".
+  - **The tool rail** names the run ("Ran fill.py from pdf", "Ran fill.py from pdf, which failed", "Didn't run fill.py from pdf"). Opening the row shows the skill, its author and version, and the trust line, fetched only on open.
+  - **The import step** says how many scripts a bundle includes, or how many a refresh changed.
+- **Who can turn scripts off** (#2384, #2386).
+  - **Authors** get **Scripts can run** on their skill's page.
+  - **Admins** get the delegable `admin.skill_scripts` scope and `/admin/skills/scripts`. The page shows any skill's scripts as read-only source, with each reviewed version and where it was reviewed. It switches scripts off for every version or only the chosen hashes, with a reason, audited as `skill.scripts_switched`.
+  - Only an admin can undo an admin's switch.
+- **Backfill** (#2379). `backend/scripts/script_trust_backfill.py` pins each existing binding of a scripted user skill and writes its `backfill` review. The reviewer is the person the scripts already run on behalf of. Without it, `run_code` refuses scripts on existing bindings until someone re-saves them, and so will the Word tools once they enforce. See Manual steps.
+
+## Skill version history (in development)
+
+A skill's history used to be the versions projects happened to pin. With `SKILL_VERSION_HISTORY_ENABLED` on, **every content write is kept as a version** (#2361). That covers My Skills, the admin catalog and the `my_skill_*` tools, deduplicated so a save that changes nothing adds nothing (`docs/specs/skill-version-history.md`).
+
+- **History** (#2366, #2368). Owners see it on the Customize page and admins on the skill edit form. It lists every version: what cut it, who made it, when, and which one is **Current**. Consecutive file edits group into one row. Open a version to see its diff from the live skill, download it, or restore it. A restore is a new version and moves no pins.
+- **Where it's used** (#2370, #2375). After a change, the author sees which Agents and projects are on the current version and which are on an older one, and can update the ones they own in one step. A published store Agent's row says that the update reaches its draft, and that the Agent needs resubmitting. Agent Designer gets an Update strip of its own.
+
+Versions are rows in the existing skill catalog table and frozen files in the existing skill-resources bucket, so there are no new resources. A re-import's checkpoint fails closed (503). Every other write treats history as best-effort and counts `SkillVersionCaptureFailed`. Nothing reaches the prompt. On in our dev (#2376).
+
+## Organize the Agents and Projects pages (in development)
+
+With `ORGANIZE_LISTS_ENABLED` and `features.organizeLists` on, members arrange their own lists. It is a view preference and never changes access (`docs/specs/agent-project-organization.md`, #2358).
+
+- **Hide** (#2369). Every agent row and project card gets **Hide**, plus a Hidden (n) filter. My agents also gains All / Mine / Shared with me chips. Hiding a pinned agent unpins it, and Undo re-pins it.
+- **Sort and Arrange** (#2372). Recently added (today's order), Name or Custom. **Arrange** turns a page, Pinned included, into one list reordered by drag, the arrow keys or Move up / Move down, and nothing saves until **Done**. Under a Custom order, an item that arrived since (a new share, a new invite) shows first with a **New** badge.
+- **Sidebar** (#2373, #2377). Pinned agents reorder in place, with a visible drop zone and a "Release to unpin" row. Locked role pins stay first.
+
+The arrangement is one `ARRANGEMENT#agents` / `ARRANGEMENT#projects` item per user on the existing user-settings table, never on the `SETTINGS` item the turn path reads. Ids are checked for shape, never access, so a list keeps an item the user lost access to and shows it again if access comes back. The Pinned order is written by `PUT /agents/pins/order`, which is gated like the other pin routes and not by this flag.
+
+## Task models, and metered side calls
+
+**Admins pick the task models** (#2362, #2374). Manage Models gains a **Task models** tab. For conversation titles, tool summaries, compaction and structured extraction, an admin picks an eligible catalog model (enabled, Bedrock Converse, text in and out) and an effort level where the model has one. The setting is one `SYSTEM#TASK_MODELS` item in the managed-models table. It is read through the 60-second config cache, and none of these tasks runs before the first token. Nothing changes until an admin assigns a model. A title model other than Nova Micro now gets a framed prompt, because Claude models had answered the opening message instead of titling it.
+
+**Side calls are metered** (#2381). Each title, tool-summary and compaction call now writes one `C#` cost row (`callKind` `session_title`, `tool_summary`, `compaction_summary`). The row is priced from the catalog row of the model that ran and counted against the **user's** quota and the conversation's cost, as spec §4.6 decided. Rows are written fire-and-forget after the call, in a worker thread, so nothing is added before the first token or on the event loop. They are kept out of the prompt-cache classifier, and they are no longer a chat call's predecessor, which had marked the next chat call `modelSwitched`. **The default models need catalog rows to be priced.** Without them, these calls are recorded as unmetered and fire `UnmeteredModelCall` (Manual steps).
+
+## Seeing the harness's own time
+
+- **Prelude per release, and an alarm** (#2348). The readout bundle, `readout.md` and the Releases tab show `PreludeTotalMs`, handler entry to the model call, and its top-level stages by version. A stage counts as moved when its p50 shifts by more than max(30 ms, 5%) on 200 or more turns per side. A new `turn-prelude-p50` CloudWatch alarm fires on a 6-hour p50 above 1,500 ms, and only in periods with at least 200 turns. Tune it with `CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS`, or set it to `0` for no alarm, and with `CDK_OBSERVABILITY_TURN_PRELUDE_MIN_TURNS`.
+- **CI holds the turn path's round trips** (#2339). A test runs four turns (first turn, warm follow-up, `@`-mention, project turn) through the real `invocations` handler against a production-sized world. It fails when a change adds a blocking call before the first token. It counts calls and never times them, so it does not flake (turn-path spec §6F, invariant I11).
+- **The ledger's turn KPIs count chat calls only** (#2335). Workflow steps, handoff briefs, voice, api-converse and extraction calls had shown up as turn-cost and first-byte regressions as their use grew. Those now get a **Calls by kind** line instead.
+
+## Smaller additions
+
+- **Admins import skill bundles into the catalog** (#2344), from a public GitHub path or a `.zip`, with the same preview and "Check GitHub for changes" as My Skills. A new import is a draft with no role grants. A re-import keeps display name, status, category and grants. My Skills and the catalog now share one import component and one backend loader.
+- The Workflows page keeps its list for the tab, so going back shows it at once, and its first load shows skeleton rows (#2360, #2365).
+- Scrolled sidebar rows fade cleanly under **New Session**, and the selected conversation loses its orange left bar (#2392).
+
+## 🐛 Bug fixes
+
+- **Long "Run now" and scheduled runs no longer fail when the agent goes quiet** (#2350). The headless harness had a 300 s read timeout, and the chat proxy has used 660 s since it outgrew the Runtime's 600 s model read timeout. The harness now waits 660 s, and a run is capped at 14 minutes, before the worker Lambda's 15. A run the Lambda killed would be retried and run the prompt again. The errors now say what happened.
+- **Each cost row carries its own call's first-byte time** (#2337). On a multi-call turn, the first call's row could carry the last call's value. Expect fewer tool-only first calls to report one; those were reporting the wrong call's number.
+- Skill import no longer warns about a byte-order mark at the start of a file, such as the Office skills' XSD schemas (#2356).
+- The eval case `skill_reactivated_after_compaction` requires a reload only after a compaction cut retired the skill. It had failed every Sonnet 5.5 and Opus 5.5 run, where no cut happens (#2342).
+
+## 🚩 Feature flags
+
+Two new flags, both **OFF** (in development). Only `"true"` enables each one, and an unset GitHub variable arrives as `""`, which is off.
+
+| Flag | Default | Set on | Kind | What on does |
+|---|---|---|---|---|
+| `SKILL_VERSION_HISTORY_ENABLED` / `CDK_SKILL_VERSION_HISTORY_ENABLED` / `features.skillVersionHistory` | **OFF** (in development) | app-api and the AgentCore Runtime (written only while on), and the SPA build; set them together, or authoring-tool writes skip history | Feature switch once finished | Every skill content write is kept as a version, with History, restore and an offer to update pinned uses (#2361) |
+| `ORGANIZE_LISTS_ENABLED` / `CDK_ORGANIZE_LISTS_ENABLED` / `features.organizeLists` | **OFF** (in development) | app-api and the SPA build; set both | Feature switch once finished | Members hide, sort and arrange the Agents and Projects pages and reorder pinned agents (#2363) |
+
+**Default changes:** none. **Retired:** none.
+
+These need no flag of their own:
+- **Script trust and the review sheet** (#2354, #2371, #2384, #2385, #2386). They tighten `run_code`, which `CODE_SANDBOX_ENABLED` already gates. The 409 applies only to a binding a save adds or moves, and the Word tools only observe the verdict.
+- **Task models** (#2362). Nothing changes until an admin assigns one.
+- **Side-call metering** (#2381). It records a cost that was already being spent.
+
+**On in our `development` environment:** both new flags, plus every flag listed as on there in 1.39.0.
+
+**Turned on in our prod with this release** (#1798). Both stay off by default for other deployments:
+- `SKILL_BUNDLE_IMPORT_ENABLED` / `CDK_SKILL_BUNDLE_IMPORT_ENABLED` with `features.skillBundleImport` (app-api and the SPA build; set both). Users import an agentskills.io bundle into My Skills from a `.zip` or a public GitHub path, and admins import into the catalog. app-api fetches from GitHub on the user's behalf. Shipped in 1.38.0 and on in dev since. A feature switch, permanent.
+- `CODE_SANDBOX_ENABLED` / `CDK_CODE_SANDBOX_ENABLED` (AgentCore Runtime only, written only while on; no SPA flag). `run_code` runs a bound skill's scripts, or Python and JavaScript the model writes, in the network-isolated interpreter, under the trust verdict above. It reaches a user only through a role granted the `run_code` catalog row (seeded `enabledByDefault: false`). It adds the sandbox VPC's Route 53 Resolver DNS Firewall (4 resources). A feature switch, permanent: it spends Code Interpreter time. `CODE_SANDBOX_OFFICE_ENABLED` stays off in our prod this release.
+
+**Still opt-in, on in our prod** (#1798). None is promoted in this release:
+- `skillBundleImport` with `SKILL_BUNDLE_IMPORT_ENABLED`, and `CODE_SANDBOX_ENABLED`: on in prod from this release.
+- `releaseLedger` with `RELEASE_LEDGER_ENABLED`, `projectFileReadiness` with `PROJECT_FILE_READINESS_ENABLED`, and `CONCURRENT_TOOL_EXECUTION_ENABLED`: on in prod since 1.39.0 (2026-11-23), short of two weeks.
+- `sessionPrewarm`: waits on the Runtime V2 readout of what turnless warms cost.
+- `attachmentKb` and `CONVERSATION_INDEX_ENABLED`: a cost and retention decision each deployment makes.
+- `WEB_SEARCH_DEFAULT_MAX_RESULTS_ENABLED`: past two weeks in prod. Promotion is due in its own PR once its readout is recorded.
+- `AGENT_KNOWLEDGE_FILES_ENABLED` with `knowledgeBaseMode`, and `CONVERSE_DOCUMENTS_AS_TEXT_ENABLED`: `knowledge_files`'s two weeks restarted from 1.39.0's PUBLIC-Agent fix.
+- `attachmentPlan` with `ATTACHMENT_PLAN_ENABLED`: a rollout switch on in prod since 1.36.0. It retires in phase 6, when the `token` profile becomes the only one.
+- `documentExtract`, `fieldSetAuthoring` and `sourceProvenance`, with `DOCUMENT_EXTRACT_ENABLED`, `FIELD_SET_AUTHORING_ENABLED` and `SOURCE_PROVENANCE_ENABLED`: on in prod since 1.36.0 (2026-11-13), short of two weeks.
+- `attachmentCards`: on in prod since 1.36.1 (UI only), short of two weeks.
+- `WORD_SKILL_SCRIPTS_ENABLED`: on in prod since 2026-11-18. Promotion is reviewed after two weeks there, and after the Word tools enforce the script trust verdict.
+
+## 🛠️ Manual steps
+
+One new backfill script, `backend/scripts/script_trust_backfill.py` (step 2).
+
+### 0. Before the platform deploy: production flag variables (production)
+Set `CDK_SKILL_BUNDLE_IMPORT_ENABLED=true` and `CDK_CODE_SANDBOX_ENABLED=true` on the `production` GitHub environment. Set them at the cut, not earlier: a platform run from 1.39.0's code would turn `run_code` on without the trust verdict. They take effect on the platform deploy, and the prod SPA build carries `features.skillBundleImport`. Other deployments leave them unset unless they choose otherwise.
+
+### 1. Price the side calls (each existing deployment, before or with the backend deploy)
+Under Admin → Models, make sure the catalog has rows for the models that write titles, tool summaries and compaction summaries. The defaults are `us.amazon.nova-micro-v1:0` and `us.amazon.nova-2-lite-v1:0`; a row a deployment assigns on the **Task models** tab works too. Until a row exists, those calls are unmetered and fire `UnmeteredModelCall`. To check, start a new conversation with a tool call, then confirm its `session_title` and `tool_summary` `C#` rows have a cost.
+
+### 2. Script-review backfill (each existing deployment that binds skills with scripts, after both deploys)
+This writes the review rows that existing Agent and project bindings need for `run_code`, and later for the Word tools when they enforce. It is idempotent, and dry-run by default. Run the dry run and read every `owner_mismatch` and `ERROR` line. Then run `--apply`, then the dry run again, which should report only `skip`. Keep the first dry run's output with the release.
+
+```bash
+cd backend
+AWS_PROFILE=<env-profile> AWS_REGION=us-west-2 uv run --no-sync python scripts/script_trust_backfill.py --prefix <prefix>
+AWS_PROFILE=<env-profile> AWS_REGION=us-west-2 uv run --no-sync python scripts/script_trust_backfill.py --prefix <prefix> --apply
+```
+
+### 3. Offer `run_code` (production, after both deploys)
+1. Confirm the `run_code` row is in prod's tool catalog. 1.39.0's bootstrap re-seed writes it.
+2. Grant it to the roles that should have it.
+3. In a new conversation, run one skill script and one model-written snippet. Confirm the `skill.script_run` audit record carries a `verdict`.
+
+Another deployment that wants `run_code` follows 1.39.0's Manual step 4, then steps 2 and 3 here.
+
+### 4. Optional: the new flags
+- **Skill version history:** set `CDK_SKILL_VERSION_HISTORY_ENABLED=true` and build the SPA with `features.skillVersionHistory: true`.
+- **Organize lists:** set `CDK_ORGANIZE_LISTS_ENABLED=true` and build the SPA with `features.organizeLists: true`.
+
+## 🚀 Deployment notes
+
+**Order: `platform.yml`, then `backend.yml`, then `frontend-deploy.yml`.** Do step 0 of Manual steps first.
+
+- **Platform** adds the `turn-prelude-p50` alarm. In our prod it also writes `CODE_SANDBOX_ENABLED` to the Runtime and adds the sandbox VPC's DNS Firewall (4 resources). The Runtime's environment changes, so live Runtime sessions roll and the next turn may start cold.
+- **Backend before frontend.** The review sheet, badges, rail lines and admin switch read app-api routes that ship in `backend.yml`.
+- **Saves that add a binding to someone else's scripted skill now need a review.** Once app-api deploys, those saves answer 409 `skill_scripts_unreviewed` until the sheet is answered. Existing bindings are untouched.
+- **Users' cost rises a little.** Titles, tool summaries and compaction summaries now count against quota.
+- **Prompt-cache impact:** none expected for default-on tools; no tool spec changed. In our prod, `run_code`'s spec (886 tokens) is added only for roles granted the catalog row, as one `toolConfig` change for those users.
+- **Watch after deploy:**
+  - the `UnmeteredModelCall` alarm, until the side-call catalog rows exist;
+  - the new `turn-prelude-p50` alarm;
+  - `run_code` refusals in `skill.script_run`;
+  - 409 `skill_scripts_unreviewed` counts on Agent and project saves.
+- **Turning `run_code` back off:** set `CDK_CODE_SANDBOX_ENABLED=false` and run a platform deploy.
+
+**Ledger readout of the outgoing release** (1.39.0 vs 1.38.0) is in the release PR body.
+
+---
+
 # Release Notes — v1.39.0
 
 **Release Date:** November 22, 2026
