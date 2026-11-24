@@ -4,10 +4,10 @@ import { Router, RouterLink, RouterLinkActive } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenuTrigger, CdkMenu, CdkMenuItem } from '@angular/cdk/menu';
 import { ConnectedPosition } from '@angular/cdk/overlay';
-import { CdkDrag, CdkDragDrop, CdkDropList } from '@angular/cdk/drag-drop';
+import { CdkDrag, CdkDragDrop, CdkDropList, moveItemInArray } from '@angular/cdk/drag-drop';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, heroChevronRight } from '@ng-icons/heroicons/outline';
+import { heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, heroChevronRight, heroArrowUp, heroArrowDown } from '@ng-icons/heroicons/outline';
 import { heroEllipsisHorizontalSolid } from '@ng-icons/heroicons/solid';
 import { SessionService } from '../../../../session/services/session/session.service';
 import { ChatStateService } from '../../../../session/services/chat/chat-state.service';
@@ -98,7 +98,7 @@ export function groupProjectSessions(
 @Component({
   selector: 'app-session-list',
   imports: [RouterLink, RouterLinkActive, NgIcon, NgTemplateOutlet, CdkMenuTrigger, CdkMenu, CdkMenuItem, CdkDrag, CdkDropList, InViewDirective, AgentIconComponent],
-  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, heroChevronRight, appPin, appPinOff, incognitoIcon })],
+  providers: [provideIcons({ heroChatBubbleLeftRight, heroTrash, heroArrowPath, heroEllipsisHorizontalSolid, heroPencilSquare, heroArrowUpOnSquare, heroCloudArrowUp, heroEnvelope, heroEnvelopeOpen, heroRectangleStack, heroChevronRight, heroArrowUp, heroArrowDown, appPin, appPinOff, incognitoIcon })],
   templateUrl: './session-list.html',
   styleUrl: './session-list.css',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -118,6 +118,11 @@ export class SessionList {
   private agentPinService = inject(AgentPinService);
   /** With Projects off in this build, project tasks list as plain rows (no heading to a dead link). */
   private readonly projectsOn = inject(FEATURES).projects;
+  /**
+   * Pinned Agents reorder in place, by drag or by Move up / Move down in the row menu
+   * (docs/specs/agent-project-organization.md §6.4). The order is the Pinned page's too.
+   */
+  protected readonly organizeLists = inject(FEATURES).organizeLists;
   /**
    * A workflow run's step conversations nest under their source (workflow-runs spec §20.4).
    * Injected only while the flag is on, so a build without it never constructs the run services.
@@ -393,6 +398,7 @@ export class SessionList {
   private readonly instanceId = nextSessionListId++;
   protected readonly pinnedListId = `session-list-pinned-${this.instanceId}`;
   protected readonly unpinnedListId = `session-list-unpinned-${this.instanceId}`;
+  protected readonly pinnedAgentsListId = `session-list-pinned-agents-${this.instanceId}`;
 
   constructor() {
     // Pinned Agents load once the session list has loaded, which is also the
@@ -883,6 +889,48 @@ export class SessionList {
     } else {
       this.setPinned(data, false);
     }
+  }
+
+  /** How many pinned Agents a role locks; they list first and nothing sorts above them. */
+  private readonly lockedPinCount = computed(() => this.pinnedAgents().filter(agent => agent.locked).length);
+
+  /** CDK asks before placing a dragged Agent: never above a locked one. */
+  protected readonly agentSortPredicate = (index: number): boolean => index >= this.lockedPinCount();
+
+  /** A pinned Agent dropped within the pinned Agents: save the new order. */
+  protected onPinnedAgentDrop(event: CdkDragDrop<unknown, unknown, DragData>): void {
+    if (event.previousContainer !== event.container || !this.organizeLists) return;
+    if (event.previousIndex === event.currentIndex) return;
+    const ids = this.pinnedAgents().map(agent => agent.agentId);
+    moveItemInArray(ids, event.previousIndex, event.currentIndex);
+    this.reorderAgents(ids);
+  }
+
+  /** Whether `agent` can move one place `delta` among the unlocked pinned Agents. */
+  protected canMoveAgent(agent: PinnedAgent, delta: -1 | 1): boolean {
+    const movable = this.pinnedAgents().filter(a => !a.locked);
+    const index = movable.findIndex(a => a.agentId === agent.agentId);
+    return index >= 0 && index + delta >= 0 && index + delta < movable.length;
+  }
+
+  /** Move up / Move down from the row menu, the keyboard path for the drag. */
+  protected onMoveAgentClick(event: Event, agent: PinnedAgent, delta: -1 | 1): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!this.canMoveAgent(agent, delta)) return;
+    const ids = this.pinnedAgents().filter(a => !a.locked).map(a => a.agentId);
+    const from = ids.indexOf(agent.agentId);
+    moveItemInArray(ids, from, from + delta);
+    // Deferred past the CDK menu's close, for the same reason as onToggleReadClick.
+    queueMicrotask(() => this.reorderAgents(ids));
+  }
+
+  /** The list moves at once; AgentPinService puts it back if the request fails. */
+  private reorderAgents(ids: string[]): void {
+    this.agentPinService.reorder(ids.filter(id => !this.agentPinService.isLocked(id))).catch(error => {
+      console.error('Failed to reorder pinned agents:', error);
+      this.toastService.error('Failed to save the order', 'There was an error saving your pinned agents. Please try again.');
+    });
   }
 
   /** A pinned Agent opens a new chat with it, as the store's Start chat does. */
