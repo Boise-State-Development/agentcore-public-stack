@@ -1,6 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { DestroyRef, Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
 
+import { FEATURES } from '../../../services/features';
 import { ToastService } from '../../../services/toast/toast.service';
 import { AgentHandoffService } from './agent-handoff.service';
 import { HandoffStatus, HandoffView } from './handoff.models';
@@ -8,7 +9,7 @@ import { HandoffStateService } from './handoff-state.service';
 import { MAX_PROMPT_STEPS_PER_CALL, PromptRefusedReason, PromptStepFrame, WorkflowPromptService } from './workflow-prompt.service';
 import { WorkflowRunStateService } from './workflow-run-state.service';
 import { DEFAULT_RUN_CONCURRENCY, RunEnvelope, RunStepLaunch, WorkflowRunView } from './workflow-run.models';
-import { readStepsOf } from './workflow-run-progress';
+import { isVersionNumber, pinnedVersionOf, readStepsOf } from './workflow-run-progress';
 
 /** A step stops holding a slot once its row reads one of these (spec §19 PR-W.4a). */
 const SETTLED: ReadonlySet<HandoffStatus> = new Set(['done', 'needs_input', 'stopped', 'dismissed', 'abandoned']);
@@ -100,6 +101,7 @@ export class WorkflowRunQueueService {
   private readonly runState = inject(WorkflowRunStateService);
   private readonly prompts = inject(WorkflowPromptService);
   private readonly toast = inject(ToastService);
+  private readonly features = inject(FEATURES);
 
   private readonly runs = signal<ReadonlyMap<string, QueuedRun>>(new Map());
 
@@ -384,6 +386,9 @@ export class WorkflowRunQueueService {
         folders: envelope.folders,
         runId: envelope.runId,
         stepId: step.stepId,
+        // The version the run recorded for a pinned step (workflow-designer §23.3): the step's
+        // first turn runs it, and acceptance refuses any other. Nothing for an unpinned step.
+        ...(this.features.agentVersionPinning && step.agentVersion !== undefined ? { agentVersion: step.agentVersion } : {}),
       });
     } catch (error) {
       console.error('Workflow run step failed to start:', error);
@@ -583,6 +588,7 @@ function isIdle(run: Pick<QueuedRun, 'pending' | 'running' | 'prompting'>): bool
 
 /** A run row's step as the queue starts it: its worker, and the handoff ids of the steps it reads. */
 export function launchOf(run: WorkflowRunView, step: WorkflowRunView['steps'][number]): RunStepLaunch {
+  const pinned = pinnedVersionOf(run, step);
   return {
     stepId: step.stepId,
     handoffId: step.handoffId,
@@ -591,6 +597,7 @@ export function launchOf(run: WorkflowRunView, step: WorkflowRunView['steps'][nu
     agentName: step.agentName,
     request: step.request,
     reads: readStepsOf(run, step).map((read) => read.handoffId),
+    ...(pinned !== undefined ? { agentVersion: pinned } : {}),
   };
 }
 

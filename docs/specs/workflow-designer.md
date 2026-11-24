@@ -1911,3 +1911,35 @@ is a per-step override on create that may name only the current `P`.
   unpinned step's JSON is unchanged.
 - **Not pinned:** voice mode, which resolves through `resolve_turn_agent` without a pin, so a voice turn in a step
   conversation runs the current version. Left for a follow-up if voice in step conversations matters.
+
+#### Built (PR-D.8c)
+
+- **The flag.** `features.agentVersionPinning`, on only in `environment.development.ts` (the `development` GitHub
+  environment sets `CDK_AGENT_VERSION_PINNING_ENABLED=true`). While off, the sheet, the designer, the queue and the
+  step conversation behave as before: no pin is read, nothing is sent, and Mark as reviewed stays.
+- **The first turn.** The queue sends `handoff_context.agentVersion` on an Agent step of a saved workflow's run: from the
+  create response's `steps[].agentVersion` on Start (`withCreatedVersion`), or the run row's `steps[].agentVersion` when
+  a reload resumes it (`pinnedVersionOf`). Nothing for a model step, a run of mentions or an unpinned step.
+  `handoffContextOf` builds the object, keeping today's key order with the version last.
+- **The sheet.** Each step carries the server's `pin` (`RunReviewWorkflowStep.pin`). A runnable pin says "Uses version
+  N.", adding "Version P is the current published version." when one is offered. **Use version P** replaces Mark as
+  reviewed on a pinned step, for everyone who can start it (`WorkflowRunService.useVersion`). For the workflow's owner it is the
+  workflow PUT; for anyone else it is `useVersions` on run create, and the line then says "Uses version P for this
+  run.". A run already opened recorded the old version on its rows, so it is dismissed and created again. The sheet's
+  edits (each step's request, what was removed, the card and a brief already written) carry over to the new run. On a
+  blocked sheet the step's blocker clears and the run is created once nothing blocks it. `agent_version_unavailable` is
+  a step blocker (Remove clears it), shown in the server's words under the Agent's own name.
+- **The owner.** A pinned step's `runsDraft` is false, so the SPA tells the Agent's owner from the `@` list it already
+  loads (`AgentMentionService`, group `own`): "Runs version N for everyone, including you." takes the draft line's place.
+  The sheet warms that cached list when a pinned step is on it. The sheet and the designer share one wording
+  (`pinnedVersionLine`).
+- **The designer.** The Step tab shows the pin line, or a refused pin's blocker, with **Use version P** for the owner,
+  which sets the draft's `agentVersion` for the next save. The Preview tab shows the pin line in place of §10's "a run
+  uses its published version".
+- **The step conversation.** "Version N" follows the "Context from" link on its first message. It comes from the link
+  the tab started it with, the replay's `spawnedFrom.agentVersion` (D.8b), or the source's run when that is loaded.
+  `HandoffStateService.hydrate` keeps a version the tab knows when a replay without one replaces the link.
+- **Checked in the app** (worktree SPA and app-api with `SKIP_AUTH` against dev data, both themes, 375 px and desktop,
+  no sideways scroll): a step pinned above the published version blocked the sheet, and Use version wrote the file and
+  opened the run. Both first turns carried `agentVersion: 1`, and the step conversation read "Version 1". The deployed
+  Runtime refuses SKIP_AUTH's token, so the turns themselves wait for the end-to-end dev check below.

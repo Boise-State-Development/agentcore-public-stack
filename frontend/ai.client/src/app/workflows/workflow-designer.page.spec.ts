@@ -641,6 +641,95 @@ describe('WorkflowDesignerPage', () => {
       });
     });
   });
+  describe('version pinning (PR-D.8c)', () => {
+    /** Generalist (the user's own) is pinned to 2 while 4 is published; Fiscal reader is pinned to its current 4. */
+    function pinnedDoc(): WorkflowDocument {
+      const [gen, fis, col] = view().steps;
+      return doc({
+        steps: [
+          { ...gen, agent: { ...gen.agent, publishedVersion: 4, changed: true }, pin: { version: 2, canRun: true, offerVersion: 4 } },
+          { ...fis, pin: { version: 4, canRun: true } },
+          col,
+        ],
+      });
+    }
+
+    function on(agentVersionPinning: boolean): void {
+      TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, agentVersionPinning } });
+      service.read.mockResolvedValue({ ok: true, document: pinnedDoc() });
+      service.validate.mockResolvedValue(pinnedDoc());
+    }
+
+    const stepPanel = (): string => el.querySelector('#wf-panel-step')!.textContent ?? '';
+
+    it('tells the Agent’s owner the pin runs for them too, and Use version records the current one on save', async () => {
+      on(true);
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Generalist, Agent step').click();
+      await settle();
+
+      expect(stepPanel()).toContain('Runs version 2 for everyone, including you. Version 4 is the current published version.');
+      expect(stepPanel()).not.toContain('your test runs use its draft');
+      button('Use version 4').click();
+      await settle();
+      expect(announce).toHaveBeenCalledWith('The step now uses version 4. Save to keep it.', 'polite');
+
+      service.write.mockResolvedValue({ ok: true, document: doc({}, true) });
+      button('Save workflow').click();
+      await settle();
+      const written = service.write.mock.calls[0][1] as WorkflowWrite;
+      expect(written.steps.map((step) => step.agentVersion)).toEqual([4, 4, 1]);
+    });
+
+    it('says which version another’s Agent runs, with nothing to offer when it is the current one', async () => {
+      on(true);
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Fiscal reader, Agent step').click();
+      await settle();
+      expect(stepPanel()).toContain('Uses version 4.');
+      expect([...el.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('Use version'))).toBe(false);
+    });
+
+    it('the preview says what a pinned step runs, never that a run uses the published version', async () => {
+      on(true);
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      el.querySelector<HTMLButtonElement>('#wf-tab-preview')!.click();
+      await settle();
+      const panel = el.querySelector('#wf-panel-preview')!.textContent ?? '';
+      expect(panel).toContain('Runs version 2 for everyone, including you. Version 4 is the current published version.');
+      expect(panel).toContain('Uses version 4.');
+      expect(panel).not.toContain('A run uses its published version');
+    });
+
+    it('a refused version says why in the server’s words', async () => {
+      on(true);
+      const refused = pinnedDoc();
+      refused.workflow.steps[1] = { ...refused.workflow.steps[1], pin: { version: 4, canRun: false, reason: 'unpublished' } };
+      refused.sheet = {
+        startable: false,
+        blockers: [{ code: 'agent_version_unavailable', step: 'fiscal', message: "This Agent is no longer published, so version 4 can't run. Remove the step or choose another Agent" }],
+      };
+      service.read.mockResolvedValue({ ok: true, document: refused });
+      service.validate.mockResolvedValue(refused);
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Fiscal reader, Agent step').click();
+      await settle();
+      expect(stepPanel()).toContain("This Agent is no longer published, so version 4 can't run. Remove the step or choose another Agent.");
+      expect(stepPanel()).not.toContain('Uses version 4');
+    });
+
+    it('with the flag off, says nothing about versions, as today', async () => {
+      on(false);
+      await open({ skillId: 'SKL-1', name: 'proposal-review' });
+      button('Generalist, Agent step').click();
+      await settle();
+      expect(stepPanel()).not.toContain('version 2');
+      el.querySelector<HTMLButtonElement>('#wf-tab-preview')!.click();
+      await settle();
+      expect(el.querySelector('#wf-panel-preview')!.textContent).toContain('A run uses its published version, now version 4.');
+    });
+  });
+
   describe('checklist steps (PR-D.7c)', () => {
     const MODELS = [
       { modelId: 'us.model-a', modelName: 'Model A', provider: 'bedrock', inputModalities: ['TEXT', 'IMAGE'], outputModalities: ['TEXT'] },

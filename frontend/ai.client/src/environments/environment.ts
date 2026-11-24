@@ -33,6 +33,7 @@ export const environment = {
         workflows: false,
         promptSteps: false,
         checklistSteps: false,
+        agentVersionPinning: false,
         sessionRewind: true,
         sessionFork: true,
         quotaRequests: false,

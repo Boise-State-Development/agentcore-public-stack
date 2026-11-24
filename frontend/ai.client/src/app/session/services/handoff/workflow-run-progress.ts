@@ -278,3 +278,17 @@ export function runProgress(run: WorkflowRunView, liveRows: readonly HandoffView
 export function showsInThread(run: WorkflowRunView): boolean {
   return run.status === 'approved' || run.status === 'stopped';
 }
+
+/**
+ * The version a saved workflow's Agent step runs (workflow-designer §23.3), from the run row:
+ * absent on a model step, on a run of mentions (never pinned) and on a step that records none.
+ */
+export function pinnedVersionOf(run: Pick<WorkflowRunView, 'workflow'>, step: WorkflowRunView['steps'][number]): number | undefined {
+  if (!run.workflow || step.kind === 'prompt' || step.kind === 'checklist') return undefined;
+  return isVersionNumber(step.agentVersion) ? step.agentVersion : undefined;
+}
+
+/** A positive whole number, as `handoff_context.agentVersion` takes. */
+export function isVersionNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1;
+}

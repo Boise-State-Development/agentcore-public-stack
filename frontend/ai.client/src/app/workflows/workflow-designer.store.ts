@@ -24,6 +24,8 @@ import {
   toggleFieldSet,
   hasWorker,
   modelViews as modelViewsOf,
+  pinViews,
+  setAgentVersion,
   renameStep,
   setStepKind,
   draftFrom,
@@ -51,6 +53,7 @@ import {
   WorkflowModelView,
   WorkflowRef,
   WorkflowResultMode,
+  WorkflowStepPin,
 } from './workflow.models';
 import { WorkflowsApiService } from '../services/workflows/workflows-api.service';
 
@@ -163,6 +166,10 @@ export class WorkflowDesignerStore {
   readonly promptModels = computed(() => promptModelChoices(this.models.availableModels()));
   /** Each field set the server last read for a checklist step, by name (title, field count, can it run). */
   readonly fieldSetViews = computed(() => fieldSetViewsOf(this.document()));
+  /** Each pinned Agent step's version as the server last judged it (§23.3); none while pinning is off. */
+  private readonly pinViews = computed(() =>
+    this.features.agentVersionPinning ? pinViews(this.document()) : new Map<string, { agentId: string; pin: WorkflowStepPin }>(),
+  );
 
   /**
    * The field sets in this workflow's skill, which a checklist step picks from (§22.3): read from
@@ -623,6 +630,37 @@ export class WorkflowDesignerStore {
 
   setOwnRequest(key: string, ownRequest: string | null): void {
     this.draft.set(updateStep(this.draft(), key, { ownRequest }));
+  }
+
+  /** Use version: the step records the Agent's current published version, saved with the rest (§23.2). */
+  useVersion(key: string, version: number): void {
+    if (!this.isOwned()) return;
+    this.draft.set(setAgentVersion(this.draft(), key, version));
+    this.announcer.announce(`The step now uses version ${version}. Save to keep it.`, 'polite');
+  }
+
+  /**
+   * A step's pin as the server last judged it (§23.3), while it still names the Agent and version
+   * the server judged: a step moved since waits for the next preview. Null while pinning is off.
+   */
+  pinFor(step: DraftStep): WorkflowStepPin | null {
+    if (isModelDraftStep(step) || !step.agentId) return null;
+    const judged = this.pinViews().get(step.name);
+    if (!judged || judged.agentId !== step.agentId) return null;
+    return step.agentVersion === null || judged.pin.version === step.agentVersion ? judged.pin : null;
+  }
+
+  /** Why the step's pinned version can't run, in the server's words, while it can't (§23.2). */
+  pinBlocker(step: DraftStep): string | null {
+    const pin = this.pinFor(step);
+    if (!pin || pin.canRun) return null;
+    const blocker = this.document()?.sheet.blockers.find((b) => b.code === 'agent_version_unavailable' && b.step === step.name);
+    return blocker ? `${blocker.message.replace(/\.$/, '')}.` : null;
+  }
+
+  /** The user owns the step's Agent: a pinned version runs for them too (§23.2). */
+  ownsAgent(step: DraftStep): boolean {
+    return this.agentFor(step).mention?.group === 'own';
   }
 
   // ---- what a card says -----------------------------------------------------------------------

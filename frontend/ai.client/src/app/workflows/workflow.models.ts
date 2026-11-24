@@ -14,6 +14,7 @@ export type {
   WorkflowRef,
   WorkflowSheet,
   WorkflowSheetBlocker,
+  WorkflowStepPin,
   WorkflowStepView,
   WorkflowSummary,
   WorkflowView,
