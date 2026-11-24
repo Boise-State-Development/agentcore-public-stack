@@ -1,4 +1,4 @@
-"""``GET /skills/{id}/script-trust`` and ``PUT /skills/mine/{id}/scripts`` (skill-code-sandbox §8.4, §8.6)."""
+"""``GET /skills/{id}/script-trust``, ``GET /skills/scripts/trust`` and ``PUT /skills/mine/{id}/scripts`` (skill-code-sandbox §8.4, §8.6)."""
 
 from __future__ import annotations
 
@@ -82,9 +82,11 @@ def test_an_authored_review_reads_as_shared_by(state):
 
 
 def test_no_review_and_switched_off_scripts_say_so(state):
-    state["switch"] = st.ScriptSwitch(off=True, by="admin")
+    state["switch"] = st.ScriptSwitch(off=True, by="admin", at="2026-11-20T09:00:00Z")
     body = _client().get("/skills/pdf/script-trust", params={"assistantId": "agent-1"}).json()
-    assert (body["trustedBy"], body["reviewer"], body["scriptsOff"]) == (None, None, {"by": "admin"})
+    assert (body["trustedBy"], body["reviewer"], body["scriptsOff"]) == (
+        None, None, {"by": "admin", "at": "2026-11-20T09:00:00Z"},
+    )
 
 
 def test_the_callers_own_import_is_imported_with_its_provenance(state):
@@ -96,6 +98,78 @@ def test_the_callers_own_import_is_imported_with_its_provenance(state):
 def test_a_skill_the_agent_does_not_bind_is_a_404(state):
     state["bound"] = False
     assert _client().get("/skills/pdf/script-trust", params={"assistantId": "agent-1"}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /skills/scripts/trust: the rail's opened row, from a name and a conversation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def lookup(state, monkeypatch):
+    """A conversation the member owns, run as agent-1, which binds ``pdf`` at v2."""
+    from apis.shared.assistants import service as assistants
+    from apis.shared.sessions import metadata
+    from apis.shared.skills import access, pinning
+
+    agent = SimpleNamespace(bindings=[SimpleNamespace(kind="skill", ref="pdf", config={"version": 2})])
+    sessions = {("conv-1", MEMBER.user_id): SimpleNamespace(assistant_id="agent-1")}
+    loaded = []
+
+    async def session(session_id, user_id):
+        return sessions.get((session_id, user_id))
+
+    async def permission(assistant_id, user_id, email):
+        return agent, "viewer"
+
+    async def records(refs):
+        loaded.extend(refs)
+        return [state["record"]]
+
+    async def reachable(user):
+        return ["pdf"] if state.get("reachable") else []
+
+    monkeypatch.setattr(metadata, "get_session_metadata", session)
+    monkeypatch.setattr(assistants, "resolve_assistant_permission", permission)
+    monkeypatch.setattr(pinning, "load_skill_records", records)
+    monkeypatch.setattr(access, "resolve_accessible_skill_ids", reachable)
+    state["loaded"] = loaded
+    state["sessions"] = sessions
+    return state
+
+
+def test_the_rail_finds_a_run_by_skill_name_in_its_conversation(lookup):
+    lookup["review"] = {"reviewedBy": "reviewer-1", "reviewedAt": "2026-11-23T00:00:00Z", "method": "review"}
+    digest = st.scripts_hash(lookup["record"])
+    body = _client().get(
+        "/skills/scripts/trust", params={"name": "pdf", "sessionId": "conv-1", "version": digest[:8]}
+    ).json()
+    assert (body["trustedBy"], body["reviewer"], body["version"]) == ("reviewed", "Riley Reviewer", digest[:8])
+    # The binding's pinned version, not the live skill.
+    assert lookup["loaded"] == ["pdf@2"]
+
+
+def test_a_version_that_no_longer_matches_names_the_skill_but_no_review(lookup):
+    lookup["review"] = {"reviewedBy": "reviewer-1", "reviewedAt": "t", "method": "review"}
+    body = _client().get(
+        "/skills/scripts/trust", params={"name": "pdf", "sessionId": "conv-1", "version": "deadbeef"}
+    ).json()
+    assert (body["displayName"], body["author"], body["trustedBy"], body["version"]) == (
+        "PDF", "Dana Author", None, "deadbeef",
+    )
+
+
+def test_another_users_conversation_and_an_unknown_skill_are_404(lookup):
+    client = _client()
+    lookup["sessions"].clear()
+    assert client.get("/skills/scripts/trust", params={"name": "pdf", "sessionId": "conv-1"}).status_code == 404
+    lookup["sessions"][("conv-1", MEMBER.user_id)] = SimpleNamespace(assistant_id=None)
+    assert client.get("/skills/scripts/trust", params={"name": "pdf", "sessionId": "conv-1"}).status_code == 404
+    # In plain chat, the member's own reachable skills.
+    lookup["reachable"] = True
+    lookup["record"] = _skill(owner=MEMBER.user_id)
+    body = client.get("/skills/scripts/trust", params={"name": "pdf", "sessionId": "conv-1"}).json()
+    assert body["trustedBy"] == "own"
 
 
 def test_the_authors_switch_and_an_admin_lock(monkeypatch):

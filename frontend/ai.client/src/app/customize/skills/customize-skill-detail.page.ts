@@ -1,4 +1,5 @@
 import { provenanceLine } from '../../shared/skills/skill-provenance';
+import { SkillScriptsSwitchComponent } from '../../shared/skills/components/skill-scripts-switch.component';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -88,6 +89,7 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
     MarkdownComponent,
     SkillVersionHistoryComponent,
     SkillUsesComponent,
+    SkillScriptsSwitchComponent,
   ],
   providers: [
     provideIcons({ heroArrowDownTray, heroArrowLeft, heroDocumentText, heroPencilSquare }),
@@ -284,6 +286,14 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                   </li>
                 }
               </ul>
+            </section>
+          }
+
+          <!-- The author's switch (skill-code-sandbox §8.4): own skills with scripts only -->
+          @if (s.isOwned && hasScripts()) {
+            <section class="mt-8 rounded-2xl border border-gray-200 p-4 dark:border-white/10">
+              <h2 class="sr-only">Scripts</h2>
+              <app-skill-scripts-switch [skillId]="s.skillId" />
             </section>
           }
 
@@ -505,6 +515,9 @@ export class CustomizeSkillDetailPage {
     if (s.status !== 'active') chips.push(s.status);
     return chips;
   });
+
+  /** The skill has at least one script, so its author has a switch for them. */
+  protected readonly hasScripts = computed(() => (this.skill()?.resources ?? []).some(r => r.kind === 'script'));
 
   /** Reference files first, then scripts, then assets; alphabetical within. */
   protected readonly files = computed<SkillDetailResource[]>(() =>
