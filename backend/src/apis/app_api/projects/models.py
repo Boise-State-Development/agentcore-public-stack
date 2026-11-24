@@ -331,6 +331,8 @@ class UpdateBindingsRequest(BaseModel):
     # Skills only (skill-code-sandbox §8.5): the script sets the saver allowed,
     # ``{skillId: scriptsHash}``. Ignored on the tools route.
     scripts_reviewed: Optional[Dict[str, str]] = Field(None, alias="scriptsReviewed")
+    # The review sheet's "Add without scripts": skills bound with no review.
+    scripts_declined: Optional[List[str]] = Field(None, alias="scriptsDeclined", max_length=MAX_BINDINGS_PER_KIND)
 
 
 class PinSkillRequest(BaseModel):

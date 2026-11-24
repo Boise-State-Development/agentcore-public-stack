@@ -13,13 +13,20 @@ a project's ``HarnessSettingsService.pin_skill`` (the "Update" on its Skills pag
 A project harness is refused: it is edited through its project, which versions
 every save. A store Agent's update lands on its draft, like any edit; users run
 the published snapshot until the owner resubmits.
+
+An Update that moves the pin onto scripts nobody has reviewed for this Agent
+raises ``ScriptsUnreviewedError`` before the pin is stored, unless the caller
+allows them (``scripts_reviewed``); a review it carries is recorded
+(skill-code-sandbox §8.3, §8.5). The routes are not behind version history's
+flag: every Agent binding of a skill with scripts is pinned, so its owner needs
+Update wherever scripts run.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from apis.shared.assistants.models import AgentBinding, Assistant
 from apis.shared.assistants.service import (
@@ -32,6 +39,8 @@ from apis.shared.auth.models import User
 from apis.shared.skills.pinning import SkillPinError, pin_current, pin_status
 from apis.shared.skills.pins import PIN_CONFIG_KEY, binding_pin, split_pinned_ref
 from apis.shared.skills.resource_store import SkillResourceStoreError
+from apis.shared.skills.script_review_check import require_script_reviews
+from apis.shared.skills.script_reviews import record_binding_reviews
 
 from .binding_validation import BindingValidationError, validate_agent_write
 
@@ -63,7 +72,9 @@ def _skill_binding(assistant: Assistant, skill_id: str) -> Optional[AgentBinding
     return None
 
 
-async def pin_agent_skill(agent_id: str, user: User, skill_id: str) -> Tuple[Assistant, int]:
+async def pin_agent_skill(
+    agent_id: str, user: User, skill_id: str, *, scripts_reviewed: Optional[Dict[str, str]] = None
+) -> Tuple[Assistant, int]:
     """Move ``agent_id``'s pin on ``skill_id`` to the skill's current content.
 
     Returns the updated Agent and the version it now pins. Pinning an unchanged
@@ -74,7 +85,8 @@ async def pin_agent_skill(agent_id: str, user: User, skill_id: str) -> Tuple[Ass
             editor; 409 a project harness, or a binding that is not pinned (it
             already runs the current version); the binding validator's status when
             the caller may no longer bind the skill; 503 when its files couldn't
-            be frozen.
+            be frozen. ``ScriptsUnreviewedError`` when the new version's
+            scripts need a review (§8.5).
     """
     assistant, permission = await resolve_assistant_permission(
         assistant_id=agent_id, user_id=user.user_id, user_email=user.email
@@ -115,11 +127,17 @@ async def pin_agent_skill(agent_id: str, user: User, skill_id: str) -> Tuple[Ass
         else b
         for b in assistant.bindings or []
     ]
+    await require_script_reviews(
+        agent_id, assistant.bindings, bindings, user.user_id, scripts_reviewed=scripts_reviewed
+    )
     updated = await update_assistant(
         assistant_id=agent_id, owner_id=assistant.owner_id, bindings=bindings
     )
     if not updated:
         raise AgentSkillPinError(f"Agent not found: {agent_id}", 404)
+    await record_binding_reviews(
+        agent_id, assistant.bindings, updated.bindings, user, scripts_reviewed=scripts_reviewed
+    )
     logger.info(
         "Moved an agent's skill pin",
         extra={"event": "agent_skill_pin_moved", "agent_id": agent_id, "version": version.version},

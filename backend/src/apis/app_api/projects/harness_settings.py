@@ -54,6 +54,7 @@ from apis.shared.projects.service import (
 )
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.pinning import PinStatus, SkillPinError, pin_current, pin_status
+from apis.shared.skills.script_review_check import require_script_reviews
 from apis.shared.skills.script_reviews import record_binding_reviews
 from apis.shared.skills.pins import ADDED_BY_CONFIG_KEY, PIN_CONFIG_KEY, binding_adder, binding_pin
 from apis.shared.skills.resource_store import SkillResourceChangedError, SkillResourceStoreError
@@ -141,6 +142,7 @@ class HarnessSettingsService:
         kind: Optional[str] = None,
         bindings: Optional[List[AgentBinding]] = None,
         scripts_reviewed: Optional[Dict[str, str]] = None,
+        scripts_declined: Optional[List[str]] = None,
     ) -> HarnessView:
         """Apply one settings change and cut a version for it. A no-op cuts nothing.
 
@@ -148,7 +150,10 @@ class HarnessSettingsService:
         (the memory space binding, the other kind), in their original order. A
         skills save also records the script reviews it implies
         (``script_reviews.record_binding_reviews``, skill-code-sandbox §8.5):
-        ``scripts_reviewed`` is ``{skillId: scriptsHash}`` the saver allowed.
+        ``scripts_reviewed`` is ``{skillId: scriptsHash}`` the saver allowed, and
+        ``scripts_declined`` the skills bound without allowing their scripts. A
+        skill the save adds or moves whose scripts need a review neither names
+        raises ``ScriptsUnreviewedError`` before anything is stored.
         """
         project, role = self.projects.authorize(project_id, user, "editor", writable=True)
         harness = await self._harness(project)
@@ -192,6 +197,10 @@ class HarnessSettingsService:
             bound_before = {b.ref for b in harness.bindings or [] if b.kind == SKILL}
             newly_bound = [b for b in added if b.ref not in bound_before]
             new_bindings = await _pin_and_attribute_added_skills(new_bindings, added, newly_bound, user)
+            await require_script_reviews(
+                harness.assistant_id, harness.bindings, new_bindings, user.user_id,
+                scripts_reviewed=scripts_reviewed, scripts_declined=scripts_declined,
+            )
 
         # The first save also records the state the project was created with, so the
         # first change in its history has something to be compared against.

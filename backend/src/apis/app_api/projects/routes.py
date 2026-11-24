@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
+from pydantic import BaseModel
 
 from apis.app_api.agent_designer.services.binding_validation import BindingValidationError
 from apis.shared.assistants.models import AgentBinding, VersionFieldChange
@@ -40,6 +41,11 @@ from apis.shared.projects.service import (
 )
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.sessions.metadata import list_project_sessions
+from apis.shared.skills.script_review_check import (
+    ScriptsUnreviewedError,
+    binding_script_status,
+    script_status_view,
+)
 from apis.shared.skills.pinning import PinStatus
 from apis.shared.skills.pins import public_skill_config
 from apis.shared.skills.resource_store import SkillResourceStoreError
@@ -257,6 +263,8 @@ async def _save(project_id: str, user: User, **changes) -> HarnessView:
         raise _translate(e)
     except BindingValidationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ScriptsUnreviewedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=e.detail())
 
 
 async def _view(project_id: str, user: User) -> HarnessView:
@@ -411,6 +419,26 @@ async def get_skills(project_id: str, user: User = Depends(require_projects_user
     return await _skills(await _view(project_id, user), user)
 
 
+class SkillScriptsResponse(BaseModel):
+    """Per bound skill with scripts, whether they run for the project's members (§8.5–§8.6)."""
+
+    skills: List[Dict[str, Any]]
+
+
+@router.get("/{project_id}/skill-scripts", response_model=SkillScriptsResponse)
+async def get_skill_scripts(project_id: str, user: User = Depends(require_projects_user)) -> SkillScriptsResponse:
+    """The skills-page row notes for an owner or editor, and the badge for a member.
+
+    Editors see every bound skill with scripts and its script list; anyone else
+    sees only the skills whose scripts run for them (skill-code-sandbox §8.6).
+    """
+    view = await _view(project_id, user)
+    entries = await binding_script_status(view.harness.assistant_id, view.harness.bindings)
+    return SkillScriptsResponse(
+        skills=await script_status_view(entries, full=view.role in ("owner", "editor"))
+    )
+
+
 @router.put("/{project_id}/skills", response_model=SkillBindingsResponse, response_model_by_alias=True)
 async def put_skills(
     project_id: str, body: UpdateBindingsRequest, user: User = Depends(require_projects_user)
@@ -421,7 +449,10 @@ async def put_skills(
     already bound keeps its pin unless the request names another version.
     """
     bindings = [AgentBinding(kind=SKILL, ref=b.ref, config=b.config) for b in body.bindings]
-    view = await _save(project_id, user, kind=SKILL, bindings=bindings, scripts_reviewed=body.scripts_reviewed)
+    view = await _save(
+        project_id, user, kind=SKILL, bindings=bindings,
+        scripts_reviewed=body.scripts_reviewed, scripts_declined=body.scripts_declined,
+    )
     return await _skills(view, user)
 
 
@@ -447,6 +478,8 @@ async def pin_skill(
         raise _translate(e)
     except BindingValidationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ScriptsUnreviewedError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=e.detail())
     return await _skills(view, user)
 
 

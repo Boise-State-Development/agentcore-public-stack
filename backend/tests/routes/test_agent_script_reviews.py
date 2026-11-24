@@ -71,3 +71,52 @@ def test_a_save_without_bindings_records_nothing(client):
          patch(f"{ROUTES}.record_binding_reviews", hook):
         assert client.put("/agents/ast-001", json={"name": "Renamed"}).status_code == 200
     hook.assert_not_awaited()
+
+
+def _unreviewed():
+    from apis.shared.skills.script_review_check import ScriptsUnreviewedError
+
+    return ScriptsUnreviewedError([{"skillId": "pdf", "displayName": "PDF", "scriptsHash": "a" * 64, "scripts": []}])
+
+
+def test_an_update_binding_unreviewed_scripts_is_a_409_and_stores_nothing(client):
+    before = _assistant([])
+    store = AsyncMock()
+    check = AsyncMock(side_effect=_unreviewed())
+    with patch(f"{ROUTES}.resolve_assistant_permission", AsyncMock(return_value=(before, "owner"))), \
+         patch(f"{ROUTES}.validate_agent_write", AsyncMock()), \
+         patch(f"{ROUTES}.pin_imported_skills", AsyncMock(side_effect=lambda u, b, *a: b)), \
+         patch(f"{ROUTES}.require_script_reviews", check), \
+         patch(f"{ROUTES}.update_assistant", store):
+        response = client.put(
+            "/agents/ast-001",
+            json={"bindings": [{"kind": "skill", "ref": "pdf"}], "scriptsDeclined": ["other"]},
+        )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "skill_scripts_unreviewed"
+    assert detail["skills"][0]["skillId"] == "pdf"
+    store.assert_not_awaited()
+    (call,) = check.await_args_list
+    assert call.args[0] == "ast-001" and call.args[1] == before.bindings
+    assert call.kwargs["scripts_declined"] == ["other"]
+
+
+def test_a_create_binding_unreviewed_scripts_is_a_409_and_stores_nothing(client):
+    store = AsyncMock()
+    check = AsyncMock(side_effect=_unreviewed())
+    with patch(f"{ROUTES}.validate_agent_write", AsyncMock()), \
+         patch(f"{ROUTES}.pin_imported_skills", AsyncMock(side_effect=lambda u, b, *a: b)), \
+         patch(f"{ROUTES}.require_script_reviews", check), \
+         patch(f"{ROUTES}.create_assistant", store):
+        response = client.post(
+            "/agents",
+            json={
+                "name": "Forms", "description": "d", "instructions": "i", "visibility": "PRIVATE",
+                "bindings": [{"kind": "skill", "ref": "pdf"}],
+            },
+        )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "skill_scripts_unreviewed"
+    store.assert_not_awaited()
+    assert check.await_args.args[0] is None

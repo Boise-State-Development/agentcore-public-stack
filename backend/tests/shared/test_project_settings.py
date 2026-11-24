@@ -490,10 +490,38 @@ def test_an_imported_skills_scripts_run_for_members_only_with_the_hash_reviewed(
     skill = _scripted_skill("skill_three", EDITOR.user_id, imported=True)
     asyncio.run(scripted.create_skill(skill))
     editor = client(EDITOR)
-    editor.put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_three"}]})
-    assert _member_verdict(project, pid, "skill_three").refused_reason == "not_reviewed"
-
     digest = script_trust.scripts_hash(skill)
+
+    # Bound with nothing said about its scripts, the save asks for the sheet (§8.5).
+    resp = editor.put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_three"}]})
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "skill_scripts_unreviewed"
+    [entry] = detail["skills"]
+    assert (entry["skillId"], entry["scriptsHash"], entry["fromVersion"]) == ("skill_three", digest, None)
+    assert [s["change"] for s in entry["scripts"]] == ["new"]
+    assert "authorId" not in entry
+    assert client(EDITOR).get(f"/projects/{pid}/skills").json()["bindings"] == []
+
+    # "Add without scripts": bound, and its scripts refuse for members.
+    resp = editor.put(
+        f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_three"}], "scriptsDeclined": ["skill_three"]}
+    )
+    assert resp.status_code == 200, resp.text
+    assert _member_verdict(project, pid, "skill_three").refused_reason == "not_reviewed"
+    status = editor.get(f"/projects/{pid}/skill-scripts").json()["skills"]
+    assert [(s["skillId"], s["state"]) for s in status] == [("skill_three", "not_allowed")]
+
+    # An unrelated save of the same skills never asks again.
+    assert editor.put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_three"}]}).status_code == 200
+
+    # Review on the row: the same skills, now allowed.
     resp = editor.post(f"/projects/{pid}/skills/skill_three/pin", json={"scriptsReviewed": {"skill_three": digest}})
     assert resp.status_code == 200, resp.text
     assert _member_verdict(project, pid, "skill_three").allowed
+    status = editor.get(f"/projects/{pid}/skill-scripts").json()["skills"]
+    assert [(s["skillId"], s["state"], s["method"]) for s in status] == [("skill_three", "allowed", "review")]
+    # A member sees it too, without the script list.
+    [member_row] = client(VIEWER).get(f"/projects/{pid}/skill-scripts").json()["skills"]
+    assert member_row["state"] == "allowed" and "scripts" not in member_row
+    assert client(STRANGER).get(f"/projects/{pid}/skill-scripts").status_code == 404
