@@ -26,6 +26,7 @@ import { downloadUrlFor } from '../../../../../shared/utils/file-download-url';
 import { TooltipDirective } from '../../../../../components/tooltip/tooltip.directive';
 import { CsvViewerComponent } from './csv-viewer.component';
 import { DocxViewerComponent } from './docx-viewer.component';
+import { PdfPageTarget, PdfViewerComponent } from './pdf-viewer.component';
 import { PptxViewerComponent } from './pptx-viewer.component';
 import { XlsxViewerComponent } from './xlsx-viewer.component';
 import { KbDocumentLoadFailure, KbDocumentViewerComponent } from './kb-document-viewer.component';
@@ -35,6 +36,7 @@ import {
   PREVIEW_KIND_LABELS,
   PreviewKind,
   isKbDocumentRef,
+  isSamePreviewDocument,
   previewFetchesBytes,
   previewKindFor,
 } from '../../../../services/file-preview/file-preview.model';
@@ -42,9 +44,9 @@ import { citationPage } from '../../../citation-display/citation-display.compone
 
 /**
  * Right-docked pane that previews one uploaded file in the browser —
- * `.docx`, `.pptx`, `.csv` and `.xlsx` today.
+ * `.docx`, `.pptx`, `.pdf`, `.csv` and `.xlsx` today.
  *
- * Three of those four are read here from bytes the pane fetched through
+ * All but `.xlsx` are read here from bytes the pane fetched through
  * a presigned URL. `.xlsx` is not: no client-side workbook reader was
  * shippable, so app-api reads it and its viewer takes an upload id
  * instead. `previewFetchesBytes` is what keeps the two paths from
@@ -78,6 +80,7 @@ import { citationPage } from '../../../citation-display/citation-display.compone
     TooltipDirective,
     CsvViewerComponent,
     DocxViewerComponent,
+    PdfViewerComponent,
     PptxViewerComponent,
     XlsxViewerComponent,
     KbDocumentViewerComponent,
@@ -232,6 +235,14 @@ import { citationPage } from '../../../citation-display/citation-display.compone
             }
           } @else {
             @switch (kind()) {
+              @case ('pdf') {
+                <app-pdf-viewer
+                  [bytes]="bytes()"
+                  [targetPage]="pageTarget()"
+                  (renderFailed)="onRenderFailed($event)"
+                  (rendered)="onRendered()"
+                />
+              }
               @case ('pptx') {
                 <app-pptx-viewer
                   [bytes]="bytes()"
@@ -315,6 +326,25 @@ export class FilePreviewPanelComponent {
     () => citationPage(this.kbRef()?.sourceUrl ?? undefined)?.url ?? null,
   );
 
+  /**
+   * The open document, compared by identity rather than by ref, so asking
+   * for another page of the file already showing (a second citation into
+   * the same PDF) moves the view instead of fetching the file again.
+   */
+  private readonly document = computed(() => this.open(), {
+    equal: isSamePreviewDocument,
+  });
+
+  /**
+   * The page a citation asked for. A fresh object per open, so asking for
+   * the same page again — after scrolling away — jumps back to it.
+   */
+  protected readonly pageTarget = computed<PdfPageTarget | null>(() => {
+    const ref = this.uploadRef();
+    if (!ref?.page) return null;
+    return ref.quote ? { page: ref.page, quote: ref.quote } : { page: ref.page };
+  });
+
   protected readonly bytes = signal<ArrayBuffer | null>(null);
   /** Which viewer renders the current file. Derived from the filename so
    *  the header reads correctly while the fetch is still in flight, then
@@ -359,7 +389,7 @@ export class FilePreviewPanelComponent {
 
   constructor() {
     effect(() => {
-      const ref = this.open();
+      const ref = this.document();
       this.requestSeq++;
       this.reset();
       if (!ref) return;
@@ -379,9 +409,15 @@ export class FilePreviewPanelComponent {
       void this.load(ref.uploadId);
     });
 
+    // Tell citation surfaces there is a pane to open pages into.
+    const unregister = this.previewState.registerHost();
+
     // Same rule as the artifact pane: leaving for a page with no message
     // list must give the rail back, or the shell keeps its gutter.
-    inject(DestroyRef).onDestroy(() => this.previewState.close());
+    inject(DestroyRef).onDestroy(() => {
+      unregister();
+      this.previewState.close();
+    });
   }
 
   private reset(): void {

@@ -136,9 +136,18 @@ describe('FilePreviewHttpService', () => {
 
   it('refuses a format the pane cannot preview at all', async () => {
     const pending = service.fetchDocument('up1');
-    flushPreviewUrl({ mimeType: 'application/pdf', filename: 'report.pdf' });
+    flushPreviewUrl({ mimeType: 'text/html', filename: 'page.html' });
 
     await expect(pending).rejects.toThrow(FilePreviewError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a .pdf the server recorded as something else', async () => {
+    const pending = service.fetchDocument('up1');
+    flushPreviewUrl({ mimeType: 'text/html', filename: 'invoice.pdf' });
+
+    await expect(pending).rejects.toThrow(FilePreviewError);
+    await expect(pending).rejects.toMatchObject({ retryable: false });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

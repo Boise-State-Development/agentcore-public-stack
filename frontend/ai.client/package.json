@@ -50,6 +50,7 @@
     "mermaid": "11.16.1",
     "ng2-charts": "10.0.0",
     "ngx-markdown": "22.1.1",
+    "pdfjs-dist": "6.5.438",
     "pptx-preview": "1.0.7",
     "prismjs": "1.30.0",
     "rxjs": "7.8.2",
