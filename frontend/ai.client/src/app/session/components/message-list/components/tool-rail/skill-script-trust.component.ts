@@ -6,7 +6,7 @@ import { ChatStateService } from '../../../../services/chat/chat-state.service';
 import { SkillProvenance } from '../../../../../shared/skills/skill-provenance';
 import { reviewDate } from '../../../../../shared/skills/script-review.model';
 import type { ToolCallDisplay } from './tool-rail.model';
-import { scriptRefused, scriptVersion, skillScriptCall } from './skill-script-call';
+import { scriptRan, scriptRefused, scriptVersion, skillScriptCall } from './skill-script-call';
 
 /** `GET /skills/scripts/trust`: who stands behind a script that ran in this conversation. */
 export interface ScriptRunTrust {
@@ -83,7 +83,10 @@ export class SkillScriptTrustComponent {
 
   protected readonly script = computed(() => skillScriptCall(this.call()));
   protected readonly version = computed(() => scriptVersion(this.call()));
-  protected readonly refused = computed(() => this.call().status === 'error' || scriptRefused(this.call()));
+  /** Refused, or a tool error before the script started: a non-zero exit still ran. */
+  protected readonly refused = computed(
+    () => scriptRefused(this.call()) || (this.call().status === 'error' && !scriptRan(this.call())),
+  );
 
   protected readonly trust = resource({
     params: () => {

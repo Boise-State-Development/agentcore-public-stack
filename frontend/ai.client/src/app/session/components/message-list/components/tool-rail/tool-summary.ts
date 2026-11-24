@@ -1,7 +1,7 @@
 import { isAwaitingUserSubmission } from '../../../../services/mcp-apps/awaiting-submission';
 import type { ToolCallDisplay } from './tool-rail.model';
 import { describeMemoryCall, memoryCallKind, memoryRollup, type MemoryCallKind } from './memory-call';
-import { describeSkillScriptCall, scriptRefused, skillScriptCall } from './skill-script-call';
+import { describeSkillScriptCall, scriptRan, scriptRefused, skillScriptCall } from './skill-script-call';
 
 /**
  * Deterministic, zero-cost descriptions of what a tool call did.
@@ -199,7 +199,8 @@ export function describeToolCall(call: ToolCallDisplay): string {
   const script = skillScriptCall(call);
   if (script) {
     if (running) return describeSkillScriptCall(script, 'running');
-    if (failed || scriptRefused(call)) return describeSkillScriptCall(script, 'refused');
+    if (scriptRefused(call)) return describeSkillScriptCall(script, 'refused');
+    if (failed) return describeSkillScriptCall(script, scriptRan(call) ? 'failed' : 'refused');
     return describeSkillScriptCall(script, 'ok');
   }
 

@@ -56,10 +56,23 @@ export function scriptRefused(call: ToolCallDisplay): boolean {
   return REFUSAL.test(resultText(call));
 }
 
+/** What the tool writes first for a script it started: "Ran …: finished|failed (exit code n)." */
+const RAN = /^Ran .+: (?:finished|failed) \(exit code -?\d+\)\./m;
+
 /**
- * "Running fill.py from pdf", "Ran fill.py from pdf", "Didn't run fill.py from pdf".
- * A refusal and a tool error both read "Didn't run"; a script that ran and exited
- * non-zero still ran, and its result says how it ended.
+ * The script started, whatever its exit code. A script that exits non-zero comes back as
+ * a tool error, but it still ran in the sandbox; only a refusal or a call that never
+ * started is "Didn't run".
+ */
+export function scriptRan(call: ToolCallDisplay): boolean {
+  const text = resultText(call);
+  return !REFUSAL.test(text) && (RAN.test(text) || VERSION_LINE.test(text));
+}
+
+/**
+ * "Running fill.py from pdf", "Ran fill.py from pdf", "Ran fill.py from pdf, which failed"
+ * (it started and exited non-zero), "Didn't run fill.py from pdf" (refused, or a tool error
+ * before it started).
  */
 export function describeSkillScriptCall(
   script: SkillScriptCall,
@@ -68,5 +81,6 @@ export function describeSkillScriptCall(
   const what = `${script.filename} from ${script.skill}`;
   if (state === 'running') return `Running ${what}`;
   if (state === 'ok') return `Ran ${what}`;
+  if (state === 'failed') return `Ran ${what}, which failed`;
   return `Didn't run ${what}`;
 }
