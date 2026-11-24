@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Component, computed, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { RouterOutlet, provideRouter } from '@angular/router';
-import { TooltipDirective } from './components/tooltip/tooltip.directive';
+import { ShellControlsComponent } from './components/shell-controls/shell-controls.component';
 import { SidenavService } from './services/sidenav/sidenav.service';
 import { SessionService } from './auth/session.service';
 import { SessionService as SessionListService } from './session/services/session/session.service';
@@ -47,7 +47,7 @@ describe('App shell: hidden sidenav panels are inert', () => {
       ],
     });
     TestBed.overrideComponent(App, {
-      set: { imports: [RouterOutlet, TooltipDirective, StubSidenav, StubErrorToast, StubToast, StubBackgroundTaskToasts] },
+      set: { imports: [RouterOutlet, ShellControlsComponent, StubSidenav, StubErrorToast, StubToast, StubBackgroundTaskToasts] },
     });
   }, IMPORT_TIMEOUT_MS);
 
@@ -100,20 +100,40 @@ describe('App shell: hidden sidenav panels are inert', () => {
     expect(drawer.hasAttribute('inert')).toBe(true);
   }, IMPORT_TIMEOUT_MS);
 
+  /** The capsule that stands in for the sidebar (open, new chat, search). */
+  function capsule(root: HTMLElement): HTMLElement {
+    return root.querySelector('app-shell-controls') as HTMLElement;
+  }
+
   it('keeps search reachable while the desktop sidenav (and its header) is collapsed', async () => {
     const open = vi.fn().mockResolvedValue(undefined);
     TestBed.overrideProvider(FEATURES, { useValue: { projects: false, conversationSearch: true } });
     TestBed.overrideProvider(SearchDialogService, { useValue: { open, isOpen: () => false } });
     const fixture = await render();
     const root = fixture.nativeElement as HTMLElement;
-    expect(root.querySelector('button[aria-label="Search"]')).toBeNull();
+    // Expanded: the sidebar's own header has search, so the capsule is off from lg up.
+    expect(capsule(root).classList.contains('lg:hidden')).toBe(true);
+    expect(root.classList.contains('shell-search-on')).toBe(true);
 
     TestBed.inject(SidenavService).collapse();
     fixture.detectChanges();
-    const button = root.querySelector('button[aria-label="Search"]') as HTMLButtonElement;
+    expect(capsule(root).classList.contains('lg:hidden')).toBe(false);
+    const button = capsule(root).querySelector('button[aria-label="Search"]') as HTMLButtonElement;
     expect(button.getAttribute('aria-keyshortcuts')).toMatch(/^(Meta|Control)\+K$/);
     button.click();
     expect(open).toHaveBeenCalledWith();
+  }, IMPORT_TIMEOUT_MS);
+
+  it('shows the capsule below lg on any page, except while the drawer is up', async () => {
+    const fixture = await render();
+    const root = fixture.nativeElement as HTMLElement;
+    const sidenav = TestBed.inject(SidenavService);
+    // No page has to ask for it: a list page opened directly on a phone still has a way to the sidebar.
+    expect(capsule(root).classList.contains('max-lg:hidden')).toBe(false);
+
+    sidenav.open();
+    fixture.detectChanges();
+    expect(capsule(root).classList.contains('max-lg:hidden')).toBe(true);
   }, IMPORT_TIMEOUT_MS);
 
   it('has no collapsed search button in a build with search off', async () => {
@@ -121,6 +141,9 @@ describe('App shell: hidden sidenav panels are inert', () => {
     const fixture = await render();
     TestBed.inject(SidenavService).collapse();
     fixture.detectChanges();
-    expect((fixture.nativeElement as HTMLElement).querySelector('button[aria-label="Search"]')).toBeNull();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('button[aria-label="Search"]')).toBeNull();
+    // The header's reserve stays two buttons wide (styles.css).
+    expect(root.classList.contains('shell-search-on')).toBe(false);
   }, IMPORT_TIMEOUT_MS);
 });

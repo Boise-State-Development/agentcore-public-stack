@@ -359,6 +359,40 @@ html.dark :scope {
 }
 
 /*
+ * Shell controls geometry: where the capsule that stands in for the sidebar
+ * sits (`app-shell-controls`, drawn by the app shell), and how much room the
+ * conversation header leaves for it.
+ *
+ * Global because two components that never meet in a template have to agree:
+ * the shell fixes the capsule at the inset, and the header starts its content
+ * at the reserve. A padding tuned by hand in the header is how the title came
+ * to sit under the search button, which was added to the capsule later.
+ *
+ * The width is the capsule's own layout: `count` buttons of 2.25rem, 0.125rem
+ * between them, 0.25rem of padding each side. Search is the third button,
+ * shown from `sm` up when the build has conversation search on (the shell
+ * sets `shell-search-on`).
+ */
+app-root {
+    --shell-controls-count: 2;
+    --shell-controls-inset: 0.75rem;
+    --shell-controls-width: calc(var(--shell-controls-count) * 2.25rem + (var(--shell-controls-count) - 1) * 0.125rem + 0.5rem);
+    --shell-controls-reserve: calc(var(--shell-controls-inset) + var(--shell-controls-width) + 0.5rem);
+}
+
+@media (min-width: 40rem) {
+    app-root.shell-search-on {
+        --shell-controls-count: 3;
+    }
+}
+
+@media (min-width: 64rem) {
+    app-root {
+        --shell-controls-inset: 1rem;
+    }
+}
+
+/*
  * The "still working" sweep on a collapsed headline in the message list: the
  * tool rail while its calls run, and the reasoning block while the model
  * thinks. Global for the same reason as `.sidenav-body-enter`: the two sit

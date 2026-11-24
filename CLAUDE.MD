@@ -210,7 +210,7 @@ The app shell (`app.ts` / `app.html`) decides what surrounds a page by reading `
 Three things that look optional and are not:
 
 - **`Sidenav.isAdminChrome` and `App.adminChrome` both read the flag.** Do not substitute a `/admin` URL test in either: two independent answers to "are we in the console?" is one more than can stay in agreement.
-- **`AdminLayout` carries its own small-screen nav opener.** The shell's floating hamburger is gated on `HeaderService.showContent()`, state the *session page* owns and admin pages never set — relying on it would make the admin nav reachable or not depending on where the user had been first.
+- **`AdminLayout` carries its own small-screen nav opener.** Below `lg` the shell hides its controls capsule (`app-shell-controls`: open sidebar, new chat, search) on an admin route, so the console's bar is the only opener there. On every other route the shell draws the capsule whenever the sidebar is out of view, whatever page the user came from; the conversation header draws no buttons and leaves room for it with `--shell-controls-reserve` (`styles.css`). Don't re-add buttons to the header or gate the capsule on page state.
 - **`.sidenav-body-enter` is global in `styles.css` on purpose.** The chat nav and the admin nav swap into the same slot and must arrive identically. Angular scopes keyframe *names* per component, so a copy of the rule inside a component compiles to a separately-named animation that looks identical today and drifts the first time one is tuned. Add a section to the stagger by applying the class plus an `animation-delay`, not by writing new keyframes.
 
 ## Debugging Quick Reference
