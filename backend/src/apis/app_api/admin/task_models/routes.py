@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from apis.shared.audit.models import TARGET_TASK_MODEL, AuditAction
+from apis.shared.caching import config_cache
 from apis.shared.audit.service import get_audit_service
 from apis.shared.auth import User, require_admin_scope
 from apis.shared.models.managed_models import list_all_managed_models
@@ -157,9 +158,22 @@ def _serialize(view: TaskSlotView) -> TaskModelSlotResponse:
     )
 
 
+async def _fresh_catalog() -> List[ManagedModel]:
+    """The catalog read from DynamoDB, not the 60 s per-process cache.
+
+    A catalog write invalidates the cache only in the app-api task that served it,
+    and there is more than one task, so a cached read could show a model an admin
+    just turned off as still running for up to a minute (seen on dev). This page is
+    where an admin checks what a change did, so it reads its own writes back, as the
+    other admin list reads do (``config_cache`` module docstring).
+    """
+    config_cache.invalidate(config_cache.MANAGED_MODELS)
+    return await list_all_managed_models()
+
+
 async def _views() -> List[TaskSlotView]:
     assignments = await load_assignments(fresh=True)
-    catalog = await list_all_managed_models()
+    catalog = await _fresh_catalog()
     return build_slot_views(assignments, catalog)
 
 
@@ -198,7 +212,7 @@ async def update_task_model(
 
     try:
         before = (await load_assignments(fresh=True)).get(task.value)
-        catalog = await list_all_managed_models()
+        catalog = await _fresh_catalog()
     except Exception:
         logger.error("Error reading task models before an update", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error updating task model")

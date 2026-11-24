@@ -384,3 +384,14 @@ class TestRoutes:
 
     def test_unknown_task_is_404(self, client):
         assert client.put("/admin/task-models/nope", json={"modelId": SONNET}).status_code == 404
+
+    def test_the_tab_reads_the_catalog_fresh(self, client):
+        """A catalog write clears the cache only in the app-api task that served it, so a
+        cached read showed a just-disabled model as running for up to a minute on dev."""
+        with patch(f"{ROUTES}.config_cache.invalidate") as invalidate:
+            client.get("/admin/task-models")
+            client.put("/admin/task-models/session_title", json={"modelId": SONNET})
+        from apis.shared.caching import config_cache
+
+        assert [c.args for c in invalidate.call_args_list].count((config_cache.MANAGED_MODELS,)) >= 3
+
