@@ -189,11 +189,24 @@ class SkillImportSource(BaseModel):
     # The frontmatter ``name`` as the bundle wrote it. The stored activation
     # name is derived from ``skill_id`` and can differ (a suffix on collision).
     original_name: Optional[str] = Field(None, alias="originalName")
+    # The scripts this import brought in, as the importer acknowledged them
+    # (skill-code-sandbox §8.4): the script-set hash and ``{path: sha256}``.
+    # None for a bundle without scripts. Recorded, never a trust grant: the
+    # importer runs their own skill as ``imported`` either way. Stored on the
+    # row (``to_item``) but left out of API responses, where a 59-script bundle
+    # would ride on every skill payload for nothing the SPA shows.
+    scripts_hash: Optional[str] = Field(None, alias="scriptsHash", exclude=True)
+    scripts: Optional[Dict[str, str]] = Field(None, exclude=True)
 
     model_config = {"populate_by_name": True}
 
     def to_item(self) -> dict:
-        return {k: v for k, v in self.model_dump(by_alias=True).items() if v is not None}
+        item = {k: v for k, v in self.model_dump(by_alias=True).items() if v is not None}
+        if self.scripts_hash:
+            item["scriptsHash"] = self.scripts_hash
+        if self.scripts:
+            item["scripts"] = dict(self.scripts)
+        return item
 
     def provenance(self) -> dict:
         """Where it came from, for display and audit: no URL, path or hash.
@@ -639,6 +652,8 @@ class AdminSkillResponse(BaseModel):
     updated_at: str = Field("", alias="updatedAt")
     created_by: Optional[str] = Field(None, alias="createdBy")
     updated_by: Optional[str] = Field(None, alias="updatedBy")
+    # Set once the skill was imported from a bundle (skill-bundle-import.md §3).
+    import_source: Optional[SkillImportSource] = Field(None, alias="importSource")
 
     model_config = {"populate_by_name": True, "use_enum_values": True}
 
@@ -665,6 +680,7 @@ class AdminSkillResponse(BaseModel):
             updated_at=to_iso(skill.updated_at) if skill.updated_at else "",
             created_by=skill.created_by,
             updated_by=skill.updated_by,
+            import_source=skill.import_source,
         )
 
 

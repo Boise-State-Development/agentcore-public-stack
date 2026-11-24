@@ -10,7 +10,7 @@ Architecture:
 """
 
 import logging
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 
 from apis.shared.models.managed_models import list_managed_models
@@ -69,8 +69,15 @@ async def get_model_pricing(model_id: str) -> Optional[Dict[str, float]]:
     model = await get_model_by_model_id(model_id)
     if not model:
         return None
+    return pricing_for_model(model)
 
-    # Build pricing dict from model
+
+def pricing_for_model(model: Any) -> Dict[str, float]:
+    """The pricing dict for one catalog row (``get_model_pricing``'s shape), with no catalog read.
+
+    For a caller that already holds the row, such as a task-model call's
+    ``TaskModelChoice.record``.
+    """
     pricing = {
         "inputPricePerMtok": model.input_price_per_million_tokens,
         "outputPricePerMtok": model.output_price_per_million_tokens,

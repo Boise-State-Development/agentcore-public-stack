@@ -69,7 +69,7 @@
             short window gives the conversations the whole column instead of
             what is left under a frozen block of links.
         -->
-        <div class="sidenav-body-enter shrink-0 px-3">
+        <div class="sidenav-body-enter relative z-20 shrink-0 px-3">
             <!-- New Session -->
             <button
                 (click)="newSession()"
@@ -87,10 +87,14 @@
 
         <div class="relative flex min-h-0 flex-1 flex-col">
             <!-- Fade under New Session, shown once the region has scrolled, so
-                 rows slide out beneath the button instead of being sliced by it. -->
+                 rows slide out beneath the button instead of being sliced by it.
+                 -top-1 matches the scroller's -mt-1: the fade must start at the
+                 scroller's clip edge, or the 4px band above it shows rows unfaded.
+                 New Session's wrapper sits above it (z-20) so its focus ring,
+                 which reaches into that band, is never covered. -->
             <div
                 aria-hidden="true"
-                class="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-linear-to-b from-gray-100 to-transparent transition-opacity duration-200 motion-reduce:transition-none dark:from-gray-900"
+                class="pointer-events-none absolute inset-x-0 -top-1 z-10 h-7 bg-linear-to-b from-gray-100 to-transparent transition-opacity duration-200 motion-reduce:transition-none dark:from-gray-900"
                 [class.opacity-0]="!bodyScrolled()"></div>
 
             <!-- cdkScrollable: lets a conversation dragged toward Pinned auto-scroll this area. -->

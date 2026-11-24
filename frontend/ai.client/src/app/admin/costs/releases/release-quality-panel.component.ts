@@ -58,7 +58,7 @@ const OUTCOME_LABELS: [string, string][] = [
 ];
 
 /**
- * The quality panel (release-ledger spec §6.4 item 7, D6): each signal on its
+ * The quality panel (release-ledger spec §6.4 item 8, D6): each signal on its
  * own, with its own floor, and no composite score anywhere. Order follows §10
  * Q2: the eval gate and the smoke matrix first, the thumbs arm last, as counts
  * only while it is under its floor.

@@ -32,14 +32,19 @@ export interface KpiDef {
   better: KpiDirection;
   /** What `n` counts, for the "n" line under the pair. */
   nOf: string;
+  /** A short line under the label, when the KPI's scope is narrower than its name. */
+  hint?: string;
 }
+
+/** The turn KPIs read chat calls only; workflow steps and other calls are their own table. */
+const CHAT_ONLY_HINT = 'Chat calls only; other kinds are under Calls by kind.';
 
 /**
  * The §6.2 KPIs in the order the cards render. Cost per turn is first and is
  * broken out per model under it (§6.4 item 3).
  */
 export const KPI_DEFS: readonly KpiDef[] = [
-  { key: 'costPerTurn', label: 'Cost per turn', format: 'usd', better: 'lower', nOf: 'turns' },
+  { key: 'costPerTurn', label: 'Cost per turn', format: 'usd', better: 'lower', nOf: 'turns', hint: CHAT_ONLY_HINT },
   { key: 'costPerCall', label: 'Cost per call', format: 'usd', better: 'lower', nOf: 'calls' },
   { key: 'cacheEfficiency', label: 'Cache efficiency', format: 'percent', better: 'higher', nOf: 'cached tokens' },
   { key: 'unexplainedWasteShare', label: 'Unexplained waste share', format: 'percent', better: 'lower', nOf: 'calls' },
@@ -47,7 +52,7 @@ export const KPI_DEFS: readonly KpiDef[] = [
   { key: 'toolErrorRate', label: 'Tool error rate', format: 'percent', better: 'lower', nOf: 'tool calls' },
   { key: 'toolPayloadPerCall', label: 'Tool payload per call', format: 'chars', better: 'neutral', nOf: 'tool calls' },
   { key: 'documentTurnShare', label: 'Document turn share', format: 'percent', better: 'neutral', nOf: 'turns' },
-  { key: 'meanFirstTokenMs', label: 'Mean model first byte', format: 'ms', better: 'lower', nOf: 'calls' },
+  { key: 'meanFirstTokenMs', label: 'Mean model first byte', format: 'ms', better: 'lower', nOf: 'chat calls', hint: CHAT_ONLY_HINT },
   { key: 'meanTurnDurationMs', label: 'Mean turn duration', format: 'ms', better: 'lower', nOf: 'turns' },
   { key: 'emptyAnswerShare', label: 'Empty-answer share', format: 'percent', better: 'lower', nOf: 'turns with an outcome' },
   { key: 'interruptedShare', label: 'Interrupted share', format: 'percent', better: 'lower', nOf: 'turns with an outcome' },
@@ -139,6 +144,25 @@ export function unitLabel(key: string | null | undefined): string {
   return build ? `${version} · ${shortBuild(build)}` : version;
 }
 
+/** How each call kind reads in the Calls by kind table; an unknown kind prints as written. */
+const CALL_KIND_LABELS: Record<string, string> = {
+  chat: 'Chat',
+  workflow_prompt: 'Workflow prompt step',
+  workflow_checklist: 'Workflow checklist step',
+  handoff_brief: 'Handoff brief',
+  voice: 'Voice',
+  api_converse: 'API converse',
+  document_extract: 'Document extraction',
+  session_title: 'Conversation title',
+  tool_summary: 'Tool activity summary',
+  compaction_summary: 'Compaction summary',
+  other: 'Other',
+};
+
+export function callKindLabel(kind: string): string {
+  return CALL_KIND_LABELS[kind] ?? kind;
+}
+
 // ---------------------------------------------------------------------------
 // Caveats
 // ---------------------------------------------------------------------------
@@ -157,6 +181,7 @@ const WARNING_CAVEATS = new Set([
   'latency_unavailable',
   'latency_mixed_window',
   'coverage_truncated',
+  'predates_chat_split',
 ]);
 
 export function caveatTone(code: string): 'warning' | 'note' {

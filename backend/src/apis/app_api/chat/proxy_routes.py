@@ -51,9 +51,11 @@ def _inference_api_url() -> str:
 _PROXY_TIMEOUT_SECONDS = 300.0
 
 # Longest gap between bytes from the Runtime. The Runtime sends nothing while
-# the model is silent (Opus 5.5 thinks with no output by default), so this
-# must outlast the Runtime's own model read timeout (`RETRY_READ_TIMEOUT`,
-# 600s) by enough for its explained timeout error to arrive. Shorter, and the
+# the model is silent (a model whose thinking isn't streamed; the Claude 5.x
+# models stream a summary, see `_apply_thinking_binding`) or a slow tool runs,
+# so this must outlast the Runtime's own model read timeout
+# (`RETRY_READ_TIMEOUT`, 600s) by enough for its explained timeout error to
+# arrive. Shorter, and the
 # proxy would cut the stream first and the user would lose the connection
 # instead (`test_read_timeout_budget.py`). Connect, write and pool keep 300s.
 _PROXY_READ_TIMEOUT_SECONDS = 660.0

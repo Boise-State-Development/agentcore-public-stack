@@ -1,0 +1,164 @@
+"""An Agent save records the script reviews it implies (skill-code-sandbox §8.5).
+
+The review logic itself is ``tests/shared/test_script_reviews.py``; this pins the
+wiring: both Agent write routes hand the stored bindings and the saver's
+``scriptsReviewed`` to ``record_binding_reviews``, and a save that doesn't touch
+bindings records nothing.
+"""
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from apis.app_api.agent_designer.routes import router as agents_router
+from apis.shared.assistants.models import AgentBinding, Assistant
+from tests.routes.conftest import mock_auth_user
+
+ROUTES = "apis.app_api.agent_designer.routes"
+
+
+def _assistant(bindings):
+    return Assistant.model_validate(dict(
+        assistantId="ast-001", ownerId="user-001", ownerName="Pat", name="Forms", description="d",
+        instructions="i", vectorIndexId="idx", visibility="PRIVATE", usageCount=0,
+        createdAt="2026-11-23T00:00:00Z", updatedAt="2026-11-23T00:00:00Z", status="COMPLETE",
+        bindings=[b.model_dump(by_alias=True) for b in bindings],
+    ))
+
+
+@pytest.fixture(autouse=True)
+def _flags_on(monkeypatch):
+    monkeypatch.setenv("AGENTS_API_ENABLED", "true")
+
+
+@pytest.fixture
+def client(make_user):
+    app = FastAPI()
+    app.include_router(agents_router)
+    mock_auth_user(app, make_user(user_id="user-001", email="pat@example.edu"))
+    return TestClient(app)
+
+
+def test_an_update_hands_the_bindings_and_reviews_to_the_hook(client):
+    before = _assistant([])
+    after = _assistant([AgentBinding(kind="skill", ref="pdf", config={"version": 3})])
+    hook = AsyncMock(return_value=[])
+    with patch(f"{ROUTES}.resolve_assistant_permission", AsyncMock(return_value=(before, "owner"))), \
+         patch(f"{ROUTES}.validate_agent_write", AsyncMock()), \
+         patch(f"{ROUTES}.pin_imported_skills", AsyncMock(side_effect=lambda u, b, *a: b)), \
+         patch(f"{ROUTES}.update_assistant", AsyncMock(return_value=after)), \
+         patch(f"{ROUTES}.record_binding_reviews", hook):
+        response = client.put(
+            "/agents/ast-001",
+            json={"bindings": [{"kind": "skill", "ref": "pdf"}], "scriptsReviewed": {"pdf": "a" * 64}},
+        )
+    assert response.status_code == 200, response.text
+    (call,) = hook.await_args_list
+    assert call.args[0] == "ast-001"
+    assert call.args[1] == before.bindings and call.args[2] == after.bindings
+    assert call.kwargs["scripts_reviewed"] == {"pdf": "a" * 64}
+
+
+def test_a_save_without_bindings_records_nothing(client):
+    agent = _assistant([])
+    hook = AsyncMock(return_value=[])
+    with patch(f"{ROUTES}.resolve_assistant_permission", AsyncMock(return_value=(agent, "owner"))), \
+         patch(f"{ROUTES}.validate_agent_write", AsyncMock()), \
+         patch(f"{ROUTES}.pin_imported_skills", AsyncMock(side_effect=lambda u, b, *a: b)), \
+         patch(f"{ROUTES}.update_assistant", AsyncMock(return_value=agent)), \
+         patch(f"{ROUTES}.record_binding_reviews", hook):
+        assert client.put("/agents/ast-001", json={"name": "Renamed"}).status_code == 200
+    hook.assert_not_awaited()
+
+
+def _unreviewed():
+    from apis.shared.skills.script_review_check import ScriptsUnreviewedError
+
+    return ScriptsUnreviewedError([{"skillId": "pdf", "displayName": "PDF", "scriptsHash": "a" * 64, "scripts": []}])
+
+
+def test_an_update_binding_unreviewed_scripts_is_a_409_and_stores_nothing(client):
+    before = _assistant([])
+    store = AsyncMock()
+    check = AsyncMock(side_effect=_unreviewed())
+    with patch(f"{ROUTES}.resolve_assistant_permission", AsyncMock(return_value=(before, "owner"))), \
+         patch(f"{ROUTES}.validate_agent_write", AsyncMock()), \
+         patch(f"{ROUTES}.pin_imported_skills", AsyncMock(side_effect=lambda u, b, *a: b)), \
+         patch(f"{ROUTES}.require_script_reviews", check), \
+         patch(f"{ROUTES}.update_assistant", store):
+        response = client.put(
+            "/agents/ast-001",
+            json={"bindings": [{"kind": "skill", "ref": "pdf"}], "scriptsDeclined": ["other"]},
+        )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "skill_scripts_unreviewed"
+    assert detail["skills"][0]["skillId"] == "pdf"
+    store.assert_not_awaited()
+    (call,) = check.await_args_list
+    assert call.args[0] == "ast-001" and call.args[1] == before.bindings
+    assert call.kwargs["scripts_declined"] == ["other"]
+
+
+def test_a_create_binding_unreviewed_scripts_is_a_409_and_stores_nothing(client):
+    store = AsyncMock()
+    check = AsyncMock(side_effect=_unreviewed())
+    with patch(f"{ROUTES}.validate_agent_write", AsyncMock()), \
+         patch(f"{ROUTES}.pin_imported_skills", AsyncMock(side_effect=lambda u, b, *a: b)), \
+         patch(f"{ROUTES}.require_script_reviews", check), \
+         patch(f"{ROUTES}.create_assistant", store):
+        response = client.post(
+            "/agents",
+            json={
+                "name": "Forms", "description": "d", "instructions": "i", "visibility": "PRIVATE",
+                "bindings": [{"kind": "skill", "ref": "pdf"}],
+            },
+        )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "skill_scripts_unreviewed"
+    store.assert_not_awaited()
+    assert check.await_args.args[0] is None
+
+
+def _status_entries():
+    from apis.shared.skills.script_review_check import BindingScripts
+
+    return [
+        BindingScripts(skill_id="pdf", display_name="PDF", version=2, scripts_hash="a" * 64, state="allowed",
+                       method="review", reviewed_by="user-001", scripts=[{"path": "scripts/fill.py", "size": 1, "change": "new"}]),
+        BindingScripts(skill_id="memo", display_name="Memo", version=1, scripts_hash="b" * 64, state="not_allowed"),
+    ]
+
+
+def _skill_scripts(client, permission, public_permission=None):
+    agent = _assistant([AgentBinding(kind="skill", ref="pdf", config={"version": 2})])
+    names = AsyncMock(return_value={"user-001": "Pat"})
+    with patch(f"{ROUTES}.resolve_assistant_permission", AsyncMock(return_value=(agent, permission))), \
+         patch(f"{ROUTES}.get_assistant_with_access_check", AsyncMock(return_value=(agent if public_permission else None, public_permission))), \
+         patch(f"{ROUTES}._published_bindings", AsyncMock(return_value=None)), \
+         patch(f"{ROUTES}.binding_script_status", AsyncMock(return_value=_status_entries())), \
+         patch("apis.shared.skills.script_review_check._display_names", names):
+        return client.get("/agents/ast-001/skill-scripts")
+
+
+def test_an_editor_sees_every_scripted_skill_with_its_scripts(client):
+    response = _skill_scripts(client, "owner")
+    assert response.status_code == 200, response.text
+    rows = response.json()["skills"]
+    assert [(r["skillId"], r["state"]) for r in rows] == [("pdf", "allowed"), ("memo", "not_allowed")]
+    assert rows[0]["reviewer"] == "Pat" and rows[0]["scripts"]
+
+
+def test_anyone_who_can_use_a_public_agent_sees_its_badge(client):
+    """A store Agent grants no share record, so the read falls back to the visibility check."""
+    response = _skill_scripts(client, None, public_permission="viewer")
+    assert response.status_code == 200, response.text
+    rows = response.json()["skills"]
+    assert [r["skillId"] for r in rows] == ["pdf"]
+    assert "scripts" not in rows[0]
+
+
+def test_someone_who_cannot_use_the_agent_gets_a_404(client):
+    assert _skill_scripts(client, None, public_permission=None).status_code == 404

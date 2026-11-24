@@ -1014,14 +1014,15 @@ class StreamCoordinator:
                 # `metadata` events already provide via last-write-wins
                 # `.update()`. Per-message cost attribution rides
                 # per_message_metadata (per-call) and is unaffected.
-                # We only keep the first_token_time backstop.
+                # We only keep the first_token_time backstop, and only for the
+                # turn-level figure on the final SSE `metadata` frame: it is
+                # the turn's first delta of any kind, which may belong to a
+                # later call than the first, so it is never written into a
+                # call's slot.
                 if event.get("type") == "metadata_summary":
                     event_data = event.get("data", {})
                     if "first_token_time" in event_data:
                         first_token_time = event_data["first_token_time"]
-                        # Associate first_token_time with first assistant message if we have one
-                        if per_message_metadata and per_message_metadata[0]["first_token_time"] is None:
-                            per_message_metadata[0]["first_token_time"] = first_token_time
                     # Don't yield this event to the client (will send final metadata before done)
                     continue
 
@@ -3851,12 +3852,12 @@ class StreamCoordinator:
         good enough answer that no failure here is worth surfacing.
         """
         try:
-            from apis.shared.tool_summaries import (
-                get_tool_summary_store,
-                summarize_tool_batch,
-            )
+            from apis.shared.tool_summaries import get_tool_summary_store
+            from apis.shared.tool_summaries.summarizer import summarize_tool_batch
 
-            summary = await summarize_tool_batch(batch.get("calls") or [])
+            summary = await summarize_tool_batch(
+                batch.get("calls") or [], session_id=session_id, user_id=user_id
+            )
             if not summary:
                 return None
 
@@ -4392,21 +4393,16 @@ class StreamCoordinator:
                 # Each message has its own start_time, first_token_time, and end_time
                 msg_start_time = metadata_for_message.get("start_time") or stream_start_time
                 msg_end_time = metadata_for_message.get("end_time") or stream_end_time
+                # Only this call's own first-byte time: its slot's metrics
+                # (the provider's per-call figure, or the one the metadata
+                # handler measured from this slot's first text delta). Never
+                # the turn-level `accumulated_metadata` metrics or
+                # `first_token_time`: the former is last-write-wins across
+                # calls, so it holds the LAST call's time, and copying it onto
+                # call 0 stamped a tool-only first call with a figure larger
+                # than its own end-to-end latency. A call with no measurement
+                # of its own stores None ("not measured").
                 first_token_for_message = metadata_for_message.get("first_token_time")
-
-                # For the FIRST message, enrich with global timeToFirstByteMs if available
-                # The provider's timeToFirstByteMs in metadata_summary is for the first LLM call
-                if idx == 0:
-                    global_ttfb = accumulated_metadata.get("metrics", {}).get("timeToFirstByteMs")
-                    if global_ttfb and "timeToFirstByteMs" not in metadata_for_message.get("metrics", {}):
-                        if "metrics" not in metadata_for_message:
-                            metadata_for_message["metrics"] = {}
-                        metadata_for_message["metrics"]["timeToFirstByteMs"] = global_ttfb
-                        logger.info(f"📊 Enriched message 0 with global timeToFirstByteMs: {global_ttfb}ms")
-
-                # Fallback: if no first_token_time for this message, try global (for first message only)
-                if first_token_for_message is None and idx == 0:
-                    first_token_for_message = first_token_time
 
                 first_token_str = f"{first_token_for_message:.3f}" if first_token_for_message is not None else "None"
                 logger.debug(f"📊 Message {idx} timing: start={msg_start_time:.3f}, first_token={first_token_str}, end={msg_end_time:.3f}")

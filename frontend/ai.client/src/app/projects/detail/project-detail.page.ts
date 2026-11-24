@@ -1,4 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal, untracked, viewChild } from '@angular/core';
+import { SkillScriptsBadgeComponent } from '../../shared/skills/components/skill-scripts-badge.component';
+import { SkillScriptStatus } from '../../shared/skills/script-review.model';
 import { Router, RouterLink } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { CdkMenu, CdkMenuItem, CdkMenuTrigger } from '@angular/cdk/menu';
@@ -50,7 +52,7 @@ const MENU_POSITIONS: ConnectedPosition[] = [
 @Component({
   selector: 'app-project-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, CdkMenu, CdkMenuItem, CdkMenuTrigger, ProjectComposerComponent, ProjectOutputsComponent, ProjectProposalsComponent, ProjectRailComponent, ProjectTasksComponent],
+  imports: [NgIcon, RouterLink, CdkMenu, CdkMenuItem, CdkMenuTrigger, ProjectComposerComponent, ProjectOutputsComponent, ProjectProposalsComponent, ProjectRailComponent, ProjectTasksComponent, SkillScriptsBadgeComponent],
   providers: [provideIcons({ heroArchiveBox, heroArrowRightOnRectangle, heroArrowUturnLeft, heroChevronDown, heroPencilSquare, heroTrash })],
   templateUrl: './project-detail.page.html',
 })
@@ -68,6 +70,8 @@ export class ProjectDetailPage {
   protected readonly project = signal<Project | null>(null);
   protected readonly loading = signal(true);
   protected readonly error = signal<string | null>(null);
+  /** Bound skills whose scripts run for members, for the badge (skill-code-sandbox §8.6). */
+  protected readonly skillScripts = signal<SkillScriptStatus[]>([]);
 
   private readonly rail = viewChild(ProjectRailComponent);
   /** The rail reads the project's model; the composer locks its picker to it. */
@@ -96,6 +100,7 @@ export class ProjectDetailPage {
     this.error.set(null);
     try {
       this.project.set(await firstValueFrom(this.api.get(id)));
+      void this.loadSkillScripts(id);
     } catch (err) {
       this.error.set(
         isUnavailable(err)
@@ -104,6 +109,16 @@ export class ProjectDetailPage {
       );
     } finally {
       this.loading.set(false);
+    }
+  }
+
+  /** Advisory: no badge rather than an error when it can't be read. */
+  private async loadSkillScripts(id: string): Promise<void> {
+    try {
+      const response = await firstValueFrom(this.api.skillScripts(id));
+      if (id === this.id()) this.skillScripts.set(response.skills);
+    } catch {
+      this.skillScripts.set([]);
     }
   }
 

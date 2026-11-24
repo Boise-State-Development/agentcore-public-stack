@@ -51,6 +51,13 @@ the agent builds its skills runtime, so they receive a :class:`TurnSkillRecords`
 holder and :func:`bind_turn_skill_records` fills it from ``ChatAgent`` once the
 records exist. A cached agent keeps the holder it was built with; the skills are
 part of the agent-cache key, so those records are this configuration's records.
+
+**Whose scripts run** is decided per call by ``apis.shared.skills.script_trust``
+(``docs/specs/skill-code-sandbox.md`` §8). The holder carries the turn's scope,
+the Agent or project the turn runs as, which is configuration too (an
+``@``-mention builds its own agent); the trust rows themselves are read on every
+call and never kept here, because a revocation changes no configuration.
+:func:`trust_refusal` is the one wording of each refusal, for both tools.
 """
 
 from __future__ import annotations
@@ -59,8 +66,8 @@ import json
 import logging
 import os
 import threading
-from dataclasses import dataclass
-from typing import Any, Iterable, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Iterable, List, Mapping, Optional
 
 from apis.shared.skills.bundle import slugify_skill_name
 from apis.shared.skills.bundle_files import MAX_RESOURCE_BYTES
@@ -91,6 +98,8 @@ __all__ = [
     "bind_turn_skill_records",
     "load_skill_script",
     "parse_script_params",
+    "record_for",
+    "trust_refusal",
     "resolve_skill_script",
     "resolve_skill_script_interpreter_id",
     "skill_script_interpreter_parameter_name",
@@ -136,6 +145,9 @@ class SkillScript:
     source: bytes
     # The catalog id of the skill the script came from, for the audit record.
     skill_id: str = ""
+    # The trust verdict's audit fields (spec §9), for a tool that records the
+    # verdict on its run's ``skill.script_run``. Not part of equality.
+    trust_audit: Optional[Mapping[str, Any]] = field(default=None, compare=False, hash=False)
 
     @property
     def label(self) -> str:
@@ -149,10 +161,18 @@ class TurnSkillRecords:
     Empty until :meth:`bind` runs. A tool that resolves against an unbound
     holder sees no skills, which is the right answer for an agent built
     without a skills runtime (no skills on the turn).
+
+    ``scope_id`` is the Agent or project harness the turn runs as (the
+    request's ``rag_assistant_id``), or ``None`` in plain chat; ``scope_kind``
+    is ``"project"`` or ``"agent"``, for the refusal's wording. Both are set
+    when the tools are built and are agent-cache key material, so a cached
+    agent's holder names its own scope.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, scope_id: Optional[str] = None, scope_kind: Optional[str] = None) -> None:
         self.records: List[Any] = []
+        self.scope_id: Optional[str] = scope_id or None
+        self.scope_kind: Optional[str] = (scope_kind or "agent") if scope_id else None
 
     def bind(self, records: Optional[Iterable[Any]]) -> None:
         self.records = list(records or [])
@@ -178,6 +198,58 @@ def bind_turn_skill_records(tools: Iterable[Any], records: Optional[Iterable[Any
             holder.bind(materialized)
             bound += 1
     return bound
+
+
+def record_for(records: Iterable[Any], skill_name: str) -> Any:
+    """The bound record ``skill_name`` activates (its slug), or ``None``."""
+    wanted = (skill_name or "").strip()
+    for record in records or []:
+        if slugify_skill_name(getattr(record, "skill_id", "")) == wanted:
+            return record
+    return None
+
+
+_NOTHING_RAN = "Nothing ran. Don't copy the script into `code` or `python_code`."
+
+
+def trust_refusal(reason: str, skill_name: str, path: str, scope_kind: Optional[str] = None) -> str:
+    """The model-facing text for a script that may not run (spec §8.7).
+
+    Names what didn't run, why and who can fix it, and tells the model not to
+    retype the script, which would run it anyway with no one's review.
+    """
+    target = f"'{skill_name}/{path}' didn't run"
+    scope = {"project": "this project", "agent": "this agent"}.get(scope_kind or "", "this agent")
+    owner = {"project": "the project's owner", "agent": "the agent's owner"}.get(scope_kind or "", "its owner")
+    texts = {
+        "not_reviewed": (
+            f"{target}: its scripts haven't been allowed in {scope}. "
+            f"Tell the user that {owner} can allow them in its settings."
+        ),
+        "pending_admin_review": (
+            f"{target}: an administrator hasn't reviewed this skill's scripts yet. "
+            "Tell the user it will run once they have."
+        ),
+        "off_by_author": f"{target}: the skill's author turned its scripts off.",
+        "off_by_admin": f"{target}: an administrator turned this skill's scripts off.",
+        "not_trusted": (
+            f"{target}: it's another user's skill, and its scripts haven't been turned on "
+            "for this account. Tell the user they can turn them on in Settings → Skills."
+        ),
+        "changed": (
+            f"{target}: its files changed while the run was being prepared. "
+            "Try once more, and tell the user if it happens again."
+        ),
+        "unreviewable": (
+            f"{target}: this skill's scripts need to be saved again before they can run "
+            "for other people. Tell the user to ask its author."
+        ),
+        "check_failed": (
+            f"{target}: whether this skill's scripts may run couldn't be checked. "
+            "Try once more, and tell the user if it happens again."
+        ),
+    }
+    return f"{texts.get(reason, f'{target}.')} {_NOTHING_RAN}"
 
 
 def _named(extensions: tuple) -> str:

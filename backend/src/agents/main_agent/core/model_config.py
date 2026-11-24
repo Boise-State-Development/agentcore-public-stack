@@ -379,9 +379,10 @@ class RetryConfig:
     """
     # Transport timeouts (botocore). Retries happen only in the SDK layer.
     connect_timeout: int = 5            # Seconds to wait for connection
-    # Longest gap between bytes from Bedrock. Opus 5.5 and the other models
-    # whose thinking display defaults to "omitted" send nothing while they
-    # think, so this is the longest a model may reason silently. 600s matches
+    # Longest gap between bytes from Bedrock. A model whose thinking isn't
+    # streamed sends nothing while it reasons (the API's default display is
+    # "omitted"; `_apply_thinking_binding` asks the Claude 5.x models for
+    # "summarized"), so this is the longest such a model may reason silently. 600s matches
     # Claude Code's default API timeout. Must stay below app-api's proxy read
     # timeout (`_PROXY_READ_TIMEOUT_SECONDS`, 660s), or the proxy drops the
     # stream first and the user gets a lost connection instead of an

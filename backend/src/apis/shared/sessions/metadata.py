@@ -32,8 +32,13 @@ from dataclasses import dataclass
 
 from apis.shared.aws_clients import get_dynamodb_table
 from apis.shared.build_info import build_stamp
-from apis.shared.sessions.ledger_rollups import LEDGERED, live_ledger_writes_on
-from typing import Iterable, List, Literal, Optional, Tuple, Any, Dict
+from apis.shared.sessions.ledger_rollups import (
+    LEDGERED,
+    PREFIX_UNRELATED_CALL_KINDS,
+    live_ledger_writes_on,
+)
+from apis.shared.sessions.ledger_rollups import call_kind as ledger_call_kind
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Tuple
 from decimal import Decimal
 
 # Relative imports from shared sessions module
@@ -59,8 +64,10 @@ logger = logging.getLogger(__name__)
 # small enough to stay a single cheap GSI query. When the same-prefix predecessor
 # falls outside this window we classify conservatively as `miss_ttl_expired`
 # rather than guessing, so widening it can only ever recover under-reported
-# waste, never manufacture it.
-_CACHE_PREDECESSOR_LOOKBACK = 10
+# waste, never manufacture it. Side-call rows (a tool summary per tool batch,
+# `PREFIX_UNRELATED_CALL_KINDS`) share the window and are dropped after the
+# read, so it is twice the depth the chat rows alone need.
+_CACHE_PREDECESSOR_LOOKBACK = 20
 
 
 def _convert_floats_to_decimal(obj: Any) -> Any:
@@ -539,6 +546,12 @@ def _derive_cache_observability(
         if (message_metadata.model_extra or {}).get("usageEstimated"):
             return {"cacheStatus": CacheStatus.ESTIMATED.value, "wastedUsd": 0.0}
 
+        # A side call (a title, a tool summary, a compaction summary, an
+        # extraction) shares no prefix with the turn, so there is nothing to
+        # classify, and its row must never be a chat call's predecessor (below).
+        if _is_prefix_unrelated(_call_kind(message_metadata), message_metadata.model_extra):
+            return {}
+
         # Recent cost rows for this session, newest first (GSI_SK = C#<timestamp>
         # sorts chronologically). We need a window rather than just the previous
         # call: the TTL question is "was the entry this call could have HIT still
@@ -553,7 +566,11 @@ def _derive_cache_observability(
             ScanIndexForward=False,
             Limit=_CACHE_PREDECESSOR_LOOKBACK,
         )
-        prev_items = [_convert_decimal_to_float(item) for item in response.get("Items", [])]
+        prev_items = [
+            row
+            for row in (_convert_decimal_to_float(item) for item in response.get("Items", []))
+            if not _is_prefix_unrelated(row.get("callKind"), row)
+        ]
         prev_row = prev_items[0] if prev_items else None
 
         try:
@@ -755,6 +772,15 @@ def _derive_cache_observability(
         return {}
 
 
+def _is_prefix_unrelated(kind: Any, row: Optional[Mapping[str, Any]]) -> bool:
+    """Whether a call shares no cached prefix with the turn (``PREFIX_UNRELATED_CALL_KINDS``).
+
+    The ledger's own classification, so a ``document_extract`` row, which carries no
+    ``callKind``, is named by its ``extract:`` message id.
+    """
+    return ledger_call_kind({**(row or {}), "callKind": kind}) in PREFIX_UNRELATED_CALL_KINDS
+
+
 def _emit_cache_metrics(
     session_id: str,
     message_metadata: MessageMetadata,
@@ -762,6 +788,8 @@ def _emit_cache_metrics(
 ) -> None:
     """Emit per-call EMF metrics for the fleet cache dashboard. Never raises."""
     try:
+        if _is_prefix_unrelated(_call_kind(message_metadata), message_metadata.model_extra):
+            return
         from apis.shared.observability import (
             CacheStatus,
             emit_prompt_cache_metrics,

@@ -331,3 +331,36 @@ def test_the_prompt_says_an_awaiting_call_did_nothing_and_hides_its_text():
     assert "WAITING FOR USER" in prompt
     assert "FAILED" not in prompt
     assert "STOP" not in prompt
+
+
+# -- metering (side_call_metering) ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_model_call_schedules_its_cost_row(bedrock):
+    reply = {**_response("Found the BIO 101 course"), "usage": {"inputTokens": 500, "outputTokens": 8}}
+    bedrock.converse.return_value = reply
+    with patch("apis.shared.tool_summaries.summarizer.schedule_side_call_cost") as schedule:
+        await summarize_tool_batch(_calls(), session_id="s1", user_id="u1")
+    schedule.assert_called_once()
+    kwargs = schedule.call_args.kwargs
+    assert kwargs["call_kind"] == "tool_summary"
+    assert (kwargs["session_id"], kwargs["user_id"]) == ("s1", "u1")
+    assert kwargs["response"] is reply
+
+
+@pytest.mark.asyncio
+async def test_a_discarded_generation_is_still_metered(bedrock):
+    bedrock.converse.return_value = _response("Found the course", stop_reason="max_tokens")
+    with patch("apis.shared.tool_summaries.summarizer.schedule_side_call_cost") as schedule:
+        assert await summarize_tool_batch(_calls(), session_id="s1", user_id="u1") is None
+    schedule.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_a_batch_headed_without_a_model_call_meters_nothing(bedrock):
+    failed = [{**c, "ok": False} for c in _calls(2)]
+    with patch("apis.shared.tool_summaries.summarizer.schedule_side_call_cost") as schedule:
+        await summarize_tool_batch(failed, session_id="s1", user_id="u1")
+    schedule.assert_not_called()
+    bedrock.converse.assert_not_called()

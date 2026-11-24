@@ -13,6 +13,20 @@ import {
   SkillResourcesResponse,
 } from '../models/admin-skill.model';
 import { SkillMdParseResult } from '../../../shared/skills/skill-md-parse';
+import {
+  SkillRestoreResult,
+  SkillVersionDetail,
+  SkillVersionHistoryApi,
+  SkillVersionList,
+} from '../../../shared/skills/skill-version-history.model';
+import {
+  ImportApplyResult,
+  ImportPreview,
+  SkillBundleImportApi,
+  SkillImportInput,
+  describeSkillApiError,
+  skillImportForm,
+} from '../../../shared/skills/skill-bundle-import.model';
 import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
 
 /**
@@ -25,7 +39,9 @@ import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
 @Injectable({
   providedIn: 'root',
 })
-export class AdminSkillService {
+export class AdminSkillService
+  implements SkillBundleImportApi<AdminSkill>, SkillVersionHistoryApi<AdminSkill>
+{
   private http = inject(HttpClient);
   private config = inject(ConfigService);
 
@@ -82,6 +98,116 @@ export class AdminSkillService {
     return firstValueFrom(
       this.http.post<SkillMdParseResult>(`${this.baseUrl()}/import/parse`, form),
     );
+  }
+
+  // ===========================================================================
+  // Bundle import (skill-bundle-import.md) — the catalog twin of My Skills'
+  // import, rendered by the shared SkillBundleImportComponent.
+  // ===========================================================================
+
+  /** What importing `input` would do, against catalog skill `skillId` when given. Writes nothing. */
+  previewImport(input: SkillImportInput, skillId?: string | null): Promise<ImportPreview> {
+    const form = skillImportForm(input);
+    if (skillId) {
+      form.append('skillId', skillId);
+    }
+    return firstValueFrom(this.http.post<ImportPreview>(`${this.baseUrl()}/import/preview`, form));
+  }
+
+  /** Create a draft catalog skill from a bundle. `expectedBundleHash` is the preview's. */
+  async importSkill(
+    input: SkillImportInput,
+    options: { displayName?: string; expectedBundleHash?: string | null },
+  ): Promise<ImportApplyResult<AdminSkill>> {
+    const form = skillImportForm(input);
+    if (options.displayName) {
+      form.append('displayName', options.displayName);
+    }
+    if (options.expectedBundleHash) {
+      form.append('expectedBundleHash', options.expectedBundleHash);
+    }
+    const result = await firstValueFrom(
+      this.http.post<ImportApplyResult<AdminSkill>>(`${this.baseUrl()}/import`, form),
+    );
+    this.skillsResource.reload();
+    return result;
+  }
+
+  /**
+   * Re-import a bundle into a catalog skill: replaces its description,
+   * instructions and files, keeps its name, status, category and grants.
+   * `confirmReach` is a My Skills concept and is not sent.
+   */
+  async reimportSkill(
+    skillId: string,
+    input: SkillImportInput,
+    options: { expectedBundleHash?: string | null; expectedUpdatedAt?: string | null },
+  ): Promise<ImportApplyResult<AdminSkill>> {
+    const form = skillImportForm(input);
+    if (options.expectedBundleHash) {
+      form.append('expectedBundleHash', options.expectedBundleHash);
+    }
+    if (options.expectedUpdatedAt) {
+      form.append('expectedUpdatedAt', options.expectedUpdatedAt);
+    }
+    const result = await firstValueFrom(
+      this.http.post<ImportApplyResult<AdminSkill>>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/import`,
+        form,
+      ),
+    );
+    this.skillsResource.reload();
+    return result;
+  }
+
+  // ===========================================================================
+  // Version history (skill-version-history.md §6) — the catalog twin of My
+  // Skills', rendered by the shared SkillVersionHistoryComponent.
+  // ===========================================================================
+
+  /** A page of a catalog skill's history, newest first. */
+  listVersions(
+    skillId: string,
+    options: { limit?: number; before?: number | null } = {},
+  ): Promise<SkillVersionList> {
+    const params: Record<string, string> = {};
+    if (options.limit) params['limit'] = String(options.limit);
+    if (options.before) params['before'] = String(options.before);
+    return firstValueFrom(
+      this.http.get<SkillVersionList>(`${this.baseUrl()}/${encodeURIComponent(skillId)}/versions`, {
+        params,
+      }),
+    );
+  }
+
+  /** One version, with the change from the live skill to it. */
+  getVersion(skillId: string, version: number): Promise<SkillVersionDetail> {
+    return firstValueFrom(
+      this.http.get<SkillVersionDetail>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/versions/${version}`,
+      ),
+    );
+  }
+
+  /** Put a version back as a new version. No reach confirmation, as for an admin edit. */
+  async restoreVersion(
+    skillId: string,
+    version: number,
+    options: { expectedUpdatedAt?: string | null },
+  ): Promise<SkillRestoreResult<AdminSkill>> {
+    const result = await firstValueFrom(
+      this.http.post<SkillRestoreResult<AdminSkill>>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/versions/${version}/restore`,
+        { expectedUpdatedAt: options.expectedUpdatedAt ?? null },
+      ),
+    );
+    this.skillsResource.reload();
+    return result;
+  }
+
+  /** The backend's message for a failed call, or `fallback`. */
+  describeError(err: unknown, fallback: string): string {
+    return describeSkillApiError(err, fallback);
   }
 
   /**

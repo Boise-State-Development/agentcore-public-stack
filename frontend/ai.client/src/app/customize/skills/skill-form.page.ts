@@ -12,7 +12,8 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { FEATURES } from '../../services/features';
 import { FieldSetsSectionComponent } from './components/field-sets-section.component';
-import { SkillBundleImportComponent } from './components/skill-bundle-import.component';
+import { SkillBundleImportComponent } from '../../shared/skills/skill-bundle-import.component';
+import { offerPinUpdates } from '../../shared/skills/skill-uses-dialog.component';
 import { fieldSetNameFor } from './models/field-set.model';
 import {
   SkillMdDiagnostic,
@@ -75,7 +76,7 @@ export class SkillFormPage {
   private fb = inject(FormBuilder);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
-  private skillService = inject(MySkillService);
+  protected readonly skillService = inject(MySkillService);
   private dialog = inject(Dialog);
   protected readonly features = inject(FEATURES);
 
@@ -181,6 +182,17 @@ export class SkillFormPage {
     }
     this.applySkill(skill);
     this.form.markAsPristine();
+    await this.offerPinUpdates(skill.skillId);
+  }
+
+  /**
+   * After a change to this skill, offer to update the agents and projects still
+   * pinned to an older version (skill-version-history.md D9). Opens only when
+   * something is behind; resolves once the author has answered.
+   */
+  private async offerPinUpdates(skillId: string): Promise<void> {
+    if (!this.features.skillVersionHistory) return;
+    await offerPinUpdates(this.dialog, this.skillService, skillId);
   }
 
   // ---- SKILL.md import ---------------------------------------------------
@@ -365,6 +377,7 @@ export class SkillFormPage {
       const id = this.skillId();
       if (id) {
         if (!(await this.updateConfirmingReach(id, value))) return;
+        await this.offerPinUpdates(id);
       } else {
         const created = await this.skillService.createSkill(value);
         // Uploads need a skill id, so staged files go up now.

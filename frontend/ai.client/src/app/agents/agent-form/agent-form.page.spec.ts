@@ -328,6 +328,17 @@ describe('AgentFormPage — invalid submit feedback', () => {
         { kind: 'skill', ref: 'redline' },
       ]);
     });
+
+    it('keeps the pin the Update strip moved, so a later save cannot put the old one back', () => {
+      component.skills.set([imported, hand]);
+      load([{ kind: 'skill', ref: 'redline', config: { version: 2, addedBy: 'u1' } }]);
+      (component as unknown as { onSkillPinMoved(m: { skillId: string; version: number }): void })
+        .onSkillPinMoved({ skillId: 'redline', version: 8 });
+      const build = () => (component as unknown as { buildBindings(): unknown[] }).buildBindings();
+      expect(build()).toEqual([{ kind: 'skill', ref: 'redline', config: { version: 8, addedBy: 'u1' } }]);
+      const notes = Object.fromEntries(component.skillItems().map((i) => [i.id, i.note]));
+      expect(notes['redline']).toContain('Pinned to v8');
+    });
   });
 
   describe('voice mode (#625)', () => {

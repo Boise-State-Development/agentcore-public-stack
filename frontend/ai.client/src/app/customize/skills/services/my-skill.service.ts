@@ -18,6 +18,23 @@ import {
 } from '../models/my-skill.model';
 import { encodeSkillFilePath } from '../../../shared/utils/skill-resource-path';
 import { reachConfirmationFrom } from '../../../shared/skills/skill-provenance';
+import {
+  SkillUseTarget,
+  SkillUseUpdateResult,
+  SkillUses,
+  SkillUsesApi,
+} from '../../../shared/skills/skill-uses.model';
+import {
+  SkillRestoreResult,
+  SkillVersionDetail,
+  SkillVersionHistoryApi,
+  SkillVersionList,
+} from '../../../shared/skills/skill-version-history.model';
+import {
+  SkillBundleImportApi,
+  describeSkillApiError,
+  skillImportForm,
+} from '../../../shared/skills/skill-bundle-import.model';
 
 /**
  * Signal-based state for the user-authored skills tier (Skills v2 PR-3).
@@ -38,7 +55,9 @@ import { reachConfirmationFrom } from '../../../shared/skills/skill-provenance';
  * missing there until a reload. A user report found exactly that gap.
  */
 @Injectable({ providedIn: 'root' })
-export class MySkillService {
+export class MySkillService
+  implements SkillBundleImportApi<MySkill>, SkillVersionHistoryApi<MySkill>, SkillUsesApi
+{
   private http = inject(HttpClient);
   private config = inject(ConfigService);
   private agents = inject(AgentService);
@@ -219,7 +238,7 @@ export class MySkillService {
 
   /** What importing `input` would do, against `skillId` when given. Writes nothing. */
   previewImport(input: SkillImportInput, skillId?: string | null): Promise<ImportPreview> {
-    const form = importForm(input);
+    const form = skillImportForm(input);
     if (skillId) {
       form.append('skillId', skillId);
     }
@@ -235,7 +254,7 @@ export class MySkillService {
     input: SkillImportInput,
     options: { displayName?: string; expectedBundleHash?: string | null },
   ): Promise<ImportApplyResult> {
-    const form = importForm(input);
+    const form = skillImportForm(input);
     if (options.displayName) {
       form.append('displayName', options.displayName);
     }
@@ -267,7 +286,7 @@ export class MySkillService {
       confirmReach?: boolean;
     },
   ): Promise<ImportApplyResult> {
-    const form = importForm(input);
+    const form = skillImportForm(input);
     if (options.confirmReach) {
       form.append('confirmReach', 'true');
     }
@@ -289,6 +308,86 @@ export class MySkillService {
     return result;
   }
 
+  // ---- version history (skill-version-history.md §6) ----------------------
+
+  /** A page of an owned skill's history, newest first. */
+  listVersions(
+    skillId: string,
+    options: { limit?: number; before?: number | null } = {},
+  ): Promise<SkillVersionList> {
+    const params: Record<string, string> = {};
+    if (options.limit) params['limit'] = String(options.limit);
+    if (options.before) params['before'] = String(options.before);
+    return firstValueFrom(
+      this.http.get<SkillVersionList>(`${this.baseUrl()}/${encodeURIComponent(skillId)}/versions`, {
+        params,
+        withCredentials: true,
+      }),
+    );
+  }
+
+  /** One version, with the change from the live skill to it. */
+  getVersion(skillId: string, version: number): Promise<SkillVersionDetail> {
+    return firstValueFrom(
+      this.http.get<SkillVersionDetail>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/versions/${version}`,
+        { withCredentials: true },
+      ),
+    );
+  }
+
+  /**
+   * Put a version back as a new version. 409s with the reach summary until the
+   * user confirms, as an edit does; pins do not move.
+   */
+  async restoreVersion(
+    skillId: string,
+    version: number,
+    options: { expectedUpdatedAt?: string | null; confirmReach?: boolean },
+  ): Promise<SkillRestoreResult<MySkill>> {
+    const result = await firstValueFrom(
+      this.http.post<SkillRestoreResult<MySkill>>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/versions/${version}/restore`,
+        {
+          expectedUpdatedAt: options.expectedUpdatedAt ?? null,
+          confirmReach: options.confirmReach ?? false,
+        },
+        { withCredentials: true },
+      ),
+    );
+    this.skills.update((current) =>
+      current.map((s) => (s.skillId === skillId ? result.skill : s)),
+    );
+    this.agents.invalidateBindable('skill');
+    return result;
+  }
+
+  // ---- where it's used (skill-version-history.md D9) -----------------------
+
+  /** The owner's Agents and projects that bind the skill, current and behind. */
+  getUses(skillId: string): Promise<SkillUses> {
+    return firstValueFrom(
+      this.http.get<SkillUses>(`${this.baseUrl()}/${encodeURIComponent(skillId)}/uses`, {
+        withCredentials: true,
+      }),
+    );
+  }
+
+  /** Move the named pins to the skill's current content; one result per target. */
+  async updateUses(skillId: string, targets: SkillUseTarget[]): Promise<SkillUseUpdateResult[]> {
+    const response = await firstValueFrom(
+      this.http.post<{ results: SkillUseUpdateResult[] }>(
+        `${this.baseUrl()}/${encodeURIComponent(skillId)}/uses/update`,
+        { targets },
+        { withCredentials: true },
+      ),
+    );
+    if (response.results.some((r) => r.ok && r.kind === 'agent')) {
+      this.agents.invalidateBindable('skill');
+    }
+    return response.results;
+  }
+
   /** The backend's message for a failed call, or `fallback`. */
   describeError(err: unknown, fallback: string): string {
     return this.messageFor(err, fallback);
@@ -299,27 +398,6 @@ export class MySkillService {
    * cap or validation failure reads as written, not as a generic HTTP error.
    */
   private messageFor(err: unknown, fallback: string): string {
-    const detail = (err as { error?: { detail?: unknown } } | null)?.error?.detail;
-    if (typeof detail === 'string' && detail.trim()) {
-      return detail;
-    }
-    const message = (detail as { message?: unknown } | null)?.message;
-    if (typeof message === 'string' && message.trim()) {
-      return message;
-    }
-    return err instanceof Error ? err.message : fallback;
+    return describeSkillApiError(err, fallback);
   }
-}
-
-function importForm(input: SkillImportInput): FormData {
-  const form = new FormData();
-  if (input.file) {
-    form.append('file', input.file, input.file.name);
-  } else if (input.url) {
-    form.append('url', input.url.trim());
-  }
-  if (input.path !== undefined && input.path !== null) {
-    form.append('path', input.path);
-  }
-  return form;
 }

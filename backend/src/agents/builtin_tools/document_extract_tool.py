@@ -503,7 +503,7 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
             tables, the cited passages and the spreadsheet are already shown to
             the user.
         """
-        from apis.shared.feature_flags import document_extract_model_id
+        from apis.shared.models.task_models import TaskModelSlot, resolve_task_model
 
         if not (field_set or "").strip():
             listing = ", ".join(available) or "(none)"
@@ -576,7 +576,9 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
                 matched.setdefault(upload_id, None)
             ids = list(matched)
 
-        model_id = document_extract_model_id()
+        # The admin's Task models choice; DOCUMENT_EXTRACT_MODEL_ID is its default.
+        extract_model = await resolve_task_model(TaskModelSlot.DOCUMENT_EXTRACT)
+        model_id = extract_model.model_id
 
         async def extract_one(upload_id: str, _label: str) -> DocumentOutcome:
             """Read, extract and verify one document. Never raises."""
@@ -615,6 +617,7 @@ def make_document_extract_tool(session_id: str, user_id: str, records: List[Any]
                     "\n\n".join(extract_texts),
                     filename=meta.filename,
                     model_id=model_id,
+                    effort=extract_model.effort,
                 )
             except SchemaTooComplexError as exc:
                 # A property of the field set, identical for every document in

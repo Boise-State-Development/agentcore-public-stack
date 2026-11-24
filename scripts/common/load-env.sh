@@ -350,6 +350,12 @@ build_cdk_context_params() {
     if [ -n "${CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD:-}" ]; then
         context_params="${context_params} --context observability.promptCacheSessionWastedUsdThreshold=\"${CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD}\""
     fi
+    if [ -n "${CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS:-}" ]; then
+        context_params="${context_params} --context observability.turnPreludeP50Ms=\"${CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS}\""
+    fi
+    if [ -n "${CDK_OBSERVABILITY_TURN_PRELUDE_MIN_TURNS:-}" ]; then
+        context_params="${context_params} --context observability.turnPreludeMinTurns=\"${CDK_OBSERVABILITY_TURN_PRELUDE_MIN_TURNS}\""
+    fi
 
     echo "${context_params}"
 }

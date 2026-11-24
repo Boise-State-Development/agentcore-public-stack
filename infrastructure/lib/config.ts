@@ -95,6 +95,7 @@ export interface AppConfig {
   sessionFork: SessionForkConfig;
   quotaRequests: QuotaRequestsConfig;
   awsLimits: AwsLimitsConfig;
+  organizeLists: OrganizeListsConfig;
   clientTurnTiming: ClientTurnTimingConfig;
   ttftProbe: TtftProbeConfig;
   memoryLint: MemoryLintConfig;
@@ -119,6 +120,7 @@ export interface AppConfig {
   documentExtract: DocumentExtractConfig;
   fieldSetAuthoring: FieldSetAuthoringConfig;
   skillBundleImport: SkillBundleImportConfig;
+  skillVersionHistory: SkillVersionHistoryConfig;
   webSearchDefaultMaxResults: WebSearchDefaultMaxResultsConfig;
   concurrentToolExecution: ConcurrentToolExecutionConfig;
   wordSkillScripts: WordSkillScriptsConfig;
@@ -543,6 +545,20 @@ export interface QuotaRequestsConfig {
  * submissions are audited in the existing audit-log table.
  */
 export interface AwsLimitsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Organizing the Agents and Projects pages
+ * (docs/specs/agent-project-organization.md): a member hides items and sets a
+ * custom order, a view preference that never changes access.
+ * **Opt-in while the feature is in development**: off unless
+ * CDK_ORGANIZE_LISTS_ENABLED=true (or an `organizeLists.enabled: true` cdk.json
+ * context). Sets ORGANIZE_LISTS_ENABLED on **app-api only**, which serves
+ * `/users/me/arrangements/{surface}`. No new resources: arrangements are items
+ * in the existing user-settings table.
+ */
+export interface OrganizeListsConfig {
   enabled: boolean;
 }
 
@@ -1282,6 +1298,24 @@ export interface SkillBundleImportConfig {
 }
 
 /**
+ * Skill version history (docs/specs/skill-version-history.md): every content
+ * write to a skill is kept as a version, and owners and admins can list and
+ * restore them. **Opt-in while in development**: off unless
+ * CDK_SKILL_VERSION_HISTORY_ENABLED=true (or a `skillVersionHistory.enabled:
+ * true` cdk.json context). A feature switch once finished: restore widens what
+ * users can do.
+ *
+ * Sets SKILL_VERSION_HISTORY_ENABLED on app-api (the REST writes) and on the
+ * AgentCore Runtime (the `my_skill_*` authoring tools write skills there).
+ * Written to the Runtime's environment **only while on**, so the default spends
+ * none of the V2 payload budget. No resources: versions are rows in the existing
+ * skill catalog table and frozen files in the existing skill-resources bucket.
+ */
+export interface SkillVersionHistoryConfig {
+  enabled: boolean;
+}
+
+/**
  * Agent Designer feature flag. Default ON with a kill switch — the governed
  * `/agents/*` surface ships everywhere now that the Designer is complete; only
  * CDK_AGENTS_API_ENABLED=false (or an `agents.enabled: false` cdk.json context)
@@ -1595,6 +1629,29 @@ export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD = 10;
 /** Dollars of fleet prompt-cache waste per 5-minute period. */
 export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD = 1;
 
+/**
+ * Harness time before the first token (`PreludeTotalMs`, handler entry to the
+ * model call, model excluded): the 6-hour p50, in ms, above which the
+ * `turn-prelude-p50` alarm fires. `0` creates no alarm.
+ *
+ * A gross-regression detector, not a fine one; the release readout's per-build
+ * prelude table is the fine one (docs/specs/turn-path-ttft.md §6E). Tuned
+ * against 14 days of 6-hour periods with at least 200 turns (2026-11-09 →
+ * 11-22): dev 955–1,088 ms, prod 510–1,366 ms, prod's swing being traffic mix
+ * (Agent turns run retrieval). 1,500 clears prod's worst healthy period by
+ * ~10% and is ~50% over dev's median, so it fires on a regression of roughly
+ * half a second on dev and never on a mix swing seen so far. A deployment
+ * whose prelude sits lower can tighten it.
+ */
+export const OBSERVABILITY_DEFAULT_TURN_PRELUDE_P50_MS = 1500;
+
+/**
+ * Turns a 6-hour period must hold before its `PreludeTotalMs` p50 counts
+ * toward the alarm. Below it the period reads as healthy: a quiet period's p50
+ * is its cold starts (a dev day of 11 turns read 7.4 s), not the harness.
+ */
+export const OBSERVABILITY_DEFAULT_TURN_PRELUDE_MIN_TURNS = 200;
+
 /** Cumulative partial-miss waste for one session, in dollars. A fleet sum
  *  cannot see a single conversation re-writing its prefix every turn. */
 export const OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD = 5;
@@ -1660,6 +1717,11 @@ export interface ObservabilityConfig {
   promptCacheAvoidableMissThreshold: number;
   promptCacheWastedUsdThreshold: number;
   promptCacheSessionWastedUsdThreshold: number;
+
+  /** 6-hour `PreludeTotalMs` p50 (ms) that fires `turn-prelude-p50`; `0` creates no alarm. */
+  turnPreludeP50Ms: number;
+  /** Turns a 6-hour period needs before its p50 counts toward that alarm. */
+  turnPreludeMinTurns: number;
 
   /** Percent of a model's TPM quota at which its usage alarm fires. */
   bedrockTpmQuotaPercent: number;
@@ -2127,6 +2189,12 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ? process.env.CDK_AWS_LIMITS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('awsLimits')?.enabled ?? false,
     },
+    organizeLists: {
+      // Opt-in while in development, same parsing as quotaRequests above.
+      enabled: process.env.CDK_ORGANIZE_LISTS_ENABLED
+        ? process.env.CDK_ORGANIZE_LISTS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('organizeLists')?.enabled ?? false,
+    },
     clientTurnTiming: {
       // Default ON with a kill switch, same parsing as projects above.
       enabled: process.env.CDK_CLIENT_TURN_TIMING_ENABLED
@@ -2357,6 +2425,13 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED
         ? process.env.CDK_SKILL_BUNDLE_IMPORT_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('skillBundleImport')?.enabled ?? false,
+    },
+    skillVersionHistory: {
+      // In development: only "true" enables, and an unset GitHub variable
+      // arrives as "" rather than undefined.
+      enabled: process.env.CDK_SKILL_VERSION_HISTORY_ENABLED
+        ? process.env.CDK_SKILL_VERSION_HISTORY_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('skillVersionHistory')?.enabled ?? false,
     },
     agents: {
       // Default ON with a kill switch (house style, mirroring memorySpaces /
@@ -2616,6 +2691,16 @@ export function loadConfig(scope: cdk.App): AppConfig {
         ?? parseFloatEnv(scope.node.tryGetContext('observability.promptCacheSessionWastedUsdThreshold'))
         ?? scope.node.tryGetContext('observability')?.promptCacheSessionWastedUsdThreshold
         ?? OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+      turnPreludeP50Ms:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.turnPreludeP50Ms'))
+        ?? scope.node.tryGetContext('observability')?.turnPreludeP50Ms
+        ?? OBSERVABILITY_DEFAULT_TURN_PRELUDE_P50_MS,
+      turnPreludeMinTurns:
+        parseIntEnv(process.env.CDK_OBSERVABILITY_TURN_PRELUDE_MIN_TURNS)
+        ?? parseIntEnv(scope.node.tryGetContext('observability.turnPreludeMinTurns'))
+        ?? scope.node.tryGetContext('observability')?.turnPreludeMinTurns
+        ?? OBSERVABILITY_DEFAULT_TURN_PRELUDE_MIN_TURNS,
       bedrockTpmQuotaPercent:
         parseIntEnv(process.env.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT)
         ?? parseIntEnv(scope.node.tryGetContext('observability.bedrockTpmQuotaPercent'))

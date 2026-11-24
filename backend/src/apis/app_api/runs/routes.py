@@ -293,14 +293,14 @@ async def run_now(
 
     Returns ``202`` with the run and session ids as soon as the run is
     authorized and audited; the turn itself runs in the background (up to
-    the harness's 300s budget, longer than the 60s CloudFront and ALB
+    the harness's 14-minute cap, far longer than the 60s CloudFront and ALB
     timeouts in front of app-api). Poll ``GET /runs/{runId}`` for the
     outcome; the answer lands as a session in the caller's conversations.
 
     Everything that can reject the run happens before the ``202``: the
     grant, the RBAC tool filter, the bearer mint, and the start audit row.
     A run lost to an app-api restart keeps a ``started`` row; the SPA
-    treats one older than the harness budget as lost.
+    treats one older than the harness's cap as lost.
     """
     await _resolve_grant(request, user)
 
@@ -320,7 +320,8 @@ async def run_now(
         enabled_tools = allowed
 
     # Mint here, not in the background, so a dead credential is still a 409
-    # the form can show. A Cognito access token outlives the 300s budget.
+    # the form can show. A Cognito access token (an hour by default) outlives
+    # the harness's 14-minute cap.
     try:
         bearer = await get_headless_auth().mint_bearer_for_user(user.user_id)
     except HeadlessAuthError as exc:

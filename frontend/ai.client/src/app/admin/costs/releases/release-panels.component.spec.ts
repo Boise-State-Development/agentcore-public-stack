@@ -6,6 +6,7 @@ import { ReleaseKpiCardsComponent } from './release-kpi-cards.component';
 import { ReleaseCompareHeaderComponent } from './release-compare-header.component';
 import { ReleaseQualityPanelComponent } from './release-quality-panel.component';
 import { ReleaseToolsTableComponent } from './release-tools-table.component';
+import { ReleaseCallKindsTableComponent } from './release-call-kinds-table.component';
 import { ReleaseVersionStripComponent } from './release-version-strip.component';
 import { unitChips } from './release-ledger.util';
 import { readoutFixture, versionsFixture } from '../../../../testing/release-ledger.fixtures';
@@ -52,6 +53,36 @@ describe('ReleaseKpiCardsComponent', () => {
   it('shows first-token percentiles from the readout’s latency block', () => {
     const fixture = render(ReleaseKpiCardsComponent, { readout: readoutFixture() });
     expect(text(fixture.nativeElement)).toContain('2,030 ms → 2,714 ms');
+  });
+
+  it('shows the per-build prelude stages and colours only what the bundle flagged', () => {
+    const readout = {
+      ...readoutFixture(),
+      prelude: {
+        available: true,
+        scope: 'version' as const,
+        stages: {
+          preludeTotalMs: { p50: [957, 1042], p90: [1738, 1443], n: [2563, 556], deltaMs: 85, moved: 'worse' as const },
+          agentBuildMs: { p50: [317, 314], p90: [600, 590], n: [2563, 556], deltaMs: -3, moved: null },
+        },
+        moved: [{ stage: 'preludeTotalMs', deltaMs: 85, direction: 'worse' as const }],
+        rule: { minMs: 30, minRelative: 0.05, minN: 200 },
+        mix: { turns: [2563, 556], assistantShare: [0.2, 0.19], resumeShare: [0.02, 0.01] },
+      },
+    };
+    const fixture = render(ReleaseKpiCardsComponent, { readout });
+    const panel = fixture.nativeElement.querySelector('[data-testid="release-prelude"]');
+    expect(text(panel)).toContain('by version');
+    expect(text(panel)).toContain('more than 30 ms or 5%');
+    expect(text(panel)).toContain('Agent turns 20.0% → 19.0%');
+    expect(text(panel.querySelector('[data-stage="preludeTotalMs"]'))).toContain('957 ms → 1,042 ms');
+    expect(text(panel.querySelector('[data-stage="preludeTotalMs"]'))).toContain('+85 ms, worse');
+    expect(text(panel.querySelector('[data-stage="agentBuildMs"]'))).toContain('-3 ms, no direction');
+  });
+
+  it('leaves the prelude panel out when the readout has none', () => {
+    const fixture = render(ReleaseKpiCardsComponent, { readout: readoutFixture() });
+    expect(fixture.nativeElement.querySelector('[data-testid="release-prelude"]')).toBeNull();
   });
 });
 
@@ -142,6 +173,29 @@ describe('ReleaseToolsTableComponent', () => {
     expect(text(rows[1])).toContain('— → $0.0500');
     expect(text(rows[1])).toContain('310');
     expect(text(fixture.nativeElement)).toContain('Not recorded by the tool census yet: awaiting-user share.');
+  });
+});
+
+describe('ReleaseCallKindsTableComponent', () => {
+  it('lists chat as the turn KPIs and the other kinds as calls, with "—" before the split', () => {
+    const fixture = render(ReleaseCallKindsTableComponent, { kinds: readoutFixture().callKinds });
+    const chat = fixture.nativeElement.querySelector('[data-kind="chat"]');
+    const prompt = fixture.nativeElement.querySelector('[data-kind="workflow_prompt"]');
+    expect(text(chat)).toContain('Chat (turn KPIs)');
+    expect(text(prompt)).toContain('Workflow prompt step');
+    expect(text(prompt)).toContain('0 → 45');
+    // A baseline whose rows predate the split reads "—", never "$0.00".
+    expect(text(prompt)).toContain('— → $0.760');
+    expect(text(prompt)).toContain('— → 12,000 ms');
+  });
+});
+
+describe('ReleaseKpiCardsComponent hints', () => {
+  it('says the turn KPIs read chat calls only', () => {
+    const fixture = render(ReleaseKpiCardsComponent, { readout: readoutFixture() });
+    const card = fixture.nativeElement.querySelector('[data-kpi="meanFirstTokenMs"]');
+    expect(text(card)).toContain('Chat calls only');
+    expect(text(card)).toContain('chat calls');
   });
 });
 

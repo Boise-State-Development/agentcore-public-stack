@@ -1,6 +1,6 @@
 """Assistants API request/response models"""
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -529,6 +529,18 @@ class CreateAssistantRequest(BaseModel):
     voice_instructions_only: bool = Field(
         True, alias="voiceInstructionsOnly", description="Voice uses only the Agent's instructions (#625)"
     )
+    # skill-code-sandbox §8.5: the script sets the saver was shown and allowed,
+    # ``{skillId: scriptsHash}``. Records a review for an imported skill bound
+    # here (``script_reviews.record_binding_reviews``); a hand-written skill of
+    # the saver's own needs none. A newly bound or moved imported skill with
+    # scripts and neither field answers 409 ``skill_scripts_unreviewed``.
+    scripts_reviewed: Optional[Dict[str, str]] = Field(
+        None, alias="scriptsReviewed", description="Script sets the saver allowed, by skill id"
+    )
+    # The review sheet's "Add without scripts": skills bound with no review.
+    scripts_declined: Optional[List[str]] = Field(
+        None, alias="scriptsDeclined", max_length=100, description="Skills bound without allowing their scripts"
+    )
 
 
 class UpdateAssistantRequest(BaseModel):
@@ -564,6 +576,18 @@ class UpdateAssistantRequest(BaseModel):
     )
     voice_instructions_only: Optional[bool] = Field(
         None, alias="voiceInstructionsOnly", description="Voice uses only the Agent's instructions (#625); None = unchanged"
+    )
+    # skill-code-sandbox §8.5: the script sets the saver was shown and allowed,
+    # ``{skillId: scriptsHash}``. Records a review for an imported skill bound
+    # here (``script_reviews.record_binding_reviews``); a hand-written skill of
+    # the saver's own needs none. A newly bound or moved imported skill with
+    # scripts and neither field answers 409 ``skill_scripts_unreviewed``.
+    scripts_reviewed: Optional[Dict[str, str]] = Field(
+        None, alias="scriptsReviewed", description="Script sets the saver allowed, by skill id"
+    )
+    # The review sheet's "Add without scripts": skills bound with no review.
+    scripts_declined: Optional[List[str]] = Field(
+        None, alias="scriptsDeclined", max_length=100, description="Skills bound without allowing their scripts"
     )
 
 
@@ -1651,6 +1675,13 @@ class UserPinState(BaseModel):
     dismissed: List[str] = Field(
         default_factory=list, description="Agent ids the user removed — the resolver MUST respect these (D9.3)"
     )
+    ordered: bool = Field(
+        False,
+        description=(
+            "The user has arranged their pins (agent-project-organization D7): unlocked rows they "
+            "own follow ``order`` rather than a role seed's priority"
+        ),
+    )
 
 
 class PinnedAgentResponse(BaseModel):
@@ -1688,6 +1719,16 @@ class AgentPinsResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     pins: List[PinnedAgentResponse] = Field(default_factory=list, description="Resolved pins, in order")
+
+
+class AgentPinOrderRequest(BaseModel):
+    """``PUT /agents/pins/order``: the caller's unlocked pins, top first (agent-project-organization D7)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_ids: List[Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")]] = Field(
+        ..., alias="agentIds", max_length=100, description="Agent ids in the order the user arranged them"
+    )
 
 
 # ── role-seeded default pins (D9, Phase 6) ──────────────────────────────────────────

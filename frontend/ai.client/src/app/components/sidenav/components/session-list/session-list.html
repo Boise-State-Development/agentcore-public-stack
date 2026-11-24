@@ -38,12 +38,56 @@
                      once, or on touch after a press-and-hold (dragStartDelay) so a
                      drag doesn't fight the drawer's scroll; not while renaming.
                      The Pin/Unpin menu item stays the keyboard path.
-                     Pinned Agents (#712) list first, in the same drop list:
+                     Pinned Agents (#712) list first, in their own sortable list:
                      dragging one out unpins it, like a conversation. They are
                      pinned from the store, never by a drop here. -->
                 @if (hasPins() || isDragging()) {
                     <section>
                         <h3 class="px-2 pb-0.5 text-[11px]/5 font-medium text-gray-600 dark:text-gray-300">Pinned</h3>
+                        <!-- Pinned Agents are their own list so they can reorder in place
+                             (agent-project-organization §6.4) while conversations keep
+                             the unsorted drop zone below. Dragging one out still unpins
+                             it. No (cdkDragStarted): they start inside Pinned, so there is
+                             no drop zone to reveal first. -->
+                        @if (pinnedAgents().length > 0) {
+                            <ul
+                                role="list"
+                                cdkDropList
+                                [id]="pinnedAgentsListId"
+                                [cdkDropListConnectedTo]="[unpinnedListId]"
+                                [cdkDropListSortingDisabled]="!organizeLists"
+                                [cdkDropListSortPredicate]="agentSortPredicate"
+                                (cdkDropListDropped)="onPinnedAgentDrop($event)"
+                                (cdkDropListEntered)="isAgentOutside.set(false)"
+                                (cdkDropListExited)="isAgentOutside.set(true)"
+                                [attr.data-zone]="isDraggingAgent() && organizeLists && !isAgentOutside() ? '' : null"
+                                aria-label="Pinned agents"
+                                class="pinned-agents-list mb-0.5 flex flex-col gap-y-0.5 rounded-md outline-offset-2 outline-transparent transition-colors data-zone:outline-dashed data-zone:outline-1 data-zone:outline-gray-300 dark:data-zone:outline-white/15"
+                            >
+                                @for (agent of pinnedAgents(); track agent.agentId) {
+                                    <li
+                                        cdkDrag
+                                        [cdkDragData]="agent"
+                                        [cdkDragStartDelay]="dragStartDelay"
+                                        [cdkDragDisabled]="agent.locked"
+                                        [cdkDragPreviewClass]="dragPreviewClass"
+                                        (cdkDragStarted)="onAgentDragStarted()"
+                                        (cdkDragEnded)="onDragEnded()"
+                                        class="group relative"
+                                    >
+                                        <ng-container *ngTemplateOutlet="agentRow; context: { $implicit: agent }" />
+                                    </li>
+                                }
+                            </ul>
+                            @if (isDraggingAgent() && isAgentOutside()) {
+                                <p
+                                    class="mb-1 flex min-h-8 items-center justify-center gap-1.5 rounded-md border border-dashed border-gray-300 px-2 py-1.5 text-xs/5 text-gray-600 dark:border-white/15 dark:text-gray-400"
+                                >
+                                    <ng-icon name="appPinOff" class="size-3.5 shrink-0" aria-hidden="true" />
+                                    <span>Release to unpin</span>
+                                </p>
+                            }
+                        }
                         <ul
                             role="list"
                             cdkDropList
@@ -56,21 +100,6 @@
                             [attr.data-over]="isOverPinned() ? '' : null"
                             class="group/pinned flex flex-col gap-y-0.5 rounded-md transition-colors data-over:bg-primary-50 dark:data-over:bg-white/5"
                         >
-                            <!-- No (cdkDragStarted) on Agent rows: they start inside
-                                 Pinned, so there is no drop zone to reveal first. -->
-                            @for (agent of pinnedAgents(); track agent.agentId) {
-                                <li
-                                    cdkDrag
-                                    [cdkDragData]="agent"
-                                    [cdkDragStartDelay]="dragStartDelay"
-                                    [cdkDragDisabled]="agent.locked"
-                                    [cdkDragPreviewClass]="dragPreviewClass"
-                                    (cdkDragEnded)="onDragEnded()"
-                                    class="group relative"
-                                >
-                                    <ng-container *ngTemplateOutlet="agentRow; context: { $implicit: agent }" />
-                                </li>
-                            }
                             @for (session of pinnedSessions(); track session.sessionId) {
                                 <li
                                     cdkDrag
@@ -298,6 +327,30 @@
                         <ng-icon name="appPinOff" class="size-4" aria-hidden="true" />
                         <span>Unpin</span>
                     </button>
+                    @if (organizeLists) {
+                        <button
+                            cdkMenuItem
+                            type="button"
+                            [cdkMenuItemDisabled]="!canMoveAgent(agent, -1)"
+                            (click)="onMoveAgentClick($event, agent, -1)"
+                            class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 disabled:opacity-50 aria-disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                            role="menuitem"
+                        >
+                            <ng-icon name="heroArrowUp" class="size-4" aria-hidden="true" />
+                            <span>Move up</span>
+                        </button>
+                        <button
+                            cdkMenuItem
+                            type="button"
+                            [cdkMenuItemDisabled]="!canMoveAgent(agent, 1)"
+                            (click)="onMoveAgentClick($event, agent, 1)"
+                            class="flex w-full items-center gap-2 px-3 py-2 text-sm/6 text-gray-700 hover:bg-gray-50 focus:bg-gray-50 disabled:opacity-50 aria-disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-700 dark:focus:bg-gray-700"
+                            role="menuitem"
+                        >
+                            <ng-icon name="heroArrowDown" class="size-4" aria-hidden="true" />
+                            <span>Move down</span>
+                        </button>
+                    }
                 </div>
             </ng-template>
         }

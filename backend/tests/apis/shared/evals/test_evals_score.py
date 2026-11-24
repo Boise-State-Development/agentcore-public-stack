@@ -17,9 +17,10 @@ from apis.shared.evals.score import (
 )
 
 
-def _score(expect: Expect, answer: str = "ok", tools=(), status: str = "completed", memory_state=None):
+def _score(expect: Expect, answer: str = "ok", tools=(), status: str = "completed", memory_state=None, turns=None):
     calls = [{"name": t, "input": {}} if isinstance(t, str) else t for t in tools]
-    return score_sample(expect, final_message=answer, tool_calls=calls, status=status, memory_state=memory_state)
+    return score_sample(expect, final_message=answer, tool_calls=calls, status=status, memory_state=memory_state,
+                        turns=turns)
 
 
 class TestScoreSample:
@@ -196,6 +197,72 @@ class TestMemoryChecks:
         assert _score(self._expect(contains_any=("x",))).failures == ("memory: not read back",)
 
 
+class TestSkillReloadsAfterCut:
+    """``skill.reloads_after_cut``: a reload is required only when a cut retired the activation."""
+
+    EXPECT = Expect(skill=SkillExpect(reloads_after_cut=("skill_creator",)))
+    LOAD = [{"name": "skills", "input": {"skill_name": "skill-creator"}},
+            {"name": "read_skill_file", "input": {"skill_name": "skill-creator", "path": "references/guide.md"}}]
+
+    def _turns(self, *, cut_on=None, final_loads=False, activated_on=0, n=3):
+        turns = []
+        for i in range(n):
+            turn = {"tool_trace": list(self.LOAD) if i == activated_on or (i == n - 1 and final_loads) else [],
+                    "events_seen": {"message_start": 1}}
+            if i == cut_on:
+                turn["events_seen"]["compaction"] = 1
+            turns.append(turn)
+        return turns
+
+    def _run(self, turns):
+        return _score(self.EXPECT, tools=turns[-1]["tool_trace"], turns=turns)
+
+    def test_a_cut_then_a_reload_passes_and_is_covered(self):
+        result = self._run(self._turns(cut_on=1, final_loads=True))
+        assert result.passed and result.uncovered == ()
+
+    def test_a_cut_without_a_reload_fails(self):
+        result = self._run(self._turns(cut_on=1))
+        assert not result.passed
+        assert result.failures == ("did not reload skill skill_creator after a cut",)
+        assert result.uncovered == ()
+
+    def test_no_cut_and_no_reload_passes_and_is_marked_uncovered(self):
+        result = self._run(self._turns())
+        assert result.passed and result.failures == ()
+        assert result.uncovered == ("skill.reloads_after_cut skill_creator: no cut after its activation",)
+
+    def test_a_cut_signalled_after_the_activating_turn_itself_counts(self):
+        # The cut is computed after a turn and applied at the next turn's head.
+        assert not self._run(self._turns(cut_on=0)).passed
+
+    def test_a_cut_signalled_on_the_last_turn_does_not_count(self):
+        # It takes effect only after the last turn, which still had the activation.
+        result = self._run(self._turns(cut_on=2))
+        assert result.passed and result.uncovered
+
+    def test_a_cut_before_the_latest_activation_does_not_count(self):
+        turns = self._turns(cut_on=0, n=4)
+        turns[2]["tool_trace"] = list(self.LOAD)  # reloaded on turn 3, no cut since
+        result = self._run(turns)
+        assert result.passed
+        assert result.uncovered == ("skill.reloads_after_cut skill_creator: no cut after its activation",)
+
+    def test_no_earlier_activation_is_uncovered_not_failed(self):
+        result = self._run(self._turns(activated_on=None, cut_on=1))
+        assert result.passed
+        assert result.uncovered == ("skill.reloads_after_cut skill_creator: not loaded before the last turn",)
+
+    def test_without_turns_the_check_is_uncovered(self):
+        result = _score(self.EXPECT)
+        assert result.passed and result.uncovered
+
+    def test_plain_loads_still_fails_on_a_model_that_was_never_cut(self):
+        # The old expectation, for contrast: an action check, not an outcome.
+        result = _score(Expect(skill=SkillExpect(loads=("skill_creator",))), turns=self._turns())
+        assert result.failures == ("did not load skill skill_creator",)
+
+
 class TestFailureCode:
     """Every sentence ``score_sample`` writes maps to a closed code (eval-harness spec §16 D20)."""
 
@@ -220,6 +287,11 @@ class TestFailureCode:
         (dict(expect=Expect(skill=SkillExpect(not_loads=("skill_creator",))),
               tools=[{"name": "skills", "input": {"skill_name": "skill-creator"}}]),
          {("skill_unexpected", "skill_creator")}),
+        (dict(expect=Expect(skill=SkillExpect(reloads_after_cut=("skill_creator",))),
+              turns=[{"tool_trace": [{"name": "skills", "input": {"skill_name": "skill-creator"}}]},
+                     {"tool_trace": [], "events_seen": {"compaction": 1}},
+                     {"tool_trace": []}]),
+         {("skill_missing", "skill_creator")}),
         (dict(expect=Expect(contains_any=("ok",), tools=ToolExpect(max_calls=1)), tools=["a", "b"]),
          {("max_calls", None)}),
         (dict(expect=Expect(memory=(MemoryExpect(scope="project", contains_any=("x",)),)),

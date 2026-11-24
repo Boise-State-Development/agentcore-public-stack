@@ -161,9 +161,12 @@ export class ScheduledRunsConstruct extends Construct {
         cmd: ['worker.lambda_handler'],
       }),
       architecture: lambda.Architecture.ARM_64,
-      // Worker drains a full agent turn's SSE stream through the harness
-      // (run_agent_headless's own budget is 300s); give it rag-ingestion's
-      // ceiling + headroom for retries/bookkeeping. Same memory class as
+      // Worker drains a full agent turn's SSE stream through the harness.
+      // run_agent_headless caps a run at 14 minutes
+      // (DEFAULT_MAX_DURATION_SECONDS) so it ends before this 15-minute
+      // timeout: the dispatcher invokes asynchronously, and a run Lambda
+      // kills is retried by Lambda, which runs the prompt again. Raise both
+      // together. Same memory class as
       // rag-ingestion (no heavy ML deps here, but the httpx stream +
       // json accumulation benefit from headroom over the dispatcher's).
       timeout: cdk.Duration.minutes(15),

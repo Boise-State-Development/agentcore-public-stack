@@ -905,11 +905,24 @@ test whose assertion never ran.
 | I8 | **`turn_prelude` shape.** One line per agent turn with `stages`, `groups` (`preamble`, `agent_build`), `totalMs`, `isResume`, `deferredBuild`, `hasAssistant`; EMF metric names derived from stage names; disabled by `TURN_LATENCY_METRICS_ENABLED=false`. | `test_turn_timing.py` |
 | I9 | **No network in tests.** | the socket guard in `tests/conftest.py` (fails at teardown) |
 | I10 | **Warm-up never opens a connection** (until P2 deliberately adds the one strategy-id read). | `test_warmup.py` (`boto3.client` patched, assert no call methods invoked) |
+| I11 | **No new round trip before the first token goes unseen.** Every AWS API call and HTTP request a turn makes before the model's first byte matches a committed inventory, per scenario and lane; and no `Before*` hook does awaited I/O before a later model call of a tool round. Counted, never timed. See §6F. | `tests/apis/inference_api/test_turn_path_io_inventory.py` against `turn_io/inventory.json`; regenerate with `UPDATE_TURN_IO_INVENTORY=1` |
+
+Every row above pins behaviour; only I11 pins cost, and it is the one a change on this path
+is most likely to move without noticing.
+
+**Two detectors, one before merge and one after.** I11 is the pre-merge one: it fails CI
+when a change adds a round trip before the first token, and it cannot see time. The
+post-merge one reads time from the stage metrics (§6E, *Detecting a regression after
+merge*): the release readout's per-build prelude table, which lists a stage whose p50
+moved by more than max(30 ms, 5%), and the `turn-prelude-p50` alarm for a step nobody
+ran a readout for. Between them, an added call fails a PR and slower work on the path
+reaches a reader within a build.
 
 ### 6B. Per-change checklist
 
-For each plan item, the cheaper model should: (1) run the named tests before touching
-anything and record the count; (2) make the change; (3) run the same tests plus the new
+For each plan item, the cheaper model should: (0) run I11's inventory test, whose diff
+says which round trips the change adds or removes before anyone reads a timing; (1) run the
+named tests before touching anything and record the count; (2) make the change; (3) run the same tests plus the new
 ones; (4) run the full suite once; (5) run the dev recipe and paste the numbers into the
 PR with the *before* numbers from the same recipe on the same day.
 
@@ -993,7 +1006,47 @@ How the probe runs (`apis/app_api/telemetry/ttft_probe.py`, `TtftProbeConstruct`
 - One alarm, `ttft-probe-not-reporting`: no complete run for 3 hours, missing data breaching. A lapsed grant, an exhausted quota, a broken image and a stopped schedule all look the same from here; the task's `ttft probe` log line in the app-api log group says which.
 - First manual run on dev (2026-10-10): cold 9,004 ms, prewarmed 2,321 ms, follow-up 1,533 ms, warm call 2,024 ms. One sample is not a baseline; set latency alarms on the probe's daily median after one to two weeks of it.
 
-Reading drift: compare the daily medians on the dashboard's trend widget, first turns and follow-ups separately, and when one moves, slice it by `modelId` in Logs Insights before calling it a regression; a change of default model moves every percentile. Alarms wait for a baseline (see the probe).
+#### Detecting a regression after merge
+
+§6F catches an added round trip before merge; nothing there sees time. Two readers of
+`PreludeTotalMs` and its top-level stages do, after the fact. Neither adds anything to the
+turn path: both read the EMF records `turn_timing.py` already writes.
+
+| Detector | Reads | Fires on | Where |
+|---|---|---|---|
+| **Release readout, *Prelude* table** | Logs Insights over the Runtime log group, filtered to each side's `appVersion` (and `build`, for a build readout): every EMF record carries both stamps, so a deploy day splits cleanly | A stage whose p50 moved by more than **max(30 ms, 5% of the baseline p50)** with **≥ 200 turns a side**, listed under *Prelude moved*; `prelude_mix_shift` when the share of Agent turns or resumes moved | `apis/shared/costs/ledger_prelude.py`, `ledger_readout.compare_prelude`; `release_readout.py`, the Releases tab, the `/release-readout` skill |
+| **`turn-prelude-p50` alarm** | `PreludeTotalMs` p50 over 6-hour periods, `IF(SampleCount >= 200, p50, 0)` | Over **1,500 ms** in 2 of the last 4 periods (one day) | `TurnLatencyObservabilityConstruct`; `CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS` (`0` = no alarm) and `…_MIN_TURNS` |
+
+**The noise band they were tuned against** (dev, 2026-11-11 → 11-22, and prod for the
+alarm):
+
+- On dev days with ≥ 200 turns, `PreludeTotalMs`'s daily p50 sat in **966–1,027 ms**
+  (`PreambleMs` 343–368, `HeadOfTurnMs` 50–56), about ±3%, and a ~20 ms drop in
+  `PreModelMs` and `AgentBuildMs` on 11-19 was plainly visible. A day with 11 turns read
+  **7.4 s**: a quiet period's p50 is its cold starts, which is why both detectors carry a
+  turn floor. The readout's 5% bar on a ~1 s prelude is 50 ms, outside that band; the
+  30 ms floor keeps a 40 ms stage from "moving" on a few milliseconds.
+- Per version on dev, 1.38.0 → 1.39.0 read 983 → 942 ms (n 873 / 556): −41 ms, inside
+  the bar, not listed.
+- 6-hour periods with ≥ 200 turns over 14 days: dev **955–1,088 ms**, prod
+  **510–1,366 ms**. Prod swings with traffic mix: per version, 1.37.0 → 1.38.0 read
+  564 → 769 ms p50, with `RagMs` 215 → 50 ms because Agent turns fell from most turns
+  to about a quarter, while `PreambleMs` (101 → 281) and `PreModelMs` (90 → 240) rose on
+  every turn. The alarm's 1,500 ms clears prod's worst healthy period by about 10%, so
+  it is a gross-regression detector (about half a second on dev); the readout is the
+  fine one.
+
+**Why a fixed threshold, not anomaly detection.** A harness regression is a level shift
+that persists. An anomaly model treats a persistent level as the new normal within days
+and stops alarming, and a band trained on prod's mix swings and on low-volume cold-start
+periods would be wider than the step it is meant to catch. A fixed threshold reads the same
+in a PR as on the console, and the readout covers the small steps per build.
+
+**What they cannot see.** Everything before handler entry (§2A: the SPA, app-api,
+Runtime routing, session start), which only the client metric and the probe measure; and
+the model's own first byte, which `PreludeTotalMs` excludes by design.
+
+Reading drift: compare the daily medians on the dashboard's trend widget, first turns and follow-ups separately, and when one moves, slice it by `modelId` in Logs Insights before calling it a regression; a change of default model moves every percentile. The probe's latency alarms still wait for its baseline (see the probe); the prelude has one (above).
 
 #### Recorded comparisons
 
@@ -1022,6 +1075,84 @@ passed this comparison unnoticed. The budget in §1 is not satisfied by this
 number; it is merely not contradicted by it. Anything claiming a TTFT effect at
 finer resolution needs the probe's daily medians (above) or a purpose-built A/B,
 not a six-turn smoke run.
+
+### 6F. The call inventory (I11)
+
+Every other signal on this path is post-merge: the eval harness's `firstTokenMs` moves
+20–115% a night per family on its own, the smoke pass prints a client median, the TTFT
+probe is not enabled everywhere, and the stage metrics are read per build by the release
+readout and alarmed only on a gross step (§6E, *Detecting a regression after merge*). So a
+harness regression is found after it ships to dev, if someone looks. The inventory turns the
+TTFT rule in CLAUDE.md into a CI failure without a clock: it counts round trips.
+
+**What runs.** `tests/apis/inference_api/turn_io/driver.py` drives four turns through the
+real `invocations` handler in a fresh process (a first turn on a new microVM meets every
+per-process cache empty; inside a pytest worker its inventory would depend on which tests
+ran first): every route phase in §2B, the real agent build (§2D, Strands included), and the
+head of the stream (§2C) up to the model call. The deployment is seeded through real code
+(`turn_io/world.py`): the bootstrap seeder's catalog (24 default tools, all granted, the
+default models, the quota tier, the bundled skills), a user with full-length personal
+instructions, an Agent with a knowledge base and tool bindings, a Shared Project, and a PDF.
+
+| Scenario | The turn |
+|---|---|
+| `first_turn` | New conversation, cold process: every default tool, a skill, a PDF |
+| `warm_follow_up` | Same conversation and configuration: an agent-cache hit. Its model calls a tool first |
+| `tool_round` | The window between `warm_follow_up`'s first and second model calls |
+| `agent_mention` | Same conversation, `@`-mentioning the knowledge-base Agent |
+| `project_turn` | New conversation on the project's harness |
+
+**How it records.** `turn_io/recorder.py` registers a botocore `before-call` handler on
+every client at its first call (clients on any `boto3.Session`, so the Memory SDK's and
+Strands' fresh sessions included) and answers from an in-memory fake, so nothing reaches a
+socket and `after-call` still deserializes; `httpx` transports are patched to record and
+refuse. Each call carries its innermost `src/` frame as its origin and, when it ran inside
+a Strands hook callback, the event and callback.
+
+**Lanes.** Every task spawned during the turn, and every piece of work handed to a thread
+pool, is a link in a *lineage* held in a context variable. A call is **awaited** when it ran
+on the model call's own lineage before the next link was spawned, or in pool work its
+submitter blocked on with nothing in between (`asyncio.to_thread`, an awaited
+`run_in_executor`, `submit(...).result()`). Anything else is **concurrent**: a task or
+thread beside the path, which costs first-token time only if it outlasts what it overlaps.
+Both are decided from program order, not timing, so five parallel runs produce the same
+file. Four small tests in the same module pin the split on toy code.
+
+**What fails.** Any difference from `turn_io/inventory.json`, with a message naming the
+scenario, lane, call and origin, and pointing here; and any awaited call inside a `Before*`
+hook before a later model call of a tool round (those hooks repeat on every round). Adding
+one `get_item` to `_prepare_session_state` fails all four turn scenarios as
+`awaited +1: dynamodb.GetItem sessions-metadata <- …routes.py:_prepare_session_state`. A
+deliberate change regenerates the file, and the diff is what review reads:
+
+```bash
+cd backend && UPDATE_TURN_IO_INVENTORY=1 uv run python -m pytest tests/apis/inference_api/test_turn_path_io_inventory.py
+```
+
+**What it cannot see.** Time: it counts round trips, so a call that got slower, or a
+concurrent one that started outlasting its overlap, is invisible (that is §6E's job). Code
+the fixture does not reach: MCP servers (no network, so none are configured; the §2D
+pre-flight is not covered), resume, continuation, handoffs, workflow runs, folders,
+spreadsheets and decks. Branches the fake answers differently from AWS: it applies key
+conditions and `SET`/`ADD`/`REMOVE` updates but ignores filter and most condition
+expressions, so a path that depends on one is recorded as this fixture takes it. A fake
+failure is reported as a problem, never swallowed, because the code under test often
+catches the exception and quietly takes another branch.
+
+**First readout** (develop @ `72115810`, 2026-11-22), awaited / concurrent calls before the
+first byte: `first_turn` 31 / 12, `warm_follow_up` 9 / 3, `agent_mention` 14 / 8,
+`project_turn` 23 / 14, `tool_round` 3 / 3, and no `Before*` hook I/O on the second model
+call. What the file shows, read off it rather than measured:
+
+- A cold first turn reads the tool catalog row by row: 24 awaited `GetItem`s from
+  `ToolCatalogRepository.get_tool` (the registry stage, §2D) beside 24 concurrent ones from
+  `get_tool_updated_at` (the freshness hash). A warm follow-up reads none.
+- A warm follow-up still makes three `SessionLookupIndex` queries before the model:
+  `load_session_meta` (B1), `_get_session_metadata_cloud` and the session manager's
+  `_get_session_via_gsi` (compaction state, re-read per turn by I5).
+- An Agent turn writes before the model on every turn: `bump_last_used_at` and, on a
+  project harness, `_store_session_metadata_cloud` and `_backfill_session_aggregates`
+  (B8's bookkeeping; §5 P4).
 
 ## 7. Clarity refactors
 

@@ -144,6 +144,23 @@ enabled.
 access** and enable the models referenced in your seed data. Confirm the
 Inference API task role has `bedrock:InvokeModel`, and check its CloudWatch logs.
 
+### The `turn-prelude-p50` alarm fired
+
+**Cause:** the harness itself got slower before the first token: the work
+inference-api does between a request arriving and the model call (session and
+quota checks, file and skill resolution, retrieval, tool assembly, the agent
+build). The model's own time is excluded. A change in what users do can also
+move it: Agent turns with a knowledge base run retrieval, and a burst of new
+conversations means more cold agent builds.
+
+**Fix:** open the `{prefix}-turn-latency-observability` dashboard and find the
+stage row that moved (preamble, agent build, retrieval and tools, head of turn).
+Then compare the build that went out with the one before it:
+`backend/scripts/release_readout.py` prints a per-build **Prelude** table with each
+stage's p50, p90 and turn count, and a `prelude_mix_shift` caveat when the share
+of Agent turns or resumes changed. If the stage that moved is retrieval and the
+mix shifted, it is traffic, not a regression.
+
 ### Admin features aren't visible
 
 **Cause:** your account doesn't hold the system-admin role.

@@ -289,6 +289,12 @@ jobs:
       # turn it on there. app-api only; the Service Quotas IAM grants exist only
       # while on. The SPA's matching switch is `features.awsLimits`.
       CDK_AWS_LIMITS_ENABLED: ${{ vars.CDK_AWS_LIMITS_ENABLED }}
+      # Organizing the Agents and Projects pages: members hide items and set a
+      # custom order (docs/specs/agent-project-organization.md). Opt-in while in
+      # development: set `CDK_ORGANIZE_LISTS_ENABLED` to "true" in an
+      # environment to turn it on there. app-api only. The SPA's matching
+      # switch will be `features.organizeLists` in src/environments/*.ts.
+      CDK_ORGANIZE_LISTS_ENABLED: ${{ vars.CDK_ORGANIZE_LISTS_ENABLED }}
       # Handoffs: a mid-thread @-mention hands off to an Agent with reviewed
       # context (docs/specs/agent-handoffs-and-consults.md, Phase 0). Opt-in
       # while in development: set `CDK_HANDOFFS_ENABLED` to "true" in an
@@ -527,6 +533,10 @@ jobs:
       # GitHub path). In development, so only "true" enables. app-api only; no
       # resources. The SPA half is features.skillBundleImport.
       CDK_SKILL_BUNDLE_IMPORT_ENABLED: ${{ vars.CDK_SKILL_BUNDLE_IMPORT_ENABLED }}
+      # Skill version history: every skill content write is kept as a version.
+      # In development, so only "true" enables. app-api and the Runtime (written
+      # there only while on); no resources.
+      CDK_SKILL_VERSION_HISTORY_ENABLED: ${{ vars.CDK_SKILL_VERSION_HISTORY_ENABLED }}
       # SageMaker fine-tuning. The tables, bucket, SageMaker role and IAM
       # grants deploy unconditionally, but these two decide whether the feature
       # is reachable and how it is rationed, and neither was forwarded before —
@@ -679,6 +689,10 @@ jobs:
       CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD }}
       CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD }}
       CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD: ${{ vars.CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD }}
+      # 6-hour PreludeTotalMs p50 (ms) for the turn-prelude-p50 alarm, 0 for no
+      # alarm, and the turns a period needs to count. Unset = 1500 / 200.
+      CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS: ${{ vars.CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS }}
+      CDK_OBSERVABILITY_TURN_PRELUDE_MIN_TURNS: ${{ vars.CDK_OBSERVABILITY_TURN_PRELUDE_MIN_TURNS }}
       CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT: ${{ vars.CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT }}
       # JSON object: Bedrock ModelId -> that model's TPM quota. Unset means no
       # per-model quota alarms. Read the live values with

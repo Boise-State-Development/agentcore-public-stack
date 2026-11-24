@@ -48,6 +48,20 @@ You are an expert in TypeScript, Angular, and scalable web application developme
 - Keep state transformations pure and predictable
 - Do NOT use `mutate` on signals, use `update` or `set` instead
 
+### Lists the user comes back to
+
+A list page (workflows, skills, agents, an admin catalog) keeps its data for the life of the tab. Going back to it shows the copy it has at once, never a spinner. Canonical example: `WorkflowsApiService.workflows` and `WorkflowsPage`.
+
+- **The `resource()` lives in a `providedIn: 'root'` service, never on the page.** A resource belongs to the injector that created it, so a component field is destroyed on every navigation away and fetches again on return. Put it on the service that already owns that domain's HTTP calls.
+- **Load it lazily.** Gate `params` on a signal the page sets (`params: () => (this.wanted() ? true : undefined)` keeps it `idle`), so the request goes out only when the page asks for the list, not when some other feature injects the service. That matters when the endpoint is flag-gated and 404s while the flag is off.
+- **Refresh with `reload()`, never by changing `params`.** `reload()` keeps the current value while it fetches (`'reloading'`). A new `params` value drops the value and shows the first-load state again.
+- **Show the cached list while it refreshes.** Show the loading state only for the first load, with `!list.hasValue() && list.isLoading()`, not `isLoading()` alone. The page calls the service on entry: the first call loads, and later ones `reload()` behind the shown copy, so a change made in another tab or by an admin still shows up.
+- **The first load shows skeleton rows shaped like the real ones**, not a "Loading…" line: same height and spacing, so nothing moves when the list arrives. The skeleton is `aria-hidden="true"` with `animate-pulse motion-reduce:animate-none`, and a visually hidden `role="status"` beside it says what is loading. A pulse alone tells a screen reader nothing.
+- **Every write that changes the list refreshes it, from inside the service.** Create, save and delete call a private refresh after they succeed, so a new caller can't forget to. A delete drops the row with `set()` first, so it never flashes back while the refresh is in flight. Skip the refresh when the list was never loaded.
+- Signing out is a full page load, so nothing cached carries over to the next user.
+
+A component-level `resource()` is still right for data that belongs to one view and should be read fresh each time, such as the document a page opens by id.
+
 ## Templates
 
 - Keep templates simple and avoid complex logic

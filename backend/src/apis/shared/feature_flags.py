@@ -1148,6 +1148,25 @@ def aws_limits_enabled() -> bool:
     return os.environ.get("AWS_LIMITS_ENABLED", "").strip().lower() == "true"
 
 
+def organize_lists_enabled() -> bool:
+    """Whether members can hide and reorder items on the Agents and Projects pages.
+
+    ``docs/specs/agent-project-organization.md``. Gates app-api's
+    ``/users/me/arrangements/{surface}`` routes, which 404 after authentication
+    while off. An arrangement is a personal view preference (sort, custom order,
+    hidden ids); it never changes access.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it, so an unset GitHub variable
+    (``""``) is off. CDK sets it on app-api from ``config.organizeLists.enabled``.
+    The SPA's matching switch will be ``features.organizeLists``.
+
+    **app-api only.** Nothing on the turn path reads an arrangement, so the
+    Runtime gets no variable.
+    """
+    return os.environ.get("ORGANIZE_LISTS_ENABLED", "").strip().lower() == "true"
+
+
 def user_grants_enabled() -> bool:
     """Whether the admin surface for direct user grants is mounted on app-api.
 
@@ -1682,8 +1701,9 @@ def skill_bundle_import_enabled() -> bool:
 
     On, app-api serves ``POST /skills/mine/import/preview``,
     ``POST /skills/mine/import`` and ``POST /skills/mine/{skill_id}/import``,
-    which 404 after authentication while off. The SPA's matching switch is
-    ``features.skillBundleImport``.
+    and their admin-catalog twins under ``/admin/skills/`` (``admin.skills``,
+    spec §6a), all of which 404 after authentication while off. The SPA's
+    matching switch is ``features.skillBundleImport``.
 
     **app-api only.** The Runtime gets no variable: an imported skill is stored
     exactly like a hand-built one, so a turn reads it the same way.
@@ -1697,6 +1717,32 @@ def skill_bundle_import_enabled() -> bool:
     which a deployment may reasonably not want.
     """
     return os.environ.get("SKILL_BUNDLE_IMPORT_ENABLED", "").strip().lower() == "true"
+
+
+def skill_version_history_enabled() -> bool:
+    """Whether every content write to a skill is kept as a version, and (once its
+    routes land) whether owners and admins can list and restore those versions
+    (``docs/specs/skill-version-history.md``).
+
+    While on, each write that changes what a skill does (its name, description,
+    instructions, frontmatter or files) is captured as a ``SKILL#`` /
+    ``VERSION#`` row through ``apis.shared.skills.history``, deduplicated by
+    content, in both tiers and in the ``my_skill_*`` authoring tools. While off,
+    versions are cut only when something pins the skill, as before.
+
+    **app-api and the AgentCore Runtime.** The authoring tools write skills from
+    the Runtime, so without its copy they would be the one write path that skips
+    history. CDK writes the Runtime's copy only while on, so the default spends
+    none of the V2 environment budget.
+
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature flags"):
+    only ``"true"`` (case-insensitive) enables it; unset arrives as ``""`` and
+    is off. CDK sets it from ``config.skillVersionHistory.enabled``.
+
+    A **feature switch** once finished, and therefore permanent: restoring a
+    version widens what users can do.
+    """
+    return os.environ.get("SKILL_VERSION_HISTORY_ENABLED", "").strip().lower() == "true"
 
 
 def release_ledger_enabled() -> bool:

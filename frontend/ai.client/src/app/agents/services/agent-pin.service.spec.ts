@@ -23,11 +23,16 @@ function pin(agentId: string, name = agentId): PinnedAgent {
  */
 describe('AgentPinService', () => {
   let service: AgentPinService;
-  let http: { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; delete: ReturnType<typeof vi.fn> };
+  let http: {
+    get: ReturnType<typeof vi.fn>;
+    post: ReturnType<typeof vi.fn>;
+    put: ReturnType<typeof vi.fn>;
+    delete: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     TestBed.resetTestingModule();
-    http = { get: vi.fn(), post: vi.fn(), delete: vi.fn() };
+    http = { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() };
 
     TestBed.configureTestingModule({
       providers: [
@@ -174,5 +179,29 @@ describe('AgentPinService', () => {
 
     expect(http.delete).toHaveBeenCalledWith('/api/agents/ast-seeded/pin');
     expect(service.isPinned('ast-seeded')).toBe(false);
+  });
+
+  // ── arranging (agent-project-organization D7) ────────────────────────────────────
+  it('moves pins at once, keeps locked ones first, and takes the server order', async () => {
+    const locked = { ...pin('ast-lock'), locked: true, source: 'role' as const };
+    http.get.mockReturnValue(of({ pins: [locked, pin('ast-a'), pin('ast-b')] }));
+    await service.load();
+    http.put.mockReturnValue(of({ pins: [locked, pin('ast-b'), pin('ast-a')] }));
+
+    await service.reorder(['ast-b', 'ast-lock', 'ast-a']);
+
+    expect(http.put).toHaveBeenCalledWith('/api/agents/pins/order', { agentIds: ['ast-b', 'ast-lock', 'ast-a'] });
+    expect(service.pins().map((p) => p.agentId)).toEqual(['ast-lock', 'ast-b', 'ast-a']);
+  });
+
+  it('rolls the order back and says why when the write fails', async () => {
+    http.get.mockReturnValue(of({ pins: [pin('ast-a'), pin('ast-b')] }));
+    await service.load();
+    http.put.mockReturnValue(throwError(() => ({ error: { detail: 'Too many pins.' } })));
+
+    await expect(service.reorder(['ast-b', 'ast-a'])).rejects.toBeTruthy();
+
+    expect(service.pins().map((p) => p.agentId)).toEqual(['ast-a', 'ast-b']);
+    expect(service.error()).toBe('Too many pins.');
   });
 });

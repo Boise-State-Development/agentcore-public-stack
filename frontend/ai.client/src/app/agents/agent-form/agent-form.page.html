@@ -392,7 +392,17 @@
           nounPlural="skills"
           [bulkActions]="false"
           maxHeight="md"
+          (itemAction)="onSkillAction($event)"
         />
+        @if (mode() === 'edit' && !isViewer() && agentId(); as id) {
+          <app-agent-skill-pins
+            [agentId]="id"
+            [agentName]="agentDisplayName()"
+            [readFile]="readSkillFile"
+            [labels]="skillLabels()"
+            (pinned)="onSkillPinMoved($event)"
+          />
+        }
       </app-settings-card>
     }
 

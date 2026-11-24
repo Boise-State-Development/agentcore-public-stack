@@ -21,6 +21,7 @@ import {
 } from '@ng-icons/heroicons/outline';
 import { AdminSkillService } from '../services/admin-skill.service';
 import {
+  AdminSkill,
   SkillResourceRef,
   SkillStatus,
   SKILL_STATUSES,
@@ -46,11 +47,23 @@ import {
   isAllowedResourceFilename,
 } from '../../../shared/skills/skill-resource-types';
 import { skillFilePath } from '../../../shared/utils/skill-resource-path';
+import { SkillBundleImportComponent } from '../../../shared/skills/skill-bundle-import.component';
+import { SkillVersionHistoryComponent } from '../../../shared/skills/skill-version-history.component';
+import { SkillImportSource } from '../../../shared/skills/skill-bundle-import.model';
+import { FEATURES } from '../../../services/features';
 
 @Component({
   selector: 'app-skill-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, ReactiveFormsModule, NgIcon, SpinnerComponent, SkillMdDiagnosticsComponent],
+  imports: [
+    RouterLink,
+    ReactiveFormsModule,
+    NgIcon,
+    SpinnerComponent,
+    SkillMdDiagnosticsComponent,
+    SkillBundleImportComponent,
+    SkillVersionHistoryComponent,
+  ],
   providers: [
     provideIcons({
       heroArrowDownTray,
@@ -142,6 +155,38 @@ import { skillFilePath } from '../../../shared/utils/skill-resource-path';
           @if (error()) {
             <div class="mb-6 rounded-lg border border-state-danger-200 bg-state-danger-50 p-3 text-sm/6 text-state-danger-800 dark:border-state-danger-800 dark:bg-state-danger-900/20 dark:text-state-danger-200">
               {{ error() }}
+            </div>
+          }
+
+          <!-- Whole-bundle import (skill-bundle-import.md), shared with My Skills -->
+          @if (features.skillBundleImport && (!isEditMode() || catalogLoaded())) {
+            <div class="mb-8">
+              <app-skill-bundle-import
+                [api]="adminSkillService"
+                [skillId]="skillId()"
+                [importSource]="importSource()"
+                createNote="The skill is created as a draft with no roles. Review it, set it Active and grant it to roles before anyone can use it."
+                (imported)="onBundleImported($event)"
+              />
+            </div>
+          }
+
+          <!-- Version history (skill-version-history.md), shared with My Skills -->
+          @if (features.skillVersionHistory && isEditMode() && catalogLoaded()) {
+            <div class="mb-8">
+              <app-skill-version-history
+                [api]="adminSkillService"
+                [skillId]="skillId()!"
+                [updatedAt]="liveUpdatedAt()"
+                [currentName]="liveName()"
+                (restored)="onVersionRestored($event)"
+              />
+              <!-- D9: a catalog skill is bound in other people's agents and projects,
+                   which nothing indexes and an admin does not edit, so say it plainly. -->
+              <p class="mt-3 text-sm/6 text-gray-600 dark:text-gray-400">
+                Agents and projects that pinned an earlier version keep it until their editors
+                update it. They see Update available on their skill settings.
+              </p>
             </div>
           }
 
@@ -433,7 +478,8 @@ export class SkillFormPage implements OnInit {
   private fb = inject(FormBuilder);
   private router = inject(Router);
   private route = inject(ActivatedRoute);
-  private adminSkillService = inject(AdminSkillService);
+  protected readonly adminSkillService = inject(AdminSkillService);
+  protected readonly features = inject(FEATURES);
 
   readonly statuses = SKILL_STATUSES;
   readonly categories = SKILL_CATEGORIES;
@@ -452,6 +498,11 @@ export class SkillFormPage implements OnInit {
   readonly importedAllowedTools = signal<string[]>([]);
   readonly importedSkillMetadata = signal<Record<string, unknown>>({});
   skillId = signal<string | null>(null);
+  /** The skill's last bundle import (skill-bundle-import.md), shown on edit. */
+  readonly importSource = signal<SkillImportSource | null>(null);
+  /** The loaded skill's `updatedAt` and name, as written: the History section's inputs. */
+  readonly liveUpdatedAt = signal<string | null>(null);
+  readonly liveName = signal('');
 
   readonly isEditMode = computed(() => !!this.skillId());
   /**
@@ -501,22 +552,64 @@ export class SkillFormPage implements OnInit {
   async loadSkill(skillId: string): Promise<void> {
     this.loading.set(true);
     try {
-      const skill = await this.adminSkillService.fetchSkill(skillId);
-      this.form.patchValue({
-        skillId: skill.skillId,
-        displayName: skill.displayName,
-        description: skill.description,
-        instructions: skill.instructions,
-        status: skill.status,
-        category: skill.category ?? '',
-      });
-      this.resources.set([...skill.resources]);
+      this.applySkill(await this.adminSkillService.fetchSkill(skillId));
       this.catalogLoaded.set(true);
     } catch (err: unknown) {
       this.error.set(err instanceof Error ? err.message : 'Failed to load skill.');
     } finally {
       this.loading.set(false);
     }
+  }
+
+  private applySkill(skill: AdminSkill): void {
+    this.form.patchValue({
+      skillId: skill.skillId,
+      displayName: skill.displayName,
+      description: skill.description,
+      instructions: skill.instructions,
+      status: skill.status,
+      category: skill.category ?? '',
+    });
+    this.resources.set([...skill.resources]);
+    this.importSource.set(skill.importSource ?? null);
+    this.liveUpdatedAt.set(skill.updatedAt);
+    this.liveName.set(skill.displayName);
+  }
+
+  /**
+   * A file write changes the skill's `updatedAt` but returns only the manifest.
+   * Re-read the stamp (not the form: that would drop unsaved edits) so History
+   * reloads and a restore does not 409 on a change made on this same page.
+   */
+  private async refreshLiveStamp(id: string): Promise<void> {
+    if (!this.features.skillVersionHistory) return;
+    try {
+      const skill = await this.adminSkillService.fetchSkill(id);
+      this.liveUpdatedAt.set(skill.updatedAt);
+      this.liveName.set(skill.displayName);
+    } catch {
+      // History reloads on the next change; a restore would say the skill moved.
+    }
+  }
+
+  /** A restore already wrote the skill; show what it wrote, as a re-import does. */
+  protected onVersionRestored(skill: AdminSkill): void {
+    this.applySkill(skill);
+    this.form.markAsPristine();
+  }
+
+  /**
+   * A bundle import already wrote the skill server-side. A new one opens its
+   * edit page (to activate and grant it); a re-import refreshes this form from
+   * what was written, so a later Save cannot put the old instructions back.
+   */
+  protected async onBundleImported(skill: AdminSkill): Promise<void> {
+    if (!this.isEditMode()) {
+      await this.router.navigate(['/admin/skills/edit', skill.skillId]);
+      return;
+    }
+    this.applySkill(skill);
+    this.form.markAsPristine();
   }
 
   /** Download the catalog skill as an agentskills.io bundle (`{slug}.zip`). */
@@ -638,6 +731,7 @@ export class SkillFormPage implements OnInit {
           manifest = await this.adminSkillService.uploadResource(id, file);
         }
         this.resources.set(manifest);
+        await this.refreshLiveStamp(id);
       } catch (err: unknown) {
         this.error.set(err instanceof Error ? err.message : 'Failed to upload reference file.');
       } finally {
@@ -681,6 +775,7 @@ export class SkillFormPage implements OnInit {
     try {
       const manifest = await this.adminSkillService.deleteResource(id, skillFilePath(res));
       this.resources.set(manifest);
+      await this.refreshLiveStamp(id);
       if (this.viewing()?.filename === skillFilePath(res)) {
         this.viewing.set(null);
       }

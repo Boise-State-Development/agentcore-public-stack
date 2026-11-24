@@ -1,4 +1,5 @@
 import { provenanceLine } from '../../shared/skills/skill-provenance';
+import { SkillScriptsSwitchComponent } from '../../shared/skills/components/skill-scripts-switch.component';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -7,6 +8,7 @@ import {
   inject,
   input,
   signal,
+  untracked,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -31,6 +33,12 @@ import {
   skillExportFilename,
 } from '../../shared/skills/skill-export';
 import { MySkillService } from './services/my-skill.service';
+import { MySkill } from './models/my-skill.model';
+import { FEATURES } from '../../services/features';
+import { SkillVersionHistoryComponent } from '../../shared/skills/skill-version-history.component';
+import { SkillUsesComponent } from '../../shared/skills/skill-uses.component';
+import { offerPinUpdates } from '../../shared/skills/skill-uses-dialog.component';
+import { Dialog } from '@angular/cdk/dialog';
 import { skillFilePath } from '../../shared/utils/skill-resource-path';
 
 /** Bundle-directory labels, in the order agentskills.io lists them. */
@@ -74,7 +82,15 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
 @Component({
   selector: 'app-customize-skill-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, SpinnerComponent, MarkdownComponent],
+  imports: [
+    NgIcon,
+    RouterLink,
+    SpinnerComponent,
+    MarkdownComponent,
+    SkillVersionHistoryComponent,
+    SkillUsesComponent,
+    SkillScriptsSwitchComponent,
+  ],
   providers: [
     provideIcons({ heroArrowDownTray, heroArrowLeft, heroDocumentText, heroPencilSquare }),
   ],
@@ -273,6 +289,14 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
             </section>
           }
 
+          <!-- The author's switch (skill-code-sandbox §8.4): own skills with scripts only -->
+          @if (s.isOwned && hasScripts()) {
+            <section class="mt-8 rounded-2xl border border-gray-200 p-4 dark:border-white/10">
+              <h2 class="sr-only">Scripts</h2>
+              <app-skill-scripts-switch [skillId]="s.skillId" />
+            </section>
+          }
+
           <!-- Composed skills -->
           @if (s.compose.length > 0) {
             <section class="mt-8">
@@ -315,6 +339,22 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                 }
               </div>
             </section>
+          }
+
+          <!-- Version history (skill-version-history.md): owned skills only -->
+          @if (features.skillVersionHistory && s.isOwned && liveStamp(); as live) {
+            <div class="mt-8">
+              <app-skill-version-history
+                [api]="mySkillsApi"
+                [skillId]="s.skillId"
+                [updatedAt]="live.updatedAt"
+                [currentName]="live.name"
+                (restored)="onVersionRestored($event)"
+              />
+            </div>
+            <div class="mt-8">
+              <app-skill-uses [api]="mySkillsApi" [skillId]="s.skillId" [refreshKey]="live.updatedAt" />
+            </div>
           }
 
           <!-- About -->
@@ -378,6 +418,17 @@ export class CustomizeSkillDetailPage {
   protected readonly skillService = inject(SkillService);
   protected readonly detailService = inject(SkillDetailService);
   private readonly mySkills = inject(MySkillService);
+  protected readonly mySkillsApi = this.mySkills;
+  protected readonly features = inject(FEATURES);
+  private readonly dialog = inject(Dialog);
+
+  /**
+   * An owned skill's `updatedAt` and name, read fresh from My Skills for the
+   * History section. The detail record is cached across navigation, and an
+   * edit made on the skill form does not refresh it, so its `updatedAt` could
+   * make a restore refuse a change the user made themselves.
+   */
+  protected readonly liveStamp = signal<{ updatedAt: string | null; name: string } | null>(null);
 
   /** Bound from the `:skillId` route param by `withComponentInputBinding()`. */
   readonly skillId = input.required<string>();
@@ -396,6 +447,33 @@ export class CustomizeSkillDetailPage {
     }
 
     effect(() => void this.detailService.ensure(this.skillId()));
+
+    effect(() => {
+      const s = this.skill();
+      if (!this.features.skillVersionHistory || !s?.isOwned) {
+        return;
+      }
+      untracked(() => void this.loadLiveStamp(s.skillId));
+    });
+  }
+
+  private async loadLiveStamp(skillId: string): Promise<void> {
+    try {
+      const live = await this.mySkills.getSkill(skillId);
+      if (live.skillId === this.skillId()) {
+        this.liveStamp.set({ updatedAt: live.updatedAt, name: live.displayName });
+      }
+    } catch {
+      this.liveStamp.set(null);
+    }
+  }
+
+  /** A restore wrote the skill: show it, and re-read the detail it changed. */
+  protected onVersionRestored(skill: MySkill): void {
+    this.liveStamp.set({ updatedAt: skill.updatedAt, name: skill.displayName });
+    this.detailService.invalidate(skill.skillId);
+    void this.detailService.ensure(skill.skillId);
+    void offerPinUpdates(this.dialog, this.mySkills, skill.skillId);
   }
 
   protected readonly skill = computed<SkillDetail | null>(() =>
@@ -437,6 +515,9 @@ export class CustomizeSkillDetailPage {
     if (s.status !== 'active') chips.push(s.status);
     return chips;
   });
+
+  /** The skill has at least one script, so its author has a switch for them. */
+  protected readonly hasScripts = computed(() => (this.skill()?.resources ?? []).some(r => r.kind === 'script'));
 
   /** Reference files first, then scripts, then assets; alphabetical within. */
   protected readonly files = computed<SkillDetailResource[]>(() =>

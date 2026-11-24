@@ -24,6 +24,7 @@ describe('FEATURES', () => {
     expect(environment.features.quotaRequests).toBe(false);
     expect(environment.features.projectFileReadiness).toBe(false);
     expect(environment.features.awsLimits).toBe(false);
+    expect(environment.features.organizeLists).toBe(false);
     expect(environment.features.knowledgeBaseMode).toBe(false);
     expect(environment.features.releaseLedger).toBe(false);
   });

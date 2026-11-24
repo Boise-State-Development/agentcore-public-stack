@@ -9,6 +9,7 @@ rule: **no audit record → no run** (no bearer mint, no HTTP).
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -365,7 +366,7 @@ async def test_stream_without_done_event_is_an_error(monkeypatch, delivery_spy):
 
 
 @pytest.mark.asyncio
-async def test_timeout_surfaces_as_timeout_status(monkeypatch, delivery_spy):
+async def test_read_timeout_surfaces_as_timeout_status(monkeypatch, delivery_spy):
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("too slow")
 
@@ -376,11 +377,45 @@ async def test_timeout_surfaces_as_timeout_status(monkeypatch, delivery_spy):
         prompt="ping",
         auth=StaticBearerAuth("t"),
         invocations_base_url="http://localhost:8001",
-        timeout_seconds=1.0,
+        read_timeout_seconds=660.0,
         governance=GovernanceFloor(audit=RecordingAudit()),
     )
 
     assert result.status == "timeout"
+    # A read timeout is silence, not a total: say so, in the user's units.
+    assert result.error == "The agent sent nothing for 11 minutes, so the run was stopped."
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_keeps_streaming_still_stops_at_the_wall_clock_cap(monkeypatch, delivery_spy):
+    """The read timeout never fires on a stream that keeps sending bytes.
+
+    The cap is what ends such a run, so a scheduled run finishes before the
+    worker Lambda's own timeout (which Lambda would retry, re-running it).
+    """
+
+    async def endless():
+        yield b"event: message_start\ndata: {\"role\": \"assistant\"}\n\n"
+        while True:
+            await asyncio.sleep(0.01)
+            yield b": keepalive\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=endless())
+
+    _mock_http(monkeypatch, handler)
+
+    result = await run_agent_headless(
+        user_id="user-1",
+        prompt="ping",
+        auth=StaticBearerAuth("t"),
+        invocations_base_url="http://localhost:8001",
+        max_duration_seconds=0.2,
+        governance=GovernanceFloor(audit=RecordingAudit()),
+    )
+
+    assert result.status == "timeout"
+    assert result.error.startswith("The run hit its ")
 
 
 @pytest.mark.asyncio

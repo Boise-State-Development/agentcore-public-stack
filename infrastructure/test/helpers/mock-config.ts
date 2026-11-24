@@ -55,6 +55,8 @@ import { AppConfig,
   OBSERVABILITY_DEFAULT_LOG_RETENTION_DAYS,
   OBSERVABILITY_DEFAULT_P99_LATENCY_MS,
   OBSERVABILITY_DEFAULT_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD,
+  OBSERVABILITY_DEFAULT_TURN_PRELUDE_MIN_TURNS,
+  OBSERVABILITY_DEFAULT_TURN_PRELUDE_P50_MS,
   OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
   OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
   OBSERVABILITY_DEFAULT_XRAY_SAMPLING_RATE,
@@ -123,6 +125,8 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
         OBSERVABILITY_DEFAULT_PROMPT_CACHE_WASTED_USD_THRESHOLD,
       promptCacheSessionWastedUsdThreshold:
         OBSERVABILITY_DEFAULT_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD,
+      turnPreludeP50Ms: OBSERVABILITY_DEFAULT_TURN_PRELUDE_P50_MS,
+      turnPreludeMinTurns: OBSERVABILITY_DEFAULT_TURN_PRELUDE_MIN_TURNS,
       bedrockTpmQuotaPercent: OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
       // Deliberately NOT the empty default: two entries with deliberately
       // different orders of magnitude, so the per-model alarms exist in test
@@ -190,6 +194,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       enabled: false,
     },
     awsLimits: {
+      enabled: false,
+    },
+    organizeLists: {
       enabled: false,
     },
     handoffs: {
@@ -307,6 +314,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       enabled: false,
     },
     skillBundleImport: {
+      enabled: false,
+    },
+    skillVersionHistory: {
       enabled: false,
     },
     agents: {

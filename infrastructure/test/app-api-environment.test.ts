@@ -108,10 +108,22 @@ describe('buildAppApiEnvironment — quota requests', () => {
     expect(on.SKILL_BUNDLE_IMPORT_ENABLED).toBe('true');
   });
 
+  it('forwards the skill version history flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).SKILL_VERSION_HISTORY_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ skillVersionHistory: { enabled: true } }), stubParams());
+    expect(on.SKILL_VERSION_HISTORY_ENABLED).toBe('true');
+  });
+
   it('forwards the AWS Limits flag, off by default', () => {
     expect(buildAppApiEnvironment(createMockConfig(), stubParams()).AWS_LIMITS_ENABLED).toBe('false');
     const on = buildAppApiEnvironment(createMockConfig({ awsLimits: { enabled: true } }), stubParams());
     expect(on.AWS_LIMITS_ENABLED).toBe('true');
+  });
+
+  it('forwards the organize-lists flag, off by default', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).ORGANIZE_LISTS_ENABLED).toBe('false');
+    const on = buildAppApiEnvironment(createMockConfig({ organizeLists: { enabled: true } }), stubParams());
+    expect(on.ORGANIZE_LISTS_ENABLED).toBe('true');
   });
 });
 
@@ -430,5 +442,21 @@ describe('buildAppApiEnvironment — MCP elicitation', () => {
       stubParams(),
     );
     expect(on.MCP_ELICITATION_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — structured extraction model id', () => {
+  // The admin Task models tab shows the deployment's extraction default, which only
+  // the Runtime used to receive. Same value, same on-only rule as the Runtime's copy.
+  it('forwards the model id only while extraction is on', () => {
+    const off = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(off.DOCUMENT_EXTRACT_MODEL_ID).toBeUndefined();
+
+    const on = buildAppApiEnvironment(
+      createMockConfig({ documentExtract: { enabled: true, modelId: 'us.anthropic.test-model' } }),
+      stubParams(),
+    );
+    expect(on.DOCUMENT_EXTRACT_ENABLED).toBe('true');
+    expect(on.DOCUMENT_EXTRACT_MODEL_ID).toBe('us.anthropic.test-model');
   });
 });
