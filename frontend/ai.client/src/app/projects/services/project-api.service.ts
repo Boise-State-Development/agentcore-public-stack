@@ -1,4 +1,5 @@
 import { Injectable, computed, inject } from '@angular/core';
+import { ScriptReviewAnswers, SkillScriptsResponse } from '../../shared/skills/script-review.model';
 import { HttpClient, HttpContext, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
@@ -166,17 +167,32 @@ export class ProjectApiService {
     return this.http.get<BindingsResponse>(this.url(projectId, `/${kind}`), this.options());
   }
 
-  saveBindings(projectId: string, kind: 'tools' | 'skills', bindings: BindingRef[]): Observable<BindingsResponse> {
-    return this.http.put<BindingsResponse>(this.url(projectId, `/${kind}`), { bindings }, this.options());
+  /**
+   * Replace the project's tools or skills. A skills save carries the review sheet's
+   * answers (skill-code-sandbox §8.5); without them, a skill whose scripts need a
+   * review answers 409 `skill_scripts_unreviewed`.
+   */
+  saveBindings(
+    projectId: string,
+    kind: 'tools' | 'skills',
+    bindings: BindingRef[],
+    answers: ScriptReviewAnswers = {},
+  ): Observable<BindingsResponse> {
+    return this.http.put<BindingsResponse>(this.url(projectId, `/${kind}`), { bindings, ...answers }, this.options());
   }
 
   /** Pin a bound skill to its current content (a new settings version when it changed). */
-  pinSkill(projectId: string, skillId: string): Observable<BindingsResponse> {
+  pinSkill(projectId: string, skillId: string, answers: ScriptReviewAnswers = {}): Observable<BindingsResponse> {
     return this.http.post<BindingsResponse>(
       this.url(projectId, `/skills/${encodeURIComponent(skillId)}/pin`),
-      {},
+      answers.scriptsReviewed ? { scriptsReviewed: answers.scriptsReviewed } : {},
       this.options(),
     );
+  }
+
+  /** Each bound skill with scripts and whether they run for the project's members (§8.5–§8.6). */
+  skillScripts(projectId: string): Observable<SkillScriptsResponse> {
+    return this.http.get<SkillScriptsResponse>(this.url(projectId, '/skill-scripts'), this.options());
   }
 
   /** A bound skill's content as the project runs it. Any member the skill runs for. */

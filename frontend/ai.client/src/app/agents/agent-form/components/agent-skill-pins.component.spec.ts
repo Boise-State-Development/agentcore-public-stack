@@ -43,7 +43,7 @@ describe('AgentSkillPinsComponent', () => {
 
     r.el.querySelector<HTMLButtonElement>('button[aria-label="Update Contract Redline"]')!.click();
     await r.settle();
-    expect(updateSkillPin).toHaveBeenCalledWith('agt-1', 'redline');
+    expect(updateSkillPin).toHaveBeenCalledWith('agt-1', 'redline', {});
     expect(r.emitted).toEqual([{ skillId: 'redline', version: 8 }]);
     expect(r.el.textContent).toContain('Contract Redline now uses version 8.');
     expect(r.el.querySelector('button[aria-label="Update Contract Redline"]')).toBeNull();

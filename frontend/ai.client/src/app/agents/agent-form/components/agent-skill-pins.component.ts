@@ -9,8 +9,10 @@ import {
   signal,
   untracked,
 } from '@angular/core';
+import { Dialog } from '@angular/cdk/dialog';
 import { AgentSkillPin, AgentSkillPinMoved } from '../../models/agent.model';
 import { AgentService } from '../../services/agent.service';
+import { saveWithScriptReview } from '../../../shared/skills/script-review';
 
 /**
  * The Agent form's Update for pinned skills (docs/specs/skill-version-history.md D9).
@@ -24,6 +26,9 @@ import { AgentService } from '../../services/agent.service';
  * on save, so it must keep this one, or a later save would put the old pin back.
  * The skills picker can't host a button per row, which is why this is a strip of
  * its own under it.
+ *
+ * When the new version's scripts need a review (skill-code-sandbox §8.5), Update
+ * opens the review sheet, and "Keep the reviewed version" leaves the pin where it is.
  */
 @Component({
   selector: 'app-agent-skill-pins',
@@ -76,8 +81,13 @@ import { AgentService } from '../../services/agent.service';
 })
 export class AgentSkillPinsComponent {
   private readonly agents = inject(AgentService);
+  private readonly dialog = inject(Dialog);
 
   readonly agentId = input.required<string>();
+  /** The Agent's name, for the review sheet's "Anyone who uses {name}". */
+  readonly agentName = input<string>('this agent');
+  /** Reads a skill file for the sheet's View. */
+  readonly readFile = input<((skillId: string, path: string) => Promise<string>) | undefined>(undefined);
   /** Skill names by id, from the form's skills picker. */
   readonly labels = input<Record<string, string>>({});
   /** The binding's new pin, for the form to keep. */
@@ -109,7 +119,13 @@ export class AgentSkillPinsComponent {
     this.busy.set(pin.skillId);
     this.error.set(null);
     try {
-      const version = await this.agents.updateSkillPin(this.agentId(), pin.skillId);
+      const version = await saveWithScriptReview(
+        this.dialog,
+        { name: this.agentName(), kind: 'agent', readFile: this.readFile() },
+        (answers) => this.agents.updateSkillPin(this.agentId(), pin.skillId, answers),
+        { isUpdate: true },
+      );
+      if (version === null) return;
       const moved = { skillId: pin.skillId, version };
       this.moved.update((rows) => [...rows, moved]);
       this.pinned.emit(moved);

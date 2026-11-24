@@ -21,6 +21,7 @@ from typing import List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from apis.shared.skills.script_review_check import ScriptsUnreviewedError
 from apis.shared.auth import User, get_current_user_from_session
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.reach import SkillBinding
@@ -159,6 +160,16 @@ async def _update(target: UseTarget, skill_id: str, user: User) -> UpdateResult:
             version = await _pin_agent(target.id, skill_id, user)
     except HTTPException as e:
         return UpdateResult(kind=target.kind, id=target.id, ok=False, error=str(e.detail))
+    except ScriptsUnreviewedError:
+        # The new version's scripts need the review sheet, which a bulk update can't
+        # show (skill-code-sandbox §8.5): the place keeps running what was reviewed.
+        where = "project's skills" if target.kind == "project" else "agent's settings"
+        return UpdateResult(
+            kind=target.kind,
+            id=target.id,
+            ok=False,
+            error=f"Its scripts changed. Update it from the {where} to review them.",
+        )
     except Exception:  # noqa: BLE001 - one target never fails the others
         logger.error("Updating a skill pin failed", exc_info=True)
         return UpdateResult(

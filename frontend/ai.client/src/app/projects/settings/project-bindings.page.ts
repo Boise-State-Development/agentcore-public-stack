@@ -12,6 +12,14 @@ import { ToastService } from '../../services/toast/toast.service';
 import { BindingRef, BindingsResponse, BoundBinding } from '../models/project.model';
 import { SkillProvenance, pinnedLabel, provenanceLine } from '../../shared/skills/skill-provenance';
 import { ProjectApiService } from '../services/project-api.service';
+import { MySkillService } from '../../customize/skills/services/my-skill.service';
+import { SkillScriptStatus, bindingScriptsNote, reviewFromStatus } from '../../shared/skills/script-review.model';
+import {
+  ScriptReviewScope,
+  openScriptReviewSheet,
+  resourcePathBelowKind,
+  saveWithScriptReview,
+} from '../../shared/skills/script-review';
 import { projectErrorMessage } from '../services/projects.service';
 import { injectProjectPage } from './project-page-state';
 import { ProjectSettingsShellComponent } from './project-settings-shell.component';
@@ -165,6 +173,7 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
   private agents = inject(AgentService);
   private toast = inject(ToastService);
   private dialog = inject(Dialog);
+  private mySkills = inject(MySkillService);
 
   protected readonly summaryId = `project-bindings-summary-${nextInstance++}`;
 
@@ -184,6 +193,8 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
   private readonly provenance = signal<Record<string, string>>({});
   /** The skill whose pin is being updated. */
   private readonly pinning = signal<string | null>(null);
+  /** Each bound skill with scripts and whether they run for members (skill-code-sandbox §8.5). */
+  private readonly skillScripts = signal<Record<string, SkillScriptStatus>>({});
   protected readonly loaded = signal(false);
   protected readonly loadError = signal<string | null>(null);
   protected readonly saving = signal(false);
@@ -198,29 +209,50 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
     const busy = pinning !== null || this.saving();
     const canEdit = this.state.canEdit();
     const provenance = this.provenance();
+    const scripts = this.skillScripts();
+    const scope = `everyone in ${this.scopeName()}`;
     return choices.map(item => {
       const pin = saved.includes(item.id) ? pins[item.id] : undefined;
       const source = provenance[item.id];
       if (!pin) return source ? { ...item, note: source, noteTone: 'muted' as const } : item;
-      const line = source ? `${pinLine(pin)} ${source}.` : pinLine(pin);
+      const status = scripts[item.id];
+      const scriptsNote = status ? bindingScriptsNote(status, scope) : null;
+      const base = source ? `${pinLine(pin)} ${source}.` : pinLine(pin);
+      const line = scriptsNote ? `${base} ${scriptsNote.text}.` : base;
       const offer = canEdit && !item.locked && (pin.updateAvailable || !pin.version);
+      const review = canEdit && !item.locked && !offer && !!scriptsNote?.review;
       const foreign = pin.available ? FOREIGN_AVAILABLE_NOTE : FOREIGN_NOTE;
       return {
         ...item,
         note: item.locked ? `${line} ${foreign}` : line,
         // Readable once saved: the project route serves what the project binds.
         detail: pin.available ? { label: 'View', ariaLabel: `View ${item.name}` } : undefined,
-        noteTone: pin.updateAvailable ? ('warning' as const) : ('muted' as const),
+        noteTone:
+          pin.updateAvailable || scriptsNote?.tone === 'warning' ? ('warning' as const) : ('muted' as const),
         action: offer
           ? {
               label: pinning === item.id ? 'Updating…' : pin.version ? 'Update' : 'Pin this version',
               ariaLabel: (pin.version ? 'Update ' : 'Pin the current version of ') + item.name,
               disabled: busy,
             }
-          : undefined,
+          : review
+            ? { label: 'Review', ariaLabel: `Review the scripts in ${item.name}`, disabled: busy }
+            : undefined,
       };
     });
   });
+
+  /** "everyone in {project}": the review sheet's and the row notes' scope. */
+  private readonly scopeName = computed(() => this.state.project()?.name || 'this project');
+
+  /** Where the review sheet's scripts would run, and how it reads a file for View. */
+  private scope(): ScriptReviewScope {
+    return {
+      name: this.scopeName(),
+      kind: 'project',
+      readFile: (skillId, path) => this.mySkills.readResource(skillId, resourcePathBelowKind(path)),
+    };
+  }
 
   protected readonly dirty = computed(() => this.loaded() && !sameRefs(this.selected(), this.saved()));
 
@@ -269,6 +301,7 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
       this.pins.set(pinsOf(bound));
       this.provenance.set(provenanceOf(bound.bindings, palette));
       this.loaded.set(true);
+      if (kind === 'skills') void this.loadSkillScripts(projectId);
     } catch (err) {
       if (projectId === this.id()) this.loadError.set(projectErrorMessage(err, `The ${KIND_COPY[kind].nounPlural} could not be loaded.`));
     }
@@ -295,7 +328,12 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
       const selected = this.selected();
       // Keep the palette's order so an unchanged selection is an unchanged list.
       const bindings: BindingRef[] = this.choices().filter(c => selected.has(c.id)).map(c => ({ ref: c.id }));
-      const written = await firstValueFrom(this.api.saveBindings(this.id(), this.kind(), bindings));
+      // A skill whose scripts nobody reviewed for this project opens the review
+      // sheet, and the save is sent again with the answer (skill-code-sandbox §8.5).
+      const written = await saveWithScriptReview(this.dialog, this.scope(), answers =>
+        firstValueFrom(this.api.saveBindings(this.id(), this.kind(), bindings, answers)),
+      );
+      if (written === null) return;
       this.adopt(written);
       this.toast.success(this.copy().saved);
     } catch (err) {
@@ -311,16 +349,66 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
    */
   protected async updatePin(item: ToolSelectorItem): Promise<void> {
     if (this.kind() !== 'skills' || this.pinning() !== null) return;
+    if (item.action?.label === 'Review') {
+      await this.reviewScripts(item);
+      return;
+    }
     this.pinning.set(item.id);
     this.error.set(null);
     try {
-      const written = await firstValueFrom(this.api.pinSkill(this.id(), item.id));
+      // New scripts open the review sheet; "Keep the reviewed version" leaves the pin.
+      const written = await saveWithScriptReview(
+        this.dialog,
+        this.scope(),
+        answers => firstValueFrom(this.api.pinSkill(this.id(), item.id, answers)),
+        { isUpdate: true },
+      );
+      if (written === null) return;
       this.pins.set(pinsOf(written));
+      void this.loadSkillScripts(this.id());
       this.toast.success(`${item.name} updated`);
     } catch (err) {
       this.error.set(projectErrorMessage(err, 'That skill could not be updated.'));
     } finally {
       this.pinning.set(null);
+    }
+  }
+
+  /**
+   * A row's Review: the sheet for a bound skill whose scripts aren't allowed here yet.
+   * Allowing re-pins the unchanged binding with the review, which records it (§8.5).
+   */
+  private async reviewScripts(item: ToolSelectorItem): Promise<void> {
+    const status = this.skillScripts()[item.id];
+    const skill = status ? reviewFromStatus(status) : null;
+    if (!skill) return;
+    const choice = await openScriptReviewSheet(this.dialog, skill, this.scope());
+    if (choice !== 'allow') return;
+    this.pinning.set(item.id);
+    this.error.set(null);
+    try {
+      const written = await firstValueFrom(
+        this.api.pinSkill(this.id(), item.id, { scriptsReviewed: { [skill.skillId]: skill.scriptsHash } }),
+      );
+      this.pins.set(pinsOf(written));
+      await this.loadSkillScripts(this.id());
+      this.toast.success(`Scripts allowed for ${item.name}`);
+    } catch (err) {
+      this.error.set(projectErrorMessage(err, "That skill's scripts could not be allowed."));
+    } finally {
+      this.pinning.set(null);
+    }
+  }
+
+  private async loadSkillScripts(projectId: string): Promise<void> {
+    try {
+      const response = await firstValueFrom(this.api.skillScripts(projectId));
+      if (projectId === this.id()) {
+        this.skillScripts.set(Object.fromEntries(response.skills.map(st => [st.skillId, st])));
+      }
+    } catch {
+      // The notes are a hint; a save still asks for anything that needs a review.
+      this.skillScripts.set({});
     }
   }
 
@@ -338,6 +426,7 @@ export class ProjectBindingsPage implements HasUnsavedChanges {
     this.saved.set(refs);
     this.selected.set(new Set(refs));
     this.pins.set(pinsOf(written));
+    if (this.kind() === 'skills') void this.loadSkillScripts(this.id());
   }
 }
 

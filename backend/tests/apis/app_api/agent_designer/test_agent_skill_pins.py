@@ -55,6 +55,18 @@ def stubs(monkeypatch):
     monkeypatch.setattr(skill_pins, "pin_current", pin)
     monkeypatch.setattr(skill_pins, "update_assistant", update)
     monkeypatch.setattr(skill_pins, "is_project_harness", lambda a: calls.harness)
+    calls.checked, calls.recorded, calls.unreviewed = [], [], None
+
+    async def check(assistant_id, before, after, binder_id, *, scripts_reviewed=None):
+        calls.checked.append(scripts_reviewed)
+        if calls.unreviewed is not None:
+            raise calls.unreviewed
+
+    async def record(assistant_id, before, after, actor, *, scripts_reviewed=None, **kw):
+        calls.recorded.append(scripts_reviewed)
+
+    monkeypatch.setattr(skill_pins, "require_script_reviews", check)
+    monkeypatch.setattr(skill_pins, "record_binding_reviews", record)
     return calls
 
 
@@ -78,6 +90,20 @@ class TestPinAgentSkill:
         moved, kept = stubs.updated
         assert moved.config == {"version": 7, "addedBy": "x"}
         assert kept is other
+        assert stubs.checked == [None] and stubs.recorded == [None]
+
+    def test_scripts_that_need_a_review_stop_the_update_before_it_is_stored(self, stubs):
+        from apis.shared.skills.script_review_check import ScriptsUnreviewedError
+
+        stubs.agent = _agent([AgentBinding(kind="skill", ref="grant_review", config={"version": 3})])
+        stubs.unreviewed = ScriptsUnreviewedError([{"skillId": "grant_review", "displayName": "Grant review"}])
+        with pytest.raises(ScriptsUnreviewedError):
+            _pin()
+        assert stubs.updated is None and stubs.recorded == []
+
+        stubs.unreviewed = None
+        asyncio.run(skill_pins.pin_agent_skill("a1", USER, "grant_review", scripts_reviewed={"grant_review": "h"}))
+        assert stubs.checked[-1] == stubs.recorded[-1] == {"grant_review": "h"}
 
     def test_refuses_what_it_should(self, stubs):
         stubs.agent = None
@@ -150,7 +176,7 @@ class TestRoutes:
             yield c
 
     def test_pin_route_returns_the_new_version(self, client, monkeypatch):
-        async def pin(agent_id, user, skill_id):
+        async def pin(agent_id, user, skill_id, **kw):
             return SimpleNamespace(), 7
 
         monkeypatch.setattr(agent_routes, "pin_agent_skill", pin)
@@ -159,7 +185,7 @@ class TestRoutes:
         assert resp.json() == {"skillId": "grant_review", "version": 7}
 
     def test_pin_route_maps_the_service_status(self, client, monkeypatch):
-        async def refused(agent_id, user, skill_id):
+        async def refused(agent_id, user, skill_id, **kw):
             raise skill_pins.AgentSkillPinError("not yours", 403)
 
         monkeypatch.setattr(agent_routes, "pin_agent_skill", refused)
@@ -172,7 +198,31 @@ class TestRoutes:
         monkeypatch.setattr(agent_routes, "resolve_assistant_permission", permission)
         assert client.get("/agents/a1/skills/pins").status_code == 403
 
-    def test_flag_off_is_404(self, client, monkeypatch):
+    def test_not_behind_version_history(self, client, monkeypatch):
+        """Every Agent binding of a skill with scripts is pinned, so Update is there
+        wherever scripts run (skill-code-sandbox §8.3)."""
         monkeypatch.setenv("SKILL_VERSION_HISTORY_ENABLED", "")
-        assert client.post("/agents/a1/skills/grant_review/pin").status_code == 404
-        assert client.get("/agents/a1/skills/pins").status_code == 404
+
+        async def pin(agent_id, user, skill_id, **kw):
+            return SimpleNamespace(), 7
+
+        monkeypatch.setattr(agent_routes, "pin_agent_skill", pin)
+        assert client.post("/agents/a1/skills/grant_review/pin").status_code == 200
+
+    def test_pin_route_forwards_the_review_and_answers_the_sheet_409(self, client, monkeypatch):
+        from apis.shared.skills.script_review_check import ScriptsUnreviewedError
+
+        seen = {}
+
+        async def pin(agent_id, user, skill_id, *, scripts_reviewed=None):
+            seen["reviewed"] = scripts_reviewed
+            if not scripts_reviewed:
+                raise ScriptsUnreviewedError([{"skillId": skill_id, "displayName": "Grant review"}])
+            return SimpleNamespace(), 8
+
+        monkeypatch.setattr(agent_routes, "pin_agent_skill", pin)
+        resp = client.post("/agents/a1/skills/grant_review/pin")
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "skill_scripts_unreviewed"
+        resp = client.post("/agents/a1/skills/grant_review/pin", json={"scriptsReviewed": {"grant_review": "h"}})
+        assert resp.status_code == 200 and seen["reviewed"] == {"grant_review": "h"}

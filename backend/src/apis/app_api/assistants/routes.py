@@ -17,6 +17,7 @@ from apis.app_api.agent_designer.services.agent_deletion import delete_owned_age
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
 from apis.shared.skills.script_reviews import record_binding_reviews
+from apis.shared.skills.script_review_check import ScriptsUnreviewedError, require_script_reviews
 from apis.shared.assistants.models import (
     AssistantResponse,
     AssistantSharesResponse,
@@ -127,8 +128,14 @@ async def create_assistant_endpoint(request: CreateAssistantRequest, current_use
             current_user, bindings=request.bindings, model_settings=request.model_settings
         )
         bindings = await pin_imported_skills(current_user, request.bindings)
+        await require_script_reviews(
+            None, None, bindings, current_user.user_id,
+            scripts_reviewed=request.scripts_reviewed, scripts_declined=request.scripts_declined,
+        )
     except BindingValidationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ScriptsUnreviewedError as e:
+        raise HTTPException(status_code=409, detail=e.detail())
 
     try:
         # Create complete assistant
@@ -382,8 +389,14 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
             bindings = await pin_imported_skills(
                 current_user, request.bindings, assistant.bindings
             )
+            await require_script_reviews(
+                assistant_id, assistant.bindings, bindings, current_user.user_id,
+                scripts_reviewed=request.scripts_reviewed, scripts_declined=request.scripts_declined,
+            )
         except BindingValidationError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        except ScriptsUnreviewedError as e:
+            raise HTTPException(status_code=409, detail=e.detail())
 
         # Mutation functions are keyed on the assistant's real owner_id, not the requester
         updated_assistant = await update_assistant(

@@ -532,9 +532,14 @@ class CreateAssistantRequest(BaseModel):
     # skill-code-sandbox §8.5: the script sets the saver was shown and allowed,
     # ``{skillId: scriptsHash}``. Records a review for an imported skill bound
     # here (``script_reviews.record_binding_reviews``); a hand-written skill of
-    # the saver's own needs none. Optional until the review sheet (PR-2e).
+    # the saver's own needs none. A newly bound or moved imported skill with
+    # scripts and neither field answers 409 ``skill_scripts_unreviewed``.
     scripts_reviewed: Optional[Dict[str, str]] = Field(
         None, alias="scriptsReviewed", description="Script sets the saver allowed, by skill id"
+    )
+    # The review sheet's "Add without scripts": skills bound with no review.
+    scripts_declined: Optional[List[str]] = Field(
+        None, alias="scriptsDeclined", max_length=100, description="Skills bound without allowing their scripts"
     )
 
 
@@ -575,9 +580,14 @@ class UpdateAssistantRequest(BaseModel):
     # skill-code-sandbox §8.5: the script sets the saver was shown and allowed,
     # ``{skillId: scriptsHash}``. Records a review for an imported skill bound
     # here (``script_reviews.record_binding_reviews``); a hand-written skill of
-    # the saver's own needs none. Optional until the review sheet (PR-2e).
+    # the saver's own needs none. A newly bound or moved imported skill with
+    # scripts and neither field answers 409 ``skill_scripts_unreviewed``.
     scripts_reviewed: Optional[Dict[str, str]] = Field(
         None, alias="scriptsReviewed", description="Script sets the saver allowed, by skill id"
+    )
+    # The review sheet's "Add without scripts": skills bound with no review.
+    scripts_declined: Optional[List[str]] = Field(
+        None, alias="scriptsDeclined", max_length=100, description="Skills bound without allowing their scripts"
     )
 
 

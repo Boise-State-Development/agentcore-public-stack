@@ -17,7 +17,7 @@ Phase-4 concern when the Designer consumes it.
 """
 
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -56,6 +56,12 @@ from apis.app_api.agent_designer.services.binding_validation import (
 )
 from apis.shared.assistants.compat import to_agent_view
 from apis.shared.skills.script_reviews import record_binding_reviews
+from apis.shared.skills.script_review_check import (
+    ScriptsUnreviewedError,
+    binding_script_status,
+    require_script_reviews,
+    script_status_view,
+)
 from apis.shared.assistants.models import (
     AgentResponse,
     AgentRunnabilityResponse,
@@ -144,7 +150,6 @@ from apis.shared.auth.models import User
 from apis.shared.feature_flags import (
     agent_marketplace_enabled,
     agents_enabled,
-    skill_version_history_enabled,
 )
 from apis.shared.security.log_sanitize import scrub_log
 
@@ -247,8 +252,14 @@ async def create_agent_endpoint(
             current_user, bindings=request.bindings, model_settings=request.model_settings
         )
         bindings = await pin_imported_skills(current_user, request.bindings)
+        await require_script_reviews(
+            None, None, bindings, current_user.user_id,
+            scripts_reviewed=request.scripts_reviewed, scripts_declined=request.scripts_declined,
+        )
     except BindingValidationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ScriptsUnreviewedError as e:
+        raise HTTPException(status_code=409, detail=e.detail())
 
     try:
         assistant = await create_assistant(
@@ -575,6 +586,14 @@ class AgentSkillPinMoved(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class PinAgentSkillRequest(BaseModel):
+    """Optional body for an Agent skill's Update: the script set the saver allowed (§8.5)."""
+
+    scripts_reviewed: Optional[Dict[str, str]] = Field(None, alias="scriptsReviewed")
+
+    model_config = {"populate_by_name": True}
+
+
 @router.get(
     "/{agent_id}/skills/pins", response_model=AgentSkillPinsResponse, response_model_by_alias=True
 )
@@ -582,10 +601,11 @@ async def get_agent_skill_pins_endpoint(
     agent_id: str, current_user: User = Depends(require_agents_enabled)
 ):
     """Each pinned skill binding's version and whether the skill has moved on
-    (skill-version-history.md D9), for the Agent form's Update. Owner or editor;
-    404 while SKILL_VERSION_HISTORY_ENABLED is off."""
-    if not skill_version_history_enabled():
-        raise HTTPException(status_code=404, detail="Not found")
+    (skill-version-history.md D9), for the Agent form's Update. Owner or editor.
+
+    Not behind SKILL_VERSION_HISTORY_ENABLED: an Agent pins every skill with
+    scripts, so its owner needs Update wherever scripts run (skill-code-sandbox §8.3).
+    """
     assistant, permission = await resolve_assistant_permission(
         assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
     )
@@ -602,23 +622,75 @@ async def get_agent_skill_pins_endpoint(
     )
 
 
+class AgentSkillScriptsResponse(BaseModel):
+    """Per bound skill with scripts, whether they run for the Agent's users (§8.5–§8.6)."""
+
+    skills: List[Dict[str, Any]]
+
+
+async def _published_bindings(assistant: Any) -> Optional[List[Any]]:
+    """A store Agent's published snapshot bindings (what its users run), else None."""
+    from apis.shared.assistants.version_repository import get_version
+
+    number = getattr(assistant, "published_version", None)
+    if not number:
+        return None
+    snapshot = await get_version(assistant.assistant_id, int(number))
+    return list(snapshot.bindings or []) if snapshot is not None else None
+
+
+@router.get("/{agent_id}/skill-scripts", response_model=AgentSkillScriptsResponse)
+async def get_agent_skill_scripts_endpoint(
+    agent_id: str, current_user: User = Depends(require_agents_enabled)
+):
+    """The Agent form's row notes for an owner or editor, and the badge for anyone
+    who can use the Agent (skill-code-sandbox §8.5–§8.6).
+
+    Editors see every bound skill with scripts and its script list; anyone else
+    sees only the skills whose scripts run for them. Read from the bindings users
+    run: a store Agent's published snapshot when it has one, for a non-editor.
+    """
+    assistant, permission = await resolve_assistant_permission(
+        assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
+    )
+    if not assistant or permission is None:
+        raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+    editor = permission in ("owner", "editor")
+    bindings = assistant.bindings
+    if not editor:
+        published = await _published_bindings(assistant)
+        if published is not None:
+            bindings = published
+    entries = await binding_script_status(agent_id, bindings)
+    return AgentSkillScriptsResponse(skills=await script_status_view(entries, full=editor))
+
+
 @router.post(
     "/{agent_id}/skills/{skill_id}/pin",
     response_model=AgentSkillPinMoved,
     response_model_by_alias=True,
 )
 async def pin_agent_skill_endpoint(
-    agent_id: str, skill_id: str, current_user: User = Depends(require_agents_enabled)
+    agent_id: str,
+    skill_id: str,
+    body: Optional[PinAgentSkillRequest] = None,
+    current_user: User = Depends(require_agents_enabled),
 ):
     """Move this Agent's pin on a skill to the skill's current content: the Agent twin
     of a project's Update (skill-version-history.md D9). Owner or editor; a store
-    Agent's update lands on its draft. 404 while SKILL_VERSION_HISTORY_ENABLED is off."""
-    if not skill_version_history_enabled():
-        raise HTTPException(status_code=404, detail="Not found")
+    Agent's update lands on its draft.
+
+    The optional body's ``scriptsReviewed`` allows the new version's scripts; without
+    it, scripts that need a review answer 409 ``skill_scripts_unreviewed``
+    (skill-code-sandbox §8.5). Not behind SKILL_VERSION_HISTORY_ENABLED (§8.3)."""
     try:
-        _, version = await pin_agent_skill(agent_id, current_user, skill_id)
+        _, version = await pin_agent_skill(
+            agent_id, current_user, skill_id, scripts_reviewed=body.scripts_reviewed if body else None
+        )
     except AgentSkillPinError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
+    except ScriptsUnreviewedError as e:
+        raise HTTPException(status_code=409, detail=e.detail())
     return AgentSkillPinMoved(skill_id=skill_id, version=version)
 
 
@@ -652,8 +724,14 @@ async def update_agent_endpoint(
             bindings = await pin_imported_skills(
                 current_user, request.bindings, assistant.bindings
             )
+            await require_script_reviews(
+                agent_id, assistant.bindings, bindings, current_user.user_id,
+                scripts_reviewed=request.scripts_reviewed, scripts_declined=request.scripts_declined,
+            )
         except BindingValidationError as e:
             raise HTTPException(status_code=e.status_code, detail=e.message)
+        except ScriptsUnreviewedError as e:
+            raise HTTPException(status_code=409, detail=e.detail())
 
         updated = await update_assistant(
             assistant_id=agent_id,

@@ -244,7 +244,13 @@ The rows live in the AppRoles table beside the skill's own rows. There's no new 
 
 *The gate is the provenance of the scripts, not the skill.* A hand-written skill that has had a script imported into it, through a refresh or a bundle merge, carries `import_source`, so it shows the sheet. Writing a script by hand into an imported skill doesn't clear `import_source`, so that skill keeps showing the sheet too.
 
-*How it works:* app-api answers `409` with `code: skill_scripts_unreviewed` and a body. The SPA shows the sheet, then resends the save with `scriptsReviewed: {skillId: scriptsHash}`. This is the reach-confirmation pattern (`confirmReach`, `skill_reach_unconfirmed`). If a hash no longer matches because an edit raced the save, app-api answers `409` again with the new diff.
+*How it works:* app-api answers `409` with `code: skill_scripts_unreviewed` and a body. The SPA shows the sheet, then resends the save with `scriptsReviewed: {skillId: scriptsHash}`, or with `scriptsDeclined: [skillId]` for **Add without scripts**. This is the reach-confirmation pattern (`confirmReach`, `skill_reach_unconfirmed`). If a hash no longer matches because an edit raced the save, app-api answers `409` again with the new diff.
+
+- **Only a binding the save adds or moves is checked** (`apis/shared/skills/script_review_check.py`). A binding left as it was never asks again. That is what makes "Add without scripts" stick, and it keeps an unrelated edit, such as a description, from reopening the sheet. The row note says "Scripts not allowed · Review" instead.
+- **The check runs after the pins are cut and before anything is stored**, on Agent create and update, the Agent and project Update, and the project skills save. A pin cut for a save that then 409s is harmless, because `pin_current` reuses the latest version.
+- **The body names people, never ids.** `author` is a display name, and `fromVersion` / `reviewedAt` are set only when the version the binding moves from was reviewed here. Against anything else, every script reads `new`.
+- **The rows read `GET /agents/{id}/skill-scripts` and `GET /projects/{id}/skill-scripts`.** An editor gets every bound skill with scripts, with its state (`allowed`, `authored`, `admin`, `not_allowed`, `off_by_author`, `off_by_admin`, `unreviewable`) and its script list. Anyone else who can use the Agent or project gets only the runnable ones, which is what the badge needs (§8.6). For a store Agent, they get the published snapshot's bindings.
+- **Agent Designer's Update** (`GET /agents/{id}/skills/pins`, `POST …/skills/{skillId}/pin`) is no longer behind `SKILL_VERSION_HISTORY_ENABLED`. Every Agent binding of a skill with scripts is pinned, so an owner needs Update wherever scripts run. The pin route takes `scriptsReviewed`, and records the review it carries.
 
 The body:
 
@@ -590,14 +596,18 @@ Throwaway resources on dev (their own role, security groups and interpreters; th
        2. Dev, apply: the same command with `--apply`, then the dry run again, which must show only `skip`.
        3. Check one Agent and one project from the table: a member's Word script call writes `verdict: reviewed` and no `wouldRefuse` on `skill.script_run`.
        4. Prod: the same three steps with the production profile and prefix, once that release is deployed. Keep the dry run's output with the release notes (§12 step 5).
-   - **PR-2e, the SPA, and the 409 that needs it.**
-     - The review sheet, its Update form and the binding-row notes (§8.5).
-     - Agent Designer's Update control.
-     - The badges on Agent details, project details and the marketplace listing.
-     - The import step's scripts block.
-     - The author switch.
-     - The rail entry, with the fixture for the version line.
-     - App-api starts answering `skill_scripts_unreviewed` in the same PR.
+   - **PR-2e, the SPA, and the 409 that needs it.** Issue #2383. It lands in two PRs. The 409 ships in the same PR as the sheet that answers it.
+     - **PR-2e.1, the save flow:**
+       - the 409 on every save that binds scripts, and `scriptsDeclined`
+       - the review sheet and its Update form
+       - the binding-row notes with **Review**
+       - the `skill-scripts` reads
+       - Agent Designer's Update control, out from behind version history's flag
+     - **PR-2e.2, what members and authors see:**
+       - the badges on Agent details, project details and the marketplace listing
+       - the import step's scripts block
+       - the author switch
+       - the rail entry, with the fixture for the version line
    - **PR-2f, admin and reports.**
      - The `admin.skill_scripts` scope and page (§8.10), with the switch.
      - `ReportReason.script` with `skillId` and `scriptsHash`, the rail's **Report this skill**, and the report route accepting a project harness.
