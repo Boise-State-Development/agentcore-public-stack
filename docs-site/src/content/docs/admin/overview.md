@@ -54,6 +54,7 @@ wildcard: full admin is spelled `system_admin`.
 | `admin.models` | AI Configuration | Models, including the Bedrock, Gemini and OpenAI model listings |
 | `admin.tools` | AI Configuration | Tools |
 | `admin.skills` | AI Configuration | Skills |
+| `admin.skill_scripts` | AI Configuration | Skill Scripts |
 | `admin.agent_templates` | AI Configuration | Agent Templates |
 | `admin.connectors` | AI Configuration | Connectors (OAuth providers for external MCP tools) |
 | `admin.file_sources` | AI Configuration | No console page; `GET /admin/file-source-adapters` |
@@ -110,6 +111,7 @@ a system admin that is Cost Analytics.
 | AI Configuration | Models | `/admin/manage-models` | The managed-model catalog and provider model listings | [Models](/agentcore-public-stack/admin/models/) |
 | AI Configuration | Tools | `/admin/tools` | The tool catalog and which roles may use each tool | [Tools](/agentcore-public-stack/admin/tools/) |
 | AI Configuration | Skills | `/admin/skills` | Skill bundles, their reference files and role grants | |
+| AI Configuration | Skill Scripts | `/admin/skills/scripts` | One skill's scripts (anyone's), where each version is reviewed, and the switch that turns them off everywhere | |
 | AI Configuration | Agent Templates | `/admin/agent-templates` | The templates users start new agents from | |
 | AI Configuration | Connectors | `/admin/connectors` | OAuth providers used by external MCP tools | [Connectors](/agentcore-public-stack/admin/connectors/) |
 | Agent Marketplace | Review Queue | `/admin/marketplace/review` | Agent submissions waiting for review. Badged with the pending count | |

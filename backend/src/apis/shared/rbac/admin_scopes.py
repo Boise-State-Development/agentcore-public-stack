@@ -110,6 +110,15 @@ ADMIN_SCOPES: tuple[AdminScope, ...] = (
         description="Manage skill bundles, their reference files, and skill role grants.",
     ),
     AdminScope(
+        id="admin.skill_scripts",
+        label="Skill Scripts",
+        group=GROUP_AI_CONFIG,
+        description=(
+            "Read any skill's scripts, including user-authored ones, see where "
+            "they are reviewed, and turn them off or back on everywhere."
+        ),
+    ),
+    AdminScope(
         id="admin.agent_templates",
         label="Agent Templates",
         group=GROUP_AI_CONFIG,
