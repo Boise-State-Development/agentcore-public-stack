@@ -35,7 +35,7 @@ export const SIDEBAR_ITEMS: readonly SidebarItemDef[] = [
   { id: 'projects', label: 'Projects', route: '/projects', icon: 'heroFolderOpen', defaultVisible: true, feature: 'projects' },
   // Saved workflows (workflow-designer §8.1), only in a build that turns them on.
   { id: 'workflows', label: 'Workflows', route: '/workflows', icon: 'heroRectangleGroup', defaultVisible: true, feature: 'workflows' },
-  { id: 'artifacts', label: 'Artifacts', route: '/artifacts', icon: 'heroDocumentText', defaultVisible: true },
+  { id: 'artifacts', label: 'Artifacts', route: '/artifacts', icon: 'heroDocumentDuplicate', defaultVisible: true },
   // The capabilities hub; see `docs/specs/customize-surface.md`.
   { id: 'customize', label: 'Customize', route: '/customize', icon: 'heroAdjustmentsHorizontal', defaultVisible: true },
   // Open to every signed-in user. The only control is the environment's

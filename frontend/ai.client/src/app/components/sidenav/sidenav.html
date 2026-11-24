@@ -75,13 +75,13 @@
                 (click)="newSession()"
                 type="button"
                 [attr.aria-keyshortcuts]="newSessionShortcutAria"
-                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
-                <div class="flex size-7 shrink-0 items-center justify-center text-secondary-500 dark:text-secondary-400">
-                    <svg class="size-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                <div class="nav-icon nav-icon-new flex size-8 shrink-0 items-center justify-center text-secondary-500 dark:text-secondary-400">
+                    <svg class="size-6" fill="none" viewBox="0 0 24 24" stroke-width="1.75" stroke="currentColor" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
                     </svg>
                 </div>
-                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">New Session</span>
+                <span class="text-sm font-medium text-gray-700 transition-colors group-hover:text-gray-950 dark:text-gray-300 dark:group-hover:text-white">New Session</span>
             </button>
         </div>
 
@@ -114,13 +114,13 @@
                     @for (entry of sidebarLayout.visibleEntries(); track entry.id) {
                         <a
                             [routerLink]="entry.route"
-                            routerLinkActive="bg-gray-200/80 dark:bg-white/10"
+                            routerLinkActive="nav-active bg-gray-200/80 dark:bg-white/10"
                             (click)="sidenavService.close()"
-                            class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
-                            <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
-                                <ng-icon [name]="entry.icon" class="size-5" aria-hidden="true" />
+                            class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:hover:bg-white/5">
+                            <div class="nav-icon flex size-8 shrink-0 items-center justify-center text-gray-500 transition-colors group-hover:text-gray-800 dark:text-gray-400 dark:group-hover:text-white">
+                                <ng-icon [name]="entry.icon" size="1.5rem" strokeWidth="1.75" aria-hidden="true" />
                             </div>
-                            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ entry.label }}</span>
+                            <span class="text-sm font-medium text-gray-700 transition-colors group-hover:text-gray-950 dark:text-gray-300 dark:group-hover:text-white">{{ entry.label }}</span>
                         </a>
                     }
 
@@ -135,11 +135,11 @@
                         [cdkMenuTriggerFor]="moreMenu"
                         [cdkMenuPosition]="moreMenuPositions"
                         [attr.data-active]="moreActive() ? '' : null"
-                        class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 aria-expanded:bg-gray-200/60 data-active:bg-gray-200/80 dark:hover:bg-white/5 dark:aria-expanded:bg-white/5 dark:data-active:bg-white/10">
-                        <div class="flex size-7 shrink-0 items-center justify-center text-gray-500 dark:text-gray-400">
-                            <ng-icon name="heroChevronRight" class="size-5" aria-hidden="true" />
+                        class="group flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1 text-left transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 aria-expanded:bg-gray-200/60 data-active:bg-gray-200/80 dark:hover:bg-white/5 dark:aria-expanded:bg-white/5 dark:data-active:bg-white/10">
+                        <div class="nav-icon flex size-8 shrink-0 items-center justify-center text-gray-500 transition-colors group-hover:text-gray-800 dark:text-gray-400 dark:group-hover:text-white">
+                            <ng-icon name="heroChevronRight" size="1.5rem" strokeWidth="1.75" aria-hidden="true" />
                         </div>
-                        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">More</span>
+                        <span class="text-sm font-medium text-gray-700 transition-colors group-hover:text-gray-950 dark:text-gray-300 dark:group-hover:text-white">More</span>
                     </button>
 
                     <ng-template #moreMenu>
