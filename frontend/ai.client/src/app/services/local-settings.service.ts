@@ -15,6 +15,7 @@ export class LocalSettingsService {
   private readonly AGENTS_VIEW_MODE_KEY = 'agents-view-mode';
   private readonly ARTIFACTS_VIEW_MODE_KEY = 'artifacts-view-mode';
   private readonly CONFIRM_CACHE_RESET_KEY = 'confirm-cache-reset';
+  private readonly COLLAPSED_SIDEBAR_GROUPS_KEY = 'sidebar-collapsed-groups';
 
   readonly showTokenCount = signal(this.loadBoolean(this.SHOW_TOKEN_COUNT_KEY, false));
   readonly showDebugOutput = signal(this.loadBoolean(this.SHOW_DEBUG_OUTPUT_KEY, false));
@@ -56,6 +57,26 @@ export class LocalSettingsService {
     this.loadViewMode(this.ARTIFACTS_VIEW_MODE_KEY, 'list'),
   );
 
+  /**
+   * The sidebar's conversation groups ("Pinned", "Today", "Yesterday", …) the user has
+   * folded, by label. Every group starts open; a label with nothing in it today is kept,
+   * so a fold survives the days its bucket is empty. Per-device, like the view modes.
+   */
+  readonly collapsedSidebarGroups = signal<ReadonlySet<string>>(
+    this.loadStringSet(this.COLLAPSED_SIDEBAR_GROUPS_KEY),
+  );
+
+  toggleSidebarGroup(label: string): void {
+    const next = new Set(this.collapsedSidebarGroups());
+    if (!next.delete(label)) next.add(label);
+    this.collapsedSidebarGroups.set(next);
+    try {
+      localStorage.setItem(this.COLLAPSED_SIDEBAR_GROUPS_KEY, JSON.stringify([...next]));
+    } catch {
+      // Storage full or blocked: the fold lasts for this tab only.
+    }
+  }
+
   setShowTokenCount(value: boolean): void {
     this.showTokenCount.set(value);
     localStorage.setItem(this.SHOW_TOKEN_COUNT_KEY, JSON.stringify(value));
@@ -88,6 +109,15 @@ export class LocalSettingsService {
       return JSON.parse(stored) === true;
     } catch {
       return defaultValue;
+    }
+  }
+
+  private loadStringSet(key: string): ReadonlySet<string> {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+      return new Set(Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []);
+    } catch {
+      return new Set();
     }
   }
 

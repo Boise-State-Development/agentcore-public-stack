@@ -85,6 +85,7 @@ describe('SessionList', () => {
 
   afterEach(() => {
     TestBed.resetTestingModule();
+    localStorage.removeItem('sidebar-collapsed-groups');
   });
 
   async function createComponent() {
@@ -534,6 +535,45 @@ describe('SessionList', () => {
       (component as any).onPinnedAgentDrop(within(2, 1));
       await new Promise(resolve => setTimeout(resolve));
       expect(mockToastService.error).toHaveBeenCalledWith('Failed to save the order', expect.any(String));
+    });
+  });
+
+  describe('folding a group', () => {
+    it('folds and unfolds a group, and remembers it across a reload', async () => {
+      const component = await createComponent();
+      expect(component['isGroupCollapsed']('Yesterday')).toBe(false);
+
+      component['toggleGroup']('Yesterday');
+      expect(component['isGroupCollapsed']('Yesterday')).toBe(true);
+      expect(component['isGroupCollapsed']('Today')).toBe(false);
+      expect(JSON.parse(localStorage.getItem('sidebar-collapsed-groups')!)).toEqual(['Yesterday']);
+
+      component['toggleGroup']('Yesterday');
+      expect(component['isGroupCollapsed']('Yesterday')).toBe(false);
+    });
+
+    it('marks a folded group by its strongest hidden state, waiting on the user first', async () => {
+      const { ChatStateService } = await import('../../../../session/services/chat/chat-state.service');
+      const chatState = TestBed.inject(ChatStateService);
+      const component = await createComponent();
+      const paused = { ...mockSession, sessionId: 'paused', awaitingInput: 'oauth' as const };
+
+      expect(component['foldIndicator']([mockSession])).toBeNull();
+      chatState.setChatLoading('test-session', true);
+      expect(component['foldIndicator']([mockSession])).toBe('streaming');
+      expect(component['foldIndicator']([mockSession, paused])).toBe('awaiting-input');
+    });
+
+    it('stops pulling pages behind a folded Older, and resumes when it opens', async () => {
+      mockSessionService.mergedSessionsResource.set({ sessions: [mockSession], nextToken: 'next' });
+      const component = await createComponent();
+      expect(component.groupedSessions().at(-1)?.label).toBe('Older');
+      expect(component['loadMorePaused']()).toBe(false);
+
+      component['toggleGroup']('Older');
+      expect(component['loadMorePaused']()).toBe(true);
+      component['toggleGroup']('Older');
+      expect(component['loadMorePaused']()).toBe(false);
     });
   });
 

@@ -14,6 +14,32 @@ describe('LocalSettingsService', () => {
     TestBed.resetTestingModule();
   });
 
+  describe('collapsedSidebarGroups', () => {
+    it('starts with every group open', () => {
+      expect(TestBed.inject(LocalSettingsService).collapsedSidebarGroups().size).toBe(0);
+    });
+
+    it('toggles a group and survives a reload', () => {
+      const settings = TestBed.inject(LocalSettingsService);
+      settings.toggleSidebarGroup('Yesterday');
+      settings.toggleSidebarGroup('Pinned');
+      settings.toggleSidebarGroup('Pinned');
+
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({});
+      expect([...TestBed.inject(LocalSettingsService).collapsedSidebarGroups()]).toEqual(['Yesterday']);
+    });
+
+    it('ignores a stored value it cannot read', () => {
+      localStorage.setItem('sidebar-collapsed-groups', '{not json');
+      expect(TestBed.inject(LocalSettingsService).collapsedSidebarGroups().size).toBe(0);
+      localStorage.setItem('sidebar-collapsed-groups', '["Today", 3]');
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({});
+      expect([...TestBed.inject(LocalSettingsService).collapsedSidebarGroups()]).toEqual(['Today']);
+    });
+  });
+
   describe('agentsViewMode', () => {
     it('defaults to grid', () => {
       // Grid shows an agent's artwork at a size you recognise, and most people have few

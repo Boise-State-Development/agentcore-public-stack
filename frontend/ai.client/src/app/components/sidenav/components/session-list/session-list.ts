@@ -31,6 +31,7 @@ import { AgentIconComponent } from '../../../../agents/components/agent-icon.com
 import { PinnedAgent } from '../../../../agents/models/store.model';
 import { WorkflowRunSidebarService } from '../../../../session/services/handoff/workflow-run-sidebar.service';
 import { SessionRunGroup, isRunSettled, nestRunSteps } from './run-nesting';
+import { LocalSettingsService } from '../../../../services/local-settings.service';
 
 /** Numbers each SessionList so its drop-list ids are unique on the page. */
 let nextSessionListId = 0;
@@ -116,6 +117,7 @@ export class SessionList {
   private projectsService = inject(ProjectsService);
   private incognitoChat = inject(IncognitoChatService);
   private agentPinService = inject(AgentPinService);
+  private localSettings = inject(LocalSettingsService);
   /** With Projects off in this build, project tasks list as plain rows (no heading to a dead link). */
   private readonly projectsOn = inject(FEATURES).projects;
   /**
@@ -131,6 +133,13 @@ export class SessionList {
     const features = inject(FEATURES);
     return features.handoffs && features.workflowRuns ? inject(WorkflowRunSidebarService) : null;
   })();
+
+  /**
+   * The groups ("Pinned", "Today", "Older", …) the user has folded, by label. Kept in
+   * localStorage, so a fold survives a reload, and shared by the sidebar and the mobile
+   * drawer's list.
+   */
+  private readonly collapsedGroups = this.localSettings.collapsedSidebarGroups;
 
   /** The runs whose line the user opened or closed; any other is open only while one of its steps is the current conversation. */
   private readonly runExpansion = signal<ReadonlyMap<string, boolean>>(new Map());
@@ -337,6 +346,46 @@ export class SessionList {
     if (group.steps.some(step => this.isSessionStreaming(step.sessionId))) return 'streaming';
     return null;
   }
+
+  protected isGroupCollapsed(label: string): boolean {
+    return this.collapsedGroups().has(label);
+  }
+
+  protected toggleGroup(label: string): void {
+    this.localSettings.toggleSidebarGroup(label);
+  }
+
+  protected groupListId(label: string): string {
+    return `session-list-${this.instanceId}-group-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  }
+
+  /**
+   * The dot a folded group's heading shows: a hidden conversation waiting on the user first,
+   * then one streaming. As on a run's line, a waiting conversation is never hidden by the fold;
+   * unread is left to the rows.
+   */
+  protected foldIndicator(sessions: readonly SessionMetadata[]): 'streaming' | 'awaiting-input' | null {
+    if (sessions.some(session => this.isAwaitingInput(session))) return 'awaiting-input';
+    if (sessions.some(session => this.isSessionStreaming(session.sessionId))) return 'streaming';
+    return null;
+  }
+
+  /** Every conversation a time bucket holds, its run steps included, for its folded heading. */
+  protected bucketSessions(group: { sessions: SessionMetadata[]; entries: SessionListEntry[] }): SessionMetadata[] {
+    const steps = group.entries.flatMap(entry => (entry.kind === 'session' ? (entry.runs ?? []).flatMap(run => run.steps) : []));
+    return steps.length > 0 ? [...group.sessions, ...steps] : group.sessions;
+  }
+
+  /**
+   * Older is the last bucket, so every page past it lands there. While it is folded the
+   * end-of-list sentinel would stay on screen and pull the whole history in behind the fold,
+   * so pages wait until it is opened again.
+   */
+  protected readonly loadMorePaused = computed(() => {
+    const groups = this.timeGroups();
+    const last = groups[groups.length - 1];
+    return last?.label === 'Older' && this.collapsedGroups().has('Older');
+  });
 
   /** The user's pinned conversations, most recently pinned first. */
   readonly pinnedSessions = this.sessionService.pinnedSessions;
