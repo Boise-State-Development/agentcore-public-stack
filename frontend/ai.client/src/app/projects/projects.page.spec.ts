@@ -106,7 +106,7 @@ describe('ProjectsPage', () => {
     return fixture;
   }
 
-  const chips = (el: HTMLElement) => [...el.querySelectorAll('[role=radio]')].map(b => b.textContent?.trim());
+  const chips = (el: HTMLElement) => [...el.querySelectorAll('[aria-label=Show] [role=radio]')].map(b => b.textContent?.trim());
   const hideButton = (el: HTMLElement, name: string) =>
     el.querySelector<HTMLButtonElement>(`button[aria-label="Hide Project ${name}"]`);
 
@@ -147,7 +147,7 @@ describe('ProjectsPage', () => {
   });
 
   it('leaves a hidden project out of Mine and Shared, and labels it under Archived', () => {
-    arrangements.hidden.projects.set(new Set(['viewing', 'old']));
+    arrangements.hide('projects', 'viewing', 'old');
     const fixture = renderOrganized();
     const el: HTMLElement = fixture.nativeElement;
     choose(el, 'Shared with me');
@@ -169,5 +169,28 @@ describe('ProjectsPage', () => {
     fixture.detectChanges();
     expect(error).toHaveBeenCalledWith('Could not hide project', 'Please try again.');
     expect(names(fixture.nativeElement)).toContain('Project mine');
+  });
+
+  it('arranges active projects only and saves the order as Custom', async () => {
+    const fixture = renderOrganized();
+    const el: HTMLElement = fixture.nativeElement;
+    [...el.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Arrange')!.click();
+    fixture.detectChanges();
+
+    const arranged = [...el.querySelectorAll('app-arrange-list li span.font-medium')].map(n => n.textContent?.trim());
+    expect(arranged).toEqual(['Project mine', 'Project shared', 'Project viewing']);
+    el.querySelector<HTMLButtonElement>('button[aria-label="Move Project viewing up"]')!.click();
+    fixture.detectChanges();
+    [...el.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Done')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(arrangements.saveArranged).toHaveBeenCalledWith(
+      'projects',
+      ['mine', 'viewing', 'shared'],
+      new Set(),
+      ['mine', 'shared', 'viewing'],
+    );
+    expect(names(el)).toEqual(['Project mine', 'Project viewing', 'Project shared']);
   });
 });

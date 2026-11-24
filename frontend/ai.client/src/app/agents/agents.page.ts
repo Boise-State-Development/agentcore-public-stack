@@ -18,6 +18,7 @@ import {
   heroLockClosed,
   heroEye,
   heroEyeSlash,
+  heroArrowsUpDown,
 } from '@ng-icons/heroicons/outline';
 import { AGENT_DUPLICATED_TOAST, AgentService } from './services/agent.service';
 import { ToastService } from '../services/toast/toast.service';
@@ -36,7 +37,8 @@ import { appPin } from '../components/sidenav/components/session-list/pin-icons'
 import { AgentsViewMode, LocalSettingsService } from '../services/local-settings.service';
 import { FEATURES } from '../services/features';
 import { ListArrangementService } from '../services/list-arrangement/list-arrangement.service';
-import { arrangeList } from '../services/list-arrangement/list-arrangement.models';
+import { ArrangementSort, arrangeList } from '../services/list-arrangement/list-arrangement.models';
+import { ArrangeListComponent, ArrangeResult, ArrangeRow } from '../components/arrange-list/arrange-list.component';
 
 type AgentFilter = 'all' | 'mine' | 'shared' | 'hidden';
 
@@ -45,6 +47,12 @@ const AGENT_FILTERS: { value: AgentFilter; label: string }[] = [
   { value: 'mine', label: 'Mine' },
   { value: 'shared', label: 'Shared with me' },
   { value: 'hidden', label: 'Hidden' },
+];
+
+const SORTS: { value: ArrangementSort; label: string }[] = [
+  { value: 'recent', label: 'Recently added' },
+  { value: 'name', label: 'Name' },
+  { value: 'custom', label: 'Custom' },
 ];
 
 /**
@@ -71,6 +79,7 @@ const AGENT_FILTERS: { value: AgentFilter; label: string }[] = [
     TooltipDirective,
     AgentsTabsComponent,
     AgentIconComponent,
+    ArrangeListComponent,
   ],
   providers: [
     provideIcons({
@@ -87,6 +96,7 @@ const AGENT_FILTERS: { value: AgentFilter; label: string }[] = [
       heroLockClosed,
       heroEye,
       heroEyeSlash,
+      heroArrowsUpDown,
     }),
   ],
 })
@@ -125,9 +135,34 @@ export class AgentsPage implements OnInit {
    */
   readonly filter = signal<AgentFilter>('all');
 
+  private readonly arrangement = this.arrangements.arrangement('agents');
+
   private readonly arranged = computed(() =>
-    arrangeList(this.agents(), (agent) => agent.agentId, this.arrangements.hiddenIds('agents')()),
+    arrangeList(this.agents(), {
+      idOf: (agent) => agent.agentId,
+      nameOf: (agent) => agent.name,
+      arrangement: this.arrangement(),
+    }),
   );
+
+  protected readonly sorts = SORTS;
+  readonly sort = computed(() => this.arrangement().sort);
+
+  /** Arrange mode (spec §6.3): the page becomes one list the user reorders and hides from. */
+  readonly arranging = signal(false);
+
+  /** Every agent, shown ones then hidden ones, as Arrange starts from them. */
+  readonly arrangeRows = computed<ArrangeRow[]>(() => {
+    const { visible, hidden } = this.arranged();
+    const hiddenIds = new Set(hidden.map((agent) => agent.agentId));
+    return [...visible, ...hidden].map((agent) => ({
+      id: agent.agentId,
+      name: agent.name,
+      detail: agent.isSharedWithMe ? 'Shared with you' : undefined,
+      hidden: hiddenIds.has(agent.agentId),
+      cannotHide: this.isPinLocked(agent),
+    }));
+  });
 
   readonly hiddenCount = computed(() => this.arranged().hidden.length);
 
@@ -168,6 +203,43 @@ export class AgentsPage implements OnInit {
     return f.value === 'hidden' ? `${f.label} (${this.hiddenCount()})` : f.label;
   }
 
+  /** Badged under a saved custom order when it arrived since the user last arranged (D6). */
+  isNew(agent: Agent): boolean {
+    return this.arranged().newIds.has(agent.agentId);
+  }
+
+  async setSort(value: ArrangementSort): Promise<void> {
+    if (value === this.sort()) return;
+    try {
+      await this.arrangements.setSort('agents', value, this.pageIds());
+    } catch {
+      this.toast.error('Could not change the order', 'Please try again.');
+    }
+  }
+
+  startArranging(): void {
+    this.filter.set('all');
+    this.arranging.set(true);
+  }
+
+  /**
+   * Save an arrangement. An agent newly hidden here is unpinned first, as Hide does (D8); a
+   * locked role pin is never offered the box.
+   */
+  async onArranged(result: ArrangeResult): Promise<void> {
+    this.arranging.set(false);
+    const wasHidden = this.arrangements.hiddenIds('agents')();
+    const toUnpin = [...result.hiddenIds].filter(
+      (id) => !wasHidden.has(id) && this.pinService.isPinned(id) && !this.pinService.isLocked(id),
+    );
+    try {
+      for (const id of toUnpin) await this.pinService.unpin(id);
+      await this.arrangements.saveArranged('agents', result.ids, result.hiddenIds, this.pageIds());
+    } catch {
+      this.toast.error('Could not save your order', 'Please try again.');
+    }
+  }
+
   isHidden(agent: Agent): boolean {
     return this.arrangements.hiddenIds('agents')().has(agent.agentId);
   }
@@ -186,7 +258,7 @@ export class AgentsPage implements OnInit {
     this.hidingId.set(agent.agentId);
     try {
       if (wasPinned) await this.pinService.unpin(agent.agentId);
-      await this.arrangements.setHidden('agents', agent.agentId, hide, this.agentIds());
+      await this.arrangements.setHidden('agents', agent.agentId, hide, this.pageIds());
       if (hide) {
         this.toast.info(
           `Hid ${agent.name}`,
@@ -203,15 +275,16 @@ export class AgentsPage implements OnInit {
 
   private async undoHide(agent: Agent, repin: boolean): Promise<void> {
     try {
-      await this.arrangements.setHidden('agents', agent.agentId, false, this.agentIds());
+      await this.arrangements.setHidden('agents', agent.agentId, false, this.pageIds());
       if (repin) await this.pinService.pin(agent.agentId);
     } catch {
       this.toast.error('Could not undo', 'Please try again.');
     }
   }
 
-  private agentIds(): ReadonlySet<string> {
-    return new Set(this.agents().map((agent) => agent.agentId));
+  /** Every agent id the page lists, in the list's own (most recent first) order. */
+  private pageIds(): string[] {
+    return this.agents().map((agent) => agent.agentId);
   }
 
   private async load(): Promise<void> {

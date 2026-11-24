@@ -243,7 +243,7 @@ describe('AgentsPage row actions', () => {
     fixture.detectChanges();
 
     expect(pins.unpin).toHaveBeenCalledWith(SHARED.agentId);
-    expect(arrangements.setHidden).toHaveBeenCalledWith('agents', SHARED.agentId, true, expect.any(Set));
+    expect(arrangements.setHidden).toHaveBeenCalledWith('agents', SHARED.agentId, true, expect.any(Array));
     expect(shownNames(el)).toEqual(['Rubric Builder']);
     expect(chip(el, 'Hidden (1)')).toBeTruthy();
     const [title, message, options] = info.mock.calls[0];
@@ -258,7 +258,7 @@ describe('AgentsPage row actions', () => {
   });
 
   it('lists hidden agents under Hidden and unhides them there', async () => {
-    arrangements.hidden.agents.set(new Set([AGENT.agentId]));
+    arrangements.hide('agents', AGENT.agentId);
     const fixture = renderOrganized();
     const el = fixture.nativeElement as HTMLElement;
     chip(el, 'Hidden (1)').click();
@@ -286,5 +286,60 @@ describe('AgentsPage row actions', () => {
     await fixture.componentInstance.onToggleHidden(AGENT);
     expect(error).toHaveBeenCalledWith('Could not hide agent', 'Please try again.');
     expect(fixture.componentInstance.hidingId()).toBeNull();
+  });
+
+  // ── Sort, Arrange and New (docs/specs/agent-project-organization.md §6.3, D6) ────
+  const sortRadio = (el: HTMLElement, label: string) =>
+    [...el.querySelectorAll('[aria-label=Sort] [role=radio]')].find(b => b.textContent?.trim() === label) as HTMLButtonElement;
+
+  it('sorts by name and back to recently added', async () => {
+    const fixture = renderOrganized();
+    const el = fixture.nativeElement as HTMLElement;
+    sortRadio(el, 'Name').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(shownNames(el)).toEqual(['Lab Helper', 'Rubric Builder']);
+    expect(sortRadio(el, 'Name').getAttribute('aria-checked')).toBe('true');
+
+    sortRadio(el, 'Recently added').click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(shownNames(el)).toEqual(['Rubric Builder', 'Lab Helper']);
+  });
+
+  it('arranges, saves as Custom, and unpins an agent hidden there', async () => {
+    pins.pinned.set(new Set([AGENT.agentId]));
+    const fixture = renderOrganized();
+    const el = fixture.nativeElement as HTMLElement;
+    [...el.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Arrange')!.click();
+    fixture.detectChanges();
+
+    expect(el.querySelector('app-arrange-list')).toBeTruthy();
+    el.querySelector<HTMLButtonElement>('button[aria-label="Move Lab Helper up"]')!.click();
+    el.querySelector<HTMLInputElement>('input[aria-label="Hide Rubric Builder"]')!.click();
+    fixture.detectChanges();
+    [...el.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Done')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(pins.unpin).toHaveBeenCalledWith(AGENT.agentId);
+    expect(arrangements.saveArranged).toHaveBeenCalledWith(
+      'agents',
+      [SHARED.agentId, AGENT.agentId],
+      new Set([AGENT.agentId]),
+      [AGENT.agentId, SHARED.agentId],
+    );
+    expect(el.querySelector('app-arrange-list')).toBeNull();
+    expect(sortRadio(el, 'Custom').getAttribute('aria-checked')).toBe('true');
+    expect(shownNames(el)).toEqual(['Lab Helper']);
+  });
+
+  it('badges an agent shared since the user last arranged, first, as New', () => {
+    arrangements.arrangements.agents.set({ sort: 'custom', order: [AGENT.agentId], hidden: [], updatedAt: '2026-11-01T00:00:00Z' });
+    const el = renderOrganized('list').nativeElement as HTMLElement;
+    expect(shownNames(el)).toEqual(['Lab Helper', 'Rubric Builder']);
+    const rows = [...el.querySelectorAll('main li')];
+    expect(rows[0].textContent).toContain('New');
+    expect(rows[1].textContent).not.toContain('New');
   });
 });

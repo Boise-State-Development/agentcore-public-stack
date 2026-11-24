@@ -4,15 +4,23 @@ import { firstValueFrom } from 'rxjs';
 import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
 import { ConfigService } from '../config.service';
 import { FEATURES } from '../features';
-import { Arrangement, ArrangementSurface, DEFAULT_ARRANGEMENT, withHidden } from './list-arrangement.models';
+import {
+  Arrangement,
+  ArrangementSort,
+  ArrangementSurface,
+  DEFAULT_ARRANGEMENT,
+  foldNew,
+  withArranged,
+  withHidden,
+} from './list-arrangement.models';
 
 function quiet(): HttpContext {
   return new HttpContext().set(SUPPRESS_ERROR_TOAST, true);
 }
 
 /**
- * The user's arrangement of the Agents and Projects pages: what they hid (PR-2), and from
- * PR-3 their sort and custom order (docs/specs/agent-project-organization.md §6.1).
+ * The user's arrangement of the Agents and Projects pages: what they hid, their sort and
+ * their custom order (docs/specs/agent-project-organization.md §6.1).
  *
  * **An arrangement is an enhancement.** A read that fails, or the flag being off, leaves the
  * page in today's order with nothing hidden; the page never fails because this did not load.
@@ -68,14 +76,42 @@ export class ListArrangementService {
   }
 
   /**
-   * Hide or unhide one item. `currentIds` is every id the page lists, which decides what can
-   * be dropped if the hidden list would pass the backend's cap.
+   * Hide or unhide one item. `pageIds` is every id the page lists, in the page's order: it
+   * decides what can be dropped at the backend's cap, and under a custom order it is how the
+   * page's new items are folded in (spec D6).
    */
-  async setHidden(surface: ArrangementSurface, id: string, hide: boolean, currentIds: ReadonlySet<string>): Promise<void> {
+  async setHidden(surface: ArrangementSurface, id: string, hide: boolean, pageIds: readonly string[]): Promise<void> {
+    await this.update(surface, pageIds, (before) => ({
+      ...before,
+      hidden: withHidden(before.hidden, id, hide, new Set(pageIds)),
+    }));
+  }
+
+  /** Choose Recently added, Name or Custom. */
+  async setSort(surface: ArrangementSurface, sort: ArrangementSort, pageIds: readonly string[]): Promise<void> {
+    await this.update(surface, pageIds, (before) => foldNew({ ...before, sort }, pageIds));
+  }
+
+  /** Save an Arrange → Done: `arrangedIds` top first, `hiddenIds` hidden, sort Custom. */
+  async saveArranged(
+    surface: ArrangementSurface,
+    arrangedIds: readonly string[],
+    hiddenIds: ReadonlySet<string>,
+    pageIds: readonly string[],
+  ): Promise<void> {
+    await this.update(surface, pageIds, (before) => withArranged(before, arrangedIds, hiddenIds, pageIds));
+  }
+
+  private async update(
+    surface: ArrangementSurface,
+    pageIds: readonly string[],
+    change: (before: Arrangement) => Arrangement,
+  ): Promise<void> {
     if (!this.enabled) return;
     const state = this.surfaces[surface];
-    const before = state.current();
-    const next: Arrangement = { ...before, hidden: withHidden(before.hidden, id, hide, currentIds) };
+    const before = foldNew(state.current(), pageIds);
+    // A save is what makes an arrangement "saved", so New badges start from here (spec D6).
+    const next: Arrangement = { ...change(before), updatedAt: before.updatedAt ?? new Date().toISOString() };
     state.resource.set(next);
     await this.enqueue(state, next);
   }

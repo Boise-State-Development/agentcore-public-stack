@@ -6,7 +6,7 @@ import { environment } from '../../../environments/environment';
 import { FEATURES } from '../features';
 import { ConfigService } from '../config.service';
 import { ListArrangementService } from './list-arrangement.service';
-import { MAX_ARRANGEMENT_IDS, arrangeList, withHidden } from './list-arrangement.models';
+import { DEFAULT_ARRANGEMENT, MAX_ARRANGEMENT_IDS, arrangeList, foldNew, withArranged, withHidden } from './list-arrangement.models';
 
 const URL = '/api/users/me/arrangements/agents';
 
@@ -69,7 +69,7 @@ describe('ListArrangementService', () => {
     service.open('agents');
     await answerGet({ sort: 'recent', order: ['ast-gone'], hidden: ['ast-gone'] });
 
-    const done = service.setHidden('agents', 'ast-1', true, new Set(['ast-1']));
+    const done = service.setHidden('agents', 'ast-1', true, ['ast-1']);
     expect(service.hiddenIds('agents')().has('ast-1')).toBe(true);
 
     await Promise.resolve();
@@ -80,8 +80,8 @@ describe('ListArrangementService', () => {
   });
 
   it('sends queued writes one after another, in order', async () => {
-    const first = service.setHidden('agents', 'ast-1', true, new Set());
-    const second = service.setHidden('agents', 'ast-2', true, new Set());
+    const first = service.setHidden('agents', 'ast-1', true, []);
+    const second = service.setHidden('agents', 'ast-2', true, []);
     await Promise.resolve();
 
     const one = http.expectOne((r) => r.method === 'PUT');
@@ -100,7 +100,7 @@ describe('ListArrangementService', () => {
     service.open('agents');
     await answerGet({ sort: 'recent', order: [], hidden: [] });
 
-    const write = service.setHidden('agents', 'ast-1', true, new Set(['ast-1']));
+    const write = service.setHidden('agents', 'ast-1', true, ['ast-1']);
     await Promise.resolve();
     http.expectOne((r) => r.method === 'PUT').flush({}, { status: 503, statusText: 'Unavailable' });
     await expect(write).rejects.toBeTruthy();
@@ -109,10 +109,27 @@ describe('ListArrangementService', () => {
     expect(service.hiddenIds('agents')().has('ast-1')).toBe(false);
   });
 
+  it('sends a sort change with the page folded in, and an arrangement as Custom', async () => {
+    const sorting = service.setSort('agents', 'custom', ['ast-2', 'ast-1']);
+    await Promise.resolve();
+    const sortPut = http.expectOne((r) => r.method === 'PUT');
+    expect(sortPut.request.body).toEqual({ sort: 'custom', order: ['ast-2', 'ast-1'], hidden: [] });
+    sortPut.flush({});
+    await sorting;
+    expect(service.arrangement('agents')().updatedAt).toBeTruthy();
+
+    const saving = service.saveArranged('agents', ['ast-1', 'ast-2'], new Set(['ast-2']), ['ast-2', 'ast-1']);
+    await Promise.resolve();
+    const arrangePut = http.expectOne((r) => r.method === 'PUT');
+    expect(arrangePut.request.body).toEqual({ sort: 'custom', order: ['ast-1', 'ast-2'], hidden: ['ast-2'] });
+    arrangePut.flush({});
+    await saving;
+  });
+
   it('does nothing at all while the flag is off', async () => {
     ({ service, http } = setUp(false));
     service.open('agents');
-    await service.setHidden('agents', 'ast-1', true, new Set());
+    await service.setHidden('agents', 'ast-1', true, []);
     TestBed.tick();
     http.expectNone(() => true);
     expect(service.hiddenIds('agents')().size).toBe(0);
@@ -120,11 +137,50 @@ describe('ListArrangementService', () => {
 });
 
 describe('arrangeList', () => {
-  it('splits by hidden id and keeps the page order in both halves', () => {
-    const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
-    const { visible, hidden } = arrangeList(items, (i) => i.id, new Set(['c', 'a', 'gone']));
-    expect(visible.map((i) => i.id)).toEqual(['b', 'd']);
-    expect(hidden.map((i) => i.id)).toEqual(['a', 'c']);
+  const items = [{ id: 'a', name: 'beta' }, { id: 'b', name: 'Alpha' }, { id: 'c', name: 'gamma' }, { id: 'd', name: 'Delta' }];
+  const options = (arrangement: Partial<typeof DEFAULT_ARRANGEMENT>) => ({
+    idOf: (i: { id: string }) => i.id,
+    nameOf: (i: { name: string }) => i.name,
+    arrangement: { ...DEFAULT_ARRANGEMENT, ...arrangement },
+  });
+  const ids = (list: { id: string }[]) => list.map((i) => i.id);
+
+  it('keeps the page order under Recently added, and splits hidden ones out', () => {
+    const { visible, hidden, newIds } = arrangeList(items, options({ hidden: ['c', 'a', 'gone'] }));
+    expect(ids(visible)).toEqual(['b', 'd']);
+    expect(ids(hidden)).toEqual(['a', 'c']);
+    expect(newIds.size).toBe(0);
+  });
+
+  it('sorts by name ignoring case', () => {
+    expect(ids(arrangeList(items, options({ sort: 'name' })).visible)).toEqual(['b', 'a', 'd', 'c']);
+  });
+
+  it('puts new items first under Custom, then the saved order, and badges them once saved', () => {
+    const saved = arrangeList(items, options({ sort: 'custom', order: ['c', 'a'], hidden: ['d'], updatedAt: 'then' }));
+    expect(ids(saved.visible)).toEqual(['b', 'c', 'a']);
+    expect(ids(saved.hidden)).toEqual(['d']);
+    expect([...saved.newIds]).toEqual(['b']);
+
+    const unsaved = arrangeList(items, options({ sort: 'custom', order: [], updatedAt: null }));
+    expect(unsaved.newIds.size).toBe(0);
+  });
+});
+
+describe('foldNew and withArranged', () => {
+  it('folds new page ids to the top of a custom order, and leaves other sorts alone', () => {
+    const custom = { ...DEFAULT_ARRANGEMENT, sort: 'custom' as const, order: ['a'], hidden: ['h'] };
+    expect(foldNew(custom, ['n1', 'a', 'h', 'n2']).order).toEqual(['n1', 'n2', 'a']);
+    const recent = { ...DEFAULT_ARRANGEMENT, order: ['a'] };
+    expect(foldNew(recent, ['n1', 'a'])).toBe(recent);
+  });
+
+  it('saves the arranged order and hidden ids, keeping ids the page does not show', () => {
+    const before = { ...DEFAULT_ARRANGEMENT, order: ['gone', 'a'], hidden: ['gone-hidden', 'a'] };
+    const next = withArranged(before, ['b', 'a'], new Set(['b']), ['a', 'b']);
+    expect(next.sort).toBe('custom');
+    expect(next.order).toEqual(['b', 'a', 'gone']);
+    expect(next.hidden).toEqual(['gone-hidden', 'b']);
   });
 });
 

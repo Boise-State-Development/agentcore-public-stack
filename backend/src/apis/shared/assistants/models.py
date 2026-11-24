@@ -1,6 +1,6 @@
 """Assistants API request/response models"""
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -1651,6 +1651,13 @@ class UserPinState(BaseModel):
     dismissed: List[str] = Field(
         default_factory=list, description="Agent ids the user removed — the resolver MUST respect these (D9.3)"
     )
+    ordered: bool = Field(
+        False,
+        description=(
+            "The user has arranged their pins (agent-project-organization D7): unlocked rows they "
+            "own follow ``order`` rather than a role seed's priority"
+        ),
+    )
 
 
 class PinnedAgentResponse(BaseModel):
@@ -1688,6 +1695,16 @@ class AgentPinsResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     pins: List[PinnedAgentResponse] = Field(default_factory=list, description="Resolved pins, in order")
+
+
+class AgentPinOrderRequest(BaseModel):
+    """``PUT /agents/pins/order``: the caller's unlocked pins, top first (agent-project-organization D7)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_ids: List[Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")]] = Field(
+        ..., alias="agentIds", max_length=100, description="Agent ids in the order the user arranged them"
+    )
 
 
 # ── role-seeded default pins (D9, Phase 6) ──────────────────────────────────────────
