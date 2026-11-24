@@ -11,7 +11,7 @@
  *     for someone the guard will bounce, which reads as a broken console.
  */
 import { TestBed } from '@angular/core/testing';
-import { provideRouter, Routes, Route } from '@angular/router';
+import { provideRouter, Router, Routes, Route } from '@angular/router';
 import { signal } from '@angular/core';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
@@ -155,6 +155,32 @@ describe('admin nav scope wiring', () => {
     expect(groups.length).toBe(1);
     expect(groups[0].items.length).toBe(1);
     expect(groups[0].items[0].route).toBe('/admin/skills');
+  });
+
+  it('gives a skill-scripts admin the Skill Scripts page alone', () => {
+    const nav = buildNav(scope => scope === 'admin.skill_scripts');
+
+    const items = nav.navGroups().flatMap(g => g.items);
+    expect(items.map(i => i.route)).toEqual(['/admin/skills/scripts']);
+  });
+
+  it('lights up Skill Scripts, not Skills, on the Skill Scripts page', async () => {
+    const nav = buildNav(() => true);
+    const items = nav.navGroups().flatMap(g => g.items);
+    const skills = items.find(i => i.route === '/admin/skills')!;
+    const scripts = items.find(i => i.route === '/admin/skills/scripts')!;
+    const active = (item: typeof skills) => (nav as unknown as { activeClassesFor(i: typeof skills): string }).activeClassesFor(item);
+
+    // The router has no navigation yet, so reach the URL through the test's own Router.
+    const router = TestBed.inject(Router);
+    vi.spyOn(router, 'url', 'get').mockReturnValue('/admin/skills/scripts?skillId=pdf');
+    const fresh = TestBed.createComponent(AdminNav).componentInstance as unknown as {
+      activeClassesFor(i: typeof skills): string;
+    };
+
+    expect(fresh.activeClassesFor(skills)).toBe('');
+    expect(fresh.activeClassesFor(scripts)).not.toBe('');
+    expect(active(skills)).not.toBe('');
   });
 
   it('drops a group whose items are all filtered out', () => {

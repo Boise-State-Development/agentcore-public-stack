@@ -182,6 +182,15 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./skills/pages/skill-list.page').then(m => m.SkillListPage),
   },
   {
+    // One skill's scripts, whoever wrote them, and the admin switch
+    // (skill-code-sandbox §8.10). Its own scope: admin.skills reads
+    // user-authored skills as 404 by design.
+    path: 'skills/scripts',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.skill_scripts' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./skill-scripts/skill-scripts.page').then(m => m.SkillScriptsPage),
+  },
+  {
     path: 'skills/new',
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.skills' } satisfies AdminScopeRouteData,
