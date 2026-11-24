@@ -6,7 +6,9 @@ import {
   OnInit,
   Signal,
 } from '@angular/core';
-import { RouterLink, RouterLinkActive } from '@angular/router';
+import { NavigationEnd, Router, RouterLink, RouterLinkActive } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { filter, map } from 'rxjs';
 import { AdminMarketplaceService } from './marketplace/services/admin-marketplace.service';
 import { QuotaRequestsAdminService } from './quota-requests/services/quota-requests-admin.service';
 import { FEATURES } from '../services/features';
@@ -41,6 +43,7 @@ import {
   heroSquares2x2,
   heroServerStack,
   heroBeaker,
+  heroCommandLine,
 } from '@ng-icons/heroicons/outline';
 
 interface NavItem {
@@ -59,7 +62,14 @@ interface NavItem {
    * starts lying about work that is already done.
    */
   badge?: Signal<number>;
+  /**
+   * A path under this entry's route that another entry owns, so this one doesn't also
+   * light up there (Skills and Skill Scripts at `/admin/skills/scripts`).
+   */
+  notActiveUnder?: string;
 }
+
+const ACTIVE_CLASSES = 'bg-gray-200/80 text-gray-900 dark:bg-white/10 dark:text-white';
 
 interface NavGroup {
   label: string;
@@ -113,6 +123,7 @@ interface NavGroup {
       heroSquares2x2,
       heroServerStack,
       heroBeaker,
+      heroCommandLine,
     }),
   ],
   host: { class: 'flex min-h-0 flex-1 flex-col' },
@@ -147,7 +158,7 @@ interface NavGroup {
                 <li>
                   <a
                     [routerLink]="item.route"
-                    routerLinkActive="bg-gray-200/80 text-gray-900 dark:bg-white/10 dark:text-white"
+                    [routerLinkActive]="activeClassesFor(item)"
                     (click)="sidenavService.close()"
                     class="group flex items-center gap-3 rounded-md px-2 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200/60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary-500 dark:text-gray-300 dark:hover:bg-white/5"
                   >
@@ -181,6 +192,21 @@ export class AdminNav implements OnInit {
   private features = inject(FEATURES);
   private userService = inject(UserService);
   protected sidenavService = inject(SidenavService);
+  private router = inject(Router);
+
+  private readonly url = toSignal(
+    this.router.events.pipe(
+      filter((e): e is NavigationEnd => e instanceof NavigationEnd),
+      map(e => e.urlAfterRedirects),
+    ),
+    { initialValue: this.router.url },
+  );
+
+  protected activeClassesFor(item: NavItem): string {
+    const path = this.url().split(/[?#]/)[0];
+    const under = item.notActiveUnder;
+    return under && (path === under || path.startsWith(under + '/')) ? '' : ACTIVE_CLASSES;
+  }
 
   private readonly allNavGroups: NavGroup[] = [
     {
@@ -224,7 +250,8 @@ export class AdminNav implements OnInit {
       items: [
         { label: 'Models', icon: 'heroPencilSquare', route: '/admin/manage-models', scope: 'admin.models' },
         { label: 'Tools', icon: 'heroWrenchScrewdriver', route: '/admin/tools', scope: 'admin.tools' },
-        { label: 'Skills', icon: 'heroSparkles', route: '/admin/skills', scope: 'admin.skills' },
+        { label: 'Skills', icon: 'heroSparkles', route: '/admin/skills', scope: 'admin.skills', notActiveUnder: '/admin/skills/scripts' },
+        { label: 'Skill Scripts', icon: 'heroCommandLine', route: '/admin/skills/scripts', scope: 'admin.skill_scripts' },
         { label: 'Agent Templates', icon: 'heroSquares2x2', route: '/admin/agent-templates', scope: 'admin.agent_templates' },
         { label: 'Connectors', icon: 'heroLink', route: '/admin/connectors', scope: 'admin.connectors' },
       ],
