@@ -39,7 +39,7 @@
           @if (!assistant() && !isLoadingAssistant()) {
             <div class="mb-8 flex items-center justify-center gap-4 relative" data-testid="greeting-message">
               <div>
-                <app-animated-text [text]="greetingMessage()" entry="focus" [speed]="50" />
+                <app-animated-text [text]="greetingMessage()" entry="weight" [speed]="50" />
               </div>
             </div>
           }
@@ -233,7 +233,7 @@
               </div>
             }
             <div>
-              <app-animated-text [text]="greetingMessage()" entry="focus" [speed]="50" />
+              <app-animated-text [text]="greetingMessage()" entry="weight" [speed]="50" />
             </div>
           </div>
 
