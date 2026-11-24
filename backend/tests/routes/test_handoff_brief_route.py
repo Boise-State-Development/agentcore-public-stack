@@ -366,4 +366,4 @@ class TestFallbacks:
             extra_patches=[patch.object(routes_module, "resolve_turn_agent", resolve)],
         )
 
-        assert resolve.await_args.kwargs == {"is_continuation": True, "record_use": False}
+        assert resolve.await_args.kwargs == {"is_continuation": True, "record_use": False, "pinned_version": None}

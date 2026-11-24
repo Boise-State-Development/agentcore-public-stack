@@ -2668,6 +2668,8 @@ def set_session_spawned_from(
     handoff_id: str,
     run_id: Optional[str] = None,
     run_steps: Optional[int] = None,
+    *,
+    pinned_agent_version: Optional[int] = None,
 ) -> bool:
     """Record on a handoff's target conversation where it came from (handoffs spec §4.2).
 
@@ -2681,6 +2683,11 @@ def set_session_spawned_from(
     write, so the session list can nest the step under its source with no read of its own, and
     ``runSteps``, the run's kept step count, so the sidebar can tell a finished run from one with a
     step still to start (§20.4).
+
+    A pinned step (workflow-designer §23.3) also gets ``pinnedAgentVersion``, top level, in this
+    same write: the Agent version every later turn of the step conversation runs, read from the row
+    those turns already read. Top level rather than inside ``spawnedFrom`` so settling the handoff
+    (``settle_session_spawned_from``) can never touch it.
     """
     from botocore.exceptions import ClientError
 
@@ -2692,12 +2699,17 @@ def set_session_spawned_from(
         spawned["runId"] = run_id
         if run_steps and run_steps > 0:
             spawned["runSteps"] = run_steps
+    update = "SET spawnedFrom = :sf"
+    values: Dict[str, Any] = {":sf": spawned}
+    if pinned_agent_version is not None and pinned_agent_version >= 1:
+        update += ", pinnedAgentVersion = :pv"
+        values[":pv"] = int(pinned_agent_version)
     try:
         get_dynamodb_table(table_name).update_item(
             Key={"PK": f"USER#{user_id}", "SK": _static_session_sk(session_id)},
-            UpdateExpression="SET spawnedFrom = :sf",
+            UpdateExpression=update,
             ConditionExpression="attribute_exists(PK)",
-            ExpressionAttributeValues={":sf": spawned},
+            ExpressionAttributeValues=values,
         )
         return True
     except ClientError as e:
@@ -2710,7 +2722,9 @@ def settle_session_spawned_from(session_id: str, user_id: str) -> None:
     """Mark a target's ``spawnedFrom`` settled: its handoff is done and stops following its turns.
 
     Without it, every later turn of a finished handoff's target would make a status write that the
-    row refuses (``done`` is frozen). The link itself stays; Phase 2 reads it.
+    row refuses (``done`` is frozen). The link itself stays; Phase 2 reads it. So does a pinned
+    step's ``pinnedAgentVersion`` (workflow-designer §23.3): the step conversation keeps running its
+    version after the handoff settles.
     """
     from botocore.exceptions import ClientError
 

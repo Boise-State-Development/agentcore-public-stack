@@ -160,12 +160,17 @@ def _spawned_from(
     if not isinstance(source_id, str) or not isinstance(handoff_id, str):
         return None
     row = store.get(user_id, handoff_id)
-    return {
+    out: Dict[str, Any] = {
         "sessionId": source_id,
         "handoffId": handoff_id,
         "sourceTitle": row.source_title if row is not None else "",
         "agentName": row.agent_name if row is not None else "",
     }
+    if row is not None and row.agent_version is not None:
+        # A pinned workflow step (workflow-designer §23.3), from the row just read, so the step
+        # conversation can say which version it runs after a reload. Absent for an unpinned step.
+        out["agentVersion"] = row.agent_version
+    return out
 
 
 __all__ = ["load_delivery_replay", "load_handoff_replay", "load_workflow_run_replay"]

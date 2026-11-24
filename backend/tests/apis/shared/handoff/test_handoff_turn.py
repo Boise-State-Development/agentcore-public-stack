@@ -567,3 +567,136 @@ class TestRunStepAgentName:
         )
         assert turn is not None and turn.request is None
         assert asyncio.run(turn.run_step_agent_name(timeout=0.01)) is None
+
+
+# ---------------------------------------------------------------- version pinning (workflow-designer §23.3)
+
+
+@pytest.fixture()
+def pinned_store(store, table) -> HandoffStore:
+    """``h1`` as a pinned run step: the run recorded version 3 on its ``HANDOFF#`` row."""
+    table.update_item(
+        Key={"PK": "USER#alice", "SK": "HANDOFF#h1"},
+        UpdateExpression="SET agentVersion = :v",
+        ExpressionAttributeValues={":v": 3},
+    )
+    assert store.get("alice", "h1").agent_version == 3
+    return store
+
+
+@pytest.fixture()
+def pin_meta(monkeypatch) -> List[Any]:
+    """Record the target META writes with their keywords (the pin rides as one)."""
+    calls: List[Any] = []
+    import apis.shared.sessions.metadata as metadata
+
+    monkeypatch.setattr(metadata, "set_session_spawned_from", lambda *a, **kw: calls.append((a, kw)) or True)
+    monkeypatch.setattr(metadata, "settle_session_spawned_from", lambda *a: None)
+    return calls
+
+
+def pinned_first_turn(store: HandoffStore, version: int | None) -> HandoffTurn:
+    turn = HandoffTurn.for_turn(
+        user_id="alice",
+        session_id="tgt",
+        agent_id="rubric",
+        handoff_context=HandoffContextRequest(handoff_id="h1", text=EXCERPT, agentVersion=version),
+        session_row=None,
+        is_resume=False,
+        is_continuation=False,
+        store=store,
+    )
+    assert turn is not None
+    return turn
+
+
+def take(turn: HandoffTurn):
+    async def run():
+        block = await turn.context_block()
+        refused = await turn.version_refused()
+        await drain()
+        return block, refused
+
+    return asyncio.run(run())
+
+
+class TestVersionPin:
+    @pytest.fixture(autouse=True)
+    def _pinning_on(self, monkeypatch):
+        monkeypatch.setenv("AGENT_VERSION_PINNING_ENABLED", "true")
+        monkeypatch.delenv("WORKFLOWS_ENABLED", raising=False)
+
+    def test_the_run_recorded_version_is_accepted_and_written_beside_spawned_from(self, pinned_store, pin_meta):
+        turn = pinned_first_turn(pinned_store, 3)
+        assert turn.requested_version == 3
+
+        block, refused = take(turn)
+
+        assert block and refused is False
+        assert pinned_store.get("alice", "h1").status == "running"
+        assert pin_meta == [(("tgt", "alice", "src", "h1"), {"pinned_agent_version": 3})]
+
+    @pytest.mark.parametrize("sent", [5, None])
+    def test_a_version_the_run_did_not_record_is_refused_before_accepting(self, pinned_store, pin_meta, sent):
+        """One side absent counts: a client can't drop the pin to run the current version either."""
+        block, refused = take(pinned_first_turn(pinned_store, sent))
+
+        assert (block, refused) == ("", True)
+        # Nothing taken: the step stays open for a correct send, and no link is written.
+        assert pinned_store.get("alice", "h1").status == "open"
+        assert pin_meta == []
+
+    def test_a_pin_on_an_unpinned_step_is_refused(self, store, pin_meta):
+        block, refused = take(pinned_first_turn(store, 3))
+
+        assert (block, refused) == ("", True)
+        assert store.get("alice", "h1").status == "open"
+
+    def test_an_unpinned_step_without_a_pin_runs_as_today(self, store, pin_meta):
+        block, refused = take(pinned_first_turn(store, None))
+
+        assert block and refused is False
+        assert pin_meta == [(("tgt", "alice", "src", "h1"), {})]
+
+    def test_a_pin_with_no_handoff_taken_is_refused(self, pinned_store, pin_meta):
+        """The agent was built on the request's version; with nothing accepted, no run vouches for it."""
+        pinned_store.accept("alice", "h1", target_session_id="elsewhere", context_edited=False, context_removed=False)
+
+        block, refused = take(pinned_first_turn(pinned_store, 3))
+
+        assert (block, refused) == ("", True)
+
+
+def test_with_pinning_off_the_field_is_ignored_with_a_warning(pinned_store, pin_meta, monkeypatch, caplog):
+    monkeypatch.delenv("AGENT_VERSION_PINNING_ENABLED", raising=False)
+    turn = pinned_first_turn(pinned_store, 5)
+
+    assert turn.requested_version is None
+    assert "AGENT_VERSION_PINNING_ENABLED is off" in caplog.text
+    block, refused = take(turn)
+    # Accepted exactly as before D.8: the row's version and the request's are not compared.
+    assert block and refused is False
+    assert pin_meta == [(("tgt", "alice", "src", "h1"), {})]
+
+
+def test_the_version_must_be_positive():
+    with pytest.raises(Exception):
+        HandoffContextRequest(handoff_id="h1", agentVersion=0)
+
+
+def test_the_replay_names_a_pinned_steps_version(pinned_store):
+    """``spawnedFrom.agentVersion`` on GET /messages, from the ``HANDOFF#`` row the replay already reads."""
+    from apis.shared.handoff.replay import _spawned_from
+
+    row = {"spawnedFrom": {"sessionId": "src", "handoffId": "h1"}}
+    assert _spawned_from(pinned_store, "alice", row)["agentVersion"] == 3
+
+
+def test_the_replay_of_an_unpinned_step_is_unchanged(store):
+    from apis.shared.handoff.replay import _spawned_from
+
+    row = {"spawnedFrom": {"sessionId": "src", "handoffId": "h1"}}
+    assert _spawned_from(store, "alice", row) == {
+        "sessionId": "src", "handoffId": "h1", "sourceTitle": "Course planning", "agentName": "Rubric Builder",
+    }
+    assert "agentVersion" not in _spawned_from(store, "alice", {"spawnedFrom": {"sessionId": "src", "handoffId": "gone"}})
