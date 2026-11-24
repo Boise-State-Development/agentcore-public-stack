@@ -52,6 +52,13 @@ describe('skill script calls in the rail (skill-code-sandbox §8.6)', () => {
     expect(scriptRefused(refused)).toBe(true);
     expect(describeToolCall(refused)).toBe("Didn't run fill_fillable_fields.py from pdf");
     expect(describeToolCall(call({ status: 'error' }))).toBe("Didn't run fill_fillable_fields.py from pdf");
+    // It ran and exited non-zero: a tool error, but not "Didn't run" (seen on dev, check_fillable_fields.py with no argument).
+    const exited = call({
+      status: 'error',
+      text: 'Ran skills/pdf/scripts/fill_fillable_fields.py: failed (exit code 1).\n\nScript version: 4afb2af9\n\nOutput:\nTraceback',
+    });
+    expect(describeToolCall(exited)).toBe('Ran fill_fillable_fields.py from pdf, which failed');
+    expect(scriptVersion(exited)).toBe('4afb2af9');
   });
 
   it('reads the version only from its own line', () => {

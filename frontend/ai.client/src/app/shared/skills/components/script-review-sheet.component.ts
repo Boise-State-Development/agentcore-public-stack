@@ -71,7 +71,7 @@ const CHANGE_LABELS: Record<string, string> = { new: 'New', changed: 'Changed', 
               @if (canView(row)) {
                 <button
                   type="button"
-                  class="shrink-0 rounded-2xl px-2 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700"
+                  class="shrink-0 rounded-2xl px-2 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 dark:text-primary-accessible-dark focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700"
                   [attr.aria-expanded]="isOpen(row.path)"
                   [attr.aria-label]="(isOpen(row.path) ? 'Hide ' : 'View ') + row.path"
                   (click)="toggle(row.path, row.size)"
@@ -108,7 +108,7 @@ const CHANGE_LABELS: Record<string, string> = { new: 'New', changed: 'Changed', 
               @if (data.readFile && file.size <= maxViewBytes) {
                 <button
                   type="button"
-                  class="shrink-0 rounded-2xl px-2 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700"
+                  class="shrink-0 rounded-2xl px-2 py-1 text-sm/6 font-medium text-primary-accessible hover:bg-gray-100 dark:text-primary-accessible-dark focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:hover:bg-gray-700"
                   [attr.aria-expanded]="isOpen(file.path)"
                   [attr.aria-label]="(isOpen(file.path) ? 'Hide ' : 'View ') + file.path"
                   (click)="toggle(file.path, file.size)"
