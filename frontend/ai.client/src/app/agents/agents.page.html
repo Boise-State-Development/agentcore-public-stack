@@ -84,24 +84,54 @@
       </div>
     </div>
 
-    <!-- Filters (docs/specs/agent-project-organization.md §6.2), the Projects page's chips. -->
-    @if (features.organizeLists && agents().length > 0) {
-      <div
-        class="mb-6 inline-flex flex-wrap gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800"
-        role="radiogroup"
-        aria-label="Show"
-      >
-        @for (f of filters(); track f.value) {
+    <!-- Filters, sort and Arrange (docs/specs/agent-project-organization.md §6.2–6.3). -->
+    @if (features.organizeLists && agents().length > 0 && !arranging()) {
+      <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div
+          class="inline-flex flex-wrap gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800"
+          role="radiogroup"
+          aria-label="Show"
+        >
+          @for (f of filters(); track f.value) {
+            <button
+              type="button"
+              role="radio"
+              [attr.aria-checked]="filter() === f.value"
+              (click)="setFilter(f.value)"
+              class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-checked:bg-white aria-checked:text-gray-900 aria-checked:shadow-xs dark:text-gray-400 dark:hover:text-white dark:aria-checked:bg-gray-900 dark:aria-checked:text-white"
+            >
+              {{ filterLabel(f) }}
+            </button>
+          }
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <div
+            class="inline-flex gap-1 rounded-2xl border border-gray-200 bg-gray-50 p-1 dark:border-gray-700 dark:bg-gray-800"
+            role="radiogroup"
+            aria-label="Sort"
+          >
+            @for (option of sorts; track option.value) {
+              <button
+                type="button"
+                role="radio"
+                [attr.aria-checked]="sort() === option.value"
+                (click)="setSort(option.value)"
+                class="rounded-xl px-3 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-checked:bg-white aria-checked:text-gray-900 aria-checked:shadow-xs dark:text-gray-400 dark:hover:text-white dark:aria-checked:bg-gray-900 dark:aria-checked:text-white"
+              >
+                {{ option.label }}
+              </button>
+            }
+          </div>
           <button
             type="button"
-            role="radio"
-            [attr.aria-checked]="filter() === f.value"
-            (click)="setFilter(f.value)"
-            class="rounded-xl px-4 py-1.5 text-sm/6 font-medium text-gray-600 transition-colors hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 aria-checked:bg-white aria-checked:text-gray-900 aria-checked:shadow-xs dark:text-gray-400 dark:hover:text-white dark:aria-checked:bg-gray-900 dark:aria-checked:text-white"
+            (click)="startArranging()"
+            class="inline-flex items-center gap-2 rounded-2xl bg-white px-3 py-2 text-sm/6 font-medium text-gray-900 ring-1 ring-gray-300 ring-inset transition hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:bg-white/10 dark:text-white dark:ring-white/5 dark:hover:bg-white/20"
           >
-            {{ filterLabel(f) }}
+            <ng-icon name="heroArrowsUpDown" class="size-4" aria-hidden="true" />
+            Arrange
           </button>
-        }
+        </div>
       </div>
     }
 
@@ -149,6 +179,8 @@
             New Agent
           </button>
         </div>
+      } @else if (arranging()) {
+        <app-arrange-list label="Agents" [items]="arrangeRows()" (done)="onArranged($event)" (cancelled)="arranging.set(false)" />
       } @else if (shownAgents().length === 0) {
         <div class="rounded-2xl border border-dashed border-gray-300 bg-white p-12 text-center dark:border-gray-700 dark:bg-gray-800">
           <p class="text-sm/6 text-gray-600 dark:text-gray-400">
@@ -173,6 +205,9 @@
                       <span class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">{{ agent.name }}</span>
                       @if (agent.status === 'DRAFT') {
                         <span class="shrink-0 rounded-full bg-state-warning-100 px-2 py-0.5 text-xs/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-400">Draft</span>
+                      }
+                      @if (isNew(agent)) {
+                        <span class="shrink-0 rounded-full bg-primary-50 px-2 py-0.5 text-xs/5 font-medium text-primary-accessible dark:bg-primary-900/30 dark:text-primary-200">New</span>
                       }
                     </span>
                     <span class="mt-0.5 block truncate text-sm/6 text-gray-500 dark:text-gray-400">{{ agent.description || 'No description' }}</span>
@@ -225,6 +260,9 @@
                     <h3 class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">{{ agent.name }}</h3>
                     @if (agent.status === 'DRAFT') {
                       <span class="rounded-full bg-state-warning-100 px-2 py-0.5 text-xs/5 font-medium text-state-warning-700 dark:bg-state-warning-900/30 dark:text-state-warning-400">Draft</span>
+                    }
+                    @if (isNew(agent)) {
+                      <span class="rounded-full bg-primary-50 px-2 py-0.5 text-xs/5 font-medium text-primary-accessible dark:bg-primary-900/30 dark:text-primary-200">New</span>
                     }
                   </div>
                   <p class="mt-0.5 line-clamp-2 text-xs/5 text-gray-500 dark:text-gray-400">{{ agent.description || 'No description' }}</p>

@@ -1,6 +1,6 @@
 # Organizing the Agents and Projects pages
 
-**Status:** PR-1 (backend storage and routes) merged in #2363; PR-2 (Hide, the Hidden filter, My agents filters) in review. Spec written 2026-11-23 against `develop` @ `b510150b1`.
+**Status:** PR-1 (backend storage and routes) merged in #2363; PR-2 (Hide, the Hidden filter, My agents filters) merged in #2369; PR-3 (sorts, Arrange, New badges, pin order) in review. Spec written 2026-11-23 against `develop` @ `b510150b1`.
 
 **Flag:** `ORGANIZE_LISTS_ENABLED` / `CDK_ORGANIZE_LISTS_ENABLED`, app-api only, `features.organizeLists`.
 In development: off by default and in prod, on in the `development` GitHub environment and
@@ -86,7 +86,10 @@ the sidebar's Pinned group) writes `PinnedAgentRef.order` through a new route. T
 for pins. Locked role pins (D9.4 of the marketplace spec) stay first and are not draggable; their slot
 is the server's sort, not the user's. Dragging an unlocked role-seeded pin writes an own ref for it,
 which is exactly what pinning it by hand does today (rule 4: the seed is converted to the user's own
-pin and survives the role pin's removal).
+pin and survives the role pin's removal). Because the effective list sorts every unlocked role seed ahead of the user's own pins, the first
+reorder marks the pin item `ordered`; from then on an unlocked row the user owns follows their `order`,
+a seed that arrives later sits ahead of it as new, and a user who never arranged keeps today's sort
+exactly.
 
 **D8. Hiding a pinned Agent unpins it.** Otherwise the sidebar would show an Agent the user hid from
 the page. The SPA calls the existing `DELETE /agents/{id}/pin` before writing the arrangement, so the
