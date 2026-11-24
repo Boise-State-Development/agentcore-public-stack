@@ -31,7 +31,8 @@ export const environment = {
         fieldSetAuthoring: true,
         // Needs CDK_SKILL_BUNDLE_IMPORT_ENABLED=true in the `development` GitHub environment.
         skillBundleImport: true,
-        skillVersionHistory: false,
+        // Needs CDK_SKILL_VERSION_HISTORY_ENABLED=true in the `development` GitHub environment.
+        skillVersionHistory: true,
         // The `development` GitHub environment sets CDK_HANDOFFS_ENABLED=true.
         handoffs: true,
         // The `development` GitHub environment sets CDK_HANDOFF_BRIEF_ENABLED=true.
