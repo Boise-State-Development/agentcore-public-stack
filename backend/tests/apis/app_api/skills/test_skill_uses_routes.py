@@ -97,6 +97,23 @@ def test_update_moves_only_behind_pins_and_reports_each(client, monkeypatch):
     assert moved == [("agent", "a-behind")]
 
 
+def test_an_update_whose_scripts_need_a_review_says_where_to_review_them(client, monkeypatch):
+    """A bulk update can't show the review sheet (skill-code-sandbox §8.5)."""
+    from apis.shared.skills.script_review_check import ScriptsUnreviewedError
+
+    sid = _skill(client)
+
+    async def unreviewed(target_id, skill_id, user):
+        raise ScriptsUnreviewedError([{"skillId": skill_id, "displayName": "PDF"}])
+
+    monkeypatch.setattr(uses_routes, "_pin_agent", unreviewed)
+    resp = client.post(f"/skills/mine/{sid}/uses/update", json={"targets": [{"kind": "agent", "id": "a-behind"}]})
+    assert resp.status_code == 200, resp.text
+    [result] = resp.json()["results"]
+    assert result["ok"] is False
+    assert result["error"] == "Its scripts changed. Update it from the agent's settings to review them."
+
+
 def test_at_most_25_targets(client):
     sid = _skill(client)
     targets = [{"kind": "agent", "id": f"a{i}"} for i in range(26)]
