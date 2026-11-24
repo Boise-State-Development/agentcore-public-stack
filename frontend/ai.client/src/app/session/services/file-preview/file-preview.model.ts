@@ -4,6 +4,13 @@ export interface OpenFilePreviewRef {
   uploadId: string;
   /** Display name, used for the pane header and the download filename. */
   filename: string;
+  /**
+   * 1-based page to show, for a document with pages (a PDF today). Set by
+   * a citation that names a page; ignored by every other viewer. Opening
+   * the file that is already showing with a new page jumps there without
+   * fetching it again.
+   */
+  page?: number;
 }
 
 /**
@@ -24,6 +31,27 @@ export interface KbDocumentPreviewRef {
 
 /** Anything the docked preview pane can show. */
 export type FilePreviewRef = OpenFilePreviewRef | KbDocumentPreviewRef;
+
+/**
+ * Whether two refs name the same document, whatever page they ask for.
+ * The pane fetches again only when this is false.
+ */
+export function isSamePreviewDocument(
+  a: FilePreviewRef | null,
+  b: FilePreviewRef | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (isKbDocumentRef(a) || isKbDocumentRef(b)) {
+    return (
+      isKbDocumentRef(a) &&
+      isKbDocumentRef(b) &&
+      a.assistantId === b.assistantId &&
+      a.documentId === b.documentId
+    );
+  }
+  return a.uploadId === b.uploadId && a.filename === b.filename;
+}
 
 export function isKbDocumentRef(ref: FilePreviewRef | null): ref is KbDocumentPreviewRef {
   return !!ref && 'kind' in ref && ref.kind === 'kb-document';

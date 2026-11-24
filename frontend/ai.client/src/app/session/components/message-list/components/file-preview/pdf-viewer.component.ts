@@ -8,6 +8,7 @@ import {
   input,
   output,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import type {
@@ -36,6 +37,19 @@ const RENDER_MARGIN = '100% 0px';
 
 /** Resize events are coalesced for this long before pages are redrawn. */
 const RESIZE_DEBOUNCE_MS = 150;
+
+/** How long a page someone jumped to stays outlined. */
+const TARGET_HIGHLIGHT_MS = 1600;
+
+/**
+ * A page to show. An object rather than a bare number so asking for the
+ * same page twice is still a change: a reader who scrolled away and
+ * clicks the same citation again expects to be taken back.
+ */
+export interface PdfPageTarget {
+  /** 1-based, as pdf.js and `source_provenance` locators number pages. */
+  page: number;
+}
 
 /** One page's slot in the scroll column. */
 interface PageSlot {
@@ -72,6 +86,11 @@ interface PageSlot {
  * The bytes are parsed in pdf.js's worker, and no script in the PDF ever
  * runs: scripting needs pdf.js's separate sandbox bundle, which is not
  * loaded.
+ *
+ * A `targetPage` (set when a citation names a page) scrolls to that page,
+ * outlines it briefly and moves focus to it, so a screen reader announces
+ * where the reader landed. Given before the document has opened, it is
+ * where the document opens: that page is drawn first, not page 1.
  *
  * The library is loaded with a dynamic `import()` (see `PdfJsLoader`):
  * it is dead weight in the initial bundle for sessions that never open a
@@ -129,6 +148,23 @@ interface PageSlot {
       overflow: hidden;
       --scale-round-x: 1px;
       --scale-round-y: 1px;
+    }
+
+    /* The page a citation jumped to. An outline rather than a border so
+       nothing reflows, and no animation, so reduced motion needs no case. */
+    :host ::ng-deep .pdf-page.pdf-page-target {
+      outline: 3px solid var(--color-primary-500);
+      outline-offset: 3px;
+    }
+
+    :host ::ng-deep .pdf-page:focus {
+      outline: none;
+    }
+
+    :host ::ng-deep .pdf-page:focus-visible,
+    :host ::ng-deep .pdf-page.pdf-page-target:focus {
+      outline: 3px solid var(--color-primary-500);
+      outline-offset: 3px;
     }
 
     :host ::ng-deep .pdf-page canvas {
@@ -218,6 +254,9 @@ export class PdfViewerComponent {
   /** Raw PDF bytes. Null clears the view (pane closed / still loading). */
   readonly bytes = input<ArrayBuffer | null>(null);
 
+  /** A page to show. Ignored when it is not a page the document has. */
+  readonly targetPage = input<PdfPageTarget | null>(null);
+
   /** The first page painted. */
   readonly rendered = output<void>();
 
@@ -248,6 +287,7 @@ export class PdfViewerComponent {
   private visibility: IntersectionObserver | null = null;
   private resizeTimer: ReturnType<typeof setTimeout> | null = null;
   private lastFitWidth = 0;
+  private highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     // Redraw at the new width when the rail is resized. Slots follow the
@@ -270,9 +310,18 @@ export class PdfViewerComponent {
       void this.open(data, host, seq);
     });
 
+    // A page asked for once the document is showing. Before that, `open`
+    // reads the target itself and starts there.
+    effect(() => {
+      const target = this.targetPage();
+      if (!target || !this.doc || !this.slots.length) return;
+      untracked(() => this.goToPage(target.page));
+    });
+
     inject(DestroyRef).onDestroy(() => {
       this.renderSeq++;
       if (this.resizeTimer) clearTimeout(this.resizeTimer);
+      if (this.highlightTimer) clearTimeout(this.highlightTimer);
       this.teardown(null);
     });
   }
@@ -304,20 +353,27 @@ export class PdfViewerComponent {
 
       if (doc.numPages === 0) throw new Error('PDF has no pages');
 
-      // Size every slot from the first page, then draw it straight away:
-      // the panel's skeleton stays up until it is on screen.
+      // Size every slot from the first page, then draw the page the reader
+      // will see first — page 1, or the one a citation asked for — straight
+      // away: the panel's skeleton stays up until it is on screen.
       const first = await doc.getPage(1);
       if (seq !== this.renderSeq) return;
       const base = first.getViewport({ scale: 1 });
       this.buildSlots(host, doc.numPages, base.width, base.height);
       this.pageCount.set(doc.numPages);
 
+      const target = this.pageIndex(untracked(this.targetPage)?.page);
+      const start = this.slots[target ?? 0];
+      start.visible = true;
       this.lastFitWidth = this.fitWidth();
-      await this.drawPage(this.slots[0], seq);
+      if (target !== null) this.scrollToSlot(start);
+      await this.drawPage(start, seq);
       if (seq !== this.renderSeq) return;
 
       this.observeVisibility(seq);
       this.rendered.emit();
+      // Again once drawn: the page may have corrected its slot's size.
+      if (target !== null) this.goToPage(target + 1);
     } catch (error) {
       if (seq !== this.renderSeq) return;
       this.teardown(host);
@@ -338,6 +394,8 @@ export class PdfViewerComponent {
       el.className = 'pdf-page';
       el.setAttribute('role', 'group');
       el.setAttribute('aria-label', `Page ${i} of ${count}`);
+      // Focusable from script only, so a jump can announce where it landed.
+      el.tabIndex = -1;
       el.style.aspectRatio = `${width} / ${height}`;
       el.dataset['page'] = String(i);
       fragment.append(el);
@@ -348,7 +406,7 @@ export class PdfViewerComponent {
         pendingWidth: null,
         task: null,
         textLayer: null,
-        visible: i === 1,
+        visible: false,
       });
     }
     host.replaceChildren(fragment);
@@ -450,6 +508,43 @@ export class PdfViewerComponent {
       // exception, and `open` reports it.
       if (slot.pageNumber === 1) throw error;
     }
+  }
+
+  /** Slot index for a 1-based page number, or null if there is no such page. */
+  private pageIndex(page: number | undefined): number | null {
+    if (!page || !Number.isInteger(page)) return null;
+    if (page < 1 || page > this.slots.length) return null;
+    return page - 1;
+  }
+
+  /**
+   * Take the reader to a page: scroll it to the top of the pane, outline
+   * it briefly, and move focus to it so assistive tech says which page
+   * this is. The visibility observer draws it once it is in view.
+   */
+  private goToPage(page: number): void {
+    const index = this.pageIndex(page);
+    if (index === null) return;
+    const slot = this.slots[index];
+    this.scrollToSlot(slot);
+
+    for (const other of this.slots) other.el.classList.remove('pdf-page-target');
+    slot.el.classList.add('pdf-page-target');
+    if (this.highlightTimer) clearTimeout(this.highlightTimer);
+    this.highlightTimer = setTimeout(() => {
+      this.highlightTimer = null;
+      slot.el.classList.remove('pdf-page-target');
+    }, TARGET_HIGHLIGHT_MS);
+
+    slot.el.focus({ preventScroll: true });
+  }
+
+  private scrollToSlot(slot: PageSlot): void {
+    const scroller = this.scroller().nativeElement;
+    const paddingTop = parseFloat(getComputedStyle(scroller).paddingTop || '0');
+    const offset =
+      slot.el.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    scroller.scrollTop += offset - paddingTop;
   }
 
   private release(slot: PageSlot): void {

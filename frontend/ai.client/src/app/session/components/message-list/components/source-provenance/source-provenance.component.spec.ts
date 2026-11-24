@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { SourceProvenanceComponent } from './source-provenance.component';
+import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
 import type { SourceProvenanceClaim } from '../../../../../shared/utils/stream-parser';
 
 function claim(over: Partial<SourceProvenanceClaim> = {}): SourceProvenanceClaim {
@@ -221,6 +222,67 @@ describe('SourceProvenanceComponent', () => {
         expect(host.querySelectorAll('.status-dot').length).toBeGreaterThan(0);
         expect(text(fixture).trim().length).toBeGreaterThan(20);
       }
+    });
+  });
+
+  describe('page links into the PDF', () => {
+    const links = (f: ComponentFixture<SourceProvenanceComponent>) =>
+      Array.from(
+        (f.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>(
+          '[data-testid="provenance-page-link"]',
+        ),
+      );
+
+    it('makes the page in the verdict a link that opens the PDF at that page', async () => {
+      const fixture = await render([claim({ locator: { kind: 'page', value: 7, precision: 'measured' } })]);
+      const [link] = links(fixture);
+
+      expect(link.textContent?.trim()).toBe('page 7');
+      expect(link.getAttribute('aria-label')).toBe('Open award.pdf at page 7');
+      // The sentence still reads whole around the link.
+      expect(text(fixture)).toContain('found on page 7');
+
+      link.click();
+      expect(TestBed.inject(FilePreviewStateService).openFile()).toEqual({
+        uploadId: 'up-1',
+        filename: 'award.pdf',
+        page: 7,
+      });
+    });
+
+    it('links an unsupported value too, so the reader can check the passage', async () => {
+      const fixture = await render([claim({ state: 'quote_unsupported' })]);
+      expect(text(fixture)).toContain('not in the quoted passage on page 1');
+      expect(links(fixture)).toHaveLength(1);
+    });
+
+    it('keeps the hedge in an estimated page link', async () => {
+      const fixture = await render([
+        claim({ locator: { kind: 'page', value: 12, precision: 'estimated' } }),
+      ]);
+      const [link] = links(fixture);
+      expect(link.textContent?.trim()).toBe('about page 12');
+      expect(link.getAttribute('aria-label')).toBe('Open award.pdf at about page 12');
+    });
+
+    it('does not link a paragraph, which no viewer can scroll to', async () => {
+      const fixture = await render([
+        claim({ filename: 'award.docx', locator: { kind: 'paragraph', value: 4, precision: 'measured' } }),
+      ]);
+      expect(links(fixture)).toHaveLength(0);
+      expect(text(fixture)).toContain('found on paragraph 4');
+    });
+
+    it('does not link a page in a file the pane cannot show as pages', async () => {
+      const fixture = await render([claim({ filename: 'deck.pptx' })]);
+      expect(links(fixture)).toHaveLength(0);
+    });
+
+    it('does not link an unverified claim or one with no file', async () => {
+      const unverified = await render([claim({ state: 'unverified', locator: null })]);
+      expect(links(unverified)).toHaveLength(0);
+      const noFile = await render([claim({ uploadId: '' })]);
+      expect(links(noFile)).toHaveLength(0);
     });
   });
 });

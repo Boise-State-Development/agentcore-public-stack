@@ -2,10 +2,21 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  inject,
   input,
   signal,
 } from '@angular/core';
 import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared/utils/stream-parser';
+import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
+import { previewKindFor } from '../../../../services/file-preview/file-preview.model';
+
+/** A verdict sentence split around its locator, so the locator can be a link. */
+interface VerdictParts {
+  before: string;
+  /** The locator in words ("page 12", "about page 3"), or empty for none. */
+  locator: string;
+  after: string;
+}
 
 /**
  * What a `verify_sources` call found, rendered under the answer it belongs to
@@ -32,6 +43,12 @@ import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared
  *
  * Colour is never the only signal: the header counts unconfirmed values in
  * words, and each row pairs its dot with a sentence.
+ *
+ * In a PDF the page in each verdict is a link that opens the document in the
+ * side pane at that page, so the reader can check the passage themselves —
+ * for `quote_unsupported` above all. Only for a PDF: a `.docx` locator is a
+ * paragraph, which no viewer can scroll to, and a page link that opened the
+ * document at the top would claim a precision it does not have.
  */
 @Component({
   selector: 'app-source-provenance',
@@ -57,6 +74,12 @@ import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared
       height: 6px;
       border-radius: 9999px;
       flex-shrink: 0;
+    }
+
+    /* Rows align to the first line, because a verdict may wrap: centre the
+       dot on that line (16px) rather than on the whole row. */
+    .claim-list .status-dot {
+      margin-top: 5px;
     }
 
     .collapsible-content {
@@ -166,15 +189,31 @@ import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared
             >
               @for (claim of claims(); track claim.id + claim.quote) {
                 <li class="bg-white/40 py-1.5 pr-2.5 dark:bg-transparent">
-                  <div class="flex items-center gap-2">
+                  <div class="flex items-start gap-2">
                     <span [class]="dotClass(claim.state)"></span>
-                    <span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-300">
+                    <span
+                      class="min-w-0 max-w-[45%] shrink-0 truncate text-xs leading-4 text-gray-600 dark:text-gray-300"
+                    >
                       {{ label(claim) }}
                     </span>
                     <!-- The verdict sits with the value, never a bare locator:
-                         "page 1" alone reads as a confirmed citation. -->
-                    <span class="truncate text-[11px]" [class]="verdictClass(claim.state)">
-                      {{ verdict(claim) }}
+                         "page 1" alone reads as a confirmed citation. It wraps
+                         rather than truncating: the page link is at its end,
+                         and an ellipsis would hide it exactly when the PDF
+                         pane is open and the column is narrow. -->
+                    <span class="min-w-0 flex-1 text-[11px] leading-4" [class]="verdictClass(claim.state)">
+                      @if (pageLink(claim); as page) {
+                        @let parts = verdictParts(claim);
+                        {{ parts.before }}<button
+                          type="button"
+                          class="cursor-pointer underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible"
+                          [attr.aria-label]="'Open ' + claim.filename + ' at ' + parts.locator"
+                          data-testid="provenance-page-link"
+                          (click)="openPage(claim, page)"
+                        >{{ parts.locator }}</button>{{ parts.after }}
+                      } @else {
+                        {{ verdict(claim) }}
+                      }
                     </span>
                   </div>
                   @if (claim.quote) {
@@ -192,6 +231,8 @@ import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared
   `,
 })
 export class SourceProvenanceComponent {
+  private readonly filePreview = inject(FilePreviewStateService);
+
   claims = input.required<readonly SourceProvenanceClaim[]>();
 
   protected readonly panelId = `provenance-${Math.random().toString(36).slice(2, 9)}`;
@@ -247,16 +288,38 @@ export class SourceProvenanceComponent {
    * reinforces them — so each says what is and is not established.
    */
   protected verdict(claim: SourceProvenanceClaim): string {
+    const { before, locator, after } = this.verdictParts(claim);
+    return `${before}${locator}${after}`;
+  }
+
+  protected verdictParts(claim: SourceProvenanceClaim): VerdictParts {
+    const locator = this.locator(claim.locator);
     switch (claim.state) {
       case 'supported':
-        return `found on ${this.locator(claim.locator)}`;
+        return { before: 'found on ', locator, after: '' };
       case 'quote_unsupported':
-        return `not in the quoted passage on ${this.locator(claim.locator)}`;
+        return { before: 'not in the quoted passage on ', locator, after: '' };
       case 'unassessed':
-        return `passage found on ${this.locator(claim.locator)}, value not checked`;
+        return { before: 'passage found on ', locator, after: ', value not checked' };
       default:
-        return 'no matching passage in the document';
+        return { before: 'no matching passage in the document', locator: '', after: '' };
     }
+  }
+
+  /**
+   * The 1-based page a claim's locator names, when it can be opened there:
+   * a located passage, in a PDF the pane can show. Null otherwise, and the
+   * verdict stays plain text.
+   */
+  protected pageLink(claim: SourceProvenanceClaim): number | null {
+    const loc = claim.locator;
+    if (claim.state === 'unverified' || !loc || loc.kind !== 'page') return null;
+    if (!claim.uploadId || previewKindFor(claim.filename ?? '') !== 'pdf') return null;
+    return Number.isInteger(loc.value) && loc.value >= 1 ? loc.value : null;
+  }
+
+  protected openPage(claim: SourceProvenanceClaim, page: number): void {
+    this.filePreview.open({ uploadId: claim.uploadId, filename: claim.filename, page });
   }
 
   /**

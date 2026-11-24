@@ -249,4 +249,50 @@ describe('PdfViewerComponent', () => {
     expect(pages()).toHaveLength(0);
     expect(destroyed).toHaveBeenCalled();
   });
+
+  describe('jumping to a page', () => {
+    it('opens at the page a citation named, drawing it first', async () => {
+      fixture.componentRef.setInput('targetPage', { page: 3 });
+      await render(new ArrayBuffer(8));
+
+      expect(drawn[0]).toBe(3);
+      expect(rendered).toBe(1);
+      const target = pages()[2];
+      expect(target.classList.contains('pdf-page-target')).toBe(true);
+      // Focus lands on the page, so a screen reader says "Page 3 of 3".
+      expect(document.activeElement).toBe(target);
+    });
+
+    it('jumps when a page is asked for after the document opened', async () => {
+      await render(new ArrayBuffer(8));
+      expect(document.activeElement).not.toBe(pages()[1]);
+
+      fixture.componentRef.setInput('targetPage', { page: 2 });
+      fixture.detectChanges();
+      await settle();
+
+      expect(pages()[1].classList.contains('pdf-page-target')).toBe(true);
+      expect(document.activeElement).toBe(pages()[1]);
+    });
+
+    it('moves the outline when another page is asked for', async () => {
+      fixture.componentRef.setInput('targetPage', { page: 1 });
+      await render(new ArrayBuffer(8));
+      fixture.componentRef.setInput('targetPage', { page: 3 });
+      fixture.detectChanges();
+      await settle();
+
+      expect(pages()[0].classList.contains('pdf-page-target')).toBe(false);
+      expect(pages()[2].classList.contains('pdf-page-target')).toBe(true);
+    });
+
+    it('ignores a page the document does not have', async () => {
+      fixture.componentRef.setInput('targetPage', { page: 99 });
+      await render(new ArrayBuffer(8));
+
+      expect(drawn[0]).toBe(1);
+      expect(rendered).toBe(1);
+      expect(fixture.nativeElement.querySelector('.pdf-page-target')).toBeNull();
+    });
+  });
 });

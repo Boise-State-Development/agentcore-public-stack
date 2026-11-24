@@ -26,7 +26,7 @@ import { downloadUrlFor } from '../../../../../shared/utils/file-download-url';
 import { TooltipDirective } from '../../../../../components/tooltip/tooltip.directive';
 import { CsvViewerComponent } from './csv-viewer.component';
 import { DocxViewerComponent } from './docx-viewer.component';
-import { PdfViewerComponent } from './pdf-viewer.component';
+import { PdfPageTarget, PdfViewerComponent } from './pdf-viewer.component';
 import { PptxViewerComponent } from './pptx-viewer.component';
 import { XlsxViewerComponent } from './xlsx-viewer.component';
 import { KbDocumentLoadFailure, KbDocumentViewerComponent } from './kb-document-viewer.component';
@@ -36,6 +36,7 @@ import {
   PREVIEW_KIND_LABELS,
   PreviewKind,
   isKbDocumentRef,
+  isSamePreviewDocument,
   previewFetchesBytes,
   previewKindFor,
 } from '../../../../services/file-preview/file-preview.model';
@@ -237,6 +238,7 @@ import { citationPage } from '../../../citation-display/citation-display.compone
               @case ('pdf') {
                 <app-pdf-viewer
                   [bytes]="bytes()"
+                  [targetPage]="pageTarget()"
                   (renderFailed)="onRenderFailed($event)"
                   (rendered)="onRendered()"
                 />
@@ -324,6 +326,24 @@ export class FilePreviewPanelComponent {
     () => citationPage(this.kbRef()?.sourceUrl ?? undefined)?.url ?? null,
   );
 
+  /**
+   * The open document, compared by identity rather than by ref, so asking
+   * for another page of the file already showing (a second citation into
+   * the same PDF) moves the view instead of fetching the file again.
+   */
+  private readonly document = computed(() => this.open(), {
+    equal: isSamePreviewDocument,
+  });
+
+  /**
+   * The page a citation asked for. A fresh object per open, so asking for
+   * the same page again — after scrolling away — jumps back to it.
+   */
+  protected readonly pageTarget = computed<PdfPageTarget | null>(() => {
+    const page = this.uploadRef()?.page;
+    return page ? { page } : null;
+  });
+
   protected readonly bytes = signal<ArrayBuffer | null>(null);
   /** Which viewer renders the current file. Derived from the filename so
    *  the header reads correctly while the fetch is still in flight, then
@@ -368,7 +388,7 @@ export class FilePreviewPanelComponent {
 
   constructor() {
     effect(() => {
-      const ref = this.open();
+      const ref = this.document();
       this.requestSeq++;
       this.reset();
       if (!ref) return;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   isPreviewableFilename,
+  isSamePreviewDocument,
   PREVIEW_KIND_LABELS,
   previewFetchesBytes,
   previewKindFor,
@@ -72,5 +73,45 @@ describe('previewKindFor', () => {
       expect(kind).not.toBeNull();
       expect(PREVIEW_KIND_LABELS[kind!]).toBeTruthy();
     }
+  });
+});
+
+describe('isSamePreviewDocument', () => {
+  it('treats another page of the same upload as the same document', () => {
+    expect(
+      isSamePreviewDocument(
+        { uploadId: 'up1', filename: 'a.pdf' },
+        { uploadId: 'up1', filename: 'a.pdf', page: 9 },
+      ),
+    ).toBe(true);
+  });
+
+  it('tells different uploads apart', () => {
+    expect(
+      isSamePreviewDocument(
+        { uploadId: 'up1', filename: 'a.pdf' },
+        { uploadId: 'up2', filename: 'a.pdf' },
+      ),
+    ).toBe(false);
+  });
+
+  it('never matches an upload to a knowledge-base document', () => {
+    expect(
+      isSamePreviewDocument(
+        { uploadId: 'd1', filename: 'a.md' },
+        { kind: 'kb-document', assistantId: 'a1', documentId: 'd1', filename: 'a.md' },
+      ),
+    ).toBe(false);
+  });
+
+  it('matches knowledge-base documents by agent and document', () => {
+    const kb = { kind: 'kb-document' as const, assistantId: 'a1', documentId: 'd1', filename: 'a.md' };
+    expect(isSamePreviewDocument(kb, { ...kb })).toBe(true);
+    expect(isSamePreviewDocument(kb, { ...kb, documentId: 'd2' })).toBe(false);
+  });
+
+  it('handles a closed pane', () => {
+    expect(isSamePreviewDocument(null, null)).toBe(true);
+    expect(isSamePreviewDocument(null, { uploadId: 'up1', filename: 'a.pdf' })).toBe(false);
   });
 });

@@ -3,6 +3,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FilePreviewPanelComponent } from './file-preview-panel.component';
 import { DocxViewerComponent } from './docx-viewer.component';
 import { PdfJsLoader } from './pdfjs-loader';
+import { PdfViewerComponent } from './pdf-viewer.component';
+import { By } from '@angular/platform-browser';
 import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
 import {
   FilePreviewError,
@@ -209,6 +211,25 @@ describe('FilePreviewPanelComponent', () => {
     expect(fixture.nativeElement.querySelector('app-docx-viewer')).toBeNull();
     expect(fixture.nativeElement.textContent).toContain('PDF document');
     expect(fixture.nativeElement.textContent).toContain('Loading preview');
+  });
+
+  it('moves to another page of the open PDF without fetching it again', async () => {
+    fetchDocument.mockResolvedValue({
+      bytes: new ArrayBuffer(16),
+      mimeType: PDF_MIME,
+      filename: 'report.pdf',
+    });
+    state.open({ uploadId: 'up3', filename: 'report.pdf' });
+    fixture.detectChanges();
+    await settle();
+
+    state.open({ uploadId: 'up3', filename: 'report.pdf', page: 4 });
+    fixture.detectChanges();
+    await settle();
+
+    expect(fetchDocument).toHaveBeenCalledTimes(1);
+    const viewer = fixture.debugElement.query(By.directive(PdfViewerComponent));
+    expect(viewer.componentInstance.targetPage()).toEqual({ page: 4 });
   });
 
   it('gives the rail back when it is destroyed with the page', async () => {
