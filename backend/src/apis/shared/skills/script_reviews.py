@@ -50,6 +50,9 @@ SCRIPTS_REVIEWED_FIELD = "scriptsReviewed"
 METHOD_REVIEW = "review"
 METHOD_AUTHORED = "authored"
 METHOD_UPDATE = "update"
+#: Written by ``backend/scripts/script_trust_backfill.py`` for a binding that
+#: predates review rows (§8.3, D14).
+METHOD_BACKFILL = "backfill"
 
 
 def _now() -> str:
@@ -154,18 +157,43 @@ def read_review(skill_id: str, scope_id: str, digest: str, table: Any = None) ->
 # ---------------------------------------------------------------------------
 
 
-def _audit(action: str, actor: User, skill_id: str, after: Dict[str, Any]) -> None:
+def _audit(action: str, actor: User, skill_id: str, after: Dict[str, Any]) -> bool:
+    """Write one audit record; ``True`` when it was stored. Never raises."""
     try:
-        get_audit_service().record(
+        return get_audit_service().record(
             action=action,
             actor=actor,
             target_id=skill_id,
             target_type=TARGET_SKILL,
             changes=sorted(after),
             after=after,
-        )
+        ) is not None
     except Exception:  # noqa: BLE001 - an audit gap never fails the save
         logger.exception("script review audit record could not be written", extra={"action": action})
+        return False
+
+
+def review_audit_fields(
+    *,
+    scripts_hash: str,
+    scripts: Dict[str, str],
+    scope_kind: str,
+    scope_id: str,
+    version: Optional[int],
+    method: str,
+    reviewed_by: str,
+) -> Dict[str, Any]:
+    """``skill.scripts_reviewed``'s ``after``: ids and hashes only (§9)."""
+    return {
+        "scriptsHash": scripts_hash,
+        "scripts": scripts,
+        "scopeType": scope_kind,
+        "scopeId": scope_id,
+        "version": version,
+        "method": method,
+        "state": st.REVIEW_APPROVED,
+        "reviewedBy": reviewed_by,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -314,16 +342,15 @@ async def _record_binding_reviews(
             AuditAction.SKILL_SCRIPTS_REVIEWED,
             actor,
             record.skill_id,
-            {
-                "scriptsHash": digest,
-                "scripts": scripts,
-                "scopeType": scope_kind,
-                "scopeId": assistant_id,
-                "version": version,
-                "method": method,
-                "state": st.REVIEW_APPROVED,
-                "reviewedBy": reviewer,
-            },
+            review_audit_fields(
+                scripts_hash=digest,
+                scripts=scripts,
+                scope_kind=scope_kind,
+                scope_id=assistant_id,
+                version=version,
+                method=method,
+                reviewed_by=reviewer,
+            ),
         )
         written.append(RecordedReview(record.skill_id, digest, method, version))
     return written
@@ -377,6 +404,7 @@ async def set_author_switch(skill_id: str, actor: User, *, off: bool, reason: st
 
 __all__ = [
     "METHOD_AUTHORED",
+    "METHOD_BACKFILL",
     "METHOD_REVIEW",
     "RecordedReview",
     "SCRIPTS_REVIEWED_FIELD",
@@ -385,6 +413,7 @@ __all__ = [
     "read_review",
     "read_switch",
     "record_binding_reviews",
+    "review_audit_fields",
     "review_method",
     "set_author_switch",
 ]
