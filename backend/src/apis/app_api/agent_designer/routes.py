@@ -653,6 +653,11 @@ async def get_agent_skill_scripts_endpoint(
     assistant, permission = await resolve_assistant_permission(
         assistant_id=agent_id, user_id=current_user.user_id, user_email=current_user.email
     )
+    if assistant is not None and permission is None:
+        # A PUBLIC (store) Agent grants no share record: anyone may use it, as a viewer.
+        assistant, permission = await get_assistant_with_access_check(
+            agent_id, current_user.user_id, current_user.email
+        )
     if not assistant or permission is None:
         raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
     editor = permission in ("owner", "editor")
