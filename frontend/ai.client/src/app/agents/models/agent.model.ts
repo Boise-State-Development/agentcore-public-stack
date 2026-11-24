@@ -150,6 +150,23 @@ export interface MissingCapability {
   optional: boolean;
 }
 
+/** One pinned skill binding: its version, and whether the skill has moved on (skill-version-history D9). */
+export interface AgentSkillPin {
+  skillId: string;
+  version: number;
+  updateAvailable: boolean;
+}
+
+export interface AgentSkillPinsResponse {
+  pins: AgentSkillPin[];
+}
+
+/** The version a binding pins after an Update; the form keeps it as the binding's config. */
+export interface AgentSkillPinMoved {
+  skillId: string;
+  version: number;
+}
+
 export interface AgentRunnability {
   agentId: string;
   state: RunnabilityState;

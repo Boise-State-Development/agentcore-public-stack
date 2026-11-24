@@ -35,6 +35,9 @@ import { MySkillService } from './services/my-skill.service';
 import { MySkill } from './models/my-skill.model';
 import { FEATURES } from '../../services/features';
 import { SkillVersionHistoryComponent } from '../../shared/skills/skill-version-history.component';
+import { SkillUsesComponent } from '../../shared/skills/skill-uses.component';
+import { offerPinUpdates } from '../../shared/skills/skill-uses-dialog.component';
+import { Dialog } from '@angular/cdk/dialog';
 import { skillFilePath } from '../../shared/utils/skill-resource-path';
 
 /** Bundle-directory labels, in the order agentskills.io lists them. */
@@ -78,7 +81,14 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
 @Component({
   selector: 'app-customize-skill-detail',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, SpinnerComponent, MarkdownComponent, SkillVersionHistoryComponent],
+  imports: [
+    NgIcon,
+    RouterLink,
+    SpinnerComponent,
+    MarkdownComponent,
+    SkillVersionHistoryComponent,
+    SkillUsesComponent,
+  ],
   providers: [
     provideIcons({ heroArrowDownTray, heroArrowLeft, heroDocumentText, heroPencilSquare }),
   ],
@@ -332,6 +342,9 @@ const KIND_ORDER: Record<string, number> = { reference: 0, script: 1, asset: 2 }
                 (restored)="onVersionRestored($event)"
               />
             </div>
+            <div class="mt-8">
+              <app-skill-uses [api]="mySkillsApi" [skillId]="s.skillId" [refreshKey]="live.updatedAt" />
+            </div>
           }
 
           <!-- About -->
@@ -397,6 +410,7 @@ export class CustomizeSkillDetailPage {
   private readonly mySkills = inject(MySkillService);
   protected readonly mySkillsApi = this.mySkills;
   protected readonly features = inject(FEATURES);
+  private readonly dialog = inject(Dialog);
 
   /**
    * An owned skill's `updatedAt` and name, read fresh from My Skills for the
@@ -449,6 +463,7 @@ export class CustomizeSkillDetailPage {
     this.liveStamp.set({ updatedAt: skill.updatedAt, name: skill.displayName });
     this.detailService.invalidate(skill.skillId);
     void this.detailService.ensure(skill.skillId);
+    void offerPinUpdates(this.dialog, this.mySkills, skill.skillId);
   }
 
   protected readonly skill = computed<SkillDetail | null>(() =>

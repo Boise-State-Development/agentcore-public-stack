@@ -181,6 +181,12 @@ import { FEATURES } from '../../../services/features';
                 [currentName]="liveName()"
                 (restored)="onVersionRestored($event)"
               />
+              <!-- D9: a catalog skill is bound in other people's agents and projects,
+                   which nothing indexes and an admin does not edit, so say it plainly. -->
+              <p class="mt-3 text-sm/6 text-gray-600 dark:text-gray-400">
+                Agents and projects that pinned an earlier version keep it until their editors
+                update it. They see Update available on their skill settings.
+              </p>
             </div>
           }
 

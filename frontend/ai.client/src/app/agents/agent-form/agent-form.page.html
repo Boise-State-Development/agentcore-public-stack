@@ -393,6 +393,13 @@
           [bulkActions]="false"
           maxHeight="md"
         />
+        @if (features.skillVersionHistory && mode() === 'edit' && !isViewer() && agentId(); as id) {
+          <app-agent-skill-pins
+            [agentId]="id"
+            [labels]="skillLabels()"
+            (pinned)="onSkillPinMoved($event)"
+          />
+        }
       </app-settings-card>
     }
 
