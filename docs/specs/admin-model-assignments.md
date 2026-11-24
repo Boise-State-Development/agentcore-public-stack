@@ -283,10 +283,19 @@ assigned every call runs exactly as before, which is the CLAUDE.md case for no f
   rows declare a params map without it, and Bedrock refuses it ("`temperature` is
   deprecated for this model", seen on dev with Haiku 5.5). A row that declares a params map
   without `temperature` gets none (`TaskModelChoice.supports_temperature`).
+- **Titles on Claude (fixed after dev QA, 2026-11-24).** The title call sent the opening
+  message raw, so Claude models answered it instead of titling it, and Haiku 5.5 spent a
+  50-token ceiling on default reasoning and returned nothing. The message is now framed as
+  `<message>…</message>` to title, and the ceiling is 300 tokens (the clip still holds a
+  title to 50 characters). Nine models titled 40 of 40 openers; Nova Micro's titles were
+  unchanged. Turning thinking off is not an option: Sonnet 5.5 and Opus 5.5 refuse
+  `thinking.type: disabled`. Tool summaries already frame their input and needed nothing.
 - **Read path** as §4.3, simplified: every slot runs off the TTFT path (titles and tool
   summaries are side-channel tasks, compaction is in `update_after_turn`, extraction is a
   tool call), so the resolver awaits the `config_cache` read (60 s TTL, single flight)
-  inside those tasks rather than serving the default on a miss. The turn-path inventory
+  inside those tasks rather than serving the default on a miss. The admin tab alone reads
+  the catalog uncached, since a catalog write clears the cache only in the app-api task that
+  served it. The turn-path inventory
   records the one cold-cache `GetItem` as **concurrent** in the title task.
 - **Retirement.** Resolution follows `replacedBy` for the assignment *and* the default. A
   default with no catalog row (Nova Micro and Nova 2 Lite on dev today) is flagged on the
