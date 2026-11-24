@@ -153,6 +153,9 @@ const CALL_KIND_LABELS: Record<string, string> = {
   voice: 'Voice',
   api_converse: 'API converse',
   document_extract: 'Document extraction',
+  session_title: 'Conversation title',
+  tool_summary: 'Tool activity summary',
+  compaction_summary: 'Compaction summary',
   other: 'Other',
 };
 

@@ -18,6 +18,7 @@ import boto3
 from agents.main_agent.agent_types import create_agent
 from agents.main_agent.base_agent import BaseAgent
 from apis.shared.handoff.context import run_step_title
+from apis.shared.costs.side_call_metering import SESSION_TITLE, schedule_side_call_cost
 from apis.shared.models.task_models import TaskModelSlot, resolve_task_model
 from apis.shared.sessions.metadata import update_session_title
 
@@ -1014,6 +1015,11 @@ async def generate_conversation_title(
             messages=request_body["messages"],
             system=request_body["system"],
             inferenceConfig=request_body["inferenceConfig"],
+        )
+        # The call is billed whatever it returned, so its cost row is scheduled before
+        # any check below can discard the title. Fire-and-forget, off the event loop.
+        schedule_side_call_cost(
+            call_kind=SESSION_TITLE, session_id=session_id, user_id=user_id, choice=choice, response=response
         )
 
         # A guardrail or content-filter stop may carry the refusal as its

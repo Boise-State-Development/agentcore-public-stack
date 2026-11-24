@@ -353,7 +353,8 @@ class TestRoutes:
         assert title["effective"] == {"modelId": MICRO, "modelName": None, "effort": None, "source": "default"}
         sonnet = next(m for m in title["eligibleModels"] if m["modelId"] == SONNET)
         assert sonnet["effortLevels"] == ["low", "medium", "high"]
-        assert title["metered"] is False
+        # Every task writes a cost row (side_call_metering).
+        assert all(s["metered"] is True for s in slots.values())
 
     def test_put_assigns_and_audits(self, client):
         resp = client.put("/admin/task-models/session_title", json={"modelId": SONNET, "effort": "low"})

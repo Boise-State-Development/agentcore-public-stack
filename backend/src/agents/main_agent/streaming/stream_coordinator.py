@@ -3855,7 +3855,9 @@ class StreamCoordinator:
             from apis.shared.tool_summaries import get_tool_summary_store
             from apis.shared.tool_summaries.summarizer import summarize_tool_batch
 
-            summary = await summarize_tool_batch(batch.get("calls") or [])
+            summary = await summarize_tool_batch(
+                batch.get("calls") or [], session_id=session_id, user_id=user_id
+            )
             if not summary:
                 return None
 

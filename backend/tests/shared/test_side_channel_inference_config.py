@@ -239,3 +239,28 @@ async def test_conversation_title_reads_past_a_reasoning_block(monkeypatch):
     monkeypatch.setattr(chat_service, "update_session_title", AsyncMock())
     assert await chat_service.generate_conversation_title(session_id="s", user_id="u", user_input="hi") == "Finals Week Dates"
     await _drain_title_writes()
+
+
+@pytest.mark.asyncio
+async def test_conversation_title_schedules_its_cost_row(monkeypatch):
+    """The title call is billed whatever it returned, so it is metered before any check
+    can discard the title (side_call_metering); the title never waits on the row."""
+    reply = {
+        "stopReason": "guardrail_intervened",
+        "output": {"message": {"content": [{"text": "Sorry."}]}},
+        "usage": {"inputTokens": 300, "outputTokens": 4},
+    }
+    client = MagicMock()
+    client.converse.return_value = reply
+    monkeypatch.setattr(chat_service.boto3, "client", MagicMock(return_value=client))
+    monkeypatch.setattr(chat_service, "update_session_title", AsyncMock())
+    schedule = MagicMock()
+    monkeypatch.setattr(chat_service, "schedule_side_call_cost", schedule)
+
+    title = await chat_service.generate_conversation_title(session_id="s", user_id="u", user_input="hi")
+
+    assert title == "New Conversation"
+    schedule.assert_called_once()
+    kwargs = schedule.call_args.kwargs
+    assert (kwargs["call_kind"], kwargs["session_id"], kwargs["user_id"]) == ("session_title", "s", "u")
+    assert kwargs["response"] is reply

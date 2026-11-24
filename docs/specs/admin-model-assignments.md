@@ -211,6 +211,9 @@ negligible. Once an admin can assign Opus there, that is no longer true. Options
 Recommend **(a)**: it is simple, and the release ledger already handles `callKind`. Its
 write cost needs measuring first.
 
+**Decided and built: (a)**, for all three unmetered tasks (titles, tool summaries and the
+compaction summary). What shipped is in §8.
+
 ---
 
 ## 5. Cleanups that need no setting
@@ -300,10 +303,47 @@ assigned every call runs exactly as before, which is the CLAUDE.md case for no f
 - **Retirement.** Resolution follows `replacedBy` for the assignment *and* the default. A
   default with no catalog row (Nova Micro and Nova 2 Lite on dev today) is flagged on the
   tab, since the catalog's redirect cannot reach it.
-- **Metering (§4.6): deferred.** Titles, tool summaries and — correcting §3 — the
-  compaction summary call write no cost row today; the tab labels them *Not metered* and
-  says the cost lands on the platform. Writing `C#` rows for them (option (a)) is the next
-  PR. Extraction is metered.
+- **Metering (§4.6): option (a), built after the tab (2026-11-24).** Titles, tool
+  summaries and the compaction summary (correcting §3: it was unmetered too) each write one
+  `C#` row per model call. The rows carry `callKind` `session_title`, `tool_summary` or
+  `compaction_summary` and no `messageId`. They are priced from the catalog row of the model
+  that ran (`TaskModelChoice.record`) and count against the user's quota and the session's
+  `totalCost`. The release ledger counts them under `callKind.<kind>`, never as a turn. Every
+  slot is now `metered`, so the tab no longer says *Not metered*.
+  `apis/shared/costs/side_call_metering.py` holds it all:
+  - **Off the first-token path and off the event loop.** The row is scheduled as a
+    fire-and-forget task once the side call's `converse` returns. That is before any check
+    that discards the text, since the call is billed either way. The write itself
+    (`store_message_metadata`, whose DynamoDB calls are synchronous) runs in a worker thread
+    on an event loop of its own. That loop waits for the rollups the store spawns before it
+    closes. The turn-path inventory records the new requests as `concurrent` lines in the
+    title and tool-summary tasks; none is awaited.
+  - **Out of the prompt-cache classifier.** A side call shares no prefix with the turn, so
+    its row is not classified. It is also dropped from a chat call's predecessor window,
+    together with `document_extract` rows, which have the same shape. Otherwise a Nova Micro
+    summary between two chat calls would mark the next one `modelSwitched` and hide its
+    waste as explained. The window was widened from 10 rows to 20 to keep its depth.
+  - **An uncataloged default: a row, no alarm.** Nova Micro and Nova 2 Lite have no catalog
+    row on dev, so a call on a default prices to nothing. The row is still written with its
+    tokens and marked `unpricedDefault`. It fires no `UnmeteredModelCall`, and the ledger
+    leaves it out of `unmeteredCalls`. Adding the catalog row prices every call from then
+    on, and the tab's default notice says so. An assigned model always has a row, so a
+    missing price there still alarms.
+  - **Measured write cost (dev, 2026-11-24).** One row is 13–16 DynamoDB requests and about
+    20 capacity units, nearly all writes:
+    - the `C#` put (6 WCU with its indexes);
+    - the session aggregate (a query and an update);
+    - five user-cost-summary updates;
+    - five or six system and ledger rollup writes.
+
+    At the on-demand rate of $0.625 per million write units, that is about $0.000012 a call,
+    roughly 40% on top of a $0.00003 Nova Micro tool summary. At prod's 26,470 Nova Micro
+    calls in 30 days, it comes to about $0.35 a month. The worker thread held the calling
+    loop's largest stall to 6–12 ms. Awaiting the same write on the loop stalled it for
+    730–800 ms, measured from a laptop; in-region the stall would be shorter, but the
+    request count is the same.
+
+  Extraction was already metered.
 - **Extraction default.** `DOCUMENT_EXTRACT_MODEL_ID` now also reaches app-api while the
   feature is on, so the tab shows the deployment's real default.
 
