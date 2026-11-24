@@ -233,6 +233,28 @@ def _field_set_note(filename: str, kind: str, content: str) -> str:
     return note
 
 
+def _pinned_behind_note(skill_id: str, user_id: str, user_email: Optional[str]) -> str:
+    """One bounded line when pinned places still run an earlier version (spec D9).
+
+    A count, never names, and empty when nothing is behind or history is off, so a
+    tool result grows only when there is something the user should hear. Read
+    after the write, during the tool call: never before the first token. A
+    failed lookup says nothing rather than failing a write that succeeded.
+    """
+    from apis.shared.feature_flags import skill_version_history_enabled
+    from apis.shared.skills.uses import behind_note, classify_uses
+
+    if not skill_version_history_enabled():
+        return ""
+    try:
+        live = _run(get_user_skill_service().get_my_skill(skill_id, _user(user_id, user_email)))
+        note = behind_note(_run(classify_uses(live, user_id)))
+    except Exception:  # noqa: BLE001 - a note never fails the write
+        logger.warning("Could not check pinned uses of %s", skill_id, exc_info=True)
+        return ""
+    return f" {note}" if note else ""
+
+
 def _stale_note() -> str:
     return (
         "If this skill was activated earlier in this conversation, what that earlier "
@@ -475,6 +497,7 @@ def make_my_skill_update_tool(session_id: str, user_id: str, user_email: Optiona
         _log_applied("my_skill_update", skill_id, session_id)
         return _ok(
             f'Updated "{skill.display_name}" ({", ".join(sorted(updates))}). {_stale_note()}'
+            + _pinned_behind_note(skill_id, user_id, user_email)
         )
 
     return my_skill_update
@@ -560,6 +583,7 @@ def make_my_skill_write_file_tool(session_id: str, user_id: str, user_email: Opt
             f"which now has {len(refs)} of {MAX_RESOURCES_PER_SKILL} files. If this file "
             "was read earlier in this conversation, that copy is out of date."
             + _field_set_note(filename, kind, content or "")
+            + _pinned_behind_note(skill_id, user_id, user_email)
         )
 
     return my_skill_write_file
@@ -595,6 +619,7 @@ def make_my_skill_delete_file_tool(session_id: str, user_id: str, user_email: Op
         return _ok(
             f"Deleted '{filename}' from skill '{skill_id}', which now has {len(refs)} files."
             + note
+            + _pinned_behind_note(skill_id, user_id, user_email)
         )
 
     return my_skill_delete_file
