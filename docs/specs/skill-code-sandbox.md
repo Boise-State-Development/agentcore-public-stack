@@ -566,7 +566,10 @@ Throwaway resources on dev (their own role, security groups and interpreters; th
        - a verdict never read from a cached agent (revoke between two calls on one cached agent, and the second call refuses)
        - the hash's canonical form, pinned
        - both tool spec digests unchanged
-   - **PR-2c, recording reviews (backend, app-api).**
+   - **PR-2c, recording reviews (backend, app-api).** Issue #2367. Notes from building it:
+     - The import preview already lists every file with its kind, so the SPA's scripts block reads `kind: "script"` rows. The hash goes on the stored `import_source`, but not on API responses.
+     - Re-saving a project's unchanged skills with `scriptsReviewed` still records the review. That is the sheet's path for a binding that already exists.
+     - **Duplicating an Agent copies its bindings but not their reviews.** The copy's owner is someone else, and their review is theirs to give. The copy's members refuse until its owner saves through the sheet.
      - Agent create and update, project skills saves and Update accept `scriptsReviewed`, and write review rows and `skill.scripts_reviewed`.
      - A hand-written skill of the binder's own gets its `authored` review on save, with no `scriptsReviewed` needed (D17).
      - Agent auto-pin widens to skills with scripts.

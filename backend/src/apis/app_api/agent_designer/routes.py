@@ -53,6 +53,7 @@ from apis.app_api.agent_designer.services.binding_validation import (
     validate_agent_write,
 )
 from apis.shared.assistants.compat import to_agent_view
+from apis.shared.skills.script_reviews import record_binding_reviews
 from apis.shared.assistants.models import (
     AgentResponse,
     AgentRunnabilityResponse,
@@ -255,6 +256,11 @@ async def create_agent_endpoint(
             voice_enabled=request.voice_enabled,
             voice_instructions_only=request.voice_instructions_only,
         )
+        if request.bindings is not None:
+            await record_binding_reviews(
+                assistant.assistant_id, None, assistant.bindings, current_user,
+                scripts_reviewed=request.scripts_reviewed,
+            )
         return _agent_response(assistant, permission="owner")
     except Exception as e:
         logger.error(f"Error creating agent: {e}", exc_info=True)
@@ -571,6 +577,11 @@ async def update_agent_endpoint(
         )
         if not updated:
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+        if request.bindings is not None:
+            await record_binding_reviews(
+                agent_id, assistant.bindings, updated.bindings, current_user,
+                scripts_reviewed=request.scripts_reviewed,
+            )
         return _agent_response(updated, permission=permission)
     except HTTPException:
         raise

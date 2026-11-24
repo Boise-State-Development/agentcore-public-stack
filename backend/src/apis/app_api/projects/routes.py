@@ -84,6 +84,7 @@ from .models import (
     ProjectListResponse,
     ProjectResponse,
     ProjectVoiceResponse,
+    PinSkillRequest,
     SettingsVersionResponse,
     SettingsVersionSummary,
     SettingsVersionsResponse,
@@ -420,18 +421,28 @@ async def put_skills(
     already bound keeps its pin unless the request names another version.
     """
     bindings = [AgentBinding(kind=SKILL, ref=b.ref, config=b.config) for b in body.bindings]
-    return await _skills(await _save(project_id, user, kind=SKILL, bindings=bindings), user)
+    view = await _save(project_id, user, kind=SKILL, bindings=bindings, scripts_reviewed=body.scripts_reviewed)
+    return await _skills(view, user)
 
 
 @router.post(
     "/{project_id}/skills/{skill_id}/pin", response_model=SkillBindingsResponse, response_model_by_alias=True
 )
 async def pin_skill(
-    project_id: str, skill_id: str, user: User = Depends(require_projects_user)
+    project_id: str,
+    skill_id: str,
+    body: Optional[PinSkillRequest] = None,
+    user: User = Depends(require_projects_user),
 ) -> SkillBindingsResponse:
-    """Pin a bound skill to its current content (editor), the "update" for a newer version."""
+    """Pin a bound skill to its current content (editor), the "update" for a newer version.
+
+    The optional body's ``scriptsReviewed`` allows the new version's scripts for the
+    project's members (skill-code-sandbox §8.5).
+    """
     try:
-        view = await _settings().pin_skill(project_id, user, skill_id)
+        view = await _settings().pin_skill(
+            project_id, user, skill_id, scripts_reviewed=body.scripts_reviewed if body else None
+        )
     except ProjectError as e:
         raise _translate(e)
     except BindingValidationError as e:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
+from types import SimpleNamespace
 from typing import List
 
 import pytest
@@ -418,3 +419,81 @@ def test_a_skill_bound_before_adders_were_recorded_has_none(pid, project, skills
     client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": []})
     client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_one"}]})
     assert _harness_skill_configs(project, pid)["skill_one"]["addedBy"] == EDITOR.user_id
+
+
+# ---------------------------------------------------------------------------
+# Script reviews (skill-code-sandbox §8.5)
+# ---------------------------------------------------------------------------
+
+
+def _scripted_skill(skill_id: str, owner_id: str, *, imported: bool = False) -> SkillDefinition:
+    import hashlib
+
+    from apis.shared.skills.models import SkillImportSource, SkillResourceRef
+
+    data = f"print('{skill_id}')".encode()
+    return SkillDefinition(
+        skill_id=skill_id, display_name=skill_id, description="Runs a script.", instructions="Run fill.py.",
+        owner_id=owner_id,
+        resources=[SkillResourceRef(
+            filename="fill.py", content_hash=hashlib.sha256(data).hexdigest(), content_type="text/x-python",
+            size=len(data), s3_key=f"skills/{skill_id}/scripts/fill.py", kind="script",
+        )],
+        import_source=SkillImportSource(type="zip", bundle_hash="b", imported_at="t") if imported else None,
+    )
+
+
+@pytest.fixture()
+def scripted(skills, monkeypatch):
+    """Pinning returns version 1 without freezing files, and a pinned load reads the live row."""
+    from apis.shared.skills import pinning
+    from apis.shared.skills import script_trust
+
+    monkeypatch.setattr(script_trust, "_client", None)
+
+    async def pin(skill_id, *, pinned_by):
+        return SimpleNamespace(version=1)
+
+    async def load(refs):
+        rows = await skills.batch_get_skills([r.split("@")[0] for r in refs])
+        return rows
+
+    monkeypatch.setattr(harness_settings, "pin_current", pin)
+    monkeypatch.setattr(pinning, "load_skill_records", load)
+    return skills
+
+
+def _member_verdict(project, pid, skill_id: str):
+    from apis.shared.skills import script_trust
+
+    service, _ = project
+    harness = asyncio.run(harness_settings.load_harness(service.get_project(pid, OWNER)[0]))
+    record = asyncio.run(skill_repository_module.get_skill_catalog_repository().get_skill(skill_id))
+    rows = script_trust.read_trust_rows(record, "member-9", harness.assistant_id, table_name="test-app-roles")
+    return script_trust.script_verdict(record, "member-9", harness.assistant_id, rows)
+
+
+def test_an_editors_own_hand_written_scripts_run_for_members_once_added(pid, project, scripted):
+    asyncio.run(scripted.create_skill(_scripted_skill("skill_two", EDITOR.user_id)))
+    assert client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_two"}]}).status_code == 200
+    verdict = _member_verdict(project, pid, "skill_two")
+    assert (verdict.trusted_by, verdict.reviewed_by) == ("reviewed", EDITOR.user_id)
+
+    # Removed, the review goes with it.
+    client(EDITOR).put(f"/projects/{pid}/skills", json={"bindings": []})
+    assert _member_verdict(project, pid, "skill_two").refused_reason == "not_reviewed"
+
+
+def test_an_imported_skills_scripts_run_for_members_only_with_the_hash_reviewed(pid, project, scripted):
+    from apis.shared.skills import script_trust
+
+    skill = _scripted_skill("skill_three", EDITOR.user_id, imported=True)
+    asyncio.run(scripted.create_skill(skill))
+    editor = client(EDITOR)
+    editor.put(f"/projects/{pid}/skills", json={"bindings": [{"ref": "skill_three"}]})
+    assert _member_verdict(project, pid, "skill_three").refused_reason == "not_reviewed"
+
+    digest = script_trust.scripts_hash(skill)
+    resp = editor.post(f"/projects/{pid}/skills/skill_three/pin", json={"scriptsReviewed": {"skill_three": digest}})
+    assert resp.status_code == 200, resp.text
+    assert _member_verdict(project, pid, "skill_three").allowed

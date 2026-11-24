@@ -529,6 +529,13 @@ class CreateAssistantRequest(BaseModel):
     voice_instructions_only: bool = Field(
         True, alias="voiceInstructionsOnly", description="Voice uses only the Agent's instructions (#625)"
     )
+    # skill-code-sandbox §8.5: the script sets the saver was shown and allowed,
+    # ``{skillId: scriptsHash}``. Records a review for an imported skill bound
+    # here (``script_reviews.record_binding_reviews``); a hand-written skill of
+    # the saver's own needs none. Optional until the review sheet (PR-2e).
+    scripts_reviewed: Optional[Dict[str, str]] = Field(
+        None, alias="scriptsReviewed", description="Script sets the saver allowed, by skill id"
+    )
 
 
 class UpdateAssistantRequest(BaseModel):
@@ -564,6 +571,13 @@ class UpdateAssistantRequest(BaseModel):
     )
     voice_instructions_only: Optional[bool] = Field(
         None, alias="voiceInstructionsOnly", description="Voice uses only the Agent's instructions (#625); None = unchanged"
+    )
+    # skill-code-sandbox §8.5: the script sets the saver was shown and allowed,
+    # ``{skillId: scriptsHash}``. Records a review for an imported skill bound
+    # here (``script_reviews.record_binding_reviews``); a hand-written skill of
+    # the saver's own needs none. Optional until the review sheet (PR-2e).
+    scripts_reviewed: Optional[Dict[str, str]] = Field(
+        None, alias="scriptsReviewed", description="Script sets the saver allowed, by skill id"
     )
 
 

@@ -20,6 +20,7 @@ from .pins import PIN_CONFIG_KEY, binding_pin, split_pinned_ref
 from .history import SkillVersionSourceMissingError, capture_current
 from .repository import get_skill_catalog_repository
 from .resource_store import get_skill_resource_store
+from .script_trust import has_scripts
 from .versions import SkillVersion, apply_version, content_hash
 
 logger = logging.getLogger(__name__)
@@ -142,14 +143,16 @@ async def pin_imported_skill_bindings(
     *,
     pinned_by: Optional[str],
 ) -> Optional[List[Any]]:
-    """Pin each newly bound skill that was imported from a bundle (agentskills D-7).
+    """Pin each newly bound skill that was imported from a bundle, or that has scripts (agentskills D-7).
 
     A skill with an ``import_source`` was written by a third party; the binding
     runs what its owner reviewed when they bound it, until someone moves the pin.
     So a skill binding whose ref was not bound before, names no version, and
-    whose row has an ``import_source`` gets ``{"version": n}`` from
-    :func:`pin_current`. A hand-written skill, a skill already bound, and a
-    binding that already names a version are returned unchanged.
+    whose row has an ``import_source`` or any ``script`` file gets
+    ``{"version": n}`` from :func:`pin_current`. A hand-written skill with no
+    scripts, a skill already bound, and a binding that already names a version
+    are returned unchanged. A skill with scripts is pinned so the version a
+    review allows is the one members run (skill-code-sandbox §8.3).
 
     ``bindings`` are ``AgentBinding`` objects (``kind``, ``ref``, ``config``);
     ``None`` (a save that does not touch bindings) is returned as is. Call it
@@ -176,7 +179,9 @@ async def pin_imported_skill_bindings(
     rows = await get_skill_catalog_repository().batch_get_skills(
         list(dict.fromkeys(b.ref for b in candidates))
     )
-    imported = {s.skill_id for s in rows if s.import_source is not None}
+    # Any skill with scripts is pinned too, so the version a review allows is the
+    # version members run (skill-code-sandbox §8.3, D5).
+    imported = {s.skill_id for s in rows if s.import_source is not None or has_scripts(s)}
     if not imported:
         return bindings
 

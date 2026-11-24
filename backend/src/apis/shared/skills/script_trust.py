@@ -40,7 +40,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from apis.shared.skills.models import SYSTEM_OWNER_ID
 from apis.shared.skills.resource_paths import manifest_path
@@ -114,6 +114,23 @@ def scripts_hash(record: Any) -> Optional[str]:
         return None
     canonical = json.dumps([[path, sha] for path, sha in entries], separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def scripts_provenance(resources: Iterable[Any]) -> Dict[str, Any]:
+    """``{"scripts_hash", "scripts"}`` for an import's resources, or ``{}`` with no scripts.
+
+    What ``SkillImportSource`` records as the importer's acknowledgement (§8.4).
+    """
+    holder = _Resources(list(resources or []))
+    digest = scripts_hash(holder)
+    if digest is None:
+        return {}
+    return {"scripts_hash": digest, "scripts": dict(script_entries(holder))}
+
+
+@dataclass(frozen=True)
+class _Resources:
+    resources: List[Any]
 
 
 def short_hash(value: Optional[str]) -> str:

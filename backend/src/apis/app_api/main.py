@@ -365,12 +365,15 @@ if skills_enabled():
     from apis.app_api.skills.bundle_import_routes import router as skill_import_router
     from apis.app_api.skills.routes import router as user_skills_router
     from apis.app_api.skills.version_routes import router as skill_versions_router
+    from apis.app_api.skills.script_trust_routes import router as skill_script_trust_router
     # Bundle import (skill-bundle-import.md); its routes 404 while
     # SKILL_BUNDLE_IMPORT_ENABLED is off.
     app.include_router(skill_import_router)
     # Version history (skill-version-history.md); 404 while
     # SKILL_VERSION_HISTORY_ENABLED is off.
     app.include_router(skill_versions_router)
+    # Who allowed a skill's scripts, and the author's switch (skill-code-sandbox §8).
+    app.include_router(skill_script_trust_router)
     app.include_router(user_skills_router)
     logger.info("Skills routes enabled")
 

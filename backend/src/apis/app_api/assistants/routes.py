@@ -16,6 +16,7 @@ from apis.app_api.agent_designer.services.binding_validation import (
 from apis.app_api.agent_designer.services.agent_deletion import delete_owned_agent
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
+from apis.shared.skills.script_reviews import record_binding_reviews
 from apis.shared.assistants.models import (
     AssistantResponse,
     AssistantSharesResponse,
@@ -150,6 +151,11 @@ async def create_assistant_endpoint(request: CreateAssistantRequest, current_use
             voice_enabled=request.voice_enabled,
             voice_instructions_only=request.voice_instructions_only,
         )
+        if request.bindings is not None:
+            await record_binding_reviews(
+                assistant.assistant_id, None, assistant.bindings, current_user,
+                scripts_reviewed=request.scripts_reviewed,
+            )
 
         # Convert to response model (excludes owner_id for privacy)
         assistant_dict = assistant.model_dump(by_alias=True, exclude={"ownerId"})
@@ -403,6 +409,11 @@ async def update_assistant_endpoint(assistant_id: str, request: UpdateAssistantR
 
         if not updated_assistant:
             raise HTTPException(status_code=404, detail=f"Assistant not found: {assistant_id}")
+        if request.bindings is not None:
+            await record_binding_reviews(
+                assistant_id, assistant.bindings, updated_assistant.bindings, current_user,
+                scripts_reviewed=request.scripts_reviewed,
+            )
 
         # Surface the requester's permission on the response so the SPA stays consistent
         updated_assistant.user_permission = permission
