@@ -120,3 +120,45 @@ def test_a_create_binding_unreviewed_scripts_is_a_409_and_stores_nothing(client)
     assert response.json()["detail"]["code"] == "skill_scripts_unreviewed"
     store.assert_not_awaited()
     assert check.await_args.args[0] is None
+
+
+def _status_entries():
+    from apis.shared.skills.script_review_check import BindingScripts
+
+    return [
+        BindingScripts(skill_id="pdf", display_name="PDF", version=2, scripts_hash="a" * 64, state="allowed",
+                       method="review", reviewed_by="user-001", scripts=[{"path": "scripts/fill.py", "size": 1, "change": "new"}]),
+        BindingScripts(skill_id="memo", display_name="Memo", version=1, scripts_hash="b" * 64, state="not_allowed"),
+    ]
+
+
+def _skill_scripts(client, permission, public_permission=None):
+    agent = _assistant([AgentBinding(kind="skill", ref="pdf", config={"version": 2})])
+    names = AsyncMock(return_value={"user-001": "Pat"})
+    with patch(f"{ROUTES}.resolve_assistant_permission", AsyncMock(return_value=(agent, permission))), \
+         patch(f"{ROUTES}.get_assistant_with_access_check", AsyncMock(return_value=(agent if public_permission else None, public_permission))), \
+         patch(f"{ROUTES}._published_bindings", AsyncMock(return_value=None)), \
+         patch(f"{ROUTES}.binding_script_status", AsyncMock(return_value=_status_entries())), \
+         patch("apis.shared.skills.script_review_check._display_names", names):
+        return client.get("/agents/ast-001/skill-scripts")
+
+
+def test_an_editor_sees_every_scripted_skill_with_its_scripts(client):
+    response = _skill_scripts(client, "owner")
+    assert response.status_code == 200, response.text
+    rows = response.json()["skills"]
+    assert [(r["skillId"], r["state"]) for r in rows] == [("pdf", "allowed"), ("memo", "not_allowed")]
+    assert rows[0]["reviewer"] == "Pat" and rows[0]["scripts"]
+
+
+def test_anyone_who_can_use_a_public_agent_sees_its_badge(client):
+    """A store Agent grants no share record, so the read falls back to the visibility check."""
+    response = _skill_scripts(client, None, public_permission="viewer")
+    assert response.status_code == 200, response.text
+    rows = response.json()["skills"]
+    assert [r["skillId"] for r in rows] == ["pdf"]
+    assert "scripts" not in rows[0]
+
+
+def test_someone_who_cannot_use_the_agent_gets_a_404(client):
+    assert _skill_scripts(client, None, public_permission=None).status_code == 404
