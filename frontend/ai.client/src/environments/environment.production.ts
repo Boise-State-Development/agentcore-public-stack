@@ -36,7 +36,9 @@ export const environment = {
         // off by default; #1798).
         documentExtract: true,
         fieldSetAuthoring: true,
-        skillBundleImport: false,
+        // The `production` GitHub environment sets CDK_SKILL_BUNDLE_IMPORT_ENABLED=true
+        // from 1.40.0 (in development, off by default; #1798).
+        skillBundleImport: true,
         skillVersionHistory: false,
         handoffs: false,
         handoffBrief: false,

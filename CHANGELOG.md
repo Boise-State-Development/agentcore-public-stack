@@ -4,6 +4,55 @@ All notable changes to this project are documented in this file. Format follows 
 
 For narrative release notes written for operators and product owners, see [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
+## [1.40.0] - 2026-11-23
+
+Skill scripts are trusted when a skill is adopted, not once per conversation. Binding someone else's scripts to an Agent or project asks the binder to review them once. Members see who reviewed them, and the tool rail names each script run. Admins get a switch that turns a skill's scripts off. With that in place, our prod turns on `run_code` and skill bundle import. Two new in-development features: skill version history with restore and an offer to update pinned uses, and organizing the Agents and Projects pages. Admins choose the model and effort for titles, tool summaries, compaction and extraction. Those side calls are now metered against the user's quota, and the harness's time before the first token has an alarm.
+
+### 🚀 Added
+
+- **Skill scripts are reviewed once, at adoption.** Saving an Agent or project that adds or moves a binding to a skill with scripts the binder didn't write by hand answers 409 `skill_scripts_unreviewed`. The new review sheet answers it, either with **Allow** (`scriptsReviewed: {skillId: hash}`) or with **Add without scripts** (`scriptsDeclined`). Every pinned scripted binding records a `SCRIPTS_REVIEW#AST#…` row, and the binder's own hand-written skill records an `authored` review with no sheet. Bindings that a save leaves alone are never asked about (#2371, #2385)
+- **Members can see whose scripts run.** A badge on Agent details (the store listing too) and on project pages: "Runs scripts in a sandbox with no internet access · Reviewed by {reviewer}, {date}". The tool rail names a run, for example "Ran fill.py from pdf", with the trust line, author and version in the opened row. A new `GET /skills/scripts/trust` route serves the rail, and new `GET /agents/{id}/skill-scripts` and `GET /projects/{id}/skill-scripts` routes serve the badge. The import step says how many scripts a bundle includes, or how many a refresh changed (#2386, #2387)
+- **Admin switch for a skill's scripts.** New delegable scope `admin.skill_scripts` and page `/admin/skills/scripts`. The page shows any skill's scripts, reviews and provenance. `PUT /admin/skill-scripts/{skillId}/switch` turns scripts off for every version or only the chosen hashes, audited as `skill.scripts_switched`. Authors get their own **Scripts can run** switch (#2384, #2386)
+- **One trust verdict for skill scripts** (`apis/shared/skills/script_trust.py`). `run_code` enforces it on every call, reading the review and switch rows with one `BatchGetItem`. The Word tools run it in shadow: they write `verdict` and `wouldRefuse` to `skill.script_run` and never stop a script (#2354)
+- `backend/scripts/script_trust_backfill.py` pins each existing Agent and project binding of a scripted user skill and writes its `backfill` review (#2379)
+- **Skill version history, in development** (`SKILL_VERSION_HISTORY_ENABLED` / `CDK_SKILL_VERSION_HISTORY_ENABLED` / `features.skillVersionHistory`, app-api and the Runtime). Every content write to a skill is kept as a version, deduplicated by content. Owners and admins list, diff, download and restore versions in a **History** section, where a restore is a new version. **Where it's used** offers to update the Agents and projects still pinned to an older version (#2361, #2366, #2368, #2370, #2375, #2376)
+- **Organize the Agents and Projects pages, in development** (`ORGANIZE_LISTS_ENABLED` / `CDK_ORGANIZE_LISTS_ENABLED` / `features.organizeLists`, app-api only). Members can hide items, sort by Recently added, Name or Custom, and **Arrange** both pages and Pinned by drag, arrow keys or Move up / Move down. **New** badges mark an item that arrived since the last arrange. Pinned agents reorder in place in the sidebar. The arrangement is stored as `ARRANGEMENT#agents` / `ARRANGEMENT#projects` items under `/users/me/arrangements/{surface}`. The pin order is written by `PUT /agents/pins/order` (#2363, #2369, #2372, #2373, #2377)
+- **Admins import skill bundles into the skill catalog** from a public GitHub path or a `.zip`, preview the changes, and later check GitHub for changes. The routes are `/admin/skills/import/preview`, `/admin/skills/import` and `/admin/skills/{id}/import`, behind `admin.skills` and `SKILL_BUNDLE_IMPORT_ENABLED`. A new import is a draft with no role grants (#2344)
+- **Task models.** Manage Models has a second tab where admins pick the catalog model, and effort where the model has it, for conversation titles, tool summaries, compaction and structured extraction. The setting is one `SYSTEM#TASK_MODELS` item in the managed-models table, read through the 60 s config cache (#2362, #2374)
+- **A `turn-prelude-p50` alarm on harness time before the first token** (`PreludeTotalMs`, 6-hour p50). It fires above 1,500 ms on periods of 200 or more turns; tune it with `CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS` / `CDK_OBSERVABILITY_TURN_PRELUDE_MIN_TURNS`. The release readout and the Releases tab show the prelude's stages by version (#2348)
+- Specs: skill script trust at adoption (#2346), skill version history (#2353), and Agents and Projects page organization (#2358)
+
+### ✨ Improved
+
+- **Title, tool-summary and compaction side calls are metered.** Each model call writes a `C#` row (`callKind` `session_title`, `tool_summary`, `compaction_summary`), priced from the catalog row of the model that ran and counted against the user's quota and the conversation's cost. Rows are written off the event loop and never before the first token (#2381)
+- **The release ledger's turn KPIs count chat calls only.** Workflow, brief, voice, api-converse and extraction calls get their own **Calls by kind** line in the readout and on the Releases tab (#2335)
+- Agent Designer's skill **Update** control no longer needs `SKILL_VERSION_HISTORY_ENABLED` (#2385)
+- The Workflows page keeps its list for the tab and shows skeleton rows on first load (#2360, #2365)
+- Scrolled sidebar rows fade cleanly under **New Session**, and the selected conversation no longer has an orange left bar (#2392)
+
+### 🐛 Fixed
+
+- **Long "Run now" and scheduled runs no longer fail with "stream exceeded 300s budget"** while the agent is quiet. The harness waits 660 s of silence, the same as a chat turn, and a run is capped at 14 minutes so it ends before the worker Lambda's 15-minute timeout (#2350)
+- **Titles work on any assigned task model.** Claude models had answered the opening message instead of titling it, and Haiku 5.5 spent its token ceiling reasoning. The Task models tab also shows catalog changes at once (#2374)
+- Each `C#` row carries its own call's first-byte time, never the turn's last call's (#2337)
+- Skill import no longer warns about a byte-order mark at the start of a file (#2356)
+- A skill script that starts and exits non-zero reads "Ran {file} from {skill}, which failed", not "Didn't run". The review sheet's View links are readable in dark mode (#2389)
+- The eval case `skill_reactivated_after_compaction` requires a reload only after a compaction cut retired the skill (#2342)
+
+### 🏗️ Infrastructure
+
+- One new CloudWatch alarm, `turn-prelude-p50` (#2348)
+- New variables forwarded in `platform.yml`: `CDK_ORGANIZE_LISTS_ENABLED`, `CDK_SKILL_VERSION_HISTORY_ENABLED`, `CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS`, `CDK_OBSERVABILITY_TURN_PRELUDE_MIN_TURNS`
+- Our prod turns on two existing in-development flags, skill bundle import and the code sandbox (`run_code`), and `environment.production.ts` sets `features.skillBundleImport`. Both stay off by default. The code sandbox adds its Route 53 Resolver DNS Firewall (4 resources) in our prod (#1798)
+
+### 🔧 CI/CD
+
+- **CI fails when the turn path adds a round trip before the first token.** `tests/apis/inference_api/test_turn_path_io_inventory.py` runs four turns through the real handler against a production-sized world and holds them to a committed inventory (turn-path spec §6F, invariant I11) (#2339)
+
+### 📚 Docs
+
+- Skill version history spec updated with what shipped (#2380)
+
 ## [1.39.0] - 2026-11-22
 
 Workflow runs and the workflow designer, all in development and off by default. A message can hand work to several Agents from one approval sheet, and their results come back as one card. A run's shape can be saved, designed on a canvas with stages, tested, and started again, with prompt steps, checklist steps and pinned Agent versions. Skills can run their own scripts with `run_code`, which is also in development: Python or Node, in a new isolated Code Interpreter that has no network path out, with an optional read-only LibreOffice mount. Every existing Code Interpreter tool now runs in that interpreter. Long-context pricing is metered. `knowledge_files` works for users of a PUBLIC Agent. Generated files get a new output card.
