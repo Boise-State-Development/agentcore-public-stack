@@ -1,34 +1,26 @@
-<div class="sticky top-0 z-40 lg:mx-auto lg:max-w-7xl lg:px-8 bg-gray-50/80 backdrop-blur-sm dark:bg-gray-900/50">
+<!--
+  The conversation header: where the conversation lives, then its title.
+
+  It draws no navigation buttons of its own. While the sidebar is out of view
+  (always below lg, and from lg up while it is collapsed) the shell's controls
+  capsule sits over this bar's left end, and the bar starts its content past
+  it: `--shell-controls-reserve` is the capsule's inset plus its width plus a
+  gap (styles.css). With the sidebar expanded nothing sits there, so the bar
+  starts at the page gutter instead.
+
+  Full width on purpose. The bar used to be a centred max-w-7xl box, which put
+  the title a different distance from the capsule at every window width.
+-->
+<div class="border-b border-gray-200 bg-gray-50/80 backdrop-blur-sm dark:border-white/10 dark:bg-gray-900/70">
     <div
-      class="flex h-16 items-center gap-x-4 border-b border-gray-200 px-4 shadow-xs sm:gap-x-6 sm:px-6 lg:shadow-none dark:border-white/10 dark:shadow-none transition-[padding] duration-300"
-      [class.lg:pl-24]="sidenavService.isCollapsed()"
-      [class.lg:pl-0]="!sidenavService.isCollapsed()">
-      <button type="button" (click)="openSidenav()" class="-m-2.5 p-2.5 text-gray-700 hover:text-gray-900 lg:hidden dark:text-gray-400 dark:hover:text-white">
-        <span class="sr-only">Open sidebar</span>
-        <!-- Sidebar panel icon -->
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" class="size-6">
-          <rect x="3" y="4" width="18" height="16" rx="2" ry="2" />
-          <line x1="9" y1="4" x2="9" y2="20" />
-        </svg>
-      </button>
-
-      <!-- New Chat button (visible when sidenav is hidden on mobile) -->
-      <button
-        type="button"
-        (click)="newChat()"
-        class="flex items-center justify-center size-10 rounded-full bg-secondary-500 text-white shadow-xs hover:bg-secondary-400 lg:hidden"
-        aria-label="New chat">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="size-5" aria-hidden="true">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-        </svg>
-      </button>
-
+      class="flex h-16 items-center pr-3 pl-(--shell-controls-reserve) transition-[padding] duration-300 motion-reduce:transition-none sm:pr-6 lg:pr-8"
+      [class.lg:pl-6]="!sidenavService.isCollapsed()">
       <!--
         Breadcrumb: whatever the conversation lives inside, then its title. The
         chat container projects the bound agent here (with its own "/"
         separator); anything projected truncates before the title does.
       -->
-      <div class="flex min-w-0 items-center gap-x-1.5">
+      <div class="flex min-w-0 flex-1 items-center gap-x-1.5">
         <ng-content select="[topnavCrumb]" />
         @if (renaming()) {
           <!-- Inline rename input -->
@@ -39,7 +31,7 @@
             (input)="renameValue.set(renameInput.value)"
             (keydown)="onRenameKeydown($event)"
             (blur)="onRenameSubmit()"
-            class="min-w-0 max-w-xs flex-1 rounded-md border border-gray-300 bg-white px-2 py-1 text-base/7 font-semibold text-gray-900 outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:focus:border-primary-400 dark:focus:ring-primary-400"
+            class="w-full min-w-0 max-w-sm rounded-md border border-gray-300 bg-white px-2 py-1 text-base/7 font-semibold text-gray-900 outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:focus:border-primary-400 dark:focus:ring-primary-400"
             aria-label="Rename conversation title"
           />
         } @else if (titlePending()) {
@@ -48,7 +40,7 @@
                title is still generating. Show a skeleton until it lands or, if
                none ever arrives, until the pending window closes (below). -->
           <div
-            class="h-4 w-40 rounded-md bg-gray-200 animate-pulse motion-reduce:animate-none dark:bg-white/5"
+            class="h-4 w-40 max-w-full rounded-md bg-gray-200 animate-pulse motion-reduce:animate-none dark:bg-white/5"
             role="status"
             aria-label="Loading conversation title"
           ></div>
@@ -60,12 +52,12 @@
             [cdkMenuTriggerFor]="sessionMenu"
             [cdkMenuPosition]="menuPositions"
             [disabled]="deleting()"
-            class="group/title flex min-w-0 items-center gap-x-2 rounded-md px-1.5 py-1 -mx-1.5 text-gray-900 hover:bg-gray-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white dark:hover:bg-white/10"
+            class="group/title flex min-w-0 items-center gap-x-1.5 rounded-md px-2 py-1 text-gray-900 sm:gap-x-2 hover:bg-gray-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white dark:hover:bg-white/10"
             [attr.aria-label]="'Options for conversation: ' + displayTitle()"
             aria-haspopup="menu"
           >
             @for (title of [visibleTitle()]; track title) {
-              <span class="session-title-enter truncate text-base/7 font-semibold">{{ title }}</span>
+              <span class="session-title-enter truncate text-[0.9375rem]/7 font-semibold sm:text-base/7">{{ title }}</span>
             }
             <ng-icon
               name="heroChevronDown"
@@ -151,9 +143,5 @@
 
       </div>
 
-      <div class="flex flex-1 gap-x-4 self-stretch lg:gap-x-6">
-        <div class="grid flex-1 grid-cols-1">
-        </div>
-      </div>
     </div>
   </div>

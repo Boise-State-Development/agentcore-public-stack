@@ -60,18 +60,6 @@ describe('Topnav', () => {
     expect(component.currentSession()).toEqual({ sessionId: 'test-session', title: 'Test Session' });
   });
 
-  it('should navigate to home when newChat is called', async () => {
-    const component = await createComponent();
-    component.newChat();
-    expect(mockRouter.navigate).toHaveBeenCalledWith(['']);
-  });
-
-  it('should open sidenav when openSidenav is called', async () => {
-    const component = await createComponent();
-    component.openSidenav();
-    expect(mockSidenavService.open).toHaveBeenCalled();
-  });
-
   describe('title pending / fallback', () => {
     it('is not pending when the session already has a title', async () => {
       const component = await createComponent();

@@ -22,10 +22,10 @@ describe('App', () => {
   );
 
   it(
-    'should have newChat as a method',
+    'should route document keydowns to the shortcut table',
     async () => {
       const { App } = await import('./app');
-      expect(App.prototype.newChat).toBeDefined();
+      expect(App.prototype.onDocumentKeydown).toBeDefined();
     },
     IMPORT_TIMEOUT_MS,
   );
