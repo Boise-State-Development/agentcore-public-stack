@@ -53,7 +53,22 @@ describe('AnimatedTextComponent', () => {
     expect(fixture.nativeElement.querySelector('.cursor')).toBeNull();
   });
 
-  it.each<AnimatedTextEntry>(['focus', 'drop', 'flip', 'aurora'])(
+  it.each<AnimatedTextEntry>([
+    'focus',
+    'drop',
+    'flip',
+    'aurora',
+    'lava',
+    'blueprint',
+    'warp',
+    'prism',
+    'shockwave',
+    'rise',
+    'settle',
+    'weight',
+    'sheen',
+    'whisper',
+  ])(
     '%s renders every letter in words with a stagger index',
     entry => {
       const fixture = render('How can I help?', entry);
@@ -109,5 +124,42 @@ describe('AnimatedTextComponent', () => {
     const after = fixture.nativeElement.querySelector('.ch');
     expect(after).not.toBe(before);
     expect(visibleLetters(fixture.nativeElement)).toBe('Second');
+  });
+
+  it('gives the stylesheet what the centre-out and word-by-word entries count from', () => {
+    const fixture = render('How can I help?', 'shockwave');
+    const el: HTMLElement = fixture.nativeElement;
+    const stage = el.querySelector('.stage') as HTMLElement;
+
+    // 12 letters: shockwave and settle measure each letter's distance from the middle of them.
+    expect(stage.style.getPropertyValue('--n')).toBe('12');
+    const words = Array.from(el.querySelectorAll<HTMLElement>('.word'));
+    expect(words.map(w => w.style.getPropertyValue('--w'))).toEqual(['0', '1', '2', '3']);
+  });
+
+  it('caps the gap between words so a long sentence still lands in about a second', () => {
+    const fixture = render('How can I help?', 'whisper');
+    const stage = fixture.nativeElement.querySelector('.stage') as HTMLElement;
+    expect(stage.style.getPropertyValue('--word-step')).toBe('110ms');
+
+    fixture.componentRef.setInput('text', Array.from({ length: 60 }, () => 'word').join(' '));
+    fixture.detectChanges();
+    expect(stage.style.getPropertyValue('--word-step')).toBe('30ms');
+  });
+
+  it('carries each letter as an attribute for the entries that draw a copy of it', () => {
+    // prism's two ghosts and weight's thickening copy are pseudo-elements reading data-c.
+    const fixture = render('Hi you', 'prism');
+    const letters = Array.from(fixture.nativeElement.querySelectorAll('.ch') as NodeListOf<HTMLElement>);
+    expect(letters.map(l => l.getAttribute('data-c')).join('')).toBe('Hiyou');
+  });
+
+  it('renders the blob filter for lava only', () => {
+    const lava = render('Hello', 'lava');
+    expect(lava.nativeElement.querySelector('.stage svg filter#animated-text-goo')).not.toBeNull();
+    expect(visibleLetters(lava.nativeElement)).toBe('Hello');
+
+    const rise = render('Hello', 'rise');
+    expect(rise.nativeElement.querySelector('svg')).toBeNull();
   });
 });

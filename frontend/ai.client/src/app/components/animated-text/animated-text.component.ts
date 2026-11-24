@@ -19,8 +19,38 @@ import {
  * - `drop`: letters fall onto the baseline at a tilt, squash on impact and bounce settle.
  * - `flip`: a departure board; every letter flips down on its own tile, which then fades away.
  * - `aurora`: letters ignite in a hue-shifted glow of the brand colour and cool to the text colour.
+ *
+ * Bold:
+ * - `lava`: brand-coloured blobs rise from under the line, fuse with their neighbours and tighten into letters.
+ * - `blueprint`: each letter is drafted as an outline, floods with ink from the baseline up, then dries to the text colour.
+ * - `warp`: letters streak in from the right as stretched light and snap into shape.
+ * - `prism`: three colour channels slide together, and the letter appears where they meet.
+ * - `shockwave`: a pulse bursts from the middle of the line and throws the letters outward before they settle.
+ *
+ * Quiet:
+ * - `rise`: letters climb out from behind the baseline, one after another.
+ * - `settle`: the whole line fades up with wide spacing that drifts closed.
+ * - `weight`: hairline letters thicken to the heading weight (needs a variable font; a plain fade without one).
+ * - `sheen`: the line fades up, then one band of brand-coloured light crosses it.
+ * - `whisper`: word by word, each one easing out of a soft blur.
  */
-export type AnimatedTextEntry = 'typewriter' | 'decode' | 'focus' | 'drop' | 'flip' | 'aurora';
+export type AnimatedTextEntry =
+  | 'typewriter'
+  | 'decode'
+  | 'focus'
+  | 'drop'
+  | 'flip'
+  | 'aurora'
+  | 'lava'
+  | 'blueprint'
+  | 'warp'
+  | 'prism'
+  | 'shockwave'
+  | 'rise'
+  | 'settle'
+  | 'weight'
+  | 'sheen'
+  | 'whisper';
 
 interface Letter {
   /** The character itself. */
@@ -33,6 +63,8 @@ interface Letter {
 
 interface Word {
   key: string;
+  /** Index among the words, which drives the word-by-word stagger. */
+  i: number;
   letters: Letter[];
 }
 
@@ -43,6 +75,13 @@ const DECODE_LEAD = 8;
 
 /** The whole line should land in about this long, however long the text is. */
 const STAGGER_BUDGET_MS = 1200;
+
+/** The same budget for the entries that stagger by word, which hold each word longer. */
+const WORD_STAGGER_BUDGET_MS = 900;
+
+/** The longest and shortest gap between words. */
+const WORD_STEP_MAX_MS = 110;
+const WORD_STEP_MIN_MS = 30;
 
 /** Deterministic pseudo-random in [-1, 1] for an index. */
 function wobble(i: number): number {
@@ -74,9 +113,26 @@ function prefersReducedMotion(): boolean {
           aria-hidden="true"
           [attr.data-entry]="entry()"
           [style.--step]="stepMs() + 'ms'"
+          [style.--word-step]="wordStepMs() + 'ms'"
+          [style.--n]="letterCount()"
         >
+          @if (entry() === 'lava') {
+            <!-- Turns blurred letters into hard-edged blobs: alpha is multiplied up and cut off. -->
+            <svg class="goo-defs" focusable="false">
+              <filter
+                id="animated-text-goo"
+                x="-20%"
+                y="-80%"
+                width="140%"
+                height="260%"
+                color-interpolation-filters="sRGB"
+              >
+                <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -8" />
+              </filter>
+            </svg>
+          }
           @for (word of words(); track word.key; let last = $last) {
-            <span class="word">
+            <span class="word" [style.--w]="word.i">
               @for (l of word.letters; track l.i) {
                 @if (entry() === 'decode') {
                   <span class="ch" [class.locked]="l.i < decodeLocked()">
@@ -86,7 +142,7 @@ function prefersReducedMotion(): boolean {
                     }
                   </span>
                 } @else {
-                  <span class="ch" [style.--i]="l.i" [style.--r]="l.r">{{ l.c }}</span>
+                  <span class="ch" [attr.data-c]="l.c" [style.--i]="l.i" [style.--r]="l.r">{{ l.c }}</span>
                 }
               }
             </span>
@@ -96,196 +152,7 @@ function prefersReducedMotion(): boolean {
       }
     </h1>
   `,
-  styles: [`
-    /* ---- typewriter ---------------------------------------------------- */
-    @keyframes caret-blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0; }
-    }
-    .cursor {
-      animation: caret-blink 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    }
-
-    /* ---- shared -------------------------------------------------------- */
-    .word {
-      display: inline-block;
-      white-space: nowrap;
-    }
-    .ch {
-      display: inline-block;
-      animation-duration: 700ms;
-      animation-fill-mode: both;
-      animation-delay: calc(var(--i, 0) * var(--step, 40ms));
-    }
-
-    /* ---- decode: cipher noise locks into letters ------------------------ */
-    [data-entry='decode'] .ch {
-      position: relative;
-      animation: none;
-    }
-    [data-entry='decode'] .final {
-      visibility: hidden;
-    }
-    [data-entry='decode'] .locked .final {
-      visibility: visible;
-      animation: decode-lock 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-    }
-    [data-entry='decode'] .glyph {
-      position: absolute;
-      inset: 0;
-      display: grid;
-      place-items: center;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.82em;
-      font-weight: 500;
-      color: var(--color-primary-500);
-      opacity: 0.75;
-    }
-    :host-context(.dark) [data-entry='aurora'] {
-      --aurora-settle: oklch(from var(--color-primary-500) 0.75 c h);
-    }
-    :host-context(.dark) [data-entry='decode'] {
-      --decode-flash: oklch(from var(--color-primary-500) 0.8 c h);
-    }
-    :host-context(.dark) [data-entry='decode'] .glyph {
-      color: oklch(from var(--color-primary-500) 0.8 c h);
-      opacity: 0.85;
-    }
-    @keyframes decode-lock {
-      0% {
-        color: var(--decode-flash, var(--color-primary-500));
-        transform: scale(1.25);
-        text-shadow: 0 0 18px oklch(from var(--color-primary-500) l c h / 0.7);
-      }
-    }
-
-    /* ---- focus: rack focus from a heavy blur ---------------------------- */
-    [data-entry='focus'] .ch {
-      animation-name: focus-in;
-      animation-duration: 1100ms;
-      animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    @keyframes focus-in {
-      0% {
-        opacity: 0;
-        filter: blur(16px);
-        transform: translateY(0.35em) scale(1.6);
-      }
-      45% {
-        opacity: 1;
-      }
-      100% {
-        opacity: 1;
-        filter: blur(0);
-        transform: none;
-      }
-    }
-
-    /* ---- drop: gravity, squash and bounce ------------------------------- */
-    [data-entry='drop'] .ch {
-      transform-origin: 50% 100%;
-      animation-name: drop-in;
-      animation-duration: 900ms;
-      animation-timing-function: linear;
-    }
-    @keyframes drop-in {
-      0% {
-        opacity: 0;
-        transform: translateY(-1.6em) rotate(calc(var(--r, 0) * 35deg));
-        animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45);
-      }
-      10% { opacity: 1; }
-      42% {
-        transform: translateY(0) rotate(0) scale(1.18, 0.78);
-        animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
-      }
-      62% {
-        transform: translateY(-0.22em) rotate(calc(var(--r, 0) * -6deg)) scale(0.96, 1.05);
-        animation-timing-function: cubic-bezier(0.32, 0, 0.67, 0);
-      }
-      78% {
-        transform: translateY(0) scale(1.05, 0.94);
-        animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
-      }
-      90% { transform: translateY(-0.05em) scale(1); }
-      100% { opacity: 1; transform: none; }
-    }
-
-    /* ---- flip: split-flap departure board ------------------------------- */
-    [data-entry='flip'] .word {
-      perspective: 500px;
-    }
-    [data-entry='flip'] .ch {
-      transform-origin: 50% 0%;
-      backface-visibility: hidden;
-      border-radius: 0.12em;
-      padding-inline: 0.02em;
-      margin-inline: -0.02em;
-      animation-name: flip-in, flip-tile;
-      animation-duration: 650ms, 1100ms;
-      animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1), ease-out;
-    }
-    @keyframes flip-in {
-      0% {
-        opacity: 0;
-        transform: rotateX(-105deg);
-      }
-      30% { opacity: 1; }
-      100% {
-        opacity: 1;
-        transform: rotateX(0);
-      }
-    }
-    @keyframes flip-tile {
-      0%, 45% {
-        background-color: color-mix(in oklch, currentColor 12%, transparent);
-        box-shadow: inset 0 -0.5px 0 0 color-mix(in oklch, currentColor 25%, transparent);
-      }
-      100% {
-        background-color: transparent;
-        box-shadow: inset 0 0 0 0 transparent;
-      }
-    }
-
-    /* ---- aurora: ignite in a hue-shifted glow, cool to the text colour -- */
-    [data-entry='aurora'] .ch {
-      animation-name: aurora-in;
-      animation-duration: 1400ms;
-      animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
-    }
-    @keyframes aurora-in {
-      0% {
-        opacity: 0;
-        filter: blur(6px);
-        transform: translateX(-0.4em) skewX(-18deg);
-        color: oklch(from var(--color-primary-500) 0.8 c calc(h + 140));
-        text-shadow: 0 0 0 transparent;
-      }
-      25% {
-        opacity: 1;
-        filter: blur(0);
-        transform: none;
-        color: oklch(from var(--color-primary-500) 0.72 0.2 calc(h + 70));
-        text-shadow: 0 0 22px oklch(from var(--color-primary-500) 0.7 0.2 calc(h + 70) / 0.9);
-      }
-      55% {
-        color: var(--aurora-settle, var(--color-primary-500));
-        text-shadow: 0 0 14px oklch(from var(--color-primary-500) l c h / 0.6);
-      }
-      100% {
-        opacity: 1;
-        text-shadow: 0 0 0 transparent;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .ch,
-      .cursor,
-      [data-entry='decode'] .locked .final {
-        animation: none !important;
-      }
-    }
-  `],
+  styleUrl: './animated-text.component.css',
 })
 export class AnimatedTextComponent {
   /** The text to animate. */
@@ -333,6 +200,7 @@ export class AnimatedTextComponent {
       .filter(w => w.length > 0)
       .map((w, wi) => ({
         key: `${run}-${wi}`,
+        i: wi,
         letters: Array.from(w, c => {
           const letter = { c, i, r: wobble(i) };
           i++;
@@ -341,9 +209,17 @@ export class AnimatedTextComponent {
       }));
   });
 
-  private readonly letterCount = computed(() =>
+  protected readonly letterCount = computed(() =>
     this.words().reduce((n, w) => n + w.letters.length, 0),
   );
+
+  /** The gap between words for the entries that stagger by word, capped like the letter stagger. */
+  protected readonly wordStepMs = computed(() => {
+    const n = Math.max(1, this.words().length);
+    return Math.round(
+      Math.max(WORD_STEP_MIN_MS, Math.min(WORD_STEP_MAX_MS, WORD_STAGGER_BUDGET_MS / n)),
+    );
+  });
 
   protected readonly stepMs = computed(() => {
     const n = Math.max(1, this.letterCount());
