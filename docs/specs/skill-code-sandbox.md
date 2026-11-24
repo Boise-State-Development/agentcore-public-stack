@@ -579,8 +579,17 @@ Throwaway resources on dev (their own role, security groups and interpreters; th
      - Nothing is required yet, so the SPA keeps working.
    - **PR-2d, the backfill** (`backend/scripts/script_trust_backfill.py`).
      - Every Agent and project binding of a user skill with scripts is pinned if it's live and gets a review by the binding's owner (`method: backfill`, `skill.scripts_reviewed`).
-     - Missing `contentHash` values are filled in.
-     - It's idempotent and has a `--dry-run` that lists what it would write. It's run on dev, then on production before the release that carries PR-2b.
+       - The reviewer is whoever the scripts already run on behalf of (`resolve_invocable_skill_ids`): an Agent's owner, or on a project the binding's `addedBy` and then the harness's owner. A binding whose reviewer didn't write the skill is skipped (`owner_mismatch`), since its scripts don't resolve for members today. Catalog skills are skipped (`catalog`): they run as `admin`.
+       - A live binding is pinned through `pinning.pin_current`, with one `UpdateItem` on the row's `bindings` that's conditional on them not having changed since the scan. A save that lands mid-run fails that write, and a rerun picks the binding up.
+       - **A project's pin cuts no settings version.** The script writes the harness row directly rather than through `HarnessSettingsService`. The service needs an authorized editor, re-runs `validate_agent_write` as them, and records `authored` reviews, not `backfill` ones. The project history also names a person for every version, and one with no author reads "Starting point". The pin is still on the binding, where Settings shows it, and on the review row and the audit record.
+       - **A published Agent's snapshot is covered too**, because its members run the published `AgentVersion`, not the draft. A skill pinned there is reviewed at that version's hash. A skill bound live there is reviewed at the live hash (`published_live`) but can't be pinned, since a published snapshot is immutable. Its scripts refuse for members once the author changes them, until the Agent is published again with the draft's pin.
+     - Missing `contentHash` values are filled in from the file's S3 bytes, before any pin, because `pin_current` can't freeze a file without one. Each write is conditional on the entry still having no hash at the same `s3Key`, and it doesn't bump `updatedAt`.
+     - It's idempotent: a binding with a review for that assistant and hash is skipped (`already_reviewed`), and a second run writes nothing. It writes nothing without `--apply`, and exits non-zero on any write error, a missing audit record included.
+     - **Runbook.** Prod runs after the release carrying PR-2b and PR-2c deploys, so a binding made after the backfill is pinned and reviewed by its save, and before PR-2g enforces.
+       1. Dev, dry run: `cd backend && AWS_PROFILE=dev-ai AWS_REGION=us-west-2 uv run --no-sync python scripts/script_trust_backfill.py --prefix dev-boisestateai-v2`. Read the table: every `owner_mismatch` and any `ERROR` needs an explanation before applying.
+       2. Dev, apply: the same command with `--apply`, then the dry run again, which must show only `skip`.
+       3. Check one Agent and one project from the table: a member's Word script call writes `verdict: reviewed` and no `wouldRefuse` on `skill.script_run`.
+       4. Prod: the same three steps with the production profile and prefix, once that release is deployed. Keep the dry run's output with the release notes (§12 step 5).
    - **PR-2e, the SPA, and the 409 that needs it.**
      - The review sheet, its Update form and the binding-row notes (§8.5).
      - Agent Designer's Update control.
