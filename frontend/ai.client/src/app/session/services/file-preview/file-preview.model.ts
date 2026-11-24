@@ -69,8 +69,14 @@ export const CSV_MIME = 'text/csv';
 export const XLSX_MIME =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
+/**
+ * MIME type of a PDF. Matches the `.pdf` entry in
+ * `apis.shared.files.ALLOWED_EXTENSIONS`.
+ */
+export const PDF_MIME = 'application/pdf';
+
 /** What the pane knows how to render, and which viewer does it. */
-export type PreviewKind = 'docx' | 'pptx' | 'csv' | 'xlsx';
+export type PreviewKind = 'docx' | 'pptx' | 'csv' | 'xlsx' | 'pdf';
 
 /** Human label for the pane header's subtitle. */
 export const PREVIEW_KIND_LABELS: Readonly<Record<PreviewKind, string>> = {
@@ -78,6 +84,7 @@ export const PREVIEW_KIND_LABELS: Readonly<Record<PreviewKind, string>> = {
   pptx: 'PowerPoint presentation',
   csv: 'Data file',
   xlsx: 'Spreadsheet',
+  pdf: 'PDF document',
 };
 
 /**
@@ -101,6 +108,7 @@ export const PREVIEW_KIND_MIMES: Readonly<
   pptx: [PPTX_MIME],
   csv: [CSV_MIME, 'application/csv', 'application/vnd.ms-excel', 'text/plain'],
   xlsx: [XLSX_MIME],
+  pdf: [PDF_MIME],
 };
 
 /**
@@ -135,6 +143,7 @@ export function previewKindFor(filename: string): PreviewKind | null {
   if (/\.pptx$/i.test(name)) return 'pptx';
   if (/\.csv$/i.test(name)) return 'csv';
   if (/\.xlsx$/i.test(name)) return 'xlsx';
+  if (/\.pdf$/i.test(name)) return 'pdf';
   return null;
 }
 

@@ -12,6 +12,7 @@ describe('previewKindFor', () => {
     expect(previewKindFor('deck.pptx')).toBe('pptx');
     expect(previewKindFor('rows.csv')).toBe('csv');
     expect(previewKindFor('budget.xlsx')).toBe('xlsx');
+    expect(previewKindFor('report.pdf')).toBe('pdf');
   });
 
   it('ignores case and surrounding whitespace', () => {
@@ -19,6 +20,7 @@ describe('previewKindFor', () => {
     expect(previewKindFor('Quarterly Review.PPTX')).toBe('pptx');
     expect(previewKindFor('Export.CSV')).toBe('csv');
     expect(previewKindFor('Budget FY27.XLSX')).toBe('xlsx');
+    expect(previewKindFor(' Annual Report.PDF')).toBe('pdf');
   });
 
   it('declines the pre-2007 binary formats', () => {
@@ -38,13 +40,14 @@ describe('previewKindFor', () => {
   });
 
   it('reads every other kind from bytes it fetched', () => {
-    for (const kind of ['docx', 'pptx', 'csv'] as const) {
+    for (const kind of ['docx', 'pptx', 'csv', 'pdf'] as const) {
       expect(previewFetchesBytes(kind)).toBe(true);
     }
   });
 
   it('declines an extension that merely contains a known one', () => {
-    expect(previewKindFor('plan.docx.pdf')).toBeNull();
+    expect(previewKindFor('plan.docx.bak')).toBeNull();
+    expect(previewKindFor('scan.pdf.zip')).toBeNull();
     expect(previewKindFor('notdocx')).toBeNull();
   });
 
@@ -57,13 +60,14 @@ describe('previewKindFor', () => {
       'e.doc',
       'f.csv',
       'g.xls',
+      'h.pdf',
     ]) {
       expect(isPreviewableFilename(name)).toBe(previewKindFor(name) !== null);
     }
   });
 
   it('labels every kind it can return', () => {
-    for (const name of ['a.docx', 'b.pptx', 'c.csv', 'd.xlsx']) {
+    for (const name of ['a.docx', 'b.pptx', 'c.csv', 'd.xlsx', 'e.pdf']) {
       const kind = previewKindFor(name);
       expect(kind).not.toBeNull();
       expect(PREVIEW_KIND_LABELS[kind!]).toBeTruthy();

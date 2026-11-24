@@ -26,6 +26,7 @@ import { downloadUrlFor } from '../../../../../shared/utils/file-download-url';
 import { TooltipDirective } from '../../../../../components/tooltip/tooltip.directive';
 import { CsvViewerComponent } from './csv-viewer.component';
 import { DocxViewerComponent } from './docx-viewer.component';
+import { PdfViewerComponent } from './pdf-viewer.component';
 import { PptxViewerComponent } from './pptx-viewer.component';
 import { XlsxViewerComponent } from './xlsx-viewer.component';
 import { KbDocumentLoadFailure, KbDocumentViewerComponent } from './kb-document-viewer.component';
@@ -42,9 +43,9 @@ import { citationPage } from '../../../citation-display/citation-display.compone
 
 /**
  * Right-docked pane that previews one uploaded file in the browser —
- * `.docx`, `.pptx`, `.csv` and `.xlsx` today.
+ * `.docx`, `.pptx`, `.pdf`, `.csv` and `.xlsx` today.
  *
- * Three of those four are read here from bytes the pane fetched through
+ * All but `.xlsx` are read here from bytes the pane fetched through
  * a presigned URL. `.xlsx` is not: no client-side workbook reader was
  * shippable, so app-api reads it and its viewer takes an upload id
  * instead. `previewFetchesBytes` is what keeps the two paths from
@@ -78,6 +79,7 @@ import { citationPage } from '../../../citation-display/citation-display.compone
     TooltipDirective,
     CsvViewerComponent,
     DocxViewerComponent,
+    PdfViewerComponent,
     PptxViewerComponent,
     XlsxViewerComponent,
     KbDocumentViewerComponent,
@@ -232,6 +234,13 @@ import { citationPage } from '../../../citation-display/citation-display.compone
             }
           } @else {
             @switch (kind()) {
+              @case ('pdf') {
+                <app-pdf-viewer
+                  [bytes]="bytes()"
+                  (renderFailed)="onRenderFailed($event)"
+                  (rendered)="onRendered()"
+                />
+              }
               @case ('pptx') {
                 <app-pptx-viewer
                   [bytes]="bytes()"

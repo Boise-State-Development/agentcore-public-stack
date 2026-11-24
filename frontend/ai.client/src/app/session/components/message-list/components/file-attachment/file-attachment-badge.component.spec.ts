@@ -65,6 +65,8 @@ describe('FileAttachmentBadgeComponent click routing', () => {
   const PPTX_MIME =
     'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   const PDF_MIME = 'application/pdf';
+  /** Pre-2007 Word: a format the pane cannot render at all. */
+  const DOC_MIME = 'application/msword';
 
   async function mount(filename: string, mimeType: string, sizeBytes = 1024) {
     const opened: unknown[] = [];
@@ -117,8 +119,18 @@ describe('FileAttachmentBadgeComponent click routing', () => {
     expect(windowOpen).not.toHaveBeenCalled();
   });
 
+  it('opens an uploaded .pdf in the docked pane, not a new tab', async () => {
+    const { fixture, opened, windowOpen } = await mount('paper.pdf', PDF_MIME);
+
+    fixture.nativeElement.querySelector('button').click();
+    await fixture.whenStable();
+
+    expect(opened).toEqual([{ uploadId: 'up1', filename: 'paper.pdf' }]);
+    expect(windowOpen).not.toHaveBeenCalled();
+  });
+
   it('still opens a format the pane cannot render in a new tab', async () => {
-    const { fixture, opened, getPreviewUrl } = await mount('paper.pdf', PDF_MIME);
+    const { fixture, opened, getPreviewUrl } = await mount('minutes.doc', DOC_MIME);
 
     fixture.nativeElement.querySelector('button').click();
     await fixture.whenStable();
@@ -143,7 +155,7 @@ describe('FileAttachmentBadgeComponent click routing', () => {
   });
 
   it('does not advertise Preview for a format the pane cannot render', async () => {
-    const { fixture } = await mount('paper.pdf', PDF_MIME);
+    const { fixture } = await mount('minutes.doc', DOC_MIME);
     expect(fixture.nativeElement.textContent).not.toContain('PREVIEW');
   });
 
@@ -153,10 +165,10 @@ describe('FileAttachmentBadgeComponent click routing', () => {
       deck.fixture.nativeElement.querySelector('button').getAttribute('aria-label'),
     ).toBe('Preview deck.pptx');
 
-    const pdf = await mount('paper.pdf', PDF_MIME);
+    const doc = await mount('minutes.doc', DOC_MIME);
     expect(
-      pdf.fixture.nativeElement.querySelector('button').getAttribute('aria-label'),
-    ).toBe('Open paper.pdf');
+      doc.fixture.nativeElement.querySelector('button').getAttribute('aria-label'),
+    ).toBe('Open minutes.doc');
   });
 
   describe('large document chip', () => {

@@ -2,12 +2,13 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FilePreviewPanelComponent } from './file-preview-panel.component';
 import { DocxViewerComponent } from './docx-viewer.component';
+import { PdfJsLoader } from './pdfjs-loader';
 import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
 import {
   FilePreviewError,
   FilePreviewHttpService,
 } from '../../../../services/file-preview/file-preview-http.service';
-import { DOCX_MIME } from '../../../../services/file-preview/file-preview.model';
+import { DOCX_MIME, PDF_MIME } from '../../../../services/file-preview/file-preview.model';
 import { DockedPaneService } from '../../../../services/docked-pane/docked-pane.service';
 import { ConfigService } from '../../../../../services/config.service';
 import { DocumentService } from '../../../../../assistants/services/document.service';
@@ -51,6 +52,12 @@ describe('FilePreviewPanelComponent', () => {
       imports: [FilePreviewPanelComponent],
       providers: [
         { provide: FilePreviewHttpService, useValue: { fetchDocument } },
+        // pdf.js cannot run under jsdom; a loader that never settles keeps
+        // the PDF viewer on its loading state, all the panel needs to see.
+        {
+          provide: PdfJsLoader,
+          useValue: { load: () => new Promise(() => undefined), assetUrl: () => '/pdfjs/' },
+        },
       ],
     }).compileComponents();
 
@@ -185,6 +192,23 @@ describe('FilePreviewPanelComponent', () => {
 
     expect(fetchDocument).toHaveBeenLastCalledWith('up2');
     expect(fixture.nativeElement.textContent).toContain('notes.docx');
+  });
+
+  it('hands a PDF to the PDF viewer, labelled as one', async () => {
+    fetchDocument.mockResolvedValue({
+      bytes: new ArrayBuffer(16),
+      mimeType: PDF_MIME,
+      filename: 'report.pdf',
+    });
+    state.open({ uploadId: 'up3', filename: 'report.pdf' });
+    fixture.detectChanges();
+    await settle();
+
+    expect(fetchDocument).toHaveBeenLastCalledWith('up3');
+    expect(fixture.nativeElement.querySelector('app-pdf-viewer')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('app-docx-viewer')).toBeNull();
+    expect(fixture.nativeElement.textContent).toContain('PDF document');
+    expect(fixture.nativeElement.textContent).toContain('Loading preview');
   });
 
   it('gives the rail back when it is destroyed with the page', async () => {
