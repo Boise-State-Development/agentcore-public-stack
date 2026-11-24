@@ -1,6 +1,6 @@
 # Organizing the Agents and Projects pages
 
-**Status:** PR-1 (backend storage and routes) merged in #2363; PR-2 (Hide, the Hidden filter, My agents filters) merged in #2369; PR-3 (sorts, Arrange, New badges, pin order) in review. Spec written 2026-11-23 against `develop` @ `b510150b1`.
+**Status:** PR-1 (backend storage and routes) merged in #2363; PR-2 (Hide, the Hidden filter, My agents filters) merged in #2369; PR-3 (sorts, Arrange, New badges, pin order) merged in #2372; PR-4 (reordering inside the sidebar's Pinned group) in review. Spec written 2026-11-23 against `develop` @ `b510150b1`.
 
 **Flag:** `ORGANIZE_LISTS_ENABLED` / `CDK_ORGANIZE_LISTS_ENABLED`, app-api only, `features.organizeLists`.
 In development: off by default and in prod, on in the `development` GitHub environment and
