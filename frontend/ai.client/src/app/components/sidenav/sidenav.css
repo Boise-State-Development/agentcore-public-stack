@@ -58,3 +58,33 @@ nav a.active {
 .sidenav-nav::-webkit-scrollbar-thumb:hover {
   /* Hover state handled by template */
 }
+
+/*
+ * Nav icons lift and tilt on hover (or keyboard focus), except New Session,
+ * whose plus turns a quarter-turn instead. A spring curve that
+ * overshoots gives the bounce, and a transition rather than a keyframe lets
+ * the icon ease back on mouse-out instead of snapping.
+ */
+.nav-active .nav-icon {
+  color: var(--color-secondary-500);
+}
+
+:host-context(.dark) .nav-active .nav-icon {
+  color: var(--color-secondary-400);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .nav-icon > * {
+    transition: transform 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  .group:hover .nav-icon > *,
+  .group:focus-visible .nav-icon > * {
+    transform: translateY(-2px) rotate(6deg) scale(1.08);
+  }
+
+  .group:hover .nav-icon.nav-icon-new > *,
+  .group:focus-visible .nav-icon.nav-icon-new > * {
+    transform: rotate(90deg) scale(1.12);
+  }
+}
