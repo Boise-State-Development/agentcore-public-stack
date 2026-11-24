@@ -294,5 +294,47 @@ describe('PdfViewerComponent', () => {
       expect(rendered).toBe(1);
       expect(fixture.nativeElement.querySelector('.pdf-page-target')).toBeNull();
     });
+
+    it('highlights the quoted passage on the page it opens at', async () => {
+      fixture.componentRef.setInput('targetPage', { page: 3, quote: 'of page 3' });
+      await render(new ArrayBuffer(8));
+
+      const marks = Array.from(pages()[2].querySelectorAll('mark.pdf-quote'));
+      expect(marks.map((m) => m.textContent)).toEqual(['of page 3']);
+      // The rest of the run is still there, unmarked.
+      expect(pages()[2].querySelector('.textLayer')?.textContent).toBe('text of page 3');
+      expect(fixture.nativeElement.querySelectorAll('mark.pdf-quote')).toHaveLength(1);
+    });
+
+    it('moves the highlight when a quote on another page is asked for', async () => {
+      fixture.componentRef.setInput('targetPage', { page: 1, quote: 'text of page 1' });
+      await render(new ArrayBuffer(8));
+      fixture.componentRef.setInput('targetPage', { page: 2, quote: 'page 2' });
+      fixture.detectChanges();
+      await settle();
+
+      expect(pages()[0].querySelector('mark.pdf-quote')).toBeNull();
+      // Unmarking leaves the run whole again, not split into pieces.
+      expect(pages()[0].querySelector('.textLayer span')?.childNodes).toHaveLength(1);
+      expect(pages()[1].querySelector('mark.pdf-quote')?.textContent).toBe('page 2');
+    });
+
+    it('marks nothing when the page does not contain the quote', async () => {
+      fixture.componentRef.setInput('targetPage', { page: 2, quote: 'a passage that is elsewhere' });
+      await render(new ArrayBuffer(8));
+
+      expect(fixture.nativeElement.querySelector('mark.pdf-quote')).toBeNull();
+      expect(pages()[1].classList.contains('pdf-page-target')).toBe(true);
+    });
+
+    it('clears the highlight when a page is asked for without a quote', async () => {
+      fixture.componentRef.setInput('targetPage', { page: 1, quote: 'page 1' });
+      await render(new ArrayBuffer(8));
+      fixture.componentRef.setInput('targetPage', { page: 1 });
+      fixture.detectChanges();
+      await settle();
+
+      expect(fixture.nativeElement.querySelector('mark.pdf-quote')).toBeNull();
+    });
   });
 });

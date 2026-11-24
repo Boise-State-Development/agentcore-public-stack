@@ -11,6 +11,11 @@ export interface OpenFilePreviewRef {
    * fetching it again.
    */
   page?: number;
+  /**
+   * A passage on `page` to highlight: the quote a `verify_sources` claim
+   * was located by. Only meaningful with `page`.
+   */
+  quote?: string;
 }
 
 /**

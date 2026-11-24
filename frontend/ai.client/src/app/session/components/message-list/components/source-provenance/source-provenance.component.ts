@@ -45,8 +45,8 @@ interface VerdictParts {
  * words, and each row pairs its dot with a sentence.
  *
  * In a PDF the page in each verdict is a link that opens the document in the
- * side pane at that page, so the reader can check the passage themselves —
- * for `quote_unsupported` above all. Only for a PDF: a `.docx` locator is a
+ * side pane at that page with the quoted passage highlighted, so the reader
+ * can check it themselves — for `quote_unsupported` above all. Only for a PDF: a `.docx` locator is a
  * paragraph, which no viewer can scroll to, and a page link that opened the
  * document at the top would claim a precision it does not have.
  */
@@ -319,7 +319,13 @@ export class SourceProvenanceComponent {
   }
 
   protected openPage(claim: SourceProvenanceClaim, page: number): void {
-    this.filePreview.open({ uploadId: claim.uploadId, filename: claim.filename, page });
+    const quote = claim.quote?.trim();
+    this.filePreview.open({
+      uploadId: claim.uploadId,
+      filename: claim.filename,
+      page,
+      ...(quote ? { quote } : {}),
+    });
   }
 
   /**

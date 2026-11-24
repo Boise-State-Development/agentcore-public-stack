@@ -18,6 +18,7 @@ import type {
   TextLayer,
 } from 'pdfjs-dist';
 import { PdfJsLoader, type PdfJs } from './pdfjs-loader';
+import { findQuote } from './pdf-quote-match';
 
 /**
  * Highest device pixel ratio a page canvas is drawn at. A canvas costs
@@ -49,7 +50,12 @@ const TARGET_HIGHLIGHT_MS = 1600;
 export interface PdfPageTarget {
   /** 1-based, as pdf.js and `source_provenance` locators number pages. */
   page: number;
+  /** A passage on that page to highlight and bring into view. */
+  quote?: string;
 }
+
+/** Class on the `<mark>` elements that highlight a quoted passage. */
+const QUOTE_MARK_CLASS = 'pdf-quote';
 
 /** One page's slot in the scroll column. */
 interface PageSlot {
@@ -90,7 +96,13 @@ interface PageSlot {
  * A `targetPage` (set when a citation names a page) scrolls to that page,
  * outlines it briefly and moves focus to it, so a screen reader announces
  * where the reader landed. Given before the document has opened, it is
- * where the document opens: that page is drawn first, not page 1.
+ * where the document opens: that page is drawn first, not page 1. With a
+ * `quote`, the passage is found in the page's text layer (`findQuote`),
+ * wrapped in `<mark>` and scrolled into view. The highlight stays until
+ * another page is asked for, and is put back whenever the page is redrawn
+ * (a resize, or scrolling away and back). A quote the text layer does not
+ * contain leaves the page outlined and nothing marked: a highlight on the
+ * wrong words would be worse than none.
  *
  * The library is loaded with a dynamic `import()` (see `PdfJsLoader`):
  * it is dead weight in the initial bundle for sessions that never open a
@@ -155,6 +167,22 @@ interface PageSlot {
     :host ::ng-deep .pdf-page.pdf-page-target {
       outline: 3px solid var(--color-primary-500);
       outline-offset: 3px;
+    }
+
+    /* The quoted passage. The text layer's glyphs are transparent over the
+       canvas, so the mark is only a tint behind the drawn text. */
+    :host ::ng-deep .textLayer mark.pdf-quote {
+      background: rgb(250 204 21 / 0.45);
+      color: transparent;
+      border-radius: 2px;
+      padding: 0;
+    }
+
+    @media (forced-colors: active) {
+      :host ::ng-deep .textLayer mark.pdf-quote {
+        background: Mark;
+        forced-color-adjust: none;
+      }
     }
 
     :host ::ng-deep .pdf-page:focus {
@@ -288,6 +316,11 @@ export class PdfViewerComponent {
   private resizeTimer: ReturnType<typeof setTimeout> | null = null;
   private lastFitWidth = 0;
   private highlightTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The passage to highlight, and on which page. */
+  private quoteTarget: { page: number; quote: string } | null = null;
+  /** Bring the passage into view the next time it is marked: once per jump,
+   *  never again on a redraw the reader did not ask for. */
+  private scrollToQuote = false;
 
   constructor() {
     // Redraw at the new width when the rail is resized. Slots follow the
@@ -315,7 +348,7 @@ export class PdfViewerComponent {
     effect(() => {
       const target = this.targetPage();
       if (!target || !this.doc || !this.slots.length) return;
-      untracked(() => this.goToPage(target.page));
+      untracked(() => this.goToPage(target.page, target.quote));
     });
 
     inject(DestroyRef).onDestroy(() => {
@@ -362,7 +395,9 @@ export class PdfViewerComponent {
       this.buildSlots(host, doc.numPages, base.width, base.height);
       this.pageCount.set(doc.numPages);
 
-      const target = this.pageIndex(untracked(this.targetPage)?.page);
+      const wanted = untracked(this.targetPage);
+      const target = this.pageIndex(wanted?.page);
+      if (target !== null) this.setQuoteTarget(target + 1, wanted?.quote);
       const start = this.slots[target ?? 0];
       start.visible = true;
       this.lastFitWidth = this.fitWidth();
@@ -373,7 +408,7 @@ export class PdfViewerComponent {
       this.observeVisibility(seq);
       this.rendered.emit();
       // Again once drawn: the page may have corrected its slot's size.
-      if (target !== null) this.goToPage(target + 1);
+      if (target !== null) this.goToPage(target + 1, wanted?.quote);
     } catch (error) {
       if (seq !== this.renderSeq) return;
       this.teardown(host);
@@ -496,6 +531,7 @@ export class PdfViewerComponent {
       slot.el.replaceChildren(canvas, text);
       slot.drawnWidth = width;
       slot.pendingWidth = null;
+      if (this.quoteTarget?.page === slot.pageNumber) this.markQuote(slot);
 
       // Scrolled away while it was drawing: give the canvas straight back.
       if (!slot.visible) this.release(slot);
@@ -522,11 +558,15 @@ export class PdfViewerComponent {
    * it briefly, and move focus to it so assistive tech says which page
    * this is. The visibility observer draws it once it is in view.
    */
-  private goToPage(page: number): void {
+  private goToPage(page: number, quote?: string): void {
     const index = this.pageIndex(page);
     if (index === null) return;
     const slot = this.slots[index];
+    this.setQuoteTarget(page, quote);
     this.scrollToSlot(slot);
+    // Already drawn: mark it now. Otherwise `drawPage` marks it once the
+    // visibility observer has it drawn.
+    if (slot.drawnWidth !== null) this.markQuote(slot);
 
     for (const other of this.slots) other.el.classList.remove('pdf-page-target');
     slot.el.classList.add('pdf-page-target');
@@ -537,6 +577,75 @@ export class PdfViewerComponent {
     }, TARGET_HIGHLIGHT_MS);
 
     slot.el.focus({ preventScroll: true });
+  }
+
+  /** Replace the passage to highlight, clearing any marks from the last. */
+  private setQuoteTarget(page: number, quote: string | undefined): void {
+    this.clearQuoteMarks();
+    const text = quote?.trim();
+    this.quoteTarget = text ? { page, quote: text } : null;
+    this.scrollToQuote = !!text;
+  }
+
+  /**
+   * Highlight the quoted passage in a drawn page's text layer, and bring it
+   * into view if this is the jump that asked for it.
+   */
+  private markQuote(slot: PageSlot): void {
+    const target = this.quoteTarget;
+    const layer = slot.el.querySelector<HTMLElement>('.textLayer');
+    if (!target || !layer || layer.querySelector(`mark.${QUOTE_MARK_CLASS}`)) return;
+
+    const nodes: Text[] = [];
+    const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+
+    const ranges = findQuote(
+      nodes.map((n) => n.data),
+      target.quote,
+    );
+    if (!ranges.length) return;
+
+    // Last range first, so splitting a node never shifts the offsets of a
+    // range still to come in that same node.
+    const marks: HTMLElement[] = [];
+    for (const range of [...ranges].reverse()) {
+      const node = nodes[range.text];
+      if (range.end < node.data.length) node.splitText(range.end);
+      const middle = range.start > 0 ? node.splitText(range.start) : node;
+      const mark = document.createElement('mark');
+      mark.className = QUOTE_MARK_CLASS;
+      middle.replaceWith(mark);
+      mark.append(middle);
+      marks.unshift(mark);
+    }
+
+    if (this.scrollToQuote) {
+      this.scrollToQuote = false;
+      this.bringIntoView(marks[0]);
+    }
+  }
+
+  /**
+   * Scroll so `el` sits a quarter of the way down the pane, unless it is
+   * already comfortably in view — a passage near the top of the page is
+   * best read with the page's top edge still showing.
+   */
+  private bringIntoView(el: HTMLElement): void {
+    const scroller = this.scroller().nativeElement;
+    const box = scroller.getBoundingClientRect();
+    const top = el.getBoundingClientRect().top - box.top;
+    if (top >= 0 && top <= scroller.clientHeight * 0.6) return;
+    scroller.scrollTop += top - scroller.clientHeight * 0.25;
+  }
+
+  private clearQuoteMarks(): void {
+    const host = this.pagesHost().nativeElement;
+    for (const mark of Array.from(host.querySelectorAll(`mark.${QUOTE_MARK_CLASS}`))) {
+      const parent = mark.parentNode;
+      mark.replaceWith(...Array.from(mark.childNodes));
+      parent?.normalize();
+    }
   }
 
   private scrollToSlot(slot: PageSlot): void {
@@ -598,6 +707,8 @@ export class PdfViewerComponent {
       slot.textLayer?.cancel();
     }
     this.slots = [];
+    this.quoteTarget = null;
+    this.scrollToQuote = false;
     this.pageCount.set(0);
     host?.replaceChildren();
     // Destroying the loading task also destroys its document and frees

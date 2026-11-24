@@ -223,13 +223,13 @@ describe('FilePreviewPanelComponent', () => {
     fixture.detectChanges();
     await settle();
 
-    state.open({ uploadId: 'up3', filename: 'report.pdf', page: 4 });
+    state.open({ uploadId: 'up3', filename: 'report.pdf', page: 4, quote: 'total award' });
     fixture.detectChanges();
     await settle();
 
     expect(fetchDocument).toHaveBeenCalledTimes(1);
     const viewer = fixture.debugElement.query(By.directive(PdfViewerComponent));
-    expect(viewer.componentInstance.targetPage()).toEqual({ page: 4 });
+    expect(viewer.componentInstance.targetPage()).toEqual({ page: 4, quote: 'total award' });
   });
 
   it('gives the rail back when it is destroyed with the page', async () => {

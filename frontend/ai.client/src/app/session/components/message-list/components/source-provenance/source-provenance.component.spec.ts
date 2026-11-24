@@ -243,10 +243,12 @@ describe('SourceProvenanceComponent', () => {
       expect(text(fixture)).toContain('found on page 7');
 
       link.click();
+      // The quote goes along, so the pane can highlight the passage.
       expect(TestBed.inject(FilePreviewStateService).openFile()).toEqual({
         uploadId: 'up-1',
         filename: 'award.pdf',
         page: 7,
+        quote: 'The total approved budget is $487,500 for this award.',
       });
     });
 
@@ -276,6 +278,16 @@ describe('SourceProvenanceComponent', () => {
     it('does not link a page in a file the pane cannot show as pages', async () => {
       const fixture = await render([claim({ filename: 'deck.pptx' })]);
       expect(links(fixture)).toHaveLength(0);
+    });
+
+    it('opens at the page without a quote when the claim has none', async () => {
+      const fixture = await render([claim({ quote: '  ' })]);
+      links(fixture)[0].click();
+      expect(TestBed.inject(FilePreviewStateService).openFile()).toEqual({
+        uploadId: 'up-1',
+        filename: 'award.pdf',
+        page: 1,
+      });
     });
 
     it('does not link an unverified claim or one with no file', async () => {

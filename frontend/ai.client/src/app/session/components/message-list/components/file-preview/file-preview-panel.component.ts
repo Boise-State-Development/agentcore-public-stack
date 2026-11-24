@@ -340,8 +340,9 @@ export class FilePreviewPanelComponent {
    * the same page again — after scrolling away — jumps back to it.
    */
   protected readonly pageTarget = computed<PdfPageTarget | null>(() => {
-    const page = this.uploadRef()?.page;
-    return page ? { page } : null;
+    const ref = this.uploadRef();
+    if (!ref?.page) return null;
+    return ref.quote ? { page: ref.page, quote: ref.quote } : { page: ref.page };
   });
 
   protected readonly bytes = signal<ArrayBuffer | null>(null);
