@@ -147,12 +147,14 @@ def skill_store(monkeypatch):
     return blobs
 
 
-def _bind(skill, blobs: Dict[str, bytes], files: Dict[str, bytes]) -> TurnSkillRecords:
+def _bind(
+    skill, blobs: Dict[str, bytes], files: Dict[str, bytes], scope: str | None = None, kind: str | None = None
+) -> TurnSkillRecords:
     from agents.main_agent.skills.strands_mapping import _manifest_path
 
     for ref in skill.resources:
         blobs[ref.s3_key] = files[_manifest_path(ref)]
-    holder = TurnSkillRecords()
+    holder = TurnSkillRecords(scope, kind)
     holder.bind([skill])
     return holder
 
@@ -224,6 +226,79 @@ def test_skill_script_runs_with_argv_and_sibling_imports(sandbox, saved, audits,
     assert args[4] == "ok"
 
 
+# ---------------------------------------------------------------------------
+# Whose scripts run (spec §8)
+# ---------------------------------------------------------------------------
+
+
+def test_a_reviewed_skill_runs_on_its_agent_and_names_its_version(sandbox, saved, audits, skill_store, trust_rows):
+    from apis.shared.skills import script_trust
+
+    files = {"scripts/x.py": b"print('reviewed')\n"}
+    skill = _skill(owner="someone-else", files=files)
+    holder = _bind(skill, skill_store, files, scope="agent-1")
+    trust_rows.rows = script_trust.TrustRows(review=script_trust.ScriptReview(reviewed_by="someone-else", version=2))
+    result = _call(holder, skill_name="pdf", path="scripts/x.py")
+    assert result["status"] == "success", _text(result)
+    digest = script_trust.scripts_hash(skill)
+    assert f"Script version: {digest[:8]}" in _text(result)
+    assert trust_rows.calls == [{"skill_id": "pdf", "invoker": USER, "scope": "agent-1"}]
+    _, (_, _, _, _, outcome, verdict) = audits[0]
+    assert outcome == "ok"
+    assert verdict.audit_fields() == {
+        "scriptsHash": digest, "trustedBy": "reviewed", "reviewedBy": "someone-else", "scopeId": "agent-1", "version": 2,
+    }
+
+
+def test_a_review_withdrawn_between_calls_refuses_the_next_call(sandbox, saved, audits, skill_store, trust_rows):
+    """One holder, as a cached agent keeps it: the second call reads the rows again."""
+    from apis.shared.skills import script_trust
+
+    files = {"scripts/x.py": b"print(1)\n"}
+    holder = _bind(_skill(owner="someone-else", files=files), skill_store, files, scope="project-1", kind="project")
+    trust_rows.rows = script_trust.TrustRows(review=script_trust.ScriptReview(reviewed_by="owner"))
+    assert _call(holder, skill_name="pdf", path="scripts/x.py")["status"] == "success"
+    trust_rows.rows = script_trust.TrustRows()
+    second = _call(holder, skill_name="pdf", path="scripts/x.py")
+    assert second["status"] == "error"
+    assert "haven't been allowed in this project" in _text(second)
+    assert "the project's owner" in _text(second)
+    assert len(trust_rows.calls) == 2
+
+
+def test_the_authors_switch_stops_their_own_skill_too(sandbox, saved, audits, skill_store, trust_rows):
+    from apis.shared.skills import script_trust
+
+    files = {"scripts/x.py": b"print(1)\n"}
+    holder = _bind(_skill(files=files), skill_store, files)
+    trust_rows.rows = script_trust.TrustRows(switch=script_trust.ScriptSwitch(off=True, by="author"))
+    result = _call(holder, skill_name="pdf", path="scripts/x.py")
+    assert "the skill's author turned its scripts off" in _text(result)
+    assert sandbox.commands == []
+
+
+def test_unreadable_trust_rows_refuse_rather_than_run(sandbox, saved, audits, skill_store, trust_rows):
+    files = {"scripts/x.py": b"print(1)\n"}
+    holder = _bind(_skill(files=files), skill_store, files)
+    trust_rows.fail = RuntimeError("throttled")
+    result = _call(holder, skill_name="pdf", path="scripts/x.py")
+    assert "couldn't be checked" in _text(result)
+    assert sandbox.commands == []
+
+
+def test_bytes_that_differ_from_the_manifest_are_refused_as_changed(sandbox, saved, audits, skill_store):
+    files = {"scripts/x.py": b"print('reviewed bytes')\n"}
+    holder = _bind(_skill(files=files), skill_store, files)
+    # The stored object was overwritten after the manifest row was read.
+    skill_store[holder.records[0].resources[0].s3_key] = b"print('something else')\n"
+    result = _call(holder, skill_name="pdf", path="scripts/x.py")
+    assert result["status"] == "error"
+    assert "its files changed while the run was being prepared" in _text(result)
+    assert not any("something else" in c for c in sandbox.commands)
+    _, (_, _, _, _, outcome, verdict) = audits[0]
+    assert (outcome, verdict.refused_reason, verdict.allowed) == ("refused", "changed", False)
+
+
 def test_script_exit_code_comes_back(sandbox, saved, audits, skill_store):
     files = {"scripts/check.py": b"import sys\nprint('usage: check.py <file>')\nsys.exit(2)\n"}
     holder = _bind(_skill(files=files), skill_store, files)
@@ -238,9 +313,14 @@ def test_a_skill_by_another_user_is_refused_before_any_sandbox(sandbox, saved, a
     holder = _bind(_skill(owner="someone-else", files=files), skill_store, files)
     result = _call(holder, skill_name="pdf", path="scripts/x.py")
     assert result["status"] == "error"
-    assert "another user" in _text(result)
+    # Plain chat (no Agent or project) and no acceptance: not trusted.
+    assert "haven't been turned on for this account" in _text(result)
+    assert "Don't copy the script" in _text(result)
     assert sandbox.commands == [] and sandbox.started_with == []
-    assert audits == []
+    # The refusal is audited, with its reason and the script set's hash.
+    assert len(audits) == 1 and audits[0][0] == "script"
+    _, (_, _, path, _, outcome, verdict) = audits[0]
+    assert (path, outcome, verdict.refused_reason) == ("scripts/x.py", "refused", "not_trusted")
 
 
 def test_an_admin_catalog_skill_runs(sandbox, saved, audits, skill_store):
@@ -360,12 +440,13 @@ def test_a_javascript_reference_is_refused_with_a_js_fix(sandbox, saved, audits,
     assert sandbox.commands == []
 
 
-def test_a_js_skill_by_another_user_waits_for_the_approval_card(sandbox, saved, audits, skill_store):
+def test_a_js_skill_by_another_user_needs_a_review_on_an_agent(sandbox, saved, audits, skill_store):
     files = {"scripts/x.js": b"console.log(1)\n"}
-    holder = _bind(_skill(owner="someone-else", files=files), skill_store, files)
+    holder = _bind(_skill(owner="someone-else", files=files), skill_store, files, scope="agent-1")
     result = _call(holder, skill_name="pdf", path="scripts/x.js")
-    assert "another user" in _text(result)
-    assert sandbox.commands == [] and audits == []
+    assert "haven't been allowed in this agent" in _text(result)
+    assert sandbox.commands == []
+    assert [a[1][4] for a in audits] == ["refused"]
 
 
 def test_the_entry_program_sends_exactly_the_node_extensions_to_node():

@@ -1,6 +1,7 @@
 import { isAwaitingUserSubmission } from '../../../../services/mcp-apps/awaiting-submission';
 import type { ToolCallDisplay } from './tool-rail.model';
 import { describeMemoryCall, memoryCallKind, memoryRollup, type MemoryCallKind } from './memory-call';
+import { describeSkillScriptCall, scriptRan, scriptRefused, skillScriptCall } from './skill-script-call';
 
 /**
  * Deterministic, zero-cost descriptions of what a tool call did.
@@ -193,6 +194,15 @@ export function describeToolCall(call: ToolCallDisplay): string {
 
   const memory = memoryCallKind(call);
   if (memory) return describeMemoryCall(memory, failed ? 'failed' : running ? 'running' : 'ok');
+
+  // A skill's own script, run by name: say which, from which skill (skill-code-sandbox §8.6).
+  const script = skillScriptCall(call);
+  if (script) {
+    if (running) return describeSkillScriptCall(script, 'running');
+    if (scriptRefused(call)) return describeSkillScriptCall(script, 'refused');
+    if (failed) return describeSkillScriptCall(script, scriptRan(call) ? 'failed' : 'refused');
+    return describeSkillScriptCall(script, 'ok');
+  }
 
   const { verb, subject } = splitToolName(call.toolName);
 

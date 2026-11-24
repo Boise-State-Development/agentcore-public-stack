@@ -16,7 +16,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from apis.app_api.skills import bundle_import_routes
+from apis.app_api.skills import bundle_import_core, bundle_import_routes
 from apis.app_api.skills import routes as my_skill_routes
 from apis.shared.auth import get_current_user_from_session
 from apis.shared.skills import pinning
@@ -140,7 +140,7 @@ class TestPreview:
         assert client.post("/skills/mine/import/preview", **both).status_code == 400
 
     def test_an_oversize_upload_is_refused_before_parsing(self, client, monkeypatch):
-        monkeypatch.setattr(bundle_import_routes, "MAX_UPLOAD_ARCHIVE_BYTES", 10)
+        monkeypatch.setattr(bundle_import_core, "MAX_UPLOAD_ARCHIVE_BYTES", 10)
         resp = _preview(client, V1)
         assert resp.status_code == 400
         assert "larger than" in resp.json()["detail"]
@@ -295,7 +295,7 @@ class TestGitHub:
                 zf.comment = b"e4bb5d960d87126ff3b3a8af1a104b7db67560ba"
             return buf.getvalue()
 
-        monkeypatch.setattr(bundle_import_routes, "fetch_archive", fake_fetch)
+        monkeypatch.setattr(bundle_import_core, "fetch_archive", fake_fetch)
         resp = client.post(
             "/skills/mine/import",
             data={"url": "https://github.com/anthropics/skills/tree/main/skills/pdf"},
@@ -321,6 +321,6 @@ class TestGitHub:
         async def boom(location):  # pragma: no cover - must not run
             raise AssertionError("fetched")
 
-        monkeypatch.setattr(bundle_import_routes, "fetch_archive", boom)
+        monkeypatch.setattr(bundle_import_core, "fetch_archive", boom)
         resp = client.post("/skills/mine/import/preview", data={"url": "https://169.254.169.254/latest/meta-data"})
         assert resp.status_code == 400

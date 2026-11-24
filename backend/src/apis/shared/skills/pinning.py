@@ -4,7 +4,8 @@ Two callers: the project settings routes pin (``pin_current``) and report
 (``pin_status``), and the runtime loads the records a turn runs
 (``load_skill_records``). A hard-deleted skill's versions go with it
 (``SkillCatalogService.delete_versions``).
-See ``versions.py`` for why a version is cut on pin rather than on every save.
+A pin cuts its version through ``history.capture_current``; see ``versions.py`` for
+when else one is cut.
 """
 
 from __future__ import annotations
@@ -14,17 +15,16 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from apis.shared.timestamps import to_iso, utc_now_iso
-
-from .models import SkillDefinition, SkillResourceRef
+from .models import SkillDefinition
 from .pins import PIN_CONFIG_KEY, binding_pin, split_pinned_ref
-from .repository import SkillVersionExistsError, get_skill_catalog_repository
+from .history import SkillVersionSourceMissingError, capture_current
+from .repository import get_skill_catalog_repository
 from .resource_store import get_skill_resource_store
-from .versions import SkillVersion, apply_version, content_hash, snapshot_of
+from .script_trust import has_scripts
+from .versions import SkillVersion, apply_version, content_hash
 
 logger = logging.getLogger(__name__)
 
-MAX_ALLOCATION_ATTEMPTS = 5
 
 
 class SkillPinError(ValueError):
@@ -34,65 +34,24 @@ class SkillPinError(ValueError):
 async def pin_current(skill_id: str, *, pinned_by: Optional[str]) -> SkillVersion:
     """The version a new pin on ``skill_id`` should hold: its content as of now.
 
-    Reuses the latest version when the live skill has not changed since it was cut,
-    so pinning is idempotent. Otherwise freezes the reference files and cuts the next
-    number; a concurrent pin that takes the number first is re-read, and reused when
-    it froze the same content.
+    ``history.capture_current`` with ``trigger="pin"``: reuses the latest version
+    when the live skill has not changed since it was cut, so pinning is idempotent,
+    and with version history on that is usually the version the last save cut.
 
     Raises ``SkillPinError`` when the skill does not exist, and
     ``SkillResourceStoreError`` (``SkillResourceChangedError`` for a mid-pin
     re-upload) when its files can't be frozen.
     """
-    repo = get_skill_catalog_repository()
-    live = await repo.get_skill(skill_id)
-    if live is None:
-        raise SkillPinError(f"Skill '{skill_id}' was not found.")
-
-    digest = content_hash(live)
-    latest = await repo.get_latest_skill_version(skill_id)
-    if latest is not None and latest.content_hash == digest:
-        return latest
-
-    frozen = await asyncio.to_thread(_freeze_resources, live)
-    snapshot = snapshot_of(
-        live,
-        frozen_resources=frozen,
-        created_at=utc_now_iso(),
-        created_by=pinned_by,
-        source_updated_at=to_iso(live.updated_at) if live.updated_at else None,
-    )
-    for attempt in range(MAX_ALLOCATION_ATTEMPTS):
-        number = (latest.version or 0) + 1 if latest else 1
-        try:
-            return await repo.put_skill_version(snapshot.model_copy(update={"version": number}))
-        except SkillVersionExistsError:
-            logger.warning(
-                "Version %s of skill %s was taken concurrently (attempt %s/%s)",
-                number, skill_id, attempt + 1, MAX_ALLOCATION_ATTEMPTS,
-            )
-            latest = await repo.get_latest_skill_version(skill_id)
-            if latest is not None and latest.content_hash == digest:
-                return latest
-    raise RuntimeError(f"Could not allocate a version of skill {skill_id}.")
-
-
-def _freeze_resources(live: SkillDefinition) -> List[SkillResourceRef]:
-    if not live.resources:
-        return []
-    store = get_skill_resource_store()
-    return [
-        ref.model_copy(
-            update={
-                "s3_key": store.freeze(
-                    skill_id=live.skill_id,
-                    s3_key=ref.s3_key,
-                    content_hash=ref.content_hash,
-                    content_type=ref.content_type,
-                )
-            }
+    try:
+        return await capture_current(
+            skill_id,
+            actor=pinned_by,
+            trigger="pin",
+            repository=get_skill_catalog_repository(),
+            resource_store=get_skill_resource_store(),
         )
-        for ref in live.resources
-    ]
+    except SkillVersionSourceMissingError as e:
+        raise SkillPinError(str(e)) from e
 
 
 @dataclass
@@ -184,14 +143,16 @@ async def pin_imported_skill_bindings(
     *,
     pinned_by: Optional[str],
 ) -> Optional[List[Any]]:
-    """Pin each newly bound skill that was imported from a bundle (agentskills D-7).
+    """Pin each newly bound skill that was imported from a bundle, or that has scripts (agentskills D-7).
 
     A skill with an ``import_source`` was written by a third party; the binding
     runs what its owner reviewed when they bound it, until someone moves the pin.
     So a skill binding whose ref was not bound before, names no version, and
-    whose row has an ``import_source`` gets ``{"version": n}`` from
-    :func:`pin_current`. A hand-written skill, a skill already bound, and a
-    binding that already names a version are returned unchanged.
+    whose row has an ``import_source`` or any ``script`` file gets
+    ``{"version": n}`` from :func:`pin_current`. A hand-written skill with no
+    scripts, a skill already bound, and a binding that already names a version
+    are returned unchanged. A skill with scripts is pinned so the version a
+    review allows is the one members run (skill-code-sandbox §8.3).
 
     ``bindings`` are ``AgentBinding`` objects (``kind``, ``ref``, ``config``);
     ``None`` (a save that does not touch bindings) is returned as is. Call it
@@ -218,7 +179,9 @@ async def pin_imported_skill_bindings(
     rows = await get_skill_catalog_repository().batch_get_skills(
         list(dict.fromkeys(b.ref for b in candidates))
     )
-    imported = {s.skill_id for s in rows if s.import_source is not None}
+    # Any skill with scripts is pinned too, so the version a review allows is the
+    # version members run (skill-code-sandbox §8.3, D5).
+    imported = {s.skill_id for s in rows if s.import_source is not None or has_scripts(s)}
     if not imported:
         return bindings
 

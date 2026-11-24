@@ -169,6 +169,11 @@ class RegexExpect:
 class SkillExpect:
     loads: Tuple[str, ...] = ()
     not_loads: Tuple[str, ...] = ()
+    #: Skills the last turn must load again **only if** a compaction cut
+    #: happened after an earlier turn loaded them, so the summary retired the
+    #: activation. With no cut the activation is still in context and not
+    #: reloading is right; the sample passes and is marked uncovered.
+    reloads_after_cut: Tuple[str, ...] = ()
 
 
 #: The project memory scopes a check can read: the project's shared space and
@@ -410,11 +415,15 @@ def _parse_expect(raw: Mapping[str, Any], where: str) -> Expect:
     skill = None
     if raw.get("skill") is not None:
         s = raw["skill"]
-        _check_keys(s, ("loads", "not_loads"), f"{where}.skill")
+        _check_keys(s, ("loads", "not_loads", "reloads_after_cut"), f"{where}.skill")
         skill = SkillExpect(
             loads=_str_tuple(s.get("loads"), f"{where}.skill.loads"),
             not_loads=_str_tuple(s.get("not_loads"), f"{where}.skill.not_loads"),
+            reloads_after_cut=_str_tuple(s.get("reloads_after_cut"), f"{where}.skill.reloads_after_cut"),
         )
+        clash = set(skill.reloads_after_cut) & set(skill.not_loads)
+        if clash:
+            raise CaseError(f"{where}.skill: {sorted(clash)} is both required after a cut and forbidden")
 
     refuses = raw.get("refuses")
     if refuses is not None and not isinstance(refuses, bool):
@@ -627,6 +636,11 @@ def parse_case(raw: Mapping[str, Any], *, family: str) -> EvalCase:
         unreachable = sorted(set(expect.skill.loads) - set(run.enabled_skills))
         if unreachable:
             raise CaseError(f"{where}: skill.loads {unreachable} is not in run.enabled_skills")
+        unreachable = sorted(set(expect.skill.reloads_after_cut) - set(run.enabled_skills))
+        if unreachable:
+            raise CaseError(f"{where}: skill.reloads_after_cut {unreachable} is not in run.enabled_skills")
+    if expect.skill is not None and expect.skill.reloads_after_cut and len(turns) < 2:
+        raise CaseError(f"{where}: skill.reloads_after_cut needs an earlier turn to load the skill and be cut")
 
     notes = raw.get("notes") or ""
     if not isinstance(notes, str):

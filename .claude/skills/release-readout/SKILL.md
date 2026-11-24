@@ -56,7 +56,7 @@ profile's session has expired, ask the user to run `aws sso login --profile dev-
 Other sources, same output:
 
 - `--export ledger.ndjson` — offline, from `GET /admin/costs/ledger/export`
-  (no latency, thumbs, provenance, active users or platform line; the
+  (no latency, prelude stages, thumbs, provenance, active users or platform line; the
   markdown says so). Add `--today YYYY-MM-DD` to judge full days as of the
   export's date.
 - `--readout-json saved.json` — a readout response saved from the Releases
@@ -82,7 +82,13 @@ for anything the markdown cuts (all 30 tools, every model's share).
    both sides over their floor; the direction word is mechanical. A tiny share
    moving 100% (0.2% → 0.0%) is a different fact from cost per turn moving
    15% on hundreds of turns. Weigh by `n` and absolute size.
-5. **Latency, tools, quality**, then agents and projects.
+5. **Prelude**, the harness's own time before the first token, per build.
+   This is the row that sees a harness regression: `FirstTokenMs` and the
+   ledger's `meanFirstTokenMs` are dominated by the model (server first-token
+   p50 swings 2.6–3.7 s a day on dev), and `PreludeTotalMs` excludes it. Read
+   its *Prelude moved* line (p50 Δ over max(30 ms, 5%), n ≥ 200 a side) and
+   the mix line under the table before any stage delta.
+6. **Latency, tools, quality**, then agents and projects.
 
 ## 3. The traps (read before calling anything a regression)
 
@@ -102,7 +108,22 @@ for anything the markdown cuts (all 30 tools, every model's share).
 - **A cost delta on a deploy day is a boundary, not a change**
   (`deploy_in_window`, `no_full_day`): both builds wrote rows that day.
 - **Latency is by time, not by build** (`latency_mixed_window`): a window with
-  a deploy in it mixes builds' TTFT.
+  a deploy in it mixes builds' TTFT. **The prelude table is by build**: it
+  filters the Runtime's EMF records on `appVersion` (and `build`, for a build
+  readout), so a deploy day splits cleanly. Its `n` is the unit's own turns
+  and will be smaller than the CloudWatch latency `n` for the same window.
+- **A prelude stage moves with the turn mix** (`prelude_mix_shift`). Agent
+  turns run retrieval and resumes skip the build. On prod, 1.37.0 → 1.38.0's
+  `ragMs` fell 215 → 50 ms because Agent turns fell from most turns to a
+  quarter, not because retrieval got faster. Read `ragMs`, `toolsMs` and
+  `agentBuildMs` beside the mix line; `preambleMs`, `headOfTurnMs` and
+  `preModelMs` run on every turn and are the cleaner read.
+- **`prelude_below_floor`**: under 200 turns a side, the stages print but
+  none is listed as moved. A dev build that lived an hour has no prelude
+  verdict.
+- **`prelude_unavailable`**: the Logs Insights read failed (its reason is in
+  the message). With `--profile`, the usual cause is an expired SSO session;
+  `no_log_group` means the Runtime id could not be read from SSM.
 - **A TTFT delta under the probe's daily-median noise is "no evidence", not
   "unchanged".** Server first-token p50 moves a few hundred ms day to day on
   dev with no code change; a delta inside that is noise either way.
@@ -114,6 +135,19 @@ for anything the markdown cuts (all 30 tools, every model's share).
   `toolPayloadPerCall` on such a window reads low, not zero-cost.
 - **`unmetered_rows`**: calls on a model with no catalog row priced to $0, so
   cost per turn on that side is understated. That is a catalog fix first.
+- **Turn KPIs are chat-only; workflow spend is its own line.** `costPerTurn`
+  and `meanFirstTokenMs` read chat calls only (spec §5.2.1). Workflow prompt
+  and checklist steps, handoff briefs, voice, api-converse and extraction
+  calls are listed under *Calls by kind*, with their calls, cost and mean
+  first byte. If workflow cost or first byte rises, that is a change in
+  workflow use or in the workflow path, not a turn regression. Read it there.
+- **`predates_chat_split`**: a side whose rows were written before the split
+  has no chat-only counters. With none, its `costPerTurn` and
+  `meanFirstTokenMs` read `—`, which is no evidence, never a zero and never a
+  floor. With some, the caveat says what part of the window they cover. The
+  first readout after the split shipped has a `—` baseline for both KPIs.
+  That is expected, and the verdict leans on the other KPIs and on server
+  TTFT.
 
 ## 4. Flag regressions, then say where to look
 
@@ -128,7 +162,8 @@ name the next place to look:
 | `toolPayloadPerCall`, a tool's `resultCharsPerCall` or `estInputUsd` | The tools table in `readout.json`: which tool's chars per call moved. Then the change to that tool's result shape in the release's diff (`git log <baseline>..<candidate> -- backend/src/agents/main_agent/tools/`) |
 | `toolErrorRate`, a tool's `errorRate` | The tool's line in `toolCensus` on the candidate's costliest sessions (`GET /admin/costs/sessions/{id}/profile`: calls, errors and payload per tool), and the Runtime logs for that tool name |
 | `emptyAnswerShare`, `interruptedShare` | The turn outcomes in `quality.outcomes`; then the stream path (`docs/specs/turn-path-ttft.md`) and the smoke rows |
-| `meanFirstTokenMs`, server TTFT p50/p90 | The TurnLatency dashboard by `appVersion` in Logs Insights, and `docs/specs/turn-path-ttft.md` §6 for the stage that moved |
+| A *Prelude moved* stage, `preludeTotalMs` | The stage's sub-stages on the `{prefix}-turn-latency-observability` dashboard (`Preamble*Ms`, `AgentBuild*Ms`), then `docs/specs/turn-path-ttft.md` §2 for what runs in it and the release's diff of the files it names (`git log <baseline>..<candidate> -- backend/src/apis/inference_api/chat/`). A new awaited call would have failed I11 (§6F) before merge, so a prelude rise that passed it is slower work, not a new round trip |
+| `meanFirstTokenMs`, server TTFT p50/p90 with a flat prelude | The model, not the harness: the per-model mix and `ModelMs` on the dashboard. `docs/specs/turn-path-ttft.md` §6 if a stage after the prelude (`headOfTurnMs`, `preModelMs`) moved |
 | An eval family `fail` or a smoke `FAIL` | `eval_harness.py score --explain` on that run, or the smoke run's own output |
 
 **The candidate's costliest sessions.** `GET /admin/costs/top-sessions?period=YYYY-MM`

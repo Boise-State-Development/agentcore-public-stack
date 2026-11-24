@@ -63,6 +63,9 @@
 
         <aside class="min-w-0 lg:row-span-2 lg:self-start" aria-label="Project settings">
           <app-project-rail [project]="p" />
+          @if (skillScripts().length) {
+            <app-skill-scripts-badge class="mt-4 rounded-2xl border border-gray-200 p-4 dark:border-gray-700" [skills]="skillScripts()" />
+          }
         </aside>
 
         <div class="min-w-0">

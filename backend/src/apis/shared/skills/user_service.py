@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Tuple
 from apis.shared.audit.models import AuditAction
 from apis.shared.auth.models import User
 from apis.shared.security.log_sanitize import scrub_log
+from apis.shared.skills import history
 from apis.shared.skills.bundle_files import SkillBundleFiles, get_skill_bundle_files
 from apis.shared.skills.audit import is_no_op, record_skill_event
 from apis.shared.skills.bundle_import import ParsedBundle
@@ -40,7 +41,9 @@ from apis.shared.skills.resource_types import (
     is_text_content_type,
     resolve_upload_content_type,
 )
+from apis.shared.skills.script_trust import scripts_provenance
 from apis.shared.skills.skill_md import validate_frontmatter
+from apis.shared.skills.versions import SNAPSHOT_FIELDS, SkillVersion, SkillVersionSummary
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +171,7 @@ class UserSkillService:
         skill_metadata: Optional[Dict] = None,
         category: Optional[str] = None,
         kind: Optional[str] = None,
+        trigger: history.VersionTrigger = "create",
     ) -> SkillDefinition:
         """Create a skill owned by ``user``.
 
@@ -220,6 +224,7 @@ class UserSkillService:
         created = await self.repository.create_skill(skill)
         self.bundle_files.write_skill_md(created)
         self._invalidate(skill_id)
+        await self._capture(skill_id, user, trigger, live=created)
         await record_skill_event(AuditAction.SKILL_CREATED, user, skill_id, after=created)
 
         logger.info(
@@ -233,7 +238,12 @@ class UserSkillService:
         return created
 
     async def update_my_skill(
-        self, skill_id: str, updates: Dict, user: User
+        self,
+        skill_id: str,
+        updates: Dict,
+        user: User,
+        *,
+        trigger: history.VersionTrigger = "save",
     ) -> SkillDefinition:
         """Update an owned skill's authored fields.
 
@@ -242,6 +252,9 @@ class UserSkillService:
         routed through here.
         """
         before = await self.require_owned(skill_id, user)
+        touches_content = bool(set(updates) & set(SNAPSHOT_FIELDS))
+        if touches_content:
+            await self._checkpoint(skill_id, user, live=before)
 
         updated = await self.repository.update_skill(
             skill_id, updates, admin_user_id=user.user_id
@@ -251,6 +264,8 @@ class UserSkillService:
 
         self.bundle_files.write_skill_md(updated)
         self._invalidate(skill_id)
+        if touches_content:
+            await self._capture(skill_id, user, trigger, live=updated)
         if not is_no_op(before, updated):
             await record_skill_event(
                 AuditAction.SKILL_UPDATED, user, skill_id, before=before, after=updated
@@ -315,12 +330,17 @@ class UserSkillService:
         user: User,
         kind: str = "reference",
         path: Optional[str] = None,
+        *,
+        trigger: history.VersionTrigger = "file",
     ) -> List[SkillResourceRef]:
         before = await self.require_owned(skill_id, user)
+        # Before the write: re-uploading a filename overwrites its live key in place.
+        await self._checkpoint(skill_id, user, live=before)
         refs = await self.bundle_files.add_resource(
             skill_id, filename, content, content_type, user, kind=kind, path=path
         )
         self._invalidate(skill_id)
+        await self._capture(skill_id, user, trigger)
         await self._record_files_changed(user, before, refs)
         return refs
 
@@ -331,11 +351,18 @@ class UserSkillService:
         return await self.bundle_files.read_resource(skill_id, filename)
 
     async def delete_resource(
-        self, skill_id: str, filename: str, user: User
+        self,
+        skill_id: str,
+        filename: str,
+        user: User,
+        *,
+        trigger: history.VersionTrigger = "file",
     ) -> List[SkillResourceRef]:
         before = await self.require_owned(skill_id, user)
+        await self._checkpoint(skill_id, user, live=before)
         refs = await self.bundle_files.delete_resource(skill_id, filename, user)
         self._invalidate(skill_id)
+        await self._capture(skill_id, user, trigger)
         await self._record_files_changed(user, before, refs)
         return refs
 
@@ -357,6 +384,8 @@ class UserSkillService:
         filename: str,
         content: str,
         user: User,
+        *,
+        trigger: history.VersionTrigger = "file",
     ) -> List[SkillResourceRef]:
         """Write one bundle file from inline text (skill-creator spec D5).
 
@@ -390,6 +419,7 @@ class UserSkillService:
             content_type,
             user,
             kind=kind,
+            trigger=trigger,
         )
 
     # =========================================================================
@@ -435,9 +465,13 @@ class UserSkillService:
             raise UserSkillConflictError(
                 "This skill changed since you previewed the import. Review it again."
             )
+        # Fails closed: a re-import replaces everything, so it must not run
+        # unless what it replaces is already a version (spec D2).
+        await self._checkpoint(skill_id, user, live=skill, required=True)
 
         old_refs = list(skill.resources)
         new_refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, old_refs)
+        source = source.model_copy(update=scripts_provenance(new_refs))
         updated = await self.repository.update_skill(
             skill_id,
             {
@@ -455,6 +489,7 @@ class UserSkillService:
         self.bundle_files.write_skill_md(updated)
         self._invalidate(skill_id)
         await self.bundle_files.gc_orphaned(old_refs, new_refs)
+        await self._capture(skill_id, user, "reimport", live=updated)
         if not is_no_op(skill, updated):
             await record_skill_event(
                 AuditAction.SKILL_REFRESHED, user, skill_id, before=skill, after=updated
@@ -479,6 +514,7 @@ class UserSkillService:
 
         skill_id = await self.plan_import_skill_id(bundle, display_name)
         refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, [])
+        source = source.model_copy(update=scripts_provenance(refs))
         skill = SkillDefinition(
             skill_id=skill_id,
             display_name=name,
@@ -502,6 +538,7 @@ class UserSkillService:
             raise
         self.bundle_files.write_skill_md(created)
         self._invalidate(skill_id)
+        await self._capture(skill_id, user, "import", live=created)
         await record_skill_event(AuditAction.SKILL_IMPORTED, user, skill_id, after=created)
         self._log_import(user, skill_id, source, [], refs, created=True)
         return created
@@ -548,6 +585,89 @@ class UserSkillService:
                 "files_changed": sum(1 for k in set(new) & set(old) if new[k] != old[k]),
                 "files_removed": len(set(old) - set(new)),
             },
+        )
+
+    # =========================================================================
+    # Version history: list, read, restore (docs/specs/skill-version-history.md §5, §6)
+    # =========================================================================
+
+    async def list_versions(
+        self, skill_id: str, user: User, *, limit: int, before: Optional[int] = None
+    ) -> Tuple[SkillDefinition, List[SkillVersionSummary], Optional[int]]:
+        """An owned skill, a page of its history (newest first) and the next cursor."""
+        live = await self.require_owned(skill_id, user)
+        rows, cursor = await self.repository.list_skill_versions(skill_id, limit=limit, before=before)
+        return live, rows, cursor
+
+    async def get_version(
+        self, skill_id: str, number: int, user: User
+    ) -> Tuple[SkillDefinition, SkillVersion]:
+        """An owned skill and one of its versions, whole."""
+        live = await self.require_owned(skill_id, user)
+        version = await self.repository.get_skill_version(skill_id, number)
+        if version is None:
+            raise history.SkillVersionNotFoundError(f"Version {number} of this skill was not found.")
+        return live, version
+
+    async def restore_version(
+        self,
+        skill_id: str,
+        number: int,
+        user: User,
+        *,
+        expected_updated_at: Optional[str] = None,
+    ) -> history.RestoreResult:
+        """Put an owned skill's version ``number`` back as a new version (spec D3).
+
+        The route asks for the reach confirmation first, as for any edit.
+        """
+        live = await self.require_owned(skill_id, user)
+        result = await history.restore_version(
+            live,
+            number,
+            user=user,
+            bundle_files=self.bundle_files,
+            expected_updated_at=expected_updated_at,
+        )
+        self._invalidate(skill_id)
+        return result
+
+    # =========================================================================
+    # Version history (docs/specs/skill-version-history.md D1/D2)
+    # =========================================================================
+
+    async def _checkpoint(
+        self,
+        skill_id: str,
+        user: User,
+        *,
+        live: Optional[SkillDefinition] = None,
+        required: bool = False,
+    ) -> None:
+        await history.checkpoint(
+            skill_id,
+            actor=user.user_id,
+            required=required,
+            live=live,
+            repository=self.repository,
+            resource_store=self.bundle_files.resource_store,
+        )
+
+    async def _capture(
+        self,
+        skill_id: str,
+        user: User,
+        trigger: history.VersionTrigger,
+        *,
+        live: Optional[SkillDefinition] = None,
+    ) -> None:
+        await history.capture(
+            skill_id,
+            actor=user.user_id,
+            trigger=trigger,
+            live=live,
+            repository=self.repository,
+            resource_store=self.bundle_files.resource_store,
         )
 
     # =========================================================================

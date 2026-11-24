@@ -50,6 +50,7 @@ ANY_SCOPE_MODULES = {
 # prefix but is marketplace functionality, guarded by require_marketplace_admin.
 EXPECTED_MODULE_SCOPES = {
     "routes.py": "admin.models",
+    "task_models/routes.py": "admin.models",  # the Task models tab on Manage Models
     "quota/routes.py": "admin.quota",
     "quota_requests/routes.py": "admin.quota_requests",
     "aws_limits/routes.py": "admin.aws_limits",
@@ -59,6 +60,7 @@ EXPECTED_MODULE_SCOPES = {
     "users/routes.py": "admin.users",
     "tools/routes.py": "admin.tools",
     "skills/routes.py": "admin.skills",
+    "skill_scripts/routes.py": "admin.skill_scripts",
     "agents/routes.py": "admin.marketplace",
     "projects/routes.py": "admin.projects",
     "oauth/routes.py": "admin.connectors",

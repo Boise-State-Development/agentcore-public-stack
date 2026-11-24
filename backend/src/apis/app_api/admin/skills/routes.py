@@ -14,11 +14,13 @@ therefore apply the catalog predicate (``get_catalog_skill`` /
 tests/apis/app_api/skills/test_admin_skill_routes.py.
 """
 
+import asyncio
 import logging
-from typing import Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 from apis.shared.audit.models import AuditAction
 from apis.shared.auth import User, require_admin_scope
@@ -46,7 +48,34 @@ from apis.shared.skills.resource_types import (
     resource_download_headers,
     safe_download_content_type,
 )
-from apis.app_api.skills.service import SkillNameConflictError, get_skill_catalog_service
+from apis.app_api.skills.bundle_import_core import (
+    ImportFileRow,
+    ImportPreviewResponse,
+    build_preview,
+    file_rows,
+    load_source,
+    require_bundle,
+    require_import_enabled,
+)
+from apis.app_api.skills.version_history_core import (
+    RestoreRequest,
+    VersionDetailResponse,
+    VersionListResponse,
+    VersionSummaryResponse,
+    detail_response,
+    history_error,
+    page_size,
+    require_history_enabled,
+    summarize,
+    summary_response,
+)
+from apis.app_api.skills.service import (
+    SkillImportConflictError,
+    SkillNameConflictError,
+    get_skill_catalog_service,
+)
+from apis.shared.skills.bundle import slugify_skill_name
+from apis.shared.skills.history import SkillCheckpointError
 from apis.app_api.skills.skill_md_parse import parse_uploaded_skill_md
 from apis.shared.skills.skill_md_import import SkillMdParseResponse
 
@@ -98,6 +127,131 @@ async def admin_parse_skill_md(
 ) -> SkillMdParseResponse:
     """Read one SKILL.md into the create form's fields and diagnostics. Writes nothing."""
     return await parse_uploaded_skill_md(file)
+
+
+# =============================================================================
+# Bundle import (docs/specs/skill-bundle-import.md) — the catalog twin of
+# /skills/mine/import*, sharing its loader and preview (``bundle_import_core``).
+# 404 after auth while SKILL_BUNDLE_IMPORT_ENABLED is off.
+# =============================================================================
+
+
+class AdminImportApplyResponse(BaseModel):
+    skill: AdminSkillResponse
+    files: List[ImportFileRow]
+
+
+def _import_error(e: ValueError) -> HTTPException:
+    if isinstance(e, (SkillImportConflictError, SkillNameConflictError)):
+        return HTTPException(status_code=409, detail=str(e))
+    return _skill_value_error(e)
+
+
+@router.post("/import/preview", response_model=ImportPreviewResponse)
+async def admin_preview_skill_import(
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None),
+    path: Optional[str] = Form(None),
+    skill_id: Optional[str] = Form(None, alias="skillId"),
+    admin: User = Depends(require_skills_admin),
+) -> ImportPreviewResponse:
+    """What importing this bundle would do, against catalog skill ``skillId`` when given."""
+    require_import_enabled()
+    service = get_skill_catalog_service()
+    target: Optional[SkillDefinition] = None
+    if skill_id:
+        try:
+            target = await service.require_catalog_skill(skill_id)
+        except ValueError as e:
+            raise _skill_value_error(e)
+
+    load, source = await load_source(file, url, path)
+    if load.bundle is None:
+        return ImportPreviewResponse(source=source, candidates=load.candidates)
+
+    bundle = load.bundle
+    planned_id = target.skill_id if target else await service.plan_import_skill_id(bundle)
+    return build_preview(bundle, source, target, stored_name=slugify_skill_name(planned_id))
+
+
+@router.post("/import", response_model=AdminImportApplyResponse)
+async def admin_create_skill_from_import(
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None),
+    path: Optional[str] = Form(None),
+    display_name: Optional[str] = Form(None, alias="displayName", max_length=100),
+    expected_bundle_hash: Optional[str] = Form(None, alias="expectedBundleHash"),
+    admin: User = Depends(require_skills_admin),
+) -> AdminImportApplyResponse:
+    """Create a draft catalog skill from a bundle; grant it to roles afterwards."""
+    require_import_enabled()
+    logger.info("Admin importing a skill bundle")
+    load, source = await load_source(file, url, path)
+    bundle = require_bundle(load)
+    rows = file_rows(bundle, None)
+    try:
+        skill = await get_skill_catalog_service().import_bundle(
+            admin,
+            bundle,
+            source=source,
+            display_name=display_name,
+            expected_bundle_hash=expected_bundle_hash,
+        )
+    except ValueError as e:
+        raise _import_error(e)
+
+    from apis.shared.skills.freshness import invalidate as invalidate_freshness
+
+    invalidate_freshness(skill.skill_id)
+    return AdminImportApplyResponse(
+        skill=AdminSkillResponse.from_skill_definition(skill), files=rows
+    )
+
+
+@router.post("/{skill_id}/import", response_model=AdminImportApplyResponse)
+async def admin_reimport_skill(
+    skill_id: str,
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None),
+    path: Optional[str] = Form(None),
+    expected_bundle_hash: Optional[str] = Form(None, alias="expectedBundleHash"),
+    expected_updated_at: Optional[str] = Form(None, alias="expectedUpdatedAt"),
+    admin: User = Depends(require_skills_admin),
+) -> AdminImportApplyResponse:
+    """Refresh a catalog skill from its bundle. Catalog-scoped; never cuts a version."""
+    require_import_enabled()
+    logger.info("Admin re-importing a skill bundle")
+    service = get_skill_catalog_service()
+    try:
+        target = await service.require_catalog_skill(skill_id)
+    except ValueError as e:
+        raise _skill_value_error(e)
+
+    load, source = await load_source(file, url, path)
+    bundle = require_bundle(load)
+    rows = file_rows(bundle, target)
+    try:
+        skill = await service.import_bundle(
+            admin,
+            bundle,
+            source=source,
+            skill_id=skill_id,
+            expected_bundle_hash=expected_bundle_hash,
+            expected_updated_at=expected_updated_at,
+        )
+    except SkillCheckpointError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise _import_error(e)
+
+    from apis.shared.skills.freshness import invalidate as invalidate_freshness
+
+    invalidate_freshness(skill_id)
+    roles = await service.get_roles_for_skill(skill_id)
+    allowed_roles = [r.role_id for r in roles if r.grant_type == "direct"]
+    return AdminImportApplyResponse(
+        skill=AdminSkillResponse.from_skill_definition(skill, allowed_roles), files=rows
+    )
 
 
 @router.get("/{skill_id}", response_model=AdminSkillResponse)
@@ -455,3 +609,126 @@ async def delete_skill_resource(
     invalidate_freshness(skill_id)
 
     return SkillResourcesResponse(skill_id=skill_id, resources=resources)
+
+
+# =============================================================================
+# Version history (docs/specs/skill-version-history.md §6.1) — the catalog twin
+# of /skills/mine/{id}/versions*, sharing ``version_history_core``. Catalog-scoped
+# like every route here; 404 after auth while SKILL_VERSION_HISTORY_ENABLED is off.
+# =============================================================================
+
+
+class AdminRestoreResponse(BaseModel):
+    skill: AdminSkillResponse
+    version: Optional[VersionSummaryResponse] = None
+    import_source_restored: bool = Field(True, alias="importSourceRestored")
+
+    model_config = {"populate_by_name": True}
+
+
+def _history_error(e: Exception) -> HTTPException:
+    mapped = history_error(e)
+    if mapped is not None:
+        return mapped
+    if isinstance(e, ValueError):
+        return _skill_value_error(e)
+    raise e
+
+
+async def _emails(user_ids: List[Optional[str]]) -> Dict[str, Optional[str]]:
+    """Each distinct author's email, None when the profile can't be read."""
+    from apis.shared.users.repository import UserRepository
+
+    ids = sorted({uid for uid in user_ids if uid})
+    if not ids:
+        return {}
+    repo = UserRepository()
+    profiles = await asyncio.gather(*(repo.get_user(uid) for uid in ids), return_exceptions=True)
+    return {
+        uid: (p.email if p is not None and not isinstance(p, BaseException) else None)
+        for uid, p in zip(ids, profiles)
+    }
+
+
+@router.get(
+    "/{skill_id}/versions",
+    response_model=VersionListResponse,
+    response_model_exclude_none=True,
+)
+async def admin_list_skill_versions(
+    skill_id: str,
+    limit: Optional[int] = Query(None, ge=1, le=50),
+    before: Optional[int] = Query(None, ge=1, description="Continue below this version"),
+    admin: User = Depends(require_skills_admin),
+) -> VersionListResponse:
+    """A page of a catalog skill's history, newest first."""
+    require_history_enabled()
+    try:
+        live, rows, cursor = await get_skill_catalog_service().list_versions(
+            skill_id, limit=page_size(limit), before=before
+        )
+    except Exception as e:  # noqa: BLE001 - mapped, or re-raised
+        raise _history_error(e)
+    emails = await _emails([r.created_by for r in rows])
+    return VersionListResponse(
+        versions=[
+            summary_response(row, live, created_by_email=emails.get(row.created_by or ""))
+            for row in rows
+        ],
+        next_cursor=cursor,
+    )
+
+
+@router.get(
+    "/{skill_id}/versions/{number}",
+    response_model=VersionDetailResponse,
+    response_model_exclude_none=True,
+)
+async def admin_get_skill_version(
+    skill_id: str,
+    number: int,
+    admin: User = Depends(require_skills_admin),
+) -> VersionDetailResponse:
+    """One version of a catalog skill, with what restoring it would change."""
+    require_history_enabled()
+    try:
+        live, version = await get_skill_catalog_service().get_version(skill_id, number)
+    except Exception as e:  # noqa: BLE001 - mapped, or re-raised
+        raise _history_error(e)
+    emails = await _emails([version.created_by])
+    return detail_response(version, live, created_by_email=emails.get(version.created_by or ""))
+
+
+@router.post(
+    "/{skill_id}/versions/{number}/restore",
+    response_model=AdminRestoreResponse,
+    response_model_exclude_none=True,
+)
+async def admin_restore_skill_version(
+    skill_id: str,
+    number: int,
+    body: RestoreRequest,
+    admin: User = Depends(require_skills_admin),
+) -> AdminRestoreResponse:
+    """Put version ``number`` back as a new version. Moves no pins and asks for no
+    reach confirmation, as for an admin edit (spec D4, D7)."""
+    require_history_enabled()
+    logger.info("Admin restoring a skill version")
+    service = get_skill_catalog_service()
+    try:
+        result = await service.restore_version(
+            skill_id, number, admin, expected_updated_at=body.expected_updated_at
+        )
+    except Exception as e:  # noqa: BLE001 - mapped, or re-raised
+        raise _history_error(e)
+    roles = await service.get_roles_for_skill(skill_id)
+    allowed_roles = [r.role_id for r in roles if r.grant_type == "direct"]
+    return AdminRestoreResponse(
+        skill=AdminSkillResponse.from_skill_definition(result.skill, allowed_roles),
+        version=summary_response(
+            summarize(result.version), result.skill, created_by_email=admin.email
+        )
+        if result.version
+        else None,
+        import_source_restored=result.import_source_restored,
+    )

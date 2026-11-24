@@ -1,0 +1,26 @@
+{
+  "_comment": "The line run_code writes for a skill script run (skill-code-sandbox §8.11), read by the rail. backend/tests/shared/test_script_version_fixture.py checks script_trust.script_version_line against these; skill-script-call.spec.ts checks the SPA's parse. Change both sides together.",
+  "cases": [
+    {
+      "name": "a finished run",
+      "scriptsHash": "3f2a9c1e5b0d4e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f",
+      "line": "Script version: 3f2a9c1e",
+      "resultText": "Ran scripts/fill_fillable_fields.py: finished (exit code 0).\nScript version: 3f2a9c1e\nOutput:\nFilled 12 fields.",
+      "version": "3f2a9c1e"
+    },
+    {
+      "name": "a failed run still has its version",
+      "scriptsHash": "00ff00ff11ee11ee22dd22dd33cc33cc44bb44bb55aa55aa6699669977887788",
+      "line": "Script version: 00ff00ff",
+      "resultText": "Ran scripts/check.py: failed (exit code 1).\nScript version: 00ff00ff\nIt printed nothing.",
+      "version": "00ff00ff"
+    },
+    {
+      "name": "model-written code has no version",
+      "scriptsHash": null,
+      "line": null,
+      "resultText": "Ran your code: finished (exit code 0).\nOutput:\nScript version: in the output is not the line",
+      "version": null
+    }
+  ]
+}

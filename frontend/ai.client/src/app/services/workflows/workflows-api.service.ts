@@ -1,5 +1,5 @@
 import { HttpClient, HttpContext, HttpErrorResponse } from '@angular/common/http';
-import { Injectable, inject } from '@angular/core';
+import { Injectable, inject, resource, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
@@ -31,13 +31,45 @@ function quiet(): HttpContext {
 }
 
 /**
- * `/workflows` (docs/specs/workflow-designer.md §9.2). Reads and writes only; who may call it is
- * the caller's to gate (`features.workflows`), and the backend 404s while the flag is off.
+ * `/workflows` (docs/specs/workflow-designer.md §9.2), and the Workflows page's list, kept for the
+ * life of the tab. Who may call it is the caller's to gate (`features.workflows`), and the backend
+ * 404s while the flag is off.
+ *
+ * The list lives here, not on the page, so going back to the page shows it at once instead of a
+ * spinner. Every write goes through this service, so every write refreshes it.
  */
 @Injectable({ providedIn: 'root' })
 export class WorkflowsApiService {
   private readonly http = inject(HttpClient);
   private readonly config = inject(ConfigService);
+
+  /**
+   * Nothing is fetched until a page asks for the list: chat injects this service too, and the
+   * backend 404s `/workflows` while the flag is off.
+   */
+  private readonly listWanted = signal(false);
+
+  /**
+   * The Workflows page's list. Read it with `hasValue()`: it keeps the copy it has while it
+   * refreshes (`reloading`), so only the first load has nothing to show.
+   */
+  readonly workflows = resource({
+    params: () => (this.listWanted() ? true : undefined),
+    loader: () => this.listQuietly(),
+  });
+
+  /**
+   * Show the list. The first call loads it; each later one refreshes it behind the copy already
+   * shown, so a workflow saved in another tab, deleted with its skill or newly granted still
+   * appears.
+   */
+  openList(): void {
+    if (!this.listWanted()) {
+      this.listWanted.set(true);
+      return;
+    }
+    this.workflows.reload();
+  }
 
   /** Every workflow the caller owns or can use: theirs first, then shared, each by title. */
   async list(): Promise<WorkflowSummary[]> {
@@ -50,8 +82,10 @@ export class WorkflowsApiService {
   }
 
   /** Write a workflow the caller owns. A save that changes nothing writes nothing (`written: false`). */
-  save(ref: WorkflowRef, definition: WorkflowDefinition): Promise<WorkflowDocument> {
-    return firstValueFrom(this.http.put<WorkflowDocument>(this.url(ref), definition));
+  async save(ref: WorkflowRef, definition: WorkflowDefinition): Promise<WorkflowDocument> {
+    const document = await firstValueFrom(this.http.put<WorkflowDocument>(this.url(ref), definition));
+    this.listChanged();
+    return document;
   }
 
   // ---- The designer's calls (PR-D.3). Each caller renders its own error, so none raises a toast. ----
@@ -63,8 +97,10 @@ export class WorkflowsApiService {
   }
 
   /** A new carrying skill and its file: blank, or filled from a started run (`fromRun`). */
-  create(body: { title?: string; fromRun?: { sessionId: string; runId: string } }): Promise<WorkflowDocument> {
-    return firstValueFrom(this.http.post<WorkflowDocument>(this.baseUrl(), body, { context: quiet() }));
+  async create(body: { title?: string; fromRun?: { sessionId: string; runId: string } }): Promise<WorkflowDocument> {
+    const document = await firstValueFrom(this.http.post<WorkflowDocument>(this.baseUrl(), body, { context: quiet() }));
+    this.listChanged();
+    return document;
   }
 
   async read(ref: WorkflowRef): Promise<WorkflowReadResult> {
@@ -90,9 +126,13 @@ export class WorkflowsApiService {
   /** Save the designer's draft against the version it opened; a stale one comes back as a conflict. */
   async write(ref: WorkflowRef, body: WorkflowWrite): Promise<WorkflowSaveResult> {
     try {
-      return { ok: true, document: await firstValueFrom(this.http.put<WorkflowDocument>(this.url(ref), body, { context: quiet() })) };
+      const document = await firstValueFrom(this.http.put<WorkflowDocument>(this.url(ref), body, { context: quiet() }));
+      this.listChanged();
+      return { ok: true, document };
     } catch (err) {
       if (err instanceof HttpErrorResponse && err.status === 409) {
+        // Another tab saved or deleted it, so the list is out of date too.
+        this.listChanged();
         const answer = err.error as { code?: unknown; document?: WorkflowDocument | null } | null;
         if (answer?.code === 'version_conflict' || answer?.code === 'workflow_deleted') {
           return {
@@ -116,6 +156,7 @@ export class WorkflowsApiService {
    */
   async remove(ref: WorkflowRef, options: { keepalive?: boolean } = {}): Promise<void> {
     await firstValueFrom(this.http.delete(this.url(ref), { context: quiet(), keepalive: options.keepalive }));
+    this.listChanged(ref);
   }
 
   /** The backend's own message (`detail`), so a parser refusal reads as written. */
@@ -127,6 +168,18 @@ export class WorkflowsApiService {
       if (typeof first?.msg === 'string') return first.msg;
     }
     return fallback;
+  }
+
+  /**
+   * After a write: refresh the list if a page has loaded it, so a return to the page shows what is
+   * stored. A deleted workflow leaves the shown copy at once, so it never flashes back.
+   */
+  private listChanged(removed?: WorkflowRef): void {
+    if (!this.listWanted()) return;
+    if (removed && this.workflows.hasValue()) {
+      this.workflows.set(this.workflows.value().filter((w) => w.skillId !== removed.skillId || w.name !== removed.name));
+    }
+    this.workflows.reload();
   }
 
   private url(ref: WorkflowRef): string {

@@ -686,3 +686,50 @@ class TestCompactionMetrics:
         mgr._all_messages_for_summary = make_conversation(5)
         await mgr.update_after_turn(2000)
         assert emitted == []
+
+
+class TestEachModelCallIsReported:
+    """``on_call`` sees every model call's response, for its cost row (side_call_metering)."""
+
+    @pytest.mark.asyncio
+    async def test_a_compression_reports_its_response(self, bedrock):
+        reply = {**_model_reply("Standing instructions: cite APA."), "usage": {"inputTokens": 300, "outputTokens": 9}}
+        bedrock.return_value = reply
+        seen = []
+        await bound_summary(["r" * 300, "s" * 300], BUDGET, model_enabled=True, model_id="m", on_call=seen.append)
+        assert seen == [reply]
+
+    @pytest.mark.asyncio
+    async def test_a_refused_generation_is_still_reported(self, bedrock):
+        """Billed whatever it returned."""
+        bedrock.return_value = _model_reply("I can't help with that.", stop="guardrail_intervened")
+        seen = []
+        result = await bound_summary(["r" * 300, "s" * 300], BUDGET, model_enabled=True, model_id="m", on_call=seen.append)
+        assert result.outcome == "truncated_after_model"
+        assert len(seen) == 1
+
+    @pytest.mark.asyncio
+    async def test_extract_then_compress_reports_both_calls(self, bedrock):
+        bedrock.side_effect = _route(_model_reply(PINNED), _model_reply("narrative"))
+        seen = []
+        await bound_summary(
+            ["r" * 2000], EXTRACT_BUDGET, model_enabled=True, model_id="m", extract_enabled=True, on_call=seen.append
+        )
+        assert len(seen) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_failed_call_reports_nothing(self, bedrock):
+        bedrock.side_effect = RuntimeError("throttled")
+        seen = []
+        await bound_summary(["r" * 300, "s" * 300], BUDGET, model_enabled=True, model_id="m", on_call=seen.append)
+        assert seen == []
+
+    @pytest.mark.asyncio
+    async def test_a_reporter_that_raises_never_costs_the_summary(self, bedrock):
+        bedrock.return_value = _model_reply("Standing instructions: cite APA.")
+
+        def boom(_response):
+            raise RuntimeError("metering down")
+
+        result = await bound_summary(["r" * 300, "s" * 300], BUDGET, model_enabled=True, model_id="m", on_call=boom)
+        assert result.outcome == "model"

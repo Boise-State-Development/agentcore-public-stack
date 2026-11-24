@@ -236,9 +236,11 @@ function allFlagsOn(base: AppConfig): AppConfig {
     sessionPrewarm: { enabled: true },
     quotaRequests: { enabled: true },
     awsLimits: { enabled: true },
+    organizeLists: { enabled: true },
     handoffs: { enabled: true, briefEnabled: true, suggestionsEnabled: true },
     workflowRuns: { enabled: true },
     workflows: { enabled: true, promptStepsEnabled: true, checklistStepsEnabled: true },
+    agentVersionPinning: { enabled: true },
     sessionRewind: { enabled: true },
     sessionFork: { enabled: true },
     clientTurnTiming: { enabled: true },
@@ -281,6 +283,9 @@ function allFlagsOn(base: AppConfig): AppConfig {
     fieldSetAuthoring: { enabled: true },
     // Skill bundle import: one app-api variable and routes, no resources.
     skillBundleImport: { enabled: true },
+    // Skill version history: one app-api variable and one Runtime variable
+    // (written only while on), no resources.
+    skillVersionHistory: { enabled: true },
     // Web Search's result default is one Runtime variable, written only while
     // on: here for the environment-variable ceilings and flag coverage.
     webSearchDefaultMaxResults: { enabled: true },

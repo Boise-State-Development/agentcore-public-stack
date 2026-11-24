@@ -18,7 +18,6 @@ import {
 import { ChatStateService } from './services/chat/chat-state.service';
 import { lastUserText } from './services/chat/provider-outage';
 import { SidenavService } from '../services/sidenav/sidenav.service';
-import { HeaderService } from '../services/header/header.service';
 import { ModelService } from './services/model/model.service';
 import { UserService } from '../auth/user.service';
 import { ChatHttpService } from './services/chat/chat-http.service';
@@ -79,7 +78,6 @@ export class ConversationPage implements OnDestroy {
   private messageMapService = inject(MessageMapService);
   private chatStateService = inject(ChatStateService);
   protected sidenavService = inject(SidenavService);
-  private headerService = inject(HeaderService);
   private modelService = inject(ModelService);
   private userService = inject(UserService);
   private chatHttpService = inject(ChatHttpService);
@@ -357,15 +355,6 @@ export class ConversationPage implements OnDestroy {
       if (!sessionId || !this.features.workflows || this.binding.queryProjectId()) return;
       const unregister = this.workflowMerge.register(sessionId, (text) => this.sendMergeTurn(sessionId, text));
       onCleanup(unregister);
-    });
-
-    // Control header visibility based on whether there are messages
-    effect(() => {
-      if (this.hasMessages()) {
-        this.headerService.showHeaderContent();
-      } else {
-        this.headerService.hideHeaderContent();
-      }
     });
 
     // Apply the conversation's last model once, when it is opened. Not on

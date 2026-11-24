@@ -1,5 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import JSZip from 'jszip';
 import { PptxViewerComponent } from './pptx-viewer.component';
 
 /** Slides the fake previewer will paint on the next `preview()`. */
@@ -8,6 +9,8 @@ let slidesToRender = 1;
 let previewRejection: Error | null = null;
 
 const init = vi.fn();
+/** The bytes each `preview()` call was handed. */
+const previewed: ArrayBuffer[] = [];
 
 // Intercepts the component's dynamic `import('pptx-preview')`. The real
 // library unzips the OOXML and lays out every shape, which is neither
@@ -21,7 +24,8 @@ vi.mock('pptx-preview', () => ({
       get slideCount() {
         return slidesToRender;
       },
-      preview: async () => {
+      preview: async (data: ArrayBuffer) => {
+        previewed.push(data);
         if (previewRejection) throw previewRejection;
         for (let i = 0; i < slidesToRender; i++) {
           const slide = document.createElement('div');
@@ -39,6 +43,7 @@ describe('PptxViewerComponent', () => {
 
   beforeEach(async () => {
     init.mockReset();
+    previewed.length = 0;
     slidesToRender = 1;
     previewRejection = null;
 
@@ -132,6 +137,45 @@ describe('PptxViewerComponent', () => {
 
     expect(failed).toHaveBeenCalledTimes(1);
     expect(slides().length).toBe(0);
+  });
+
+  it('hands the library a pptxgenjs deck without the masters it never wrote', async () => {
+    // pptxgenjs lists one slideMaster per slide but writes only the
+    // first; the real library reads the missing part, throws inside its
+    // own try block and resolves with zero slides. The repair itself is
+    // covered by pptx-preview-repair.spec.ts; this pins that the viewer
+    // feeds the library its output.
+    const master = 'application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml';
+    const zip = new JSZip();
+    zip.file(
+      '[Content_Types].xml',
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        `<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="${master}"/>` +
+        `<Override PartName="/ppt/slideMasters/slideMaster2.xml" ContentType="${master}"/>` +
+        '</Types>',
+    );
+    zip.file('ppt/slideMasters/slideMaster1.xml', '<x/>');
+    const original = await zip.generateAsync({ type: 'arraybuffer' });
+
+    await render(original);
+
+    expect(previewed).toHaveLength(1);
+    expect(previewed[0]).not.toBe(original);
+    const types = await (await JSZip.loadAsync(previewed[0]))
+      .file('[Content_Types].xml')!
+      .async('string');
+    expect(types).toContain('slideMaster1.xml');
+    expect(types).not.toContain('slideMaster2.xml');
+    expect(slides().length).toBe(1);
+  });
+
+  it('hands the library bytes it cannot repair unchanged', async () => {
+    const original = new ArrayBuffer(16);
+
+    await render(original);
+
+    expect(previewed).toEqual([original]);
+    expect(previewed[0]).toBe(original);
   });
 
   it('clears the deck when the bytes go away', async () => {

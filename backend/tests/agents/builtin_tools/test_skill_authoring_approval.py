@@ -172,8 +172,9 @@ class _RecordingService:
     def __init__(self) -> None:
         self.updates: list = []
 
-    async def update_my_skill(self, skill_id, updates, user):
+    async def update_my_skill(self, skill_id, updates, user, *, trigger="save"):
         self.updates.append((skill_id, updates, user.user_id))
+        self.trigger = trigger
         return SimpleNamespace(display_name="Grant Review")
 
 
@@ -245,6 +246,7 @@ class TestRealInterrupt:
         await run.go([{"interruptResponse": {"interruptId": interrupt.id, "response": "approved"}}])
 
         assert run.service.updates == [("grant_review", {"instructions": "new"}, "u1")]
+        assert run.service.trigger == "authoring"
         [tool_result] = _tool_results(run.model.seen_messages)
         assert tool_result["status"] == "success"
         assert "activate the skill again" in json.dumps(tool_result)

@@ -1068,6 +1068,7 @@ export class PlatformStack extends cdk.Stack {
     // answers "how long did the user wait". The fourth dashboard is $3/month
     // beyond CloudWatch's free three, taken deliberately; see the construct.
     new TurnLatencyObservabilityConstruct(this, 'TurnLatencyObservability', {
+      alarmTopic: this.alarmTopic,
       config: this._config,
       runtimeLogGroupName: inferenceApi.runtimeLogGroupName,
     });

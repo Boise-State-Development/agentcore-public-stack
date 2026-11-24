@@ -9,6 +9,8 @@ Usage:
     from agents.main_agent.config.constants import EnvVars, Defaults, Prefixes
 """
 
+from apis.shared.models import task_model_defaults
+
 
 class EnvVars:
     """Environment variable names used across the main_agent package.
@@ -204,7 +206,7 @@ class Defaults:
     # exact identifiers) and Lite ~99% (100%), for ~$0.01 per cut. `us.*`
     # because dev's SCP denies `global.*`. compress_with_model sends
     # `temperature` only, so a Claude override works too.
-    COMPACTION_SUMMARY_MODEL_ID = "us.amazon.nova-2-lite-v1:0"
+    COMPACTION_SUMMARY_MODEL_ID = task_model_defaults.COMPACTION_SUMMARY_DEFAULT_MODEL_ID
     COMPACTION_DEFERRED_APPLY_ENABLED = True
     COMPACTION_TAIL_TOKEN_BOUND_ENABLED = True
     # Tool-result offload gate. 4k is well under the 25k compaction floor, so a

@@ -31,7 +31,18 @@ from apis.shared.costs.ledger_reader import (
 TODAY = date(2026, 10, 10)
 
 
-def _v(day, version, build, **counters):
+def _chat_split(counters):
+    """The chat split today's writer adds, for an all-chat fixture row (ledger_rollups)."""
+    split = dict(counters)
+    for counter, source in (("splitCalls", "calls"), ("splitTurns", "turns"), ("chatCost", "cost"),
+                            ("chatFirstTokenMsSum", "firstTokenMsSum"), ("chatFirstTokenCount", "firstTokenCount")):
+        if source in counters:
+            split.setdefault(counter, counters[source])
+    return split
+
+
+def _v(day, version, build, *, split=True, **counters):
+    counters = _chat_split(counters) if split else counters
     return {"PK": "LEDGER#VERSION", "SK": f"{day}#{version}#{build}", "date": day, "appVersion": version,
             "build": build, **{k: Decimal(str(v)) for k, v in counters.items()}}
 
@@ -355,3 +366,69 @@ def test_thumbs_by_build_day_counts_retries_on_down_thumbs():
               {"sessionId": "s9", "messageId": 1, "value": 1}]
     records = {"s1": [{"messageId": 1, "timestamp": "2026-10-05T10:00:00", "appVersion": "1.1.0", "build": "b1"}]}
     assert thumbs_by_build_day(thumbs, records) == {"1.1.0#b1|2026-10-05": {"up": 0, "down": 1, "retries": 1}}
+
+
+# ---------------------------------------------------------------------------
+# Turn KPIs over the chat split (rows from before it carry none)
+# ---------------------------------------------------------------------------
+
+
+def _workflow_heavy(day, version, build, *, split=True):
+    """100 chat calls over 40 turns at 300 ms, plus 20 workflow prompt steps at 12 s and $0.05 each."""
+    counters = dict(calls=120, turns=40, cost=5.0, firstTokenMsSum=300 * 100 + 12_000 * 20, firstTokenCount=120,
+                    **{"callKind.chat": 100, "callKind.workflow_prompt": 20})
+    if split:
+        counters.update(splitCalls=120, splitTurns=40, chatCost=4.0, chatFirstTokenMsSum=300 * 100,
+                        chatFirstTokenCount=100, **{"callKindCost.workflow_prompt": 1.0,
+                                                    "callKindFirstTokenMsSum.workflow_prompt": 12_000 * 20,
+                                                    "callKindFirstTokenCount.workflow_prompt": 20})
+    return _v(day, version, build, split=False, **counters)
+
+
+SPLIT_ROWS = [
+    _workflow_heavy("2026-10-01", "1.0.0", "a1", split=False),
+    _workflow_heavy("2026-10-02", "1.0.0", "a1", split=False),
+    _workflow_heavy("2026-10-05", "1.1.0", "b1"),
+    _workflow_heavy("2026-10-06", "1.1.0", "b1"),
+]
+
+
+def test_workflow_steps_stay_out_of_the_turn_kpis_and_show_on_their_own_line():
+    sel = ledger_readout.select_windows(SPLIT_ROWS, today=TODAY)
+    bundle = ledger_readout.build_readout(sel, version_rows=SPLIT_ROWS)
+    assert bundle["kpis"]["costPerTurn"]["candidate"] == pytest.approx(0.1)  # $4.00 / 40, not $5.00 / 40
+    assert bundle["kpis"]["meanFirstTokenMs"]["candidate"] == pytest.approx(300.0)
+    kinds = {k["kind"]: k for k in bundle["callKinds"]}
+    assert [k["kind"] for k in bundle["callKinds"]] == ["chat", "workflow_prompt"]
+    assert kinds["workflow_prompt"]["calls"] == [40, 40]
+    assert kinds["workflow_prompt"]["cost"] == [None, pytest.approx(2.0)]
+    assert kinds["workflow_prompt"]["meanFirstTokenMs"] == [None, pytest.approx(12_000.0)]
+    assert kinds["chat"]["cost"] == [None, pytest.approx(8.0)]
+
+
+def test_a_baseline_before_the_split_reads_none_with_its_own_caveat_not_a_floor():
+    sel = ledger_readout.select_windows(SPLIT_ROWS, today=TODAY)
+    bundle = ledger_readout.build_readout(sel, version_rows=SPLIT_ROWS)
+    for name in ("costPerTurn", "meanFirstTokenMs"):
+        kpi = bundle["kpis"][name]
+        assert kpi["baseline"] is None and kpi["delta"] is None and kpi["n"][0] == 0
+    split = [c["message"] for c in bundle["caveats"] if c["code"] == "predates_chat_split"]
+    assert len(split) == 1 and split[0].startswith("baseline rows predate the chat-only counters")
+    floors = [c["message"] for c in bundle["caveats"] if c["code"] == "below_floor"]
+    assert not any(m.startswith(("costPerTurn", "meanFirstTokenMs")) for m in floors)
+
+
+def test_a_window_part_before_the_split_covers_only_the_split_rows_and_says_so():
+    rows = [_workflow_heavy("2026-10-05", "1.1.0", "b1", split=False), _workflow_heavy("2026-10-06", "1.1.0", "b1")]
+    sel = ledger_readout.select_windows(rows, today=TODAY)
+    bundle = ledger_readout.build_readout(sel, version_rows=rows)
+    assert bundle["kpis"]["costPerTurn"]["candidate"] == pytest.approx(0.1)
+    assert bundle["kpis"]["costPerTurn"]["n"][1] == 40
+    message = next(c["message"] for c in bundle["caveats"] if c["code"] == "predates_chat_split")
+    assert message.startswith("candidate costPerTurn, meanFirstTokenMs cover 40 of 80 turns and 120 of 240 calls")
+
+
+def test_a_fully_split_window_has_no_split_caveat():
+    rows = [_workflow_heavy("2026-10-05", "1.1.0", "b1"), _workflow_heavy("2026-10-06", "1.1.0", "b1")]
+    bundle = ledger_readout.build_readout(ledger_readout.select_windows(rows, today=TODAY), version_rows=rows)
+    assert "predates_chat_split" not in {c["code"] for c in bundle["caveats"]}

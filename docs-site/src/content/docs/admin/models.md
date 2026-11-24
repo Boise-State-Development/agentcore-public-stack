@@ -34,3 +34,22 @@ The curated catalog sets a default when a model is first added. A model that is 
 To update every environment at once, an operator can run `backend/scripts/backfill_model_output_caps.py` instead. It changes only rows still on the old curated default and leaves any row an admin has edited alone. It is a dry run unless you pass `--apply`.
 
 Claude Haiku 5.5 keeps a 32,000 default on purpose. A Haiku 5.5 prompt over 100,000 tokens is billed at 5x, and a long answer is re-sent as input on the next call, so a larger default can push the following call over that line.
+
+## Task models
+
+The **Task models** tab under **Admin → Models** chooses the model the platform uses for its own background work, separate from the models users chat with:
+
+| Task | What it does | Built-in default |
+|---|---|---|
+| Conversation titles | Names each new conversation from its first message | Nova Micro |
+| Tool activity summaries | Writes the one-line description of a batch of tool calls | Nova Micro |
+| Conversation compaction | Summarizes the older part of a long conversation so it fits the context | Nova 2 Lite |
+| Structured extraction | Pulls a skill's named fields out of documents (`document_extract`) | `DOCUMENT_EXTRACT_MODEL_ID`, set at deploy time |
+
+For each task you pick a model and, when the model has one, an **Effort** level (Claude's `effort` setting). Leave the model on **Default** to keep the built-in choice.
+
+- **Who can be assigned:** any enabled Bedrock model in the catalog that reads and writes text. Users don't need access to it; access grants apply only to chat.
+- **When it applies:** within a minute, with no deploy. A compaction change applies from each conversation's next compaction, so existing summaries are not rewritten.
+- **Fallback:** a task never fails because of this setting. If the assigned model is turned off, deleted or retired with no replacement, the task runs its default and the tab says why. A retired model with a replacement runs the replacement.
+- **Cost:** every task is metered. Each model call writes a cost record priced from the model's catalog row, and it counts against the quota of the user whose conversation it ran for, so a larger model costs that user, not the platform. The calls show under their own kinds in the release ledger (`session_title`, `tool_summary`, `compaction_summary`, `document_extract`), never as chat turns. A default with no catalog row (Nova Micro and Nova 2 Lite, unless you add them) is recorded with its tokens but no cost. Add the model to the catalog to price those calls.
+- **Retirement watch:** the built-in defaults are not in the curated catalog, so the tab notes when a default has no catalog row. Watch AWS model lifecycle notices for those ids (`backend/src/apis/shared/models/task_model_defaults.py`), or add the model to the catalog so its retirement and replacement are tracked there.

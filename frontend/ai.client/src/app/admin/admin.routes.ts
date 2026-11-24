@@ -116,6 +116,12 @@ export const adminRoutes: Routes = [
     loadComponent: () => import('./manage-models/manage-models.page').then(m => m.ManageModelsPage),
   },
   {
+    path: 'manage-models/tasks',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.models' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./manage-models/task-models.page').then(m => m.TaskModelsPage),
+  },
+  {
     path: 'manage-models/catalog',
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.models' } satisfies AdminScopeRouteData,
@@ -174,6 +180,15 @@ export const adminRoutes: Routes = [
     canActivate: [adminScopeGuard],
     data: { scope: 'admin.skills' } satisfies AdminScopeRouteData,
     loadComponent: () => import('./skills/pages/skill-list.page').then(m => m.SkillListPage),
+  },
+  {
+    // One skill's scripts, whoever wrote them, and the admin switch
+    // (skill-code-sandbox §8.10). Its own scope: admin.skills reads
+    // user-authored skills as 404 by design.
+    path: 'skills/scripts',
+    canActivate: [adminScopeGuard],
+    data: { scope: 'admin.skill_scripts' } satisfies AdminScopeRouteData,
+    loadComponent: () => import('./skill-scripts/skill-scripts.page').then(m => m.SkillScriptsPage),
   },
   {
     path: 'skills/new',

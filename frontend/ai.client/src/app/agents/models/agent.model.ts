@@ -150,6 +150,23 @@ export interface MissingCapability {
   optional: boolean;
 }
 
+/** One pinned skill binding: its version, and whether the skill has moved on (skill-version-history D9). */
+export interface AgentSkillPin {
+  skillId: string;
+  version: number;
+  updateAvailable: boolean;
+}
+
+export interface AgentSkillPinsResponse {
+  pins: AgentSkillPin[];
+}
+
+/** The version a binding pins after an Update; the form keeps it as the binding's config. */
+export interface AgentSkillPinMoved {
+  skillId: string;
+  version: number;
+}
+
 export interface AgentRunnability {
   agentId: string;
   state: RunnabilityState;
@@ -199,6 +216,10 @@ export interface CreateAgentRequest {
   voiceEnabled?: boolean;
   /** #625 — default on when omitted. */
   voiceInstructionsOnly?: boolean;
+  /** skill-code-sandbox §8.5: the script sets the saver allowed, `{skillId: scriptsHash}`. */
+  scriptsReviewed?: Record<string, string>;
+  /** The review sheet's "Add without scripts". */
+  scriptsDeclined?: string[];
 }
 
 export interface UpdateAgentRequest {
@@ -221,6 +242,10 @@ export interface UpdateAgentRequest {
   /** #625 — omit to leave the stored value unchanged. */
   voiceEnabled?: boolean;
   voiceInstructionsOnly?: boolean;
+  /** skill-code-sandbox §8.5: the script sets the saver allowed, `{skillId: scriptsHash}`. */
+  scriptsReviewed?: Record<string, string>;
+  /** The review sheet's "Add without scripts". */
+  scriptsDeclined?: string[];
 }
 
 export interface AgentsListResponse {

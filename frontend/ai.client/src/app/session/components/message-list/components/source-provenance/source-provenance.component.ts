@@ -2,10 +2,22 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  inject,
   input,
   signal,
 } from '@angular/core';
 import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared/utils/stream-parser';
+import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
+import type { OpenFilePreviewRef } from '../../../../services/file-preview/file-preview.model';
+import { pdfPageRef } from '../../../../services/file-preview/pdf-page-link';
+
+/** A verdict sentence split around its locator, so the locator can be a link. */
+interface VerdictParts {
+  before: string;
+  /** The locator in words ("page 12", "about page 3"), or empty for none. */
+  locator: string;
+  after: string;
+}
 
 /**
  * What a `verify_sources` call found, rendered under the answer it belongs to
@@ -32,6 +44,13 @@ import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared
  *
  * Colour is never the only signal: the header counts unconfirmed values in
  * words, and each row pairs its dot with a sentence.
+ *
+ * In a PDF the page in each verdict is a link that opens the document in the
+ * side pane at that page with the quoted passage highlighted, so the reader
+ * can check it themselves — for `quote_unsupported` above all. Which
+ * locators are links is decided once, in `pdfPageRef`, for this list and
+ * the extraction table alike, and only while a preview pane is on the page
+ * to open them in.
  */
 @Component({
   selector: 'app-source-provenance',
@@ -57,6 +76,12 @@ import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared
       height: 6px;
       border-radius: 9999px;
       flex-shrink: 0;
+    }
+
+    /* Rows align to the first line, because a verdict may wrap: centre the
+       dot on that line (16px) rather than on the whole row. */
+    .claim-list .status-dot {
+      margin-top: 5px;
     }
 
     .collapsible-content {
@@ -166,15 +191,31 @@ import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared
             >
               @for (claim of claims(); track claim.id + claim.quote) {
                 <li class="bg-white/40 py-1.5 pr-2.5 dark:bg-transparent">
-                  <div class="flex items-center gap-2">
+                  <div class="flex items-start gap-2">
                     <span [class]="dotClass(claim.state)"></span>
-                    <span class="min-w-0 truncate text-xs text-gray-600 dark:text-gray-300">
+                    <span
+                      class="min-w-0 max-w-[45%] shrink-0 truncate text-xs leading-4 text-gray-600 dark:text-gray-300"
+                    >
                       {{ label(claim) }}
                     </span>
                     <!-- The verdict sits with the value, never a bare locator:
-                         "page 1" alone reads as a confirmed citation. -->
-                    <span class="truncate text-[11px]" [class]="verdictClass(claim.state)">
-                      {{ verdict(claim) }}
+                         "page 1" alone reads as a confirmed citation. It wraps
+                         rather than truncating: the page link is at its end,
+                         and an ellipsis would hide it exactly when the PDF
+                         pane is open and the column is narrow. -->
+                    <span class="min-w-0 flex-1 text-[11px] leading-4" [class]="verdictClass(claim.state)">
+                      @if (pageRef(claim); as ref) {
+                        @let parts = verdictParts(claim);
+                        {{ parts.before }}<button
+                          type="button"
+                          class="cursor-pointer underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible"
+                          [attr.aria-label]="'Open ' + claim.filename + ' at ' + parts.locator"
+                          data-testid="provenance-page-link"
+                          (click)="openPage(ref)"
+                        >{{ parts.locator }}</button>{{ parts.after }}
+                      } @else {
+                        {{ verdict(claim) }}
+                      }
                     </span>
                   </div>
                   @if (claim.quote) {
@@ -192,6 +233,8 @@ import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared
   `,
 })
 export class SourceProvenanceComponent {
+  private readonly filePreview = inject(FilePreviewStateService);
+
   claims = input.required<readonly SourceProvenanceClaim[]>();
 
   protected readonly panelId = `provenance-${Math.random().toString(36).slice(2, 9)}`;
@@ -247,16 +290,35 @@ export class SourceProvenanceComponent {
    * reinforces them — so each says what is and is not established.
    */
   protected verdict(claim: SourceProvenanceClaim): string {
+    const { before, locator, after } = this.verdictParts(claim);
+    return `${before}${locator}${after}`;
+  }
+
+  protected verdictParts(claim: SourceProvenanceClaim): VerdictParts {
+    const locator = this.locator(claim.locator);
     switch (claim.state) {
       case 'supported':
-        return `found on ${this.locator(claim.locator)}`;
+        return { before: 'found on ', locator, after: '' };
       case 'quote_unsupported':
-        return `not in the quoted passage on ${this.locator(claim.locator)}`;
+        return { before: 'not in the quoted passage on ', locator, after: '' };
       case 'unassessed':
-        return `passage found on ${this.locator(claim.locator)}, value not checked`;
+        return { before: 'passage found on ', locator, after: ', value not checked' };
       default:
-        return 'no matching passage in the document';
+        return { before: 'no matching passage in the document', locator: '', after: '' };
     }
+  }
+
+  /**
+   * How to open a claim's page with its passage highlighted, or null when it
+   * can't be (`pdfPageRef`) or there is no pane here to open it in. Null
+   * leaves the verdict as plain text.
+   */
+  protected pageRef(claim: SourceProvenanceClaim): OpenFilePreviewRef | null {
+    return this.filePreview.hostAvailable() ? pdfPageRef(claim) : null;
+  }
+
+  protected openPage(ref: OpenFilePreviewRef): void {
+    this.filePreview.open(ref);
   }
 
   /**

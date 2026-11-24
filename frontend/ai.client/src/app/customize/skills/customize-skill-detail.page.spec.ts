@@ -8,6 +8,8 @@ import { CustomizeSkillDetailPage } from './customize-skill-detail.page';
 import { SkillService, SkillsResponse } from '../../services/skill/skill.service';
 import { SkillDetail } from '../../services/skill-detail/skill-detail.service';
 import { ConfigService } from '../../services/config.service';
+import { FEATURES } from '../../services/features';
+import { environment } from '../../../environments/environment';
 
 /** A failed save lands a microtask after `whenStable()`; one macrotask makes it observable. */
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -360,5 +362,83 @@ describe('CustomizeSkillDetailPage', () => {
       (fixture.nativeElement.querySelector('button[role="switch"]') as HTMLButtonElement)
         .disabled,
     ).toBe(false);
+  });
+});
+
+describe('CustomizeSkillDetailPage — version history', () => {
+  let http: HttpTestingController;
+
+  function configure(skillVersionHistory: boolean): void {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        provideMarkdown(),
+        { provide: FEATURES, useValue: { ...environment.features, skillVersionHistory } },
+      ],
+    });
+    TestBed.inject(ConfigService).appApiUrl.set('/api');
+    http = TestBed.inject(HttpTestingController);
+  }
+
+  afterEach(() => {
+    http.match(() => true);
+    TestBed.resetTestingModule();
+  });
+
+  async function create(record: SkillDetail): Promise<HTMLElement> {
+    const fixture = TestBed.createComponent(CustomizeSkillDetailPage);
+    fixture.componentRef.setInput('skillId', record.skillId);
+    fixture.detectChanges();
+    http.match(req => req.url === '/api/skills/').forEach(req => req.flush(PICKER));
+    http.match(`/api/skills/${record.skillId}`).forEach(req => req.flush(record));
+    for (let i = 0; i < 3; i++) {
+      await fixture.whenStable();
+      fixture.detectChanges();
+      await settle();
+      http
+        .match(`/api/skills/mine/${record.skillId}`)
+        .forEach(req =>
+          req.flush({ ...record, updatedAt: '2026-11-23T10:00:00+00:00', importSource: null }),
+        );
+      http
+        .match(req => req.url === `/api/skills/mine/${record.skillId}/versions`)
+        .forEach(req =>
+          req.flush({
+            versions: [
+              {
+                version: 1,
+                trigger: 'create',
+                displayName: record.displayName,
+                fileCount: 0,
+                isCurrent: true,
+                createdByYou: true,
+              },
+            ],
+          }),
+        );
+    }
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('shows History on a skill you own while the flag is on', async () => {
+    configure(true);
+    const el = await create(detail({ skillId: 'mine', displayName: 'Mine', isOwned: true }));
+    expect(el.querySelector('#skill-history-heading')?.textContent).toContain('History');
+    expect(el.textContent).toContain('Version 1');
+  });
+
+  it('shows no History on a catalog skill, or while the flag is off', async () => {
+    configure(true);
+    const catalog = await create(detail({ skillId: 'web_research', displayName: 'Web Research' }));
+    expect(catalog.querySelector('#skill-history-heading')).toBeNull();
+    expect(http.match(req => req.url.includes('/skills/mine/'))).toEqual([]);
+
+    configure(false);
+    const off = await create(detail({ skillId: 'mine', displayName: 'Mine', isOwned: true }));
+    expect(off.querySelector('#skill-history-heading')).toBeNull();
   });
 });

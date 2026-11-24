@@ -1059,6 +1059,8 @@ def _build_word_document_tools(
     session_id: str,
     user_id: str,
     user_name: Optional[str] = None,
+    scope_id: Optional[str] = None,
+    scope_kind: Optional[str] = None,
 ) -> list:
     """Create context-bound Word document tools if enabled by the user.
 
@@ -1096,7 +1098,9 @@ def _build_word_document_tools(
     if word_skill_scripts_enabled():
         from agents.main_agent.skills.skill_scripts import TurnSkillRecords
 
-        skill_records = TurnSkillRecords()
+        # The turn's Agent or project names whose review of a skill's scripts
+        # counts (skill-code-sandbox §8); it is agent-cache key material.
+        skill_records = TurnSkillRecords(scope_id, scope_kind)
 
     tools = [
         make_create_word_document_tool(session_id, user_id, skill_records),
@@ -1121,13 +1125,17 @@ def _build_code_sandbox_tools(
     enabled_tools: list | None,
     session_id: str,
     user_id: str,
+    scope_id: Optional[str] = None,
+    scope_kind: Optional[str] = None,
 ) -> list:
     """Create ``run_code`` if the turn enables it and ``CODE_SANDBOX_ENABLED`` is on.
 
     Closes over ``(session_id, user_id)`` and a ``TurnSkillRecords`` holder that
     ``ChatAgent`` fills from the turn's skill records, as the Word tools' script
-    path does (``docs/specs/skill-code-sandbox.md``). Off, the spec never
-    reaches ``toolConfig``.
+    path does (``docs/specs/skill-code-sandbox.md``). The holder also names the
+    turn's Agent or project (``scope_id``), whose review of another author's
+    scripts lets them run (§8); both are agent-cache key elements. Off, the
+    spec never reaches ``toolConfig``.
     """
     if not enabled_tools or not CODE_SANDBOX_TOOL_IDS.intersection(enabled_tools):
         return []
@@ -1138,7 +1146,7 @@ def _build_code_sandbox_tools(
     from agents.builtin_tools.code_sandbox import make_run_code_tool
     from agents.main_agent.skills.skill_scripts import TurnSkillRecords
 
-    return [make_run_code_tool(session_id, user_id, TurnSkillRecords())]
+    return [make_run_code_tool(session_id, user_id, TurnSkillRecords(scope_id, scope_kind))]
 
 
 # ============================================================
@@ -4714,6 +4722,9 @@ async def _build_turn_tools(
     memory. ``turn_project_id`` marks a project-harness turn, which also gets
     ``project_files``; any other Agent turn gets ``knowledge_files`` while
     ``AGENT_KNOWLEDGE_FILES_ENABLED`` is on."""
+    # Whose review of a skill's scripts counts on this turn: the Agent's or
+    # the project's (skill-code-sandbox §8). Wording only; the id decides.
+    script_scope_kind = "project" if turn_project_id else "agent"
     extra_tools = _build_spreadsheet_tools(
         enabled_tools=effective_enabled_tools,
         assistant_id=input_data.rag_assistant_id,
@@ -4728,6 +4739,8 @@ async def _build_turn_tools(
         session_id=input_data.session_id,
         user_id=user_id,
         user_name=current_user.name,
+        scope_id=input_data.rag_assistant_id,
+        scope_kind=script_scope_kind,
     ) + _build_workspace_tools(
         enabled_tools=effective_enabled_tools,
         session_id=input_data.session_id,
@@ -4744,6 +4757,8 @@ async def _build_turn_tools(
         enabled_tools=effective_enabled_tools,
         session_id=input_data.session_id,
         user_id=user_id,
+        scope_id=input_data.rag_assistant_id,
+        scope_kind=script_scope_kind,
     ) + _build_account_tools(effective_enabled_tools, current_user) + _build_skill_authoring_tools(
         enabled_tools=effective_enabled_tools,
         session_id=input_data.session_id,

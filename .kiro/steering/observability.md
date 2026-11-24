@@ -328,6 +328,7 @@ to print the plan (no `gh` auth needed).
 | `ecsCpuPercent` / `ecsMemoryPercent` | `80` / `85` | default | `75` / `80` |
 | `promptCacheAvoidableMissThreshold` | `10` | `5` | default |
 | `promptCacheWastedUsdThreshold` | `1` | `0.5` | default |
+| `turnPreludeP50Ms` / `turnPreludeMinTurns` | `1500` / `200` | default | default |
 
 Two choices worth understanding rather than copying:
 

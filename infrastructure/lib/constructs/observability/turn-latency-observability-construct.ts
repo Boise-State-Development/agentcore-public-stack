@@ -1,8 +1,21 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 
 import { AppConfig, getResourceName } from '../../config';
+import { AlarmFactory } from './alarm-factory';
+
+/**
+ * The prelude alarm's period. Six hours, not five minutes: a p50 is only as
+ * steady as the turns under it, and dev's median hour holds 9 turns while a
+ * 6-hour period with traffic holds hundreds. Four of them make a day, the
+ * longest evaluation range CloudWatch allows at this period.
+ */
+export const TURN_PRELUDE_ALARM_PERIOD = cdk.Duration.hours(6);
+export const TURN_PRELUDE_ALARM_EVALUATION_PERIODS = 4;
+/** Two separate breaching periods in a day: one load test of cold sessions is not a regression. */
+export const TURN_PRELUDE_ALARM_DATAPOINTS = 2;
 
 export interface TurnLatencyObservabilityConstructProps {
   config: AppConfig;
@@ -16,6 +29,8 @@ export interface TurnLatencyObservabilityConstructProps {
    * rather than "wrong query".
    */
   runtimeLogGroupName: string;
+  /** Undefined when the alarm topic is off; the prelude alarm stays console-only. */
+  alarmTopic?: sns.ITopic;
 }
 
 /**
@@ -54,9 +69,20 @@ export interface TurnLatencyObservabilityConstructProps {
  * metric-stream cost: a dimension invites reading a p99 off a slice too thin to
  * have one.
  *
- * **No alarms.** An alarm needs a threshold, there is no baseline yet, and
- * inventing one is the exact guessing the spec this supports exists to prevent.
- * Add them once the dashboard has run long enough to say what normal is.
+ * **One alarm, `turn-prelude-p50`, a gross-regression detector.** It waited
+ * for a baseline: two weeks of 6-hour periods with at least 200 turns read
+ * 955–1,088 ms on dev and 510–1,366 ms on prod (2026-11-09 → 11-22), the
+ * prod swing being traffic mix. A fixed threshold above that band
+ * (`observability.turnPreludeP50Ms`, default 1,500) rather than anomaly
+ * detection, because a harness regression is a level shift that persists,
+ * and an anomaly model learns a persistent level as the new normal within
+ * days and stops alarming, while its band, trained on prod's mix swings and
+ * on low-volume cold-start periods, would be too wide to catch a step of a
+ * few hundred milliseconds anyway. The guard (`IF(turns >= floor, p50, 0)`)
+ * makes a quiet period read as healthy, since its p50 is its cold starts. The
+ * fine detector is the release readout's per-build prelude table, which flags
+ * a stage moving by more than max(30 ms, 5%); this alarm is for the step
+ * nobody ran a readout for. See docs/specs/turn-path-ttft.md §6E.
  *
  * **These metrics start at handler entry.** They cannot see the app-api hop,
  * auth, or Runtime routing — ~478ms warm, ~1.5s cold, up to 20% of the turn.
@@ -67,6 +93,8 @@ export interface TurnLatencyObservabilityConstructProps {
  */
 export class TurnLatencyObservabilityConstruct extends Construct {
   public readonly dashboard: cloudwatch.Dashboard;
+  /** `turn-prelude-p50`; absent when `observability.turnPreludeP50Ms` is 0. */
+  public readonly preludeAlarm?: cloudwatch.Alarm;
 
   constructor(
     scope: Construct,
@@ -76,6 +104,8 @@ export class TurnLatencyObservabilityConstruct extends Construct {
     super(scope, id);
 
     const { config, runtimeLogGroupName } = props;
+    const thresholdMs = config.observability.turnPreludeP50Ms;
+    const minTurns = config.observability.turnPreludeMinTurns;
 
     // Must match TURN_LATENCY_EMF_NAMESPACE's default in turn_timing.py.
     // Deliberately not set from CDK, for the same reason the prompt-cache
@@ -381,5 +411,45 @@ export class TurnLatencyObservabilityConstruct extends Construct {
         height: 6,
       }),
     );
+
+    if (thresholdMs > 0) {
+      this.preludeAlarm = new AlarmFactory(this, config, props.alarmTopic).expressionAlarm('PreludeP50Alarm', {
+        name: 'turn-prelude-p50',
+        alarmDescription:
+          `Harness time before the first token (PreludeTotalMs, model excluded) had a 6-hour p50 over `
+          + `${thresholdMs} ms in ${TURN_PRELUDE_ALARM_DATAPOINTS} of the last ${TURN_PRELUDE_ALARM_EVALUATION_PERIODS} `
+          + `periods with at least ${minTurns} turns. Read the stage rows of the turn-latency dashboard for which `
+          + 'stage moved, and the release readout\'s prelude table (backend/scripts/release_readout.py) for which '
+          + 'build. Rule out a traffic-mix shift first (Agent turns run retrieval). See docs/specs/turn-path-ttft.md 6E.',
+        expression: new cloudwatch.MathExpression({
+          expression: `IF(turns >= ${minTurns}, p50, 0)`,
+          usingMetrics: {
+            p50: new cloudwatch.Metric({
+              namespace, metricName: 'PreludeTotalMs', statistic: 'p50', period: TURN_PRELUDE_ALARM_PERIOD,
+            }),
+            turns: new cloudwatch.Metric({
+              namespace, metricName: 'PreludeTotalMs', statistic: 'SampleCount', period: TURN_PRELUDE_ALARM_PERIOD,
+            }),
+          },
+          period: TURN_PRELUDE_ALARM_PERIOD,
+          label: `PreludeTotalMs p50 (6 h, periods with ≥ ${minTurns} turns)`,
+        }),
+        threshold: thresholdMs,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        evaluationPeriods: TURN_PRELUDE_ALARM_EVALUATION_PERIODS,
+        datapointsToAlarm: TURN_PRELUDE_ALARM_DATAPOINTS,
+        // A period with no turns is a quiet period, not a slow one.
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      this.dashboard.addWidgets(
+        new cloudwatch.AlarmWidget({
+          title: `Alarm: prelude p50 over 6 h (periods with ≥ ${minTurns} turns) vs ${thresholdMs} ms`,
+          alarm: this.preludeAlarm,
+          leftYAxis: { min: 0 },
+          width: 24,
+          height: 6,
+        }),
+      );
+    }
   }
 }

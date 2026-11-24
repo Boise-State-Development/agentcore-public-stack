@@ -245,9 +245,11 @@ def provider_unavailable_message(
 # the response never opens. Once the stream is open, botocore's `EventStream`
 # iterates the raw urllib3 stream unwrapped, so the error is urllib3's
 # ("AWSHTTPSConnectionPool(host=...): Read timed out."). The mid-stream form is
-# the one prod hits: Opus 5.5 thinks with `display: "omitted"` by default, which
-# sends no bytes while it reasons, and a long think on a large document ran
-# past the old 120s timeout about 5 times a day in prod in 2026-10.
+# the one prod hit: until PR 1890 asked for `display: "summarized"`, Opus 5.5
+# thought with its default `display: "omitted"`, which sends no bytes while it
+# reasons, and a long think on a large document ran past the old 120s timeout
+# about 5 times a day in prod in 2026-10. A model whose thinking isn't
+# streamed still can.
 # It reached users as the raw "Agent force-stopped: ...: Read timed out."
 _BEFORE_STREAM_READ_TIMEOUT_MARKER = "read timeout on endpoint url"
 _MID_STREAM_READ_TIMEOUT_MARKER = "read timed out"

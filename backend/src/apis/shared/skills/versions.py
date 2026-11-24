@@ -10,11 +10,12 @@ carries no ``status``, ``owner_id`` or ``visibility``. Those come from the live 
 every time, so a pinned skill an admin disables stops running, and one its author
 deletes is gone. A pin answers "which instructions", never "may this run".
 
-**Versions are cut when something pins, not on every skill save.** A version exists
-only where a binding runs it. Cutting on save would put a write (and a copy of every
-reference file) on each edit an author makes, for snapshots nothing reads. A pin
-reuses the latest version when the live skill still has the same content
-(``content_hash``), so pinning an unchanged skill twice is one version, not two.
+**When versions are cut.** Always when something pins the skill. With
+``SKILL_VERSION_HISTORY_ENABLED`` on, also on every content write, so history holds
+every content the skill ever had (``history.py``, docs/specs/skill-version-history.md
+D1). Either way a cut reuses the latest version when the live skill still has the
+same content (``content_hash``), so pinning or saving an unchanged skill twice is one
+version, not two, and a pin after a save reuses the save's version.
 
 **Reference files are frozen.** The live bundle keys
 (``skills/{id}/references/{filename}``) are overwritten in place on re-upload, so a
@@ -31,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .models import SkillDefinition, SkillResourceRef, skill_provenance
+from .models import SkillDefinition, SkillImportSource, SkillResourceRef, skill_provenance
 
 VERSION_SK_PREFIX = "VERSION#"
 VERSION_NUMBER_WIDTH = 8
@@ -124,6 +125,27 @@ class SkillVersion(BaseModel):
         ),
     )
 
+    trigger: Optional[str] = Field(
+        None,
+        description=(
+            "What cut it (``history.VersionTrigger``): a save, a file write, an import, "
+            "a pin... Not in ``content_hash``. None on rows cut before it was recorded, "
+            "all of which were pins."
+        ),
+    )
+    restored_from: Optional[int] = Field(
+        None, alias="restoredFrom", description="On a restore's version, the one it put back"
+    )
+    import_source_record: Optional[SkillImportSource] = Field(
+        None,
+        alias="importSourceRecord",
+        description=(
+            "The live skill's whole ``import_source`` when this was cut, so a restore can "
+            "put it back (spec D6). Never served: read APIs show ``import_source``, the "
+            "provenance. Not in ``content_hash``."
+        ),
+    )
+
     def to_dynamo_item(self) -> Dict[str, Any]:
         """The row. Deliberately no ``GSI4PK``: the owner index lists skills, not versions."""
         if self.version is None:
@@ -145,6 +167,13 @@ class SkillVersion(BaseModel):
             "skillMetadata": dict(self.skill_metadata),
             "resources": [r.to_item() for r in self.resources],
             **({"importSource": dict(self.import_source)} if self.import_source else {}),
+            **({"trigger": self.trigger} if self.trigger else {}),
+            **({"restoredFrom": self.restored_from} if self.restored_from is not None else {}),
+            **(
+                {"importSourceRecord": self.import_source_record.to_item()}
+                if self.import_source_record
+                else {}
+            ),
         }
 
     @classmethod
@@ -164,6 +193,63 @@ class SkillVersion(BaseModel):
             skill_metadata=dict(item.get("skillMetadata") or {}),
             resources=[SkillResourceRef.from_item(r) for r in (item.get("resources") or [])],
             import_source=dict(item["importSource"]) if item.get("importSource") else None,
+            trigger=item.get("trigger"),
+            restored_from=int(item["restoredFrom"]) if item.get("restoredFrom") is not None else None,
+            import_source_record=SkillImportSource.model_validate(item["importSourceRecord"])
+            if item.get("importSourceRecord")
+            else None,
+        )
+
+
+# What a history list reads: everything but the instructions and the frozen keys,
+# so a page of fifty versions stays small however long the skill is (spec §6.1).
+SUMMARY_ATTRIBUTES: Tuple[str, ...] = (
+    "skillId",
+    "version",
+    "contentHash",
+    "createdAt",
+    "createdBy",
+    "displayName",
+    "resources",
+    "importSource",
+    "trigger",
+    "restoredFrom",
+)
+
+
+class SkillVersionSummary(BaseModel):
+    """One row of a skill's history: a version without its instructions.
+
+    A distinct type from ``SkillVersion`` on purpose, so nothing can restore or
+    apply a projected row whose instructions were never read.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    skill_id: str
+    version: int
+    content_hash: str
+    created_at: Optional[str] = None
+    created_by: Optional[str] = None
+    display_name: str = ""
+    file_count: int = 0
+    import_source: Optional[Dict[str, str]] = None
+    trigger: Optional[str] = None
+    restored_from: Optional[int] = None
+
+    @classmethod
+    def from_dynamo_item(cls, item: Dict[str, Any]) -> "SkillVersionSummary":
+        return cls(
+            skill_id=item.get("skillId", ""),
+            version=int(item["version"]),
+            content_hash=item.get("contentHash", ""),
+            created_at=item.get("createdAt"),
+            created_by=item.get("createdBy"),
+            display_name=item.get("displayName", ""),
+            file_count=len(item.get("resources") or []),
+            import_source=dict(item["importSource"]) if item.get("importSource") else None,
+            trigger=item.get("trigger"),
+            restored_from=int(item["restoredFrom"]) if item.get("restoredFrom") is not None else None,
         )
 
 

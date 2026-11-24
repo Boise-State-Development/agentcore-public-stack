@@ -247,6 +247,20 @@ class ReadoutTool(_Model):
     spec_tokens: Optional[int] = Field(None, alias="specTokens")
 
 
+class ReadoutCallKind(_Model):
+    """One call kind's calls, cost and mean model first byte (``chat`` is what the turn KPIs read).
+
+    ``cost`` and ``meanFirstTokenMs`` are ``None`` for a side whose rows predate
+    the chat split (the ``predates_chat_split`` caveat), never ``0``.
+    """
+
+    kind: str
+    calls: List[int]
+    cost: List[Optional[float]]
+    mean_first_token_ms: List[Optional[float]] = Field(..., alias="meanFirstTokenMs")
+    first_token_n: List[int] = Field(..., alias="firstTokenN")
+
+
 class ReadoutGroup(_Model):
     id: str
     calls: List[int]
@@ -269,6 +283,45 @@ class ReadoutLatency(_Model):
     client_first_token_ms: Optional[ReadoutLatencyMetric] = Field(None, alias="clientFirstTokenMs")
     probe_cold_first_token_ms: Optional[ReadoutLatencyMetric] = Field(None, alias="probeColdFirstTokenMs")
     probe_follow_up_first_token_ms: Optional[ReadoutLatencyMetric] = Field(None, alias="probeFollowUpFirstTokenMs")
+
+
+class ReadoutPreludeStage(_Model):
+    p50: List[Optional[float]]
+    p90: List[Optional[float]]
+    n: List[int]
+    delta_ms: Optional[float] = Field(None, alias="deltaMs")
+    #: ``worse`` / ``better`` when the stage cleared the moved rule, else null.
+    moved: Optional[str] = None
+
+
+class ReadoutPreludeMove(_Model):
+    stage: str
+    delta_ms: float = Field(..., alias="deltaMs")
+    direction: str
+
+
+class ReadoutPreludeRule(_Model):
+    min_ms: float = Field(..., alias="minMs")
+    min_relative: float = Field(..., alias="minRelative")
+    min_n: int = Field(..., alias="minN")
+
+
+class ReadoutPreludeMix(_Model):
+    turns: List[int]
+    assistant_share: List[Optional[float]] = Field(..., alias="assistantShare")
+    resume_share: List[Optional[float]] = Field(..., alias="resumeShare")
+
+
+class ReadoutPrelude(_Model):
+    """Harness time before the first token, per build, from Logs Insights (``ledger_prelude``)."""
+
+    available: bool = False
+    #: ``build`` when both sides were filtered to one stamped build, else ``version``.
+    scope: Optional[str] = None
+    stages: Dict[str, ReadoutPreludeStage] = Field(default_factory=dict)
+    moved: List[ReadoutPreludeMove] = Field(default_factory=list)
+    rule: Optional[ReadoutPreludeRule] = None
+    mix: Optional[ReadoutPreludeMix] = None
 
 
 class ReadoutPairs(_Model):
@@ -328,10 +381,12 @@ class LedgerReadout(_Model):
     requested_days: int = Field(..., alias="requestedDays")
     mix_shift: ReadoutMixShift = Field(..., alias="mixShift")
     kpis: Dict[str, ReadoutKpi] = Field(default_factory=dict)
+    call_kinds: List[ReadoutCallKind] = Field(default_factory=list, alias="callKinds")
     tools: List[ReadoutTool] = Field(default_factory=list)
     agents: List[ReadoutGroup] = Field(default_factory=list)
     projects: List[ReadoutGroup] = Field(default_factory=list)
     latency: ReadoutLatency = Field(default_factory=ReadoutLatency)
+    prelude: ReadoutPrelude = Field(default_factory=ReadoutPrelude)
     quality: ReadoutQuality
     platform: Optional[ReadoutPlatform] = None
     caveats: List[ReadoutCaveat] = Field(default_factory=list)

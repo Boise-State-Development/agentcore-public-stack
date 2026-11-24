@@ -116,6 +116,31 @@ export class AgentPinService {
     }
   }
 
+  /**
+   * Arrange the pins, top first (docs/specs/agent-project-organization.md D7). Locked role
+   * pins keep their place at the top whatever is sent. The list moves at once and is
+   * replaced by the server's answer, or rolled back if the write fails.
+   */
+  async reorder(agentIds: readonly string[]): Promise<void> {
+    const previous = this._pins();
+    const byId = new Map(previous.map((pin) => [pin.agentId, pin]));
+    const locked = previous.filter((pin) => pin.locked);
+    const arranged = agentIds.map((id) => byId.get(id)).filter((pin): pin is PinnedAgent => !!pin && !pin.locked);
+    const rest = previous.filter((pin) => !pin.locked && !agentIds.includes(pin.agentId));
+    this._pins.set([...locked, ...arranged, ...rest]);
+    this._error.set(null);
+    try {
+      const response = await firstValueFrom(
+        this.http.put<AgentPinsResponse>(`${this.baseUrl()}/pins/order`, { agentIds }),
+      );
+      this._pins.set(response.pins ?? []);
+    } catch (err) {
+      this._pins.set(previous);
+      this._error.set(this.messageFor(err, 'Failed to save the order of your pinned agents.'));
+      throw err;
+    }
+  }
+
   /** Toggle, for the single control that both surfaces render. */
   async toggle(agentId: string): Promise<void> {
     // A locked seed has no un-pinned state to toggle to. The server ignores the call

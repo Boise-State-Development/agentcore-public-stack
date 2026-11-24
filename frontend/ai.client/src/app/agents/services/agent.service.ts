@@ -1,10 +1,12 @@
 import { Injectable, inject, signal } from '@angular/core';
+import { ScriptReviewAnswers, SkillScriptStatus } from '../../shared/skills/script-review.model';
 import { firstValueFrom } from 'rxjs';
 import { AgentApiService } from './agent-api.service';
 import {
   Agent,
   AgentRunnability,
   AgentBoundSkill,
+  AgentSkillPin,
   BindableItem,
   BindableKind,
   CreateAgentDraftRequest,
@@ -113,6 +115,21 @@ export class AgentService {
     const agent = await firstValueFrom(this.api.duplicateAgent(id));
     this.agents.update((current) => [agent, ...current]);
     return agent;
+  }
+
+  /** Each pinned skill binding's version and whether the skill moved on. */
+  async getSkillPins(id: string): Promise<AgentSkillPin[]> {
+    return (await firstValueFrom(this.api.getSkillPins(id))).pins;
+  }
+
+  /** Move this Agent's pin on a skill to its current content; resolves to the new version. */
+  async updateSkillPin(id: string, skillId: string, answers: ScriptReviewAnswers = {}): Promise<number> {
+    return (await firstValueFrom(this.api.pinSkill(id, skillId, answers))).version;
+  }
+
+  /** Each bound skill with scripts and whether they run for the Agent's users. */
+  async getSkillScripts(id: string): Promise<SkillScriptStatus[]> {
+    return (await firstValueFrom(this.api.getSkillScripts(id))).skills;
   }
 
   async updateAgent(id: string, request: UpdateAgentRequest): Promise<Agent> {

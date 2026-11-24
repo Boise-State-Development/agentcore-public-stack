@@ -275,6 +275,7 @@ from apis.app_api.assistants.knowledge_mode import router as knowledge_mode_rout
 from apis.app_api.assistants.knowledge_mode import voice_router as voice_knowledge_mode_router
 from apis.app_api.users.routes import router as users_router
 from apis.app_api.user_settings.routes import router as user_settings_router
+from apis.app_api.arrangements.routes import router as arrangements_router
 from apis.app_api.connectors.routes import router as connectors_router
 from apis.app_api.file_sources.routes import router as file_sources_router
 from apis.app_api.export_targets.routes import router as export_targets_router
@@ -313,6 +314,7 @@ app.include_router(voice_knowledge_mode_router)  # Agent Designer: how voice mod
 app.include_router(kb_upgrade_router)  # Owner-facing KB upgrade card; phase "none" (renders nothing) while MANAGED_KB_MIGRATION_ENABLED is off
 app.include_router(users_router)
 app.include_router(user_settings_router)
+app.include_router(arrangements_router)  # /users/me/arrangements/*; 404s while ORGANIZE_LISTS_ENABLED is off
 app.include_router(models_router)
 app.include_router(costs_router)
 app.include_router(quota_requests_router)  # /quota/* quota requests; 404s while QUOTA_REQUESTS_ENABLED is off
@@ -362,9 +364,19 @@ if os.environ.get("FINE_TUNING_ENABLED", "false").lower() == "true":
 if skills_enabled():
     from apis.app_api.skills.bundle_import_routes import router as skill_import_router
     from apis.app_api.skills.routes import router as user_skills_router
+    from apis.app_api.skills.uses_routes import router as skill_uses_router
+    from apis.app_api.skills.version_routes import router as skill_versions_router
+    from apis.app_api.skills.script_trust_routes import router as skill_script_trust_router
     # Bundle import (skill-bundle-import.md); its routes 404 while
     # SKILL_BUNDLE_IMPORT_ENABLED is off.
     app.include_router(skill_import_router)
+    # Version history (skill-version-history.md); 404 while
+    # SKILL_VERSION_HISTORY_ENABLED is off.
+    app.include_router(skill_versions_router)
+    # Where a skill is used, and moving pins behind it (D9); same flag.
+    app.include_router(skill_uses_router)
+    # Who allowed a skill's scripts, and the author's switch (skill-code-sandbox §8).
+    app.include_router(skill_script_trust_router)
     app.include_router(user_skills_router)
     logger.info("Skills routes enabled")
 

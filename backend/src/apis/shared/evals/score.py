@@ -161,6 +161,51 @@ def _skill_matches(skill_id: str, loaded: Sequence[str]) -> bool:
 class SampleScore:
     passed: bool
     failures: Tuple[str, ...] = ()
+    #: Conditional checks whose scenario did not happen in this sample, so
+    #: they passed without testing anything (``skill.reloads_after_cut`` with
+    #: no cut). Advisory: a reviewer reads them to tell a covered pass from a
+    #: vacuous one; they never fail a sample.
+    uncovered: Tuple[str, ...] = ()
+
+
+def _turn_calls(turn: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+    return [entry for entry in (turn.get("tool_trace") or []) if isinstance(entry, Mapping)]
+
+
+def _compacted(turn: Mapping[str, Any]) -> bool:
+    """The turn streamed a ``compaction`` event (``RunResult.events_seen``)."""
+    try:
+        return int((turn.get("events_seen") or {}).get("compaction") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def reload_after_cut(
+    skill_id: str,
+    turns: Sequence[Mapping[str, Any]],
+    final_calls: Sequence[Mapping[str, Any]],
+) -> Tuple[Optional[str], Optional[str]]:
+    """``(failure, uncovered)`` for one ``skill.reloads_after_cut`` entry.
+
+    The scenario is: an earlier turn loaded the skill, then a compaction cut
+    retired that activation into the summary. A cut is computed after a turn
+    and applied at the head of the next (``StreamCoordinator`` streams the
+    event after the turn's ``metadata``), so a ``compaction`` event on the
+    activating turn or any later turn before the last means the last turn ran
+    on the summary. A cut signalled on the last turn itself only takes effect
+    afterwards, so it does not count. Only the most recent earlier activation
+    matters: a reload before the last turn restores the skill until the next
+    cut.
+    """
+    earlier = list(turns[:-1])
+    activated = [i for i, turn in enumerate(earlier) if _skill_matches(skill_id, skills_loaded(_turn_calls(turn)))]
+    if not activated:
+        return None, f"skill.reloads_after_cut {skill_id}: not loaded before the last turn"
+    if not any(_compacted(turn) for turn in earlier[activated[-1]:]):
+        return None, f"skill.reloads_after_cut {skill_id}: no cut after its activation"
+    if not _skill_matches(skill_id, skills_loaded(final_calls)):
+        return f"did not reload skill {skill_id} after a cut", None
+    return None, None
 
 
 def score_sample(
@@ -170,6 +215,7 @@ def score_sample(
     tool_calls: Sequence[Mapping[str, Any]],
     status: str = "completed",
     memory_state: Optional[Mapping[str, Any]] = None,
+    turns: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> SampleScore:
     """Score one sample's last turn against its case's expectations.
 
@@ -182,8 +228,14 @@ def score_sample(
     ``{"project": text, "mine": text, "before": {scope: text}, "proposals": n}``.
     Each scope's text is every entry and the index, so a check matches wherever
     the model wrote the fact.
+
+    ``turns`` are every turn's stored dicts (``tool_trace``, ``events_seen``),
+    the last included, for a check that depends on what happened before the
+    last turn (``skill.reloads_after_cut``). Without them such a check has no
+    earlier turn to read and records itself as uncovered.
     """
     failures: List[str] = []
+    uncovered: List[str] = []
     if status != "completed":
         return SampleScore(False, (f"status: {status}",))
 
@@ -245,11 +297,17 @@ def score_sample(
         for skill_id in skill.not_loads:
             if _skill_matches(skill_id, loaded):
                 failures.append(f"loaded skill {skill_id}")
+        for skill_id in skill.reloads_after_cut:
+            failure, note = reload_after_cut(skill_id, turns or [], tool_calls)
+            if failure:
+                failures.append(failure)
+            if note:
+                uncovered.append(note)
 
     if expect.memory or expect.proposals is not None:
         failures.extend(_memory_failures(expect, memory_state))
 
-    return SampleScore(not failures, tuple(failures))
+    return SampleScore(not failures, tuple(failures), tuple(uncovered))
 
 
 def _memory_failures(expect: "Expect", state: Optional[Mapping[str, Any]]) -> List[str]:
@@ -315,6 +373,7 @@ _FAILURE_PATTERNS: Tuple[Tuple["re.Pattern[str]", str, bool], ...] = (
     (re.compile(r"^format: "), "format", False),
     (re.compile(r"^did not load skill (?P<name>\S+)$"), "skill_missing", True),
     (re.compile(r"^loaded skill (?P<name>\S+)$"), "skill_unexpected", True),
+    (re.compile(r"^did not reload skill (?P<name>\S+) after a cut$"), "skill_missing", True),
     (re.compile(r"^too many tool calls: "), "max_calls", False),
     (re.compile(r"^memory[ :]"), "memory", False),
     (re.compile(r"^proposals: "), "proposals", False),

@@ -23,11 +23,10 @@ import { SidenavService } from '../services/sidenav/sidenav.service';
  * would be the reading-width cap this shell exists to drop.
  *
  * The one piece of chrome left is the small-screen bar below: on desktop the
- * sidenav is always present, but on mobile it is an overlay, and the shell's
- * floating hamburger is conditioned on `HeaderService.showContent()` — state
- * the *session page* owns and admin pages never set. Relying on it would make
- * the admin nav reachable or not depending on what the user did before they
- * came here, so the console carries its own opener.
+ * sidenav is always present, but on mobile it is an overlay. The console
+ * carries its own opener in that bar, beside its title, and the shell keeps
+ * its controls capsule (`app-shell-controls`) out of the way below `lg` on an
+ * admin route, so the two never stack in the same corner.
  */
 @Component({
   selector: 'app-admin-layout',

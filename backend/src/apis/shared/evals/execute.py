@@ -391,6 +391,7 @@ async def run_sample(
         tool_calls=tool_calls,
         status=status,
         memory_state=memory_state,
+        turns=turns,
     )
 
     return {
@@ -413,6 +414,7 @@ async def run_sample(
         **({"error_code": error_code} if error_code else {}),
         "passed": scored.passed,
         "failures": list(scored.failures),
+        **({"uncovered": list(scored.uncovered)} if scored.uncovered else {}),
         "final_message": str(last.get("final_message") or ""),
         "tool_calls": tool_calls,
         "usage": sum_usage(turns),

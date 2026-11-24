@@ -31,6 +31,8 @@ export const environment = {
         fieldSetAuthoring: true,
         // Needs CDK_SKILL_BUNDLE_IMPORT_ENABLED=true in the `development` GitHub environment.
         skillBundleImport: true,
+        // Needs CDK_SKILL_VERSION_HISTORY_ENABLED=true in the `development` GitHub environment.
+        skillVersionHistory: true,
         // The `development` GitHub environment sets CDK_HANDOFFS_ENABLED=true.
         handoffs: true,
         // The `development` GitHub environment sets CDK_HANDOFF_BRIEF_ENABLED=true.
@@ -52,6 +54,8 @@ export const environment = {
         projectFileReadiness: true,
         // Needs CDK_AWS_LIMITS_ENABLED=true in the `development` GitHub environment.
         awsLimits: true,
+        // Needs CDK_ORGANIZE_LISTS_ENABLED=true in the `development` GitHub environment (set 2026-11-23).
+        organizeLists: true,
         // Reads app-api's knowledge-base mode, which follows the Runtime's
         // CDK_ASSISTANT_KB_FULL_CONTEXT_* variables in the `development` environment.
         knowledgeBaseMode: true,

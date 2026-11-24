@@ -241,6 +241,12 @@
               </div>
             }
 
+            <!-- A skill's own script, run by name: whose it is and who let it
+                 run (skill-code-sandbox §8.6), fetched only once opened. -->
+            @if (isSkillScript(call)) {
+              <app-skill-script-trust [call]="call" />
+            }
+
             <!-- Input -->
             @if (call.input && (call.input | keyvalue)?.length) {
               <div class="call-input">

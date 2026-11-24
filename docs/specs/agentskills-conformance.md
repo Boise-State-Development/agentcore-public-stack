@@ -289,6 +289,9 @@ promoted to default-on, or any general runner is built, all of the following hol
    skill, its author and its provenance. A changed hash asks again.
 4. **Across a trust boundary, only pinned versions run.** A script from a skill the
    invoker does not own runs only from a frozen version.
+   **Items 3 and 4 superseded (2026-11-23):** `docs/specs/skill-code-sandbox.md` §8 decides
+   trust once, at adoption, keyed on the hash of the skill's script set, and a review pins
+   the binding so members run the version that was reviewed. Members are never asked.
 5. **A repo-side timeout and output cap** on the sandbox call, and a fresh session per
    run (already true).
 6. Each run writes a `skill.script_run` audit event.

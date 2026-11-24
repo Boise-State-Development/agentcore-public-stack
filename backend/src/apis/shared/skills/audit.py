@@ -44,8 +44,17 @@ def skill_tier(skill: SkillDefinition) -> str:
 
 
 def import_source_fields(skill: SkillDefinition) -> Dict[str, Any]:
-    """The provenance of an imported skill, without any URL query or text."""
-    return skill.import_source.provenance() if skill.import_source is not None else {}
+    """The provenance of an imported skill, without any URL query or text.
+
+    With the script-set hash the import brought in, when it had scripts: that is
+    the importer's acknowledgement on the record (skill-code-sandbox §8.4).
+    """
+    if skill.import_source is None:
+        return {}
+    fields = skill.import_source.provenance()
+    if skill.import_source.scripts_hash:
+        fields["scriptsHash"] = skill.import_source.scripts_hash
+    return fields
 
 
 def skill_state(skill: SkillDefinition) -> Dict[str, Any]:

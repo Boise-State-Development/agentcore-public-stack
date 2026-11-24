@@ -12,6 +12,9 @@ import type {
   SourceLocator,
 } from '../../../../../shared/utils/stream-parser';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
+import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
+import type { OpenFilePreviewRef } from '../../../../services/file-preview/file-preview.model';
+import { pdfPageRef } from '../../../../services/file-preview/pdf-page-link';
 
 type FieldState = DocumentExtractionField['state'];
 
@@ -31,6 +34,13 @@ interface DocumentRow {
 interface CellRef {
   uploadId: string;
   field: string;
+}
+
+/** A verdict split around its locator, so the locator can be a link. */
+interface VerdictParts {
+  before: string;
+  locator: string;
+  after: string;
 }
 
 /** Numbers each table's ids; DOM ids only need to be unique on the page. */
@@ -63,6 +73,12 @@ let nextExtractionTable = 0;
  * One document reads as a field list with each passage inline. Several read
  * as a documents × fields grid — the comparison is the point of running a
  * set (§17.1) — with a cell's passage shown under the grid when selected.
+ *
+ * In a PDF the page in a value's verdict is a link that opens the document
+ * in the side pane at that page with the passage highlighted, by the same
+ * rule as `SourceProvenanceComponent` (`pdfPageRef`). In the grid it lives
+ * in the selected cell's detail, not the cell: each cell is already the
+ * button that selects it.
  */
 @Component({
   selector: 'app-document-extraction',
@@ -212,9 +228,22 @@ let nextExtractionTable = 0;
                           }
                         </td>
                         <td>
-                          <span class="flex items-center gap-1.5">
-                            <span [class]="dotClass(field.state)" aria-hidden="true"></span>
-                            <span [class]="verdictClass(field.state)">{{ verdict(field) }}</span>
+                          <span class="flex items-start gap-1.5">
+                            <span [class]="dotClass(field.state) + ' mt-1.5'" aria-hidden="true"></span>
+                            <span [class]="verdictClass(field.state)">
+                              @if (pageRef(run, field); as ref) {
+                                @let parts = verdictParts(field);
+                                {{ parts.before }}<button
+                                  type="button"
+                                  [class]="pageLinkClass"
+                                  [attr.aria-label]="'Open ' + run.filename + ' at ' + parts.locator"
+                                  data-testid="extraction-page-link"
+                                  (click)="openPage(ref)"
+                                >{{ parts.locator }}</button>{{ parts.after }}
+                              } @else {
+                                {{ verdict(field) }}
+                              }
+                            </span>
                           </span>
                           @if (field.quote) {
                             <p class="cell-quote text-[11px] text-gray-500 dark:text-gray-400">
@@ -294,10 +323,21 @@ let nextExtractionTable = 0;
                       · {{ sel.run.filename || 'Document' }}:
                       {{ sel.field.value || 'Not found' }}
                     </p>
-                    <p class="flex items-center gap-1.5">
-                      <span [class]="dotClass(sel.field.state)" aria-hidden="true"></span>
+                    <p class="flex items-start gap-1.5">
+                      <span [class]="dotClass(sel.field.state) + ' mt-1'" aria-hidden="true"></span>
                       <span class="text-[11px]" [class]="verdictClass(sel.field.state)">
-                        {{ verdict(sel.field) }}
+                        @if (pageRef(sel.run, sel.field); as ref) {
+                          @let parts = verdictParts(sel.field);
+                          {{ parts.before }}<button
+                            type="button"
+                            [class]="pageLinkClass"
+                            [attr.aria-label]="'Open ' + sel.run.filename + ' at ' + parts.locator"
+                            data-testid="extraction-page-link"
+                            (click)="openPage(ref)"
+                          >{{ parts.locator }}</button>{{ parts.after }}
+                        } @else {
+                          {{ verdict(sel.field) }}
+                        }
                       </span>
                     </p>
                     @if (sel.field.quote) {
@@ -355,6 +395,11 @@ export class DocumentExtractionComponent {
   heading = input('');
 
   private readonly artifactState = inject(ArtifactStateService);
+  private readonly filePreview = inject(FilePreviewStateService);
+
+  /** Same look as the page link in `SourceProvenanceComponent`. */
+  protected readonly pageLinkClass =
+    'cursor-pointer underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible';
 
   private readonly tableNumber = ++nextExtractionTable;
   protected readonly panelId = `extraction-${this.tableNumber}`;
@@ -491,21 +536,53 @@ export class DocumentExtractionComponent {
    * reinforces them — and only `supported` reads as a plain citation.
    */
   protected verdict(field: DocumentExtractionField): string {
-    if (!field.value) return 'the document does not answer this field';
+    const { before, locator, after } = this.verdictParts(field);
+    return `${before}${locator}${after}`;
+  }
+
+  protected verdictParts(field: DocumentExtractionField): VerdictParts {
+    const plain = (before: string): VerdictParts => ({ before, locator: '', after: '' });
+    if (!field.value) return plain('the document does not answer this field');
+    const locator = this.locator(field.locator);
     switch (field.state) {
       case 'supported':
-        return `found on ${this.locator(field.locator)}`;
+        return { before: 'found on ', locator, after: '' };
       case 'quote_unsupported':
-        return `not in the quoted passage on ${this.locator(field.locator)}`;
+        return { before: 'not in the quoted passage on ', locator, after: '' };
       case 'unassessed':
         return field.locator
-          ? `passage found on ${this.locator(field.locator)}, value not checked`
-          : 'value not checked';
+          ? { before: 'passage found on ', locator, after: ', value not checked' }
+          : plain('value not checked');
       default:
-        return field.method === 'no_quote'
-          ? 'no source passage given'
-          : 'no matching passage in the document';
+        return plain(
+          field.method === 'no_quote'
+            ? 'no source passage given'
+            : 'no matching passage in the document',
+        );
     }
+  }
+
+  /**
+   * How to open a value's page with its passage highlighted, or null: no
+   * value (there is no passage to show), a citation `pdfPageRef` won't
+   * link, or no preview pane on this page to open it in.
+   */
+  protected pageRef(
+    run: DocumentExtractionRun,
+    field: DocumentExtractionField,
+  ): OpenFilePreviewRef | null {
+    if (!field.value || !this.filePreview.hostAvailable()) return null;
+    return pdfPageRef({
+      state: field.state,
+      locator: field.locator,
+      uploadId: run.uploadId,
+      filename: run.filename,
+      quote: field.quote,
+    });
+  }
+
+  protected openPage(ref: OpenFilePreviewRef): void {
+    this.filePreview.open(ref);
   }
 
   /** The short state word under a grid cell; none for `supported`. */

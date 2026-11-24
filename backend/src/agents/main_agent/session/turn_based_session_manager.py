@@ -39,6 +39,8 @@ from datetime import datetime, timezone
 from typing import Optional, Collection, Dict, Any, List, Set, Tuple, TYPE_CHECKING
 
 from agents.main_agent.config.constants import Defaults, EnvVars
+from apis.shared.costs.side_call_metering import COMPACTION_SUMMARY, schedule_side_call_cost
+from apis.shared.models.task_models import TaskModelSlot, resolve_task_model
 from apis.shared.observability.build_stages import mark_stage
 from apis.shared.sessions.fork import ForkOrigin, ancestor_session_ids
 from apis.shared.sessions.rewind import RewindState
@@ -1839,13 +1841,31 @@ class TurnBasedSessionManager(AgentCoreMemorySessionManager):
             fallback = self._generate_fallback_summary(messages[:relative_cut])
             records = [fallback] if fallback else []
             summary_source = "fallback"
+        # The admin's Task models choice, with the deploy-time id as its default.
+        # update_after_turn runs after the turn's last call, so this cached read
+        # is never before a first token.
+        summary_model = await resolve_task_model(
+            TaskModelSlot.COMPACTION_SUMMARY,
+            default_model_id=self.compaction_config.summary_model_id,
+        )
         bounded = await bound_summary(
             records,
             self.compaction_config.summary_token_budget,
             model_enabled=self.compaction_config.summary_model_enabled,
-            model_id=self.compaction_config.summary_model_id,
+            model_id=summary_model.model_id,
             region=self.region_name,
             extract_enabled=self.compaction_config.summary_extract_enabled,
+            effort=summary_model.effort,
+            send_temperature=summary_model.supports_temperature,
+            # Each model call writes its cost row in the background (titles and tool
+            # summaries do the same); nothing here waits on it.
+            on_call=lambda response: schedule_side_call_cost(
+                call_kind=COMPACTION_SUMMARY,
+                session_id=self.config.session_id,
+                user_id=self.user_id,
+                choice=summary_model,
+                response=response,
+            ),
         )
         # A skill activated in the retired messages leaves with them. One line
         # names it so the model activates it again before relying on it. It is

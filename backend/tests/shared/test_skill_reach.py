@@ -250,7 +250,9 @@ class TestEditorProjects:
             )
             yield resource
 
-    def _project(self, resource, project_id, name, owner, *, bindings, member="author@example.edu"):
+    def _project(
+        self, resource, project_id, name, owner, *, bindings, member="author@example.edu", role="editor"
+    ):
         from decimal import Decimal
 
         from apis.shared.projects.models import Project, ProjectMember
@@ -263,7 +265,7 @@ class TestEditorProjects:
             harness_agent_id=f"h-{project_id}", created_at=now, updated_at=now,
         ))
         repository._table.put_item(Item=repository._member_to_item(ProjectMember(
-            project_id=project_id, email=member, role="editor", user_id="author",
+            project_id=project_id, email=member, role=role, user_id="author",
             invited_by=owner, created_at=now, updated_at=now,
         )))
         for b in bindings:
@@ -286,6 +288,18 @@ class TestEditorProjects:
         assert result.reaches_others_unpinned
         assert 'project ("Grant Office")' in result.summary()
         assert 'project ("Grant Office")' in result.conflict_detail()["reach"]
+
+    def test_a_project_binding_carries_its_project_and_whether_the_author_can_update_it(self, tables):
+        self._project(tables, "p1", "Grant Office", "creator", bindings=[_adder_skill("s1", "author", 4)])
+        self._project(
+            tables, "p2", "Archive", "creator", bindings=[_adder_skill("s1", "author", 2)], role="viewer"
+        )
+
+        found = {b.name: b for b in lookup_skill_reach("s1", "author").bindings}
+
+        assert (found["Grant Office"].project_id, found["Grant Office"].agent_id) == ("p1", "h-p1")
+        assert found["Grant Office"].can_update is True
+        assert found["Archive"].can_update is False
 
     def test_a_pinned_one_is_not_a_reach(self, tables):
         self._project(tables, "p1", "Grant Office", "creator", bindings=[_adder_skill("s1", "author", 4)])

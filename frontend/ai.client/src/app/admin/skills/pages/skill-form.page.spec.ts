@@ -6,6 +6,8 @@ import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angul
 import { signal } from '@angular/core';
 import { SkillFormPage } from './skill-form.page';
 import { ConfigService } from '../../../services/config.service';
+import { FEATURES } from '../../../services/features';
+import { environment } from '../../../../environments/environment';
 
 const API = 'http://localhost:8000';
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -235,5 +237,150 @@ describe('SkillFormPage (admin) — Import SKILL.md', () => {
     const fixture = await render();
     await choose(fixture, { detail: 'SKILL.md is not UTF-8 text.' }, 400);
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('SKILL.md is not UTF-8 text.');
+  });
+});
+
+describe('SkillFormPage (admin) — bundle import', () => {
+  let http: HttpTestingController;
+
+  function configure(skillId: string | null, skillBundleImport: boolean): void {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        { provide: ConfigService, useValue: { appApiUrl: signal(API) } },
+        { provide: FEATURES, useValue: { ...environment.features, skillBundleImport } },
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { paramMap: convertToParamMap(skillId ? { skillId } : {}) } },
+        },
+      ],
+    });
+    http = TestBed.inject(HttpTestingController);
+  }
+
+  afterEach(() => {
+    http.match(() => true);
+    TestBed.resetTestingModule();
+  });
+
+  async function render(load?: object): Promise<HTMLElement> {
+    const fixture = TestBed.createComponent(SkillFormPage);
+    fixture.detectChanges();
+    await settle();
+    if (load) http.expectOne(`${API}/admin/skills/pdf_workflows`).flush(load);
+    http.match(`${API}/admin/skills/`).forEach(req => req.flush({ skills: [], total: 0 }));
+    await fixture.whenStable();
+    await settle();
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('offers the shared bundle import on the create form while the flag is on', async () => {
+    configure(null, true);
+    const el = await render();
+    expect(el.querySelector('#bundle-import-heading')?.textContent).toContain('Import a skill bundle');
+    expect(el.querySelector('#bundle-url')).not.toBeNull();
+  });
+
+  it('offers no bundle import while the flag is off', async () => {
+    configure(null, false);
+    const el = await render();
+    expect(el.querySelector('app-skill-bundle-import')).toBeNull();
+  });
+
+  it('offers a refresh from GitHub on an imported catalog skill', async () => {
+    configure('pdf_workflows', true);
+    const el = await render({
+      ...CATALOG_SKILL,
+      importSource: {
+        type: 'github',
+        path: 'skills/pdf',
+        bundleHash: 'h',
+        importedAt: '2026-11-20T00:00:00+00:00',
+        url: 'https://github.com/acme/skills/tree/main/skills/pdf',
+        owner: 'acme',
+        repo: 'skills',
+      },
+    });
+    expect(el.querySelector('#bundle-import-heading')?.textContent).toContain('Re-import from source');
+    expect(el.textContent).toContain('acme/skills/skills/pdf');
+    const refresh = Array.from(el.querySelectorAll('button')).find(b =>
+      b.textContent?.includes('Check GitHub for changes'),
+    );
+    expect(refresh).toBeTruthy();
+  });
+});
+
+describe('SkillFormPage (admin) — version history', () => {
+  let http: HttpTestingController;
+
+  function configure(skillId: string | null, skillVersionHistory: boolean): void {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideRouter([]),
+        { provide: ConfigService, useValue: { appApiUrl: signal(API) } },
+        { provide: FEATURES, useValue: { ...environment.features, skillVersionHistory } },
+        {
+          provide: ActivatedRoute,
+          useValue: { snapshot: { paramMap: convertToParamMap(skillId ? { skillId } : {}) } },
+        },
+      ],
+    });
+    http = TestBed.inject(HttpTestingController);
+  }
+
+  afterEach(() => {
+    http.match(() => true);
+    TestBed.resetTestingModule();
+  });
+
+  async function render(load?: object): Promise<HTMLElement> {
+    const fixture = TestBed.createComponent(SkillFormPage);
+    fixture.detectChanges();
+    await settle();
+    if (load) http.expectOne(`${API}/admin/skills/pdf_workflows`).flush(load);
+    http.match(`${API}/admin/skills/`).forEach(req => req.flush({ skills: [], total: 0 }));
+    for (let i = 0; i < 3; i++) {
+      await fixture.whenStable();
+      await settle();
+      fixture.detectChanges();
+      http
+        .match(req => req.url === `${API}/admin/skills/pdf_workflows/versions`)
+        .forEach(req =>
+          req.flush({
+            versions: [
+              {
+                version: 2,
+                trigger: 'save',
+                displayName: 'PDF Workflows',
+                fileCount: 0,
+                isCurrent: true,
+                createdByEmail: 'admin@example.com',
+              },
+            ],
+          }),
+        );
+    }
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('shows History on a catalog skill being edited while the flag is on', async () => {
+    configure('pdf_workflows', true);
+    const el = await render({ ...CATALOG_SKILL, updatedAt: '2026-11-23T10:00:00+00:00' });
+    expect(el.querySelector('#skill-history-heading')).not.toBeNull();
+    expect(el.textContent).toContain('Saved · admin@example.com');
+  });
+
+  it('shows no History on the create form, or while the flag is off', async () => {
+    configure(null, true);
+    expect((await render()).querySelector('#skill-history-heading')).toBeNull();
+    configure('pdf_workflows', false);
+    expect((await render(CATALOG_SKILL)).querySelector('#skill-history-heading')).toBeNull();
   });
 });

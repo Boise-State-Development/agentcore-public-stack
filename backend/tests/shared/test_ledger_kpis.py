@@ -33,6 +33,8 @@ def test_version_kpis_on_a_full_window():
         documentTurns=10, firstTokenMsSum=80_000, firstTokenCount=100, turnDurationMsSum=200_000,
         emptyAnswerTurns=2, stoppedTurns=1, errorTurns=1, interruptedTurns=2, pausedTurns=4,
         compactionEvents=20, forcedCompactions=2,
+        splitCalls=100, splitTurns=40, chatCost=Decimal("2.0"),
+        chatFirstTokenMsSum=80_000, chatFirstTokenCount=100,
     )])
     kpis = k.version_kpis(totals)
     values = {name: kpi["value"] for name, kpi in kpis.items()}
@@ -64,6 +66,7 @@ def test_an_empty_window_is_none_everywhere_never_zero():
 
 def test_a_share_under_its_floor_is_none_but_a_mean_is_not():
     totals = k.sum_rows([_version(calls=5, turns=5, outcomeTurns=5, cost=Decimal("0.5"),
+                                  splitCalls=5, splitTurns=5, chatCost=Decimal("0.5"),
                                   stoppedTurns=1, emptyAnswerTurns=0)])
     kpis = k.version_kpis(totals)
     assert kpis["costPerTurn"]["value"] == pytest.approx(0.1)
@@ -71,6 +74,69 @@ def test_a_share_under_its_floor_is_none_but_a_mean_is_not():
     assert kpis["emptyAnswerShare"] == {"value": None, "n": 5}
     totals["outcomeTurns"] = k.MIN_SHARE_N
     assert k.version_kpis(totals)["emptyAnswerShare"] == {"value": 0.0, "n": k.MIN_SHARE_N}
+
+
+def test_turn_kpis_read_chat_calls_only():
+    """The 1.38.0 case: workflow steps add cost and slow first bytes, never to the turn KPIs."""
+    totals = k.sum_rows([_version(
+        calls=120, turns=40, splitCalls=120, splitTurns=40,
+        cost=Decimal("5.0"), chatCost=Decimal("4.0"),
+        firstTokenMsSum=12_000 * 20 + 300 * 100, firstTokenCount=120,
+        chatFirstTokenMsSum=300 * 100, chatFirstTokenCount=100,
+        **{"callKind.chat": 100, "callKind.workflow_prompt": 20,
+           "callKindCost.workflow_prompt": Decimal("1.0"),
+           "callKindFirstTokenMsSum.workflow_prompt": 12_000 * 20,
+           "callKindFirstTokenCount.workflow_prompt": 20},
+    )])
+    kpis = k.version_kpis(totals)
+    assert kpis["costPerTurn"] == {"value": pytest.approx(0.1), "n": 40}
+    assert kpis["meanFirstTokenMs"] == {"value": pytest.approx(300.0), "n": 100}
+    assert kpis["costPerCall"]["value"] == pytest.approx(5.0 / 120)  # still every call
+    model = k.model_kpis(totals)
+    assert model["costPerTurn"]["value"] == pytest.approx(0.1)
+    assert model["meanFirstTokenMs"]["value"] == pytest.approx(300.0)
+
+
+def test_rows_before_the_split_are_left_out_never_read_as_zero():
+    old = _version(calls=50, turns=20, cost=Decimal("9.0"), firstTokenMsSum=99_000, firstTokenCount=50,
+                   **{"callKind.chat": 50})
+    new = _version(calls=10, turns=5, cost=Decimal("0.5"), splitCalls=10, splitTurns=5,
+                   chatCost=Decimal("0.5"), chatFirstTokenMsSum=3000, chatFirstTokenCount=10,
+                   **{"callKind.chat": 10})
+    only_old = k.version_kpis(k.sum_rows([old]))
+    assert only_old["costPerTurn"] == {"value": None, "n": 0}
+    assert only_old["meanFirstTokenMs"] == {"value": None, "n": 0}
+    both = k.version_kpis(k.sum_rows([old, new]))
+    assert both["costPerTurn"] == {"value": pytest.approx(0.1), "n": 5}
+    assert both["meanFirstTokenMs"] == {"value": pytest.approx(300.0), "n": 10}
+    assert k.chat_split_coverage(k.sum_rows([old, new])) == {
+        "splitTurns": 5, "turns": 25, "splitCalls": 10, "calls": 60,
+    }
+
+
+def test_call_kind_kpis():
+    totals = k.sum_rows([_version(
+        calls=30, splitCalls=30, chatCost=Decimal("0.4"), chatFirstTokenMsSum=6000, chatFirstTokenCount=20,
+        **{"callKind.chat": 20, "callKind.workflow_checklist": 10,
+           "callKindCost.workflow_checklist": Decimal("0.3"),
+           "callKindFirstTokenMsSum.workflow_checklist": 64_000,
+           "callKindFirstTokenCount.workflow_checklist": 10},
+    )])
+    kinds = k.call_kind_kpis(totals)
+    assert set(kinds) == {"chat", "workflow_checklist"}
+    assert kinds["chat"]["calls"]["n"] == 20
+    assert kinds["chat"]["cost"]["value"] == pytest.approx(0.4)
+    assert kinds["chat"]["meanFirstTokenMs"] == {"value": pytest.approx(300.0), "n": 20}
+    assert kinds["workflow_checklist"]["cost"] == {"value": pytest.approx(0.3), "n": 10}
+    assert kinds["workflow_checklist"]["meanFirstTokenMs"]["value"] == pytest.approx(6400.0)
+
+
+def test_call_kind_cost_before_the_split_is_none_never_zero():
+    kinds = k.call_kind_kpis({"calls": 12, "callKind.chat": 10, "callKind.voice": 2, "cost": 1.0})
+    assert kinds["chat"]["calls"]["n"] == 10
+    assert kinds["chat"]["cost"]["value"] is None
+    assert kinds["voice"]["cost"]["value"] is None
+    assert kinds["voice"]["meanFirstTokenMs"] == {"value": None, "n": 0}
 
 
 def test_shares_divide_by_turns_that_carry_an_outcome():
