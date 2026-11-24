@@ -76,6 +76,28 @@ describe('ContentCardComponent', () => {
     expect(inRow.parentElement?.className).toContain('@md:w-full');
   });
 
+  it('keeps a fitted output card upright, its tray as tall as the preview', async () => {
+    const lg = await render({ size: 'lg', bleed: true, meta: 'JPG · 54 KB' });
+    const fit = await render({ size: 'lg', bleed: true, fit: true, meta: 'JPG · 54 KB' });
+    const article = (el: HTMLElement) => el.querySelector('article')!;
+    const tray = (el: HTMLElement) => article(el).firstElementChild!;
+    const foot = (el: HTMLElement) => article(el).lastElementChild!;
+
+    // Cropped to the tray: the preview is laid over a tray of a set height.
+    expect(tray(lg).className).toContain('h-24');
+    expect(tray(lg).firstElementChild?.className).toContain('absolute');
+
+    // Fitted: the preview is in flow and gives the tray its height.
+    expect(article(fit).className).not.toContain('flex-row');
+    expect(tray(fit).className).not.toContain('h-24');
+    expect(tray(fit).className).not.toContain('@md:w-1/2');
+    expect(tray(fit).firstElementChild?.className).not.toContain('absolute');
+    expect(foot(fit).className).toContain('border-t');
+    expect(foot(fit).className).not.toContain('border-l');
+    // One meta line, under the name, with the actions beside them.
+    expect([...fit.querySelectorAll('p')].filter((p) => p.textContent?.includes('JPG · 54 KB')).length).toBe(1);
+  });
+
   it('marks a danger tone on the frame', async () => {
     const el = await render({ tone: 'danger' });
     expect(el.querySelector('article')?.className).toContain('ring-state-danger-300');

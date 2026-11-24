@@ -25,6 +25,7 @@ import { FilePreviewStateService } from '../../../../../services/file-preview/fi
 import { isPreviewableFilename } from '../../../../../services/file-preview/file-preview.model';
 import { attachmentKind, type AttachmentKind } from '../../../../attachment-card/attachment-kind';
 import { AttachmentPreviewComponent } from '../../../../attachment-card/attachment-preview.component';
+import { ImageOutputCardComponent } from './image-output-card.component';
 
 /**
  * Payload for the file_download inline visual, produced by the office document
@@ -71,11 +72,15 @@ interface ResolvedFile {
  * real link to the durable route, which 302s to a fresh presigned URL. The
  * chat's prose rules stop at a content card (`@scope` in styles.css), so the
  * links take the card's own colours rather than the answer's link style.
+ *
+ * An image is the exception: there is nothing to preview that the card could
+ * not simply show, so it is drawn whole, and opens in the lightbox, by
+ * `ImageOutputCardComponent`.
  */
 @Component({
   selector: 'app-file-download-renderer',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ContentCardComponent, AttachmentPreviewComponent, NgIcon],
+  imports: [ContentCardComponent, AttachmentPreviewComponent, ImageOutputCardComponent, NgIcon],
   providers: [
     provideIcons({
       heroArrowDownTray,
@@ -90,55 +95,64 @@ interface ResolvedFile {
   host: { class: OUTPUT_CARD_HOST_CLASS },
   template: `
     @if (file(); as f) {
-      <app-content-card size="lg" [title]="f.filename" [meta]="f.meta">
-        <div contentCardChrome class="flex min-w-0 flex-1 items-center gap-1.5" aria-hidden="true">
-          <span class="flex shrink-0" [class]="f.kind.accent">
-            <ng-icon [name]="f.kind.icon" size="13" />
-          </span>
-          <span
-            class="min-w-0 flex-1 truncate rounded-full bg-gray-100 px-2 text-[10px]/4 text-gray-600 dark:bg-white/5 dark:text-gray-400"
-            >{{ f.kind.name }}</span
-          >
-        </div>
+      @if (f.kind.preview === 'image') {
+        <app-image-output-card
+          [uploadId]="f.uploadId"
+          [filename]="f.filename"
+          [href]="f.href"
+          [meta]="f.meta"
+        />
+      } @else {
+        <app-content-card size="lg" [title]="f.filename" [meta]="f.meta">
+          <div contentCardChrome class="flex min-w-0 flex-1 items-center gap-1.5" aria-hidden="true">
+            <span class="flex shrink-0" [class]="f.kind.accent">
+              <ng-icon [name]="f.kind.icon" size="13" />
+            </span>
+            <span
+              class="min-w-0 flex-1 truncate rounded-full bg-gray-100 px-2 text-[10px]/4 text-gray-600 dark:bg-white/5 dark:text-gray-400"
+              >{{ f.kind.name }}</span
+            >
+          </div>
 
-        <app-attachment-preview contentCardPreview [uploadId]="f.uploadId" [mimeType]="f.mimeType" />
+          <app-attachment-preview contentCardPreview [uploadId]="f.uploadId" [mimeType]="f.mimeType" />
 
-        <!-- One container per branch: a slot only projects a control-flow
-             block whose root is a single node matching it. -->
-        @if (f.previewable) {
-          <ng-container contentCardAction>
-          <a
-            class="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-100"
-            [href]="f.href"
-            [attr.download]="f.filename"
-            [attr.aria-label]="'Download ' + f.filename"
-            [title]="'Download'"
-            rel="noopener noreferrer"
-          >
-            <ng-icon name="heroArrowDownTray" size="18" aria-hidden="true" />
-          </a>
-          <button
-            type="button"
-            [class]="compactActionClass"
-            [attr.aria-label]="'Preview ' + f.filename"
-            (click)="preview(f.uploadId, f.filename)"
-          >
-            Preview
-          </button>
-          </ng-container>
-        } @else {
-          <a
-            contentCardAction
-            [class]="actionClass"
-            [href]="f.href"
-            [attr.download]="f.filename"
-            [attr.aria-label]="'Download ' + f.filename"
-            rel="noopener noreferrer"
-          >
-            Download
-          </a>
-        }
-      </app-content-card>
+          <!-- One container per branch: a slot only projects a control-flow
+               block whose root is a single node matching it. -->
+          @if (f.previewable) {
+            <ng-container contentCardAction>
+            <a
+              class="flex size-8 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-accessible dark:text-gray-400 dark:hover:bg-white/10 dark:hover:text-gray-100"
+              [href]="f.href"
+              [attr.download]="f.filename"
+              [attr.aria-label]="'Download ' + f.filename"
+              [title]="'Download'"
+              rel="noopener noreferrer"
+            >
+              <ng-icon name="heroArrowDownTray" size="18" aria-hidden="true" />
+            </a>
+            <button
+              type="button"
+              [class]="compactActionClass"
+              [attr.aria-label]="'Preview ' + f.filename"
+              (click)="preview(f.uploadId, f.filename)"
+            >
+              Preview
+            </button>
+            </ng-container>
+          } @else {
+            <a
+              contentCardAction
+              [class]="actionClass"
+              [href]="f.href"
+              [attr.download]="f.filename"
+              [attr.aria-label]="'Download ' + f.filename"
+              rel="noopener noreferrer"
+            >
+              Download
+            </a>
+          }
+        </app-content-card>
+      }
     }
   `,
 })

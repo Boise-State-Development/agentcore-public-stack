@@ -119,6 +119,32 @@ describe('FileDownloadRendererComponent', () => {
     expect(previewButton()).not.toBeNull();
   });
 
+  it.each([
+    ['chart.png', 'PNG'],
+    ['thumbs.jpg', 'JPG'],
+    ['thumbs.jpeg', 'JPG'],
+    ['spin.gif', 'GIF'],
+    ['photo.webp', 'WEBP'],
+  ])('draws %s as an image card, shown whole, not as a file to download', (filename, label) => {
+    const anchor = render({ filename, upload_id: 'up3', size_kb: '53.7 KB' });
+
+    const card = fixture.nativeElement.querySelector('app-image-output-card');
+    expect(card).not.toBeNull();
+    expect(card.textContent).toContain(filename);
+    expect(card.textContent).toContain(`${label} · 53.7 KB`);
+    // The sheet preview and the docked pane are for documents.
+    expect(fixture.nativeElement.querySelector('app-attachment-preview')).toBeNull();
+    expect(fixture.nativeElement.textContent).not.toContain('Preview');
+    expect(anchor?.getAttribute('href')).toBe('/api/files/up3/download');
+    expect(anchor?.getAttribute('aria-label')).toBe(`Download ${filename}`);
+  });
+
+  it('keeps a document on the file card', () => {
+    render({ filename: 'plan.docx', upload_id: 'up1' });
+
+    expect(fixture.nativeElement.querySelector('app-image-output-card')).toBeNull();
+  });
+
   it('offers no preview for formats the pane cannot render', () => {
     // The legacy binary formats are not OOXML at all, and .xls would
     // need a library we did not take on for a format nothing in the
