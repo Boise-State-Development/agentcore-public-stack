@@ -136,6 +136,11 @@ export interface SpawnedFrom {
   handoffId: string;
   sourceTitle: string;
   agentName: string;
+  /**
+   * A pinned workflow step's Agent version (workflow-designer §23.3): set by the tab that started
+   * it, or carried by the replay when the server sends it. Absent while unpinned.
+   */
+  agentVersion?: number;
 }
 
 /** What the user mentioned and typed, carried from the composer into the review sheet. */

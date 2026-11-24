@@ -8,6 +8,7 @@ import { MentionableAgent } from '../../agents/services/agent-mention.service';
 import { DraftStep, MAX_CHECKLIST_FIELD_SETS, isModelDraftStep } from '../workflow-draft';
 import { RESULT_NODE, START_NODE, WorkflowDesignerStore } from '../workflow-designer.store';
 import { MAX_WORKFLOW_STEPS, WorkflowFiles } from '../workflow.models';
+import { pinnedVersionLine } from '../../services/workflows/workflow-pins';
 
 /** Why the server says this user can't run a prompt step's model (`ModelView.reason`). */
 export function modelReasonCopy(reason: string | undefined): string {
@@ -530,7 +531,21 @@ const FILE_CHOICES: { value: WorkflowFiles; label: string; hint: string }[] = [
               }
             } @else {
 
-            @if (view()?.runsDraft) {
+            @if (pin(); as p) {
+              <div class="rounded-2xl border border-gray-200 bg-white px-3 py-2 text-xs/5 text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                @if (pinBlocker(); as why) {
+                  <p class="flex items-start gap-1.5 font-medium text-state-warning-700 dark:text-state-warning-300">
+                    <ng-icon name="heroExclamationTriangle" class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                    {{ why }}
+                  </p>
+                } @else {
+                  <p>{{ pinCopy() }}</p>
+                }
+                @if (p.offerVersion && editable()) {
+                  <button type="button" (click)="useVersion(p.offerVersion)" [class]="linkButtonClass">Use version {{ p.offerVersion }}</button>
+                }
+              </div>
+            } @else if (view()?.runsDraft) {
               <p class="rounded-2xl border border-gray-200 bg-white px-3 py-2 text-xs/5 text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
                 You own this Agent, so your test runs use its draft. Others run its published version.
               </p>
@@ -798,6 +813,29 @@ export class WorkflowStepTabComponent {
     return step ? this.store.agentFor(step).view : null;
   });
 
+  /** The version the step runs for everyone, as the server last judged it (§23.3). */
+  protected readonly pin = computed(() => {
+    const step = this.step();
+    return step ? this.store.pinFor(step) : null;
+  });
+
+  protected readonly pinBlocker = computed(() => {
+    const step = this.step();
+    return step ? this.store.pinBlocker(step) : null;
+  });
+
+  /** "Uses version 3.", or for the Agent's owner "Runs version 3 for everyone, including you.", and the newer one. */
+  protected readonly pinCopy = computed(() => {
+    const step = this.step();
+    const pin = this.pin();
+    return step && pin ? pinnedVersionLine(pin, this.store.ownsAgent(step)) : '';
+  });
+
+  protected useVersion(version: number): void {
+    const step = this.step();
+    if (step) this.store.useVersion(step.key, version);
+  }
+
   /** The step's Agent is one the picker lists. */
   protected readonly known = computed(() => {
     const step = this.step();
@@ -1001,3 +1039,4 @@ export class WorkflowStepTabComponent {
     this.focusCanvas.emit(next);
   }
 }
+

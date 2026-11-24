@@ -17,13 +17,16 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowRight, heroChevronRight, heroMinusCircle, heroPaperClip, heroXMark } from '@ng-icons/heroicons/outline';
 
 import { AgentIconComponent } from '../../../agents/components/agent-icon.component';
+import { AgentMentionService } from '../../../agents/services/agent-mention.service';
+import { FEATURES } from '../../../services/features';
+import { pinnedVersionLine } from '../../../services/workflows/workflow-pins';
 import { ChecklistStepIconComponent } from '../../../workflows/components/checklist-step-icon.component';
 import { PromptStepIconComponent } from '../../../workflows/components/prompt-step-icon.component';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { formatFileSize } from '../../services/handoff/handoff-prompt';
 import { MAX_SHARED_FILES } from '../../services/handoff/handoff.models';
 import { checklistEstimate, estimateRunInputUsd, formatEstimateUsd } from '../../services/handoff/workflow-run-estimate';
-import { RunReviewStep, RunShareableFile } from '../../services/handoff/workflow-run.models';
+import { RunReviewStep, RunReviewWorkflowStep, RunShareableFile } from '../../services/handoff/workflow-run.models';
 import { WorkflowRunStateService } from '../../services/handoff/workflow-run-state.service';
 import {
   WorkflowRunService,
@@ -59,8 +62,12 @@ interface StepRow {
   unavailableCopy: string;
   /** The saved step's name, for Mark as reviewed. */
   stepName?: string;
-  /** "This Agent has changed since it was added…" (§10), when it has. */
+  /** "This Agent has changed since it was added…" (§10), when it has and the step isn't pinned. */
   changedLine?: string;
+  /** A pinned step's line (§23.2): "Uses version 3.", and the current published one when it differs. */
+  pinLine?: string;
+  /** Use version P: the Agent's current published version, which the step can be moved to. */
+  offerVersion?: number;
   /** The kept steps that read this one, which Remove takes with it (PR-D.5a), as the sheet names them. */
   readers: string[];
 }
@@ -183,6 +190,24 @@ interface StepRow {
                       </button>
                     }
                   </div>
+                  @if (row.pinLine || row.offerVersion) {
+                    <div class="mt-1 pl-10 text-xs/5 text-gray-600 dark:text-gray-400">
+                      @if (row.pinLine) {
+                        <p>{{ row.pinLine }}</p>
+                      }
+                      @if (row.offerVersion; as offer) {
+                        <button
+                          type="button"
+                          class="mt-0.5 font-medium text-primary-accessible underline-offset-2 dark:text-primary-accessible-dark hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 disabled:opacity-50"
+                          [disabled]="!!r.reviewingStep || r.phase === 'starting'"
+                          [attr.aria-label]="'Use version ' + offer + ' of ' + row.label"
+                          (click)="useVersion(row)"
+                        >
+                          {{ r.reviewingStep === row.stepName ? 'Using version ' + offer + '…' : 'Use version ' + offer }}
+                        </button>
+                      }
+                    </div>
+                  }
                   @if (row.changedLine; as line) {
                     <div class="mt-1 pl-10 text-xs/5 text-gray-600 dark:text-gray-400">
                       <p>{{ line }}</p>
@@ -461,6 +486,13 @@ export class WorkflowRunSheetComponent {
   private readonly state = inject(WorkflowRunStateService);
   private readonly models = inject(ModelService);
   private readonly injector = inject(Injector);
+  private readonly features = inject(FEATURES);
+  private readonly mentions = inject(AgentMentionService);
+
+  /** The Agents the user owns, from the `@` list already loaded: a pinned step's owner runs the pin too (§23.2). */
+  private readonly ownAgentIds = computed(
+    () => new Set(this.mentions.mentionable().filter((agent) => agent.group === 'own').map((agent) => agent.agentId)),
+  );
 
   /** The source conversation: the one being viewed. */
   readonly sessionId = input.required<string>();
@@ -598,7 +630,12 @@ export class WorkflowRunSheetComponent {
         step,
         // Several model steps can share a model, so a prompt or checklist step is called by its own
         // name, as the run's row and its result card call it, and its buttons are told apart by it.
-        label: prompt ? promptStepLabel(saved?.name, modelName, step.kind) : unavailable ? `Unavailable Agent (${saved?.name})` : step.agentName,
+        // An Agent the starter can't use has no name; one whose pinned version can't run still does.
+        label: prompt
+          ? promptStepLabel(saved?.name, modelName, step.kind)
+          : unavailable && !step.agentName
+            ? `Unavailable Agent (${saved?.name})`
+            : step.agentName,
         // The model is named even when it can't run: the file names it to everyone. A checklist
         // step says how many sets it runs instead of what it reads: it always reads the files.
         modelName: checklist
@@ -619,7 +656,11 @@ export class WorkflowRunSheetComponent {
         unavailable,
         unavailableCopy: saved?.unavailableReason ?? "You can't use this step's Agent. Remove the step, or ask its owner to share it.",
         stepName: saved?.name,
-        changedLine: saved && !unavailable && saved.changed ? changedLine(saved.publishedVersion, saved.runsDraft) : undefined,
+        changedLine:
+          saved && !saved.pin && !unavailable && saved.changed ? changedLine(saved.publishedVersion, saved.runsDraft) : undefined,
+        // A refused pin says why in `unavailableCopy`, so its own line is only the offer.
+        pinLine: saved?.pin && !unavailable ? pinLine(saved, this.ownAgentIds().has(step.agentId)) : undefined,
+        offerVersion: saved?.pin?.offerVersion,
         readers: readersOf(r, step.stepId).map((reader) => readerLabel(reader)),
       };
     });
@@ -704,6 +745,13 @@ export class WorkflowRunSheetComponent {
 
   constructor() {
     this.fitToColumn();
+
+    // The owner's line on a pinned step reads the user's own Agents, which the composer's `@` menu
+    // loads on focus; a sheet opened from the + menu may come first, so warm the same cached list.
+    effect(() => {
+      if (!this.features.agentVersionPinning) return;
+      if (this.review()?.steps.some((step) => step.workflowStep?.pin)) void this.mentions.load();
+    });
 
     // Move focus into the sheet when it opens, so Esc and the keyboard land here and a screen
     // reader hears the region's name.
@@ -853,6 +901,10 @@ export class WorkflowRunSheetComponent {
   protected markReviewed(row: StepRow): void {
     if (row.stepName) void this.runs.markReviewed(this.sessionId(), row.stepName);
   }
+
+  protected useVersion(row: StepRow): void {
+    if (row.stepName) void this.runs.useVersion(this.sessionId(), row.stepName);
+  }
 }
 
 /** Room kept above the sheet for the page's top bar, so its title is never under it. */
@@ -872,6 +924,18 @@ export function changedLine(publishedVersion: number | undefined, runsDraft: boo
   const now = publishedVersion !== undefined ? `, now version ${publishedVersion}` : '';
   const line = `This Agent has changed since it was added. A run uses its published version${now}.`;
   return runsDraft ? `${line} You own it, so your run uses its draft.` : line;
+}
+
+/**
+ * A pinned step's line (workflow-designer §23.2). It runs its version for everyone, so its
+ * owner is told they run it too, in place of the draft line; a newer published version is named
+ * beside Use version. A version chosen for this run only says so.
+ */
+export function pinLine(saved: Pick<RunReviewWorkflowStep, 'pin' | 'pinForThisRun'>, ownsAgent: boolean): string | undefined {
+  const pin = saved.pin;
+  if (!pin) return undefined;
+  if (saved.pinForThisRun) return `Uses version ${pin.version} for this run.`;
+  return pinnedVersionLine(pin, ownsAgent);
 }
 
 /** A step as the sheet names it when another's Remove takes it too. */

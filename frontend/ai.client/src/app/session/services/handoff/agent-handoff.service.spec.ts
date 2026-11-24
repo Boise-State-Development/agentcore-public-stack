@@ -413,4 +413,25 @@ describe('AgentHandoffService', () => {
     await vi.waitFor(() => expect(toastWarning).toHaveBeenCalled());
     expect(toastWarning.mock.calls[0][0]).toBe('Rubric Builder needs your input');
   });
+  it('a pinned workflow step’s send carries its version, and its conversation’s link records it (§23.3)', () => {
+    const base = {
+      sourceSessionId: 'src',
+      agentId: 'rubric',
+      agentName: 'Rubric Builder',
+      request: 'r',
+      sourceMessageIndex: 1,
+      excerptTokens: 1,
+      sourceTitle: 'Source',
+      sharedFileIds: [],
+      filesUnticked: 0,
+      runId: 'run1',
+    };
+    void service.startRunStep({ ...base, handoffId: 'h1', stepId: 's1', agentVersion: 3 });
+    void service.startRunStep({ ...base, handoffId: 'h2', stepId: 's2' });
+    const [pinned, unpinned] = submitHandoffRequest.mock.calls.map((call) => call[0]);
+    expect(pinned.agentVersion).toBe(3);
+    expect('agentVersion' in unpinned).toBe(false);
+    expect(state.spawnedFrom(pinned.targetSessionId)?.agentVersion).toBe(3);
+    expect(state.spawnedFrom(unpinned.targetSessionId)?.agentVersion).toBeUndefined();
+  });
 });

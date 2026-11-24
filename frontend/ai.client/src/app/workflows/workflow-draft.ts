@@ -19,6 +19,7 @@ import {
   WorkflowDocument,
   WorkflowFiles,
   WorkflowResultMode,
+  WorkflowStepPin,
   WorkflowView,
   WorkflowWrite,
 } from './workflow.models';
@@ -503,6 +504,28 @@ function renamed(draft: WorkflowDraft, key: string, label: string): WorkflowDraf
 
 export function updateStep(draft: WorkflowDraft, key: string, patch: Partial<Pick<DraftStep, 'reads' | 'ownRequest'>>): WorkflowDraft {
   return { ...draft, steps: draft.steps.map((s) => (s.key === key ? { ...s, ...patch } : s)) };
+}
+
+/** Move an Agent step to another recorded version: Use version on a pinned step (§23.2). */
+export function setAgentVersion(draft: WorkflowDraft, key: string, agentVersion: number): WorkflowDraft {
+  return {
+    ...draft,
+    steps: draft.steps.map((s) => (s.key === key && !isModelDraftStep(s) && s.agentId ? { ...s, agentVersion } : s)),
+  };
+}
+
+/**
+ * Each pinned Agent step's pin as the server last judged it (§23.3), by step name, with the Agent
+ * and version it judged, so a step whose Agent or version has moved since waits for the next preview.
+ */
+export function pinViews(document: WorkflowDocument | null): Map<string, { agentId: string; pin: WorkflowStepPin }> {
+  const map = new Map<string, { agentId: string; pin: WorkflowStepPin }>();
+  for (const step of document?.workflow.steps ?? []) {
+    if (step.kind !== 'prompt' && step.kind !== 'checklist' && step.agentId && step.pin) {
+      map.set(step.name, { agentId: step.agentId, pin: step.pin });
+    }
+  }
+  return map;
 }
 
 /** Each Agent the server last described, by id, from a document. A prompt or checklist step has none. */
