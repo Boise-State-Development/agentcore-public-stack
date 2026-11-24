@@ -94,6 +94,26 @@
   opacity: 0.4;
 }
 
+/* Reordering a pinned Agent: the placeholder is the slot it will land in, drawn
+   as an empty dashed row rather than a faded copy, so the drop point is plain. */
+.pinned-agents-list .cdk-drag-placeholder {
+  opacity: 1;
+  border-radius: 0.375rem;
+  outline: 1px dashed color-mix(in oklab, var(--color-primary-500) 45%, transparent);
+  outline-offset: -1px;
+  background-color: color-mix(in oklab, var(--color-primary-500) 5%, transparent);
+}
+
+.pinned-agents-list .cdk-drag-placeholder > * {
+  visibility: hidden;
+}
+
+/* The brand blue is too dark to read on the dark sidebar; a lighter step is. */
+:host-context(html.dark) .pinned-agents-list .cdk-drag-placeholder {
+  outline-color: color-mix(in oklab, var(--color-primary-300) 50%, transparent);
+  background-color: color-mix(in oklab, var(--color-primary-300) 8%, transparent);
+}
+
 .cdk-drag-animating {
   transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
 }

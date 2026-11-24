@@ -58,8 +58,11 @@
                                 [cdkDropListSortingDisabled]="!organizeLists"
                                 [cdkDropListSortPredicate]="agentSortPredicate"
                                 (cdkDropListDropped)="onPinnedAgentDrop($event)"
+                                (cdkDropListEntered)="isAgentOutside.set(false)"
+                                (cdkDropListExited)="isAgentOutside.set(true)"
+                                [attr.data-zone]="isDraggingAgent() && organizeLists && !isAgentOutside() ? '' : null"
                                 aria-label="Pinned agents"
-                                class="mb-0.5 flex flex-col gap-y-0.5"
+                                class="pinned-agents-list mb-0.5 flex flex-col gap-y-0.5 rounded-md outline-offset-2 outline-transparent transition-colors data-zone:outline-dashed data-zone:outline-1 data-zone:outline-gray-300 dark:data-zone:outline-white/15"
                             >
                                 @for (agent of pinnedAgents(); track agent.agentId) {
                                     <li
@@ -68,6 +71,7 @@
                                         [cdkDragStartDelay]="dragStartDelay"
                                         [cdkDragDisabled]="agent.locked"
                                         [cdkDragPreviewClass]="dragPreviewClass"
+                                        (cdkDragStarted)="onAgentDragStarted()"
                                         (cdkDragEnded)="onDragEnded()"
                                         class="group relative"
                                     >
@@ -75,6 +79,14 @@
                                     </li>
                                 }
                             </ul>
+                            @if (isDraggingAgent() && isAgentOutside()) {
+                                <p
+                                    class="mb-1 flex min-h-8 items-center justify-center gap-1.5 rounded-md border border-dashed border-gray-300 px-2 py-1.5 text-xs/5 text-gray-600 dark:border-white/15 dark:text-gray-400"
+                                >
+                                    <ng-icon name="appPinOff" class="size-3.5 shrink-0" aria-hidden="true" />
+                                    <span>Release to unpin</span>
+                                </p>
+                            }
                         }
                         <ul
                             role="list"
