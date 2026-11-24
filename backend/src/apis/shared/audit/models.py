@@ -139,6 +139,13 @@ class AuditAction:
     SKILL_DELETED = "skill.deleted"
     SKILL_EXPORTED = "skill.exported"
     SKILL_SCRIPT_RUN = "skill.script_run"
+    # Who allowed a skill's scripts to run for other people (skill-code-sandbox
+    # §8, §9), target ``skill``: a review recorded for an Agent or project at a
+    # script-set hash, one withdrawn (the skill unbound), and the author's or an
+    # admin's switch. Ids and hashes only.
+    SKILL_SCRIPTS_REVIEWED = "skill.scripts_reviewed"
+    SKILL_SCRIPTS_REVIEW_WITHDRAWN = "skill.scripts_review_withdrawn"
+    SKILL_SCRIPTS_SWITCHED = "skill.scripts_switched"
 
     # ``run_code`` (docs/specs/skill-code-sandbox.md §8), target
     # ``conversation`` keyed by the session id: Python the model wrote, run in

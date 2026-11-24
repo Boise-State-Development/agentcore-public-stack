@@ -58,6 +58,9 @@ const ACTION_LABELS: Record<string, string> = {
   'skill.deleted': 'Skill deleted',
   'skill.exported': 'Skill exported',
   'skill.script_run': 'Skill script run',
+  'skill.scripts_reviewed': 'Skill scripts allowed',
+  'skill.scripts_review_withdrawn': 'Skill scripts no longer allowed',
+  'skill.scripts_switched': 'Skill scripts switched on or off',
   'sandbox.code_run': 'Sandbox code run',
 };
 
