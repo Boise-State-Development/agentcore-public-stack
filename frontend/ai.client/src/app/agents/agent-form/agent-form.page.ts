@@ -66,8 +66,14 @@ import { SettingsCardComponent } from '../../components/settings-card/settings-c
 import { ToolSelectorItem } from '../../components/tool-selector/tool-selector.model';
 import { isItemSelected } from '../../components/tool-selector/tool-selection';
 import { AgentPreviewComponent } from './components/agent-preview.component';
+import { MySkillService } from '../../customize/skills/services/my-skill.service';
+import {
+  SkillScriptStatus,
+  bindingScriptsNote,
+  reviewFromStatus,
+} from '../../shared/skills/script-review.model';
+import { openScriptReviewSheet, resourcePathBelowKind, saveWithScriptReview } from '../../shared/skills/script-review';
 import { AgentSkillPinsComponent } from './components/agent-skill-pins.component';
-import { FEATURES } from '../../services/features';
 import { AgentSkillPinMoved } from '../models/agent.model';
 import { AgentIconComponent } from '../components/agent-icon.component';
 import {
@@ -209,6 +215,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
   private themeService = inject(ThemeService);
   private toast = inject(ToastService);
   private dialog = inject(Dialog);
+  private mySkills = inject(MySkillService);
   private host = inject(ElementRef<HTMLElement>);
   private toolService = inject(ToolService);
   private injector = inject(Injector);
@@ -269,7 +276,6 @@ export class AgentFormPage implements OnInit, OnDestroy {
   readonly models = signal<BindableItem[]>([]);
   readonly tools = signal<BindableItem[]>([]);
   readonly skills = signal<BindableItem[]>([]);
-  protected readonly features = inject(FEATURES);
   /** Skill names by ref, for the pinned-skills Update strip. */
   protected readonly skillLabels = computed<Record<string, string>>(() =>
     Object.fromEntries(this.skills().map((s) => [s.ref, s.label])),
@@ -301,6 +307,13 @@ export class AgentFormPage implements OnInit, OnDestroy {
    * adding it again binds (and, for an imported skill, pins) its current version.
    */
   readonly skillBindingConfigs = signal<Record<string, Record<string, unknown>>>({});
+  /**
+   * Each bound skill with scripts and whether they run for this agent's users
+   * (skill-code-sandbox §8.5), for the row notes. Empty until the agent is saved.
+   */
+  readonly skillScripts = signal<SkillScriptStatus[]>([]);
+  /** Script sets allowed from a row's Review, sent with the next save. */
+  readonly pendingScriptReviews = signal<Record<string, string>>({});
 
   /**
    * Which settings cards are open. One rule for all of them, so the page always
@@ -638,6 +651,7 @@ export class AgentFormPage implements OnInit, OnDestroy {
       // Freshly loaded state is clean — the preview matches the saved record.
       this.form.markAsPristine();
       this.bindingsDirty.set(false);
+      void this.loadSkillScripts();
     } catch (err) {
       console.error('Error loading agent:', err);
       this.toast.error('Could not load this agent.');
@@ -1194,13 +1208,18 @@ export class AgentFormPage implements OnInit, OnDestroy {
       .map((s) => ({ s, rank: skillOwnershipRank(s) }))
       .sort((a, b) => a.rank - b.rank || a.s.label.localeCompare(b.s.label))
       .map(({ s, rank }) => {
-        const note = skillRowNote(s, this.skillBindingConfigs()[s.ref]);
+        const pinNote = skillRowNote(s, this.skillBindingConfigs()[s.ref]);
+        const scripts = this.scriptsNote(s.ref);
+        const note = [pinNote, scripts?.text].filter((p): p is string => !!p).join(' · ') || null;
         return {
           id: s.ref,
           name: s.label,
           description: s.description,
           group: SKILL_GROUPS[rank],
-          ...(note ? { note, noteTone: 'muted' as const } : {}),
+          ...(note ? { note, noteTone: scripts?.tone ?? ('muted' as const) } : {}),
+          ...(scripts?.review
+            ? { action: { label: 'Review', ariaLabel: `Review the scripts in ${s.label}` } }
+            : {}),
         };
       }),
   );
@@ -1215,6 +1234,72 @@ export class AgentFormPage implements OnInit, OnDestroy {
       ...configs,
       [moved.skillId]: { ...(configs[moved.skillId] ?? {}), version: moved.version },
     }));
+    void this.loadSkillScripts();
+  }
+
+  /** "Anyone who uses {name}": the agent's name as typed, for the review sheet. */
+  protected agentDisplayName(): string {
+    return (this.form?.value?.name as string | undefined)?.trim() || 'this agent';
+  }
+
+  /** The review sheet's View: the binder's own (or imported) skill's file. */
+  protected readonly readSkillFile = (skillId: string, path: string): Promise<string> =>
+    this.mySkills.readResource(skillId, resourcePathBelowKind(path));
+
+  /** The scripts line for a selected skill's row, if it has scripts. */
+  private scriptsNote(ref: string) {
+    if (!this.selectedSkillRefs().has(ref)) return null;
+    if (this.pendingScriptReviews()[ref]) {
+      return { text: 'Scripts will be allowed when you save', tone: 'muted' as const, review: false };
+    }
+    const status = this.skillScripts().find((st) => st.skillId === ref);
+    return status ? bindingScriptsNote(status, `everyone who uses ${this.agentDisplayName()}`) : null;
+  }
+
+  /** A skill row's Review: the sheet for a binding whose scripts aren't allowed yet. */
+  protected async onSkillAction(item: { id: string }): Promise<void> {
+    const status = this.skillScripts().find((st) => st.skillId === item.id);
+    const skill = status ? reviewFromStatus(status) : null;
+    if (!skill) return;
+    const choice = await openScriptReviewSheet(this.dialog, skill, {
+      name: this.agentDisplayName(),
+      kind: 'agent',
+      readFile: this.readSkillFile,
+    });
+    if (choice !== 'allow') return;
+    this.pendingScriptReviews.update((pending) => ({ ...pending, [skill.skillId]: skill.scriptsHash }));
+    this.bindingsDirty.set(true);
+  }
+
+  /**
+   * Keep the pins the save just stored (a newly bound skill with scripts is pinned
+   * server-side), so the next save sends them back rather than dropping them.
+   */
+  private applySavedSkillPins(bindings: AgentBinding[] | undefined): void {
+    const saved = (bindings ?? []).filter((b) => b.kind === 'skill' && b.config && Object.keys(b.config).length);
+    if (!saved.length) return;
+    this.skillBindingConfigs.update((configs) => {
+      const next = { ...configs };
+      for (const b of saved) {
+        if (this.selectedSkillRefs().has(b.ref)) next[b.ref] = { ...(next[b.ref] ?? {}), ...b.config };
+      }
+      return next;
+    });
+  }
+
+  private async loadSkillScripts(): Promise<void> {
+    const id = this.agentId();
+    if (!id || this.isViewer()) {
+      this.skillScripts.set([]);
+      return;
+    }
+    try {
+      const rows = await this.agentService.getSkillScripts(id);
+      if (id === this.agentId()) this.skillScripts.set(rows);
+    } catch {
+      // The row notes are a hint; the save still asks for anything that needs a review.
+      this.skillScripts.set([]);
+    }
   }
 
   onSkillSelectionChange(next: ReadonlySet<string>): void {
@@ -1326,20 +1411,28 @@ export class AgentFormPage implements OnInit, OnDestroy {
 
     this.saving.set(true);
     try {
-      let id: string;
+      // A skill with scripts nobody reviewed for this agent opens the review sheet
+      // and the save is sent again with the answer (skill-code-sandbox §8.5).
+      const pending = this.pendingScriptReviews();
+      const saved = await saveWithScriptReview(
+        this.dialog,
+        { name: this.agentDisplayName(), kind: 'agent', readFile: this.readSkillFile },
+        (answers) =>
+          this.mode() === 'create'
+            ? this.agentService.createAgent({ ...payload, ...answers })
+            : this.agentService.updateAgent(this.agentId()!, { ...payload, ...answers, status: 'COMPLETE' }),
+        { initial: Object.keys(pending).length ? { scriptsReviewed: pending } : undefined },
+      );
+      if (saved === null) return null;
+      const id = saved.agentId;
       if (this.mode() === 'create') {
-        const created = await this.agentService.createAgent(payload);
-        id = created.agentId;
         // Transition to edit mode in place so the side-by-side preview (which needs a
         // persisted id to resolve bindings) lights up without leaving the page.
         this.agentId.set(id);
-      } else {
-        const updated = await this.agentService.updateAgent(this.agentId()!, {
-          ...payload,
-          status: 'COMPLETE',
-        });
-        id = updated.agentId;
       }
+      this.pendingScriptReviews.set({});
+      this.applySavedSkillPins(saved.bindings);
+      void this.loadSkillScripts();
       // Saved state now matches the preview — clear the dirty banner. The preview
       // re-resolves bindings from the saved record on its next message, so no reset
       // is needed; a create just set agentId, which resets the preview via its effect.

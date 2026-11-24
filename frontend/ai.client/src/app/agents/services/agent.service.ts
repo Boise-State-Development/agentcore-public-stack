@@ -1,4 +1,5 @@
 import { Injectable, inject, signal } from '@angular/core';
+import { ScriptReviewAnswers, SkillScriptStatus } from '../../shared/skills/script-review.model';
 import { firstValueFrom } from 'rxjs';
 import { AgentApiService } from './agent-api.service';
 import {
@@ -122,8 +123,13 @@ export class AgentService {
   }
 
   /** Move this Agent's pin on a skill to its current content; resolves to the new version. */
-  async updateSkillPin(id: string, skillId: string): Promise<number> {
-    return (await firstValueFrom(this.api.pinSkill(id, skillId))).version;
+  async updateSkillPin(id: string, skillId: string, answers: ScriptReviewAnswers = {}): Promise<number> {
+    return (await firstValueFrom(this.api.pinSkill(id, skillId, answers))).version;
+  }
+
+  /** Each bound skill with scripts and whether they run for the Agent's users. */
+  async getSkillScripts(id: string): Promise<SkillScriptStatus[]> {
+    return (await firstValueFrom(this.api.getSkillScripts(id))).skills;
   }
 
   async updateAgent(id: string, request: UpdateAgentRequest): Promise<Agent> {

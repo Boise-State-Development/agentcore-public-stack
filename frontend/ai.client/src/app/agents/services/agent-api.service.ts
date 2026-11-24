@@ -1,4 +1,5 @@
 import { Injectable, inject, computed } from '@angular/core';
+import { ScriptReviewAnswers, SkillScriptsResponse } from '../../shared/skills/script-review.model';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { ConfigService } from '../../services/config.service';
@@ -86,12 +87,21 @@ export class AgentApiService {
     return this.http.get<AgentSkillPinsResponse>(`${this.baseUrl()}/${id}/skills/pins`);
   }
 
-  /** Move this Agent's pin on a skill to the skill's current content. */
-  pinSkill(id: string, skillId: string): Observable<AgentSkillPinMoved> {
+  /**
+   * Move this Agent's pin on a skill to the skill's current content. `scriptsReviewed`
+   * allows the new version's scripts (skill-code-sandbox §8.5); without it, scripts that
+   * need a review answer 409 `skill_scripts_unreviewed`.
+   */
+  pinSkill(id: string, skillId: string, answers: ScriptReviewAnswers = {}): Observable<AgentSkillPinMoved> {
     return this.http.post<AgentSkillPinMoved>(
       `${this.baseUrl()}/${id}/skills/${encodeURIComponent(skillId)}/pin`,
-      {},
+      answers.scriptsReviewed ? { scriptsReviewed: answers.scriptsReviewed } : {},
     );
+  }
+
+  /** Each bound skill with scripts and whether they run for the Agent's users (§8.5–§8.6). */
+  getSkillScripts(id: string): Observable<SkillScriptsResponse> {
+    return this.http.get<SkillScriptsResponse>(`${this.baseUrl()}/${id}/skill-scripts`);
   }
 
   /** The Agent's bound skills that will run for the signed-in user, in binding order. */
