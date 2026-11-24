@@ -1,0 +1,636 @@
+/* ---- typewriter ---------------------------------------------------- */
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.cursor {
+  animation: caret-blink 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ---- shared -------------------------------------------------------- */
+.word {
+  display: inline-block;
+  white-space: nowrap;
+}
+.ch {
+  display: inline-block;
+  animation-duration: 700ms;
+  animation-fill-mode: both;
+  /* --pace lets an entry run its stagger tighter or looser than the shared step. */
+  animation-delay: calc(var(--i, 0) * var(--step, 40ms) * var(--pace, 1));
+}
+
+/*
+ * Brand ink for the entries that colour their letters. Dark mode pins the
+ * lightness and keeps the brand's hue, so a dark brand colour still reads.
+ */
+.stage {
+  --at-ink: var(--color-primary-500);
+  --at-glow: oklch(from var(--color-primary-500) 0.6 0.2 h);
+  --at-glint: oklch(from var(--color-primary-500) 0.68 0.19 h);
+}
+:host-context(.dark) .stage {
+  --at-ink: oklch(from var(--color-primary-500) 0.75 c h);
+  --at-glow: oklch(from var(--color-primary-500) 0.8 0.15 h);
+  --at-glint: oklch(from var(--color-primary-500) 0.7 0.2 h);
+}
+
+/* ---- decode: cipher noise locks into letters ------------------------ */
+[data-entry='decode'] .ch {
+  position: relative;
+  animation: none;
+}
+[data-entry='decode'] .final {
+  visibility: hidden;
+}
+[data-entry='decode'] .locked .final {
+  visibility: visible;
+  animation: decode-lock 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+[data-entry='decode'] .glyph {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82em;
+  font-weight: 500;
+  color: var(--color-primary-500);
+  opacity: 0.75;
+}
+:host-context(.dark) [data-entry='aurora'] {
+  --aurora-settle: oklch(from var(--color-primary-500) 0.75 c h);
+}
+:host-context(.dark) [data-entry='decode'] {
+  --decode-flash: oklch(from var(--color-primary-500) 0.8 c h);
+}
+:host-context(.dark) [data-entry='decode'] .glyph {
+  color: oklch(from var(--color-primary-500) 0.8 c h);
+  opacity: 0.85;
+}
+@keyframes decode-lock {
+  0% {
+    color: var(--decode-flash, var(--color-primary-500));
+    transform: scale(1.25);
+    text-shadow: 0 0 18px oklch(from var(--color-primary-500) l c h / 0.7);
+  }
+}
+
+/* ---- focus: rack focus from a heavy blur ---------------------------- */
+[data-entry='focus'] .ch {
+  animation-name: focus-in;
+  animation-duration: 1100ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes focus-in {
+  0% {
+    opacity: 0;
+    filter: blur(16px);
+    transform: translateY(0.35em) scale(1.6);
+  }
+  45% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+}
+
+/* ---- drop: gravity, squash and bounce ------------------------------- */
+[data-entry='drop'] .ch {
+  transform-origin: 50% 100%;
+  animation-name: drop-in;
+  animation-duration: 900ms;
+  animation-timing-function: linear;
+}
+@keyframes drop-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-1.6em) rotate(calc(var(--r, 0) * 35deg));
+    animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45);
+  }
+  10% { opacity: 1; }
+  42% {
+    transform: translateY(0) rotate(0) scale(1.18, 0.78);
+    animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+  62% {
+    transform: translateY(-0.22em) rotate(calc(var(--r, 0) * -6deg)) scale(0.96, 1.05);
+    animation-timing-function: cubic-bezier(0.32, 0, 0.67, 0);
+  }
+  78% {
+    transform: translateY(0) scale(1.05, 0.94);
+    animation-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+  90% { transform: translateY(-0.05em) scale(1); }
+  100% { opacity: 1; transform: none; }
+}
+
+/* ---- flip: split-flap departure board ------------------------------- */
+[data-entry='flip'] .word {
+  perspective: 500px;
+}
+[data-entry='flip'] .ch {
+  transform-origin: 50% 0%;
+  backface-visibility: hidden;
+  border-radius: 0.12em;
+  padding-inline: 0.02em;
+  margin-inline: -0.02em;
+  animation-name: flip-in, flip-tile;
+  animation-duration: 650ms, 1100ms;
+  animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1), ease-out;
+}
+@keyframes flip-in {
+  0% {
+    opacity: 0;
+    transform: rotateX(-105deg);
+  }
+  30% { opacity: 1; }
+  100% {
+    opacity: 1;
+    transform: rotateX(0);
+  }
+}
+@keyframes flip-tile {
+  0%, 45% {
+    background-color: color-mix(in oklch, currentColor 12%, transparent);
+    box-shadow: inset 0 -0.5px 0 0 color-mix(in oklch, currentColor 25%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+}
+
+/* ---- aurora: ignite in a hue-shifted glow, cool to the text colour -- */
+[data-entry='aurora'] .ch {
+  animation-name: aurora-in;
+  animation-duration: 1400ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes aurora-in {
+  0% {
+    opacity: 0;
+    filter: blur(6px);
+    transform: translateX(-0.4em) skewX(-18deg);
+    color: oklch(from var(--color-primary-500) 0.8 c calc(h + 140));
+    text-shadow: 0 0 0 transparent;
+  }
+  25% {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+    color: oklch(from var(--color-primary-500) 0.72 0.2 calc(h + 70));
+    text-shadow: 0 0 22px oklch(from var(--color-primary-500) 0.7 0.2 calc(h + 70) / 0.9);
+  }
+  55% {
+    color: var(--aurora-settle, var(--color-primary-500));
+    text-shadow: 0 0 14px oklch(from var(--color-primary-500) l c h / 0.6);
+  }
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 0 transparent;
+  }
+}
+
+/* ==== bold ============================================================ */
+
+/* ---- lava: brand-coloured blobs rise, merge and resolve into letters -- */
+/*
+ * Each letter starts as a blurred smear. The stage's filter thresholds the
+ * alpha, so a smear reads as a hard-edged blob and neighbours fuse where
+ * their blur overlaps. As a letter's blur falls to zero its blob tightens
+ * into the glyph. The filter comes off with the last letter, so the resting
+ * text is ordinary antialiased type.
+ */
+.goo-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+[data-entry='lava'] {
+  display: inline-block;
+  /* As long as the last letter takes: the stagger across the line, then one letter's run. */
+  animation: lava-goo calc(var(--n, 20) * var(--step, 40ms) * 0.62 + 1500ms) linear both;
+}
+@keyframes lava-goo {
+  0%, 99.9% { filter: url(#animated-text-goo); }
+  100% { filter: none; }
+}
+[data-entry='lava'] .ch {
+  --pace: 0.62;
+  transform-origin: 50% 80%;
+  animation-name: lava-in;
+  animation-duration: 1500ms;
+  animation-timing-function: linear;
+}
+@keyframes lava-in {
+  /* A droplet under the line. */
+  0% {
+    opacity: 0;
+    color: var(--at-ink);
+    filter: blur(0.2em);
+    transform: translateY(0.9em) scale(0.3);
+    animation-timing-function: cubic-bezier(0.3, 0, 0.3, 1);
+  }
+  10% { opacity: 1; }
+  /* Risen and swollen, fused with its neighbours. */
+  42% {
+    color: var(--at-ink);
+    filter: blur(0.15em);
+    transform: translateY(-0.16em) scale(1.1, 1.3);
+    animation-timing-function: cubic-bezier(0.4, 0, 0.4, 1);
+  }
+  /* Sagging back onto the baseline as the letter shows through. */
+  68% {
+    color: var(--at-ink);
+    filter: blur(0.08em);
+    transform: translateY(0.03em) scale(1.06, 0.96);
+    animation-timing-function: cubic-bezier(0.3, 0, 0.2, 1);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+}
+
+/* ---- blueprint: drafted in outline, then flooded with ink ------------- */
+[data-entry='blueprint'] .ch {
+  --pace: 0.62;
+  /* Ink in the lower half, a bright line on its surface, nothing above. Tilted a little, like a liquid. */
+  background-image: linear-gradient(
+    8deg,
+    var(--at-ink) 0%,
+    var(--at-ink) 48.5%,
+    var(--at-glow) 48.5%,
+    var(--at-glow) 50%,
+    transparent 50%,
+    transparent 100%
+  );
+  background-size: 100% 200%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation-name: blueprint-in;
+  animation-duration: 1400ms;
+  animation-timing-function: linear;
+}
+@keyframes blueprint-in {
+  /* The outline is plotted left to right. */
+  0% {
+    opacity: 0;
+    -webkit-text-fill-color: transparent;
+    -webkit-text-stroke: 1px var(--at-ink);
+    background-position: 0 0;
+    clip-path: inset(-0.3em 100% -0.3em -0.3em);
+    animation-timing-function: cubic-bezier(0.3, 0, 0.2, 1);
+  }
+  6% { opacity: 1; }
+  /* The ink rises through it. */
+  24% {
+    -webkit-text-fill-color: transparent;
+    background-position: 0 12%;
+    clip-path: inset(-0.3em -0.3em -0.3em -0.3em);
+    animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  }
+  74% {
+    -webkit-text-fill-color: transparent;
+    -webkit-text-stroke: 1px var(--at-ink);
+    background-position: 0 100%;
+    animation-timing-function: ease-out;
+  }
+  /* The ink dries to the text colour. */
+  100% {
+    opacity: 1;
+    -webkit-text-fill-color: currentColor;
+    -webkit-text-stroke: 0 transparent;
+    background-position: 0 100%;
+  }
+}
+
+/* ---- warp: streaks in from the right and snaps into letters ----------- */
+[data-entry='warp'] .ch {
+  --pace: 0.6;
+  transform-origin: 0% 60%;
+  animation-name: warp-in;
+  animation-duration: 950ms;
+  animation-timing-function: linear;
+}
+@keyframes warp-in {
+  0% {
+    opacity: 0;
+    color: var(--at-glow);
+    filter: blur(5px);
+    transform: translateX(2.4em) scaleX(5) skewX(-28deg);
+    text-shadow:
+      0.5em 0 0.12em oklch(from var(--at-glow) l c h / 0.5),
+      1em 0 0.24em oklch(from var(--at-glow) l c h / 0.25);
+    animation-timing-function: cubic-bezier(0.1, 0.85, 0.2, 1);
+  }
+  14% { opacity: 1; }
+  44% {
+    color: var(--at-glow);
+    filter: blur(0);
+    transform: translateX(-0.05em) scaleX(0.86) skewX(9deg);
+    text-shadow:
+      0.1em 0 0.06em oklch(from var(--at-glow) l c h / 0.4),
+      0.2em 0 0.12em oklch(from var(--at-glow) l c h / 0.2);
+    animation-timing-function: cubic-bezier(0.3, 0, 0.3, 1);
+  }
+  64% {
+    transform: translateX(0.015em) scaleX(1.04) skewX(-3deg);
+    animation-timing-function: cubic-bezier(0.3, 0, 0.3, 1);
+  }
+  82% { transform: scaleX(0.99) skewX(1deg); }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+    text-shadow: 0 0 0 transparent, 0 0 0 transparent;
+  }
+}
+
+/* ---- prism: three colour channels slide together into one letter ------ */
+/*
+ * The letter and its two ghosts are one channel each: cyan, magenta and
+ * yellow multiplied on a light page, red, green and blue screened on a dark
+ * one. Where all three overlap they make black or white, so the letter forms
+ * as the ghosts arrive. Blending stays inside the letter's own group.
+ *
+ * The channels are display-p3 primaries on purpose. Chrome on a wide-gamut
+ * screen blends in the screen's colour space, where an sRGB cyan carries some
+ * red, and three sRGB channels then meet at plum instead of black.
+ */
+[data-entry='prism'] {
+  --prism-a: color(display-p3 0 0.8 1);
+  --prism-b: color(display-p3 1 0 0.85);
+  --prism-c: color(display-p3 1 0.86 0);
+  --prism-blend: multiply;
+}
+:host-context(.dark) [data-entry='prism'] {
+  --prism-a: color(display-p3 0.1 1 0.45);
+  --prism-b: color(display-p3 1 0.12 0.3);
+  --prism-c: color(display-p3 0.2 0.4 1);
+  --prism-blend: screen;
+}
+[data-entry='prism'] .ch {
+  --pace: 0.7;
+  position: relative;
+  isolation: isolate;
+  animation-name: prism-core;
+  animation-duration: 1300ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+[data-entry='prism'] .ch::before,
+[data-entry='prism'] .ch::after {
+  content: attr(data-c);
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  mix-blend-mode: var(--prism-blend);
+  animation: prism-ghost 1300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--i, 0) * var(--step, 40ms) * var(--pace, 1));
+}
+[data-entry='prism'] .ch::before {
+  --from: -0.55em;
+  color: var(--prism-b);
+}
+[data-entry='prism'] .ch::after {
+  --from: 0.55em;
+  color: var(--prism-c);
+}
+/* The letter takes the text colour first, under the ghosts; then the ghosts go. */
+@keyframes prism-core {
+  0% {
+    opacity: 0;
+    color: var(--prism-a);
+    transform: translateY(0.18em);
+  }
+  25% { opacity: 1; }
+  60% {
+    color: var(--prism-a);
+    transform: none;
+    animation-timing-function: linear;
+  }
+  72% { color: inherit; }
+  100% { opacity: 1; }
+}
+@keyframes prism-ghost {
+  0% {
+    opacity: 0;
+    transform: translateX(var(--from));
+  }
+  25% { opacity: 1; }
+  60% { transform: none; }
+  76% {
+    opacity: 1;
+    animation-timing-function: linear;
+  }
+  92%, 100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+
+/* ---- shockwave: a pulse bursts from the centre and throws letters out -- */
+[data-entry='shockwave'] .ch {
+  /* --o: places from the centre, signed. --d: its size. --s: its side. */
+  --o: calc(var(--i, 0) - (var(--n, 1) - 1) / 2);
+  --d: max(var(--o), calc(var(--o) * -1));
+  --s: clamp(-1, calc(var(--o) * 100), 1);
+  animation-name: shockwave-in;
+  animation-duration: 1100ms;
+  animation-timing-function: linear;
+  animation-delay: calc(var(--d) * var(--step, 40ms) * 1.1);
+}
+@keyframes shockwave-in {
+  0% {
+    opacity: 0;
+    color: var(--at-glow);
+    filter: blur(4px);
+    transform: translateX(calc(var(--s) * -0.4em)) scale(0.2);
+    text-shadow: 0 0 0 transparent;
+    animation-timing-function: cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+  10% { opacity: 1; }
+  24% {
+    color: var(--at-glow);
+    filter: blur(0);
+    transform: translateX(calc(var(--s) * 0.28em)) scale(1.36);
+    text-shadow: 0 0 0.6em oklch(from var(--at-glow) l c h / 0.85);
+    animation-timing-function: cubic-bezier(0.4, 0, 0.3, 1);
+  }
+  48% {
+    transform: translateX(calc(var(--s) * -0.07em)) scale(0.94);
+    animation-timing-function: cubic-bezier(0.4, 0, 0.3, 1);
+  }
+  68% {
+    transform: translateX(calc(var(--s) * 0.025em)) scale(1.03);
+    animation-timing-function: ease-out;
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+    text-shadow: 0 0 0 transparent;
+  }
+}
+
+/* ==== quiet =========================================================== */
+
+/* ---- rise: letters climb out from behind the baseline ----------------- */
+[data-entry='rise'] .word {
+  /* The mask. clip-path leaves the baseline alone; overflow:hidden on an
+     inline-block would move it. Open on the other three sides. */
+  clip-path: inset(-0.3em -0.3em 0 -0.3em);
+}
+[data-entry='rise'] .ch {
+  --pace: 0.5;
+  animation-name: rise-in;
+  animation-duration: 950ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes rise-in {
+  0% { transform: translateY(108%); }
+  100% { transform: none; }
+}
+
+/* ---- settle: wide tracking drifts closed as the line comes into focus -- */
+[data-entry='settle'] .ch {
+  --o: calc(var(--i, 0) - (var(--n, 1) - 1) / 2);
+  animation-name: settle-in;
+  animation-duration: 1700ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-delay: 0ms;
+}
+@keyframes settle-in {
+  0% {
+    opacity: 0;
+    filter: blur(8px);
+    /* The spread is a share of the line, so a long line opens no wider than a short one. */
+    transform: translateX(calc(var(--o) / var(--n, 1) * 2.6em));
+  }
+  55% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- weight: hairline letters thicken to the heading weight ----------- */
+/*
+ * A thin glyph is narrower than a bold one, so thickening the letter itself
+ * would shove its neighbours along. The real letter holds its final width,
+ * hidden, while a copy drawn over it gains weight; they trade places at the
+ * end. Needs a variable font, and falls back to a fade without one.
+ */
+[data-entry='weight'] .ch {
+  --pace: 0.7;
+  position: relative;
+  animation-name: weight-hold;
+  animation-duration: 1200ms;
+  animation-timing-function: linear;
+}
+[data-entry='weight'] .ch::before {
+  content: attr(data-c);
+  position: absolute;
+  inset: 0;
+  text-align: center;
+  visibility: hidden;
+  animation: weight-in 1200ms cubic-bezier(0.25, 0.6, 0.2, 1) both;
+  animation-delay: calc(var(--i, 0) * var(--step, 40ms) * var(--pace, 1));
+}
+@keyframes weight-hold {
+  0%, 99.9% { visibility: hidden; }
+}
+@keyframes weight-in {
+  0% {
+    visibility: visible;
+    opacity: 0;
+    font-weight: 100;
+  }
+  35% { opacity: 1; }
+  99.9% {
+    visibility: visible;
+    opacity: 1;
+  }
+  100% { visibility: hidden; }
+}
+
+/* ---- sheen: the line fades up, then one band of light crosses it ------ */
+/*
+ * Each letter carries the same gradient, nine letters wide with a soft band
+ * about four letters wide in the middle, and slides it across in eight stagger
+ * steps. That moves the band one letter per step, the pace the stagger moves
+ * along the line, so the letters' bands join into one.
+ */
+[data-entry='sheen'] .ch {
+  --pace: 0.8;
+  --pass: calc(var(--step, 40ms) * var(--pace) * 8);
+  background-image: linear-gradient(
+    100deg,
+    currentColor 0%,
+    currentColor 30%,
+    var(--at-glint) 50%,
+    currentColor 70%,
+    currentColor 100%
+  );
+  background-size: 900% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation-name: sheen-fade, sheen-pass;
+  animation-duration: 700ms, var(--pass);
+  animation-timing-function: ease-out, linear;
+  animation-delay:
+    calc(var(--i, 0) * 6ms),
+    calc(300ms + var(--i, 0) * var(--step, 40ms) * var(--pace));
+}
+@keyframes sheen-fade {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes sheen-pass {
+  0%, 99.9% { -webkit-text-fill-color: transparent; }
+  0% { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
+}
+
+/* ---- whisper: word by word, the way it would be said ------------------ */
+[data-entry='whisper'] .ch {
+  animation: none;
+}
+[data-entry='whisper'] .word {
+  animation: whisper-in 1000ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--w, 0) * var(--word-step, 90ms));
+}
+@keyframes whisper-in {
+  0% {
+    opacity: 0;
+    filter: blur(10px);
+    transform: translateY(0.28em);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage,
+  .word,
+  .ch,
+  .ch::before,
+  .ch::after,
+  .cursor,
+  [data-entry='decode'] .locked .final {
+    animation: none !important;
+  }
+}
