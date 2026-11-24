@@ -37,8 +37,9 @@ Stop/disconnect paths all go through it), and it is the row that carries
 ``documentTurns`` and ``turnDurationMsSum`` are read from that row only, and a
 four-call turn adds 4 to ``calls`` and 1 to ``turns``. A call that is not a chat
 turn's (a handoff brief, a voice session, an api-converse request, a
-``document_extract`` side call) carries no ``turnDurationMs`` and is counted
-under ``callKind.<kind>``, never as a turn.
+``document_extract`` side call, a task-model side call: ``session_title``,
+``tool_summary``, ``compaction_summary``) carries no ``turnDurationMs`` and is
+counted under ``callKind.<kind>``, never as a turn.
 
 **Turn KPIs read chat calls only.** ``cost`` and ``firstTokenMsSum`` /
 ``firstTokenCount`` add every call, whatever its kind, so a cost per turn
@@ -99,7 +100,28 @@ OUTCOME_COUNTERS = {
 
 #: The kinds a call is classified into. ``callKind`` on the row wins; the rest
 #: are recognised by the id shapes their writers use.
-CALL_KINDS = ("chat", "handoff_brief", "workflow_prompt", "workflow_checklist", "voice", "api_converse", "document_extract", "other")
+CALL_KINDS = (
+    "chat",
+    "handoff_brief",
+    "workflow_prompt",
+    "workflow_checklist",
+    "voice",
+    "api_converse",
+    "document_extract",
+    # The task-model side calls (``apis.shared.costs.side_call_metering``).
+    "session_title",
+    "tool_summary",
+    "compaction_summary",
+    "other",
+)
+
+#: The task-model side calls ``apis.shared.costs.side_call_metering`` writes.
+SIDE_CALL_KINDS = frozenset({"session_title", "tool_summary", "compaction_summary"})
+
+#: Kinds whose calls share no cached prefix with the chat turn: their own request on
+#: their own model. The prompt-cache classifier neither classifies their rows nor takes
+#: one as a chat call's predecessor (``metadata._derive_cache_observability``).
+PREFIX_UNRELATED_CALL_KINDS = SIDE_CALL_KINDS | frozenset({"document_extract"})
 _KIND_PATTERN = re.compile(r"^[a-z0-9_]{1,32}$")
 
 #: What one character of a tool result costs as input, in tokens (D4). An
@@ -298,7 +320,13 @@ def ledger_updates(row: Mapping[str, Any]) -> List[LedgerUpdate]:
         version_row.bump("uncachedCalls", 1)
     if status == "estimated" or row.get("usageEstimated"):
         version_row.bump("estimatedCalls", 1)
-    if (input_tokens + output_tokens + cache_read + cache_write) > 0 and row.get("cost") is None:
+    # A task-model side call on an uncataloged default (`unpricedDefault`) is a known,
+    # accepted gap the admin tab names, not one this counter exists to surface.
+    if (
+        (input_tokens + output_tokens + cache_read + cache_write) > 0
+        and row.get("cost") is None
+        and not row.get("unpricedDefault")
+    ):
         version_row.bump("unmeteredCalls", 1)
     version_row.bump("toolCalls", tool_calls)
     version_row.bump("toolErrors", tool_errors)

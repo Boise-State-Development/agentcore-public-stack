@@ -112,8 +112,9 @@ class TaskSlotSpec:
     description: str
     guidance: str
     default_model_id: Callable[[], str]
-    #: Whether a call writes a cost row today. An unmetered task's spend is the platform's,
-    #: not counted against any user's quota, which the tab says next to the picker.
+    #: Whether a call writes a cost row (every task does since the side-call metering,
+    #: ``apis.shared.costs.side_call_metering``). An unmetered task's spend would be the
+    #: platform's, not counted against any user's quota, which the tab says next to the picker.
     metered: bool
     #: Whether the feature that runs this task is on in this deployment.
     available: Callable[[], bool] = lambda: True
@@ -134,7 +135,7 @@ TASK_SLOTS: tuple[TaskSlotSpec, ...] = (
             "low-cost model; a larger one makes titles slower without making them better."
         ),
         default_model_id=lambda: defaults.SESSION_TITLE_DEFAULT_MODEL_ID,
-        metered=False,
+        metered=True,
     ),
     TaskSlotSpec(
         slot=TaskModelSlot.TOOL_SUMMARY,
@@ -148,7 +149,7 @@ TASK_SLOTS: tuple[TaskSlotSpec, ...] = (
             "low-cost model that follows a short instruction reliably."
         ),
         default_model_id=lambda: defaults.TOOL_SUMMARY_DEFAULT_MODEL_ID,
-        metered=False,
+        metered=True,
     ),
     TaskSlotSpec(
         slot=TaskModelSlot.COMPACTION_SUMMARY,
@@ -164,7 +165,7 @@ TASK_SLOTS: tuple[TaskSlotSpec, ...] = (
             "Nova 2 Lite about 99%. A change applies from each conversation's next compaction."
         ),
         default_model_id=_compaction_default,
-        metered=False,
+        metered=True,
     ),
     TaskSlotSpec(
         slot=TaskModelSlot.DOCUMENT_EXTRACT,
@@ -546,8 +547,10 @@ def default_notice(spec: TaskSlotSpec, default_id: str, catalog: Sequence[Manage
         return f"The default is retired in the catalog, so this task runs its replacement, {name}."
     if effective.record is None:
         return (
-            "The default isn't in the model catalog, so its pricing and retirement aren't tracked "
-            "here. Watch AWS model lifecycle notices for it, or add it to the catalog."
+            "The default isn't in the model catalog, so its calls are recorded with their tokens "
+            "but no cost, and nothing counts them against quota. Its retirement isn't tracked "
+            "here either. Add it to the catalog to price them, or watch AWS model lifecycle "
+            "notices for it."
         )
     return None
 

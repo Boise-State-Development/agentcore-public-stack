@@ -74,9 +74,20 @@
         "24x dynamodb.GetItem app-roles  <- apis/shared/tools/repository.py:ToolCatalogRepository.get_tool  [task get_tool_updated_at]",
         "1x dynamodb.GetItem managed-models  <- apis/shared/models/task_models.py:_read_item  [task generate_conversation_title]",
         "1x dynamodb.GetItem user-file-uploads  <- apis/shared/files/repository.py:FileUploadRepository.get_file  [task FileResolver._resolve_single_file]",
+        "1x dynamodb.PutItem sessions-metadata  <- apis/shared/sessions/metadata.py:_store_message_metadata_cloud  [task generate_conversation_title]",
+        "2x dynamodb.PutItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.track_active_user  [task generate_conversation_title]",
+        "1x dynamodb.PutItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.track_active_user_for_model  [task generate_conversation_title]",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_get_session_by_gsi  [task generate_conversation_title]",
         "1x dynamodb.Query user-file-uploads/SessionIndex  <- apis/shared/files/repository.py:FileUploadRepository.list_session_files_sync  [task _auto_enabled_spreadsheet_tool_ids]",
         "1x dynamodb.Query user-quotas/UserAssignmentIndex  <- agents/main_agent/quota/repository.py:QuotaRepository.get_active_extensions  [task QuotaResolver._load_active_extensions]",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:_bump_session_aggregates  [task generate_conversation_title]",
         "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:update_session_title  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_daily_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_model_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_monthly_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage._update_cost_sort_key  [task generate_conversation_title]",
+        "3x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage._update_model_breakdown  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_user_cost_summary  [task generate_conversation_title]",
         "1x s3.GetObject user-file-uploads-123456789012  <- apis/shared/files/file_resolver.py:FileResolver._get_bytes  [task FileResolver._resolve_single_file]"
       ]
     },
@@ -115,10 +126,21 @@
         "1x dynamodb.GetItem projects  <- apis/shared/projects/repository.py:ProjectRepository.get_personal_space_id  [task load_project_memory]",
         "1x dynamodb.GetItem rag-assistants  <- apis/shared/assistants/rag_service.py:_filter_vectors_by_document_status  [task _search_and_augment]",
         "1x dynamodb.GetItem rag-assistants  <- apis/shared/kb_backend/records.py:get_kb_record  [task _search_and_augment]",
+        "1x dynamodb.PutItem sessions-metadata  <- apis/shared/sessions/metadata.py:_store_message_metadata_cloud  [task generate_conversation_title]",
+        "2x dynamodb.PutItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.track_active_user  [task generate_conversation_title]",
+        "1x dynamodb.PutItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.track_active_user_for_model  [task generate_conversation_title]",
         "1x dynamodb.Query rag-assistants  <- apis/shared/assistants/kb_tabular.py:_has_tabular_document  [task _auto_enabled_spreadsheet_tool_ids]",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_get_session_by_gsi  [task generate_conversation_title]",
         "1x dynamodb.Query user-file-uploads/SessionIndex  <- apis/shared/files/repository.py:FileUploadRepository.list_session_files_sync  [task _auto_enabled_presentation_tool_ids]",
         "1x dynamodb.Query user-file-uploads/SessionIndex  <- apis/shared/files/repository.py:FileUploadRepository.list_session_files_sync  [task _auto_enabled_spreadsheet_tool_ids]",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:_bump_session_aggregates  [task generate_conversation_title]",
         "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:update_session_title  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_daily_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_model_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_monthly_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage._update_cost_sort_key  [task generate_conversation_title]",
+        "3x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage._update_model_breakdown  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_user_cost_summary  [task generate_conversation_title]",
         "1x s3.GetObject memory-spaces  <- apis/shared/memory/store.py:MemorySpaceStore.get  [task load_project_memory]",
         "1x s3vectors.QueryVectors  <- apis/shared/embeddings/bedrock_embeddings.py:_search_assistant_knowledgebase_sync  [task _search_and_augment]"
       ]
@@ -131,8 +153,18 @@
       ],
       "concurrent": [
         "1x bedrock-runtime.Converse  <- apis/shared/tool_summaries/summarizer.py:_converse  [task StreamCoordinator._summarize_and_persist_batch]",
+        "1x dynamodb.PutItem sessions-metadata  <- apis/shared/sessions/metadata.py:_store_message_metadata_cloud  [task StreamCoordinator._summarize_and_persist_batch]",
         "1x dynamodb.PutItem sessions-metadata  <- apis/shared/tool_summaries/store.py:ToolSummaryStore.store  [task StreamCoordinator._summarize_and_persist_batch]",
-        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_get_session_by_gsi  [task StreamCoordinator._summarize_and_persist_batch]"
+        "2x dynamodb.PutItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.track_active_user  [task StreamCoordinator._summarize_and_persist_batch]",
+        "1x dynamodb.PutItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.track_active_user_for_model  [task StreamCoordinator._summarize_and_persist_batch]",
+        "2x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_get_session_by_gsi  [task StreamCoordinator._summarize_and_persist_batch]",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:_bump_session_aggregates  [task StreamCoordinator._summarize_and_persist_batch]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_daily_rollup  [task StreamCoordinator._summarize_and_persist_batch]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_model_rollup  [task StreamCoordinator._summarize_and_persist_batch]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_monthly_rollup  [task StreamCoordinator._summarize_and_persist_batch]",
+        "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage._update_cost_sort_key  [task StreamCoordinator._summarize_and_persist_batch]",
+        "3x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage._update_model_breakdown  [task StreamCoordinator._summarize_and_persist_batch]",
+        "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_user_cost_summary  [task StreamCoordinator._summarize_and_persist_batch]"
       ]
     },
     "warm_follow_up": {
