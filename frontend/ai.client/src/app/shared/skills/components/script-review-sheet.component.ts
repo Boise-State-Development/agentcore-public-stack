@@ -64,7 +64,7 @@ const CHANGE_LABELS: Record<string, string> = { new: 'New', changed: 'Changed', 
                   class="shrink-0 rounded-full px-2 py-0.5 text-xs/5 font-medium"
                   [class]="row.change === 'removed'
                     ? 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200'
-                    : 'bg-amber-50 text-amber-800 dark:bg-amber-500/10 dark:text-amber-300'"
+                    : 'bg-state-warning-50 text-state-warning-800 dark:bg-state-warning-500/10 dark:text-state-warning-300'"
                 >{{ label }}</span>
               }
               <span class="shrink-0 text-xs/5 text-gray-500 dark:text-gray-400">{{ size(row.size) }}</span>
