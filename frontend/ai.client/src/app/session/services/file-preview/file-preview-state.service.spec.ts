@@ -102,4 +102,19 @@ describe('FilePreviewStateService', () => {
 
     expect(artifacts.openArtifact()).not.toBeNull();
   });
+
+  it('knows whether a preview pane is on the page', () => {
+    expect(service.hostAvailable()).toBe(false);
+
+    const first = service.registerHost();
+    const second = service.registerHost();
+    expect(service.hostAvailable()).toBe(true);
+
+    first();
+    first(); // a second call is a no-op, never a second unregister
+    expect(service.hostAvailable()).toBe(true);
+
+    second();
+    expect(service.hostAvailable()).toBe(false);
+  });
 });

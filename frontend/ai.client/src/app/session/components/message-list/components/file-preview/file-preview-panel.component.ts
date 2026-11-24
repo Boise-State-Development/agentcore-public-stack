@@ -409,9 +409,15 @@ export class FilePreviewPanelComponent {
       void this.load(ref.uploadId);
     });
 
+    // Tell citation surfaces there is a pane to open pages into.
+    const unregister = this.previewState.registerHost();
+
     // Same rule as the artifact pane: leaving for a page with no message
     // list must give the rail back, or the shell keeps its gutter.
-    inject(DestroyRef).onDestroy(() => this.previewState.close());
+    inject(DestroyRef).onDestroy(() => {
+      unregister();
+      this.previewState.close();
+    });
   }
 
   private reset(): void {

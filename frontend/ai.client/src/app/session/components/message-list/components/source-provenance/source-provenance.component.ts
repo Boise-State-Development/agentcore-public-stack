@@ -8,7 +8,8 @@ import {
 } from '@angular/core';
 import type { SourceProvenanceClaim, SourceLocator } from '../../../../../shared/utils/stream-parser';
 import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
-import { previewKindFor } from '../../../../services/file-preview/file-preview.model';
+import type { OpenFilePreviewRef } from '../../../../services/file-preview/file-preview.model';
+import { pdfPageRef } from '../../../../services/file-preview/pdf-page-link';
 
 /** A verdict sentence split around its locator, so the locator can be a link. */
 interface VerdictParts {
@@ -46,9 +47,10 @@ interface VerdictParts {
  *
  * In a PDF the page in each verdict is a link that opens the document in the
  * side pane at that page with the quoted passage highlighted, so the reader
- * can check it themselves — for `quote_unsupported` above all. Only for a PDF: a `.docx` locator is a
- * paragraph, which no viewer can scroll to, and a page link that opened the
- * document at the top would claim a precision it does not have.
+ * can check it themselves — for `quote_unsupported` above all. Which
+ * locators are links is decided once, in `pdfPageRef`, for this list and
+ * the extraction table alike, and only while a preview pane is on the page
+ * to open them in.
  */
 @Component({
   selector: 'app-source-provenance',
@@ -202,14 +204,14 @@ interface VerdictParts {
                          and an ellipsis would hide it exactly when the PDF
                          pane is open and the column is narrow. -->
                     <span class="min-w-0 flex-1 text-[11px] leading-4" [class]="verdictClass(claim.state)">
-                      @if (pageLink(claim); as page) {
+                      @if (pageRef(claim); as ref) {
                         @let parts = verdictParts(claim);
                         {{ parts.before }}<button
                           type="button"
                           class="cursor-pointer underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-accessible"
                           [attr.aria-label]="'Open ' + claim.filename + ' at ' + parts.locator"
                           data-testid="provenance-page-link"
-                          (click)="openPage(claim, page)"
+                          (click)="openPage(ref)"
                         >{{ parts.locator }}</button>{{ parts.after }}
                       } @else {
                         {{ verdict(claim) }}
@@ -307,25 +309,16 @@ export class SourceProvenanceComponent {
   }
 
   /**
-   * The 1-based page a claim's locator names, when it can be opened there:
-   * a located passage, in a PDF the pane can show. Null otherwise, and the
-   * verdict stays plain text.
+   * How to open a claim's page with its passage highlighted, or null when it
+   * can't be (`pdfPageRef`) or there is no pane here to open it in. Null
+   * leaves the verdict as plain text.
    */
-  protected pageLink(claim: SourceProvenanceClaim): number | null {
-    const loc = claim.locator;
-    if (claim.state === 'unverified' || !loc || loc.kind !== 'page') return null;
-    if (!claim.uploadId || previewKindFor(claim.filename ?? '') !== 'pdf') return null;
-    return Number.isInteger(loc.value) && loc.value >= 1 ? loc.value : null;
+  protected pageRef(claim: SourceProvenanceClaim): OpenFilePreviewRef | null {
+    return this.filePreview.hostAvailable() ? pdfPageRef(claim) : null;
   }
 
-  protected openPage(claim: SourceProvenanceClaim, page: number): void {
-    const quote = claim.quote?.trim();
-    this.filePreview.open({
-      uploadId: claim.uploadId,
-      filename: claim.filename,
-      page,
-      ...(quote ? { quote } : {}),
-    });
+  protected openPage(ref: OpenFilePreviewRef): void {
+    this.filePreview.open(ref);
   }
 
   /**

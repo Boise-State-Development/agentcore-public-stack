@@ -232,6 +232,12 @@ describe('FilePreviewPanelComponent', () => {
     expect(viewer.componentInstance.targetPage()).toEqual({ page: 4, quote: 'total award' });
   });
 
+  it('tells citations a pane is here while it is mounted', () => {
+    expect(state.hostAvailable()).toBe(true);
+    fixture.destroy();
+    expect(state.hostAvailable()).toBe(false);
+  });
+
   it('gives the rail back when it is destroyed with the page', async () => {
     await openPreview();
     fixture.destroy();

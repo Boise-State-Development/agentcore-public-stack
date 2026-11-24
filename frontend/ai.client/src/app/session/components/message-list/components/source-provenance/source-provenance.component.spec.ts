@@ -20,6 +20,7 @@ function claim(over: Partial<SourceProvenanceClaim> = {}): SourceProvenanceClaim
 
 async function render(
   claims: SourceProvenanceClaim[],
+  { previewPane = true }: { previewPane?: boolean } = {},
 ): Promise<ComponentFixture<SourceProvenanceComponent>> {
   // Reset per render: TestBed refuses reconfiguration once instantiated, and
   // some cases below render several times.
@@ -27,6 +28,8 @@ async function render(
   await TestBed.configureTestingModule({
     imports: [SourceProvenanceComponent],
   }).compileComponents();
+  // The chat renders this beside the preview pane; links need one to open in.
+  if (previewPane) TestBed.inject(FilePreviewStateService).registerHost();
   const fixture = TestBed.createComponent(SourceProvenanceComponent);
   fixture.componentRef.setInput('claims', claims);
   await fixture.whenStable();
@@ -288,6 +291,12 @@ describe('SourceProvenanceComponent', () => {
         filename: 'award.pdf',
         page: 1,
       });
+    });
+
+    it('offers no links where there is no preview pane to open them in', async () => {
+      const fixture = await render([claim()], { previewPane: false });
+      expect(links(fixture)).toHaveLength(0);
+      expect(text(fixture)).toContain('found on page 1');
     });
 
     it('does not link an unverified claim or one with no file', async () => {
