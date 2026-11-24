@@ -6,6 +6,11 @@ import { signal } from '@angular/core';
 import { ProjectsPage } from './projects.page';
 import { ProjectsService } from './services/projects.service';
 import { Project, ProjectRole, ProjectStatus } from './models/project.model';
+import { environment } from '../../environments/environment';
+import { FEATURES } from '../services/features';
+import { ListArrangementService } from '../services/list-arrangement/list-arrangement.service';
+import { ToastService } from '../services/toast/toast.service';
+import { listArrangementStub } from '../../testing/list-arrangement';
 
 const project = (id: string, role: ProjectRole, status: ProjectStatus = 'active'): Project => ({
   projectId: id,
@@ -23,6 +28,8 @@ const project = (id: string, role: ProjectRole, status: ProjectStatus = 'active'
 });
 
 describe('ProjectsPage', () => {
+  let arrangements: ReturnType<typeof listArrangementStub>;
+  let organizeLists = false;
   const projects = signal<Project[]>([]);
   const available = signal<boolean | null>(true);
   const service = {
@@ -42,12 +49,16 @@ describe('ProjectsPage', () => {
       project('old', 'owner', 'archived'),
     ]);
     available.set(true);
+    arrangements = listArrangementStub();
+    organizeLists = false;
     TestBed.configureTestingModule({
       imports: [ProjectsPage],
       providers: [
         provideRouter([]),
         { provide: ProjectsService, useValue: service },
         { provide: Dialog, useValue: { open: vi.fn() } },
+        { provide: ListArrangementService, useFactory: () => arrangements },
+        { provide: FEATURES, useFactory: () => ({ ...environment.features, organizeLists }) },
       ],
     });
   });
@@ -85,5 +96,101 @@ describe('ProjectsPage', () => {
     const el: HTMLElement = fixture.nativeElement;
     expect(el.textContent).toContain('Projects aren’t available here');
     expect([...el.querySelectorAll('button')].some(b => b.textContent?.includes('New project'))).toBe(false);
+  });
+
+  // ── Hide (docs/specs/agent-project-organization.md) ────────────────────────────
+  function renderOrganized() {
+    organizeLists = true;
+    const fixture = TestBed.createComponent(ProjectsPage);
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  const chips = (el: HTMLElement) => [...el.querySelectorAll('[aria-label=Show] [role=radio]')].map(b => b.textContent?.trim());
+  const hideButton = (el: HTMLElement, name: string) =>
+    el.querySelector<HTMLButtonElement>(`button[aria-label="Hide Project ${name}"]`);
+
+  it('offers no Hide and no Hidden chip while the flag is off', () => {
+    const fixture = TestBed.createComponent(ProjectsPage);
+    fixture.detectChanges();
+    const el: HTMLElement = fixture.nativeElement;
+    expect(hideButton(el, 'shared')).toBeNull();
+    expect(chips(el)).not.toContain('Hidden (0)');
+  });
+
+  it('hides a project from All into Hidden, with Undo, and keeps it a sibling of the link', async () => {
+    const fixture = renderOrganized();
+    const el: HTMLElement = fixture.nativeElement;
+    expect(arrangements.open).toHaveBeenCalledWith('projects');
+    expect(chips(el)).toEqual(['All', 'Mine', 'Shared with me', 'Archived']);
+
+    const button = hideButton(el, 'shared')!;
+    expect(button.closest('a')).toBeNull();
+    const info = vi.spyOn(TestBed.inject(ToastService), 'info');
+    button.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(names(el)).toEqual(['Project mine', 'Project viewing']);
+    expect(chips(el)).toContain('Hidden (1)');
+    expect(info).toHaveBeenCalledWith('Hid Project shared', expect.any(String), expect.objectContaining({ action: expect.objectContaining({ label: 'Undo' }) }));
+
+    choose(el, 'Hidden (1)');
+    fixture.detectChanges();
+    expect(names(el)).toEqual(['Project shared']);
+
+    info.mock.calls[0][2]!.action!.handler();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(names(el)).toEqual([]);
+    expect(el.textContent).toContain('Nothing hidden.');
+  });
+
+  it('leaves a hidden project out of Mine and Shared, and labels it under Archived', () => {
+    arrangements.hide('projects', 'viewing', 'old');
+    const fixture = renderOrganized();
+    const el: HTMLElement = fixture.nativeElement;
+    choose(el, 'Shared with me');
+    fixture.detectChanges();
+    expect(names(el)).toEqual(['Project shared']);
+    expect(chips(el)).toContain('Hidden (1)');
+    choose(el, 'Archived');
+    fixture.detectChanges();
+    expect(names(el)).toEqual(['Project old']);
+    expect(el.querySelector('ul li')?.textContent).toContain('Hidden');
+  });
+
+  it('says so when a hide fails, and changes nothing', async () => {
+    const fixture = renderOrganized();
+    const error = vi.spyOn(TestBed.inject(ToastService), 'error');
+    arrangements.fail();
+    hideButton(fixture.nativeElement, 'mine')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(error).toHaveBeenCalledWith('Could not hide project', 'Please try again.');
+    expect(names(fixture.nativeElement)).toContain('Project mine');
+  });
+
+  it('arranges active projects only and saves the order as Custom', async () => {
+    const fixture = renderOrganized();
+    const el: HTMLElement = fixture.nativeElement;
+    [...el.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Arrange')!.click();
+    fixture.detectChanges();
+
+    const arranged = [...el.querySelectorAll('app-arrange-list li span.font-medium')].map(n => n.textContent?.trim());
+    expect(arranged).toEqual(['Project mine', 'Project shared', 'Project viewing']);
+    el.querySelector<HTMLButtonElement>('button[aria-label="Move Project viewing up"]')!.click();
+    fixture.detectChanges();
+    [...el.querySelectorAll('button')].find(b => b.textContent?.trim() === 'Done')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(arrangements.saveArranged).toHaveBeenCalledWith(
+      'projects',
+      ['mine', 'viewing', 'shared'],
+      new Set(),
+      ['mine', 'shared', 'viewing'],
+    );
+    expect(names(el)).toEqual(['Project mine', 'Project viewing', 'Project shared']);
   });
 });

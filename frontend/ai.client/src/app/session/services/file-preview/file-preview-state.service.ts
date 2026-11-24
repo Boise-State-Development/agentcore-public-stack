@@ -24,11 +24,31 @@ export class FilePreviewStateService {
   private readonly dockedPane = inject(DockedPaneService);
 
   private readonly openRef = signal<FilePreviewRef | null>(null);
+  private readonly hosts = signal(0);
+
+  /**
+   * Whether a preview pane is on the page to open files into. The pane
+   * registers itself (`registerHost`), so a surface that renders citations
+   * somewhere without one — the workflow designer's test run — can leave
+   * its page links as plain text rather than offer links that do nothing.
+   */
+  readonly hostAvailable = computed(() => this.hosts() > 0);
 
   /** The file the pane is showing, or null when closed. */
   readonly openFile = computed<FilePreviewRef | null>(() =>
     this.dockedPane.owner() === 'file-preview' ? this.openRef() : null,
   );
+
+  /** Called by a mounted preview pane; returns its unregister. */
+  registerHost(): () => void {
+    this.hosts.update((n) => n + 1);
+    let registered = true;
+    return () => {
+      if (!registered) return;
+      registered = false;
+      this.hosts.update((n) => Math.max(0, n - 1));
+    };
+  }
 
   open(ref: FilePreviewRef): void {
     this.openRef.set(ref);

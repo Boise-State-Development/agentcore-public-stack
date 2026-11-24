@@ -8,17 +8,14 @@ import { ErrorToastComponent } from './components/error-toast/error-toast.compon
 import { ToastComponent } from './components/toast';
 import { BackgroundTaskToastsComponent } from './components/background-task-toasts/background-task-toasts.component';
 import { SidenavService } from './services/sidenav/sidenav.service';
-import { HeaderService } from './services/header/header.service';
-import { TooltipDirective } from './components/tooltip/tooltip.directive';
+import { ShellControlsComponent } from './components/shell-controls/shell-controls.component';
 import { SessionService } from './auth/session.service';
 import { SessionService as SessionListService } from './session/services/session/session.service';
 import { DockedPaneService } from './session/services/docked-pane/docked-pane.service';
 import { isAdminChromeRoute, isMinimalChromeRoute } from './shared/utils/route-chrome';
 import { BrandingService } from '../branding/branding.service';
 import { FEATURES } from './services/features';
-import { SearchDialogService } from './components/search/search-dialog.service';
 import { KeyboardShortcutsService } from './components/shortcuts/keyboard-shortcuts.service';
-import { shortcutAria, withShortcut } from './components/shortcuts/shortcuts';
 
 @Component({
   selector: 'app-root',
@@ -28,34 +25,28 @@ import { shortcutAria, withShortcut } from './components/shortcuts/shortcuts';
     ErrorToastComponent,
     ToastComponent,
     BackgroundTaskToastsComponent,
-    TooltipDirective
+    ShellControlsComponent,
   ],
   templateUrl: './app.html',
   styleUrl: './app.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     '(document:keydown)': 'onDocumentKeydown($event)',
+    // Widens the header's reserve for the capsule's search button (styles.css).
+    '[class.shell-search-on]': 'conversationSearchOn',
   },
 })
 export class App {
   protected readonly title = signal('boisestate.ai');
   protected sidenavService = inject(SidenavService);
-  protected headerService = inject(HeaderService);
   private router = inject(Router);
   private session = inject(SessionService);
   private sessionList = inject(SessionListService);
   private dockedPane = inject(DockedPaneService);
   private titleService = inject(Title);
   private branding = inject(BrandingService);
-  private searchDialog = inject(SearchDialogService);
   private shortcuts = inject(KeyboardShortcutsService);
   protected readonly conversationSearchOn = inject(FEATURES).conversationSearch;
-  protected readonly searchTooltip = withShortcut('Search', 'search');
-  protected readonly searchShortcutAria = shortcutAria('search');
-  protected readonly newChatTooltip = withShortcut('New chat', 'newConversation');
-  protected readonly newChatShortcutAria = shortcutAria('newConversation');
-  protected readonly expandSidebarTooltip = withShortcut('Expand sidebar', 'toggleSidebar');
-  protected readonly sidebarShortcutAria = shortcutAria('toggleSidebar');
 
   /** Re-read on every completed navigation; the value itself is unused,
    *  it exists so `minimalChrome` recomputes when the route changes. */
@@ -138,14 +129,6 @@ export class App {
       document.addEventListener('visibilitychange', handler);
       destroyRef.onDestroy(() => document.removeEventListener('visibilitychange', handler));
     }
-  }
-
-  protected openSearch(): void {
-    void this.searchDialog.open();
-  }
-
-  newChat() {
-    this.router.navigate(['']);
   }
 
   /**

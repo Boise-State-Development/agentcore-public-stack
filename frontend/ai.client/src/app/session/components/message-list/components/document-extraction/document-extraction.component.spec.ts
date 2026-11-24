@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { DocumentExtractionComponent } from './document-extraction.component';
 import { ArtifactStateService } from '../../../../services/artifacts/artifact-state.service';
+import { FilePreviewStateService } from '../../../../services/file-preview/file-preview-state.service';
 import type {
   DocumentExtractionField,
   DocumentExtractionRun,
@@ -52,6 +53,7 @@ const openArtifactPanel = vi.fn();
 
 async function render(
   runs: DocumentExtractionRun[],
+  { previewPane = true }: { previewPane?: boolean } = {},
 ): Promise<ComponentFixture<DocumentExtractionComponent>> {
   TestBed.resetTestingModule();
   await TestBed.configureTestingModule({
@@ -63,6 +65,9 @@ async function render(
       },
     ],
   }).compileComponents();
+  // In the chat the preview pane is on the page; the workflow designer's
+  // test run renders the same table without one.
+  if (previewPane) TestBed.inject(FilePreviewStateService).registerHost();
   const fixture = TestBed.createComponent(DocumentExtractionComponent);
   fixture.componentRef.setInput('runs', runs);
   await fixture.whenStable();
@@ -256,6 +261,82 @@ describe('DocumentExtractionComponent', () => {
       runs[1] = { ...runs[1], schemaEnforced: false };
       const fixture = await render(runs);
       expect(text(fixture)).toContain('not enforced for nih-par-24.pdf');
+    });
+  });
+
+  describe('page links into the PDF', () => {
+    const pdfRun = () =>
+      run({
+        filename: 'award.pdf',
+        fields: [
+          field({ locator: { kind: 'page', value: 3, precision: 'measured' } }),
+          field({
+            name: 'deadline',
+            title: 'Deadline',
+            value: 'October 18, 2023',
+            state: 'quote_unsupported',
+            quote: 'Full proposal deadline: October 18',
+            locator: { kind: 'page', value: 5, precision: 'estimated' },
+          }),
+        ],
+      });
+    const links = (f: ComponentFixture<DocumentExtractionComponent>) => [
+      ...host(f).querySelectorAll<HTMLButtonElement>('[data-testid="extraction-page-link"]'),
+    ];
+
+    it('links each located page in a single PDF’s Source column', async () => {
+      const fixture = await render([pdfRun()]);
+      expect(links(fixture).map(b => b.textContent?.trim())).toEqual(['page 3', 'about page 5']);
+      expect(links(fixture)[1].getAttribute('aria-label')).toBe('Open award.pdf at about page 5');
+      expect(text(fixture)).toContain('not in the quoted passage on about page 5');
+    });
+
+    it('opens the PDF at the page with the passage to highlight', async () => {
+      const fixture = await render([pdfRun()]);
+      links(fixture)[0].click();
+      expect(TestBed.inject(FilePreviewStateService).openFile()).toEqual({
+        uploadId: 'up-1',
+        filename: 'award.pdf',
+        page: 3,
+        quote: 'Awards will not exceed $500,000 in total costs.',
+      });
+    });
+
+    it('puts the link in the grid’s detail, never inside a cell button', async () => {
+      const fixture = await render([run(), { ...pdfRun(), uploadId: 'up-pdf' }]);
+      // The first unsupported value (award.pdf's deadline) shows unclicked.
+      const detail = host(fixture).querySelector('.detail')!;
+      const link = detail.querySelector<HTMLButtonElement>('[data-testid="extraction-page-link"]')!;
+      expect(link.textContent?.trim()).toBe('about page 5');
+      expect(host(fixture).querySelector('tbody [data-testid="extraction-page-link"]')).toBeNull();
+
+      link.click();
+      expect(TestBed.inject(FilePreviewStateService).openFile()).toMatchObject({
+        uploadId: 'up-pdf',
+        page: 5,
+      });
+    });
+
+    it('does not link a value the document does not answer', async () => {
+      const fixture = await render([
+        run({
+          filename: 'award.pdf',
+          fields: [field({ value: '', locator: { kind: 'page', value: 2, precision: 'measured' } })],
+        }),
+      ]);
+      expect(links(fixture)).toHaveLength(0);
+    });
+
+    it('leaves lines in a non-PDF as plain text', async () => {
+      const fixture = await render([run()]);
+      expect(links(fixture)).toHaveLength(0);
+      expect(text(fixture)).toContain('found on line 88');
+    });
+
+    it('offers no links where there is no preview pane to open them in', async () => {
+      const fixture = await render([pdfRun()], { previewPane: false });
+      expect(links(fixture)).toHaveLength(0);
+      expect(text(fixture)).toContain('found on page 3');
     });
   });
 });

@@ -5,7 +5,7 @@ import { TestBed } from '@angular/core/testing';
 import { Router, RouterOutlet, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { Dialog } from '@angular/cdk/dialog';
-import { TooltipDirective } from './components/tooltip/tooltip.directive';
+import { ShellControlsComponent } from './components/shell-controls/shell-controls.component';
 import { SessionService } from './auth/session.service';
 import { SessionService as SessionListService } from './session/services/session/session.service';
 import { BrandingService } from '../branding/branding.service';
@@ -82,7 +82,7 @@ describe('App shell: the docked-pane gutter does not outlive the conversation', 
       ],
     });
     TestBed.overrideComponent(App, {
-      set: { imports: [RouterOutlet, TooltipDirective, StubSidenav, StubErrorToast, StubToast, StubBackgroundTaskToasts] },
+      set: { imports: [RouterOutlet, ShellControlsComponent, StubSidenav, StubErrorToast, StubToast, StubBackgroundTaskToasts] },
     });
   }, IMPORT_TIMEOUT_MS);
 

@@ -36,12 +36,14 @@ import os
 from typing import Any, Dict, List, Optional
 
 from apis.shared.aws_clients import get_client
+from apis.shared.costs.side_call_metering import TOOL_SUMMARY, schedule_side_call_cost
+from apis.shared.models.task_models import TaskModelSlot, resolve_task_model
 
 logger = logging.getLogger(__name__)
 
-# Nova Micro: the cheapest Bedrock model that reliably follows a one-line
-# instruction. Same model the conversation-title side-channel uses.
-_MODEL_ID = "us.amazon.nova-micro-v1:0"
+# The model is the admin's Task models choice ("Tool activity summaries"), Nova
+# Micro by default: the cheapest Bedrock model that reliably follows a one-line
+# instruction (`task_model_defaults.TOOL_SUMMARY_DEFAULT_MODEL_ID`).
 # The summary is one short sentence; anything longer is the model ignoring the
 # brief, and the store clamps it again on write. Headroom matters more than
 # tightness here: a generation that hits this ceiling is DISCARDED (see
@@ -208,7 +210,12 @@ def _converse(region: str, **kwargs: Any) -> Dict[str, Any]:
     return get_client("bedrock-runtime", region).converse(**kwargs)
 
 
-async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
+async def summarize_tool_batch(
+    calls: List[Dict[str, Any]],
+    *,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Optional[str]:
     """Summarize one finished tool batch, or return ``None``.
 
     ``calls`` are the bounded records captured by ``AgentStatusHook`` —
@@ -221,6 +228,10 @@ async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
     client, a model error, or an empty generation. Every one of those means
     "keep showing the deterministic line", which is why they share a return
     value instead of raising.
+
+    With ``session_id`` and ``user_id``, the model call writes its cost row
+    (``callKind: "tool_summary"``) in the background once it returns. A batch
+    headed without a model call writes none.
     """
     from apis.shared.feature_flags import tool_summaries_enabled
 
@@ -233,22 +244,28 @@ async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
         return _failure_heading(calls)
 
     try:
+        # Read through the per-process config cache, inside this side-channel
+        # task, which the stream never waits on.
+        choice = await resolve_task_model(TaskModelSlot.TOOL_SUMMARY)
         # boto3's converse() is synchronous — awaited inline it would block
-        # the event loop for the whole Nova round trip, stalling the agent
+        # the event loop for the whole round trip, stalling the agent
         # stream this task runs concurrently with.
         response = await asyncio.to_thread(
             _converse,
             os.environ.get("AWS_REGION", "us-west-2"),
-            modelId=_MODEL_ID,
+            **choice.converse_kwargs(),
             messages=[{"role": "user", "content": [{"text": _build_prompt(calls)}]}],
             system=[{"text": _SUMMARY_SYSTEM_PROMPT}],
             # Temperature only: Claude 4.5+ rejects `temperature` and `topP`
-            # together, which would silently fail every summary if
-            # `_MODEL_ID` ever moved to one.
-            inferenceConfig={
-                "temperature": 0.2,
-                "maxTokens": _MAX_OUTPUT_TOKENS,
-            },
+            # together, which would silently fail every summary on an
+            # assigned Claude model. A row that leaves temperature out (Claude 5.x) gets none.
+            inferenceConfig=choice.inference_config(temperature=0.2, max_tokens=_MAX_OUTPUT_TOKENS),
+        )
+        # Billed whatever it returned, so metered before any discard below. Fire-and-forget:
+        # the stream never waits on it, and a summary task cancelled with the stream still
+        # leaves the row.
+        schedule_side_call_cost(
+            call_kind=TOOL_SUMMARY, session_id=session_id, user_id=user_id, choice=choice, response=response
         )
         # A generation cut off at the token ceiling is a fragment, not a
         # summary, and cleaning cannot rescue one — the missing half is the
@@ -267,7 +284,12 @@ async def summarize_tool_batch(calls: List[Dict[str, Any]]) -> Optional[str]:
             logger.debug("Tool-batch summary stopped with stopReason=%s; discarding", stop_reason)
             return None
 
-        summary = _clean(response["output"]["message"]["content"][0]["text"])
+        # The first text block: an assigned reasoning model may open with a reasoning block.
+        text = next(
+            (b["text"] for b in response["output"]["message"]["content"] if isinstance(b.get("text"), str)),
+            "",
+        )
+        summary = _clean(text)
         if not summary:
             return None
         return summary

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, resource } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { NgTemplateOutlet } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { NgIcon, provideIcons } from '@ng-icons/core';
@@ -21,6 +21,9 @@ interface ListRow {
  * a skill, and a skill isn't shared person to person, so this page has no Share.
  *
  * New starts a blank draft or the one template; nothing is stored until the designer saves.
+ *
+ * The list is the service's, kept for the tab: coming back shows it at once and refreshes it
+ * behind the copy shown, so only the first visit has a "Loading" line.
  */
 @Component({
   selector: 'app-workflows-page',
@@ -56,8 +59,25 @@ interface ListRow {
           </div>
         </div>
 
-        @if (list.isLoading()) {
-          <p class="text-sm/6 text-gray-600 dark:text-gray-400" role="status">Loading workflows…</p>
+        @if (!list.hasValue() && list.isLoading()) {
+          <p class="sr-only" role="status">Loading workflows…</p>
+          <!-- Rows shaped like the real ones (same height and spacing), so nothing moves when the list arrives. -->
+          <div aria-hidden="true" class="animate-pulse motion-reduce:animate-none">
+            <div class="flex h-7 items-center">
+              <div class="h-4 w-16 rounded-sm bg-gray-200 dark:bg-gray-700"></div>
+            </div>
+            <ul class="mt-1">
+              @for (width of skeletonWidths; track $index) {
+                <li class="flex items-center gap-4 border-b border-gray-100 py-3.5 last:border-0 dark:border-white/5">
+                  <div class="size-9 shrink-0 rounded-xl bg-gray-100 dark:bg-gray-700/50"></div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex h-6 items-center"><div class="h-3.5 rounded-sm bg-gray-200 dark:bg-gray-700" [class]="width"></div></div>
+                    <div class="flex h-5 items-center"><div class="h-3 w-28 rounded-sm bg-gray-100 dark:bg-gray-700/50"></div></div>
+                  </div>
+                </li>
+              }
+            </ul>
+          </div>
         } @else if (list.error()) {
           <div role="alert" class="rounded-2xl border border-state-danger-200 bg-state-danger-50 px-4 py-3 text-sm/6 text-state-danger-800 dark:border-state-danger-800/60 dark:bg-state-danger-900/20 dark:text-state-danger-300">
             Your workflows couldn’t be loaded.
@@ -134,7 +154,14 @@ export class WorkflowsPage {
 
   protected readonly template = PROPOSAL_REVIEW_TEMPLATE;
 
-  protected readonly list = resource({ loader: () => this.workflows.listQuietly() });
+  /** Title widths for the first-load skeleton's rows, varied so it reads as a list, not a block. */
+  protected readonly skeletonWidths = ['w-2/5', 'w-1/3', 'w-1/2'];
+
+  protected readonly list = this.workflows.workflows;
+
+  constructor() {
+    this.workflows.openList();
+  }
 
   private readonly rows = computed<ListRow[]>(() =>
     (this.list.hasValue() ? this.list.value() : []).map((summary) => {

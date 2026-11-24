@@ -186,6 +186,9 @@ CALL_ROW_PROJECTION: Tuple[str, ...] = (
     # Set on a call that is not a turn (a handoff brief): a closed vocabulary,
     # no content. Absent on every turn's rows.
     "callKind",
+    # A task-model side call on its slot's uncataloged default, which carries no
+    # cost by design (side_call_metering): a boolean.
+    "unpricedDefault",
     "prefixFingerprints",
     "contextWindow",
     # The call billed on its model's long-context row: a boolean, and the
@@ -236,6 +239,7 @@ LEDGER_ROW_PROJECTION: Tuple[str, ...] = (
     "appVersion",
     "build",
     "callKind",
+    "unpricedDefault",
     "modelInfo.modelId",
     "modelInfo.pricingSnapshot.inputPricePerMtok",
     "tokenUsage",

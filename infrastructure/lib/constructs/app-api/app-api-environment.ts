@@ -396,6 +396,9 @@ export function buildAppApiEnvironment(
     // AWS Limits (opt-in while in development): gates /admin/aws-limits.
     // app-api only; the Runtime never reads Service Quotas.
     AWS_LIMITS_ENABLED: config.awsLimits.enabled ? 'true' : 'false',
+    // Organize lists (opt-in while in development): gates
+    // /users/me/arrangements/*. app-api only; nothing on the turn path reads it.
+    ORGANIZE_LISTS_ENABLED: config.organizeLists.enabled ? 'true' : 'false',
     // Handoffs (opt-in while in development): gates /sessions/{id}/handoffs.
     HANDOFFS_ENABLED: config.handoffs.enabled ? 'true' : 'false',
     // Workflow runs (opt-in while in development): gates
@@ -471,9 +474,14 @@ export function buildAppApiEnvironment(
     // Typed structured extraction (docs/specs/structured-extraction.md).
     // app-api's share is the read side: `GET /messages` replays the stored
     // `EXTR#` rows, which the SSE event does not re-stream. In development, so
-    // only "true" enables. The model id is deliberately NOT set here — app-api
-    // never makes the extraction call.
+    // only "true" enables. app-api never makes the extraction call; it reads the
+    // model id only to show the deployment's default on the admin Task models tab
+    // (docs/specs/admin-model-assignments.md), so it rides along only while on,
+    // exactly as the Runtime's copy does.
     DOCUMENT_EXTRACT_ENABLED: config.documentExtract.enabled ? 'true' : 'false',
+    ...(config.documentExtract.enabled
+      ? { DOCUMENT_EXTRACT_MODEL_ID: config.documentExtract.modelId }
+      : {}),
 
     // Field-set authoring (docs/specs/field-set-authoring.md §7): the
     // `/skills/mine/{id}/field-sets` routes. app-api only; the Runtime resolves
@@ -482,6 +490,7 @@ export function buildAppApiEnvironment(
     // Skill bundle import: the `/skills/mine/import*` routes (a `.zip` or a
     // public GitHub path). app-api only. In development, so only "true" enables.
     SKILL_BUNDLE_IMPORT_ENABLED: config.skillBundleImport.enabled ? 'true' : 'false',
+    SKILL_VERSION_HISTORY_ENABLED: config.skillVersionHistory.enabled ? 'true' : 'false',
 
     // Assistant KB full-context mode. app-api never sends a knowledge base to a
     // model; its share is `GET /assistants/{id}/knowledge-base/mode`, which tells

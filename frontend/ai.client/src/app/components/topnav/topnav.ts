@@ -129,14 +129,6 @@ export class Topnav {
     }
   ];
 
-  newChat() {
-    this.router.navigate(['']);
-  }
-
-  openSidenav() {
-    this.sidenavService.open();
-  }
-
   /**
    * Enters inline rename mode, seeding the input with the current title and
    * focusing it once the template re-renders.

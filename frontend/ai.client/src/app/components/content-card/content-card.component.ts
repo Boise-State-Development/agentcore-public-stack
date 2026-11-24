@@ -53,7 +53,9 @@ export const OUTPUT_CARD_HOST_CLASS = 'block w-full';
  * - `[contentCardAction]`: the footer's primary action.
  *
  * With `bleed`, the preview fills the tray edge to edge with no sheet, for
- * images. `progress` draws a bar along the tray's bottom edge, above the
+ * images. With `fit` as well, the tray is as tall as its preview and the card
+ * stays upright at every width, for an image shown whole instead of cropped
+ * to the tray. `progress` draws a bar along the tray's bottom edge, above the
  * sheet. Every layer is stacked inside the card (`isolate`), so nothing in it
  * can rise above a sticky bar or a neighbouring card.
  */
@@ -73,7 +75,7 @@ export const OUTPUT_CARD_HOST_CLASS = 'block w-full';
     >
       <div class="relative shrink-0 overflow-hidden" [class]="trayClass()">
         @if (bleed()) {
-          <div class="absolute inset-0">
+          <div [class]="fit() ? '' : 'absolute inset-0'">
             <ng-container [ngTemplateOutlet]="previewSlot" />
           </div>
         } @else {
@@ -138,7 +140,7 @@ export const OUTPUT_CARD_HOST_CLASS = 'block w-full';
              pushed right, so the name has the half's whole width and the
              card one row less height. -->
         <div [class]="actionsClass()">
-        @if (size() === 'lg') {
+        @if (sideways()) {
           <p
             class="mr-auto hidden min-w-0 items-center gap-1.5 @md:flex"
             [class]="metaClass()"
@@ -219,6 +221,11 @@ export class ContentCardComponent {
   readonly tone = input<'default' | 'danger'>('default');
   readonly size = input<ContentCardSize>('md');
   readonly bleed = input(false);
+  /**
+   * The tray takes its preview's height, and an output card never lies on its
+   * side. Use with `bleed`.
+   */
+  readonly fit = input(false);
   /** 0–100 draws the bar; null draws none. */
   readonly progress = input<number | null>(null);
   readonly menuItems = input<ContentCardMenuItem[]>([]);
@@ -230,12 +237,15 @@ export class ContentCardComponent {
     { originX: 'end', originY: 'top', overlayX: 'end', overlayY: 'bottom', offsetY: -4 },
   ];
 
+  /** An output card lies on its side when it has the room; a fitted one never does. */
+  protected readonly sideways = computed(() => this.size() === 'lg' && !this.fit());
+
   protected readonly frameClass = computed(() => {
     const ring =
       this.tone() === 'danger'
         ? 'ring-1 ring-state-danger-300 dark:ring-state-danger-800'
         : 'ring-1 ring-gray-200 dark:ring-white/10';
-    return `${ring} ${this.size() === 'lg' ? 'flex-col @md:flex-row' : 'flex-col'}`;
+    return `${ring} ${this.sideways() ? 'flex-col @md:flex-row' : 'flex-col'}`;
   });
 
   protected readonly trayClass = computed(() => {
@@ -243,7 +253,13 @@ export class ContentCardComponent {
     // An output's tray is the left half of the card, so its height is the
     // card's; the others' trays sit on top at full width, as an output's does
     // too when the card is under 28rem.
-    const box = size === 'lg' ? 'h-24 w-full @md:h-auto @md:min-h-24 @md:w-1/2' : size === 'md' ? 'h-36' : 'h-21';
+    const box = this.fit()
+      ? 'w-full'
+      : size === 'lg'
+        ? 'h-24 w-full @md:h-auto @md:min-h-24 @md:w-1/2'
+        : size === 'md'
+          ? 'h-36'
+          : 'h-21';
     const pad = this.bleed() ? '' : size === 'lg' ? 'px-4 pt-3.5' : size === 'md' ? 'px-6 pt-5' : 'px-3.5 pt-3';
     const bg =
       this.tone() === 'danger'
@@ -258,7 +274,7 @@ export class ContentCardComponent {
    * own rows must never make the card taller.
    */
   protected readonly sheetClass = computed(() =>
-    this.size() === 'lg' ? '@md:absolute @md:inset-x-4 @md:top-3.5 @md:bottom-0 @md:h-auto' : '',
+    this.sideways() ? '@md:absolute @md:inset-x-4 @md:top-3.5 @md:bottom-0 @md:h-auto' : '',
   );
 
   protected readonly footClass = computed(() => {
@@ -267,26 +283,27 @@ export class ContentCardComponent {
         ? 'border-state-danger-200 dark:border-state-danger-900'
         : 'border-gray-200 dark:border-white/10';
     const size = this.size();
-    const side = size === 'lg' ? 'border-t @md:border-t-0 @md:border-l' : 'border-t';
+    const side = this.sideways() ? 'border-t @md:border-t-0 @md:border-l' : 'border-t';
     const pad = size === 'sm' ? 'gap-1.5 py-1.5 pl-3 pr-2' : 'gap-3 px-4 py-3';
     // A wide output card stacks its name over its actions.
-    const flow = size === 'lg' ? '@md:flex-col @md:items-start @md:justify-center @md:gap-2' : '';
+    const flow = this.sideways() ? '@md:flex-col @md:items-start @md:justify-center @md:gap-2' : '';
     return `${side} ${border} ${pad} ${flow}`;
   });
 
   /** Takes the row's free width; in a wide output card, the whole column's. */
   protected readonly textClass = computed(() =>
-    this.size() === 'lg' ? 'flex-1 @md:w-full @md:flex-none' : 'flex-1',
+    this.sideways() ? 'flex-1 @md:w-full @md:flex-none' : 'flex-1',
   );
 
   /** Inline in the footer row, except stacked under the name in a wide output card. */
-  protected readonly actionsClass = computed(() =>
-    this.size() === 'lg' ? 'flex shrink-0 items-center gap-2 @md:w-full @md:shrink' : 'contents',
-  );
+  protected readonly actionsClass = computed(() => {
+    if (this.size() !== 'lg') return 'contents';
+    return `flex shrink-0 items-center gap-2 ${this.sideways() ? '@md:w-full @md:shrink' : ''}`;
+  });
 
   /** The meta line under the name; a wide output card shows it in its actions row instead. */
   protected readonly nameMetaClass = computed(() =>
-    this.size() === 'lg' ? `${this.metaClass()} @md:hidden` : this.metaClass(),
+    this.sideways() ? `${this.metaClass()} @md:hidden` : this.metaClass(),
   );
 
   /**

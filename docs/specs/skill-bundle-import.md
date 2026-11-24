@@ -2,7 +2,7 @@
 
 **Status:** in development behind `SKILL_BUNDLE_IMPORT_ENABLED` (off by default).
 **Extends:** `skills-as-agent-primitive.md` §7 ("zip support still deferred"), which
-this closes for **My Skills**. The admin catalog keeps its single-`SKILL.md` import.
+this closes for **My Skills** and, since §6a, for the **admin catalog** too.
 
 ## 1. Why
 
@@ -165,11 +165,38 @@ A failure after step 2 leaves new bytes under some live keys while the row
 still describes the old manifest: the same exposure a hand re-upload has today.
 Pinned versions read frozen content-addressed copies, so no project sees it.
 
+## 6a. The admin catalog
+
+The catalog gets the same import under the same flag: `POST /admin/skills/import/preview`,
+`POST /admin/skills/import` and `POST /admin/skills/{skill_id}/import`, behind
+`admin.skills` and the catalog predicate (a user-authored skill is a 404, as on
+every other admin route). The two tiers differ only in who may write which skill,
+so they share everything else:
+
+- **Backend.** `apis/app_api/skills/bundle_import_core.py` holds the wire models,
+  the source loader (`load_source`) and the preview builder (`build_preview`);
+  each tier's routes add only their auth, their target lookup and their service
+  call. `SkillCatalogService.import_bundle` is the catalog twin of
+  `UserSkillService.import_bundle`: one file writer (`put_imported_files`), the
+  same D3 conflict checks and the same audit actions.
+- **SPA.** `shared/skills/skill-bundle-import.component.ts` takes the tier's
+  service as `api` (`SkillBundleImportApi`, implemented by `MySkillService` and
+  `AdminSkillService`) and emits that tier's skill. Both skill forms render it.
+
+What the catalog does differently:
+
+- An import creates a **draft** with no role grants, so no one's agent sees it
+  until an admin activates and grants it (the form says so before Import). The id
+  comes from the frontmatter `name`, suffixed past both a taken id and a taken
+  activation name, the rule `create_skill` enforces.
+- A re-import keeps the display name, status, category and grants, and asks for
+  no reach confirmation: an admin edit of a catalog skill does not either.
+
 ## 7. Not in this change
 
 Private repositories (would need a GitHub connector token), branch names with
-`/`, admin-catalog bundle import, scheduled auto-refresh (would quietly change a
-skill under its users; refresh stays a click).
+`/`, scheduled auto-refresh (would quietly change a skill under its users;
+refresh stays a click).
 
 Exporting a skill as a zip was built separately, with no flag of its own:
 `GET /skills/mine/{skill_id}/export` (the owner only) and

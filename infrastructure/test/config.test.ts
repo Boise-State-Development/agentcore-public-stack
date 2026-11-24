@@ -103,6 +103,8 @@ const OBSERVABILITY_ENV_KEYS = [
   'CDK_OBSERVABILITY_PROMPT_CACHE_AVOIDABLE_MISS_THRESHOLD',
   'CDK_OBSERVABILITY_PROMPT_CACHE_WASTED_USD_THRESHOLD',
   'CDK_OBSERVABILITY_PROMPT_CACHE_SESSION_WASTED_USD_THRESHOLD',
+  'CDK_OBSERVABILITY_TURN_PRELUDE_P50_MS',
+  'CDK_OBSERVABILITY_TURN_PRELUDE_MIN_TURNS',
   'CDK_OBSERVABILITY_BEDROCK_TPM_QUOTA_PERCENT',
   'CDK_OBSERVABILITY_BEDROCK_TPM_QUOTAS',
   'CDK_OBSERVABILITY_RUNTIME_LOG_RETENTION_SWEEP_ENABLED',
@@ -1192,6 +1194,26 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Skill version history feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_SKILL_VERSION_HISTORY_ENABLED;
+    });
+
+    test('defaults to disabled when unset or empty', () => {
+      delete process.env.CDK_SKILL_VERSION_HISTORY_ENABLED;
+      expect(loadConfig(app).skillVersionHistory.enabled).toBe(false);
+      process.env.CDK_SKILL_VERSION_HISTORY_ENABLED = '';
+      expect(loadConfig(app).skillVersionHistory.enabled).toBe(false);
+    });
+
+    test('only "true" turns it on', () => {
+      process.env.CDK_SKILL_VERSION_HISTORY_ENABLED = ' True ';
+      expect(loadConfig(app).skillVersionHistory.enabled).toBe(true);
+      process.env.CDK_SKILL_VERSION_HISTORY_ENABLED = 'yes';
+      expect(loadConfig(app).skillVersionHistory.enabled).toBe(false);
+    });
+  });
+
   // ============================================================
   // AWS Limits feature flag — opt-in while in development
   // ============================================================
@@ -1219,6 +1241,36 @@ describe('RAG Ingestion Configuration', () => {
     test('anything but "true" leaves it off', () => {
       process.env.CDK_AWS_LIMITS_ENABLED = 'yes';
       expect(loadConfig(app).awsLimits.enabled).toBe(false);
+    });
+  });
+
+  // ============================================================
+  // Organize lists feature flag — opt-in while in development
+  // ============================================================
+
+  describe('Organize lists feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_ORGANIZE_LISTS_ENABLED;
+    });
+
+    test('defaults to disabled when CDK_ORGANIZE_LISTS_ENABLED is unset', () => {
+      delete process.env.CDK_ORGANIZE_LISTS_ENABLED;
+      expect(loadConfig(app).organizeLists.enabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_ORGANIZE_LISTS_ENABLED = '';
+      expect(loadConfig(app).organizeLists.enabled).toBe(false);
+    });
+
+    test('CDK_ORGANIZE_LISTS_ENABLED="true" turns it on', () => {
+      process.env.CDK_ORGANIZE_LISTS_ENABLED = ' TRUE ';
+      expect(loadConfig(app).organizeLists.enabled).toBe(true);
+    });
+
+    test('anything but "true" leaves it off', () => {
+      process.env.CDK_ORGANIZE_LISTS_ENABLED = 'yes';
+      expect(loadConfig(app).organizeLists.enabled).toBe(false);
     });
   });
 
@@ -3034,6 +3086,8 @@ describe('Observability Configuration', () => {
       app.node.setContext('observability.promptCacheAvoidableMissThreshold', '22');
       app.node.setContext('observability.promptCacheWastedUsdThreshold', '2.5');
       app.node.setContext('observability.promptCacheSessionWastedUsdThreshold', '23');
+      app.node.setContext('observability.turnPreludeP50Ms', '1250');
+      app.node.setContext('observability.turnPreludeMinTurns', '150');
 
       expect(loadConfig(app).observability).toEqual({
         alarmTopicEnabled: false,
@@ -3057,6 +3111,8 @@ describe('Observability Configuration', () => {
         promptCacheAvoidableMissThreshold: 22,
         promptCacheWastedUsdThreshold: 2.5,
         promptCacheSessionWastedUsdThreshold: 23,
+        turnPreludeP50Ms: 1250,
+        turnPreludeMinTurns: 150,
         bedrockTpmQuotaPercent: OBSERVABILITY_DEFAULT_BEDROCK_TPM_QUOTA_PERCENT,
         bedrockTpmQuotas: {},
       });

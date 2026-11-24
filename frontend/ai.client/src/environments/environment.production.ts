@@ -36,7 +36,10 @@ export const environment = {
         // off by default; #1798).
         documentExtract: true,
         fieldSetAuthoring: true,
-        skillBundleImport: false,
+        // The `production` GitHub environment sets CDK_SKILL_BUNDLE_IMPORT_ENABLED=true
+        // from 1.40.0 (in development, off by default; #1798).
+        skillBundleImport: true,
+        skillVersionHistory: false,
         handoffs: false,
         handoffBrief: false,
         workflowRuns: false,
@@ -47,10 +50,14 @@ export const environment = {
         sessionRewind: true,
         sessionFork: true,
         quotaRequests: false,
-        projectFileReadiness: false,
+        // The `production` GitHub environment sets CDK_PROJECT_FILE_READINESS_ENABLED=true
+        // and CDK_RELEASE_LEDGER_ENABLED=true from 1.39.0 (in development, off by
+        // default; #1798).
+        projectFileReadiness: true,
         awsLimits: false,
+        organizeLists: false,
         knowledgeBaseMode: true,
-        releaseLedger: false,
+        releaseLedger: true,
         // On in our prod from 1.36.1 (UI only; in development, off by default; #1798).
         attachmentCards: true,
     } satisfies FeatureFlags,

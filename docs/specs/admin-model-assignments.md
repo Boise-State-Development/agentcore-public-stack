@@ -1,6 +1,7 @@
 # Admin model assignments
 
-**Status:** Plan, not built. Audit taken 2026-11-13 on `develop` at `bee114fb9`.
+**Status:** PR 2 + PR 3 built together on 2026-11-23 as the **Task models** tab on Manage
+Models (§8). Audit taken 2026-11-13 on `develop` at `bee114fb9`.
 **Supersedes:** the narrower "admin-configurable model for document extraction"
 follow-up. That model is one slot here (§3, slot 1).
 
@@ -210,6 +211,9 @@ negligible. Once an admin can assign Opus there, that is no longer true. Options
 Recommend **(a)**: it is simple, and the release ledger already handles `callKind`. Its
 write cost needs measuring first.
 
+**Decided and built: (a)**, for all three unmetered tasks (titles, tool summaries and the
+compaction summary). What shipped is in §8.
+
 ---
 
 ## 5. Cleanups that need no setting
@@ -257,3 +261,89 @@ never strands an assignment.
    field), or keep an allowlist in the extraction slot?
 4. **Per-environment defaults:** should an assignment carry across environments (seeded
    by the bootstrap), or stay deliberately per deployment like the catalog?
+
+---
+
+## 8. What was built (2026-11-23)
+
+PR 2 and PR 3 shipped as one change, so no `MODEL_ASSIGNMENTS_ENABLED` flag: with nothing
+assigned every call runs exactly as before, which is the CLAUDE.md case for no flag.
+
+- **Name.** The admin surface calls them *task models*; the code is
+  `apis/shared/models/task_models.py` (registry, resolver, store, the one eligibility rule)
+  and `task_model_defaults.py` (the code defaults, the one file to watch for AWS
+  retirement notices). Routes: `GET /admin/task-models`, `PUT /admin/task-models/{slot}`
+  under `admin.models`, audited as `task_model.updated`.
+- **Slots:** `session_title`, `tool_summary`, `compaction_summary`, `document_extract`.
+  `document_digest` and `voice` are not slots yet (§4.4 option (b) still applies).
+- **Storage** as §4.1: `PK = SK = SYSTEM#TASK_MODELS`, a `slots` map of
+  `{modelId, effort?, updatedAt, updatedBy}`. The catalog scan never sees it.
+- **Effort** (new since the plan): each slot stores an optional effort level, validated
+  against the model row's `effort` param (`allowed`), sent as Anthropic
+  `output_config.effort` in `additionalModelRequestFields`. A level the row stops declaring
+  is dropped at read time.
+- **Temperature.** Titles, tool summaries and compaction send `temperature`; the Claude 5.x
+  rows declare a params map without it, and Bedrock refuses it ("`temperature` is
+  deprecated for this model", seen on dev with Haiku 5.5). A row that declares a params map
+  without `temperature` gets none (`TaskModelChoice.supports_temperature`).
+- **Titles on Claude (fixed after dev QA, 2026-11-24).** The title call sent the opening
+  message raw, so Claude models answered it instead of titling it, and Haiku 5.5 spent a
+  50-token ceiling on default reasoning and returned nothing. The message is now framed as
+  `<message>…</message>` to title, and the ceiling is 300 tokens (the clip still holds a
+  title to 50 characters). Nine models titled 40 of 40 openers; Nova Micro's titles were
+  unchanged. Turning thinking off is not an option: Sonnet 5.5 and Opus 5.5 refuse
+  `thinking.type: disabled`. Tool summaries already frame their input and needed nothing.
+- **Read path** as §4.3, simplified: every slot runs off the TTFT path (titles and tool
+  summaries are side-channel tasks, compaction is in `update_after_turn`, extraction is a
+  tool call), so the resolver awaits the `config_cache` read (60 s TTL, single flight)
+  inside those tasks rather than serving the default on a miss. The admin tab alone reads
+  the catalog uncached, since a catalog write clears the cache only in the app-api task that
+  served it. The turn-path inventory
+  records the one cold-cache `GetItem` as **concurrent** in the title task.
+- **Retirement.** Resolution follows `replacedBy` for the assignment *and* the default. A
+  default with no catalog row (Nova Micro and Nova 2 Lite on dev today) is flagged on the
+  tab, since the catalog's redirect cannot reach it.
+- **Metering (§4.6): option (a), built after the tab (2026-11-24).** Titles, tool
+  summaries and the compaction summary (correcting §3: it was unmetered too) each write one
+  `C#` row per model call. The rows carry `callKind` `session_title`, `tool_summary` or
+  `compaction_summary` and no `messageId`. They are priced from the catalog row of the model
+  that ran (`TaskModelChoice.record`) and count against the user's quota and the session's
+  `totalCost`. The release ledger counts them under `callKind.<kind>`, never as a turn. Every
+  slot is now `metered`, so the tab no longer says *Not metered*.
+  `apis/shared/costs/side_call_metering.py` holds it all:
+  - **Off the first-token path and off the event loop.** The row is scheduled as a
+    fire-and-forget task once the side call's `converse` returns. That is before any check
+    that discards the text, since the call is billed either way. The write itself
+    (`store_message_metadata`, whose DynamoDB calls are synchronous) runs in a worker thread
+    on an event loop of its own. That loop waits for the rollups the store spawns before it
+    closes. The turn-path inventory records the new requests as `concurrent` lines in the
+    title and tool-summary tasks; none is awaited.
+  - **Out of the prompt-cache classifier.** A side call shares no prefix with the turn, so
+    its row is not classified. It is also dropped from a chat call's predecessor window,
+    together with `document_extract` rows, which have the same shape. Otherwise a Nova Micro
+    summary between two chat calls would mark the next one `modelSwitched` and hide its
+    waste as explained. The window was widened from 10 rows to 20 to keep its depth.
+  - **An uncataloged default: a row, no alarm.** Nova Micro and Nova 2 Lite have no catalog
+    row on dev, so a call on a default prices to nothing. The row is still written with its
+    tokens and marked `unpricedDefault`. It fires no `UnmeteredModelCall`, and the ledger
+    leaves it out of `unmeteredCalls`. Adding the catalog row prices every call from then
+    on, and the tab's default notice says so. An assigned model always has a row, so a
+    missing price there still alarms.
+  - **Measured write cost (dev, 2026-11-24).** One row is 13–16 DynamoDB requests and about
+    20 capacity units, nearly all writes:
+    - the `C#` put (6 WCU with its indexes);
+    - the session aggregate (a query and an update);
+    - five user-cost-summary updates;
+    - five or six system and ledger rollup writes.
+
+    At the on-demand rate of $0.625 per million write units, that is about $0.000012 a call,
+    roughly 40% on top of a $0.00003 Nova Micro tool summary. At prod's 26,470 Nova Micro
+    calls in 30 days, it comes to about $0.35 a month. The worker thread held the calling
+    loop's largest stall to 6–12 ms. Awaiting the same write on the loop stalled it for
+    730–800 ms, measured from a laptop; in-region the stall would be shorter, but the
+    request count is the same.
+
+  Extraction was already metered.
+- **Extraction default.** `DOCUMENT_EXTRACT_MODEL_ID` now also reaches app-api while the
+  feature is on, so the tab shows the deployment's real default.
+

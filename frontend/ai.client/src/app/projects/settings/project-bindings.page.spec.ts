@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { Dialog } from '@angular/cdk/dialog';
 import { HttpErrorResponse } from '@angular/common/http';
-import { of, throwError } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BindableItem } from '../../agents/models/agent.model';
 import { AgentService } from '../../agents/services/agent.service';
@@ -10,6 +10,7 @@ import { BoundBinding, Project } from '../models/project.model';
 import { ProjectApiService } from '../services/project-api.service';
 import { TEST_PROJECT, buttonNamed, openProjectPage, provideProjectPageRoute, settlePage } from '../../../testing/project-page';
 import { ProjectBindingsPage } from './project-bindings.page';
+import { SkillScriptStatus, SkillScriptsResponse } from '../../shared/skills/script-review.model';
 import { ProjectSkillDialogComponent } from './components/project-skill-dialog.component';
 
 function bindable(ref: string, label: string, description: string, category?: string): BindableItem {
@@ -28,6 +29,7 @@ describe('ProjectBindingsPage', () => {
     bindings: vi.fn(),
     saveBindings: vi.fn((_id: string, _kind: string, bindings: { ref: string }[]) => of({ bindings, version: 3, canEdit: true })),
     pinSkill: vi.fn(),
+    skillScripts: vi.fn((): Observable<SkillScriptsResponse> => of({ skills: [] })),
   };
   const agents = { loadBindable: vi.fn() };
   const toast = { success: vi.fn(), error: vi.fn() };
@@ -118,7 +120,7 @@ describe('ProjectBindingsPage', () => {
 
     save.click();
     await settlePage(harness);
-    expect(api.saveBindings).toHaveBeenCalledWith('prj_1', 'tools', [{ ref: 'calendar' }, { ref: 'browse_web' }, { ref: 'gone' }]);
+    expect(api.saveBindings).toHaveBeenCalledWith('prj_1', 'tools', [{ ref: 'calendar' }, { ref: 'browse_web' }, { ref: 'gone' }], {});
     expect(toast.success).toHaveBeenCalledWith('Tools saved');
     expect(save.disabled).toBe(true);
     expect(harness.routeDebugElement!.componentInstance.hasUnsavedChanges()).toBe(false);
@@ -185,7 +187,7 @@ describe('ProjectBindingsPage', () => {
       update.click();
       await settlePage(harness);
 
-      expect(api.pinSkill).toHaveBeenCalledWith('prj_1', 'pdf');
+      expect(api.pinSkill).toHaveBeenCalledWith('prj_1', 'pdf', {});
       expect(rowText(el, 'PDF Workflows')).toContain('Pinned to v3 · since Oct 8, 2026.');
       expect(rowFor(el, 'PDF Workflows').querySelector('button')).toBeNull();
       expect(toast.success).toHaveBeenCalledWith('PDF Workflows updated');
@@ -222,6 +224,104 @@ describe('ProjectBindingsPage', () => {
       await settlePage(harness);
       expect(el.querySelector('[role=alert]')?.textContent).toContain('The skill changed while it was being pinned');
       expect(rowText(el, 'PDF Workflows')).toContain('Pinned to v2');
+    });
+  });
+
+  describe('skill scripts (skill-code-sandbox §8.5)', () => {
+    const NOT_ALLOWED: SkillScriptStatus = {
+      skillId: 'pdf',
+      displayName: 'PDF Workflows',
+      version: 2,
+      scriptsHash: '3f2a9c1e' + '0'.repeat(56),
+      state: 'not_allowed',
+      method: null,
+      author: 'Pat',
+      reviewer: null,
+      reviewedAt: null,
+      provenance: { type: 'zip' },
+      scriptsChanged: false,
+      scripts: [{ path: 'scripts/fill.py', size: 400, change: 'new' }],
+      files: [],
+    };
+    const unreviewed = (extra: Record<string, unknown> = {}) =>
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            code: 'skill_scripts_unreviewed',
+            message: 'Review',
+            skills: [{ ...NOT_ALLOWED, fromVersion: null, reviewedAt: null, ...extra }],
+          },
+        },
+      });
+
+    const sheetAnswers = (answer: 'allow' | 'decline' | undefined) =>
+      dialog.open.mockReturnValue({ closed: of(answer) });
+
+    it("notes each bound skill's scripts, and offers Review where they aren't allowed", async () => {
+      api.skillScripts.mockReturnValue(of({ skills: [NOT_ALLOWED] }));
+      const { el } = await openSkills({ pdf: { ref: 'pdf', version: 2, pinnedAt: null, updateAvailable: false } });
+      expect(rowText(el, 'PDF Workflows')).toContain('Scripts not allowed.');
+      const review = rowFor(el, 'PDF Workflows').querySelector('button')!;
+      expect(review.textContent!.trim()).toBe('Review');
+      expect(review.getAttribute('aria-label')).toBe('Review the scripts in PDF Workflows');
+    });
+
+    it('Review allows the scripts by re-pinning the binding with the reviewed hash', async () => {
+      api.skillScripts.mockReturnValue(of({ skills: [NOT_ALLOWED] }));
+      api.pinSkill.mockReturnValue(of({ bindings: [{ ref: 'pdf', version: 2, pinnedAt: null, updateAvailable: false }], version: 4, canEdit: true }));
+      sheetAnswers('allow');
+      const { el, harness } = await openSkills({ pdf: { ref: 'pdf', version: 2, pinnedAt: null, updateAvailable: false } });
+      api.skillScripts.mockReturnValue(of({ skills: [{ ...NOT_ALLOWED, state: 'allowed', method: 'review', reviewedAt: '2026-11-23T10:00:00Z' }] }));
+      rowFor(el, 'PDF Workflows').querySelector('button')!.click();
+      await settlePage(harness);
+      expect(dialog.open).toHaveBeenCalledTimes(1);
+      expect(dialog.open.mock.calls[0][1].data).toMatchObject({ scope: 'project', scopeName: TEST_PROJECT.name, isUpdate: false });
+      expect(api.pinSkill).toHaveBeenCalledWith('prj_1', 'pdf', { scriptsReviewed: { pdf: NOT_ALLOWED.scriptsHash } });
+      expect(rowText(el, 'PDF Workflows')).toContain('Scripts allowed · version 3f2a9c1e · Nov 23, 2026.');
+    });
+
+    it('a save that binds unreviewed scripts opens the sheet and is sent again with the answer', async () => {
+      const conflict = unreviewed();
+      api.saveBindings
+        .mockReturnValueOnce(throwError(() => conflict))
+        .mockImplementationOnce((_id: string, _kind: string, bindings: { ref: string }[]) => of({ bindings, version: 3, canEdit: true }));
+      sheetAnswers('decline');
+      const { el, harness } = await openSkills({});
+      checkboxFor(el, 'PDF Workflows').click();
+      await settlePage(harness);
+      buttonNamed(el, 'Save skills')!.click();
+      await settlePage(harness);
+      expect(api.saveBindings).toHaveBeenNthCalledWith(1, 'prj_1', 'skills', [{ ref: 'pdf' }], {});
+      expect(api.saveBindings).toHaveBeenNthCalledWith(2, 'prj_1', 'skills', [{ ref: 'pdf' }], { scriptsDeclined: ['pdf'] });
+      expect(toast.success).toHaveBeenCalled();
+    });
+
+    it('cancelling the sheet saves nothing and keeps the change to make', async () => {
+      const conflict = unreviewed();
+      api.saveBindings.mockReturnValueOnce(throwError(() => conflict));
+      sheetAnswers(undefined);
+      const { el, harness } = await openSkills({});
+      checkboxFor(el, 'PDF Workflows').click();
+      await settlePage(harness);
+      buttonNamed(el, 'Save skills')!.click();
+      await settlePage(harness);
+      expect(api.saveBindings).toHaveBeenCalledTimes(1);
+      expect(el.querySelector('[role=alert]')).toBeNull();
+      expect(buttonNamed(el, 'Save skills')!.disabled).toBe(false);
+    });
+
+    it('an Update onto changed scripts asks first, and "Keep the reviewed version" leaves the pin', async () => {
+      const conflict = unreviewed({ version: 3, fromVersion: 2, reviewedAt: '2026-11-01T00:00:00Z' });
+      api.pinSkill.mockReturnValue(throwError(() => conflict));
+      sheetAnswers('decline');
+      const { el, harness } = await openSkills({ pdf: { ref: 'pdf', version: 2, pinnedAt: null, updateAvailable: true } });
+      rowFor(el, 'PDF Workflows').querySelector('button')!.click();
+      await settlePage(harness);
+      expect(dialog.open.mock.calls[0][1].data.isUpdate).toBe(true);
+      expect(api.pinSkill).toHaveBeenCalledTimes(1);
+      expect(rowText(el, 'PDF Workflows')).toContain('Pinned to v2');
+      expect(toast.success).not.toHaveBeenCalled();
     });
   });
 

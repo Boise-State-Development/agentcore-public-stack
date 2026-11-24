@@ -25,7 +25,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from apis.shared.costs import ledger_kpis
+from apis.shared.costs import ledger_kpis, ledger_prelude
 from apis.shared.files.source_provenance import STATE_QUOTE_UNSUPPORTED
 from apis.shared.costs.ledger_reader import (
     Unit,
@@ -62,7 +62,12 @@ CAVEAT_CODES = (
     "payload_not_measured",
     "latency_unavailable",
     "latency_mixed_window",
+    "prelude_unavailable",
+    "prelude_below_floor",
+    "prelude_version_scoped",
+    "prelude_mix_shift",
     "coverage_truncated",
+    "predates_chat_split",
 )
 
 Row = Dict[str, Any]
@@ -298,6 +303,49 @@ def _groups(rows_b: Sequence[Row], rows_c: Sequence[Row], label: str) -> List[Di
     return out[:TOP_GROUPS]
 
 
+def _call_kinds(t_b: Mapping[str, Any], t_c: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Calls, cost and mean model first byte per call kind: chat first, then by candidate cost.
+
+    The line that keeps the calls that are not turns (workflow steps, handoff
+    briefs, voice, api-converse, extraction) visible now that the turn KPIs
+    leave them out.
+    """
+    kb, kc = ledger_kpis.call_kind_kpis(t_b), ledger_kpis.call_kind_kpis(t_c)
+    empty: Dict[str, Any] = {}
+    out = []
+    for kind in set(kb) | set(kc):
+        b, c = kb.get(kind, empty), kc.get(kind, empty)
+        out.append({
+            "kind": kind,
+            "calls": _pair(_n(b.get("calls")), _n(c.get("calls"))),
+            "cost": _pair(_value(b.get("cost")), _value(c.get("cost"))),
+            "meanFirstTokenMs": _pair(_value(b.get("meanFirstTokenMs")), _value(c.get("meanFirstTokenMs"))),
+            "firstTokenN": _pair(_n(b.get("meanFirstTokenMs")), _n(c.get("meanFirstTokenMs"))),
+        })
+    out.sort(key=lambda k: (k["kind"] != ledger_kpis.CHAT_KIND, -(k["cost"][1] or 0.0), -k["calls"][1], k["kind"]))
+    return out
+
+
+def _split_caveat(name: str, totals_side: Mapping[str, Any]) -> Optional[Dict[str, str]]:
+    """``predates_chat_split`` when some of a side's rows were written before the chat split."""
+    cov = ledger_kpis.chat_split_coverage(totals_side)
+    if cov["calls"] == 0 or (cov["splitTurns"] >= cov["turns"] and cov["splitCalls"] >= cov["calls"]):
+        return None
+    kpis = ", ".join(ledger_kpis.CHAT_SPLIT_KPIS)
+    if cov["splitCalls"] == 0:
+        return caveat(
+            "predates_chat_split",
+            f"{name} rows predate the chat-only counters: {kpis} and the by-kind cost read — for it, "
+            "and its calls are not split into chat and non-turn kinds",
+        )
+    return caveat(
+        "predates_chat_split",
+        f"{name} {kpis} cover {cov['splitTurns']:,} of {cov['turns']:,} turns and {cov['splitCalls']:,} of "
+        f"{cov['calls']:,} calls: rows written before the chat-only counters are left out, "
+        "and the by-kind cost is over the same part",
+    )
+
+
 #: The key prefix of an item whose cost row predates PR-1's stamps.
 UNSTAMPED_PREFIX = "unstamped#"
 
@@ -357,6 +405,7 @@ def build_readout(
     project_rows: Sequence[Row] = (),
     daily_rollups: Sequence[Row] = (),
     latency: Optional[Mapping[str, Any]] = None,
+    prelude: Optional[Mapping[str, Any]] = None,
     eval_rows: Sequence[Row] = (),
     smoke_rows: Sequence[Row] = (),
     thumbs: Optional[Mapping[str, Any]] = None,
@@ -369,7 +418,8 @@ def build_readout(
     :func:`sole_units_by_date`.
 
     ``latency`` is ``{"baseline": <window latency>, "candidate": …}`` from
-    :mod:`ledger_latency`. ``thumbs`` and ``provenance`` are ``{byKey, coverage}``
+    :mod:`ledger_latency`; ``prelude`` is the same shape from
+    :mod:`ledger_prelude` (per build, not per window). ``thumbs`` and ``provenance`` are ``{byKey, coverage}``
     with keys ``"<appVersion>#<build>|<date>"`` (attributed through each
     item's own cost row), so a side counts only what fell inside its window.
     """
@@ -441,8 +491,17 @@ def build_readout(
         mc = ledger_kpis.model_kpis(totals(grouped_mc.get(model_id, [])))
         by_model[model_id] = _compare(mb, mc, "costPerTurn")
     kpis["costPerTurn"]["byModel"] = by_model
+    split_caveats = [c for c in (_split_caveat("baseline", t_b) if base else None,
+                                 _split_caveat("candidate", t_c)) if c]
+    caveats.extend(split_caveats)
+    # A side with no split rows reads `None` on the chat KPIs because the
+    # counters are missing, not because n is small: `predates_chat_split`
+    # already says so, and `below_floor` would name the wrong reason.
+    unsplit = {side for side, t in (("baseline", t_b), ("candidate", t_c))
+               if t.get("calls") and not t.get("splitCalls")}
     under = [name for name, k in kpis.items()
-             if base and (k["baseline"] is None or k["candidate"] is None) and max(k["n"]) > 0]
+             if base and (k["baseline"] is None or k["candidate"] is None) and max(k["n"]) > 0
+             and not (name in ledger_kpis.CHAT_SPLIT_KPIS and unsplit)]
     for name in under:
         caveats.append(caveat("below_floor", f"{name} under its floor (n={kpis[name]['n'][0]} / {kpis[name]['n'][1]})"))
 
@@ -489,6 +548,10 @@ def build_readout(
                 "latency_mixed_window",
                 "latency percentiles are by time, not by build: a window with a deploy in it mixes builds",
             ))
+
+    # -- prelude (harness time before the first token, per build) -----------------
+    prelude_out, prelude_caveats = compare_prelude(prelude, cand, base)
+    caveats.extend(prelude_caveats)
 
     # -- quality ---------------------------------------------------------------------
     sole = sole_units_by_date(version_rows, selection["byBuild"])
@@ -564,14 +627,104 @@ def build_readout(
         "requestedDays": requested,
         "mixShift": {"warn": bool(shifted) or users_shifted, "models": models, "activeUsers": users},
         "kpis": kpis,
+        "callKinds": _call_kinds(t_b, t_c),
         "tools": tools[:TOP_TOOLS],
         "agents": _groups(_side_rows(agent_rows, base), _side_rows(agent_rows, cand), "agentId"),
         "projects": _groups(_side_rows(project_rows, base), _side_rows(project_rows, cand), "projectId"),
         "latency": latency_out,
+        "prelude": prelude_out,
         "quality": quality,
         "platform": dict(platform) if platform else None,
         "caveats": caveats,
     }
+
+
+def compare_prelude(
+    prelude: Optional[Mapping[str, Any]],
+    cand: Mapping[str, Any],
+    base: Optional[Mapping[str, Any]],
+) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
+    """Pair the per-build prelude stages and decide which moved. ``(prelude bundle, caveats)``.
+
+    A stage moved when both sides have at least :data:`ledger_prelude.MOVED_MIN_N`
+    turns and its p50 changed by more than ``max(MOVED_MIN_MS, MOVED_MIN_RELATIVE ×
+    baseline p50)``; up is ``worse``. Every stage is a duration, so there is no
+    stage without a good direction.
+    """
+    rule = {
+        "minMs": ledger_prelude.MOVED_MIN_MS,
+        "minRelative": ledger_prelude.MOVED_MIN_RELATIVE,
+        "minN": ledger_prelude.MOVED_MIN_N,
+    }
+    out: Dict[str, Any] = {"available": False, "scope": None, "stages": {}, "moved": [], "rule": rule, "mix": None}
+    caveats: List[Dict[str, str]] = []
+    if prelude is None:
+        return out, caveats
+    pb, pc = prelude.get("baseline") or {}, prelude.get("candidate") or {}
+    available = bool(pc.get("available")) and (base is None or bool(pb.get("available")))
+    out["available"] = available
+    if not available:
+        reasons = sorted({str(p.get("reason")) for p in (pb, pc) if p and not p.get("available") and p.get("reason")})
+        caveats.append(caveat(
+            "prelude_unavailable",
+            "per-build prelude stages could not be read from Logs Insights"
+            + (f" ({', '.join(reasons)})" if reasons else ""),
+        ))
+        return out, caveats
+    scopes = {p.get("scope") for p in ((pb, pc) if base else (pc,))}
+    out["scope"] = "build" if scopes == {"build"} else "version"
+    if cand["unit"].is_build and out["scope"] != "build":
+        caveats.append(caveat(
+            "prelude_version_scoped",
+            "a side's build is attributed by commit, not stamped, so its prelude reads every build of its version",
+        ))
+
+    stages_b, stages_c = pb.get("stages") or {}, pc.get("stages") or {}
+    for name in ledger_prelude.STAGES:
+        sb, sc = stages_b.get(name) or {}, stages_c.get(name) or {}
+        n = _pair(int(sb.get("n") or 0), int(sc.get("n") or 0))
+        b50, c50 = sb.get("p50"), sc.get("p50")
+        delta_ms = round(c50 - b50, 1) if b50 is not None and c50 is not None else None
+        direction = None
+        if delta_ms is not None and min(n) >= ledger_prelude.MOVED_MIN_N:
+            bar = max(ledger_prelude.MOVED_MIN_MS, ledger_prelude.MOVED_MIN_RELATIVE * b50)
+            if abs(delta_ms) > bar:
+                direction = "worse" if delta_ms > 0 else "better"
+                out["moved"].append({"stage": name, "deltaMs": delta_ms, "direction": direction})
+        out["stages"][name] = {
+            "p50": _pair(b50, c50),
+            "p90": _pair(sb.get("p90"), sc.get("p90")),
+            "n": n,
+            "deltaMs": delta_ms,
+            "moved": direction,
+        }
+    out["moved"].sort(key=lambda m: (m["direction"] != "worse", -abs(m["deltaMs"])))
+
+    # -- mix: which stages a turn runs depends on what it is ---------------------
+    mix_b, mix_c = pb.get("mix") or {}, pc.get("mix") or {}
+    mix_out: Dict[str, Any] = {"turns": _pair(int(mix_b.get("turns") or 0), int(mix_c.get("turns") or 0))}
+    shifted = []
+    for name, counter in (("assistantShare", "assistantTurns"), ("resumeShare", "resumeTurns")):
+        b = ledger_kpis.share({"x": int(mix_b.get(counter) or 0), "n": int(mix_b.get("turns") or 0)}, "x", "n")["value"]
+        c = ledger_kpis.share({"x": int(mix_c.get(counter) or 0), "n": int(mix_c.get("turns") or 0)}, "x", "n")["value"]
+        mix_out[name] = _pair(b, c)
+        if base and b is not None and c is not None and max(b, c) >= MIX_SHIFT_MIN_SHARE and _relative_shift(b, c):
+            shifted.append(f"{name} {b:.2f} → {c:.2f}")
+    out["mix"] = mix_out
+    if shifted:
+        caveats.append(caveat(
+            "prelude_mix_shift",
+            "prelude turn mix shifted (" + "; ".join(shifted) + "): Agent turns run retrieval and resumes skip "
+            "the build, so read rag, tools and agentBuild beside it",
+        ))
+    total_n = (out["stages"].get("preludeTotalMs") or {}).get("n") or [0, 0]
+    if base and min(total_n) < ledger_prelude.MOVED_MIN_N:
+        caveats.append(caveat(
+            "prelude_below_floor",
+            f"prelude turns under {ledger_prelude.MOVED_MIN_N} on a side (n={total_n[0]} / {total_n[1]}): "
+            "stages are shown but none can be listed as moved",
+        ))
+    return out, caveats
 
 
 def window_span(selection: Mapping[str, Any]) -> Tuple[str, str]:

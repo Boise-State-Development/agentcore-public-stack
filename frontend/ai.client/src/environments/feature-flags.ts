@@ -138,6 +138,18 @@ export interface FeatureFlags {
   skillBundleImport: boolean;
 
   /**
+   * Skill version history (docs/specs/skill-version-history.md): a skill's
+   * History section lists every version, shows what restoring one would
+   * change, downloads it, and restores it as a new version. Backend:
+   * SKILL_VERSION_HISTORY_ENABLED (app-api serves `/skills/mine/{id}/versions*`
+   * and `/admin/skills/{id}/versions*`, which 404 while off). The UI's share is
+   * the History section on an owned skill's Customize page and on the admin
+   * skill edit form. In development: on only in the deployed dev build (the
+   * `development` GitHub environment sets the backend flag); off locally and in prod.
+   */
+  skillVersionHistory: boolean;
+
+  /**
    * Handoffs (docs/specs/agent-handoffs-and-consults.md, Phase 0): a mid-thread
    * `@`-mention opens a review sheet instead of sending, then starts the Agent's
    * conversation in the background while the user stays put, tracked by a
@@ -257,6 +269,13 @@ export interface FeatureFlags {
    * 404s while off). In development, so `false` locally and in prod.
    */
   awsLimits: boolean;
+  /**
+   * Organizing the Agents and Projects pages: Hide, a Hidden filter and a
+   * custom order (docs/specs/agent-project-organization.md). Backend:
+   * ORGANIZE_LISTS_ENABLED (app-api; `/users/me/arrangements/*` 404s while
+   * off). In development: `true` only in `environment.development.ts`, `false` locally and in prod.
+   */
+  organizeLists: boolean;
 
   /**
    * Knowledge-base mode line: one read-only line on the Agent Designer's

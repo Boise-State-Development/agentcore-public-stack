@@ -66,6 +66,10 @@ describe('skill audit records', () => {
   it('labels the skill actions', () => {
     expect(actionLabel('skill.updated')).toBe('Skill updated');
     expect(actionLabel('skill.script_run')).toBe('Skill script run');
+    expect(actionLabel('skill.scripts_reviewed')).toBe('Skill scripts allowed');
+    expect(actionLabel('skill.scripts_review_withdrawn')).toBe('Skill scripts no longer allowed');
+    expect(actionLabel('skill.scripts_switched')).toBe('Skill scripts switched on or off');
+    expect(actionLabel('skill.restored')).toBe('Skill version restored');
     expect(actionLabel('sandbox.code_run')).toBe('Sandbox code run');
   });
 

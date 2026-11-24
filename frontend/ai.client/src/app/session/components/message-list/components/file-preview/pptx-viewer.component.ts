@@ -8,6 +8,7 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import { repairDeckForPreview } from './pptx-preview-repair';
 
 /**
  * Width, in CSS px, the deck is rendered at before it is scaled to fit.
@@ -184,7 +185,14 @@ export class PptxViewerComponent {
 
     try {
       PptxViewerComponent.libraryPromise ??= import('pptx-preview');
-      const { init } = await PptxViewerComponent.libraryPromise;
+      // pptxgenjs decks carry flaws PowerPoint tolerates and `pptx-preview`
+      // does not (missing slide masters, layout background aliases); see
+      // pptx-preview-repair.ts. Repaired beside the library load, so
+      // neither waits on the other.
+      const [{ init }, deck] = await Promise.all([
+        PptxViewerComponent.libraryPromise,
+        repairDeckForPreview(data),
+      ]);
       if (seq !== this.renderSeq) return;
 
       const previewer = init(target, {
@@ -196,7 +204,7 @@ export class PptxViewerComponent {
         // scrollbar and reads as a second, competing set of controls.
         mode: 'list',
       });
-      await previewer.preview(data);
+      await previewer.preview(deck);
 
       if (seq !== this.renderSeq) return;
 

@@ -3,9 +3,12 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ImportPreview, MySkill, SkillImportSource } from '../models/my-skill.model';
-import { MySkillService } from '../services/my-skill.service';
+import { ImportPreview, SkillBundleImportApi, SkillImportSource } from './skill-bundle-import.model';
 import { SkillBundleImportComponent } from './skill-bundle-import.component';
+
+interface FakeSkill {
+  skillId: string;
+}
 
 function preview(overrides: Partial<ImportPreview> = {}): ImportPreview {
   return {
@@ -36,30 +39,29 @@ function preview(overrides: Partial<ImportPreview> = {}): ImportPreview {
   };
 }
 
-const SKILL = { skillId: 'contract_redline' } as MySkill;
+const SKILL: FakeSkill = { skillId: 'contract_redline' };
 
 describe('SkillBundleImportComponent', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   async function render(
-    service: Partial<Record<keyof MySkillService, unknown>>,
-    inputs: { skillId?: string | null; importSource?: SkillImportSource | null } = {},
+    service: Partial<Record<keyof SkillBundleImportApi<FakeSkill>, unknown>>,
+    inputs: { skillId?: string | null; importSource?: SkillImportSource | null; createNote?: string | null } = {},
     extraProviders: unknown[] = [],
   ) {
     TestBed.configureTestingModule({
       imports: [SkillBundleImportComponent],
-      providers: [
-        {
-          provide: MySkillService,
-          useValue: { describeError: (_: unknown, fallback: string) => fallback, ...service },
-        },
-        ...(extraProviders as never[]),
-      ],
+      providers: [...(extraProviders as never[])],
     });
-    const fixture = TestBed.createComponent(SkillBundleImportComponent);
+    const fixture = TestBed.createComponent(SkillBundleImportComponent<FakeSkill>);
+    fixture.componentRef.setInput('api', {
+      describeError: (_: unknown, fallback: string) => fallback,
+      ...service,
+    });
+    fixture.componentRef.setInput('createNote', inputs.createNote ?? null);
     fixture.componentRef.setInput('skillId', inputs.skillId ?? null);
     fixture.componentRef.setInput('importSource', inputs.importSource ?? null);
-    const emitted: MySkill[] = [];
+    const emitted: FakeSkill[] = [];
     fixture.componentInstance.imported.subscribe((s) => emitted.push(s));
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
@@ -110,6 +112,46 @@ describe('SkillBundleImportComponent', () => {
     expect(r.emitted).toEqual([SKILL]);
   });
 
+  it('says a bundle has scripts, and where they come from, above Import (skill-code-sandbox §8.5)', async () => {
+    const previewImport = vi.fn().mockResolvedValue(
+      preview({
+        source: { ...preview().source, owner: 'acme', repo: 'skills', commitSha: 'e4bb5d9aa1' },
+        files: [
+          { path: 'references/nda.md', status: 'added', filename: 'nda.md', kind: 'reference', size: 3, reason: null },
+          { path: 'scripts/fill.py', status: 'added', filename: 'fill.py', kind: 'script', size: 4096, reason: null },
+        ],
+      }),
+    );
+    const r = await render({ previewImport });
+    r.typeUrl('https://github.com/acme/skills/tree/main/skills/redline');
+    r.button('Preview')!.click();
+    await r.settle();
+
+    const block = r.el.querySelector('section[aria-labelledby="bundle-import-scripts"]')!;
+    const text = block.textContent!.replace(/\s+/g, ' ');
+    expect(text).toContain('This skill includes 1 script');
+    expect(text).toContain('Scripts run in a sandbox with no internet access');
+    expect(text).toContain('From acme/skills @ e4bb5d9');
+    expect(text).toMatch(/scripts\/fill\.py\s*· 4 KB/);
+  });
+
+  it('a bundle with no scripts shows no scripts block', async () => {
+    const r = await render({ previewImport: vi.fn().mockResolvedValue(preview()) });
+    r.typeUrl('https://github.com/acme/skills/tree/main/skills/redline');
+    r.button('Preview')!.click();
+    await r.settle();
+    expect(r.el.querySelector('section[aria-labelledby="bundle-import-scripts"]')).toBeNull();
+  });
+
+  it('shows the tier\'s note when creating', async () => {
+    const previewImport = vi.fn().mockResolvedValue(preview());
+    const r = await render({ previewImport }, { createNote: 'Imported as a draft.' });
+    r.typeUrl('https://github.com/acme/skills/tree/main/skills/redline');
+    r.button('Preview')!.click();
+    await r.settle();
+    expect(r.el.textContent).toContain('Imported as a draft.');
+  });
+
   it('asks which skill when the archive holds several, and previews the one picked', async () => {
     const previewImport = vi
       .fn()
@@ -151,6 +193,7 @@ describe('SkillBundleImportComponent', () => {
     expect(previewImport).toHaveBeenCalledWith({ url: source.url, path: 'skills/redline' }, 'contract_redline');
     expect(r.el.textContent).toContain('Changes: instructions.');
     expect(r.el.textContent).toContain('1 file is not in the bundle and will be deleted');
+    expect(r.el.textContent).toContain('1 script changed in this update');
     expect(r.el.textContent).toContain('keep their current version until someone clicks Update');
 
     r.button('Re-import')!.click();

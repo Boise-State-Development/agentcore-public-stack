@@ -68,6 +68,16 @@ class SkillBinding:
     # its harness runs for every member.
     shared: bool
     pinned_version: Optional[int]
+    # Where it is, for acting on it (skill-version-history.md D9). Not compared, so
+    # a binding still equals one built from its four classifying fields.
+    agent_id: str = field(default="", compare=False)
+    # The project, when ``is_project``: the id its settings routes take.
+    project_id: Optional[str] = field(default=None, compare=False)
+    # Whether the skill's owner may move this binding's pin today: their own
+    # Agents and projects, and projects where they are still an editor.
+    can_update: bool = field(default=True, compare=False)
+    # A store Agent with a published version, whose users run that snapshot.
+    published: bool = field(default=False, compare=False)
 
 
 @dataclass
@@ -272,6 +282,10 @@ def bindings_from_items(
                     is_project=is_project,
                     shared=is_project or item.get("visibility") in _SHARED_VISIBILITIES,
                     pinned_version=binding_pin(binding.get("config")) or ref_pin,
+                    agent_id=str(item["assistantId"]),
+                    project_id=item.get("projectId") if is_project else None,
+                    can_update=bool(item.get("_canUpdate", True)),
+                    published=bool(item.get("publishedVersion")),
                 )
             )
             break
@@ -327,7 +341,7 @@ def _query_owned_assistant_bindings(table_name: str, owner_id: str):
     params: Dict[str, Any] = {
         "IndexName": "OwnerStatusIndex",
         "KeyConditionExpression": Key("GSI_PK").eq(f"OWNER#{owner_id}"),
-        "ProjectionExpression": "assistantId, #n, visibility, #k, bindings",
+        "ProjectionExpression": "assistantId, #n, visibility, #k, bindings, projectId, publishedVersion",
         "ExpressionAttributeNames": {"#n": "name", "#k": "kind"},
     }
     items: List[Dict[str, Any]] = []
@@ -370,14 +384,16 @@ def _query_editor_project_harnesses(assistants_table: str, owner_id: str) -> Lis
         return []
 
     repository = ProjectRepository(projects_table)
-    project_ids = [m.project_id for m in repository.list_memberships(email)]
+    roles = {m.project_id: m.role for m in repository.list_memberships(email)}
+    project_ids = list(roles)
     if not project_ids:
         return []
-    names = {
-        project.harness_agent_id: project.name
+    projects = {
+        project.harness_agent_id: project
         for project in repository.batch_get_projects(project_ids).values()
         if project.harness_agent_id
     }
+    names = {agent_id: project.name for agent_id, project in projects.items()}
 
     items: List[Dict[str, Any]] = []
     harness_ids = sorted(names)
@@ -396,7 +412,12 @@ def _query_editor_project_harnesses(assistants_table: str, owner_id: str) -> Lis
             response = dynamodb.batch_get_item(RequestItems=request)
             for raw in response.get("Responses", {}).get(assistants_table, []):
                 item = from_ddb(raw)
+                project = projects.get(item.get("assistantId"))
                 item["name"] = names.get(item.get("assistantId"), item.get("assistantId"))
+                if project is not None:
+                    item["projectId"] = project.project_id
+                    # An editor can move a pin; a member since made a viewer cannot.
+                    item["_canUpdate"] = roles.get(project.project_id) == "editor"
                 items.append(item)
             request = response.get("UnprocessedKeys") or {}
             if not request:

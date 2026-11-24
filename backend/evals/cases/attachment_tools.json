@@ -479,7 +479,7 @@
     },
     "expect": {
       "skill": {
-        "loads": [
+        "reloads_after_cut": [
           "skill_creator"
         ]
       },
@@ -509,6 +509,6 @@
       "site_badge_15.png",
       "site_badge_16.png"
     ],
-    "notes": "Turn 1 activates skill_creator; its sixteen ~4.8k-token images cross Haiku 5.5's 70k hard ceiling, so the turn after it cuts the activation into the summary, which then names skill_creator and says to activate it again. Turn 3 asks for work the skill governs: it passes only if the model calls skills again before answering. On a model whose ceiling this does not cross (Sonnet 5.5, Opus 5.5) the activation is still in context and the case measures whether the model reloads anyway."
+    "notes": "Turn 1 activates skill_creator; its sixteen ~4.8k-token images cross Haiku 5.5's 70k hard ceiling, so turn 2 streams a compaction event and the cut retires the activation into the summary, which names skill_creator and says to activate it again. Turn 3 asks for work the skill governs. skill.reloads_after_cut requires turn 3 to call skills again only when a compaction event followed the activation; on a model whose ceiling this does not cross (Sonnet 5.5, Opus 5.5) no cut happens, the activation is still in context, not reloading is right, and the sample passes on the format checks alone, recorded as uncovered. Covering the reload path on those models would take enough images to cross their ceilings."
   }
 ]

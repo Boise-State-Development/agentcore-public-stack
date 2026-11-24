@@ -52,6 +52,43 @@ Key `resource` patterns:
 - Use `abortSignal` to cancel in-flight requests
 - Check `hasValue()` before accessing `value()` to handle loading/error states
 - Status values: `'idle'`, `'loading'`, `'reloading'`, `'resolved'`, `'error'`, `'local'`
+- `reload()` keeps the current value while it fetches (`'reloading'`). A new `params` value drops it and goes back to `'loading'`
+
+### Lists are cached in a root service, not on the page
+
+A resource is destroyed with the injector that created it. A `resource()` field on a page component therefore fetches again, with a spinner, every time the user comes back. For a list the user returns to, the resource lives in a `providedIn: 'root'` service, loads lazily, and is refreshed by the service's own writes:
+
+```typescript
+@Injectable({ providedIn: 'root' })
+export class ThingsService {
+  private readonly http = inject(HttpClient);
+  private readonly wanted = signal(false);
+
+  /** Idle until a page opens it, so injecting the service elsewhere fetches nothing. */
+  readonly things = resource({
+    params: () => (this.wanted() ? true : undefined),
+    loader: () => firstValueFrom(this.http.get<Thing[]>('/api/things')),
+  });
+
+  /** The page calls this on entry: the first call loads, later ones refresh behind the shown copy. */
+  open(): void {
+    if (!this.wanted()) this.wanted.set(true);
+    else this.things.reload();
+  }
+
+  async remove(id: string): Promise<void> {
+    await firstValueFrom(this.http.delete(`/api/things/${id}`));
+    if (!this.wanted()) return;
+    if (this.things.hasValue()) this.things.set(this.things.value().filter((t) => t.id !== id));
+    this.things.reload();
+  }
+}
+
+// The page: show the loading state only when there is nothing to show yet.
+// @if (!things.hasValue() && things.isLoading()) { Loading… }
+```
+
+Keep a component-level `resource()` for data that belongs to one view and should be read fresh each time, such as a record opened by id. The frontend `CLAUDE.md` ("Lists the user comes back to") has the full rule. `WorkflowsApiService.workflows` is the example in this codebase.
 
 ## Templates
 

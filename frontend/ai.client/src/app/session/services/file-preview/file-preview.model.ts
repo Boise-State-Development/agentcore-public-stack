@@ -4,6 +4,18 @@ export interface OpenFilePreviewRef {
   uploadId: string;
   /** Display name, used for the pane header and the download filename. */
   filename: string;
+  /**
+   * 1-based page to show, for a document with pages (a PDF today). Set by
+   * a citation that names a page; ignored by every other viewer. Opening
+   * the file that is already showing with a new page jumps there without
+   * fetching it again.
+   */
+  page?: number;
+  /**
+   * A passage on `page` to highlight: the quote a `verify_sources` claim
+   * was located by. Only meaningful with `page`.
+   */
+  quote?: string;
 }
 
 /**
@@ -24,6 +36,27 @@ export interface KbDocumentPreviewRef {
 
 /** Anything the docked preview pane can show. */
 export type FilePreviewRef = OpenFilePreviewRef | KbDocumentPreviewRef;
+
+/**
+ * Whether two refs name the same document, whatever page they ask for.
+ * The pane fetches again only when this is false.
+ */
+export function isSamePreviewDocument(
+  a: FilePreviewRef | null,
+  b: FilePreviewRef | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (isKbDocumentRef(a) || isKbDocumentRef(b)) {
+    return (
+      isKbDocumentRef(a) &&
+      isKbDocumentRef(b) &&
+      a.assistantId === b.assistantId &&
+      a.documentId === b.documentId
+    );
+  }
+  return a.uploadId === b.uploadId && a.filename === b.filename;
+}
 
 export function isKbDocumentRef(ref: FilePreviewRef | null): ref is KbDocumentPreviewRef {
   return !!ref && 'kind' in ref && ref.kind === 'kb-document';
@@ -69,8 +102,14 @@ export const CSV_MIME = 'text/csv';
 export const XLSX_MIME =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
+/**
+ * MIME type of a PDF. Matches the `.pdf` entry in
+ * `apis.shared.files.ALLOWED_EXTENSIONS`.
+ */
+export const PDF_MIME = 'application/pdf';
+
 /** What the pane knows how to render, and which viewer does it. */
-export type PreviewKind = 'docx' | 'pptx' | 'csv' | 'xlsx';
+export type PreviewKind = 'docx' | 'pptx' | 'csv' | 'xlsx' | 'pdf';
 
 /** Human label for the pane header's subtitle. */
 export const PREVIEW_KIND_LABELS: Readonly<Record<PreviewKind, string>> = {
@@ -78,6 +117,7 @@ export const PREVIEW_KIND_LABELS: Readonly<Record<PreviewKind, string>> = {
   pptx: 'PowerPoint presentation',
   csv: 'Data file',
   xlsx: 'Spreadsheet',
+  pdf: 'PDF document',
 };
 
 /**
@@ -101,6 +141,7 @@ export const PREVIEW_KIND_MIMES: Readonly<
   pptx: [PPTX_MIME],
   csv: [CSV_MIME, 'application/csv', 'application/vnd.ms-excel', 'text/plain'],
   xlsx: [XLSX_MIME],
+  pdf: [PDF_MIME],
 };
 
 /**
@@ -135,6 +176,7 @@ export function previewKindFor(filename: string): PreviewKind | null {
   if (/\.pptx$/i.test(name)) return 'pptx';
   if (/\.csv$/i.test(name)) return 'csv';
   if (/\.xlsx$/i.test(name)) return 'xlsx';
+  if (/\.pdf$/i.test(name)) return 'pdf';
   return null;
 }
 

@@ -1084,6 +1084,14 @@ if skills_enabled():
 
     router.include_router(skills_router)
 
+# ========== Include Skill Scripts Admin Subrouter ==========
+# One skill's scripts, wherever they are reviewed, and the admin switch
+# (skill-code-sandbox §8.10), scope admin.skill_scripts. Mounted always: the
+# switch also governs the Word tools' skill scripts, whichever flags are on.
+from .skill_scripts.routes import router as skill_scripts_router
+
+router.include_router(skill_scripts_router)
+
 # ========== Include Agent Marketplace Admin Subrouter ==========
 # Mounted unconditionally; every route depends on ``require_marketplace_admin``, which
 # 404s while AGENT_MARKETPLACE_ENABLED is off (the ``/agents`` surface pattern) rather
@@ -1121,6 +1129,11 @@ router.include_router(audit_router)
 from .user_menu_links.routes import router as user_menu_links_admin_router
 
 router.include_router(user_menu_links_admin_router)
+
+# ========== Include Task Models Admin Subrouter ==========
+from .task_models.routes import router as task_models_admin_router
+
+router.include_router(task_models_admin_router)
 
 # ========== Include System Prompts Admin Subrouter ==========
 from .system_prompts.routes import router as system_prompts_admin_router

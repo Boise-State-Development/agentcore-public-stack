@@ -21,6 +21,7 @@ export const ADMIN_SCOPE_IDS = [
   'admin.models',
   'admin.tools',
   'admin.skills',
+  'admin.skill_scripts',
   'admin.connectors',
   'admin.file_sources',
   'admin.export_targets',

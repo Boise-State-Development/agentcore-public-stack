@@ -293,6 +293,19 @@ export interface ReadoutTool {
   specTokens: number | null;
 }
 
+/**
+ * One call kind's calls, cost and mean model first byte. `chat` is what the
+ * turn KPIs read; the rest are calls that are not turns. `cost` and
+ * `meanFirstTokenMs` are `null` for a side whose rows predate the chat split.
+ */
+export interface ReadoutCallKind {
+  kind: string;
+  calls: LedgerPair<number>;
+  cost: LedgerPair<number | null>;
+  meanFirstTokenMs: LedgerPair<number | null>;
+  firstTokenN: LedgerPair<number>;
+}
+
 export interface ReadoutGroup {
   id: string;
   calls: LedgerPair<number>;
@@ -315,6 +328,26 @@ export interface ReadoutLatency {
   clientFirstTokenMs?: ReadoutLatencyMetric | null;
   probeColdFirstTokenMs?: ReadoutLatencyMetric | null;
   probeFollowUpFirstTokenMs?: ReadoutLatencyMetric | null;
+}
+
+/** One harness stage before the first token, per build (`ledger_prelude`). */
+export interface ReadoutPreludeStage {
+  p50: LedgerPair<number | null>;
+  p90: LedgerPair<number | null>;
+  n: LedgerPair<number>;
+  deltaMs: number | null;
+  /** Set only when the stage cleared the moved rule (`rule`). */
+  moved: 'worse' | 'better' | null;
+}
+
+export interface ReadoutPrelude {
+  available: boolean;
+  /** `build` when both sides were filtered to one stamped build, else `version`. */
+  scope: 'build' | 'version' | null;
+  stages: Record<string, ReadoutPreludeStage>;
+  moved: { stage: string; deltaMs: number; direction: 'worse' | 'better' }[];
+  rule: { minMs: number; minRelative: number; minN: number } | null;
+  mix: { turns: LedgerPair<number>; assistantShare: LedgerPair<number | null>; resumeShare: LedgerPair<number | null> } | null;
 }
 
 export interface ReadoutPairs<T> {
@@ -373,10 +406,14 @@ export interface LedgerReadout {
   requestedDays: number;
   mixShift: ReadoutMixShift;
   kpis: Record<string, ReadoutKpi>;
+  /** Absent from a readout saved before the chat split. */
+  callKinds?: ReadoutCallKind[];
   tools: ReadoutTool[];
   agents: ReadoutGroup[];
   projects: ReadoutGroup[];
   latency: ReadoutLatency;
+  /** Absent from a readout saved before the prelude panel. */
+  prelude?: ReadoutPrelude;
   quality: ReadoutQuality;
   platform: ReadoutPlatform | null;
   caveats: ReadoutCaveat[];

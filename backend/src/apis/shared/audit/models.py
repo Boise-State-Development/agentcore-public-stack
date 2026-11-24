@@ -135,15 +135,28 @@ class AuditAction:
     SKILL_UPDATED = "skill.updated"
     SKILL_IMPORTED = "skill.imported"
     SKILL_REFRESHED = "skill.refreshed"
+    SKILL_RESTORED = "skill.restored"
     SKILL_DELETED = "skill.deleted"
     SKILL_EXPORTED = "skill.exported"
     SKILL_SCRIPT_RUN = "skill.script_run"
+    # Who allowed a skill's scripts to run for other people (skill-code-sandbox
+    # §8, §9), target ``skill``: a review recorded for an Agent or project at a
+    # script-set hash, one withdrawn (the skill unbound), and the author's or an
+    # admin's switch. Ids and hashes only.
+    SKILL_SCRIPTS_REVIEWED = "skill.scripts_reviewed"
+    SKILL_SCRIPTS_REVIEW_WITHDRAWN = "skill.scripts_review_withdrawn"
+    SKILL_SCRIPTS_SWITCHED = "skill.scripts_switched"
 
     # ``run_code`` (docs/specs/skill-code-sandbox.md §8), target
     # ``conversation`` keyed by the session id: Python the model wrote, run in
     # the isolated sandbox. The code's hash and size, never its text. A skill
     # script run through ``run_code`` writes ``skill.script_run`` instead.
     SANDBOX_CODE_RUN = "sandbox.code_run"
+
+    # Task models (docs/specs/admin-model-assignments.md §4.5), target ``task_model``
+    # keyed by the slot (``session_title``, ``compaction_summary``, ...). One record per
+    # set or clear, with the model id and effort before and after.
+    TASK_MODEL_UPDATED = "task_model.updated"
 
 
 ALL_ACTIONS: frozenset[str] = frozenset(
@@ -165,6 +178,7 @@ TARGET_QUOTA_PERIOD = "quota_period"
 TARGET_AWS_LIMIT_REQUEST = "aws_limit_request"
 TARGET_SKILL = "skill"
 TARGET_CONVERSATION = "conversation"
+TARGET_TASK_MODEL = "task_model"
 
 
 @dataclass

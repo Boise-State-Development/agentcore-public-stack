@@ -154,6 +154,49 @@ class TestParseCase:
         with pytest.raises(CaseError, match="not in run.enabled_skills"):
             parse_case(raw, family="skill_selection")
 
+    def test_reloads_after_cut_parses(self):
+        raw = _case(
+            id="skill_selection.example",
+            family="skill_selection",
+            turns=[{"prompt": "a"}, {"prompt": "b"}],
+            run={"enabled_skills": ["skill_creator"]},
+            expect={"skill": {"reloads_after_cut": ["skill_creator"]}},
+        )
+        case = parse_case(raw, family="skill_selection")
+        assert case.expect.skill.reloads_after_cut == ("skill_creator",)
+        assert case.expect.skill.loads == ()
+
+    def test_reloads_after_cut_must_be_offered(self):
+        raw = _case(
+            id="skill_selection.example",
+            family="skill_selection",
+            turns=[{"prompt": "a"}, {"prompt": "b"}],
+            run={"enabled_skills": ["web_research"]},
+            expect={"skill": {"reloads_after_cut": ["skill_creator"]}},
+        )
+        with pytest.raises(CaseError, match="reloads_after_cut .* is not in run.enabled_skills"):
+            parse_case(raw, family="skill_selection")
+
+    def test_reloads_after_cut_needs_an_earlier_turn(self):
+        raw = _case(
+            id="skill_selection.example",
+            family="skill_selection",
+            run={"enabled_skills": ["skill_creator"]},
+            expect={"skill": {"reloads_after_cut": ["skill_creator"]}},
+        )
+        with pytest.raises(CaseError, match="needs an earlier turn"):
+            parse_case(raw, family="skill_selection")
+
+    def test_reloads_after_cut_cannot_also_be_forbidden(self):
+        raw = _case(
+            id="skill_selection.example",
+            family="skill_selection",
+            turns=[{"prompt": "a"}, {"prompt": "b"}],
+            expect={"skill": {"reloads_after_cut": ["skill_creator"], "not_loads": ["skill_creator"]}},
+        )
+        with pytest.raises(CaseError, match="both required after a cut and forbidden"):
+            parse_case(raw, family="skill_selection")
+
     def test_a_tool_cannot_be_both_required_and_forbidden(self):
         raw = _case(expect={"tools": {"must_call": ["calculator"], "must_not_call": ["calculator"]}})
         with pytest.raises(CaseError, match="both required and forbidden"):

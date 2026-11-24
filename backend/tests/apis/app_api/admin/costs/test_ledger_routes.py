@@ -28,7 +28,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from apis.app_api.admin.costs import ledger_routes
-from apis.shared.costs import ledger_latency
+from apis.shared.costs import ledger_latency, ledger_prelude
 from apis.shared.observability.content_policy import content_bearing_paths
 from tests.conftest import override_admin_auth
 
@@ -70,10 +70,12 @@ def _family(family: str, label: str, day: str, version: str, build: str, key: st
 
 BASE = dict(calls=40, turns=30, cost="0.30", outcomeTurns=30, completedTurns=29, stoppedTurns=1,
             cacheReadTokens=9000, cacheWriteTokens=1000, toolCalls=25, toolErrors=1, firstTokenMsSum=40000,
-            firstTokenCount=40)
+            firstTokenCount=40, splitCalls=40, splitTurns=30, chatCost="0.30", chatFirstTokenMsSum=40000,
+            chatFirstTokenCount=40)
 CAND = dict(calls=44, turns=30, cost="0.36", outcomeTurns=30, completedTurns=28, emptyAnswerTurns=2,
             cacheReadTokens=8000, cacheWriteTokens=2000, toolCalls=25, toolErrors=3, estimatedCalls=1,
-            firstTokenMsSum=48000, firstTokenCount=44)
+            firstTokenMsSum=48000, firstTokenCount=44, splitCalls=44, splitTurns=30, chatCost="0.36",
+            chatFirstTokenMsSum=48000, chatFirstTokenCount=44)
 
 VERSION_ROWS = [
     _v("2026-10-01", "1.32.0", "aaaa", **BASE),
@@ -86,7 +88,8 @@ VERSION_ROWS = [
 ]
 MODEL_ROWS = [
     _family("MODEL", "modelId", r["date"], r["appVersion"], r["build"], "us.anthropic.claude-haiku-5-5",
-            calls=int(r["calls"]), turns=int(r["turns"]), cost=r["cost"])
+            calls=int(r["calls"]), turns=int(r["turns"]), cost=r["cost"],
+            splitTurns=int(r["turns"]), chatCost=r["cost"])
     for r in VERSION_ROWS
 ]
 TOOL_ROWS = [
@@ -185,9 +188,17 @@ def _flag_and_clock(monkeypatch):
         lambda window, client=None: {"available": True, "metrics": {
             "serverFirstTokenMs": {"p50": 1800.0, "p90": 4000.0, "n": 120}}},
     )
+    ledger_prelude.clear_cache()
+    prelude_by_version = {"1.32.0": 1000.0, "1.33.0": 1080.0}
+    monkeypatch.setattr(
+        ledger_prelude, "fetch_unit_prelude",
+        lambda key, client=None: {"available": True, "scope": "version", "stages": {
+            "preludeTotalMs": {"p50": prelude_by_version.get(key[0]), "p90": 1600.0, "n": 300}}},
+    )
     monkeypatch.setattr(ledger_routes, "_platform", AsyncMock(return_value=None))
     yield
     ledger_latency.clear_cache()
+    ledger_prelude.clear_cache()
 
 
 @pytest.mark.parametrize("path", ROUTES)
@@ -283,6 +294,10 @@ def test_readout_compares_equal_windows_and_generates_caveats():
     assert cpt["delta"] == pytest.approx(0.2) and cpt["n"] == [60, 60]
     assert set(cpt["byModel"]) == {"us.anthropic.claude-haiku-5-5"}
     assert body["latency"]["serverFirstTokenMs"]["p50"] == [1800.0, 1800.0]
+    # Per version, not per window: each side reads its own unit's turns.
+    prelude = body["prelude"]
+    assert prelude["available"] and prelude["stages"]["preludeTotalMs"]["p50"] == [1000.0, 1080.0]
+    assert prelude["moved"] == [{"stage": "preludeTotalMs", "deltaMs": 80.0, "direction": "worse"}]
     assert body["tools"][0]["toolId"] == "browse_web" and body["tools"][0]["calls"] == [25, 25]
     assert body["quality"]["thumbs"]["n"] == [0, 2] and body["quality"]["thumbs"]["downRate"] == [None, None]
     assert body["quality"]["eval"]["candidate"][0]["build"] == "bbbb"

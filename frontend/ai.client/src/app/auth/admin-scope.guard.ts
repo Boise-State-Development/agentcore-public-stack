@@ -73,6 +73,7 @@ const LANDING_CANDIDATES: ReadonlyArray<{ scope: AdminScopeId; path: string }> =
   { scope: 'admin.models', path: '/admin/manage-models' },
   { scope: 'admin.tools', path: '/admin/tools' },
   { scope: 'admin.skills', path: '/admin/skills' },
+  { scope: 'admin.skill_scripts', path: '/admin/skills/scripts' },
   { scope: 'admin.connectors', path: '/admin/connectors' },
   { scope: 'admin.marketplace', path: '/admin/marketplace/review' },
   { scope: 'admin.users', path: '/admin/users' },

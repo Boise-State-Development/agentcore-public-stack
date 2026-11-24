@@ -126,10 +126,11 @@ describe('SkillFormPage (My Skills) — reach confirmation on save', () => {
     getSkill: ReturnType<typeof vi.fn>;
     updateSkill: ReturnType<typeof vi.fn>;
     error$: () => string | null;
+    getUses: ReturnType<typeof vi.fn>;
   };
   let dialog: { open: ReturnType<typeof vi.fn> };
 
-  function setup(confirmed: boolean) {
+  function setup(confirmed: boolean, history = false, behind: unknown[] = []) {
     service = {
       getSkill: vi.fn().mockResolvedValue({
         skillId: 'grant_review',
@@ -145,6 +146,7 @@ describe('SkillFormPage (My Skills) — reach confirmation on save', () => {
         updatedAt: null,
       }),
       updateSkill: vi.fn().mockRejectedValueOnce(conflict).mockResolvedValue({ skillId: 'grant_review' }),
+      getUses: vi.fn().mockResolvedValue({ current: [], behind, othersBehind: 0, complete: true }),
       error$: () => null,
     };
     dialog = { open: vi.fn(() => ({ closed: of(confirmed) })) };
@@ -153,7 +155,10 @@ describe('SkillFormPage (My Skills) — reach confirmation on save', () => {
         provideRouter([]),
         { provide: MySkillService, useValue: service },
         { provide: Dialog, useValue: dialog },
-        { provide: FEATURES, useValue: { ...environment.features, skillBundleImport: false } },
+        {
+          provide: FEATURES,
+          useValue: { ...environment.features, skillBundleImport: false, skillVersionHistory: history },
+        },
         {
           provide: ActivatedRoute,
           useValue: {
@@ -190,6 +195,26 @@ describe('SkillFormPage (My Skills) — reach confirmation on save', () => {
     expect(service.updateSkill.mock.calls[0][1].confirmReach).toBeUndefined();
     expect(service.updateSkill.mock.calls[1][1]).toEqual(expect.objectContaining({ confirmReach: true }));
     expect(navigate).toHaveBeenCalledWith(['/customize/skills']);
+  });
+
+  it('asks where the skill is used after a save, and offers an update only when a pin is behind', async () => {
+    setup(true, true);
+    const navigate = await submit();
+    expect(service.getUses).toHaveBeenCalledWith('grant_review');
+    expect(dialog.open).toHaveBeenCalledTimes(1); // the reach confirmation only
+    expect(navigate).toHaveBeenCalledWith(['/customize/skills']);
+
+    TestBed.resetTestingModule();
+    setup(true, true, [{ kind: 'agent', id: 'a1', name: 'Grader', pinnedVersion: 2, canUpdate: true, shared: false, published: false }]);
+    await submit();
+    expect(dialog.open).toHaveBeenCalledTimes(2);
+    expect(dialog.open.mock.calls[1][1].data.uses.behind[0].name).toBe('Grader');
+  });
+
+  it('asks nothing after a save while version history is off', async () => {
+    setup(true);
+    await submit();
+    expect(service.getUses).not.toHaveBeenCalled();
   });
 
   it('saves nothing more and stays on the page when the user keeps editing', async () => {

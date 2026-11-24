@@ -10,6 +10,7 @@ import { ReleaseVersionStripComponent } from './release-version-strip.component'
 import { ReleaseCompareHeaderComponent } from './release-compare-header.component';
 import { ReleaseKpiCardsComponent } from './release-kpi-cards.component';
 import { ReleaseToolsTableComponent } from './release-tools-table.component';
+import { ReleaseCallKindsTableComponent } from './release-call-kinds-table.component';
 import { ReleaseGroupsTableComponent } from './release-groups-table.component';
 import { ReleaseQualityPanelComponent } from './release-quality-panel.component';
 
@@ -44,6 +45,7 @@ const CHART_FORMAT: Record<KpiFormat, TrendChartFormat> = {
     ReleaseCompareHeaderComponent,
     ReleaseKpiCardsComponent,
     ReleaseToolsTableComponent,
+    ReleaseCallKindsTableComponent,
     ReleaseGroupsTableComponent,
     ReleaseQualityPanelComponent,
   ],
@@ -183,6 +185,7 @@ const CHART_FORMAT: Record<KpiFormat, TrendChartFormat> = {
         </section>
 
         @if (state.readout(); as readout) {
+          <app-release-call-kinds-table [kinds]="readout.callKinds ?? []" />
           <app-release-tools-table [tools]="readout.tools" [notMeasured]="state.tools()?.notMeasured ?? []" />
           <div class="grid grid-cols-1 gap-6 2xl:grid-cols-2">
             <app-release-groups-table heading="Agents" idLabel="Agent" [groups]="readout.agents" emptyText="No agent turns in either window." />

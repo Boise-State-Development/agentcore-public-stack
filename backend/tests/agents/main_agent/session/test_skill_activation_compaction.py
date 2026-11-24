@@ -215,7 +215,7 @@ class TestModelWrittenSummary:
     async def test_line_survives_model_compression(self, make_session_manager, monkeypatch):
         """Over budget, the model compresses the records; the line goes on after, verbatim."""
 
-        async def fake_compress(records, budget_tokens, *, model_id, region):
+        async def fake_compress(records, budget_tokens, *, model_id, region, effort=None, send_temperature=True, on_call=None):
             return "Compressed narrative.", False
 
         monkeypatch.setattr(compaction_summary, "_compress", fake_compress)
@@ -229,6 +229,36 @@ class TestModelWrittenSummary:
         )
         assert mgr.compaction_state.policy["summaryOutcome"] == "model"
         assert summary == "Compressed narrative.\n\n" + LINE.format(names="pdf-workflows")
+
+    @pytest.mark.asyncio
+    async def test_the_summary_call_schedules_its_cost_row(self, make_session_manager, monkeypatch):
+        """Each compaction model call writes a ``compaction_summary`` cost row for this
+        conversation and user (side_call_metering), on the model the slot resolved."""
+        from agents.main_agent.session import turn_based_session_manager as tbsm
+
+        reply = {"usage": {"inputTokens": 9000, "outputTokens": 300}}
+
+        async def fake_compress(records, budget_tokens, *, model_id, region, effort=None, send_temperature=True, on_call=None):
+            on_call(reply)
+            return "Compressed narrative.", False
+
+        scheduled = []
+        monkeypatch.setattr(compaction_summary, "_compress", fake_compress)
+        monkeypatch.setattr(tbsm, "schedule_side_call_cost", lambda **kwargs: scheduled.append(kwargs))
+        live = _conversation((8000, None), (40, None))
+        _, _, mgr = await _cut(
+            make_session_manager,
+            live,
+            summaries=("x " * 2000,),
+            summary_model_enabled=True,
+            summary_extract_enabled=False,
+        )
+        assert len(scheduled) == 1
+        call = scheduled[0]
+        assert call["call_kind"] == "compaction_summary"
+        assert (call["session_id"], call["user_id"]) == (mgr.config.session_id, mgr.user_id)
+        assert call["response"] is reply
+        assert call["choice"].slot.value == "compaction_summary"
 
     @pytest.mark.asyncio
     async def test_deferred_cut_parks_the_same_summary(self, make_session_manager):

@@ -6,6 +6,7 @@ import {
   output,
   signal,
 } from '@angular/core';
+import { CdkTrapFocus } from '@angular/cdk/a11y';
 import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroXMark, heroArrowLeft, heroArrowRight } from '@ng-icons/heroicons/outline';
 
@@ -19,12 +20,13 @@ export interface LightboxImage {
  *
  * Renders a fixed overlay above the page when an image is selected.
  * Supports left/right arrow keys to step through a group of images and
- * Escape to dismiss.
+ * Escape to dismiss. Focus moves into the overlay when it opens, stays there
+ * while it is open, and returns to whatever opened it when it closes.
  */
 @Component({
   selector: 'app-image-lightbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon],
+  imports: [CdkTrapFocus, NgIcon],
   providers: [provideIcons({ heroXMark, heroArrowLeft, heroArrowRight })],
   host: {
     '(document:keydown)': 'onKeydown($event)',
@@ -34,6 +36,8 @@ export interface LightboxImage {
       class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
       role="dialog"
       aria-modal="true"
+      cdkTrapFocus
+      [cdkTrapFocusAutoCapture]="true"
       [attr.aria-label]="'Image preview: ' + currentImage().filename"
       (click)="onBackdropClick($event)"
     >

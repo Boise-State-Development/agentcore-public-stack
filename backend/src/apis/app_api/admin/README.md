@@ -51,6 +51,7 @@ Scope ids come from the closed registry in `apis/shared/rbac/admin_scopes.py`.
 | `users/` | `/admin/users` | `admin.users` |
 | `tools/` | `/admin/tools` | `admin.tools` |
 | `skills/` | `/admin/skills` | `admin.skills` |
+| `skill_scripts/` | `/admin/skill-scripts` | `admin.skill_scripts` |
 | `agents/` | `/admin/agents` | `admin.marketplace` |
 | `roles/agent_pins.py` | `/admin/roles/{id}/agent-pins` | `admin.marketplace` ¹ |
 | `oauth/` | `/admin/oauth-providers` | `admin.connectors` |

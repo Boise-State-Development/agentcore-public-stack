@@ -65,6 +65,38 @@ describe('MySkillService', () => {
     expect(service.error$()).toBeNull();
   });
 
+  describe('version history', () => {
+    it('lists a page with the cursor and reads one version', async () => {
+      const list = service.listVersions('grant writing', { limit: 20, before: 7 });
+      const req = httpMock.expectOne((r) => r.url === `${BASE}/grant%20writing/versions`);
+      expect(req.request.params.get('limit')).toBe('20');
+      expect(req.request.params.get('before')).toBe('7');
+      expect(req.request.withCredentials).toBe(true);
+      req.flush({ versions: [] });
+      expect(await list).toEqual({ versions: [] });
+
+      const one = service.getVersion('grant_writing', 3);
+      httpMock.expectOne(`${BASE}/grant_writing/versions/3`).flush({ version: 3 });
+      expect((await one).version).toBe(3);
+    });
+
+    it('restores with the stale check and reach flag, then updates its list', async () => {
+      const promise = service.restoreVersion('grant_writing', 2, {
+        expectedUpdatedAt: '2026-11-23T10:00:00+00:00',
+        confirmReach: true,
+      });
+      const req = httpMock.expectOne(`${BASE}/grant_writing/versions/2/restore`);
+      expect(req.request.method).toBe('POST');
+      expect(req.request.body).toEqual({
+        expectedUpdatedAt: '2026-11-23T10:00:00+00:00',
+        confirmReach: true,
+      });
+      req.flush({ skill: stubSkill(), version: null, importSourceRestored: true });
+      await promise;
+      expect(invalidateBindable).toHaveBeenCalledWith('skill');
+    });
+  });
+
   describe('bundle import', () => {
     it('previews a GitHub URL as multipart, with the target skill and no path unless chosen', async () => {
       const promise = service.previewImport({ url: ' https://github.com/a/b ' }, 'grant_writing');

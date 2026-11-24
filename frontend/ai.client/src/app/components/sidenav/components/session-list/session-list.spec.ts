@@ -65,6 +65,8 @@ describe('SessionList', () => {
       pins: signal([]),
       load: vi.fn().mockResolvedValue([]),
       unpin: vi.fn().mockResolvedValue(undefined),
+      reorder: vi.fn().mockResolvedValue(undefined),
+      isLocked: (id: string) => mockAgentPinService.pins().some((pin: { agentId: string; locked: boolean }) => pin.agentId === id && pin.locked),
     };
 
     TestBed.configureTestingModule({
@@ -421,9 +423,9 @@ describe('SessionList', () => {
         'utf8',
       );
       const dropLists = html.match(/<[a-z]+\s[^>]*\bcdkDropList\b[^>]*>/g) ?? [];
-      expect(dropLists).toHaveLength(2);
+      expect(dropLists).toHaveLength(3);
       for (const tag of dropLists) {
-        expect(tag).toMatch(/\[id\]="(pinnedListId|unpinnedListId)"/);
+        expect(tag).toMatch(/\[id\]="(pinnedListId|unpinnedListId|pinnedAgentsListId)"/);
         expect(tag).toMatch(/\[cdkDropListConnectedTo\]="\[(pinnedListId|unpinnedListId)\]"/);
         expect(tag).not.toMatch(/\sid="/);
       }
@@ -449,6 +451,89 @@ describe('SessionList', () => {
       });
       expect(mockAgentPinService.unpin).toHaveBeenCalledWith('ast-1');
       expect(mockSessionService.setSessionPinned).not.toHaveBeenCalled();
+    });
+
+    // ── reordering in place (agent-project-organization §6.4) ──────────────────────
+    const pinned = (agentId: string, locked = false) => ({ ...agent, agentId, name: agentId, locked });
+    const list = { id: 'session-list-pinned-agents' };
+    const within = (previousIndex: number, currentIndex: number) =>
+      ({ previousContainer: list, container: list, previousIndex, currentIndex, item: { data: pinned('x') } }) as any;
+
+    async function organized() {
+      TestBed.overrideProvider(FEATURES, { useValue: { projects: true, organizeLists: true } });
+      mockAgentPinService.pins.set([pinned('ast-lock', true), pinned('ast-a'), pinned('ast-b'), pinned('ast-c')]);
+      return createComponent();
+    }
+
+    it('saves the order of an agent dragged within the pinned agents, locked pins left out', async () => {
+      const component = await organized();
+      (component as any).onPinnedAgentDrop(within(3, 1));
+      expect(mockAgentPinService.reorder).toHaveBeenCalledWith(['ast-c', 'ast-a', 'ast-b']);
+    });
+
+    it('never sorts an agent above a locked pin', async () => {
+      const component = await organized();
+      const predicate = (component as any).agentSortPredicate as (index: number) => boolean;
+      expect(predicate(0)).toBe(false);
+      expect(predicate(1)).toBe(true);
+    });
+
+    it('moves an agent from the row menu, and not past either end', async () => {
+      const component = await organized();
+      const event = { preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as Event;
+      expect((component as any).canMoveAgent(pinned('ast-a'), -1)).toBe(false);
+      expect((component as any).canMoveAgent(pinned('ast-c'), 1)).toBe(false);
+
+      (component as any).onMoveAgentClick(event, pinned('ast-c'), -1);
+      await Promise.resolve();
+      expect(mockAgentPinService.reorder).toHaveBeenCalledWith(['ast-a', 'ast-c', 'ast-b']);
+    });
+
+    it('does nothing on a drop while the flag is off', async () => {
+      mockAgentPinService.pins.set([pinned('ast-a'), pinned('ast-b')]);
+      const off = await createComponent();
+      (off as any).onPinnedAgentDrop(within(1, 0));
+      expect(mockAgentPinService.reorder).not.toHaveBeenCalled();
+    });
+
+    it('ignores a drop that came from another list', async () => {
+      const on = await organized();
+      (on as any).onPinnedAgentDrop({ ...within(1, 0), previousContainer: { id: 'session-list-unpinned' } });
+      expect(mockAgentPinService.reorder).not.toHaveBeenCalled();
+    });
+
+    it('marks the drop zone while a pinned agent is dragged, and clears it on drop', async () => {
+      const component = (await organized()) as any;
+      expect(component.isDraggingAgent()).toBe(false);
+      component.onAgentDragStarted();
+      expect(component.isDraggingAgent()).toBe(true);
+      component.isAgentOutside.set(true);
+      component.onDragEnded();
+      expect(component.isDraggingAgent()).toBe(false);
+      expect(component.isAgentOutside()).toBe(false);
+    });
+
+    it('draws the zone, the landing slot and the unpin hint from those signals', () => {
+      const html = readFileSync(
+        fromProjectRoot('src/app/components/sidenav/components/session-list/session-list.html'),
+        'utf8',
+      );
+      const css = readFileSync(
+        fromProjectRoot('src/app/components/sidenav/components/session-list/session-list.css'),
+        'utf8',
+      );
+      expect(html).toContain(`[attr.data-zone]="isDraggingAgent() && organizeLists && !isAgentOutside() ? '' : null"`);
+      expect(html).toContain('(cdkDragStarted)="onAgentDragStarted()"');
+      expect(html).toContain('Release to unpin');
+      expect(css).toMatch(/\.pinned-agents-list \.cdk-drag-placeholder \{[^}]*outline: 1px dashed/);
+    });
+
+    it('says so when the order cannot be saved', async () => {
+      const component = await organized();
+      mockAgentPinService.reorder.mockRejectedValueOnce(new Error('500'));
+      (component as any).onPinnedAgentDrop(within(2, 1));
+      await new Promise(resolve => setTimeout(resolve));
+      expect(mockToastService.error).toHaveBeenCalledWith('Failed to save the order', expect.any(String));
     });
   });
 
