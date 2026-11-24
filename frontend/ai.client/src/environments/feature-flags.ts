@@ -144,8 +144,8 @@ export interface FeatureFlags {
    * SKILL_VERSION_HISTORY_ENABLED (app-api serves `/skills/mine/{id}/versions*`
    * and `/admin/skills/{id}/versions*`, which 404 while off). The UI's share is
    * the History section on an owned skill's Customize page and on the admin
-   * skill edit form. In development: off everywhere until an environment turns
-   * the backend on.
+   * skill edit form. In development: on only in the deployed dev build (the
+   * `development` GitHub environment sets the backend flag); off locally and in prod.
    */
   skillVersionHistory: boolean;
 
