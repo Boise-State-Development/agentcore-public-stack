@@ -42,6 +42,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
+from apis.shared.blocking_io import run_blocking
 from apis.shared.timestamps import utc_now_iso
 
 from .models import AgentVersion
@@ -83,14 +84,30 @@ class AgentVersionExistsError(ValueError):
         )
 
 
-def _table():
-    """Bind the assistants table, or raise if the environment is not configured."""
-    import boto3
-
+def _table_name() -> str:
     table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
     if not table_name:
         raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
-    return boto3.resource("dynamodb").Table(table_name)
+    return table_name
+
+
+def _table():
+    """Bind the assistants table on the process-cached resource, or raise if not configured.
+
+    The cached resource keeps its connection pool, so a read reuses a warm connection. A fresh
+    ``boto3.resource`` per call opened a new TLS connection every time, which measured ~150 ms
+    against ~36 ms per ``GetItem`` from a laptop, and was most of what a pinned turn and every
+    non-owner turn on a published Agent paid to resolve its version (workflow-designer §23.4).
+    """
+    from apis.shared.aws_clients import get_dynamodb_table
+
+    return get_dynamodb_table(_table_name())
+
+
+def _resource():
+    from apis.shared.aws_clients import get_resource
+
+    return get_resource("dynamodb")
 
 
 def _pk(agent_id: str) -> str:
@@ -137,7 +154,7 @@ async def put_version(agent_id: str, version: AgentVersion) -> AgentVersion:
 
     item = _to_item(agent_id, version)
     try:
-        _table().put_item(Item=item, ConditionExpression="attribute_not_exists(PK)")
+        await run_blocking(_table().put_item, Item=item, ConditionExpression="attribute_not_exists(PK)")
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
             raise AgentVersionExistsError(agent_id, version.version) from e
@@ -231,7 +248,7 @@ async def set_version_index(
         params["ExpressionAttributeValues"] = values
 
     try:
-        _table().update_item(**params)
+        await run_blocking(_table().update_item, **params)
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
             raise ValueError(f"Version {number} of agent {agent_id} does not exist.") from e
@@ -246,7 +263,7 @@ async def set_version_index(
 
 async def get_version(agent_id: str, number: int) -> Optional[AgentVersion]:
     """One snapshot by number, or ``None`` if it does not exist."""
-    response = _table().get_item(Key={"PK": _pk(agent_id), "SK": version_sk(number)})
+    response = await run_blocking(_table().get_item, Key={"PK": _pk(agent_id), "SK": version_sk(number)})
     item = response.get("Item")
     return _from_item(item) if item else None
 
@@ -263,9 +280,9 @@ async def get_latest_version(agent_id: str) -> Optional[AgentVersion]:
     """
     from boto3.dynamodb.conditions import Key
 
-    response = _table().query(
-        KeyConditionExpression=Key("PK").eq(_pk(agent_id))
-        & Key("SK").begins_with(VERSION_SK_PREFIX),
+    response = await run_blocking(
+        _table().query,
+        KeyConditionExpression=Key("PK").eq(_pk(agent_id)) & Key("SK").begins_with(VERSION_SK_PREFIX),
         ScanIndexForward=False,
         Limit=1,
     )
@@ -286,9 +303,12 @@ async def delete_versions_for_agent(agent_id: str) -> int:
     §8 flags "versions referenced by an audit record should survive" as a question for a
     retention policy that does not exist yet, and there is no such reference today.
     """
+    return await run_blocking(_delete_versions_sync, _table(), agent_id)
+
+
+def _delete_versions_sync(table: Any, agent_id: str) -> int:
     from boto3.dynamodb.conditions import Key
 
-    table = _table()
     condition = Key("PK").eq(_pk(agent_id)) & Key("SK").begins_with(VERSION_SK_PREFIX)
 
     response = table.query(KeyConditionExpression=condition, ProjectionExpression="PK, SK")
@@ -326,13 +346,10 @@ async def batch_get_versions(refs: List[Tuple[str, int]]) -> Dict[str, AgentVers
     if not refs:
         return {}
 
-    import boto3
+    return await run_blocking(_batch_get_versions_sync, _resource(), _table_name(), refs)
 
-    table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
-    if not table_name:
-        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
 
-    resource = boto3.resource("dynamodb")
+def _batch_get_versions_sync(resource: Any, table_name: str, refs: List[Tuple[str, int]]) -> Dict[str, AgentVersion]:
     found: Dict[str, AgentVersion] = {}
 
     # De-duplicated because BatchGetItem rejects duplicate keys outright.
@@ -361,21 +378,15 @@ async def get_versions(refs: List[Tuple[str, int]]) -> Dict[Tuple[str, int], Age
     (keyed by agent id) can't return. A missing version is absent from the result. The read
     runs through ``run_blocking``, so app-api's event loop never waits on it.
     """
-    from apis.shared.blocking_io import run_blocking
-
     unique = list(dict.fromkeys(refs))
     if not unique:
         return {}
-    return await run_blocking(_get_versions_sync, unique)
+    return await run_blocking(_get_versions_sync, _resource(), _table_name(), unique)
 
 
-def _get_versions_sync(refs: List[Tuple[str, int]]) -> Dict[Tuple[str, int], AgentVersion]:
-    import boto3
-
-    table_name = os.environ.get("DYNAMODB_ASSISTANTS_TABLE_NAME")
-    if not table_name:
-        raise RuntimeError("DYNAMODB_ASSISTANTS_TABLE_NAME environment variable is required")
-    resource = boto3.resource("dynamodb")
+def _get_versions_sync(
+    resource: Any, table_name: str, refs: List[Tuple[str, int]]
+) -> Dict[Tuple[str, int], AgentVersion]:
     found: Dict[Tuple[str, int], AgentVersion] = {}
     for start in range(0, len(refs), 100):  # BatchGetItem caps at 100 keys
         keys = [{"PK": _pk(agent_id), "SK": version_sk(number)} for agent_id, number in refs[start : start + 100]]
@@ -407,7 +418,10 @@ async def list_versions(agent_id: str, *, limit: Optional[int] = None) -> List[A
     if limit is not None:
         params["Limit"] = limit
 
-    table = _table()
+    return await run_blocking(_list_versions_sync, _table(), params, limit)
+
+
+def _list_versions_sync(table: Any, params: Dict[str, Any], limit: Optional[int]) -> List[AgentVersion]:
     items: List[Dict[str, Any]] = []
     response = table.query(**params)
     items.extend(response.get("Items", []))
