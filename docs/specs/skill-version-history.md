@@ -1,7 +1,9 @@
 # Skill version history and restore
 
-**Status:** design accepted 2026-11-23 (§13), not started. Would ship behind
-`SKILL_VERSION_HISTORY_ENABLED` (in development, off by default).
+**Status:** built and validated on dev (2026-11-24, issue #2352). Behind
+`SKILL_VERSION_HISTORY_ENABLED` / `features.skillVersionHistory`: on in the
+`development` environment and the dev build, off by default and in prod. §11 records
+what each PR shipped and where the build differs from this design.
 **Extends:** `skills-as-agent-primitive.md`, shared-projects 3.1 (skill pins,
 `apis/shared/skills/versions.py`), `skill-bundle-import.md`.
 **Pattern from:** `agent-version-snapshots.md` §8 (Agent rollback).
@@ -227,6 +229,12 @@ save, so it needs two changes:
 - When the caller has the bytes in hand (an upload, an import, a restore), freeze from
   them instead of reading the live key back.
 
+**As built (#2361):** the first change shipped, matching on `content_hash` alone
+rather than path and hash, since a frozen key is named by its content. The second
+was **deferred**: with reuse in place, a changed file costs one existence check, one
+read and one write, so freezing from bytes in hand would save one read per changed
+file. It is still worth doing if capture cost ever shows up.
+
 Cost per content write: two Queries, one conditional PutItem, and one S3 put per
 changed file. All of it runs in app-api, or in the Runtime during a `my_skill_*` tool
 call. None of it is on the path to the first token.
@@ -326,9 +334,14 @@ One shared component, `shared/skills/skill-version-history.component.ts`. It tak
 `SkillBundleImportComponent` pattern. It renders on:
 
 - the admin skill form, edit mode, beside the bundle import section;
-- the Customize skill detail page (and its edit form). The user page's
-  `onBundleImported` already shows how to refresh the form from a written skill, so a
-  later Save cannot put the old content back.
+- the Customize skill detail page, for a skill you own.
+
+**As built (#2368):** History is not on the user's edit form; a restore refreshes the
+detail page instead. Restore sends the `updatedAt` the page last saw, so each host
+keeps it fresh. The admin form re-reads the skill's timestamp after a file upload or
+delete on the same page, and the Customize page reads it from My Skills rather than
+its cached detail record, which edits made on the skill form do not refresh. Without
+that, a restore could refuse a change the user had just made.
 
 The list shows newest first. Each row has the version number, a relative date, who
 (admin) or "You" / "Someone else" (user), what cut it in words ("Saved", "File
@@ -351,9 +364,10 @@ Backend, My Skills only:
 
 | Route | Returns |
 |---|---|
-| `GET /skills/mine/{id}/uses` | `{current: [Use], behind: [Use], othersBehind: int, complete: bool}`, each `Use` being `{kind: "agent" \| "project", id, name, pinnedVersion, canUpdate}` |
+| `GET /skills/mine/{id}/uses` | `{current: [Use], behind: [Use], othersBehind: int, complete: bool}`, each `Use` being `{kind: "agent" \| "project", id, name, pinnedVersion, canUpdate, shared, published}` |
 | `POST /skills/mine/{id}/uses/update` | Body `{targets: [{kind, id}]}`, at most 25. Returns one `{kind, id, ok, version?, error?}` per target |
-| `POST /agents/{agentId}/skills/{skillId}/pin` | The Agent twin of the project route. Owner only |
+| `POST /agents/{agentId}/skills/{skillId}/pin` | The Agent twin of the project route. Owner or editor, as for any Agent edit; refused for a project harness and for an unpinned binding. Returns `{skillId, version}` |
+| `GET /agents/{agentId}/skills/pins` | Each pinned skill binding's `version` and `updateAvailable` (`pin_status`), for the Agent form. Owner or editor |
 
 `uses` is `lookup_skill_reach` with two additions. `SkillBinding` gains the Agent or
 project id. Editor-project harnesses carry the caller's current role, so `canUpdate`
@@ -370,11 +384,22 @@ SPA:
 - The Agent form's skill rows show `v3` and "Update available" with an **Update**
   button, from `pin_status` on the Agent's skill bindings, read when the form loads.
 
+**As built (#2375):** the skills picker (`ToolSelector`) has a per-row note but no
+per-row button, so the Update lives in a **Skill updates** strip under the picker
+(`AgentSkillPinsComponent`). It lists only pinned skills with a newer version, and
+reads `GET /agents/{id}/skills/pins`. The Agent form sends each binding's stored
+config back on save, so the strip hands the new version to the form
+(`onSkillPinMoved`); otherwise a later save would quietly put the old pin back.
+The authoring tools' note (#2370) is a count with no names, added only when a pinned
+place is behind and the flag is on.
+
 ## 7. Feature flag
 
 `SKILL_VERSION_HISTORY_ENABLED` / `CDK_SKILL_VERSION_HISTORY_ENABLED`,
 `features.skillVersionHistory`. In development: only `"true"` enables it. It is off
-by default and in prod, and on in the `development` environment once PR-1 lands.
+by default and in prod. It has been on in the `development` environment and
+`environment.development.ts` since 2026-11-24 (#2376). The SPA half arrived with
+PR-3 (#2368), the first PR that read it, not PR-1 as planned below.
 
 - **app-api:** gates the routes and the capture.
 - **AgentCore Runtime:** gates the capture inside the `my_skill_*` tools. Without it,
@@ -454,16 +479,37 @@ That is enough to tell whether D2's best-effort path is ever taken in practice.
 
 ## 11. Phasing
 
-| PR | Content |
-|---|---|
-| **PR-1** | `history.py`: `capture_current` with `pin_current` as a wrapper, the `trigger` / `restored_from` / full `import_source` fields, the §4.2 freeze reuse, `run_blocking` on the version repository methods, the capture hooks on every §4.3 path, and the architecture test. Flag wiring: backend reader, CDK config and test, `platform.yml`, Runtime copy, docs-site row, SPA flag fields. No routes and no UI. History starts accumulating on dev. |
-| **PR-2** | `version_history_core.py`, list, detail and restore routes for both tiers, `skill.restored`, and the repository's projected list Query. |
-| **PR-3** | SPA: `SkillVersionHistoryComponent`, both services' adapters, the admin form and Customize detail page, and specs. |
-| **PR-4** | D9: `uses` and `uses/update`, the Agent pin route and `pin_status` on the Agent form, `SkillUsesComponent` (section and post-save dialog), and the authoring tools' result line. Depends on PR-1 only, so it can land before PR-2 and PR-3. |
-| **PR-5** | Dev validation (§10), then the release notes and #1798 entry if dev is turned on in prod. |
+| PR | Content | Shipped |
+|---|---|---|
+| **PR-1** | `history.py`: `capture_current` with `pin_current` as a wrapper, the `trigger` / `restored_from` / full `import_source` fields, the §4.2 freeze reuse, `run_blocking` on the version repository methods, the capture hooks on every §4.3 path, and the architecture test. Flag wiring: backend reader, CDK config and test, `platform.yml`, Runtime copy, docs-site row, SPA flag fields. No routes and no UI. History starts accumulating on dev. | #2361. The SPA flag moved to PR-3, and freezing from bytes in hand (§4.2) was deferred |
+| **PR-2** | `version_history_core.py`, list, detail and restore routes for both tiers, `skill.restored`, and the repository's projected list Query. | #2366, plus `update_skill(clear_fields=…)` so a restore can clear `import_source` (D6) |
+| **PR-3** | SPA: `SkillVersionHistoryComponent`, both services' adapters, the admin form and Customize detail page, and specs. | #2368, with the SPA flag |
+| **PR-4** | D9: `uses` and `uses/update`, the Agent pin route and `pin_status` on the Agent form, `SkillUsesComponent` (section and post-save dialog), and the authoring tools' result line. Depends on PR-1 only, so it can land before PR-2 and PR-3. | Split in two so each could be reviewed: **PR-4a** #2370 (backend) and **PR-4b** #2375 (UI). See §6.3's "as built" |
+| **PR-5** | Dev validation (§10), then the release notes and #1798 entry if dev is turned on in prod. | Flag on in dev (#2376); validated 2026-11-24, below. Prod not yet |
 
 PR-1 can land well before the others, so dev has real history to show by the time
 the UI arrives.
+
+**Dev validation (2026-11-24).** Done with a throwaway skill and Agent; the results
+are on issue #2352.
+- **Capture:** one version per change; a category-only edit cut nothing.
+- **First change after turn-on:** the first admin edit of a skill that predates the
+  flag saved its old content as a `checkpoint` first (D2).
+- **Restore:** through the UI, it became a new version with its files byte for byte,
+  and a stale view got a 409.
+- **The offer after a form save:** it moved an Agent's pin 2 → 7, reusing the save's
+  version. After restoring the content an Agent pinned, that Agent correctly read as
+  current and no offer opened.
+- **The Agent form's Update:** it moved a pin 7 → 8, and a later save of the form
+  kept 8.
+- **Runtime:** its environment has the flag.
+- **Not exercised live:** a `my_skill_*` authoring write, which needs a chat turn and
+  an approval. Its capture path is covered by tests.
+
+**Prod rollout** (not done):
+1. set `CDK_SKILL_VERSION_HISTORY_ENABLED=true` in the `production` environment;
+2. flip `skillVersionHistory` in `environment.production.ts`;
+3. add the flag to #1798, per CLAUDE.md "Feature Flags".
 
 ## 12. Not in this change
 
