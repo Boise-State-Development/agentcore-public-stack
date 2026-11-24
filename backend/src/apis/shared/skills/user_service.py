@@ -41,6 +41,7 @@ from apis.shared.skills.resource_types import (
     is_text_content_type,
     resolve_upload_content_type,
 )
+from apis.shared.skills.script_trust import scripts_provenance
 from apis.shared.skills.skill_md import validate_frontmatter
 from apis.shared.skills.versions import SNAPSHOT_FIELDS, SkillVersion, SkillVersionSummary
 
@@ -470,6 +471,7 @@ class UserSkillService:
 
         old_refs = list(skill.resources)
         new_refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, old_refs)
+        source = source.model_copy(update=scripts_provenance(new_refs))
         updated = await self.repository.update_skill(
             skill_id,
             {
@@ -512,6 +514,7 @@ class UserSkillService:
 
         skill_id = await self.plan_import_skill_id(bundle, display_name)
         refs = await self.bundle_files.put_imported_files(skill_id, bundle.files, [])
+        source = source.model_copy(update=scripts_provenance(refs))
         skill = SkillDefinition(
             skill_id=skill_id,
             display_name=name,

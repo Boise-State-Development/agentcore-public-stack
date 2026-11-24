@@ -54,6 +54,7 @@ from apis.shared.projects.service import (
 )
 from apis.shared.security.log_sanitize import scrub_log
 from apis.shared.skills.pinning import PinStatus, SkillPinError, pin_current, pin_status
+from apis.shared.skills.script_reviews import record_binding_reviews
 from apis.shared.skills.pins import ADDED_BY_CONFIG_KEY, PIN_CONFIG_KEY, binding_adder, binding_pin
 from apis.shared.skills.resource_store import SkillResourceChangedError, SkillResourceStoreError
 from apis.shared.skills.versions import SkillVersion
@@ -139,11 +140,15 @@ class HarnessSettingsService:
         model_settings: Optional[AgentModelConfig] = None,
         kind: Optional[str] = None,
         bindings: Optional[List[AgentBinding]] = None,
+        scripts_reviewed: Optional[Dict[str, str]] = None,
     ) -> HarnessView:
         """Apply one settings change and cut a version for it. A no-op cuts nothing.
 
         ``kind`` + ``bindings`` replace every binding of that kind and keep the rest
-        (the memory space binding, the other kind), in their original order.
+        (the memory space binding, the other kind), in their original order. A
+        skills save also records the script reviews it implies
+        (``script_reviews.record_binding_reviews``, skill-code-sandbox §8.5):
+        ``scripts_reviewed`` is ``{skillId: scriptsHash}`` the saver allowed.
         """
         project, role = self.projects.authorize(project_id, user, "editor", writable=True)
         harness = await self._harness(project)
@@ -169,6 +174,13 @@ class HarnessSettingsService:
             model_settings = None
 
         if instructions is None and model_settings is None and new_bindings is None:
+            if kind == SKILL and scripts_reviewed:
+                # Nothing to save, but the saver allowed the scripts of a skill
+                # already bound (the review sheet on an existing binding, §8.5).
+                await record_binding_reviews(
+                    harness.assistant_id, harness.bindings, harness.bindings, user,
+                    scripts_reviewed=scripts_reviewed, scope_kind="project",
+                )
             latest = await get_latest_version(harness.assistant_id)
             return HarnessView(project, role, harness, latest.version if latest else None)
 
@@ -195,6 +207,12 @@ class HarnessSettingsService:
         )
         if updated is None:
             raise ProjectNotFoundError("This project's settings could not be found")
+
+        if kind == SKILL and new_bindings is not None:
+            await record_binding_reviews(
+                harness.assistant_id, harness.bindings, updated.bindings, user,
+                scripts_reviewed=scripts_reviewed, scope_kind="project",
+            )
 
         snapshot = snapshot_of(updated, created_at=utc_now_iso(), created_by=user.user_id)
         snapshot = AgentVersion(**snapshot.model_dump(by_alias=True), **{CREATED_BY_EMAIL: user.email})
@@ -226,7 +244,9 @@ class HarnessSettingsService:
                 before_detail["versions"], after_detail["versions"] = versions(before.bindings), versions(new_bindings)
             self.projects.record(action, user, project_id, before=before_detail, after=after_detail)
 
-    async def pin_skill(self, project_id: str, user: User, skill_id: str) -> HarnessView:
+    async def pin_skill(
+        self, project_id: str, user: User, skill_id: str, scripts_reviewed: Optional[Dict[str, str]] = None
+    ) -> HarnessView:
         """Re-pin one bound skill to its current content ("update", shared-projects 3.1).
 
         Saved like any skills change: the saver must be able to use the skill, and the
@@ -245,7 +265,7 @@ class HarnessSettingsService:
             else b
             for b in bound
         ]
-        return await self.update(project_id, user, kind=SKILL, bindings=wanted)
+        return await self.update(project_id, user, kind=SKILL, bindings=wanted, scripts_reviewed=scripts_reviewed)
 
     async def list_versions(self, project_id: str, user: User, limit: int) -> List[Tuple[AgentVersion, List[str]]]:
         """Newest first, each with the fields it changed from the one before it."""

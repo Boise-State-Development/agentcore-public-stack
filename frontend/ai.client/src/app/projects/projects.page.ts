@@ -3,7 +3,7 @@ import { Router, RouterLink } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
 import { NgIcon, provideIcons } from '@ng-icons/core';
-import { heroArchiveBox, heroEye, heroEyeSlash, heroFolder, heroLockClosed, heroPencilSquare, heroPlus } from '@ng-icons/heroicons/outline';
+import { heroArchiveBox, heroArrowsUpDown, heroEye, heroEyeSlash, heroFolder, heroLockClosed, heroPencilSquare, heroPlus } from '@ng-icons/heroicons/outline';
 import { CreateProjectDialogComponent, CreateProjectDialogResult } from './components/create-project-dialog.component';
 import { Project, ProjectRole } from './models/project.model';
 import { ProjectsService } from './services/projects.service';
@@ -12,6 +12,8 @@ import { FEATURES } from '../services/features';
 import { ToastService } from '../services/toast/toast.service';
 import { ListArrangementService } from '../services/list-arrangement/list-arrangement.service';
 import { TooltipDirective } from '../components/tooltip/tooltip.directive';
+import { ArrangementSort, DEFAULT_ARRANGEMENT, arrangeList } from '../services/list-arrangement/list-arrangement.models';
+import { ArrangeListComponent, ArrangeResult, ArrangeRow } from '../components/arrange-list/arrange-list.component';
 
 type ListFilter = 'all' | 'mine' | 'shared' | 'archived' | 'hidden';
 
@@ -21,6 +23,12 @@ const FILTERS: { value: ListFilter; label: string }[] = [
   { value: 'shared', label: 'Shared with me' },
   { value: 'archived', label: 'Archived' },
   { value: 'hidden', label: 'Hidden' },
+];
+
+const SORTS: { value: ArrangementSort; label: string }[] = [
+  { value: 'recent', label: 'Recently added' },
+  { value: 'name', label: 'Name' },
+  { value: 'custom', label: 'Custom' },
 ];
 
 const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Editor', viewer: 'Viewer' };
@@ -40,8 +48,8 @@ const ROLE_LABELS: Record<ProjectRole, string> = { owner: 'Owner', editor: 'Edit
 @Component({
   selector: 'app-projects',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [NgIcon, RouterLink, TooltipDirective],
-  providers: [provideIcons({ heroArchiveBox, heroEye, heroEyeSlash, heroFolder, heroLockClosed, heroPencilSquare, heroPlus })],
+  imports: [NgIcon, RouterLink, TooltipDirective, ArrangeListComponent],
+  providers: [provideIcons({ heroArchiveBox, heroArrowsUpDown, heroEye, heroEyeSlash, heroFolder, heroLockClosed, heroPencilSquare, heroPlus })],
   templateUrl: './projects.page.html',
 })
 export class ProjectsPage implements OnInit {
@@ -53,6 +61,30 @@ export class ProjectsPage implements OnInit {
   protected readonly features = inject(FEATURES);
 
   private readonly hiddenIds = this.arrangements.hiddenIds('projects');
+  private readonly arrangement = this.arrangements.arrangement('projects');
+
+  protected readonly sorts = SORTS;
+  protected readonly sort = computed(() => this.arrangement().sort);
+
+  /** Arrange mode (spec §6.3): active projects as one list the user reorders and hides from. */
+  protected readonly arranging = signal(false);
+
+  /** Every project in the user's order, with New marked (spec D6); today's order while off. */
+  private readonly arranged = computed(() =>
+    arrangeList(this.projects(), {
+      idOf: p => p.projectId,
+      nameOf: p => p.name,
+      arrangement: this.features.organizeLists ? this.arrangement() : DEFAULT_ARRANGEMENT,
+    }),
+  );
+
+  protected readonly arrangeRows = computed<ArrangeRow[]>(() => {
+    const { visible, hidden } = this.arranged();
+    const hiddenIds = new Set(hidden.map(p => p.projectId));
+    return [...visible, ...hidden]
+      .filter(p => p.status !== 'archived')
+      .map(p => ({ id: p.projectId, name: p.name, detail: ROLE_LABELS[p.role], hidden: hiddenIds.has(p.projectId) }));
+  });
 
   /** Hidden non-archived projects; archived ones stay under Archived. */
   protected readonly hiddenCount = computed(() => {
@@ -80,7 +112,8 @@ export class ProjectsPage implements OnInit {
   protected readonly visible = computed(() => {
     const f = this.filter();
     const hidden = this.features.organizeLists ? this.hiddenIds() : new Set<string>();
-    return this.projects().filter(p => {
+    const { visible, hidden: hiddenRows } = this.arranged();
+    return [...visible, ...hiddenRows].filter(p => {
       if (f === 'archived') return p.status === 'archived';
       if (p.status === 'archived') return false;
       if (f === 'hidden') return hidden.has(p.projectId);
@@ -106,6 +139,33 @@ export class ProjectsPage implements OnInit {
     return f.value === 'hidden' ? `${f.label} (${this.hiddenCount()})` : f.label;
   }
 
+  protected isNew(project: Project): boolean {
+    return project.status !== 'archived' && this.arranged().newIds.has(project.projectId);
+  }
+
+  protected async setSort(value: ArrangementSort): Promise<void> {
+    if (value === this.sort()) return;
+    try {
+      await this.arrangements.setSort('projects', value, this.pageIds());
+    } catch {
+      this.toast.error('Could not change the order', 'Please try again.');
+    }
+  }
+
+  protected startArranging(): void {
+    this.filter.set('all');
+    this.arranging.set(true);
+  }
+
+  protected async onArranged(result: ArrangeResult): Promise<void> {
+    this.arranging.set(false);
+    try {
+      await this.arrangements.saveArranged('projects', result.ids, result.hiddenIds, this.pageIds());
+    } catch {
+      this.toast.error('Could not save your order', 'Please try again.');
+    }
+  }
+
   protected isHidden(project: Project): boolean {
     return this.hiddenIds().has(project.projectId);
   }
@@ -116,7 +176,7 @@ export class ProjectsPage implements OnInit {
     const hide = !this.isHidden(project);
     this.hidingId.set(project.projectId);
     try {
-      await this.arrangements.setHidden('projects', project.projectId, hide, this.projectIds());
+      await this.arrangements.setHidden('projects', project.projectId, hide, this.pageIds());
       if (hide) {
         this.toast.info(`Hid ${project.name}`, 'You are still a member. Find it under Hidden.', {
           action: { label: 'Undo', handler: () => void this.undoHide(project) },
@@ -131,14 +191,15 @@ export class ProjectsPage implements OnInit {
 
   private async undoHide(project: Project): Promise<void> {
     try {
-      await this.arrangements.setHidden('projects', project.projectId, false, this.projectIds());
+      await this.arrangements.setHidden('projects', project.projectId, false, this.pageIds());
     } catch {
       this.toast.error('Could not undo', 'Please try again.');
     }
   }
 
-  private projectIds(): ReadonlySet<string> {
-    return new Set(this.projects().map(p => p.projectId));
+  /** Active project ids in the list's own order; archived ones are not arranged. */
+  private pageIds(): string[] {
+    return this.projects().filter(p => p.status !== 'archived').map(p => p.projectId);
   }
 
   protected readonly personLabel = personLabel;

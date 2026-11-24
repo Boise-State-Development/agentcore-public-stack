@@ -33,6 +33,7 @@ sorts and renders by.
 
 import logging
 import os
+from typing import List
 
 from .models import PinnedAgentRef, UserPinState
 from apis.shared.timestamps import utc_now_iso
@@ -74,7 +75,11 @@ async def get_pin_state(user_id: str) -> UserPinState:
     if not item:
         return UserPinState()
     return UserPinState.model_validate(
-        {"pinned": item.get("pinned", []), "dismissed": item.get("dismissed", [])}
+        {
+            "pinned": item.get("pinned", []),
+            "dismissed": item.get("dismissed", []),
+            "ordered": bool(item.get("ordered", False)),
+        }
     )
 
 
@@ -84,6 +89,7 @@ async def _put_pin_state(user_id: str, state: UserPinState) -> UserPinState:
             **_key(user_id),
             "pinned": [ref.model_dump(by_alias=True, exclude_none=True) for ref in state.pinned],
             "dismissed": state.dismissed,
+            "ordered": state.ordered,
             "updatedAt": _now(),
         }
     )
@@ -129,4 +135,34 @@ async def remove_pin(user_id: str, agent_id: str) -> UserPinState:
     if agent_id not in state.dismissed:
         state.dismissed.append(agent_id)
     logger.info(f"📌 {user_id} unpinned agent {agent_id}")
+    return await _put_pin_state(user_id, state)
+
+
+async def set_pin_order(user_id: str, agent_ids: List[str]) -> UserPinState:
+    """Write the user's arranged order (agent-project-organization D7).
+
+    ``agent_ids`` are the rows the user arranged, top first, already narrowed by the
+    caller to Agents on their effective shelf that are not locked. Each becomes an own
+    pin at its position: one that was only a role seed is converted, exactly as pinning
+    it by hand would, and any dismissal of it is cleared. Own pins not listed (locked
+    ones, or ones the user can no longer reach) keep their relative order after the
+    listed ones. Marks the state ``ordered`` so the resolver follows this order.
+    """
+    state = await get_pin_state(user_id)
+    own = {ref.agent_id: ref for ref in state.pinned}
+    arranged: List[PinnedAgentRef] = []
+    for position, agent_id in enumerate(dict.fromkeys(agent_ids)):
+        ref = own.pop(agent_id, None) or PinnedAgentRef(agent_id=agent_id, pinned_at=_now())
+        arranged.append(ref.model_copy(update={"order": position}))
+    rest = sorted(own.values(), key=lambda ref: ref.order)
+    arranged.extend(ref.model_copy(update={"order": len(arranged) + k}) for k, ref in enumerate(rest))
+    if len(arranged) > MAX_PINS:
+        raise PinLimitError(
+            f"You have reached the limit of {MAX_PINS} pinned agents. Remove one to add another."
+        )
+    listed = set(agent_ids)
+    state.pinned = arranged
+    state.dismissed = [agent_id for agent_id in state.dismissed if agent_id not in listed]
+    state.ordered = True
+    logger.info(f"📌 {user_id} arranged {len(listed)} pinned agents")
     return await _put_pin_state(user_id, state)

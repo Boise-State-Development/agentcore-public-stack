@@ -55,6 +55,7 @@ from apis.app_api.agent_designer.services.binding_validation import (
     validate_agent_write,
 )
 from apis.shared.assistants.compat import to_agent_view
+from apis.shared.skills.script_reviews import record_binding_reviews
 from apis.shared.assistants.models import (
     AgentResponse,
     AgentRunnabilityResponse,
@@ -109,6 +110,7 @@ from apis.app_api.agent_designer.services.pin_service import (
     PinError,
     list_pins,
     pin_agent,
+    reorder_pins,
     unpin_agent,
 )
 from apis.app_api.agent_designer.services.report_service import ReportError, file_report
@@ -126,6 +128,7 @@ from apis.app_api.agent_designer.services.store_service import (
 from apis.shared.assistants.models import (
     AgentIconResponse,
     AgentListing,
+    AgentPinOrderRequest,
     AgentPinsResponse,
     AgentStoreFrontResponse,
     AgentStoreResponse,
@@ -266,6 +269,11 @@ async def create_agent_endpoint(
             voice_enabled=request.voice_enabled,
             voice_instructions_only=request.voice_instructions_only,
         )
+        if request.bindings is not None:
+            await record_binding_reviews(
+                assistant.assistant_id, None, assistant.bindings, current_user,
+                scripts_reviewed=request.scripts_reviewed,
+            )
         return _agent_response(assistant, permission="owner")
     except Exception as e:
         logger.error(f"Error creating agent: {e}", exc_info=True)
@@ -363,6 +371,25 @@ async def list_agent_pins_endpoint(current_user: User = Depends(require_agents_e
     except Exception as e:
         logger.error(f"Error listing agent pins: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list pinned agents: {str(e)}")
+
+
+@router.put("/pins/order", response_model=AgentPinsResponse)
+async def reorder_agent_pins_endpoint(
+    body: AgentPinOrderRequest, current_user: User = Depends(require_agents_enabled)
+):
+    """Arrange the caller's pins, top first (agent-project-organization D7).
+
+    Gated like the other pin routes: it extends pinning, which a deployment already chose.
+    The order is the one the Pinned page and the sidebar both show. Locked role pins keep
+    their place; an unlocked role seed the user arranges becomes their own pin.
+    """
+    try:
+        return AgentPinsResponse(pins=await reorder_pins(current_user, body.agent_ids))
+    except PinError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.error(f"Error arranging agent pins: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to arrange pinned agents.")
 
 
 # --------------------------------------------------------------------------- palette
@@ -650,6 +677,11 @@ async def update_agent_endpoint(
         )
         if not updated:
             raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+        if request.bindings is not None:
+            await record_binding_reviews(
+                agent_id, assistant.bindings, updated.bindings, current_user,
+                scripts_reviewed=request.scripts_reviewed,
+            )
         return _agent_response(updated, permission=permission)
     except HTTPException:
         raise

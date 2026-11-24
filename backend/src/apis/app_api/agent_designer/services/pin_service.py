@@ -54,6 +54,7 @@ from apis.shared.assistants.pins import (
     add_pin,
     get_pin_state,
     remove_pin,
+    set_pin_order,
 )
 from apis.shared.assistants.listing import is_listed
 from apis.shared.assistants.publishers import list_publishers
@@ -69,7 +70,7 @@ from apis.shared.rbac.service import get_app_role_service
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["PinError", "list_pins", "pin_agent", "unpin_agent"]
+__all__ = ["PinError", "list_pins", "pin_agent", "reorder_pins", "unpin_agent"]
 
 
 class PinError(Exception):
@@ -186,13 +187,21 @@ async def _role_seeds(user: User) -> Dict[str, _Seed]:
     return seeds
 
 
-def _shelf_key(ref: Optional[PinnedAgentRef], seed: Optional[_Seed], name: str) -> Tuple[int, int, int, int, str]:
+def _shelf_key(
+    ref: Optional[PinnedAgentRef], seed: Optional[_Seed], name: str, ordered: bool = False
+) -> Tuple[int, int, int, int, str]:
     """``(locked desc, role priority desc, order asc, name asc)`` from the spec's Data model.
 
     The extra term is where a pin with no role sits: a user's own pins have no role
     priority to sort by, so they follow the seeded ones rather than being interleaved by a
     priority they do not have. Within each group the stored ``order`` holds.
+
+    Once the user has arranged their pins (``ordered``, agent-project-organization D7),
+    every unlocked row they own follows their ``order``, seeded or not; a locked seed stays
+    first, and a seed that arrived since sits ahead of their arranged rows, as new.
     """
+    if ordered and ref is not None and not (seed is not None and seed.locked):
+        return (1, 1, 0, ref.order, name.lower())
     if seed is not None:
         return (0 if seed.locked else 1, 0, -seed.priority, seed.order, name.lower())
     return (1, 1, 0, ref.order if ref else 0, name.lower())
@@ -242,7 +251,7 @@ async def list_pins(user: User) -> List[PinnedAgentResponse]:
             continue
 
         row = _pin_row(assistant, ref, publishers, seed)
-        rows.append((_shelf_key(ref, seed, assistant.name), row))
+        rows.append((_shelf_key(ref, seed, assistant.name, state.ordered), row))
 
     rows.sort(key=lambda entry: entry[0])
     return [row for _key, row in rows]
@@ -323,3 +332,21 @@ async def unpin_agent(user: User, agent_id: str) -> None:
         logger.info(f"📌 {user.user_id} tried to unpin locked role pin {agent_id}; ignored")
         return
     await remove_pin(user.user_id, agent_id)
+
+
+async def reorder_pins(user: User, agent_ids: List[str]) -> List[PinnedAgentResponse]:
+    """Arrange the caller's pins, top first (agent-project-organization D7).
+
+    Only Agents on the caller's effective shelf are written, so a reorder can never pin
+    something the user could not otherwise pin. Locked role pins are ignored: their place
+    is the role's. Ids that match nothing on the shelf (gone, or no longer reachable) are
+    ignored too. Returns the shelf as it now resolves.
+    """
+    shelf = await list_pins(user)
+    movable = {row.agent_id for row in shelf if not row.locked}
+    arranged = [agent_id for agent_id in dict.fromkeys(agent_ids) if agent_id in movable]
+    try:
+        await set_pin_order(user.user_id, arranged)
+    except PinLimitError as e:
+        raise PinError(409, str(e)) from e
+    return await list_pins(user)

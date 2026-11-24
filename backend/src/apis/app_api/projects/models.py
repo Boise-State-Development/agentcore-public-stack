@@ -325,7 +325,20 @@ class UpdateModelRequest(BaseModel):
 class UpdateBindingsRequest(BaseModel):
     """The complete list for the route's kind; bindings of other kinds are kept."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     bindings: List[BindingRef] = Field(..., max_length=MAX_BINDINGS_PER_KIND)
+    # Skills only (skill-code-sandbox §8.5): the script sets the saver allowed,
+    # ``{skillId: scriptsHash}``. Ignored on the tools route.
+    scripts_reviewed: Optional[Dict[str, str]] = Field(None, alias="scriptsReviewed")
+
+
+class PinSkillRequest(BaseModel):
+    """Optional body for a skill's Update: the script set the saver allowed (§8.5)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    scripts_reviewed: Optional[Dict[str, str]] = Field(None, alias="scriptsReviewed")
 
 
 class _SettingsResponse(BaseModel):
