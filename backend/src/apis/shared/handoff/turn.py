@@ -246,8 +246,11 @@ class HandoffTurn:
         if request is not None and (is_resume or is_continuation):
             logger.warning("handoff_context ignored on a resume or continuation turn")
             request = None
-        if request is not None and linked is not None:
+        if request is not None and (linked is not None or _took_a_handoff(session_row)):
             # Already a handoff's target: a second card would be a second, conflicting context.
+            # Settled counts too: after the first turn's ``done`` the link stops being followed, but
+            # the conversation still took its handoff, and a pinned step keeps its version on the
+            # row (workflow-designer §23.3), so a stray card is ignored rather than accepted again.
             logger.warning("handoff_context ignored: this conversation already took a handoff")
             request = None
         pinning = agent_version_pinning_enabled()
@@ -602,6 +605,12 @@ def _project_of(session_row: Optional[Dict[str, Any]]) -> Optional[str]:
     from apis.shared.handoff.send_back import project_of
 
     return project_of(session_row)
+
+
+def _took_a_handoff(session_row: Optional[Dict[str, Any]]) -> bool:
+    """Whether this conversation is already a handoff's target, settled or not."""
+    row = session_row or {}
+    return isinstance(row.get("spawnedFrom"), dict) or row.get("pinnedAgentVersion") is not None
 
 
 def _linked_handoff_id(session_row: Optional[Dict[str, Any]]) -> Optional[str]:

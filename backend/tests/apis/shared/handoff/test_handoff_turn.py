@@ -165,6 +165,27 @@ class TestForTurn:
         row = {"spawnedFrom": {"sessionId": "src", "handoffId": "h0", "settled": True}}
         assert self.build(handoff_context=None, session_row=row) is None
 
+    @pytest.mark.parametrize(
+        "row",
+        [
+            {"spawnedFrom": {"sessionId": "src", "handoffId": "h0", "settled": True}},
+            {"spawnedFrom": {"sessionId": "src", "handoffId": "h0", "settled": True}, "pinnedAgentVersion": 3},
+            {"pinnedAgentVersion": 3},
+        ],
+    )
+    @pytest.mark.parametrize("version", [None, 3, 5])
+    def test_a_settled_or_pinned_target_ignores_a_stray_card(self, monkeypatch, caplog, row, version):
+        """workflow-designer §23.3: a later turn ignores a card (and its version), never refusing it."""
+        monkeypatch.setenv("HANDOFFS_ENABLED", "true")
+        monkeypatch.setenv("AGENT_VERSION_PINNING_ENABLED", "true")
+        card = HandoffContextRequest(handoff_id="h1", text=EXCERPT, agentVersion=version)
+        assert self.build(handoff_context=card, session_row=row) is None
+        assert "already took a handoff" in caplog.text
+
+    def test_a_fresh_conversation_still_takes_the_card(self, monkeypatch):
+        monkeypatch.setenv("HANDOFFS_ENABLED", "true")
+        assert self.build(session_row={"title": "New Conversation"}).request.handoff_id == "h1"
+
 
 def test_an_oversized_field_is_refused_at_the_schema():
     with pytest.raises(Exception):
