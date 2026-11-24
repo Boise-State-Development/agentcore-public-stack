@@ -502,6 +502,32 @@ describe('SessionList', () => {
       expect(mockAgentPinService.reorder).not.toHaveBeenCalled();
     });
 
+    it('marks the drop zone while a pinned agent is dragged, and clears it on drop', async () => {
+      const component = (await organized()) as any;
+      expect(component.isDraggingAgent()).toBe(false);
+      component.onAgentDragStarted();
+      expect(component.isDraggingAgent()).toBe(true);
+      component.isAgentOutside.set(true);
+      component.onDragEnded();
+      expect(component.isDraggingAgent()).toBe(false);
+      expect(component.isAgentOutside()).toBe(false);
+    });
+
+    it('draws the zone, the landing slot and the unpin hint from those signals', () => {
+      const html = readFileSync(
+        fromProjectRoot('src/app/components/sidenav/components/session-list/session-list.html'),
+        'utf8',
+      );
+      const css = readFileSync(
+        fromProjectRoot('src/app/components/sidenav/components/session-list/session-list.css'),
+        'utf8',
+      );
+      expect(html).toContain(`[attr.data-zone]="isDraggingAgent() && organizeLists && !isAgentOutside() ? '' : null"`);
+      expect(html).toContain('(cdkDragStarted)="onAgentDragStarted()"');
+      expect(html).toContain('Release to unpin');
+      expect(css).toMatch(/\.pinned-agents-list \.cdk-drag-placeholder \{[^}]*outline: 1px dashed/);
+    });
+
     it('says so when the order cannot be saved', async () => {
       const component = await organized();
       mockAgentPinService.reorder.mockRejectedValueOnce(new Error('500'));

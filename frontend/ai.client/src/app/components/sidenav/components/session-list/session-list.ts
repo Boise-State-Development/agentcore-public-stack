@@ -372,6 +372,15 @@ export class SessionList {
   /** The dragged row is over the Pinned list. */
   protected readonly isOverPinned = signal(false);
 
+  /**
+   * A pinned Agent is being dragged. Its list draws itself as the drop zone, with a
+   * dashed slot where the Agent will land (agent-project-organization §6.4).
+   */
+  protected readonly isDraggingAgent = signal(false);
+
+  /** The dragged Agent has left its list, so letting go unpins it. */
+  protected readonly isAgentOutside = signal(false);
+
   /** Touch needs a short press-and-hold so a drag never fights the drawer's scroll. */
   protected readonly dragStartDelay = { touch: 300, mouse: 0 };
 
@@ -866,6 +875,14 @@ export class SessionList {
   protected onDragEnded(): void {
     this.isDragging.set(false);
     this.isOverPinned.set(false);
+    this.isDraggingAgent.set(false);
+    this.isAgentOutside.set(false);
+  }
+
+  /** A pinned Agent started dragging: show its list as the drop zone. */
+  protected onAgentDragStarted(): void {
+    this.isAgentOutside.set(false);
+    this.isDraggingAgent.set(true);
   }
 
   /**
