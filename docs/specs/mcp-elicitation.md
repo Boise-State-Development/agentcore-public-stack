@@ -251,3 +251,15 @@ App-api's admin discovery advertises form elicitation to an opted-in server too,
 - **`AwaitingInputKind` gains `mcp_elicitation`** in both packages, ordered after `user_question`.
 - **Admin discovery advertises form elicitation** to an opted-in server, so the tool picker lists what such a server offers only to clients that can elicit (`delete_repository`). The admin form's Discover sends the row's `elicitationEnabled` (`MCPDiscoverRequest.elicitation_enabled`), and `to_config` carries it into the same `create_external_mcp_client` the agent loop uses. It is therefore gated by the same two switches and narrowed to `form` on 2026-07-28 only. A saved tool's discovery already passed its stored config. Discovery calls no tool, and the callback answers "not supported" outside a call, so no form is ever asked for. This differs from §6's "a callback that always cancels" only in that wording; the server never sees either.
 - **Not yet done:** the handoff relay of an elicitation (§3) is still out of scope.
+
+## 13. Dev run (PR-3)
+
+**Step 0, the probe (2026-11-25).** I ran a read-only `tools/list` against `api.githubcopilot.com/mcp/` through `create_external_mcp_client` twice, once with form elicitation advertised and once without, under two `X-MCP-Toolsets` headers.
+
+| Toolsets | Tools, off → on | `delete_repository` | Shared specs changed | The row's 10 allowlisted tools |
+|---|---|---|---|---|
+| `issues,context` (dev's row today) | 13 → 13 | absent both ways | none | 10/10, byte-identical |
+| `issues,context,repos` | 32 → 33 | only when advertised | none | 10/10, byte-identical |
+
+- **Advertising form elicitation changes no existing GitHub tool spec**, so turning it on rewrites no cached prefix.
+- **`delete_repository` lives in the `repos` toolset.** Dev's row sends `X-MCP-Toolsets: issues,context`, so the dev run also adds `repos` to that header. The row's non-empty allowlist keeps the toolset's other 22 tools out of `toolConfig`, so the only prefix change on dev is the one deliberate rewrite from allowing `delete_repository`.
