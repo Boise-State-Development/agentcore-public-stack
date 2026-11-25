@@ -17,6 +17,8 @@ export type NotificationKind =
   | 'project_proposal_decided'
   | 'project_memory_maintenance'
   | 'project_schedule_paused'
+  // A personal schedule the platform stopped (proactive-agent-gaps slice 0).
+  | 'schedule_paused'
   // Quota requests and extensions (quota-requests spec §11.1).
   | 'quota_request_submitted'
   | 'quota_request_decided'

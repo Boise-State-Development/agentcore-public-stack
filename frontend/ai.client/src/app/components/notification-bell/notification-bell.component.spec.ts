@@ -43,6 +43,11 @@ describe('describeNotification', () => {
     [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'deleted', createdBy: 'me@x.edu' } }), 'ann@x.edu deleted your schedule “Weekly status” in Enrollment Sync.'],
     [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'max_runs_per_day_exceeded', createdBy: 'ed@x.edu' } }), 'The schedule “Weekly status” in Enrollment Sync stopped after reaching its daily run limit.'],
     [notif({ kind: 'project_schedule_paused', payload: { reason: 'something_new' } }), 'A schedule in Enrollment Sync stopped.'],
+    // A personal schedule the platform stopped: always the reader's own, never in a project.
+    [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', label: 'Morning Briefing', reason: 'repeated_failures' } }), 'Your schedule “Morning Briefing” stopped after failing several times in a row.'],
+    [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', label: 'Morning Briefing', reason: 'oauth_required' } }), 'Your schedule “Morning Briefing” stopped until you reconnect a tool it uses.'],
+    [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', reason: 'reauth_required' } }), 'Your schedule stopped until you sign in again.'],
+    [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', label: 'Morning Briefing', reason: 'something_new' } }), 'Your schedule “Morning Briefing” stopped.'],
     [notif({ actorEmail: null, projectName: null, payload: {} }), 'Someone added you to a project.'],
     [notif({ actorName: 'Ann Lee' }), 'Ann Lee added you to Enrollment Sync as an editor.'],
   ])('%#: reads as a sentence', (n, text) => {
@@ -247,6 +252,13 @@ describe('NotificationBellComponent', () => {
     expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1', 'schedules']);
     component.open(notif({ kind: 'project_schedule_paused', payload: { scheduleId: 'sc1', label: 'W', reason: 'deleted' } }));
     expect(navigate).toHaveBeenLastCalledWith(['/projects', 'prj_1']);
+  });
+
+  it('a stopped personal schedule opens /schedules, where it can be resumed', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(notif({ kind: 'schedule_paused', projectId: null, projectName: null, payload: { scheduleId: 's1', label: 'W', reason: 'repeated_failures' } }));
+    expect(navigate).toHaveBeenLastCalledWith(['/schedules']);
   });
 
   it('a shared task opens the shared view, revoked or not', () => {

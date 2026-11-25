@@ -42,9 +42,11 @@ from apis.shared.scheduled_prompts.service import (
     delete_scheduled_prompt,
     get_scheduled_prompt,
     list_scheduled_prompts,
+    remember_owner_email,
     set_schedule_state,
     update_scheduled_prompt,
 )
+from apis.shared.projects.models import normalize_email
 
 from apis.app_api.schedules.models import (
     CreateScheduleRequest,
@@ -103,6 +105,23 @@ async def _resolve_enabled_tools_snapshot(user: User, requested: Optional[List[s
     return list(permissions.tools)
 
 
+async def _backfill_owner_email(user: User, schedules) -> None:
+    """Record the caller's email on their personal schedules that predate storing it.
+
+    A pause notice is addressed by email (``pausing.notify_schedule_paused``).
+    Writes only for a schedule with none, once each; best-effort, never fails the list.
+    """
+    email = normalize_email(user.email or "")
+    missing = [s for s in schedules if not s.project_id and not s.owner_email]
+    if not email or not missing:
+        return
+    for schedule in missing:
+        try:
+            await asyncio.to_thread(remember_owner_email, user.user_id, schedule.schedule_id, email)
+        except Exception:
+            logger.warning("Could not record the owner email on schedule %s", schedule.schedule_id, exc_info=True)
+
+
 def _require_schedule_or_404(schedule, schedule_id: str):
     if schedule is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Schedule not found: {schedule_id}")
@@ -143,6 +162,8 @@ async def create_schedule(
             assistant_id=request.assistant_id,
             enabled_tools=enabled_tools,
             deliver_email=request.deliver_email,
+            # Where a pause notice goes: the scheduled-runs Lambdas can't look it up.
+            owner_email=normalize_email(user.email or "") or None,
         )
     except ScheduledPromptLimitExceeded as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -159,6 +180,7 @@ async def list_schedules(
     user: User = Depends(require_scheduled_runs_user),
 ) -> ScheduledPromptsListResponse:
     schedules = await list_scheduled_prompts(user.user_id)
+    await _backfill_owner_email(user, schedules)
     return ScheduledPromptsListResponse(
         schedules=[ScheduledPromptResponse.from_schedule(s) for s in schedules]
     )

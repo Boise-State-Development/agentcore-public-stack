@@ -18,7 +18,7 @@ these tests pin the HTTP contract and ownership isolation.
 
 from dataclasses import dataclass
 from typing import List, Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -101,6 +101,8 @@ def _make_client(
         monkeypatch.setenv("SCHEDULED_RUNS_ENABLED", flag)
 
     monkeypatch.setattr(schedules_routes, "get_app_role_service", lambda: FakeRoleService())
+    # The list's owner-email back-fill writes to DynamoDB; tests read the calls instead.
+    monkeypatch.setattr(schedules_routes, "remember_owner_email", MagicMock(return_value=True))
 
     app = FastAPI()
     app.include_router(schedules_routes.router)
@@ -177,6 +179,8 @@ class TestCreateSchedule:
         (call,) = create_mock.call_args_list
         assert call.kwargs["user_id"] == USER_ID
         assert call.kwargs["label"] == "Morning Briefing"
+        # Where a pause notice goes: the scheduled-runs Lambdas can't look the email up.
+        assert call.kwargs["owner_email"] == f"{USER_ID}@example.com"
 
     def test_none_enabled_tools_resolves_rbac_snapshot_at_creation(self, monkeypatch):
         client = _make_client(monkeypatch)
@@ -399,6 +403,32 @@ class TestListAndGet:
         assert response.status_code == 200
         assert len(response.json()["schedules"]) == 1
         list_mock.assert_awaited_once_with(USER_ID)
+
+    def test_list_records_the_owner_email_on_personal_schedules_missing_it(self, monkeypatch):
+        client = _make_client(monkeypatch, user_id=USER_ID)
+        missing = _make_schedule(scheduleId="sched-000000000001")
+        has_one = _make_schedule(scheduleId="sched-000000000002", ownerEmail="someone@example.com")
+        in_project = _make_schedule(scheduleId="sched-000000000003", projectId="proj-1")
+        monkeypatch.setattr(
+            schedules_routes, "list_scheduled_prompts", AsyncMock(return_value=[missing, has_one, in_project])
+        )
+
+        response = client.get("/schedules")
+
+        assert response.status_code == 200
+        schedules_routes.remember_owner_email.assert_called_once_with(
+            USER_ID, "sched-000000000001", f"{USER_ID}@example.com"
+        )
+
+    def test_a_failed_back_fill_never_fails_the_list(self, monkeypatch):
+        client = _make_client(monkeypatch, user_id=USER_ID)
+        monkeypatch.setattr(schedules_routes, "list_scheduled_prompts", AsyncMock(return_value=[_make_schedule()]))
+        monkeypatch.setattr(schedules_routes, "remember_owner_email", MagicMock(side_effect=RuntimeError("throttled")))
+
+        response = client.get("/schedules")
+
+        assert response.status_code == 200
+        assert len(response.json()["schedules"]) == 1
 
     def test_get_by_id(self, monkeypatch):
         client = _make_client(monkeypatch)

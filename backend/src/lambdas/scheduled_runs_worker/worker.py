@@ -53,10 +53,10 @@ from apis.shared.harness import (
 from apis.shared.projects.schedule_delivery import ScheduleDelivery
 from apis.shared.projects.schedules import ProjectSchedules
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
+from apis.shared.scheduled_prompts.pausing import pause_schedule
 from apis.shared.scheduled_prompts.service import (
     get_scheduled_prompt,
     record_run_result,
-    set_schedule_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,12 +68,12 @@ def _env_int(name: str, default: int) -> int:
 
 
 async def _pause(schedule: ScheduledPrompt, reason: str) -> None:
-    """Pause with ``reason``; a project schedule also gets a run row and a notice."""
-    if schedule.project_id:
-        # ``schedule`` is the record as it was before this run, so still "active".
-        await asyncio.to_thread(ProjectSchedules().pause, schedule, reason)
-        return
-    await set_schedule_state(schedule.user_id, schedule.schedule_id, "paused_error", state_reason=reason)
+    """Pause with ``reason`` and tell the owner (``pause_schedule``).
+
+    ``schedule`` is the record as it was before this run, so still "active". A
+    project schedule also gets a run row on the project.
+    """
+    await pause_schedule(schedule, reason)
 
 
 async def _record_project_run(schedule: ScheduledPrompt, status: str, share_id: Optional[str] = None) -> None:

@@ -45,6 +45,13 @@ function describeSchedule(n: AppNotification, who: string, project: string): str
   return stop ? `${subject} in ${project} stopped ${mine ? stop.mine : stop.theirs}.` : `${subject} in ${project} stopped.`;
 }
 
+/** A personal schedule the platform stopped: always the reader's own, never in a project. */
+function describeOwnSchedule(n: AppNotification): string {
+  const label = typeof n.payload?.label === 'string' && n.payload.label ? ` “${n.payload.label}”` : '';
+  const stop = SCHEDULE_STOPS[n.payload?.reason ?? ''];
+  return stop ? `Your schedule${label} stopped ${stop.mine}.` : `Your schedule${label} stopped.`;
+}
+
 function amountOf(value: unknown): number | null {
   const amount = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
   return Number.isFinite(amount) ? amount : null;
@@ -112,6 +119,7 @@ function describeHandoff(n: AppNotification): string {
 export function describeNotification(n: AppNotification, quotaPeriodType?: string | null): string {
   if (n.kind.startsWith('quota_')) return describeQuota(n, quotaPeriodType);
   if (n.kind.startsWith('handoff_')) return describeHandoff(n);
+  if (n.kind === 'schedule_paused') return describeOwnSchedule(n);
   const who = personLabel(n.actorName, n.actorEmail) || 'Someone';
   const project = n.projectName || 'a project';
   const role = ROLE_PHRASES[n.payload?.role ?? ''] ?? (n.payload?.role ? `a ${n.payload.role}` : null);
@@ -467,6 +475,12 @@ export class NotificationBellComponent {
     if (n.kind === 'project_proposal_decided' && n.projectId) {
       const file = typeof n.payload?.slug === 'string' ? n.payload.slug : undefined;
       void this.router.navigate(['/projects', n.projectId, 'memory'], { queryParams: file ? { file } : {} });
+      this.sidenav.close();
+      return;
+    }
+    // A stopped personal schedule opens /schedules, where it can be resumed.
+    if (n.kind === 'schedule_paused') {
+      void this.router.navigate(['/schedules']);
       this.sidenav.close();
       return;
     }

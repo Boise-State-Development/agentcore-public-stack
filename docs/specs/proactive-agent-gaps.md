@@ -114,7 +114,7 @@ The triage pass is metered like any side call (`callKind: "proactive_triage"`). 
   - `agent_item`, a G2 `notify`: `{jobId, runId, sessionId, title, urgency, sourceRef}`;
   - `agent_needs_approval` (G5);
   - `agent_needs_input` (a question or elicitation pause);
-  - `agent_job_paused`: the personal counterpart of `project_schedule_paused`. **This one is worth doing on its own today**, since a personal schedule currently pauses silently.
+  - `schedule_paused`: the personal counterpart of `project_schedule_paused`, named for the schedule because a "job" isn't defined yet (open question 1). **Built as slice 0** (`apis/shared/scheduled_prompts/pausing.py`): every platform pause of a personal schedule now writes it.
 - `urgency` is `now` / `today` / `fyi` and decides the channel (G6).
 - Items carry a `dedupeKey` (the G1 fingerprint) so a retried run never notifies twice. That is the same idempotency rule the scheduler already applies to sessions.
 - Actions on an item (`dismiss`, `not_useful`, `snooze`) are recorded as feedback for G7.
@@ -172,7 +172,7 @@ The triage pass is metered like any side call (`callKind: "proactive_triage"`). 
 
 **Proposed shape.**
 
-- The worker already knows each case (`HeadlessAuthError`, `oauth_required`, `run_block_reason`). Each writes `agent_job_paused` (G4) with the reason and the one action that fixes it: sign in, Connect, or edit the job.
+- The worker already knows each case (`HeadlessAuthError`, `oauth_required`, `run_block_reason`). Each writes `schedule_paused` (G4) with the reason and the one action that fixes it: sign in, Connect, or edit the job.
 - A daily, cheap **pre-flight** for active jobs checks the grant's age and vaulted token presence **without** running the model, and warns at "expires in 3 days" rather than after the fact.
 - G6 pushes the `now`-urgency subset.
 
@@ -182,7 +182,7 @@ The triage pass is metered like any side call (`callKind: "proactive_triage"`). 
 
 **Proposed shape.**
 
-- **Per-job budget**: `maxCostPerDay` on the job. Before each run the dispatcher reads the job's spend today, summed from its runs' `C#` rows by `runId` (no new metering). A job over budget pauses with `agent_job_paused{reason: "budget"}`.
+- **Per-job budget**: `maxCostPerDay` on the job. Before each run the dispatcher reads the job's spend today, summed from its runs' `C#` rows by `runId` (no new metering). A job over budget pauses with `schedule_paused{reason: "budget"}`.
 - **A scale guard in the run-frequency rules**: an interval under 1 hour requires a triage model to be set. A frontier model every 15 minutes is the scenario this exists to prevent.
 - **Action audit**: every tool call made by a headless run that the tool's catalog row marks as write or destructive (MCP `destructiveHint`, or the approval card's own list) writes an `audit` row with the run, tool, target and approver. The governance seam already exists (`RunAuditRecorder`); this extends it from runs to actions.
 - **Who receives**: G4 and G6 deliver to the owner only. Anything that sends to someone else (an email, a message) stays behind G5's approval. That keeps F6a's "deliver to self" premise true.
@@ -231,7 +231,7 @@ Rules for the web app half:
 |---|---|---|---|
 | Slice | Gaps | Delivers | Web app half (same slice) | Depends on |
 |---|---|---|---|---|
-| **0 — Paused jobs say so** | G4 (`agent_job_paused` only), G8 (existing reasons) | A personal schedule that stops tells its owner | The bell's text for `agent_job_paused`, linking to the schedule | Nothing. Small, and worth doing alone |
+| **0 — Paused jobs say so** (built) | G4 (`schedule_paused` only), G8 (existing reasons) | A personal schedule that stops tells its owner | The bell's text for `schedule_paused`, linking to the schedule | Nothing. Small, and worth doing alone |
 | **1 — Quiet watcher** | G1, G2, G3 step 1, G4 (`agent_item`) | A 15-minute watcher that is silent until something is new, then raises one inbox item | Watcher fields in the schedule form, run history with quiet runs, job state view, `agent_item` in the bell, a menu entry for schedules | Slice 0 |
 | **2 — Answer from anywhere** | G5 | Approvals and questions from a headless run land in the inbox and can be answered there | Approve, Decline and answer in the bell | Slice 1's inbox kinds |
 | **3 — Push** | G6, plus the iOS app's inbox and notification actions | `now` items reach a closed tab and a locked phone; Approve works from the notification after re-auth | Web Push: service worker, opt-in in Settings | Slice 2; iOS read-only conversations; `native-app-auth.md` PR 3 (devices) |

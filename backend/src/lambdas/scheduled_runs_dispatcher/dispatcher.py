@@ -45,10 +45,10 @@ from typing import Any, Dict
 from apis.shared.scheduled_prompts.service import (
     list_due_schedules,
     rearm_schedule,
-    set_schedule_state,
 )
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
-from apis.shared.projects.schedules import ProjectSchedules, run_block_reason
+from apis.shared.scheduled_prompts.pausing import pause_schedule
+from apis.shared.projects.schedules import run_block_reason
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -144,7 +144,7 @@ async def _dispatch_schedule(schedule: ScheduledPrompt, now: datetime, counts: D
     if schedule.project_id:
         reason = await asyncio.to_thread(run_block_reason, schedule)
         if reason is not None:
-            await asyncio.to_thread(ProjectSchedules().pause, schedule, reason)
+            await pause_schedule(schedule, reason)
             logger.warning(f"Schedule {schedule.schedule_id}: project {schedule.project_id} refused it ({reason}); pausing")
             counts["PausedProject"] += 1
             return
@@ -154,12 +154,8 @@ async def _dispatch_schedule(schedule: ScheduledPrompt, now: datetime, counts: D
     # counter (a run this tick would be the (runs_today + 1)th today).
     runs_today = _runs_today(schedule, today)
     if runs_today >= schedule.max_runs_per_day:
-        await set_schedule_state(
-            schedule.user_id,
-            schedule.schedule_id,
-            "paused_error",
-            state_reason="max_runs_per_day_exceeded",
-        )
+        # Tells the owner, and leaves a run row on a project schedule's project.
+        await pause_schedule(schedule, "max_runs_per_day_exceeded")
         logger.warning(
             f"Schedule {schedule.schedule_id}: runaway guard tripped "
             f"({runs_today}/{schedule.max_runs_per_day} runs today); pausing"
