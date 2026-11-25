@@ -165,7 +165,7 @@ App-api's admin discovery advertises form elicitation to an opted-in server too,
   - The capability is part of `_build_capabilities`, which already runs at connect, so it adds no round trip.
   - The middleware is registered at agent build. For a tool it doesn't handle, it costs one `isinstance` check and one set lookup per tool call, after the model has answered.
   - A resumed delete pays one extra MCP round trip, the replayed first round (~100–300 ms). That is on the resume, after the user has answered.
-- **Prompt cache.** No schema enters `toolConfig`, and nothing is appended to history beyond the server's own result (§4).
+- **Prompt cache.** No schema enters `toolConfig`, and nothing is appended to history beyond the server's own result and, since §14, one answer-free line saying what the user did (§4).
   - The one possible prefix change is GitHub's `tools/list` growing by `delete_repository`. On an allowlisted row like dev's, that never reaches `toolConfig`. On an empty-list row it is one deliberate rewrite when the admin enables the server.
   - Step 0 of §8 checks whether advertising form elicitation changes any *other* tool spec GitHub returns.
 - **Session state.** A per-call contextvar plus Strands' own `_interrupt_state`. No cache on the agent instance or on the shared client (§2). The contextvar also cannot route user A's form to user B on a shared client: a callback that finds no slot answers `cancel`.
@@ -287,6 +287,30 @@ App-api's admin discovery advertises form elicitation to an opted-in server too,
 
 **Not measured:** step 4's `turn_prelude` timing comparison, flag on versus off.
 
-**Findings for later:**
+**Findings for later** (both fixed, §14):
 - **A decline or a mismatch reads as a failure.** GitHub returns both as an error result, so the tool rail shows "Couldn't use Github Issues · 1 failed" for a decision the user made.
 - **The model cannot tell what the user did.** The answer never reaches it, by design (§4). After a mismatch it guessed at causes and told the user it "can't see GitHub's confirmation form". A one-line, answer-free note in the tool result, such as "the user declined" or "the user answered; the server's reply follows", would let it explain without seeing the content.
+
+## 14. The outcome note (follow-up to §13)
+
+Both §13 findings are fixed in one change.
+
+**What the model reads.** When the user has answered a form on a call, the middleware appends one line to the tool result, after the server's own reply. The line says what the user did and nothing they entered (`outcome_text` in `apis/shared/mcp_elicitation/forms.py`):
+
+| Last action sent | Line |
+|---|---|
+| `accept` | The user submitted *{server}*'s form. Their answer went to the server and is not shown to you; the result above is the server's reply to it. |
+| `decline` | The user declined *{server}*'s request for input, so nothing was submitted. That was their choice, not an error: don't call the tool again unless they ask. |
+| `cancel` | The user dismissed *{server}*'s request for input, so nothing was submitted. Don't call the tool again unless they ask. |
+
+The last form answered on a call decides it, so a declined second round outranks a submitted first one. An answer the backend refused (it did not fit the schema) was sent as `cancel` and reads as dismissed. A call that never asked is untouched. The line is roughly 30 tokens on the one call that asked, appended to history like any result, so it rewrites nothing.
+
+**What the rail reads.** The same result carries `elicitation: {"action": …}` (`OUTCOME_KEY`). No model formatter sends a tool result's extra keys to a provider (Strands' Bedrock formatter keeps `content`, `toolUseId` and `status`), so it travels on the SSE `tool_result` and the stored message only, like `structuredContent`. `user_declined(result)` is true for `decline` and `cancel`, and every judge of a call's outcome asks it:
+
+- `AgentStatusHook` reports `ok: true` and records `declined` on the batch.
+- `ToolCensusHook` doesn't count it as an error.
+- The tool summarizer heads an all-declined batch "You declined the request for input from *{integration}*" without a model call, and shows a declined call in a mixed batch as `DECLINED BY USER` instead of its error text.
+- The SPA (`isDeclinedElicitation`, `services/mcp-elicitation/elicitation-outcome.ts`) maps it to the rail status `declined`: a grey dot, the line "You declined the request for input", the label "Declined", and no place in the group's failure count. The live parser and the reload merge both keep the key.
+
+**An answer the server refused still reads as a failure.** After `accept`, an error is the server's verdict, and only the server knows why: a mismatched name, or a real outage after a correct one. The rail counts it as failed, and the model now reads that the user did answer, so it can tell them the server refused what they entered rather than guess that the form never appeared.
+
