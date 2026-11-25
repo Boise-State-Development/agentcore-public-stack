@@ -11,9 +11,11 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.service import (
     get_scheduled_prompt,
     create_scheduled_prompt,
+    runaway_ceiling,
     set_schedule_state,
 )
 from lambdas.scheduled_runs_dispatcher import dispatcher
@@ -121,6 +123,80 @@ class TestRunawayGuard:
 
         assert counts["Dispatched"] == 1
         assert counts["PausedRunaway"] == 0
+
+    async def _due_interval_schedule(self, sessions_metadata_table, *, minutes: int, runs_today: int):
+        schedule = await create_scheduled_prompt(
+            user_id=USER_ID,
+            label="Inbox watcher",
+            prompt_text="Check my inbox",
+            cadence="interval",
+            hour_local=0,
+            timezone_name="America/Boise",
+            interval_value=minutes,
+            interval_unit="minutes",
+        )
+        sessions_metadata_table.update_item(
+            Key={"PK": f"USER#{USER_ID}", "SK": f"SCHEDPROMPT#{schedule.schedule_id}"},
+            UpdateExpression="SET nextRunAt = :past, GSI3_SK = :gsisk, runsToday = :n, runsTodayDate = :today",
+            ExpressionAttributeValues={
+                ":past": PAST,
+                ":gsisk": f"{PAST}#{schedule.schedule_id}",
+                ":n": runs_today,
+                ":today": date.today().isoformat(),
+            },
+        )
+        return schedule
+
+    async def test_a_fifteen_minute_interval_runs_past_the_default_ceiling(self, sessions_metadata_table, invoked_workers):
+        """96 runs a day is the cadence, not a runaway: the default 24 must not pause it."""
+        await self._due_interval_schedule(sessions_metadata_table, minutes=15, runs_today=60)
+
+        counts = await dispatcher.dispatch_once()
+
+        assert counts["Dispatched"] == 1
+        assert counts["PausedRunaway"] == 0
+
+    async def test_a_fifteen_minute_interval_past_its_cadence_is_a_runaway(self, sessions_metadata_table, invoked_workers):
+        schedule = await self._due_interval_schedule(sessions_metadata_table, minutes=15, runs_today=100)
+
+        counts = await dispatcher.dispatch_once()
+
+        assert counts["PausedRunaway"] == 1
+        assert invoked_workers == []
+        assert (await get_scheduled_prompt(USER_ID, schedule.schedule_id)).state_reason == "max_runs_per_day_exceeded"
+
+
+class TestRunawayCeiling:
+    @pytest.mark.parametrize(
+        ("cadence", "value", "unit", "stored", "expected"),
+        [
+            ("daily", None, None, 24, 24),
+            ("weekly", None, None, 3, 3),
+            ("interval", 15, "minutes", 24, 96 + 4),
+            ("interval", 45, "minutes", 24, 32 + 4),
+            ("interval", 1, "hours", 24, 28),
+            ("interval", 6, "hours", 24, 24),
+            ("interval", 15, "minutes", 500, 500),
+        ],
+    )
+    async def test_the_ceiling_follows_the_cadence(self, cadence, value, unit, stored, expected):
+        schedule = ScheduledPrompt.model_validate(
+            {
+                "scheduleId": "sched-000000000001",
+                "userId": USER_ID,
+                "label": "x",
+                "promptText": "x",
+                "cadence": cadence,
+                "hourLocal": 0,
+                "intervalValue": value,
+                "intervalUnit": unit,
+                "timezone": "UTC",
+                "maxRunsPerDay": stored,
+                "createdAt": PAST,
+                "updatedAt": PAST,
+            }
+        )
+        assert runaway_ceiling(schedule) == expected
 
 
 class TestConditionalRearm:

@@ -33,10 +33,13 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-#: Floor for the custom "every N" cadence. Below this a schedule fires faster
-#: than the runaway guard (``max_runs_per_day``) tolerates and just self-pauses;
-#: 15 minutes keeps the smallest interval useful without inviting a hot loop.
+#: Floor for the custom "every N" cadence: 15 minutes keeps the smallest
+#: interval useful without inviting a hot loop.
 MIN_INTERVAL_MINUTES = 15
+
+#: Runs a day an interval schedule may make beyond what its cadence implies
+#: before the runaway guard (``runaway_ceiling``) calls it a runaway.
+RUNAWAY_SLACK_RUNS = 4
 
 
 class _Unset:
@@ -145,6 +148,26 @@ def interval_to_minutes(value: Optional[int], unit: Optional[IntervalUnit]) -> O
     if value is None or unit is None:
         return None
     return value * 60 if unit == "hours" else value
+
+
+def runaway_ceiling(schedule: ScheduledPrompt) -> int:
+    """The most runs a day the dispatcher lets ``schedule`` make before pausing it.
+
+    The guard exists to catch a schedule firing far more often than its
+    cadence says (a re-arm bug, a hot loop), never one running as designed.
+    The stored ``max_runs_per_day`` (24 by default) is enough for every fixed
+    cadence, but an interval under an hour runs more than 24 times a day by
+    design: a 15-minute watcher makes 96 runs. So an interval schedule's
+    ceiling is what its interval implies plus ``RUNAWAY_SLACK_RUNS``, or the
+    stored ceiling if that is higher.
+    """
+    if schedule.cadence != "interval":
+        return schedule.max_runs_per_day
+    minutes = interval_to_minutes(schedule.interval_value, schedule.interval_unit)
+    if not minutes or minutes <= 0:
+        return schedule.max_runs_per_day
+    expected = -(-24 * 60 // minutes)  # ceil(1440 / minutes)
+    return max(schedule.max_runs_per_day, expected + RUNAWAY_SLACK_RUNS)
 
 
 def compute_next_run_at(

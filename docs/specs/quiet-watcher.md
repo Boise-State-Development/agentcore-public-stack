@@ -31,6 +31,8 @@ A schedule can be a **watcher**. "Every 15 minutes, check my GitHub notification
 
 Both can be set only while the flag is on. A `watch` schedule whose interval is under 60 minutes gets a form note, not a refusal: it states the runs per day and recommends a small model. The catalog has no "small" marker, so the note doesn't guess which models are small.
 
+The dispatcher's runaway guard follows the cadence (`runaway_ceiling`): an interval schedule may make the runs its interval implies plus 4 before it is paused, so a 15-minute watcher (96 runs a day) is not stopped by the flat default of 24. This also fixes standard interval schedules under an hour, which paused themselves every day.
+
 ### 3.2 Watcher state (G1)
 
 One item per watcher, beside the schedule in sessions-metadata:

@@ -45,6 +45,7 @@ from typing import Any, Dict
 from apis.shared.scheduled_prompts.service import (
     list_due_schedules,
     rearm_schedule,
+    runaway_ceiling,
 )
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.pausing import pause_schedule
@@ -152,13 +153,16 @@ async def _dispatch_schedule(schedule: ScheduledPrompt, now: datetime, counts: D
     # Guard 2 — runaway: would firing this schedule exceed its own daily
     # ceiling? Check BEFORE re-arming/invoking, using the rollover-aware
     # counter (a run this tick would be the (runs_today + 1)th today).
+    # The ceiling follows the cadence (`runaway_ceiling`): a 15-minute interval
+    # makes 96 runs a day by design and must not trip a flat ceiling of 24.
     runs_today = _runs_today(schedule, today)
-    if runs_today >= schedule.max_runs_per_day:
+    ceiling = runaway_ceiling(schedule)
+    if runs_today >= ceiling:
         # Tells the owner, and leaves a run row on a project schedule's project.
         await pause_schedule(schedule, "max_runs_per_day_exceeded")
         logger.warning(
             f"Schedule {schedule.schedule_id}: runaway guard tripped "
-            f"({runs_today}/{schedule.max_runs_per_day} runs today); pausing"
+            f"({runs_today}/{ceiling} runs today); pausing"
         )
         counts["PausedRunaway"] += 1
         return
