@@ -337,6 +337,9 @@ export function buildAppApiEnvironment(
     // only (the fork copy path here, the after-`done` put on the runtime).
     CONVERSATION_ARCHIVE_BUCKET_NAME: params.conversationArchiveBucketName,
     CONVERSATION_INDEX_ENABLED: config.conversationIndex.enabled ? 'true' : 'false',
+    // Quiet watcher (docs/specs/quiet-watcher.md): a schedule's mode and
+    // modelId, and /schedules/{id}/runs and /schedules/{id}/state, only while on.
+    PROACTIVE_RUNS_ENABLED: config.proactiveRuns.enabled ? 'true' : 'false',
     // Conversation search (§5): GET /sessions/search 404s while this is off. The
     // retention setting is the search's read-path belt (§3): a turn older than
     // this is dropped from results even before the reconciler deletes it.

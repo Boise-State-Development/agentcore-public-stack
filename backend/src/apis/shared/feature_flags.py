@@ -302,6 +302,26 @@ def scheduled_runs_enabled() -> bool:
     return os.environ.get("SCHEDULED_RUNS_ENABLED", "").strip().lower() != "false"
 
 
+def proactive_runs_enabled() -> bool:
+    """Whether schedules can be watchers, and personal runs keep a history.
+
+    The quiet watcher (``docs/specs/quiet-watcher.md``): a schedule's ``mode``
+    and ``modelId`` are accepted only while this is on; the scheduled-runs
+    worker writes one ``SCHEDRUN#`` row per personal run; and
+    ``/schedules/{id}/runs`` and ``/schedules/{id}/state`` are served.
+    **Opt-in while the feature is in development** (CLAUDE.md "Feature
+    flags"): only ``"true"`` (case-insensitive) enables it; unset or anything
+    else, including the ``""`` an unset GitHub variable arrives as, is off.
+    CDK sets it on app-api and both scheduled-runs Lambdas from
+    ``config.proactiveRuns.enabled``.
+
+    A feature switch once finished, not a rollout switch: a watcher runs on
+    a timer and spends model tokens on every run, which a deployment may
+    reasonably not want.
+    """
+    return os.environ.get("PROACTIVE_RUNS_ENABLED", "").strip().lower() == "true"
+
+
 def memory_spaces_enabled() -> bool:
     """Whether the Memory Spaces feature is enabled for this environment.
 
