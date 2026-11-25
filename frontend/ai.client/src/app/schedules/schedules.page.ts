@@ -14,7 +14,7 @@ import {
 import { ToastService } from '../services/toast/toast.service';
 import { FEATURES } from '../services/features';
 import { ProjectsService } from '../projects/services/projects.service';
-import { cadenceSummary, relativeFuture, relativePast } from './schedule-wording';
+import { cadenceSummary, relativeFuture, relativePast, scheduleStopSentence } from './schedule-wording';
 
 /**
  * Schedules management page — list, create/edit (routed), pause/resume,
@@ -235,6 +235,30 @@ export class SchedulesPage implements OnInit {
   /** True for a paused_error schedule whose stateReason marks it as needing an OAuth reconnect. */
   needsOAuthReconnect(schedule: ScheduledPrompt): boolean {
     return schedule.state === 'paused_error' && schedule.stateReason === 'oauth_required';
+  }
+
+  /**
+   * Why the platform stopped a schedule, for every reason except the two with
+   * their own action above (sign in again, reconnect a tool). The same words
+   * the notification bell uses, so the bell and this page never disagree.
+   * Null for anything but a `paused_error` schedule, or a reason this build doesn't know.
+   */
+  stopSentence(schedule: ScheduledPrompt): string | null {
+    if (schedule.state !== 'paused_error' || this.needsReauth(schedule) || this.needsOAuthReconnect(schedule)) {
+      return null;
+    }
+    return scheduleStopSentence(schedule.stateReason, true);
+  }
+
+  /**
+   * Resume is offered for a schedule its owner paused, and for one the platform
+   * stopped for a reason resuming fixes (failures, the daily run limit). Sign-in
+   * and reconnect have their own action, and a project schedule resumes from its project.
+   */
+  canResume(schedule: ScheduledPrompt): boolean {
+    if (schedule.projectId) return false;
+    if (schedule.state === 'paused') return true;
+    return schedule.state === 'paused_error' && !this.needsReauth(schedule) && !this.needsOAuthReconnect(schedule);
   }
 
   lastRunLabel(schedule: ScheduledPrompt): string {

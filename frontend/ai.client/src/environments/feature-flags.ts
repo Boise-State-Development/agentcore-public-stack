@@ -315,8 +315,8 @@ export interface FeatureFlags {
    * "Allow this server to ask for input" toggle (`elicitationEnabled`).
    * Backend: MCP_ELICITATION_ENABLED (AgentCore Runtime and app-api), which is
    * the real gate: while it is off no server is told the client can elicit, so
-   * the event never arrives. In development, so `false` everywhere until an
-   * environment turns the backend on.
+   * the event never arrives. In development: `true` only in
+   * `environment.development.ts`, `false` locally and in prod.
    */
   mcpElicitation: boolean;
 }
