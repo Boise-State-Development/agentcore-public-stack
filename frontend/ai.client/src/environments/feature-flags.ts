@@ -327,9 +327,9 @@ export interface FeatureFlags {
    * history and what a watcher is tracking (with Start over), and the bell's
    * `agent_item` findings. Backend: PROACTIVE_RUNS_ENABLED (app-api and the
    * scheduled-runs Lambdas; `/schedules/{id}/runs` and `/state` 404 while off,
-   * and `mode` / `modelId` are refused). In development: `false` everywhere,
-   * dev included, until the `development` GitHub environment sets
-   * CDK_PROACTIVE_RUNS_ENABLED=true.
+   * and `mode` / `modelId` are refused). In development: `true` only in
+   * `environment.development.ts`, where the `development` GitHub environment
+   * sets CDK_PROACTIVE_RUNS_ENABLED=true; `false` locally and in prod.
    */
   proactiveRuns: boolean;
 }
