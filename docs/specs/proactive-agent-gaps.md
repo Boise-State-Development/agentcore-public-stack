@@ -143,7 +143,7 @@ The triage pass is metered like any side call (`callKind: "proactive_triage"`). 
 
 **Proposed shape.**
 
-- A per-user **device registry**: `PUSHDEV#{deviceId}` rows holding the platform, token, app version and `lastSeenAt`. It is registered by the iOS app after sign-in, and by the SPA for Web Push if wanted. It pairs with the signed-in devices list in `native-app-auth.md` PR 3: revoking a device's session also drops its push token.
+- A per-user **device registry**: `PUSHDEV#{deviceId}` rows holding the platform, token, app version and `lastSeenAt`. It is registered by the iOS app after sign-in, and by the SPA for Web Push (§3a). It pairs with the signed-in devices list in `native-app-auth.md` PR 3: revoking a device's session also drops its push token.
 - A sender behind the inbox write. An inbox row with `urgency: now` (and `today`, outside quiet hours) is sent through APNs (token-based auth, key in Secrets Manager) or Web Push (VAPID).
 - **Content rule: the push carries the title and ids only.** The app fetches the body over the authenticated API, so no conversation text transits Apple's or a browser vendor's push service. This matches the inbox's own "ids and display names only" rule.
 - Notification actions (Approve, Decline, Snooze) post to G5's respond endpoint after the app re-authenticates with its Keychain session. Approve never acts from the lock screen without authentication.
@@ -195,22 +195,54 @@ The triage pass is metered like any side call (`callKind: "proactive_triage"`). 
 - **The headless run's own prefix must stay stable across runs of a job.** Constant system prompt, constant tool set, job state and new items in the user message. Measure with the `C#` row hashes on a dev watcher before promoting G2.
 - **A silent run should cost one triage call.** Target under $0.001 per quiet run on the triage model, stated as a measured number in the PR that ships G2, with the per-job-day figure for a 15-minute watcher.
 
+## 3a. Clients: the web app first, the phone for reach
+
+Every gap above is backend-first, but almost none is backend-only. The root `CLAUDE.md` asks for an endpoint and its clients to change in the same PR, and most users are in the web app. So **the web app is the first client of each slice**. The iOS app reuses the same endpoints and adds the one thing a browser does badly: reaching a user who isn't looking.
+
+What the web app already has to build on:
+
+- `notification-bell`, which renders inbox kinds with one `switch` per family (`describeQuota`, `describeHandoff`);
+- the pause cards in a conversation (approval, question, consent, elicitation);
+- a `/schedules` page and schedule form (`frontend/ai.client/src/app/schedules/`). It has **no menu entry**: that was a deliberate decision in July 2026 to keep scheduled runs low-key. A proactive feature can't stay unlinked, so slice 1 revisits that decision.
+- browser notifications for handoffs, which fire only while a tab is open and hidden. There is **no service worker**, so nothing reaches a closed tab.
+
+| Gap | Web app half | iOS half |
+|---|---|---|
+| G1 Job state | On the job's page: what it is tracking, when each source was last checked, and "start over from now", which resets the cursors | Read-only, later |
+| G2 Silent outcome | Run history on the job's page that shows quiet runs ("checked 22 times today, raised 2, cost $0.02"). Without it a silent job looks broken | — |
+| G3 Triggers | Creating a watcher in the schedule form (source, condition, interval, triage model); a menu entry for schedules; later, connecting a push trigger | — |
+| G4 Inbox | `describeAgent` in the bell for the `agent_*` kinds; urgency shown; Dismiss, Snooze and "Not useful" on each item | The inbox list, the app's next screen after read-only conversations |
+| G5 Approvals | Approve, Decline or answer **in the bell**, without opening the conversation. The web app is the first caller of the respond endpoint; the conversation's own pause card is unchanged | Notification actions and the inbox, after re-auth |
+| G6 Push | **Web Push** through a service worker (VAPID), registered in the same device registry as a `web` platform row, and opt-in from Settings. It is the floor for every user without the iOS app, including Android and desktop | APNs |
+| G7 Standing instructions | Quiet hours and "what reaches me where" in Settings; the attention page edited through the Memory Spaces UI; "Not useful" feeding the job's counts | Quiet hours honoured by the sender; no editing UI |
+| G8 Connection health | A Connections view, or a banner, that warns before the headless grant or a connector token expires, with Sign in or Reconnect. OAuth consent is easiest on a desktop browser anyway | Shows the warning, deep-links to the web app to fix it |
+| G9 Budgets | A per-job budget field and today's spend on the job's page. For admins, watcher and triage spend under its own `callKind` on `/admin/costs` | — |
+
+Rules for the web app half:
+
+- **Frontend flags follow the backend ones.** `features.proactiveRuns` and `features.pushNotifications` hold only what the UI offers; the backend is the gate.
+- **The bell never shows message content.** It renders from the inbox row's ids and display fields, as `describeHandoff` does.
+- **Web Push carries title and ids only**, like APNs. The service worker fetches nothing on its own: clicking opens the app, which reads the item over the session cookie.
+- **A service worker is new to the SPA.** It needs its own scope, cache policy (none: it is for push only, not offline), and a check that it doesn't interfere with the BFF cookie or the SSE stream. This deserves a short design note in slice 3's PR.
+
 ## 4. Sequencing
 
 | Slice | Gaps | Delivers | Depends on |
 |---|---|---|---|
-| **0 — Paused jobs say so** | G4 (`agent_job_paused` only), G8 (existing reasons) | A personal schedule that stops tells its owner, in the bell | Nothing. Small, and worth doing alone |
-| **1 — Quiet watcher** | G1, G2, G3 step 1, G4 (`agent_item`) | A 15-minute watcher that is silent until something is new, then raises one inbox item | Slice 0 |
-| **2 — Answer from anywhere** | G5 | Approvals and questions from a headless run land in the inbox and can be answered there | Slice 1's inbox kinds |
-| **3 — Push** | G6, plus the iOS app's inbox and notification actions | The phone buzzes for `now` items; Approve works from the notification after re-auth | Slice 2; iOS read-only conversations; `native-app-auth.md` PR 3 (devices) |
-| **4 — Trust** | G7, G8 pre-flight, G9 | Standing instructions, quiet hours, budgets, action audit | Slice 1 |
-| **5 — Push triggers** | G3 step 2 | Near-real-time reaction for connectors that support it | Slice 1 |
+| Slice | Gaps | Delivers | Web app half (same slice) | Depends on |
+|---|---|---|---|---|
+| **0 — Paused jobs say so** | G4 (`agent_job_paused` only), G8 (existing reasons) | A personal schedule that stops tells its owner | The bell's text for `agent_job_paused`, linking to the schedule | Nothing. Small, and worth doing alone |
+| **1 — Quiet watcher** | G1, G2, G3 step 1, G4 (`agent_item`) | A 15-minute watcher that is silent until something is new, then raises one inbox item | Watcher fields in the schedule form, run history with quiet runs, job state view, `agent_item` in the bell, a menu entry for schedules | Slice 0 |
+| **2 — Answer from anywhere** | G5 | Approvals and questions from a headless run land in the inbox and can be answered there | Approve, Decline and answer in the bell | Slice 1's inbox kinds |
+| **3 — Push** | G6, plus the iOS app's inbox and notification actions | `now` items reach a closed tab and a locked phone; Approve works from the notification after re-auth | Web Push: service worker, opt-in in Settings | Slice 2; iOS read-only conversations; `native-app-auth.md` PR 3 (devices) |
+| **4 — Trust** | G7, G8 pre-flight, G9 | Standing instructions, quiet hours, budgets, action audit | Quiet hours and channel rules in Settings, the Connections warning, the budget field, admin spend by `callKind` | Slice 1 |
+| **5 — Push triggers** | G3 step 2 | Near-real-time reaction for connectors that support it | Connecting a trigger in the schedule form | Slice 1 |
 
 Slices 1–4 are each one feature, gated by `PROACTIVE_RUNS_ENABLED` while in development. Slice 3's switch (`PUSH_NOTIFICATIONS_ENABLED`) and slice 5's per-source switches are permanent feature switches.
 
 ### How this changes the iOS plan
 
-The iOS app's next feature is read-only conversations, then chat. This spec suggests a third use that may matter more on a phone: **the inbox**. List the items, open the run's session, and answer approvals. Push (G6) is the reason to have a native app at all, rather than a responsive web page. It should follow read-only conversations, before full chat.
+The iOS app's next feature is read-only conversations, then chat. This spec suggests a third use that may matter more on a phone: **the inbox**. List the items, open the run's session, and answer approvals. It should follow read-only conversations, before full chat. Web Push (§3a) does not make the native app redundant on iPhone: Safari delivers Web Push only to a site the user has added to the Home Screen, and APNs notification actions (Approve, Decline) are richer and more reliable there.
 
 ## 5. Validation use cases
 
@@ -227,5 +259,5 @@ Each should be configuration once its slice lands:
 2. **Triage model.** Use a Task-models admin row (as titles and summaries do) or the job's own model at low effort? A separate row makes the quiet-run cost predictable.
 3. **Session per notify.** Should a `notify` run append to one long-lived session per job, so the user sees a feed and the prefix is cacheable, instead of a session per run? That trades a growing history (compaction applies) for continuity.
 4. **Project-scoped inbox.** Does a project schedule's `notify` go to every member's inbox or only the owner's? Today `notify_members` exists for completed runs; the same rule probably applies.
-5. **Web Push.** Is browser push worth it alongside the iOS app, or do the bell and the phone cover it?
+5. ~~**Web Push.** Is browser push worth it alongside the iOS app?~~ **Proposed yes (§3a):** the iOS app reaches iPhone users only, so Web Push is the floor for everyone else. The open part is the SPA's first service worker and how it coexists with the BFF cookie and SSE.
 6. **Data in push payloads.** Is "title and ids only" sufficient for a useful lock-screen notification, or does a deployment want an opt-in for a one-line summary?
