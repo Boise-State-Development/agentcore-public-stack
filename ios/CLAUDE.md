@@ -8,7 +8,7 @@ This adds to the repo-root `CLAUDE.MD` and doesn't replace it. The root file's c
 - **Swift 6.2 toolchain** (`.swift-version`, `swift-tools-version: 6.2`), Swift 6 language mode, `SWIFT_STRICT_CONCURRENCY = complete`, **every warning is an error** in both the app and the package. Xcode 26 or newer; CI builds with Xcode 27.
 - **Thin app, fat package.** The app target holds views and app lifecycle only. Models, networking, SSE parsing, auth and anything testable without a UI go in the local `AgentCoreKit` package.
 - Bundle id `org.example.agentcore` is a placeholder. A real one comes from the untracked `Config/Local.xcconfig`.
-- Status: the scaffold, with sign-in next (`docs/specs/native-app-auth.md`), then a read-only conversation list and transcript, then chat with streaming.
+- Status: sign-in works end to end against a deployment (`docs/specs/native-app-auth.md`). Next is a read-only conversation list and transcript, then chat with streaming.
 
 ## Open source first
 
@@ -45,14 +45,18 @@ ios/
 ├── AgentCore.xcworkspace/      Open and build this. Holds the project and the package.
 ├── AgentCore.xcodeproj/        App shell. Synchronized folders, no build settings. Don't edit by hand.
 ├── AgentCore/                  App target: views and app lifecycle only.
-│   ├── AgentCoreApp.swift      @main entry point and root scene.
-│   ├── ContentView.swift       Placeholder root view until sign-in lands.
+│   ├── AgentCoreApp.swift      @main entry point; builds the live SessionModel.
+│   ├── RootView.swift          Switches screens on SessionModel.phase.
+│   ├── ServerView.swift        Enter and check the server address.
+│   ├── SignInView.swift        Providers and the ASWebAuthenticationSession sheet.
+│   ├── SignedInView.swift      Who is signed in, and Sign out.
+│   ├── ProblemText.swift       SessionModel.Problem in words.
 │   ├── AppInfo.swift           Build-time facts (marketing version from Info.plist).
-│   ├── PrivacyInfo.xcprivacy   Privacy manifest. Empty until code uses a required-reason API.
+│   ├── PrivacyInfo.xcprivacy   Privacy manifest (UserDefaults, for the saved server).
 │   └── Assets.xcassets/        App icon and accent color.
 ├── AgentCoreKit/               Local Swift package. Most work lands here.
 │   ├── Package.swift           iOS 18, Swift 6 mode, warnings as errors, no third-party deps.
-│   ├── Sources/AgentCoreKit/   Library code. ServerConfiguration.swift validates the user-entered server URL.
+│   ├── Sources/AgentCoreKit/   Library code: server validation, PKCE, the sign-in client, Keychain store, SessionModel.
 │   └── Tests/AgentCoreKitTests/ Swift Testing suites, one file per source file (FooTests.swift).
 ├── Config/                     All build settings, as xcconfig.
 │   ├── Base.xcconfig           Platform, Swift settings, generated Info.plist keys, placeholder identity.

@@ -20,29 +20,35 @@ Sign-in, and nothing past it yet:
   session and offers Try again.
 - **Sign out**, dropping the local copy first and then telling the server.
 
-The design is `docs/specs/native-app-auth.md`. **The server half is not built
-yet** (that spec's PR 1: `client=native` on `/auth/login` and
-`POST /auth/native/exchange`), so against a real deployment sign-in currently
-fails with "doesn't support signing in from the app yet".
+The design is `docs/specs/native-app-auth.md`. The server half
+(`client=native` on `/auth/login` and `POST /auth/native/exchange`) is in
+app-api, off until a deployment lists the app's redirect address in
+`NATIVE_AUTH_REDIRECT_URIS`. A server that has not answers the exchange with a
+404, which the app reports as "doesn't support signing in from the app yet".
 
 Next up, in order:
 
-1. **The server half of sign-in** (spec PR 1).
-2. **Conversations, read-only**: the list and a transcript, plain JSON.
-3. **Chat**: sending a turn, SSE streaming, the event types in the root
+1. **Conversations, read-only**: the list and a transcript, plain JSON.
+2. **Chat**: sending a turn, SSE streaming, the event types in the root
    `CLAUDE.md`.
+3. **Signed-in devices**: list and revoke app sessions (spec PR 3).
 
-### Trying sign-in locally
+### Trying sign-in
 
-Until the server half exists, the flow can be exercised against a stub of the
-contract on loopback (`http://localhost:<port>/api`). Two things to know:
+The app's redirect address is its bundle id, lowercased, as a scheme:
+`<bundle id>://auth/callback`. A fresh clone's placeholder bundle id gives
+`org.example.agentcore://auth/callback`; a build with your own bundle id in
+`Local.xcconfig` needs that address added to the deployment's
+`NATIVE_AUTH_REDIRECT_URIS` (`CDK_NATIVE_AUTH_REDIRECT_URIS` in the GitHub
+environment) before it can sign in.
 
 - Build **with** simulator signing (the default). `CODE_SIGNING_ALLOWED=NO`
   builds an app with no entitlements, and the Keychain then refuses to store
   the session (`-34018`), which the app reports as "Couldn't save your
   sign-in".
-- iOS logs that `ASWebAuthenticationSession` support for `http` is deprecated.
-  It works today for loopback only; a local stack behind `https` avoids it.
+- Against a local stack on loopback (`http://localhost:<port>/api`), iOS logs
+  that `ASWebAuthenticationSession` support for `http` is deprecated. It works
+  today for loopback only; a local stack behind `https` avoids it.
 
 ## Requirements
 
