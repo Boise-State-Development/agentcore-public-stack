@@ -7,11 +7,15 @@ to regress:
   browser in as a side effect and make two holders share one refresh token);
 * an unapprovable code renders the same page whatever the reason, so the
   endpoint is not a user-code existence oracle;
-* pending polls are HTTP 400 with an RFC 8628 `error`, not 200.
+* pending polls are HTTP 400 with an RFC 8628 `error`, not 200;
+* opening the verification link starts nothing: the identity provider is
+  contacted, and the grant can be approved, only after an explicit Continue
+  posted from the confirmation page (RFC 8628 §3.3.1, §5.4).
 """
 
 from __future__ import annotations
 
+import re
 import time
 import urllib.parse
 from types import SimpleNamespace
@@ -24,7 +28,7 @@ from fastapi.testclient import TestClient
 from apis.app_api.auth.bff import cli_routes
 from apis.app_api.auth.bff import routes as bff_routes
 from apis.app_api.auth.bff.cli_routes import router as cli_router
-from apis.app_api.auth.bff.cookies import OAUTH_STATE_COOKIE_NAME
+from apis.app_api.auth.bff.cookies import CLI_CONFIRM_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME
 from apis.app_api.auth.bff.routes import router as bff_router
 from apis.app_api.auth.bff.token_exchange import ExchangeResult
 from apis.shared.auth.device_grants.models import (
@@ -106,29 +110,67 @@ def _state_from_redirect(location: str) -> str:
     return query["state"][0]
 
 
-def _issued_binding_cookie(response) -> str | None:
+def _issued_cookie(response, name: str) -> str | None:
     for header in response.headers.get_list("set-cookie"):
-        if header.startswith(OAUTH_STATE_COOKIE_NAME):
+        if header.startswith(f"{name}="):
             value = header.split(";", 1)[0].split("=", 1)[1]
             return value or None
     return None
 
 
+def _issued_binding_cookie(response) -> str | None:
+    return _issued_cookie(response, OAUTH_STATE_COOKIE_NAME)
+
+
+_HIDDEN_FIELD = re.compile(r'<input type="hidden" name="(user_code|confirm_token)" value="([^"]*)">')
+
+
+def _open_confirmation(client: TestClient, user_code: str) -> dict[str, str]:
+    """Open the verification URL the way a browser does; return the form fields.
+
+    TestClient's jar won't replay a `Secure` cookie over http, so the
+    confirmation cookie is re-seated by hand, as the binding cookie is below.
+    """
+    response = client.get(f"/auth/cli/verify?user_code={user_code}")
+    assert response.status_code == 200
+    assert "location" not in response.headers
+    secret = _issued_cookie(response, CLI_CONFIRM_COOKIE_NAME)
+    assert secret, "the confirmation page must issue its cookie"
+    client.cookies.set(CLI_CONFIRM_COOKIE_NAME, secret)
+    fields = dict(_HIDDEN_FIELD.findall(response.text))
+    assert set(fields) == {"user_code", "confirm_token"}
+    return fields
+
+
+def _answer(client: TestClient, user_code: str, action: str, *, headers: dict | None = None):
+    fields = _open_confirmation(client, user_code)
+    return client.post("/auth/cli/verify", data={**fields, "action": action}, headers=headers or {})
+
+
+def _continue(client: TestClient, user_code: str):
+    response = _answer(client, user_code, "continue")
+    assert response.status_code == 303
+    return response
+
+
 def _verify(client: TestClient, user_code: str) -> tuple[str, str]:
-    """Open the verification URL the way a browser does; return (state, nonce).
+    """Open the link, choose Continue, and return (state, nonce).
 
     The callback is the web app's and requires the browser-binding cookie and
     an ID token echoing the nonce, so the CLI's verify leg must issue both.
-    TestClient's jar won't replay a `Secure` cookie over http, so re-seat it
-    the same way develop's own login tests do.
     """
-    response = client.get(f"/auth/cli/verify?user_code={user_code}")
-    assert response.status_code == 302
+    response = _continue(client, user_code)
     binding = _issued_binding_cookie(response)
-    assert binding, "verify must issue the browser-binding cookie"
+    assert binding, "Continue must issue the browser-binding cookie"
     client.cookies.set(OAUTH_STATE_COOKIE_NAME, binding)
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(response.headers["location"]).query)
     return query["state"][0], query["nonce"][0]
+
+
+def _poll_error(client: TestClient, device_code: str) -> str:
+    response = client.post("/auth/cli/token", json={"device_code": device_code})
+    assert response.status_code == 400
+    return response.json()["error"]
 
 
 def _non_binding_set_cookies(response) -> list[str]:
@@ -182,13 +224,72 @@ class TestAuthorize:
 
 
 class TestVerify:
-    def test_redirects_to_cognito_with_state(self, cli_app):
+    def test_opening_the_link_starts_nothing(self, cli_app, monkeypatch):
+        """The prefilled link alone must not reach the identity provider.
+
+        Whoever opens a `verification_uri_complete` link may not be whoever
+        started the sign-in. If the GET went straight to Cognito, a browser
+        with a live Hosted UI session would approve someone else's terminal
+        without seeing a prompt.
+        """
+        spy = MagicMock(wraps=bff_routes._get_state_store())
+        monkeypatch.setattr(cli_routes, "_get_state_store", lambda: spy)
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+
+        response = client.get(f"/auth/cli/verify?user_code={auth['user_code']}")
+
+        assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+        assert "location" not in response.headers
+        assert COGNITO_DOMAIN_URL not in response.text
+        assert _issued_binding_cookie(response) is None
+        spy.store_state.assert_not_called()
+        # Still waiting for an answer.
+        assert _poll_error(client, auth["device_code"]) == "authorization_pending"
+
+    def test_the_page_shows_the_code_as_the_terminal_printed_it(self, cli_app):
+        client = TestClient(cli_app, follow_redirects=False)
+        user_code = client.post("/auth/cli/authorize").json()["user_code"]
+
+        response = client.get(f"/auth/cli/verify?user_code={user_code.lower().replace('-', '')}")
+
+        assert f'<p class="code">{user_code}</p>' in response.text
+        assert 'value="continue"' in response.text
+        assert 'value="cancel"' in response.text
+
+    def test_the_page_cannot_be_framed_cached_or_leak_its_url(self, cli_app):
+        """A page one click approves must never be shown inside another site's."""
         client = TestClient(cli_app, follow_redirects=False)
         user_code = client.post("/auth/cli/authorize").json()["user_code"]
 
         response = client.get(f"/auth/cli/verify?user_code={user_code}")
 
-        assert response.status_code == 302
+        assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["referrer-policy"] == "no-referrer"
+
+    def test_the_confirmation_cookie_is_strict_and_host_only(self, cli_app):
+        client = TestClient(cli_app, follow_redirects=False)
+        user_code = client.post("/auth/cli/authorize").json()["user_code"]
+
+        response = client.get(f"/auth/cli/verify?user_code={user_code}")
+
+        header = next(h for h in response.headers.get_list("set-cookie") if h.startswith(CLI_CONFIRM_COOKIE_NAME))
+        lowered = header.lower()
+        assert "samesite=strict" in lowered
+        assert "httponly" in lowered
+        assert "secure" in lowered
+        assert "path=/" in lowered
+        assert "domain=" not in lowered
+
+    def test_continue_redirects_to_cognito_with_state(self, cli_app):
+        client = TestClient(cli_app, follow_redirects=False)
+        user_code = client.post("/auth/cli/authorize").json()["user_code"]
+
+        response = _continue(client, user_code)
+
         location = response.headers["location"]
         assert location.startswith(f"{COGNITO_DOMAIN_URL}/oauth2/authorize")
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(location).query)
@@ -200,7 +301,7 @@ class TestVerify:
         client = TestClient(cli_app, follow_redirects=False)
         user_code = client.post("/auth/cli/authorize").json()["user_code"]
 
-        response = client.get(f"/auth/cli/verify?user_code={user_code}")
+        response = _continue(client, user_code)
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(response.headers["location"]).query)
 
         assert query["code_challenge_method"] == ["S256"]
@@ -219,7 +320,7 @@ class TestVerify:
         client = TestClient(cli_app, follow_redirects=False)
         user_code = client.post("/auth/cli/authorize").json()["user_code"]
 
-        response = client.get(f"/auth/cli/verify?user_code={user_code}")
+        response = _continue(client, user_code)
         location = response.headers["location"]
         assert normalise_user_code(user_code) not in location
 
@@ -233,8 +334,7 @@ class TestVerify:
         user_code = client.post("/auth/cli/authorize").json()["user_code"]
 
         typed = user_code.lower().replace("-", "")
-        response = client.get(f"/auth/cli/verify?user_code={typed}")
-        assert response.status_code == 302
+        assert _continue(client, typed).status_code == 303
 
     def test_missing_code_renders_a_page(self, cli_app):
         client = TestClient(cli_app, follow_redirects=False)
@@ -276,6 +376,141 @@ class TestVerify:
         assert response.status_code == 200
         assert "<script>alert(1)</script>" not in response.text
         assert "alert(1)" not in response.text
+
+
+# =====================================================================
+# POST /auth/cli/verify — the confirmation page's answer
+# =====================================================================
+
+
+class TestVerifyAnswer:
+    def test_cancel_is_access_denied_on_the_next_poll(self, cli_app):
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+
+        response = _answer(client, auth["user_code"], "cancel")
+
+        assert response.status_code == 200
+        assert "Sign-in cancelled" in response.text
+        assert "location" not in response.headers
+        assert _issued_binding_cookie(response) is None
+        assert _poll_error(client, auth["device_code"]) == "access_denied"
+
+    @pytest.mark.asyncio
+    async def test_cancel_records_a_denial(self, cli_app, grants):
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+
+        _answer(client, auth["user_code"], "cancel")
+
+        stored = await grants.get_by_device_code_hash(hash_device_code(auth["device_code"]))
+        assert stored.status is GrantStatus.DENIED
+
+    def test_a_cancelled_code_cannot_be_continued(self, cli_app):
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+        fields = _open_confirmation(client, auth["user_code"])
+        client.post("/auth/cli/verify", data={**fields, "action": "cancel"})
+
+        # The same page resubmitted (TestClient keeps the cookie, as a second
+        # tab opened on the same page would).
+        replay = client.post("/auth/cli/verify", data={**fields, "action": "continue"})
+        assert "location" not in replay.headers
+        reopened = client.get(f"/auth/cli/verify?user_code={auth['user_code']}")
+        assert "expired" in reopened.text
+        assert _poll_error(client, auth["device_code"]) == "access_denied"
+
+    def _assert_refused(self, grants, response, device_code: str) -> None:
+        """Nothing happened: no redirect, no binding, and the grant still pending."""
+        import asyncio
+
+        assert response.status_code == 200
+        assert "location" not in response.headers
+        assert _issued_binding_cookie(response) is None
+        assert "This page has expired" in response.text
+        stored = asyncio.run(grants.get_by_device_code_hash(hash_device_code(device_code)))
+        assert stored.status is GrantStatus.PENDING
+
+    def test_continue_without_the_confirmation_cookie_is_refused(self, cli_app, monkeypatch, grants):
+        spy = MagicMock(wraps=bff_routes._get_state_store())
+        monkeypatch.setattr(cli_routes, "_get_state_store", lambda: spy)
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+        fields = _open_confirmation(client, auth["user_code"])
+        client.cookies.delete(CLI_CONFIRM_COOKIE_NAME)
+
+        response = client.post("/auth/cli/verify", data={**fields, "action": "continue"})
+
+        self._assert_refused(grants, response, auth["device_code"])
+        spy.store_state.assert_not_called()
+
+    def test_continue_posted_from_another_site_is_refused(self, cli_app, grants):
+        """Even holding the cookie and a valid token, a cross-site post is refused."""
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+
+        for site in ("cross-site", "same-site"):
+            response = _answer(client, auth["user_code"], "continue", headers={"Sec-Fetch-Site": site})
+            self._assert_refused(grants, response, auth["device_code"])
+
+    def test_a_forged_post_with_no_page_behind_it_is_refused(self, cli_app, grants):
+        """The shape a hostile form would send: the code, a guessed token, no cookie."""
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+
+        response = client.post(
+            "/auth/cli/verify",
+            data={"user_code": auth["user_code"], "confirm_token": "0" * 64, "action": "continue"},
+        )
+
+        self._assert_refused(grants, response, auth["device_code"])
+
+    def test_a_token_for_one_code_cannot_answer_another(self, cli_app, grants):
+        client = TestClient(cli_app, follow_redirects=False)
+        mine = client.post("/auth/cli/authorize").json()
+        theirs = client.post("/auth/cli/authorize").json()
+        fields = _open_confirmation(client, mine["user_code"])
+
+        response = client.post(
+            "/auth/cli/verify",
+            data={**fields, "user_code": theirs["user_code"], "action": "continue"},
+        )
+
+        self._assert_refused(grants, response, theirs["device_code"])
+
+    def test_an_unknown_action_is_refused(self, cli_app, grants):
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+
+        for action in ("approve", ""):
+            response = _answer(client, auth["user_code"], action)
+            self._assert_refused(grants, response, auth["device_code"])
+
+    def test_an_expired_grant_is_reported_like_the_page_does(self, cli_app, grants):
+        import asyncio
+
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+        fields = _open_confirmation(client, auth["user_code"])
+        stored = asyncio.run(grants.get_by_device_code_hash(hash_device_code(auth["device_code"])))
+        asyncio.run(grants.delete(stored))
+
+        response = client.post("/auth/cli/verify", data={**fields, "action": "continue"})
+
+        assert "location" not in response.headers
+        assert "That code has expired" in response.text
+
+    def test_the_answer_spends_the_same_rate_limit_as_the_page(self, cli_app):
+        """A sign-in now costs two verify requests; the guessing budget is unchanged."""
+        client = TestClient(cli_app, follow_redirects=False)
+        auth = client.post("/auth/cli/authorize").json()
+        fields = _open_confirmation(client, auth["user_code"])
+        for _ in range(25):
+            client.get("/auth/cli/verify?user_code=CDFG-HJKM")
+
+        response = client.post("/auth/cli/verify", data={**fields, "action": "continue"})
+
+        assert response.status_code == 429
 
 
 # =====================================================================

@@ -130,3 +130,48 @@ def clear_oauth_state_cookie(response: Response) -> None:
         httponly=True,
         samesite=_SAMESITE,
     )
+
+
+# Carries the secret behind the CLI sign-in confirmation form
+# (`GET`/`POST /auth/cli/verify`). The form echoes an HMAC of this secret and
+# the user code, so a `Continue` or `Cancel` only counts when it comes from
+# the confirmation page this browser was shown.
+#
+# Attribute notes:
+#   - `__Host-`, `HttpOnly`, `Secure`, `Path=/` for the same reasons as the
+#     binding cookie above.
+#   - `SameSite=strict`, unlike every other cookie here. The form posts from
+#     our own page, so a same-site request always carries it, and nothing in
+#     this leg arrives by a cross-site redirect the way the callback does. A
+#     cross-site form post is exactly what this cookie must not ride on.
+CLI_CONFIRM_COOKIE_NAME = "__Host-bff_cli_confirm"
+_CLI_CONFIRM_SAMESITE: Literal["strict"] = "strict"
+
+
+def set_cli_confirm_cookie(
+    response: Response,
+    *,
+    confirm_secret: str,
+    max_age_seconds: int,
+) -> None:
+    """Hand the browser the secret behind one CLI sign-in confirmation form."""
+    response.set_cookie(
+        key=CLI_CONFIRM_COOKIE_NAME,
+        value=confirm_secret,
+        max_age=max_age_seconds,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite=_CLI_CONFIRM_SAMESITE,
+    )
+
+
+def clear_cli_confirm_cookie(response: Response) -> None:
+    """Drop the confirmation secret once the form has been answered."""
+    response.delete_cookie(
+        CLI_CONFIRM_COOKIE_NAME,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite=_CLI_CONFIRM_SAMESITE,
+    )

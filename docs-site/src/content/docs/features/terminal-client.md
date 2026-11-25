@@ -40,7 +40,10 @@ Gatekeeper has anything to warn about.
 The client never talks to Cognito. `aps-tui login --sso` (or the first-run
 setup) starts a **device-authorization flow** against the App API: it shows a
 short code and a URL, opens your browser when it can, and polls until you
-approve the sign-in on the web app's own login page. What comes back is a
+approve the sign-in. The browser shows the code first: check that it matches
+the one in your terminal and choose **Continue**, then sign in on the web app's
+own login page. If you didn't start the sign-in, choose **Cancel**, and the
+terminal reports that the request was declined. What comes back is a
 sealed platform session, stored in your OS keyring and presented on every
 request as `Authorization: BFF <session>`.
 

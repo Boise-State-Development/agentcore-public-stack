@@ -306,7 +306,8 @@ class DeviceGrantService:
 
         Lets the verify route render "a terminal is requesting access" before
         the user commits, without exposing anything: the grant carries no
-        credential, and the caller is already authenticated.
+        credential. The caller has *not* authenticated yet, which is why the
+        route reports every non-answerable grant with one identical page.
         """
         stamp = now if now is not None else int(time.time())
         grant = await self._repository.get_by_user_code(user_code)

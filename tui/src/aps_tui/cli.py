@@ -309,6 +309,7 @@ def _command_login_sso(args: argparse.Namespace) -> int:
             # SSH, and in some WSL setups, and the URL is the only way through.
             if _try_open_browser(authorization.verification_uri_complete):
                 print("Opened your browser. ", end="")
+            print("Check that the code in your browser matches, then choose Continue.")
             print("Waiting for you to approve the sign-in...")
 
             try:
