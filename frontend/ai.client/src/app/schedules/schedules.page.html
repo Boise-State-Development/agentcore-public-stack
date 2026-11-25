@@ -148,8 +148,16 @@
                         Reconnect a tool
                       </a>
                     </div>
-                  } @else if (schedule.state === 'paused_error' && schedule.lastError) {
-                    <p class="mt-2 text-xs/5 text-state-warning-700 dark:text-state-warning-400">{{ schedule.lastError }}</p>
+                  } @else if (schedule.state === 'paused_error') {
+                    @if (stopSentence(schedule); as stopped) {
+                      <div class="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-state-warning-50 px-3 py-2 dark:bg-state-warning-900/10">
+                        <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
+                        <span class="text-xs/5 text-state-warning-800 dark:text-state-warning-300">{{ stopped }}</span>
+                      </div>
+                    }
+                    @if (schedule.lastError) {
+                      <p class="mt-2 text-xs/5 text-state-warning-700 dark:text-state-warning-400">{{ schedule.lastError }}</p>
+                    }
                   }
                 </div>
 
@@ -163,7 +171,7 @@
                     >
                       Pause
                     </button>
-                  } @else if (schedule.state === 'paused' && !schedule.projectId) {
+                  } @else if (canResume(schedule)) {
                     <button
                       type="button"
                       (click)="onResume(schedule)"
