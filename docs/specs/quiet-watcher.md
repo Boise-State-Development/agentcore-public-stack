@@ -5,6 +5,7 @@
 **Targets branch:** `develop`
 **Parent:** `docs/specs/proactive-agent-gaps.md` (slice 1: G1 job state, G2 silent outcome, G3 step 1 polling, G4 `agent_item`)
 **Flag:** `PROACTIVE_RUNS_ENABLED` / `CDK_PROACTIVE_RUNS_ENABLED`, `features.proactiveRuns`. In development: off by default, only `"true"` enables.
+**Companion:** `docs/specs/quiet-watcher-triage.md`, the design for the second triage stage (a decider that settles whether a watch run has anything new before the schedule's own model runs).
 
 ---
 
