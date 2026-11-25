@@ -1,6 +1,6 @@
 # Workflow Designer: authoring a saved workflow on a canvas
 
-**Status:** Step 2 (D.1 to D.5) built and dev-validated, 2026-11-21, behind `WORKFLOWS_ENABLED` and `WORKFLOW_RUNS_ENABLED` (on in `development` only). §20 is its delivery plan and §20.5 what it showed. Prompt steps (D.6, §21) built and dev-validated 2026-11-22 behind `PROMPT_STEPS_ENABLED`; checklist steps (D.7) built and dev-validated 2026-11-22 behind `CHECKLIST_STEPS_ENABLED` (§22); version pinning (D.8) decided 2026-11-22 and planned in §23. It is the authoring half of step 2 in
+**Status:** Step 2 (D.1 to D.5) built and dev-validated, 2026-11-21, behind `WORKFLOWS_ENABLED` and `WORKFLOW_RUNS_ENABLED` (on in `development` only). §20 is its delivery plan and §20.5 what it showed. Prompt steps (D.6, §21) built and dev-validated 2026-11-22 behind `PROMPT_STEPS_ENABLED`; checklist steps (D.7) built and dev-validated 2026-11-22 behind `CHECKLIST_STEPS_ENABLED` (§22); version pinning (D.8) built and dev-validated 2026-11-24 behind `AGENT_VERSION_PINNING_ENABLED` (§23, outcome in §23.6). It is the authoring half of step 2 in
 `docs/specs/workflow-runs.md` §14, and it replaces that spec's §10 editor (step cards in a list) with a canvas.
 **Targets branch:** `develop`
 **Tracking:** #2218 (step 2)
@@ -1943,3 +1943,87 @@ is a per-step override on create that may name only the current `P`.
   no sideways scroll): a step pinned above the published version blocked the sheet, and Use version wrote the file and
   opened the run. Both first turns carried `agentVersion: 1`, and the step conversation read "Version 1". The deployed
   Runtime refuses SKIP_AUTH's token, so the turns themselves wait for the end-to-end dev check below.
+
+### 23.6 Step 5 outcome (2026-11-24)
+
+D.8a (#2324), D.8b (#2327) and D.8c (#2328) are merged and passed their dev checks. So did two follow-ups: #2326,
+which turns the flag on in the platform-ceilings test's all-on config, and #2408, which made the version read cheap.
+`AGENT_VERSION_PINNING_ENABLED` is on in the `development` GitHub environment on app-api and the Runtime, and
+`features.agentVersionPinning` is on in the dev build. Both are off by default and in prod.
+
+**End to end on dev.** One throwaway Agent was published and taken through approval, rollback and takedown, then
+deleted. Each version's instructions tagged its replies, so a reply showed which version ran. The developer approved
+every admin action, in the session that ran them.
+
+| §23.2 case | Seen on dev |
+|---|---|
+| A superseded version, approved after D.8 (v1 while v2 is published) | Runs. The sheet says "Runs version 1 for everyone, including you. Version 2 is the current published version." and offers Use version 2 |
+| The Agent's owner | Runs the pin: the reply was `[V1]`, not `[V2]` or `[DRAFT]` |
+| A later turn of the step conversation | Still `[V1]` while v2 was published, with the same `systemPromptHash`, and read the prefix (`hit`) |
+| A rollback (v2 → v1) | The step pinned to 2 blocks as `above_published` and offers Use version 1. A roll forward unblocks it |
+| A takedown | Every pinned step blocks as `unpublished`, with no offer. The next turn of an open step conversation is refused in the conversation, with no model call and no fall-forward to the draft |
+| A version superseded before the stamp existed | Blocked as `never_published`, with the current version offered |
+| Use version, for someone who can edit the workflow | The workflow PUT wrote the file and run create recorded the new version on both steps |
+| "Version N" on the step conversation | Shown live and after a reload, from the replay's `spawnedFrom.agentVersion` |
+| A first turn naming a version the run didn't record | Refused before any model call. A send with no version on a pinned step is refused too. A correct resend then works |
+
+With the flag off, the D.8a check found the sheet's JSON byte-identical to the old code's, run create recording the same
+labels, `useVersions` ignored and no `agentVersion` on the `HANDOFF#` rows.
+
+**The prompt cache** (§23.4 holds). One `systemPromptHash` per Agent version, the same on pinned and unpinned turns
+of that version and steady across a pinned conversation's turns. Two runs pinned to the same version shared it. Each
+Agent wrote its prefix once and every other call read it. `wastedUsd` was 0 on every row, with no `miss_avoidable`.
+
+**Time to first token** (§23.4 did not hold as written). §23.4 expected no added round trip. That is true for
+everyone but the Agent's owner, whose unpinned turn runs the draft and reads no version row. A pinned turn reads
+`VERSION#n` for everyone, the owner included, because the rule is re-checked every turn. The first measurement found
+that read slow, because `version_repository` built a new `boto3.resource` (and so a new TLS connection) on every call.
+That cost every non-owner turn on a published Agent too, before D.8. #2408 moved every reader onto the process-cached
+resource and through `run_blocking`. Measured on the dev Runtime, owner turns, medians of the `rag` stage of
+`turn_prelude`, 10 pinned and 10 unpinned first turns:
+
+| | Pinned | Unpinned | Gap |
+|---|---|---|---|
+| First turn, before #2408 | 300.5 ms | 253.5 ms | 47 ms |
+| First turn, after #2408 | 276 ms | 252.5 ms | 23.5 ms |
+| Later turns, before #2408 | 290 / 298 ms | 197 / 157 ms | ~117 ms |
+| Later turns, after #2408 | 221 / 212 ms | 188 / 176 ms | ~35 ms |
+
+- **What is left** is one warm `GetItem`, about 25–35 ms, paid only by the Agent's owner on a pinned step. A
+  non-owner's turn on a published Agent already made that read and now pays the lower cost too: a laptop A/B of
+  `resolve_invocation_agent` against dev's table went from 135.5 ms to 33.6 ms. That wasn't measured on the Runtime,
+  for want of a second identity there.
+- **The agent build, the server's time to first token and the client's send-to-first-token** didn't move.
+- **The developer accepted the remaining 25–35 ms** on 2026-11-24, under CLAUDE.md's TTFT rule. Hiding it would mean
+  starting the read beside the access check, a turn-path reorder that wants a rollout switch of its own. That is not
+  planned.
+
+**Not reached on dev.** A second user who can't edit the workflow, using Use version for one run. The test user has
+no users row on dev, so the approved grant to it couldn't be written, and nothing else stands in: a wildcard skill
+grant covers catalog skills only, never another user's workflow. The path is covered by the SPA specs and by
+app-api's tests (`useVersions` refused for anything but the current version, accepted for it). A dev check needs a real
+second account.
+
+**What the build taught:**
+
+- **The Runtime merges after the SPA.** With the flag on, run create records `agentVersion` on every pinned step's
+  row, and the Runtime refuses a first turn that doesn't send it. A Runtime ahead of the SPA would have refused every
+  pinned step. The SPA went first, which is harmless: the old Runtime ignores the extra field.
+- **"Merge once CI is green" means waiting for the run.** This repo doesn't require checks to pass, so an auto-merge
+  merges at once. D.8a merged that way and turned the infrastructure tests red until #2326.
+- **A new opt-in flag goes into `allFlagsOn()`** in `platform-ceilings.test.ts`, or that test fails.
+
+**Cost on dev:** $0.0037 for the end-to-end check and $0.029 for each of the two TTFT passes.
+
+**Follow-ups.**
+
+- **Voice turns don't pin.** A voice turn in a step conversation runs the current version (§23.5, D.8b).
+- **An unpinned step on a taken-down Agent still runs the author's draft**, as any conversation with that Agent does.
+  That is the marketplace question §23.2 left open.
+- **A dev run in flight when the flag was turned on** records the version only as a label, with none on its rows, so
+  its step's first turn is refused as a mismatch. It is dev-only, and has no fix.
+- **The second-user check**, once there is a second account on dev.
+- **Turning it on in prod** is its own decision. When it is, the flag goes on #1798's list, since it is a feature
+  switch that is off by default.
+- **Test data left on dev:** the workflows "D.8a dev check: version pins" and three named "ZZ D.8 … (delete me)",
+  with their carrying skills and their source and step conversations.
