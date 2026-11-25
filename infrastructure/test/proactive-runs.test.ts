@@ -4,7 +4,8 @@
  *     junk are off; only 'true' (any case) turns it on, and the variable beats
  *     a cdk.json context;
  *   - app-api and both scheduled-runs Lambdas get PROACTIVE_RUNS_ENABLED;
- *   - the AgentCore Runtime does not, yet (PR 1.2 adds it, written only while on).
+ *   - the AgentCore Runtime gets it only while on (PR 1.2), so the default
+ *     spends none of the V2 environment budget.
  */
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -141,8 +142,8 @@ describe('proactive runs wiring', () => {
     expect(lambdaEnvironment(on, lambda).PROACTIVE_RUNS_ENABLED).toBe('true');
   });
 
-  it('spends nothing on the AgentCore Runtime yet', () => {
-    expect(runtimeEnv(on)).not.toHaveProperty('PROACTIVE_RUNS_ENABLED');
+  it('writes the AgentCore Runtime copy only while on', () => {
     expect(runtimeEnv(off)).not.toHaveProperty('PROACTIVE_RUNS_ENABLED');
+    expect(runtimeEnv(on).PROACTIVE_RUNS_ENABLED).toBe('true');
   });
 });

@@ -40,6 +40,10 @@ NotificationKind = Literal[
     # payload {scheduleId, label, reason}, ``reason`` a scheduled-runs pause code.
     # Written with no actor: the recipient is the schedule's owner.
     "schedule_paused",
+    # A quiet watcher found something new (quiet-watcher spec §3.3): one per new item, payload
+    # {scheduleId, runId, sessionId, label, title, urgency, key}, never the item's summary.
+    # Written with no actor: the recipient is the schedule's owner.
+    "agent_item",
     # Quota requests and extensions (quota-requests spec §11.1). Not project
     # events: projectId is unset and the payload carries the ids.
     "quota_request_submitted",

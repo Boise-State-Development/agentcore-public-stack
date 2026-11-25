@@ -2199,6 +2199,46 @@ async def session_owned_by_other_user(session_id: str, user_id: str) -> bool:
         return False
 
 
+def _owned_session_row(items: List[Dict[str, Any]], session_id: str, user_id: str) -> Optional[dict]:
+    """The caller's META row among a SessionLookupIndex query's items, or None."""
+    if not items:
+        return None
+
+    # Scan ALL matching rows for this user's, rather than trusting items[0].
+    #
+    # A session id is supposed to have exactly one META row, but a
+    # cross-user fork could create a second one (see
+    # `session_owned_by_other_user`, and prod session 5f34d2b0 where it
+    # actually happened). Both rows share GSI_PK/GSI_SK, so DynamoDB
+    # returns them in an unspecified order — reading items[0] meant the
+    # rightful owner's own session could resolve to the other row, fail
+    # the ownership check, and look "not found" to every marker helper
+    # that routes through here. Matching by userId makes the lookup
+    # deterministic even where a fork already exists in the table.
+    for item in items:
+        if item.get('userId') == user_id:
+            return _convert_decimal_to_float(item)
+
+    logger.warning(f"Session {session_id} belongs to different user")
+    return None
+
+
+def _get_session_by_gsi_sync(session_id: str, user_id: str, table) -> Optional[dict]:
+    """``_get_session_by_gsi`` for a caller off the event loop (``soft_delete.soft_delete_session_row``).
+
+    Blocking (one Query). Same lookup and the same row choice; errors raise
+    rather than read as "not found", so a delete never mistakes an outage for
+    a missing row.
+    """
+    from boto3.dynamodb.conditions import Key
+
+    response = table.query(
+        IndexName='SessionLookupIndex',
+        KeyConditionExpression=Key('GSI_PK').eq(f'SESSION#{session_id}') & Key('GSI_SK').eq('META')
+    )
+    return _owned_session_row(response.get('Items', []), session_id, user_id)
+
+
 async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[dict]:
     """
     Get session record using GSI (SessionLookupIndex)
@@ -2221,27 +2261,7 @@ async def _get_session_by_gsi(session_id: str, user_id: str, table) -> Optional[
             KeyConditionExpression=Key('GSI_PK').eq(f'SESSION#{session_id}') & Key('GSI_SK').eq('META')
         )
 
-        items = response.get('Items', [])
-        if not items:
-            return None
-
-        # Scan ALL matching rows for this user's, rather than trusting items[0].
-        #
-        # A session id is supposed to have exactly one META row, but a
-        # cross-user fork could create a second one (see
-        # `session_owned_by_other_user`, and prod session 5f34d2b0 where it
-        # actually happened). Both rows share GSI_PK/GSI_SK, so DynamoDB
-        # returns them in an unspecified order — reading items[0] meant the
-        # rightful owner's own session could resolve to the other row, fail
-        # the ownership check, and look "not found" to every marker helper
-        # that routes through here. Matching by userId makes the lookup
-        # deterministic even where a fork already exists in the table.
-        for item in items:
-            if item.get('userId') == user_id:
-                return _convert_decimal_to_float(item)
-
-        logger.warning(f"Session {session_id} belongs to different user")
-        return None
+        return _owned_session_row(response.get('Items', []), session_id, user_id)
 
     except Exception as e:
         # JUSTIFICATION: GSI lookup is a fallback mechanism for finding sessions.

@@ -8,13 +8,14 @@ This service provides operations for session management including:
 The service preserves cost records (C# prefix) for audit trails and billing accuracy.
 """
 
+import asyncio
 import logging
 import os
 from typing import Any, List, Optional
-from datetime import datetime, timezone
 from decimal import Decimal
 
 from apis.shared.sessions.models import SessionMetadata
+from apis.shared.sessions.soft_delete import LISTING_KEY_ATTRS, soft_delete_session_row
 from apis.app_api.files.service import get_file_upload_service
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ class SessionService:
 
     # Sparse index keys that list a session (recency, project, pinned). Live
     # rows may carry them; a soft-deleted row never should.
-    _LISTING_KEY_ATTRS = ('GSI4_PK', 'GSI4_SK', 'GSI5_PK', 'GSI5_SK', 'GSI6_PK', 'GSI6_SK')
+    _LISTING_KEY_ATTRS = LISTING_KEY_ATTRS
 
     def __init__(self):
         self.table_name = os.environ.get(
@@ -225,77 +226,9 @@ class SessionService:
             return False
 
         try:
-            # Resolve the raw row (with its actual SK) via GSI. Do NOT reconstruct the
-            # SK from lastMessageAt — under the static-SK schema (issue #175) a migrated
-            # row lives at S#{session_id}, not S#ACTIVE#{lastMessageAt}#{id}, so a
-            # reconstructed key would miss it entirely.
-            from apis.shared.sessions.metadata import _get_session_by_gsi, _static_session_sk
-
-            existing = await _get_session_by_gsi(session_id, user_id, self.table)
-            if not existing:
-                logger.info("Session not found for deletion")
-                return False
-
-            if existing.get('deleted') or existing.get('status') == 'deleted':
-                # A tombstone should carry no listing keys. If a write landed
-                # after the delete and put some back (#1764), the conversation
-                # is in the sidebar again and can't be opened or pinned; remove
-                # them so deleting again repairs it.
-                stale = [k for k in self._LISTING_KEY_ATTRS if k in existing]
-                if stale:
-                    logger.warning(
-                        "Deleted session still had listing keys %s; removing them", stale
-                    )
-                    self.table.update_item(
-                        Key={'PK': f'USER#{user_id}', 'SK': existing['SK']},
-                        UpdateExpression="REMOVE " + ", ".join(stale),
-                    )
-                else:
-                    logger.info("Session already deleted")
-                return True
-
-            now = datetime.now(timezone.utc)
-            deleted_at = now.isoformat()
-            pk = f'USER#{user_id}'
-            old_sk = existing['SK']
-            target_sk = _static_session_sk(session_id)
-
-            if old_sk == target_sk:
-                # Already migrated — soft-delete in place: flip status + drop the sparse
-                # recency keys (user and project) so the row leaves both active
-                # listings. No row move.
-                self.table.update_item(
-                    Key={'PK': pk, 'SK': target_sk},
-                    UpdateExpression=(
-                        "SET #s = :d, deleted = :true, deletedAt = :da "
-                        "REMOVE GSI4_PK, GSI4_SK, GSI5_PK, GSI5_SK, GSI6_PK, GSI6_SK"
-                    ),
-                    ExpressionAttributeNames={'#s': 'status'},
-                    ExpressionAttributeValues={':d': 'deleted', ':true': True, ':da': deleted_at},
-                )
-            else:
-                # Legacy row — migrate to the static tombstone (status=deleted, no
-                # recency keys) and drop the old row. One-time move; carry existing fields.
-                deleted_item = {
-                    k: v for k, v in existing.items()
-                    if k not in ('PK', 'SK', 'GSI4_PK', 'GSI4_SK', 'GSI5_PK', 'GSI5_SK', 'GSI6_PK', 'GSI6_SK')
-                }
-                deleted_item.update({
-                    'PK': pk,
-                    'SK': target_sk,
-                    'GSI_PK': f'SESSION#{session_id}',
-                    'GSI_SK': 'META',
-                    'sessionId': session_id,
-                    'userId': user_id,
-                    'status': 'deleted',
-                    'deleted': True,
-                    'deletedAt': deleted_at,
-                })
-                # existing came back with Decimals converted to floats — put_item needs Decimal.
-                self.table.put_item(Item=_convert_float_to_decimal(deleted_item))
-                self.table.delete_item(Key={'PK': pk, 'SK': old_sk})
-
-            logger.info("Soft-deleted session")
+            # The row move itself is shared with the scheduled-runs worker (a quiet
+            # watcher run is soft-deleted the same way): apis.shared.sessions.soft_delete.
+            deleted = await asyncio.to_thread(soft_delete_session_row, user_id, session_id, self.table)
 
             # Note: AgentCore Memory cleanup is now handled via BackgroundTasks
             # in the route handler for true fire-and-forget behavior
@@ -303,7 +236,7 @@ class SessionService:
             # Note: File cascade delete is also handled via BackgroundTasks
             # in the route handler
 
-            return True
+            return deleted
 
         except self.dynamodb.meta.client.exceptions.TransactionCanceledException as e:
             # Transaction failed - likely the session was already deleted or modified

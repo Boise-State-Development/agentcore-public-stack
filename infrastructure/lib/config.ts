@@ -462,8 +462,9 @@ export interface ScheduledRunsConfig {
  * `proactiveRuns.enabled: true` cdk.json context). Sets PROACTIVE_RUNS_ENABLED
  * on app-api (a schedule's `mode` and `modelId`, and the
  * `/schedules/{id}/runs` and `/schedules/{id}/state` routes) and on both
- * scheduled-runs Lambdas (the worker's per-run `SCHEDRUN#` history rows). Not
- * on the AgentCore Runtime yet. A feature switch once finished.
+ * scheduled-runs Lambdas (the worker's per-run `SCHEDRUN#` history rows and
+ * watch runs), and on the AgentCore Runtime only while on (the `report` tool
+ * of a headless watch run). A feature switch once finished.
  */
 export interface ProactiveRunsConfig {
   enabled: boolean;

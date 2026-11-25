@@ -36,7 +36,8 @@ DEFAULT_RUNS_LIMIT = 50
 
 RUN_SK_PREFIX = "SCHEDRUN#"
 
-#: The statuses PR 1.1 writes; ``quiet`` and ``notify`` arrive with the watch run (PR 1.2).
+#: ``completed`` is a standard run; a watch run ends ``quiet`` (nothing new: its
+#: conversation is soft-deleted) or ``notify`` (``itemCount`` inbox rows written).
 ScheduleRunStatus = Literal["completed", "quiet", "notify", "error", "timeout", "paused"]
 
 

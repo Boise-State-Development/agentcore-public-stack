@@ -1,6 +1,6 @@
 # Quiet Watcher — Slice 1 of the Proactive Agent Gaps
 
-**Status:** Draft / build plan. Nothing here is built.
+**Status:** PR 1.1 and PR 1.2 built (see §5); PR 1.3 (the web app) and the dev readout to come.
 **Date:** 2026-11-25
 **Targets branch:** `develop`
 **Parent:** `docs/specs/proactive-agent-gaps.md` (slice 1: G1 job state, G2 silent outcome, G3 step 1 polling, G4 `agent_item`)
@@ -84,8 +84,9 @@ It never goes in the system prompt, so the system prompt and `toolConfig` stay c
 | No `report`, but final assistant text | Notify, with one item titled with the schedule's label. A finding is never swallowed |
 | No `report`, no text | Quiet |
 | `error`, `timeout`, `oauth_required` | As today: failure streak, pause, slice 0 notice |
+| Completed, but over quota (`quota_exceeded`) | A failure, never a finding: the text is the quota message. Failure streak, then the slice 0 notice |
 
-- **Quiet** means the run's session is **soft-deleted**: moved to `S#DELETED#`, its `C#` cost rows kept for quota, the ledger and audit. No unread dot, no inbox row, and `lastRunSessionId` is left unchanged. The soft delete moves from `SessionService.delete_session` (app-api) into `apis.shared.sessions` so the worker can call it, and app-api keeps calling the same function.
+- **Quiet** means the run's session is **soft-deleted**: moved to `S#DELETED#`, its `C#` cost rows kept for quota, the ledger and audit. No unread dot, no inbox row, and `lastRunSessionId` is left unchanged. The run's messages stay in AgentCore Memory until its retention expires (app-api's memory cascade is not run for a quiet run); the run is incognito, so nothing reaches long-term memory. The soft delete moves from `SessionService.delete_session` (app-api) into `apis.shared.sessions` so the worker can call it, and app-api keeps calling the same function.
 - **Notify** keeps the session, sets the unread dot, and writes one `agent_item` inbox row per new item: `{scheduleId, runId, sessionId, label, title, urgency, key}`. The title is the model's short display line for the user's own inbox, held to the same standard as a conversation title. No summary text goes in the inbox.
 - **Either way**, the state is saved: the new cursors and tracking from `report`, plus the items' keys appended to `seen`.
 
@@ -121,3 +122,5 @@ inputTokens, outputTokens, cacheReadTokens
 | **1.2: the watch run** | `run_mode` on `InvocationRequest`, the `report` tool (digest pin, token measurement), harness capture of `report` input and `incognito`, the worker's state block, dedupe and outcomes, soft delete moved to `apis.shared`, the `agent_item` inbox kind; the Runtime's copy of the flag (written only while on) | Watchers are quiet until something is new |
 | **1.3: the web app** | `features.proactiveRuns`; mode and model in the form, with the short-interval guidance; a schedule detail view with run history (quiet runs counted) and the state with Start over; `agent_item` in the bell | Users can make and inspect watchers |
 | **Dev readout** | A 15-minute watcher on a dev connector for a day: quiet-run tokens and cost, prefix hashes, false-positive and missed findings | Decides whether a second triage stage is needed before slice 4 |
+
+**Built:** PR 1.2, 2026-11-25. Two choices the table above leaves open: a watch run's agent is never cached (`report` is not a cache-key element, and a later turn in a notifying run's conversation must not be served it), and a run with no `report` keeps the previous cursors and tracking and adds no `run:` key to `seen`.

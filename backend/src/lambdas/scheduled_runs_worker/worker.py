@@ -44,6 +44,17 @@ docs/specs/quiet-watcher.md §3.4): completed, error, timeout, or paused (an
 OAuth consent or a dead headless grant). While it is off, nothing is written,
 and a schedule's ``modelId`` (settable only while it is on) is passed to the
 run whenever one is set.
+
+A personal schedule in ``watch`` mode, while the flag is on, is a quiet
+watcher (docs/specs/quiet-watcher.md §3.3). Its run is sent with
+``run_mode="watch"`` and ``incognito``, and its prompt starts with the
+watcher's ``<watch_state>`` block. A completed run is then **quiet** (its
+conversation soft-deleted, its ``C#`` cost rows kept, no unread dot, no inbox
+row, ``lastRunSessionId`` untouched) or **notifies** (unread dot, one
+``agent_item`` inbox row per new finding), by ``watch_run.decide_watch_outcome``.
+Either way the state is saved, conditional on the version the run read. A
+failed, timed-out or consent-blocked watch run takes the paths above unchanged.
+A standard schedule, or any schedule while the flag is off, runs as before.
 """
 
 import asyncio
@@ -65,6 +76,17 @@ from apis.shared.projects.schedules import ProjectSchedules
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.pausing import pause_schedule
 from apis.shared.scheduled_prompts.runs import ScheduleRunStatus, record_schedule_run
+from apis.shared.scheduled_prompts.watch_run import (
+    WatchOutcome,
+    build_watch_prompt,
+    decide_watch_outcome,
+    next_watch_state,
+)
+from apis.shared.scheduled_prompts.watch_state import (
+    WatchState,
+    get_watch_state,
+    save_watch_state,
+)
 from apis.shared.scheduled_prompts.service import (
     get_scheduled_prompt,
     record_run_result,
@@ -95,11 +117,15 @@ async def _record_history(
     schedule: ScheduledPrompt,
     status: ScheduleRunStatus,
     result: Optional[RunResult] = None,
+    *,
+    item_count: int = 0,
+    with_session: bool = True,
 ) -> None:
     """Leave the run's history row: personal schedules only, and only while the flag is on.
 
     ``result`` is the run's outcome when there is one; a run that raised before
-    returning gets a fresh run id and now.
+    returning gets a fresh run id and now. ``with_session=False`` leaves the
+    session off the row (a quiet run, whose conversation is gone).
     """
     if schedule.project_id or not proactive_runs_enabled():
         return
@@ -108,8 +134,9 @@ async def _record_history(
         schedule,
         run_id=(result.run_id if result is not None else None) or f"run-{uuid.uuid4().hex[:12]}",
         status=status,
-        session_id=result.session_id if result is not None else None,
+        session_id=result.session_id if result is not None and with_session else None,
         finished_at=(result.finished_at if result is not None else None) or _now_iso(),
+        item_count=item_count,
         usage=result.usage if result is not None else None,
     )
 
@@ -170,6 +197,116 @@ async def _pause_reauth(
     return {"scheduleId": schedule.schedule_id, "result": "paused_error", "reason": reason}
 
 
+def _is_watch(schedule: ScheduledPrompt) -> bool:
+    """A personal schedule in ``watch`` mode while the flag is on; anything else runs as standard."""
+    return schedule.mode == "watch" and not schedule.project_id and proactive_runs_enabled()
+
+
+async def _save_watch_state(
+    schedule: ScheduledPrompt,
+    previous: Optional[WatchState],
+    outcome: WatchOutcome,
+    finished_at: str,
+) -> None:
+    """Save the watcher's next state, conditional on the version the run read. Never raises."""
+    try:
+        saved = await asyncio.to_thread(
+            save_watch_state,
+            schedule.user_id,
+            schedule.schedule_id,
+            next_watch_state(previous, outcome, finished_at),
+            expected_version=previous.version if previous is not None else None,
+        )
+        if not saved:
+            logger.warning(f"Schedule {schedule.schedule_id}: watcher state moved on during the run; not saved")
+    except Exception:
+        logger.warning(f"Schedule {schedule.schedule_id}: could not save watcher state", exc_info=True)
+
+
+def _soft_delete_quiet_session(user_id: str, session_id: str) -> None:
+    """Soft-delete a quiet run's conversation, keeping its C# cost rows. Never raises."""
+    from apis.shared.sessions.soft_delete import soft_delete_session_row
+
+    try:
+        if not soft_delete_session_row(user_id, session_id):
+            logger.info("Quiet watcher run: no session row to delete")
+    except Exception:
+        logger.warning("Quiet watcher run: could not delete its session", exc_info=True)
+
+
+def _notify_items(schedule: ScheduledPrompt, result: RunResult, outcome: WatchOutcome) -> int:
+    """One ``agent_item`` inbox row per new item, to the owner. Returns how many were written."""
+    email = schedule.owner_email
+    if not email:
+        logger.info(f"Schedule {schedule.schedule_id}: no owner email on record, so no inbox rows")
+        return 0
+    from apis.shared.notifications.service import NotificationService
+
+    service = NotificationService()
+    written = 0
+    for item in outcome.items:
+        if service.notify_own(
+            recipient_email=email,
+            kind="agent_item",
+            payload={
+                "scheduleId": schedule.schedule_id,
+                "runId": result.run_id,
+                "sessionId": result.session_id,
+                "label": schedule.label,
+                "title": item.title,
+                "urgency": item.urgency,
+                "key": item.key,
+            },
+        ) is not None:
+            written += 1
+    return written
+
+
+async def _finish_watch_run(
+    schedule: ScheduledPrompt,
+    result: RunResult,
+    previous: Optional[WatchState],
+) -> Dict[str, Any]:
+    """A completed watch run: quiet or notify (spec §3.3), then save the state."""
+    outcome = decide_watch_outcome(
+        result.report_input,
+        result.final_message,
+        previous.seen if previous is not None else [],
+        run_id=result.run_id,
+        label=schedule.label,
+    )
+    schedule_id = schedule.schedule_id
+
+    if outcome.notify:
+        try:
+            from apis.shared.sessions.metadata import set_session_unread
+
+            await set_session_unread(result.session_id, schedule.user_id, True)
+        except Exception:
+            logger.warning(f"Schedule {schedule_id}: could not mark the run unread", exc_info=True)
+        await record_run_result(schedule.user_id, schedule_id, status="completed", session_id=result.session_id)
+        await asyncio.to_thread(_notify_items, schedule, result, outcome)
+        await _record_history(schedule, "notify", result, item_count=len(outcome.items))
+        await _save_watch_state(schedule, previous, outcome, result.finished_at)
+        logger.info(f"Schedule {schedule_id}: watch run {result.run_id} notified {len(outcome.items)} item(s)")
+        return {
+            "scheduleId": schedule_id,
+            "result": "notify",
+            "sessionId": result.session_id,
+            "itemCount": len(outcome.items),
+        }
+
+    # Quiet: nothing left behind. No session id, so lastRunSessionId still
+    # names the last run that had something to show.
+    if result.session_id:
+        await asyncio.to_thread(_soft_delete_quiet_session, schedule.user_id, result.session_id)
+    await record_run_result(schedule.user_id, schedule_id, status="completed")
+    await _record_history(schedule, "quiet", result, with_session=False)
+    await _save_watch_state(schedule, previous, outcome, result.finished_at)
+    logger.info(f"Schedule {schedule_id}: watch run {result.run_id} was quiet")
+    return {"scheduleId": schedule_id, "result": "quiet"}
+
+
 async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
     schedule_id = payload["scheduleId"]
     user_id = payload["userId"]
@@ -185,10 +322,20 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
         # Agent's or the user's default, exactly as before.
         run_config["model_id"] = schedule.model_id
 
+    watch = _is_watch(schedule)
+    watch_state: Optional[WatchState] = None
+    prompt = schedule.prompt_text
+    if watch:
+        # The worker decides the unread dot; the run never feeds long-term memory.
+        run_config.update(run_mode="watch", incognito=True, mark_unread=False)
+
     try:
+        if watch:
+            watch_state = await asyncio.to_thread(get_watch_state, user_id, schedule_id)
+            prompt = build_watch_prompt(schedule.prompt_text, watch_state)
         result: RunResult = await run_agent_headless(
             user_id=user_id,
-            prompt=schedule.prompt_text,
+            prompt=prompt,
             auth=CognitoRefreshBearerAuth(),
             title=schedule.label,
             rag_assistant_id=schedule.assistant_id,
@@ -219,6 +366,21 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
             first = result.oauth_required[0]
             detail = f"provider={first.provider_id} authorization_url={first.authorization_url}"
         return await _pause_reauth(schedule, "oauth_required", detail, result)
+
+    if result.status == "completed" and watch and result.quota_exceeded:
+        # The "answer" is the quota message, not a finding: a watcher that can't
+        # run is a failure (streak, then a schedule_paused notice), never a bell item.
+        return await _record_failure_and_maybe_pause(
+            schedule,
+            error="quota_exceeded",
+            session_id=result.session_id,
+            max_failures=_env_int("SCHEDULED_RUNS_MAX_FAILURES", 3),
+            result_label="error",
+            result=result,
+        )
+
+    if result.status == "completed" and watch:
+        return await _finish_watch_run(schedule, result, watch_state)
 
     if result.status == "completed":
         await record_run_result(

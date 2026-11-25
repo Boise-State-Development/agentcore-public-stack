@@ -1215,6 +1215,29 @@ def _build_suggest_handoff_tools(
     return [make_suggest_handoff_tool(session_id, user_id)]
 
 
+def _build_watch_report_tools(input_data: InvocationRequest) -> list:
+    """The quiet watcher's ``report`` tool on an unattended watch run (quiet-watcher spec §3.3).
+
+    Built only when the request carries ``run_mode: "watch"``, the session is
+    headless and the Runtime's ``PROACTIVE_RUNS_ENABLED`` is on, so a web or
+    terminal turn (which never sends ``run_mode``) is unchanged. Gated on the
+    request rather than the catalog, so it is in no ``INJECTED_TOOL_IDS`` set.
+    A constant spec with no closure and no IO.
+    """
+    if getattr(input_data, "run_mode", None) != "watch":
+        return []
+
+    from apis.shared.feature_flags import proactive_runs_enabled
+    from apis.shared.scheduled_prompts.models import is_headless_session
+
+    if not is_headless_session(input_data.session_id) or not proactive_runs_enabled():
+        return []
+
+    from agents.builtin_tools.watch_report_tool import make_watch_report_tool
+
+    return [make_watch_report_tool()]
+
+
 # ============================================================
 # Meeting Transcripts → GitHub Issues Tool Injection
 # ============================================================
@@ -4833,13 +4856,22 @@ async def _build_turn_tools(
     )
     extra_tools = extra_tools + document_tools
 
+    # A watch run's `report` (quiet-watcher §3.3), after every other family so
+    # no spec moves. Empty on every turn that is not a headless watch run.
+    watch_report_tools = _build_watch_report_tools(input_data)
+    extra_tools = extra_tools + watch_report_tools
+
     # Can this turn's agent be cached despite carrying injected tools?
     # Only when every builder that fired closes over values the cache
     # key already carries (session, user, enabled_tools). Derived from
     # the same `effective_enabled_tools` that goes into the key below —
     # passing the request's list here instead would let the predicate
-    # and the key disagree about which builders ran.
-    extra_tools_key_described = injected_tools_are_key_described(
+    # and the key disagree about which builders ran. `report` is not a key
+    # element, so a watch run's agent is never cached: a later turn in the
+    # same conversation (the user opening a notifying run) must not be
+    # served an agent carrying it. Every watch run is a fresh session, so
+    # this costs no cache hit.
+    extra_tools_key_described = not watch_report_tools and injected_tools_are_key_described(
         enabled_tools=effective_enabled_tools,
     )
     # Memory tools close over the project's resolved spaces, so the binding is
@@ -6838,6 +6870,7 @@ async def _run_invocation(
                 is_resume=True,
                 # A key dimension for non-web surfaces; replay the paused turn's.
                 client_surface=snapshot.client_surface or input_data.client_surface,
+                # A watch run's `report` is not rebuilt here (quiet-watcher §3.3): it ends by the worker's "no report" rules.
                 # Client-executed tools are the one injected family a resume
                 # MUST rebuild: Strands re-enters the paused tool body with the
                 # client's response, so the tool has to exist on the rebuilt

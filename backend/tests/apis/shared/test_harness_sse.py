@@ -193,3 +193,17 @@ def test_accumulator_notes_a_quota_exceeded_frame():
     acc = InvocationStreamAccumulator()
     acc.handle("quota_exceeded", {"message": "over"})
     assert acc.quota_exceeded
+
+
+def test_report_input_is_the_last_report_call():
+    from apis.shared.harness.models import RunResult
+
+    acc = InvocationStreamAccumulator()
+    acc.handle("tool_use", {"tool_use": {"name": "report", "tool_use_id": "r1", "input": '{"outcome": "notif'}})
+    acc.handle("tool_use", {"tool_use": {"name": "report", "tool_use_id": "r1", "input": '{"outcome": "notify"}'}})
+    acc.handle("tool_use", {"toolUseId": "t2", "name": "calc", "input": {"x": 1}})
+    result = RunResult(run_id="r", session_id="s", user_id="u", status="completed", tool_trace=acc.tool_trace)
+    assert result.report_input == {"outcome": "notify"}
+    assert "report_input" not in result.to_dict()
+
+    assert RunResult(run_id="r", session_id="s", user_id="u", status="completed").report_input is None
