@@ -319,4 +319,17 @@ export interface FeatureFlags {
    * `environment.development.ts`, `false` locally and in prod.
    */
   mcpElicitation: boolean;
+
+  /**
+   * Quiet watchers (docs/specs/quiet-watcher.md): a schedule's "What should it
+   * do?" choice (run and deliver every time, or watch and only tell me when
+   * something is new) and its own model, a schedule detail page with its run
+   * history and what a watcher is tracking (with Start over), and the bell's
+   * `agent_item` findings. Backend: PROACTIVE_RUNS_ENABLED (app-api and the
+   * scheduled-runs Lambdas; `/schedules/{id}/runs` and `/state` 404 while off,
+   * and `mode` / `modelId` are refused). In development: `false` everywhere,
+   * dev included, until the `development` GitHub environment sets
+   * CDK_PROACTIVE_RUNS_ENABLED=true.
+   */
+  proactiveRuns: boolean;
 }

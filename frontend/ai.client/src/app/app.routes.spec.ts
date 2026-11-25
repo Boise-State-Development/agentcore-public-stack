@@ -5,6 +5,8 @@ import { provideRouter, Router, Routes } from '@angular/router';
 import { provideLocationMocks } from '@angular/common/testing';
 import { routes } from './app.routes';
 import { MINIMAL_CHROME } from './shared/utils/route-chrome';
+import { FEATURES } from './services/features';
+import { environment } from '../environments/environment';
 
 /**
  * Assistant deprecation (Designer Phase 5, #746).
@@ -192,5 +194,72 @@ describe('app routes — connectors moved into Customize', () => {
   it('no longer offers connectors as a Settings child route', async () => {
     const { settingsRoutes } = await import('./settings/settings.routes');
     expect(settingsRoutes.map(r => r.path)).not.toContain('connectors');
+  });
+});
+
+/**
+ * A schedule's own page (docs/specs/quiet-watcher.md §3.4) sits beside the form's
+ * routes. It is unmatched while `features.proactiveRuns` is off, and `new` and
+ * `:scheduleId/edit` must still reach the form with it on.
+ */
+describe('app routes — schedule detail', () => {
+  @Component({ template: '' })
+  class BlankComponent {}
+
+  function stubbedRoutes(source: Routes): Routes {
+    return source.map((route) => {
+      const { loadComponent, loadChildren, children, canActivate, ...rest } = route;
+      const stubbed: Routes[number] = { ...rest };
+      if (children) stubbed.children = stubbedRoutes(children);
+      if ((loadComponent || loadChildren) && !rest.redirectTo) stubbed.component = BlankComponent;
+      return stubbed;
+    });
+  }
+
+  function routerWith(proactiveRuns: boolean): Router {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(stubbedRoutes(routes)),
+        provideLocationMocks(),
+        { provide: FEATURES, useValue: { ...environment.features, proactiveRuns } },
+      ],
+    });
+    return TestBed.inject(Router);
+  }
+
+  /** The configured path of the route a URL landed on. */
+  function matchedPath(router: Router): string | undefined {
+    let snapshot = router.routerState.snapshot.root;
+    while (snapshot.firstChild) snapshot = snapshot.firstChild;
+    return snapshot.routeConfig?.path;
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('opens a schedule’s page with quiet watchers on, and still reaches new and edit', async () => {
+    const router = routerWith(true);
+    await router.navigateByUrl('/schedules/sched-1');
+    expect(matchedPath(router)).toBe('schedules/:scheduleId');
+    await router.navigateByUrl('/schedules/new');
+    expect(matchedPath(router)).toBe('schedules/new');
+    await router.navigateByUrl('/schedules/sched-1/edit');
+    expect(matchedPath(router)).toBe('schedules/:scheduleId/edit');
+    await router.navigateByUrl('/schedules');
+    expect(matchedPath(router)).toBe('schedules');
+  });
+
+  it('leaves a schedule’s page unmatched with quiet watchers off', async () => {
+    const router = routerWith(false);
+    await router.navigateByUrl('/schedules/sched-1');
+    expect(matchedPath(router)).not.toBe('schedules/:scheduleId');
+    await router.navigateByUrl('/schedules/sched-1/edit');
+    expect(matchedPath(router)).toBe('schedules/:scheduleId/edit');
+  });
+
+  it('declares the page after new and edit', () => {
+    const paths = routes.map(r => r.path);
+    expect(paths.indexOf('schedules/:scheduleId')).toBeGreaterThan(paths.indexOf('schedules/new'));
+    expect(paths.indexOf('schedules/:scheduleId')).toBeGreaterThan(paths.indexOf('schedules/:scheduleId/edit'));
   });
 });

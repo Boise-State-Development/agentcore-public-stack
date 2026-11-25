@@ -12,6 +12,7 @@ import { ToolService } from '../../services/tool/tool.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ProjectApiService } from '../../projects/services/project-api.service';
 import { Project, ProjectSchedule } from '../../projects/models/project.model';
+import { FEATURES } from '../../services/features';
 
 /**
  * The schedule form's project mode (`?projectId=…`, shared-projects 3.2c): the
@@ -87,6 +88,7 @@ describe('ScheduleFormPage — project mode', () => {
         { provide: AgentService, useValue: agents },
         { provide: ToolService, useValue: tools },
         { provide: ToastService, useValue: toast },
+        { provide: FEATURES, useValue: { proactiveRuns: false } },
         {
           provide: ActivatedRoute,
           useValue: {

@@ -27,6 +27,7 @@ describe('FEATURES', () => {
     expect(environment.features.organizeLists).toBe(false);
     expect(environment.features.knowledgeBaseMode).toBe(false);
     expect(environment.features.releaseLedger).toBe(false);
+    expect(environment.features.proactiveRuns).toBe(false);
   });
 
   it('turns finished features on locally, matching their default-on backend switches', () => {
@@ -62,6 +63,30 @@ describe('/projects routes follow the Projects switch', () => {
     for (const route of projectRoutes) {
       expect(matches(route, true)).toBe(true);
       expect(matches(route, false)).toBe(false);
+    }
+  });
+});
+
+describe('a schedule’s page follows the quiet-watcher switch', () => {
+  const route = routes.find(r => r.path === 'schedules/:scheduleId')!;
+
+  function matches(proactiveRuns: boolean): boolean {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [{ provide: FEATURES, useValue: { proactiveRuns } }] });
+    return (route.canMatch ?? []).every(guard =>
+      TestBed.runInInjectionContext(() => (guard as () => boolean)()),
+    );
+  }
+
+  it('is guarded, and matches only while quiet watchers are on', () => {
+    expect(route.canMatch?.length).toBeGreaterThan(0);
+    expect(matches(true)).toBe(true);
+    expect(matches(false)).toBe(false);
+  });
+
+  it('leaves the form’s routes unguarded', () => {
+    for (const path of ['schedules/new', 'schedules/:scheduleId/edit', 'schedules']) {
+      expect(routes.find(r => r.path === path)?.canMatch).toBeUndefined();
     }
   });
 });

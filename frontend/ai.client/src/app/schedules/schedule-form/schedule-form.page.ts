@@ -22,8 +22,12 @@ import {
   MIN_INTERVAL_MINUTES,
   RunNowRequest,
   ScheduleCadence,
+  ScheduleMode,
   UpdateScheduleRequest,
 } from '../models/schedule.model';
+import { FEATURES } from '../../services/features';
+import { ModelService } from '../../session/services/model/model.service';
+import { isRetiring as isModelRetiring } from '../../shared/utils/retirement';
 import { ToastService } from '../../services/toast/toast.service';
 import { ToolSelectorComponent } from '../../components/tool-selector/tool-selector.component';
 import { ToolSelectorItem } from '../../components/tool-selector/tool-selector.model';
@@ -35,7 +39,16 @@ import {
   ProjectSchedule,
   UpdateProjectScheduleRequest,
 } from '../../projects/models/project.model';
-import { WEEKDAY_LABELS } from '../schedule-wording';
+import { WEEKDAY_LABELS, runsPerDay } from '../schedule-wording';
+
+/** A watcher this often or more gets the "use a small model" note (quiet-watcher §3.1). */
+const WATCH_NOTE_UNDER_MINUTES = 60;
+
+/** One row of the schedule's Model picker. */
+export interface ScheduleModelChoice {
+  modelId: string;
+  label: string;
+}
 
 /** All 24 hours, labeled 12-hour-with-suffix for the select. */
 function hourOptions(): { value: number; label: string }[] {
@@ -124,6 +137,13 @@ export class ScheduleFormPage implements OnInit {
   private readonly toolService = inject(ToolService);
   private readonly toast = inject(ToastService);
   private readonly projectApi = inject(ProjectApiService);
+  protected readonly features = inject(FEATURES);
+  /**
+   * The chat composer's model list (`/models`, already filtered to what this user
+   * can use). Injected only while quiet watchers are on, so a build with them off
+   * makes no request it didn't make before.
+   */
+  private readonly modelService = this.features.proactiveRuns ? inject(ModelService) : null;
 
   readonly scheduleId = signal<string | null>(null);
   /** Set in project mode: the schedule runs on this project's assistant. */
@@ -198,11 +218,62 @@ export class ScheduleFormPage implements OnInit {
     deliverToProject: [false],
     notifyMembers: new FormControl<boolean>({ value: false, disabled: true }, { nonNullable: true }),
     publishOutputs: new FormControl<boolean>({ value: false, disabled: true }, { nonNullable: true }),
+    // Quiet-watcher fields (quiet-watcher §3.1): rendered and sent only while
+    // `features.proactiveRuns` is on, and only for a personal schedule.
+    mode: new FormControl<ScheduleMode>('standard', { nonNullable: true }),
+    modelId: new FormControl<string | null>(null),
   });
 
   private readonly cadenceValue = signal<ScheduleCadence>('daily');
   readonly isWeekly = computed(() => this.cadenceValue() === 'weekly');
   readonly isInterval = computed(() => this.cadenceValue() === 'interval');
+
+  /** Whether this form offers the mode and model fields: the flag, and a personal schedule. */
+  readonly offersWatchFields = computed(() => this.features.proactiveRuns && !this.isProject());
+  /** Mirrors of the mode, model and interval controls, for the template's computeds. */
+  readonly modeValue = signal<ScheduleMode>('standard');
+  readonly modelIdValue = signal<string | null>(null);
+  private readonly intervalMinutes = signal<number | null>(null);
+  /** The model the schedule had when it was loaded, so an edit sends only a change. */
+  private loadedModelId: string | null = null;
+
+  /**
+   * The Model picker's rows: the composer's list, less models being retired (their
+   * successor is the one to choose), but always the schedule's own model, even one
+   * this list no longer has, so the select never silently shows "Default".
+   */
+  readonly modelChoices = computed<ScheduleModelChoice[]>(() => {
+    const service = this.modelService;
+    if (!service) return [];
+    const current = this.modelIdValue();
+    const choices = service
+      .availableModels()
+      .filter((model) => !isModelRetiring(model) || model.modelId === current)
+      .map((model) => ({
+        modelId: model.modelId,
+        label: model.providerName ? `${model.modelName} (${model.providerName})` : model.modelName,
+      }));
+    if (current && !choices.some((choice) => choice.modelId === current)) {
+      choices.unshift({ modelId: current, label: service.modelNameFor(current) ?? current });
+    }
+    return choices;
+  });
+  readonly modelsLoading = computed(() => this.modelService?.modelsLoading() ?? false);
+
+  /**
+   * The note for a watcher that checks more often than hourly: how many runs a day
+   * that is, and to choose a small, inexpensive model. The catalog has no "small"
+   * marker, so it names none. Null when it doesn't apply.
+   */
+  readonly shortIntervalNote = computed<string | null>(() => {
+    if (!this.offersWatchFields() || this.modeValue() !== 'watch' || !this.isInterval()) return null;
+    const minutes = this.intervalMinutes();
+    if (minutes === null || minutes < MIN_INTERVAL_MINUTES || minutes >= WATCH_NOTE_UNDER_MINUTES) return null;
+    return (
+      `This watcher checks about ${runsPerDay(minutes)} times a day. Each check is a full run, ` +
+      'so choose a small, inexpensive model under Model to keep it cheap.'
+    );
+  });
 
   ngOnInit(): void {
     const id = this.route.snapshot.paramMap.get('scheduleId');
@@ -247,6 +318,20 @@ export class ScheduleFormPage implements OnInit {
         this.form.controls.intervalUnit.setValue('hours');
       }
     });
+
+    this.form.controls.mode.valueChanges.subscribe((mode) => this.modeValue.set(mode ?? 'standard'));
+    this.form.controls.modelId.valueChanges.subscribe((modelId) => this.modelIdValue.set(modelId || null));
+    this.syncIntervalMinutes();
+    this.form.controls.intervalValue.valueChanges.subscribe(() => this.syncIntervalMinutes());
+    this.form.controls.intervalUnit.valueChanges.subscribe(() => this.syncIntervalMinutes());
+  }
+
+  private syncIntervalMinutes(): void {
+    const value = Number(this.form.controls.intervalValue.value);
+    const unit = this.form.controls.intervalUnit.value;
+    this.intervalMinutes.set(
+      Number.isFinite(value) && value > 0 && unit ? (unit === 'hours' ? value * 60 : value) : null,
+    );
   }
 
   private async loadSchedule(id: string): Promise<void> {
@@ -268,8 +353,14 @@ export class ScheduleFormPage implements OnInit {
         intervalUnit: schedule.intervalUnit ?? 'hours',
         timezone: schedule.timezone,
         assistantId: schedule.assistantId ?? null,
+        mode: schedule.mode ?? 'standard',
+        modelId: schedule.modelId ?? null,
       });
       this.cadenceValue.set(schedule.cadence);
+      this.modeValue.set(schedule.mode ?? 'standard');
+      this.modelIdValue.set(schedule.modelId ?? null);
+      this.loadedModelId = schedule.modelId ?? null;
+      this.syncIntervalMinutes();
       this.selectedToolIds.set(new Set(schedule.enabledTools ?? []));
     } catch {
       this.loadError.set('Failed to load this schedule.');
@@ -469,6 +560,12 @@ export class ScheduleFormPage implements OnInit {
           assistantId: value.assistantId ?? null,
           enabledTools: toolIds.length > 0 ? toolIds : null,
         };
+        if (this.offersWatchFields()) {
+          // Only while the flag is on: with it off the backend refuses these (422),
+          // and the body stays exactly what it was before watchers existed.
+          request.mode = value.mode;
+          if (value.modelId) request.modelId = value.modelId;
+        }
         await this.scheduleService.createSchedule(request);
         this.toast.success('Schedule created', `"${request.label}" will run on the cadence you set.`);
       } else {
@@ -553,6 +650,17 @@ export class ScheduleFormPage implements OnInit {
       request.clearTools = true;
     } else if (toolIds.length > 0) {
       request.enabledTools = toolIds;
+    }
+    if (this.offersWatchFields()) {
+      // The model is sent only when it changed, so an edit to something else never
+      // re-checks (and refuses) a model the user has since lost access to. Back to
+      // "Default" is an explicit clear, since a bare null means "leave unchanged".
+      request.mode = value.mode;
+      const modelId = value.modelId || null;
+      if (modelId !== this.loadedModelId) {
+        if (modelId) request.modelId = modelId;
+        else request.clearModel = true;
+      }
     }
     return request;
   }

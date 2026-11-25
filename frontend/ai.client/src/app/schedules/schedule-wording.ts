@@ -109,8 +109,12 @@ export function relativePast(iso: string, now = Date.now()): string {
   return `${Math.floor(diffHours / 24)}d ago`;
 }
 
-/** A run's outcome as a word: the worker's `completed` / `error` / `timeout`, and a recorded pause. */
-export function runStatusLabel(status: string | null | undefined): string {
+/**
+ * A run's outcome as a word: the worker's `completed` / `error` / `timeout`, a
+ * recorded pause, and a watcher's `quiet` ("Nothing new") and `notify` ("Found 2",
+ * from the run's `itemCount`).
+ */
+export function runStatusLabel(status: string | null | undefined, itemCount?: number | null): string {
   switch (status) {
     case 'completed':
       return 'Completed';
@@ -120,7 +124,44 @@ export function runStatusLabel(status: string | null | undefined): string {
       return 'Timed out';
     case 'paused':
       return 'Paused';
+    case 'quiet':
+      return 'Nothing new';
+    case 'notify':
+      return itemCount && itemCount > 0 ? `Found ${itemCount}` : 'Found something';
     default:
       return status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Unknown';
   }
+}
+
+/** "1 time", "3 times". */
+function times(count: number): string {
+  return count === 1 ? '1 time' : `${count} times`;
+}
+
+/** The fields a last-24-hours summary reads from each run. */
+export interface RunSummaryFields {
+  status: string;
+  finishedAt: string;
+}
+
+/**
+ * One line for a schedule's last 24 hours of runs: a watcher's
+ * "Checked 22 times · found something 2 times", a standard schedule's
+ * "Ran 3 times", or "No runs in the last 24 hours".
+ */
+export function lastDayRunSummary(runs: readonly RunSummaryFields[], watching: boolean, now = Date.now()): string {
+  const since = now - 24 * 60 * 60_000;
+  const recent = runs.filter((run) => {
+    const at = parseIso(run.finishedAt).getTime();
+    return !Number.isNaN(at) && at >= since && at <= now;
+  });
+  if (recent.length === 0) return 'No runs in the last 24 hours';
+  if (!watching) return `Ran ${times(recent.length)}`;
+  const found = recent.filter((run) => run.status === 'notify').length;
+  return `Checked ${times(recent.length)} · found something ${times(found)}`;
+}
+
+/** How many runs a day an interval of `minutes` makes (a 15-minute interval is 96). */
+export function runsPerDay(minutes: number): number {
+  return minutes > 0 ? Math.floor((24 * 60) / minutes) : 0;
 }

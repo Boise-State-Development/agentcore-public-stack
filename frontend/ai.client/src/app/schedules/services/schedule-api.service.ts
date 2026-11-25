@@ -5,8 +5,10 @@ import { ConfigService } from '../../services/config.service';
 import {
   CreateScheduleRequest,
   ScheduledPrompt,
+  ScheduleRunsResponse,
   ScheduledPromptsListResponse,
   UpdateScheduleRequest,
+  WatchStateResponse,
 } from '../models/schedule.model';
 
 /**
@@ -47,5 +49,24 @@ export class ScheduleApiService {
 
   delete(scheduleId: string): Observable<void> {
     return this.http.delete<void>(`${this.baseUrl()}/${scheduleId}`);
+  }
+
+  /**
+   * A personal schedule's runs, newest first (quiet-watcher §3.4). 404s while
+   * the backend's PROACTIVE_RUNS_ENABLED is off, so only call it behind
+   * `features.proactiveRuns`.
+   */
+  runs(scheduleId: string): Observable<ScheduleRunsResponse> {
+    return this.http.get<ScheduleRunsResponse>(`${this.baseUrl()}/${scheduleId}/runs`);
+  }
+
+  /** A watcher's state, or `{state: null}` when it has none. Behind the same flag as `runs`. */
+  watchState(scheduleId: string): Observable<WatchStateResponse> {
+    return this.http.get<WatchStateResponse>(`${this.baseUrl()}/${scheduleId}/state`);
+  }
+
+  /** Start over: clears the watcher's state, so its next run reads everything as new. */
+  clearWatchState(scheduleId: string): Observable<void> {
+    return this.http.delete<void>(`${this.baseUrl()}/${scheduleId}/state`);
   }
 }

@@ -28,7 +28,9 @@ export type NotificationKind =
   // Handoffs (agent-handoffs-and-consults §4.3, PR-0.3b): a background conversation's state.
   | 'handoff_needs_input'
   | 'handoff_done'
-  | 'handoff_stopped';
+  | 'handoff_stopped'
+  // A quiet watcher found something new (quiet-watcher §3.3, §3.5): one per finding.
+  | 'agent_item';
 
 /** The inbox kinds a handoff writes. */
 export const HANDOFF_NOTIFICATION_KINDS: ReadonlySet<NotificationKind> = new Set([
@@ -57,7 +59,10 @@ export interface AppNotification {
    * (a date), `standing`, `fundingLabel`, `note`, and `reason` on a revoke;
    * for a handoff: `handoffId`, `sourceSessionId`, `targetSessionId`, `agentId`, `agentName`
    * and `sourceTitle` (never request or conversation text), plus `waitingKind` on a
-   * `handoff_needs_input` entry, so a click opens where the answer is.
+   * `handoff_needs_input` entry, so a click opens where the answer is;
+   * for a watcher's finding (`agent_item`, no actor or project): `scheduleId`, `runId`,
+   * `sessionId`, `label` (the schedule's), `title` (the finding's short display line),
+   * `urgency` (`now` | `today` | `fyi`) and `key` (the finding's stable identity).
    */
   payload: {
     role?: string;
@@ -81,6 +86,9 @@ export interface AppNotification {
     agentName?: string;
     sourceTitle?: string;
     waitingKind?: string;
+    sessionId?: string;
+    urgency?: 'now' | 'today' | 'fyi';
+    key?: string;
   } & Record<string, unknown>;
   createdAt: string;
   readAt?: string | null;
