@@ -150,3 +150,31 @@ def test_login_path_is_exempt() -> None:
 
     response = TestClient(app).post("/auth/login")
     assert response.status_code == 200
+
+
+def test_cli_verify_answer_is_exempt_for_a_signed_in_browser() -> None:
+    """The CLI sign-in confirmation form posts from a browser that may already
+    hold a web session. A plain form cannot add the CSRF header, so without the
+    exemption every Continue would be a 403; the route carries its own token."""
+    app = FastAPI()
+    app.add_middleware(CSRFMiddleware)
+    app.add_middleware(_AttachSession, record=_record())
+
+    @app.post("/auth/cli/verify")
+    def verify_answer() -> dict:
+        return {"ok": True}
+
+    assert TestClient(app).post("/auth/cli/verify").status_code == 200
+
+
+def test_the_cli_exemption_is_exact_not_a_prefix() -> None:
+    """Exempting the verify form must not exempt anything beside it."""
+    app = FastAPI()
+    app.add_middleware(CSRFMiddleware)
+    app.add_middleware(_AttachSession, record=_record())
+
+    @app.post("/auth/cli/verify/extra")
+    def nearby() -> dict:
+        return {"ok": True}
+
+    assert TestClient(app).post("/auth/cli/verify/extra").status_code == 403

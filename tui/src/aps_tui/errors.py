@@ -157,7 +157,7 @@ class DeviceAuthDeniedError(DeviceAuthError):
     def __init__(self) -> None:
         super().__init__(
             "The sign-in was declined in the browser",
-            hint="Run `aps-tui login --sso` again and choose Approve if you meant to sign in.",
+            hint="Run `aps-tui login --sso` again and choose Continue if you meant to sign in.",
         )
 
 

@@ -88,8 +88,18 @@ def generate_device_code() -> str:
 def generate_user_code() -> str:
     """A short code a human can read from a terminal and type into a browser."""
     raw = "".join(secrets.choice(USER_CODE_ALPHABET) for _ in range(USER_CODE_LENGTH))
-    midpoint = USER_CODE_LENGTH // 2
-    return f"{raw[:midpoint]}-{raw[midpoint:]}"
+    return display_user_code(raw)
+
+
+def display_user_code(code: str) -> str:
+    """The code as the terminal prints it (``ABCD-EFGH``), from any typed form.
+
+    The confirmation page shows it this way so the person compares like with
+    like against their terminal.
+    """
+    normalised = normalise_user_code(code)
+    midpoint = len(normalised) // 2
+    return f"{normalised[:midpoint]}-{normalised[midpoint:]}"
 
 
 def normalise_user_code(raw: str) -> str:
@@ -199,7 +209,7 @@ class DevicePendingResponse(BaseModel):
     error: str = Field(
         ...,
         description=(
-            "authorization_pending | slow_down | expired_token | access_denied " "| invalid_grant (unknown device code, or one already claimed)"
+            "authorization_pending | slow_down | expired_token | access_denied | invalid_grant (unknown device code, or one already claimed)"
         ),
     )
     error_description: str = Field(..., description="Human-readable explanation")

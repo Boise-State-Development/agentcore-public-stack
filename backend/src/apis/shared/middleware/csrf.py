@@ -41,6 +41,14 @@ _EXEMPT_PATHS = frozenset(
         "/auth/login",
         "/auth/callback",
         "/auth/logout",  # logout will rotate cookies even on stale CSRF
+        # The CLI sign-in confirmation form. A browser already signed in to
+        # the web app sends its session cookie with this same-origin post,
+        # and a plain HTML form cannot add the X-CSRF-Token header, so the
+        # double-submit check here would refuse every Continue. The route
+        # holds its own CSRF defence instead: a form token keyed on a
+        # SameSite=strict cookie, plus a Sec-Fetch-Site check
+        # (`cli_routes.cli_verify_answer`).
+        "/auth/cli/verify",
     }
 )
 

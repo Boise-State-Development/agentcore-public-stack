@@ -18,6 +18,7 @@ from apis.shared.auth.device_grants.models import (
     USER_CODE_LENGTH,
     DeviceGrant,
     GrantStatus,
+    display_user_code,
     generate_device_code,
     generate_user_code,
     hash_device_code,
@@ -90,6 +91,14 @@ class TestNormalisation:
         """The alphabet excludes ambiguous pairs, so a wrong character is a real
         typo and must not be silently 'corrected' into someone else's code."""
         assert normalise_user_code("0DFG-HJKM") != "CDFGHJKM"
+
+    @pytest.mark.parametrize("raw", ["CDFGHJKM", "cdfg-hjkm", "CD-FG-HJ-KM"])
+    def test_displays_the_way_the_terminal_prints_it(self, raw: str) -> None:
+        assert display_user_code(raw) == "CDFG-HJKM"
+
+    def test_display_round_trips_a_generated_code(self) -> None:
+        code = generate_user_code()
+        assert display_user_code(normalise_user_code(code)) == code
 
 
 class TestHashing:

@@ -224,7 +224,7 @@ class SetupScreen(ModalScreen[str | None]):
                 opened = self._try_open_browser(authorization.verification_uri_complete)
                 lead = "Opened your browser. " if opened else ""
                 body.update(
-                    f"{lead}Approve the sign-in there, then come back here.\n\n"
+                    f"{lead}Check that the code there matches this one, choose Continue, then come back here.\n\n"
                     f"  Your code:  {authorization.user_code}\n"
                     f"  Open:       {authorization.verification_uri_complete}"
                 )

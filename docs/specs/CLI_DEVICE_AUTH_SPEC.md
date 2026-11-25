@@ -151,8 +151,10 @@ CLI                          app-api                        browser
  |                              |                              |
  |  print URL + user code ------------------------------------->| opens
  |                              |<-- GET /auth/cli/verify ------|
- |                              |    (existing BFF login,       |
- |                              |     device_code in state)     |
+ |                              |--- confirmation page -------->| shows the code
+ |                              |<-- POST /auth/cli/verify -----| Continue
+ |                              |    (existing BFF login,       |  (or Cancel →
+ |                              |     user_code in state)       |   deny grant)
  |                              |--- Cognito authorize -------->|
  |                              |<-- GET /auth/callback --------|
  |                              | exchange code (BFF secret),   |
@@ -181,18 +183,22 @@ blocked the previous approach in a containerised dev environment.
 | What approval records | `session_id` only, never a sealed value | Sealing needs the codec key from Secrets Manager, so the table is not a credential store. |
 | Expiry | Checked in application code | DynamoDB TTL deletion is asynchronous and documented as lagging up to 48h, so an expired row stays readable. |
 | Storage | Items live in the **BFF sessions table** under `DEVICE-GRANT#` / `DEVICE-USERCODE#` prefixes | Follows `apis.shared.harness.grants`, which already keeps `HEADLESS-GRANT#` items there. The classification argument is easier here: that module pins Cognito refresh tokens, whereas a grant holds a hash and a `session_id`. No new table, no new IAM grant, and **no infrastructure deploy before the feature works**. `DEVICE_GRANTS_TABLE_NAME` moves them to a dedicated table as a config change. |
+| Confirmation before sign-in | `GET /auth/cli/verify` only **shows** the code, with Continue and Cancel; the Cognito round trip starts from the `POST` that Continue submits | RFC 8628 §3.3.1 asks for a prefilled code to be shown and confirmed, and §5.4 explains why: the person who opens a verification link is not always the person whose terminal created it, and an identity provider with a live session does not re-prompt. Cancel calls `DeviceGrantService.deny`, so the CLI's next poll gets `access_denied`. The post counts only with an HMAC token keyed on a `SameSite=strict`, `__Host-` cookie set with the page, and a browser-reported cross-site post (`Sec-Fetch-Site`) is refused; the path is exempt from the session-cookie `CSRFMiddleware`, whose header a plain form cannot send. The pages are sent with `frame-ancestors 'none'`, `no-store` and `no-referrer`. The page and its answer share the verify rate-limit bucket. |
 | Orphaned CLI sessions | Deleted when approval fails at the callback | On the device path nobody holds the freshly minted session — the browser deliberately gets no cookie and the CLI can no longer claim it — so leaving it would strand a live credential until its 8h TTL. |
 
 **User-visible consequence of the session-ownership choice:** signing out in the
 browser does **not** sign out the CLI, and vice versa. This matches `gh` and
-`aws`. `aps-tui logout` deletes the CLI session server-side.
+`aws`. `aps-tui logout` only removes the credential stored on this machine; it
+makes no server call, so the CLI's session row is not deleted and lapses on its
+own TTL.
 
 ### The `user_code` is low-entropy on purpose
 
 It is human-transcribable, so it cannot carry much entropy. It is therefore
 single-use, short-lived (10 min), rate-limited, and **authorises nothing on its
 own** — it only identifies which pending grant a separately authenticated
-browser session is approving. The alphabet excludes every pair that is
+browser session is approving, and that browser approves only after the person
+has been shown the code and chosen Continue. The alphabet excludes every pair that is
 indistinguishable in common terminal fonts (`0/O`, `1/I/L`, `2/Z`, `5/S`, `8/B`)
 and all vowels, so a wrong character is a genuine typo rather than a font
 problem. That is what lets normalisation safely refuse to "correct" a character
@@ -222,8 +228,12 @@ becoming a guessing amplifier.
       3. claim last, and return only what the claim returns — the losing poll
          has by then sealed a valid value and must discard it.
 - [x] **Routes** — `POST /auth/cli/authorize`, `GET /auth/cli/verify`,
-      `POST /auth/cli/token` in `app_api/auth/bff/cli_routes.py`, browser
-      screens in `bff/pages.py`, plus the device branch in `GET /auth/callback`.
+      `POST /auth/cli/verify`, `POST /auth/cli/token` in
+      `app_api/auth/bff/cli_routes.py`, browser screens in `bff/pages.py`
+      (problem, confirmation, cancelled, approved), plus the device branch in
+      `GET /auth/callback`. The confirmation step (Decisions above) was added
+      after the first release of this flow, which went from the `GET` straight
+      to Cognito.
       24 tests. Two deviations from this spec's original wording:
       the `OIDCStateData` field is named **`device_user_code`**, because it
       carries the *user* code (the server never sees the device code in the
@@ -458,7 +468,7 @@ environment; the ✅ notes record what the deployment actually did.
 1. **Confirm the routes are live.**
    `curl -s https://<host>/api/openapi.json | jq '.paths | keys | map(select(startswith("/auth/cli")))'`
    should list `/auth/cli/authorize`, `/auth/cli/verify`, `/auth/cli/token`.
-   → ✅ all three.
+   → ✅ all three. (`/auth/cli/verify` now has both `get` and `post`.)
 2. **Mint a grant.** `curl -XPOST https://<host>/api/auth/cli/authorize` →
    expect `device_code`, `user_code`, `verification_uri`,
    `verification_uri_complete`, `expires_in`, `interval`. Check
@@ -474,12 +484,17 @@ environment; the ✅ notes record what the deployment actually did.
    immediately → expect `{"error": "slow_down"}`.
    → ✅ both. The throttle-from-the-*previous*-poll ordering behaves live.
 4. **The browser leg (the untested part).** Open `verification_uri_complete`.
-   Expect a Cognito redirect, a normal sign-in, then a "You're signed in" page.
+   Expect a confirmation page showing the same code as the terminal, with
+   Continue and Cancel, and **no** redirect yet. Choose Continue; expect a
+   Cognito redirect, a normal sign-in, then a "You're signed in" page. On a
+   second grant, choose Cancel and expect the terminal to report the request
+   was declined (`access_denied`).
    Confirm in devtools that this response sets **no** cookies — that is the
    invariant the whole no-cookie design rests on, and it is the thing most likely
    to have been broken by a proxy or CloudFront behaviour rewriting headers.
    → ✅ completed by a human; no cookies set. Neither CloudFront nor the ALB
-   rewrites the response.
+   rewrites the response. (Recorded before the confirmation page existed;
+   re-run this step after the deploy that adds it.)
 5. **Claim.** Poll again → expect HTTP 200 with `session`, `expires_in`,
    `user_id`, `username`. Poll a third time → expect 400 `invalid_grant`; the
    value is single-use.
@@ -634,8 +649,8 @@ any of them can be changed cheaply.
 | `verification_uri` is **derived** from `BFF_AUTH_CALLBACK_URL` by swapping the last path segment, with `BFF_CLI_VERIFICATION_URL` as an override. | Add a required env var. Rejected because a second URL can drift out of agreement with the Cognito-registered callback, and `is_ready()` already guarantees the callback is set. |
 | The `OIDCStateData` field is `device_user_code`, not the spec's original `device_code`. | It holds the *user* code; the server never sees the device code in the clear. The original name would have been actively misleading at the call site. |
 | `/auth/cli/verify` reports unknown, expired and already-answered codes with one identical page. | Distinguishing them would give an unauthenticated caller an existence oracle for user codes. |
-| The two browser pages are server-rendered from `bff/pages.py`. | Routing them through the SPA would make a CLI login depend on the SPA's router and build for two screens that never change. They take no request input, which is the XSS argument. |
-| Rate limits: authorize 10/5min per IP, verify 20/5min per IP, token 40/min **per device-code hash**. | Token is keyed on the grant rather than the IP so one aggressive client cannot throttle everyone behind a shared egress address. Note `RateLimiter` is fail-open. |
+| The browser pages are server-rendered from `bff/pages.py`. | Routing them through the SPA would make a CLI login depend on the SPA's router and build for screens that never change. Only the confirmation page carries request-derived values (the shape-checked user code and a hex token), and those are passed through `html.escape`. |
+| Rate limits: authorize 10/5min per IP, verify 20/5min per IP (the confirmation page and its answer share the bucket, so a sign-in costs two), token 40/min **per device-code hash**. | Token is keyed on the grant rather than the IP so one aggressive client cannot throttle everyone behind a shared egress address. Note `RateLimiter` is fail-open. |
 | The whole backend landed as **one commit**. | Each layer was independently green, so it can be split into four for review if preferred — say so before opening the PR. |
 
 ## Documentation follow-ups

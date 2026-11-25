@@ -1,6 +1,6 @@
 """CLI device-authorization routes.
 
-Three endpoints, two audiences:
+Four endpoints, two audiences:
 
 ``POST /auth/cli/authorize``
     The CLI, holding no credential yet, asks for a grant. **Unauthenticated
@@ -8,11 +8,17 @@ Three endpoints, two audiences:
     per client IP so it cannot be used to bulk-mint grants.
 
 ``GET /auth/cli/verify``
-    The human's browser. Validates the typed user code, then hands off to the
-    *existing* BFF login by stashing the code in the OIDC state. The device
-    branch in ``GET /auth/callback`` finishes the job. Rate-limited per client
-    IP, because this is the only endpoint where a low-entropy user code is
-    submitted and therefore the only one that could be guessed at.
+    The human's browser. Validates the typed or prefilled user code and shows
+    it back on a confirmation page with Continue and Cancel. Nothing else
+    happens on this request: no OIDC state, no redirect, no approval.
+
+``POST /auth/cli/verify``
+    The confirmation page's answer. Continue hands off to the *existing* BFF
+    login by stashing the code in the OIDC state, and the device branch in
+    ``GET /auth/callback`` finishes the job. Cancel records a denial. The
+    page and its answer share one rate limit per client IP, because this is
+    the only place a low-entropy user code is submitted and therefore the
+    only one that could be guessed at.
 
 ``POST /auth/cli/token``
     The CLI polls here. Returns 200 with a sealed session on success, or 400
@@ -35,6 +41,8 @@ device branch can render it without a cycle.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import secrets
 import urllib.parse
@@ -45,21 +53,28 @@ from fastapi.responses import JSONResponse
 from starlette.responses import RedirectResponse
 
 from apis.shared.auth.device_grants.models import (
+    GRANT_TTL_SECONDS,
     USER_CODE_ALPHABET,
     USER_CODE_LENGTH,
     DeviceAuthorizationResponse,
     DeviceTokenRequest,
     DeviceTokenResponse,
+    display_user_code,
     hash_device_code,
     normalise_user_code,
 )
-from apis.shared.auth.device_grants.service import DeviceGrantService
+from apis.shared.auth.device_grants.service import ApprovalOutcome, DeviceGrantService
 from apis.shared.auth.state_store import OIDCStateData
 from apis.shared.rate_limit import RateLimiter
 
 from .config import BFFAuthConfig
-from .cookies import set_oauth_state_cookie
-from .pages import device_problem_page
+from .cookies import (
+    CLI_CONFIRM_COOKIE_NAME,
+    clear_cli_confirm_cookie,
+    set_cli_confirm_cookie,
+    set_oauth_state_cookie,
+)
+from .pages import device_cancelled_page, device_confirm_page, device_problem_page
 from .routes import (
     _AUTHORIZE_SCOPES,
     _BROWSER_BINDING_BYTES,
@@ -196,7 +211,16 @@ async def cli_authorize(request: Request) -> DeviceAuthorizationResponse:
     return await service.authorize()
 
 
-# ─── GET /auth/cli/verify ──────────────────────────────────────────────
+# ─── GET / POST /auth/cli/verify ───────────────────────────────────────
+
+#: Bytes of entropy behind the confirmation form's cookie secret.
+_CONFIRM_SECRET_BYTES = 32
+
+#: The confirmation page lives no longer than the grant it is answering.
+_CONFIRM_TTL_SECONDS = GRANT_TTL_SECONDS
+
+_ACTION_CONTINUE = "continue"
+_ACTION_CANCEL = "cancel"
 
 
 def _valid_user_code_shape(raw: str) -> bool:
@@ -212,14 +236,54 @@ def _valid_user_code_shape(raw: str) -> bool:
     return all(ch in USER_CODE_ALPHABET for ch in normalised)
 
 
-@router.get("/verify", summary="Approve a CLI sign-in from the browser")
-async def cli_verify(request: Request, user_code: Optional[str] = None) -> Response:
-    """Validate the typed code, then start the normal BFF login.
+def _confirm_token(confirm_secret: str, user_code: str) -> str:
+    """The form's proof that it came from the page this browser was shown.
 
-    The user code authorizes nothing here — it only selects which pending
-    grant the upcoming, separately authenticated browser session will approve.
-    The approval happens in the callback, after Cognito has vouched for the
-    human.
+    Keyed on the cookie's secret and bound to the normalised user code, so a
+    token minted for one code cannot answer another, and a page that cannot
+    read the cookie cannot mint one at all.
+    """
+    return hmac.new(
+        confirm_secret.encode("ascii"),
+        f"cli-verify:{user_code}".encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _is_same_origin_post(request: Request) -> bool:
+    """Refuse a form post a browser reports as coming from another site.
+
+    `Sec-Fetch-Site` is set by the browser and cannot be forged by page
+    script. A browser too old to send it is still held by the cookie, which
+    is `SameSite=strict`, and by the token it keys; this is the first check,
+    not the only one.
+    """
+    site = request.headers.get("sec-fetch-site")
+    return site is None or site == "same-origin"
+
+
+def _expired_code_page() -> Response:
+    # Unknown, expired, and already-answered are reported identically: this
+    # caller has not authenticated, so distinguishing them would hand out a
+    # free existence oracle for user codes.
+    return device_problem_page(
+        "That code has expired",
+        "Device codes are valid for a few minutes. Start a new sign-in from your terminal and try again.",
+    )
+
+
+def _stale_form_page() -> Response:
+    return device_problem_page(
+        "This page has expired",
+        "Open the link from your terminal again, check the code, and choose Continue.",
+    )
+
+
+async def _guard_verify(request: Request) -> tuple[BFFAuthConfig, DeviceGrantService]:
+    """What both halves of verify check before reading anything.
+
+    One rate-limit bucket for the page and its answer: a sign-in costs two
+    requests from it, and the code-guessing budget is no larger than before.
     """
     config = BFFAuthConfig.from_env()
     if not config.is_ready():
@@ -236,6 +300,20 @@ async def cli_verify(request: Request, user_code: Optional[str] = None) -> Respo
         window=_VERIFY_WINDOW_SECONDS,
         limit=_VERIFY_MAX_REQUESTS,
     )
+    return config, service
+
+
+@router.get("/verify", summary="Show a CLI sign-in for the person to confirm")
+async def cli_verify(request: Request, user_code: Optional[str] = None) -> Response:
+    """Check the code, then ask the person to confirm it.
+
+    Opening this URL starts nothing. ``verification_uri_complete`` prefills
+    the code, so whoever opens the link may not be whoever started the
+    sign-in; RFC 8628 §3.3.1 and §5.4 ask for the code to be shown and
+    confirmed before the browser authenticates. The identity provider is
+    contacted only from the POST below, after an explicit Continue.
+    """
+    _config, service = await _guard_verify(request)
 
     if not user_code or not _valid_user_code_shape(user_code):
         return device_problem_page(
@@ -246,19 +324,83 @@ async def cli_verify(request: Request, user_code: Optional[str] = None) -> Respo
     normalised = normalise_user_code(user_code)
     grant = await service.lookup_pending(user_code=normalised)
     if grant is None:
-        # Unknown, expired, and already-answered are reported identically:
-        # this caller has not authenticated yet, so distinguishing them would
-        # hand out a free existence oracle for user codes.
-        return device_problem_page(
-            "That code has expired",
-            "Device codes are valid for a few minutes. Start a new sign-in " "from your terminal and try again.",
-        )
+        return _expired_code_page()
 
-    # Same shape of authorize request as `/auth/login` — PKCE, nonce and the
-    # browser-binding cookie — because the callback is the web app's and it
-    # rejects any state that lacks them. The CLI adapts to that contract; it
-    # must not loosen it. Binding *this* browser also stops an attacker from
-    # relaying a verify URL for someone else to finish.
+    confirm_secret = secrets.token_urlsafe(_CONFIRM_SECRET_BYTES)
+    response = device_confirm_page(
+        display_code=display_user_code(grant.user_code),
+        user_code=normalised,
+        confirm_token=_confirm_token(confirm_secret, normalised),
+    )
+    set_cli_confirm_cookie(
+        response,
+        confirm_secret=confirm_secret,
+        max_age_seconds=_CONFIRM_TTL_SECONDS,
+    )
+    return response
+
+
+@router.post("/verify", summary="Continue or cancel a CLI sign-in")
+async def cli_verify_answer(request: Request) -> Response:
+    """Act on the confirmation page's answer.
+
+    Continue starts the normal BFF login; the grant is approved only in the
+    callback, after the identity provider has vouched for the person. The
+    user code still authorizes nothing: it selects which pending grant that
+    separately authenticated session will answer. Cancel records a refusal,
+    which the CLI's next poll reports as ``access_denied``.
+
+    The answer counts only when it carries the token the confirmation page
+    was rendered with, keyed on this browser's ``SameSite=strict`` cookie, so
+    a form on another site cannot submit it. Every check here is local and
+    runs before the one database read.
+    """
+    config, service = await _guard_verify(request)
+
+    if not _is_same_origin_post(request):
+        logger.info("CLI verify answer refused: cross-site post")
+        return _stale_form_page()
+
+    form = await request.form()
+    user_code = form.get("user_code")
+    confirm_token = form.get("confirm_token")
+    action = form.get("action")
+    confirm_secret = request.cookies.get(CLI_CONFIRM_COOKIE_NAME)
+
+    if not isinstance(user_code, str) or not _valid_user_code_shape(user_code):
+        return _stale_form_page()
+    normalised = normalise_user_code(user_code)
+    if not confirm_secret or not isinstance(confirm_token, str) or not hmac.compare_digest(confirm_token, _confirm_token(confirm_secret, normalised)):
+        logger.info("CLI verify answer refused: missing or mismatched confirmation token")
+        return _stale_form_page()
+    if action not in (_ACTION_CONTINUE, _ACTION_CANCEL):
+        return _stale_form_page()
+
+    grant = await service.lookup_pending(user_code=normalised)
+    if grant is None:
+        response = _expired_code_page()
+    elif action == _ACTION_CANCEL:
+        outcome = await service.deny(user_code=normalised)
+        response = device_cancelled_page() if outcome is ApprovalOutcome.DENIED else _expired_code_page()
+    else:
+        response = _begin_device_login(config, normalised)
+
+    # One answer per page: a second submit has to come from a fresh page.
+    clear_cli_confirm_cookie(response)
+    return response
+
+
+def _begin_device_login(config: BFFAuthConfig, user_code: str) -> Response:
+    """Hand off to the identity provider with the user code in the OIDC state.
+
+    Same shape of authorize request as `/auth/login` — PKCE, nonce and the
+    browser-binding cookie — because the callback is the web app's and it
+    rejects any state that lacks them. The CLI adapts to that contract; it
+    must not loosen it. The binding ties the authorize URL to this browser,
+    so that URL is useless relayed to anyone else.
+
+    303, not 302: the answer to a POST is fetched with a GET.
+    """
     state = secrets.token_urlsafe(32)
     code_verifier = secrets.token_urlsafe(_CODE_VERIFIER_BYTES)
     nonce = secrets.token_urlsafe(_NONCE_BYTES)
@@ -272,7 +414,7 @@ async def cli_verify(request: Request, user_code: Optional[str] = None) -> Respo
             code_verifier=code_verifier,
             nonce=nonce,
             browser_binding_hash=_browser_binding_digest(binding_secret),
-            device_user_code=normalised,
+            device_user_code=user_code,
         ),
         ttl_seconds=_STATE_TTL_SECONDS,
     )
@@ -291,7 +433,7 @@ async def cli_verify(request: Request, user_code: Optional[str] = None) -> Respo
     )
     response = RedirectResponse(
         url=f"{config.cognito_domain_url}/oauth2/authorize?{params}",
-        status_code=status.HTTP_302_FOUND,
+        status_code=status.HTTP_303_SEE_OTHER,
     )
     set_oauth_state_cookie(
         response,
