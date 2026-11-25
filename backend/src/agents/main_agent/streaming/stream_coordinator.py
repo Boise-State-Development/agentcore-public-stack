@@ -419,6 +419,7 @@ class StreamCoordinator:
         turn_clock: Any = None,
         invocation_state: Optional[Dict[str, Any]] = None,
         cancel_signal: Optional[threading.Event] = None,
+        turn_tool_summaries: bool = True,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses with proper lifecycle management
@@ -478,6 +479,10 @@ class StreamCoordinator:
                 which reaches an in-flight MCP call and the tools queued behind
                 it. Set together with ``session_manager.cancelled`` (flag
                 first), so the in-loop check below still owns the stop.
+            turn_tool_summaries: False on a quiet-watcher run, whose
+                conversation is usually deleted unread, so no Nova Micro
+                tool-batch summary is made for it. Per turn, like
+                ``turn_agent_id``, because the agent is cached.
 
         Yields:
             str: SSE formatted events
@@ -1603,7 +1608,8 @@ class StreamCoordinator:
                 # earlier tasks have finished. Non-blocking in both
                 # directions — the agent stream never waits on Nova.
                 self._spawn_tool_summary_tasks(
-                    main_agent_wrapper, session_id, user_id, tool_summary_tasks
+                    main_agent_wrapper, session_id, user_id, tool_summary_tasks,
+                    summarize=turn_tool_summaries,
                 )
                 for summary_sse in await self._collect_tool_summary_events(
                     tool_summary_tasks
@@ -3806,8 +3812,12 @@ class StreamCoordinator:
         session_id: str,
         user_id: str,
         tasks: List[Any],
+        summarize: bool = True,
     ) -> None:
         """Kick off a Nova Micro summary for each tool batch that just closed.
+
+        ``summarize=False`` (a quiet-watcher run) still drains the closed
+        batches, so none is left for a later turn, and summarizes none.
 
         Concurrent with the agent stream, exactly like conversation-title
         generation: the batch is finished, so nothing downstream waits on this,
@@ -3831,7 +3841,7 @@ class StreamCoordinator:
 
         from apis.shared.feature_flags import tool_summaries_enabled
 
-        if not tool_summaries_enabled():
+        if not summarize or not tool_summaries_enabled():
             return
 
         for batch in batches:

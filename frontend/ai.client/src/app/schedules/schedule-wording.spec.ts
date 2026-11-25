@@ -65,8 +65,17 @@ describe('lastDayRunSummary', () => {
     expect(lastDayRunSummary([run('notify', 1)], true, now)).toBe('Checked 1 time · found something 1 time');
   });
 
+  it('never counts a run that stopped before it started as a check', () => {
+    // Seen on dev: a run paused for expired access read "Checked 1 time".
+    expect(lastDayRunSummary([run('paused', 1)], true, now)).toBe('Checked 0 times · found something 0 times · 1 failed');
+    expect(lastDayRunSummary([run('notify', 1), run('error', 2), run('timeout', 3)], true, now)).toBe(
+      'Checked 1 time · found something 1 time · 2 failed',
+    );
+  });
+
   it('counts a standard schedule’s runs, and says when there were none', () => {
-    expect(lastDayRunSummary([run('completed', 2), run('error', 5)], false, now)).toBe('Ran 2 times');
+    expect(lastDayRunSummary([run('completed', 2), run('error', 5)], false, now)).toBe('Ran 1 time · 1 failed');
+    expect(lastDayRunSummary([run('completed', 2)], false, now)).toBe('Ran 1 time');
     expect(lastDayRunSummary([run('completed', 25)], false, now)).toBe('No runs in the last 24 hours');
     expect(lastDayRunSummary([], true, now)).toBe('No runs in the last 24 hours');
   });

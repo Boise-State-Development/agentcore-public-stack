@@ -137,6 +137,8 @@ export interface ScheduleRun {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
+  /** Written to the prompt cache; most of a short run's cost. Absent on rows from before it was recorded. */
+  cacheWriteTokens?: number;
 }
 
 /** Response from GET /schedules/{id}/runs: the newest 50, newest first. */

@@ -405,6 +405,25 @@ class TestRecordRunResult:
         assert fetched.last_run_status == "failed"
         assert fetched.last_error == "boom"
 
+    async def test_a_completed_run_clears_the_last_error(self, sessions_metadata_table):
+        # Seen on dev: a watcher resumed after a reauth pause kept showing
+        # "No active headless grant…" through runs that succeeded.
+        schedule = await _make_schedule()
+        await record_run_result(USER_ID, schedule.schedule_id, status="failed", error="boom")
+        await record_run_result(USER_ID, schedule.schedule_id, status="completed")
+
+        fetched = await get_scheduled_prompt(USER_ID, schedule.schedule_id)
+        assert fetched.last_run_status == "completed"
+        assert fetched.last_error is None
+
+    async def test_a_failure_without_a_message_keeps_the_last_one(self, sessions_metadata_table):
+        schedule = await _make_schedule()
+        await record_run_result(USER_ID, schedule.schedule_id, status="failed", error="boom")
+        await record_run_result(USER_ID, schedule.schedule_id, status="failed")
+
+        fetched = await get_scheduled_prompt(USER_ID, schedule.schedule_id)
+        assert fetched.last_error == "boom"
+
     async def test_runs_today_increments_within_same_day(self, sessions_metadata_table):
         schedule = await _make_schedule()
         await record_run_result(USER_ID, schedule.schedule_id, status="completed")

@@ -23,6 +23,21 @@ export function compactTokens(count: number): string {
   return `${trimZero((count / 1_000_000).toFixed(1))}M`;
 }
 
+/**
+ * A run's tokens, for its history row: "Tokens: 8 in · 180 out · 4.5k written
+ * to cache · 4.3k read from cache". The cache write is named on its own because
+ * it bills at a premium and is most of a short run's cost. Empty for a run that
+ * used no tokens (one that stopped before it started), so the row says nothing.
+ */
+export function runTokens(run: ScheduleRun): string {
+  const write = run.cacheWriteTokens ?? 0;
+  if (!run.inputTokens && !run.outputTokens && !run.cacheReadTokens && !write) return '';
+  const parts = [`${compactTokens(run.inputTokens)} in`, `${compactTokens(run.outputTokens)} out`];
+  if (write) parts.push(`${compactTokens(write)} written to cache`);
+  if (run.cacheReadTokens) parts.push(`${compactTokens(run.cacheReadTokens)} read from cache`);
+  return `Tokens: ${parts.join(' · ')}`;
+}
+
 function trimZero(value: string): string {
   return value.endsWith('.0') ? value.slice(0, -2) : value;
 }
@@ -139,7 +154,7 @@ export class ScheduleDetailPage {
         label: runStatusLabel(run.status, run.itemCount),
         when: relativePast(run.finishedAt),
         absolute: parseIso(run.finishedAt).toLocaleString(),
-        tokens: `${compactTokens(run.inputTokens)} in · ${compactTokens(run.outputTokens)} out · ${compactTokens(run.cacheReadTokens)} cached`,
+        tokens: runTokens(run),
         badgeClass: this.badgeClass(run.status),
       }));
   });

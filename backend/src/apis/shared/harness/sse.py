@@ -109,6 +109,12 @@ class InvocationStreamAccumulator:
     _messages: List[str] = field(default_factory=list)
     _trace_by_id: Dict[str, ToolTraceEntry] = field(default_factory=dict)
     _per_message_usage: Dict[str, Any] = field(default_factory=dict)
+    #: The turn's per-call ``metadata`` frames summed, key by key. The final
+    #: frame (the one with ``turnDurationMs``) repeats the last call's usage,
+    #: so it is never added. ``metadata_summary`` never leaves the Runtime, so
+    #: without this a run's usage would be its last model call only.
+    _call_usage_totals: Dict[str, int] = field(default_factory=dict)
+    _model_calls: int = 0
 
     @property
     def final_message(self) -> str:
@@ -212,6 +218,12 @@ class InvocationStreamAccumulator:
             for key in ("usage", "metrics"):
                 if key in payload:
                     self._per_message_usage[key] = payload[key]
+            call_usage = payload.get("usage")
+            if "turnDurationMs" not in payload and isinstance(call_usage, dict):
+                self._model_calls += 1
+                for key, value in call_usage.items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        self._call_usage_totals[key] = self._call_usage_totals.get(key, 0) + int(value)
             # Only the turn's final frame carries ``turnDurationMs``; its
             # ``metrics.timeToFirstByteMs`` is then the coordinator's own
             # first-token measurement, not a per-call provider figure.
@@ -263,6 +275,15 @@ class InvocationStreamAccumulator:
             self.done = True
 
     def finalize_usage(self) -> Dict[str, Any]:
+        """The turn's usage: the summary if one arrived, else every model call summed.
+
+        Falls back to the last frame seen when no per-call frame carried usage.
+        """
         if self.usage:
             return self.usage
+        if self._call_usage_totals:
+            summed: Dict[str, Any] = {"usage": dict(self._call_usage_totals), "modelCalls": self._model_calls}
+            if "metrics" in self._per_message_usage:
+                summed["metrics"] = self._per_message_usage["metrics"]
+            return summed
         return dict(self._per_message_usage)

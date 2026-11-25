@@ -59,8 +59,11 @@ class ScheduleRun(BaseModel):
     input_tokens: int = Field(0, alias="inputTokens")
     output_tokens: int = Field(0, alias="outputTokens")
     cache_read_tokens: int = Field(0, alias="cacheReadTokens")
+    #: What the run wrote to the prompt cache, at the write premium: on a short
+    #: watcher run this is most of the cost, so a row without it reads cheap.
+    cache_write_tokens: int = Field(0, alias="cacheWriteTokens")
 
-    @field_validator("item_count", "input_tokens", "output_tokens", "cache_read_tokens", mode="before")
+    @field_validator("item_count", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", mode="before")
     @classmethod
     def _int(cls, value: object) -> int:
         # DynamoDB returns numbers as Decimal.
@@ -68,7 +71,7 @@ class ScheduleRun(BaseModel):
 
 
 def _token_counts(usage: Optional[Dict[str, Any]]) -> Dict[str, int]:
-    """Input, output and cache-read tokens from a ``RunResult.usage``.
+    """Input, output, cache-read and cache-write tokens from a ``RunResult.usage``.
 
     The harness keeps the stream's ``metadata_summary`` payload, so the counts
     sit under ``usage``; a flat dict of the same keys is read as well.
@@ -88,6 +91,7 @@ def _token_counts(usage: Optional[Dict[str, Any]]) -> Dict[str, int]:
         "inputTokens": count("inputTokens", "input_tokens"),
         "outputTokens": count("outputTokens", "output_tokens"),
         "cacheReadTokens": count("cacheReadInputTokens", "cache_read_input_tokens"),
+        "cacheWriteTokens": count("cacheWriteInputTokens", "cache_write_input_tokens"),
     }
 
 

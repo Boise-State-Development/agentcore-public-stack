@@ -499,7 +499,8 @@ async def record_run_result(
     Bumps the runaway-guard counter (``runs_today``/``runs_today_date``,
     reset on a UTC date rollover) and maintains ``consecutive_failures`` — a
     ``"completed"`` run resets it to 0, any other status increments it
-    (mirrors ``sync_policies.update_sync_result``). The B2 worker uses the
+    (mirrors ``sync_policies.update_sync_result``), and also clears
+    ``lastError``. The B2 worker uses the
     returned streak to trip the repeated-failure breaker at any threshold;
     the dispatcher reads ``runs_today`` to auto-pause a schedule that exceeds
     ``max_runs_per_day``.
@@ -535,10 +536,13 @@ async def record_run_result(
     if error is not None:
         set_parts.append("lastError = :error")
         values[":error"] = error
+    # A completed run clears the last failure's message, so a schedule that
+    # recovered never shows the error that once stopped it.
+    clear_error = status == "completed" and error is None
 
     _get_table().update_item(
         Key={"PK": f"USER#{user_id}", "SK": f"SCHEDPROMPT#{schedule_id}"},
-        UpdateExpression="SET " + ", ".join(set_parts),
+        UpdateExpression="SET " + ", ".join(set_parts) + (" REMOVE lastError" if clear_error else ""),
         ExpressionAttributeValues=values,
     )
     return consecutive_failures

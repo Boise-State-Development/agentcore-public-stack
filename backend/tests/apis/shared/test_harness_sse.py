@@ -207,3 +207,28 @@ def test_report_input_is_the_last_report_call():
     assert "report_input" not in result.to_dict()
 
     assert RunResult(run_id="r", session_id="s", user_id="u", status="completed").report_input is None
+
+
+def test_usage_is_every_model_call_summed_not_the_last():
+    # A tool turn: two calls, then the final frame, which repeats the last call
+    # and carries turnDurationMs. Measured on dev: a watcher run's row showed
+    # only the second call (5 in, 22 out) and none of the first call's write.
+    acc = InvocationStreamAccumulator()
+    acc.handle("metadata", {"usage": {"inputTokens": 3, "outputTokens": 158, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 4325}})
+    acc.handle("metadata", {"usage": {"inputTokens": 5, "outputTokens": 22, "cacheReadInputTokens": 4325, "cacheWriteInputTokens": 169}})
+    acc.handle("metadata", {
+        "usage": {"inputTokens": 5, "outputTokens": 22, "cacheReadInputTokens": 4325, "cacheWriteInputTokens": 169},
+        "metrics": {"timeToFirstByteMs": 383},
+        "turnDurationMs": 7099,
+    })
+
+    usage = acc.finalize_usage()
+
+    assert usage["usage"] == {"inputTokens": 8, "outputTokens": 180, "cacheReadInputTokens": 4325, "cacheWriteInputTokens": 4494}
+    assert usage["modelCalls"] == 2
+
+
+def test_usage_falls_back_to_the_final_frame_when_no_call_frame_came():
+    acc = InvocationStreamAccumulator()
+    acc.handle("metadata", {"usage": {"inputTokens": 9}, "turnDurationMs": 100})
+    assert acc.finalize_usage()["usage"] == {"inputTokens": 9}

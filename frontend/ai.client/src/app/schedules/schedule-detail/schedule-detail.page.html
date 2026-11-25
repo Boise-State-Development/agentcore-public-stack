@@ -159,7 +159,9 @@
                     <p class="text-sm/6 text-gray-900 dark:text-white">
                       <time [attr.datetime]="row.run.finishedAt" [attr.title]="row.absolute">{{ row.when }}</time>
                     </p>
-                    <p class="text-xs/5 text-gray-500 tabular-nums dark:text-gray-400">{{ row.tokens }} tokens</p>
+                    @if (row.tokens) {
+                      <p class="text-xs/5 text-gray-500 tabular-nums dark:text-gray-400">{{ row.tokens }}</p>
+                    }
                   </div>
                   @if (row.run.sessionId) {
                     <a

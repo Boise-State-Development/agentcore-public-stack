@@ -99,8 +99,10 @@ The worker writes one row per run for **every personal schedule**, standard or w
 ```
 PK = USER#{userId}   SK = SCHEDRUN#{scheduleId}#{finishedAt}#{runId}   ttl = 30 days
 runId, status (completed | quiet | notify | error | timeout | paused), itemCount, sessionId?, finishedAt,
-inputTokens, outputTokens, cacheReadTokens
+inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens
 ```
+
+The counts are the whole run, every model call summed. The harness sums the per-call `metadata` frames, because the turn's `metadata_summary` never leaves the Runtime and the final frame repeats the last call. `cacheWriteTokens` was added after the dev readout: on a short run it is most of the cost, so a row without it reads cheap.
 
 `GET /schedules/{id}/runs` returns the newest 50, behind the flag. Dollar cost per run is left for later: the run's `C#` rows land asynchronously from the Runtime, and tokens are enough to tell a 2k-token quiet run from a 40k-token one.
 
@@ -124,3 +126,36 @@ inputTokens, outputTokens, cacheReadTokens
 | **Dev readout** | A 15-minute watcher on a dev connector for a day: quiet-run tokens and cost, prefix hashes, false-positive and missed findings | Decides whether a second triage stage is needed before slice 4 |
 
 **Built:** PR 1.2, 2026-11-25. Two choices the table above leaves open: a watch run's agent is never cached (`report` is not a cache-key element, and a later turn in a notifying run's conversation must not be served it), and a run with no `report` keeps the previous cursors and tracking and adds no `run:` key to `seen`.
+
+## 6. Dev readout (2026-11-25)
+
+The flag was turned on in the `development` environment (#2449). A Haiku 4.5 watcher on a 15-minute interval was forced through two runs 35 seconds apart. Its prompt reports one item keyed by the day, so the first run notifies and the second is quiet.
+
+**Passed:**
+- **Outcomes:** run 1 notified, run 2 was quiet. The quiet run's conversation was soft-deleted with its `C#` rows kept. The bell item opened the notifying run's conversation.
+- **Prerequisite:** a real run needs the user's scheduled-runs grant, from Enable scheduled runs on `/schedules`. Without it, the first run paused with `reauth_required`, and that pause reached the bell.
+- **`report` spec:** 364 tokens beside an existing tool, by CountTokens.
+
+**Cost per run:** about **$0.0076** on Haiku 4.5, either outcome, over two model calls.
+
+| Call | Cost | What it does |
+|---|---|---|
+| 1 | $0.0068 | Writes the whole ~4.3k-token prefix to the cache |
+| 2 | $0.0008 | Reads that prefix back after `report` |
+
+A 15-minute watcher is therefore about **$0.73 a day**. The cost is the same whether the run notifies or is quiet.
+
+**Why the prefix never caches across runs.** Run 2 read nothing, even though its `systemPromptHash` and `toolConfigHash` matched run 1's. A direct probe on the `us.*` Haiku 4.5 profile found Bedrock ignores a cache point below **4,096 tokens** of cumulative prefix:
+- Prefixes of 4,076 tokens and under missed on every pair. Prefixes of 4,116 and over hit on every pair.
+- A watch run's tools plus system prompt are about 3.8–3.9k tokens, so the tools and system points are dropped. Only the message point caches, and the message changes every run.
+- The 1-hour static TTL doesn't help, because the minimum applies whatever the TTL.
+- Padding the prompt is not an option.
+
+So the honest baseline is a full prefix write per run. Anything that makes a quiet run cheaper has to make it smaller or skip the model. That is the second triage stage the table in §5 leaves open: a decider (plain change detection, or a small model with a short prompt) that calls the schedule's model only when something may be new. Its acceptance bar is recall on real watch prompts, because a missed finding is the failure a watcher must not have.
+
+**Fixed after the readout:**
+- **Run usage:** run rows recorded only the last call's usage; they now record the whole run.
+- **Side calls:** a watch run no longer makes the Nova title and tool-summary side calls.
+- **Raw block:** the user bubble no longer shows the `<watch_state>` block.
+- **Summary:** the 24-hour summary no longer counts a run that never started.
+- **Stale error:** a completed run clears `lastError`.

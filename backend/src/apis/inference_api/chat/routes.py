@@ -1215,22 +1215,30 @@ def _build_suggest_handoff_tools(
     return [make_suggest_handoff_tool(session_id, user_id)]
 
 
-def _build_watch_report_tools(input_data: InvocationRequest) -> list:
-    """The quiet watcher's ``report`` tool on an unattended watch run (quiet-watcher spec §3.3).
+def _is_watch_run(input_data: InvocationRequest) -> bool:
+    """An unattended quiet-watcher run (quiet-watcher spec §3.3).
 
-    Built only when the request carries ``run_mode: "watch"``, the session is
-    headless and the Runtime's ``PROACTIVE_RUNS_ENABLED`` is on, so a web or
-    terminal turn (which never sends ``run_mode``) is unchanged. Gated on the
-    request rather than the catalog, so it is in no ``INJECTED_TOOL_IDS`` set.
-    A constant spec with no closure and no IO.
+    The request carries ``run_mode: "watch"``, the session is headless and the
+    Runtime's ``PROACTIVE_RUNS_ENABLED`` is on, so a web or terminal turn
+    (which never sends ``run_mode``) is never one. No IO.
     """
     if getattr(input_data, "run_mode", None) != "watch":
-        return []
+        return False
 
     from apis.shared.feature_flags import proactive_runs_enabled
     from apis.shared.scheduled_prompts.models import is_headless_session
 
-    if not is_headless_session(input_data.session_id) or not proactive_runs_enabled():
+    return is_headless_session(input_data.session_id) and proactive_runs_enabled()
+
+
+def _build_watch_report_tools(input_data: InvocationRequest) -> list:
+    """The quiet watcher's ``report`` tool on an unattended watch run (quiet-watcher spec §3.3).
+
+    Built only on a watch run (:func:`_is_watch_run`). Gated on the request
+    rather than the catalog, so it is in no ``INJECTED_TOOL_IDS`` set. A
+    constant spec with no closure and no IO.
+    """
+    if not _is_watch_run(input_data):
         return []
 
     from agents.builtin_tools.watch_report_tool import make_watch_report_tool
@@ -6331,8 +6339,12 @@ async def _run_invocation(
         user_email=current_user.email,
     )
 
+    # A watch run makes neither side call: its conversation is deleted when the
+    # run is quiet, and the worker names it after the schedule when it is kept,
+    # so a Nova title or tool summary would be paid for and never read.
+    watch_run = _is_watch_run(input_data)
     title_task: Optional["asyncio.Task[str]"] = None
-    if is_new_session and input_data.message:
+    if is_new_session and input_data.message and not watch_run:
         title_task = asyncio.create_task(
             generate_conversation_title(
                 session_id=input_data.session_id,
@@ -7440,6 +7452,7 @@ async def _run_invocation(
                 turn_clock=prelude,
                 invocation_state=turn_invocation_state,
                 cancel_signal=turn_cancel_signal,
+                turn_tool_summaries=not watch_run,
             ):
                 yield event
                 # Interleave the finished title between agent events (same

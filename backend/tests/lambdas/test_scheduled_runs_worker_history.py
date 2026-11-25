@@ -23,7 +23,7 @@ pytestmark = pytest.mark.asyncio
 
 USER_ID = "user-1"
 FINISHED = "2026-11-25T01:00:00Z"
-USAGE = {"usage": {"inputTokens": 2000, "outputTokens": 40, "cacheReadInputTokens": 1200}}
+USAGE = {"usage": {"inputTokens": 2000, "outputTokens": 40, "cacheReadInputTokens": 1200, "cacheWriteInputTokens": 4300}}
 
 
 def _now_iso() -> str:
@@ -108,7 +108,7 @@ class TestHistoryRows:
         (run,) = list_schedule_runs(USER_ID, schedule.schedule_id)
         assert run.status == "completed"
         assert (run.run_id, run.session_id, run.finished_at) == ("run-abc", "headless-abc", FINISHED)
-        assert (run.input_tokens, run.output_tokens, run.cache_read_tokens) == (2000, 40, 1200)
+        assert (run.input_tokens, run.output_tokens, run.cache_read_tokens, run.cache_write_tokens) == (2000, 40, 1200, 4300)
         assert run.item_count == 0
 
     @pytest.mark.parametrize("status", ["error", "timeout"])
