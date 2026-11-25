@@ -188,9 +188,11 @@ blocked the previous approach in a containerised dev environment.
 
 **User-visible consequence of the session-ownership choice:** signing out in the
 browser does **not** sign out the CLI, and vice versa. This matches `gh` and
-`aws`. `aps-tui logout` only removes the credential stored on this machine; it
-makes no server call, so the CLI's session row is not deleted and lapses on its
-own TTL.
+`aws`. `aps-tui logout` presents its session to `POST /auth/logout`, which
+deletes the CLI's session row and revokes its refresh token without touching any
+browser's, then removes the credential stored on this machine. If the server
+can't be reached, the local copy is still removed and the row lapses on its own
+TTL.
 
 ### The `user_code` is low-entropy on purpose
 

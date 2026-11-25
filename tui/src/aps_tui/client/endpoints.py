@@ -59,6 +59,12 @@ class Endpoints:
         """Who the current credential belongs to. Used to confirm a sign-in."""
         return self._join("auth/session")
 
+    @property
+    def auth_logout(self) -> str:
+        """Ends the presented session: deletes its row and revokes its Cognito
+        refresh token. A header-presented session gets no cookie writes."""
+        return self._join("auth/logout")
+
     # -- chat ----------------------------------------------------------------
 
     @property

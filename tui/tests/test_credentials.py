@@ -131,6 +131,7 @@ class TestEndpoints:
         assert endpoints.cli_authorize == "https://h/api/auth/cli/authorize"
         assert endpoints.cli_token == "https://h/api/auth/cli/token"
         assert endpoints.auth_session == "https://h/api/auth/session"
+        assert endpoints.auth_logout == "https://h/api/auth/logout"
 
     def test_there_is_no_verify_url_builder(self) -> None:
         """`/auth/cli/verify` is deliberately absent.

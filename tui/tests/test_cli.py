@@ -273,9 +273,80 @@ class TestLoginSso:
 class TestLogout:
     @pytest.fixture(autouse=True)
     def no_real_keyring(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Logout touches two services. Stub both, or tests hit the host."""
+        """Logout touches two services and the network. Stub them all, or
+        tests hit the host keyring or try a real sign-out."""
         monkeypatch.setattr(cli, "delete_key_from_keyring", lambda _: False)
         monkeypatch.setattr(cli, "delete_session_from_keyring", lambda _: False)
+        monkeypatch.setattr(cli, "load_session_from_keyring", lambda _: (None, None))
+
+        def no_network(*_a: object, **_k: object) -> httpx.Response:
+            raise AssertionError("logout made a request it should not have")
+
+        monkeypatch.setattr(cli.httpx, "post", no_network)
+
+    @staticmethod
+    def _stored_session(monkeypatch: pytest.MonkeyPatch, server: object) -> list[dict]:
+        """Hold a session and route the sign-out POST to `server`. Returns
+        the recorded calls."""
+        calls: list[dict] = []
+        monkeypatch.setattr(cli, "load_session_from_keyring", lambda _: ("sealed-envelope-value", None))
+        monkeypatch.setattr(cli, "delete_session_from_keyring", lambda _: True)
+
+        def post(url: str, **kwargs: object) -> httpx.Response:
+            calls.append({"url": url, **kwargs})
+            if isinstance(server, Exception):
+                raise server
+            return server  # type: ignore[return-value]
+
+        monkeypatch.setattr(cli.httpx, "post", post)
+        return calls
+
+    def test_ends_the_session_on_the_server_before_removing_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        calls = self._stored_session(monkeypatch, httpx.Response(200, json={"post_logout_url": None}))
+
+        exit_code = cli.main(["logout", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
+
+        assert exit_code == 0
+        (call,) = calls
+        assert call["url"] == f"{BASE_URL}/auth/logout"
+        assert call["headers"]["Authorization"] == "BFF sealed-envelope-value"
+        # A redirect would carry the session header somewhere else.
+        assert call["follow_redirects"] is False
+        captured = capsys.readouterr()
+        assert "Signed out on the server." in captured.out
+        assert "Removed the stored session" in captured.out
+        assert "sealed-envelope-value" not in captured.out + captured.err
+
+    def test_an_unreachable_server_still_removes_the_local_copy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._stored_session(monkeypatch, httpx.ConnectError("offline"))
+
+        exit_code = cli.main(["logout", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
+
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "Removed the stored session" in captured.out
+        assert "will expire on its own" in captured.err
+
+    def test_a_refused_sign_out_still_removes_the_local_copy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._stored_session(monkeypatch, httpx.Response(503))
+
+        exit_code = cli.main(["logout", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")])
+
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "Removed the stored session" in captured.out
+        assert "HTTP 503" in captured.err
+
+    def test_an_api_key_alone_makes_no_server_call(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Keys are revoked from the web app; the autouse stub fails on any POST."""
+        monkeypatch.setattr(cli, "delete_key_from_keyring", lambda _: True)
+        assert cli.main(["logout", "--base-url", BASE_URL, "--config", str(tmp_path / "c.toml")]) == 0
 
     def test_reports_removal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         monkeypatch.setattr(cli, "delete_key_from_keyring", lambda _: True)
