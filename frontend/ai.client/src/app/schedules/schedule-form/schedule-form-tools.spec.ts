@@ -8,6 +8,7 @@ import { RunNowService } from '../services/run-now.service';
 import { AgentService } from '../../agents/services/agent.service';
 import { Tool, ToolService } from '../../services/tool/tool.service';
 import { ToastService } from '../../services/toast/toast.service';
+import { FEATURES } from '../../services/features';
 
 /**
  * The schedule's Tools picker, as rendered: the shared `<app-tool-selector>` fed
@@ -80,6 +81,7 @@ describe('ScheduleFormPage — tools picker', () => {
           useValue: { tools: signal(TOOLS), initialized: signal(true), loadTools: vi.fn() },
         },
         { provide: ToastService, useValue: { success: vi.fn(), error: vi.fn(), info: vi.fn() } },
+        { provide: FEATURES, useValue: { proactiveRuns: false } },
         {
           provide: ActivatedRoute,
           useValue: {

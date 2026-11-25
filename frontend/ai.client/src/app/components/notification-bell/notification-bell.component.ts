@@ -113,6 +113,18 @@ function describeHandoff(n: AppNotification): string {
 }
 
 /**
+ * A watcher's finding (quiet-watcher §3.5): "{label}: {title}", the schedule's label
+ * and the model's short display line for it, with "Urgent — " ahead of a `now` one.
+ */
+function describeAgentItem(n: AppNotification): string {
+  const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
+  const label = text(n.payload?.label) || 'A watcher';
+  const title = text(n.payload?.title) || 'found something new';
+  const line = `${label}: ${title}`;
+  return n.payload?.urgency === 'now' ? `Urgent — ${line}` : line;
+}
+
+/**
  * The sentence a notification reads as. Actor and project fall back to neutral words.
  * `quotaPeriodType` words a quota amount (`per month` / `per day`); unknown reads as monthly.
  */
@@ -120,6 +132,7 @@ export function describeNotification(n: AppNotification, quotaPeriodType?: strin
   if (n.kind.startsWith('quota_')) return describeQuota(n, quotaPeriodType);
   if (n.kind.startsWith('handoff_')) return describeHandoff(n);
   if (n.kind === 'schedule_paused') return describeOwnSchedule(n);
+  if (n.kind === 'agent_item') return describeAgentItem(n);
   const who = personLabel(n.actorName, n.actorEmail) || 'Someone';
   const project = n.projectName || 'a project';
   const role = ROLE_PHRASES[n.payload?.role ?? ''] ?? (n.payload?.role ? `a ${n.payload.role}` : null);
@@ -475,6 +488,20 @@ export class NotificationBellComponent {
     if (n.kind === 'project_proposal_decided' && n.projectId) {
       const file = typeof n.payload?.slug === 'string' ? n.payload.slug : undefined;
       void this.router.navigate(['/projects', n.projectId, 'memory'], { queryParams: file ? { file } : {} });
+      this.sidenav.close();
+      return;
+    }
+    // A watcher's finding opens the run's conversation; without one, the schedule's
+    // own page where the build has it, else the schedules list.
+    if (n.kind === 'agent_item') {
+      const { sessionId, scheduleId } = n.payload ?? {};
+      if (typeof sessionId === 'string' && sessionId) {
+        void this.router.navigate(['/s', sessionId]);
+      } else if (this.features.proactiveRuns && typeof scheduleId === 'string' && scheduleId) {
+        void this.router.navigate(['/schedules', scheduleId]);
+      } else {
+        void this.router.navigate(['/schedules']);
+      }
       this.sidenav.close();
       return;
     }

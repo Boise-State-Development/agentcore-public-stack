@@ -10,6 +10,12 @@
 export type ScheduleCadence = 'daily' | 'weekday' | 'weekly' | 'interval';
 export type IntervalUnit = 'minutes' | 'hours';
 export type ScheduledPromptState = 'active' | 'paused' | 'paused_error';
+/**
+ * What a schedule's runs do (docs/specs/quiet-watcher.md §3.1): `standard` runs
+ * and delivers every time; `watch` checks and only leaves something behind when
+ * it finds something new.
+ */
+export type ScheduleMode = 'standard' | 'watch';
 
 /** Floor for the custom "every N" cadence (mirrors backend MIN_INTERVAL_MINUTES). */
 export const MIN_INTERVAL_MINUTES = 15;
@@ -44,6 +50,10 @@ export interface ScheduledPrompt {
   projectId?: string | null;
   /** A project schedule's delivery: the creator's sidebar, or shared with the project. */
   deliverTo?: 'owner' | 'project' | null;
+  /** `watch` for a quiet watcher; absent from an older backend, which means `standard`. */
+  mode?: ScheduleMode;
+  /** The model each run uses; null is the default (the Agent's or the user's). */
+  modelId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -61,6 +71,10 @@ export interface CreateScheduleRequest {
   assistantId?: string | null;
   enabledTools?: string[] | null;
   deliverEmail?: boolean;
+  /** Sent only while `features.proactiveRuns` is on; the backend refuses it (422) while off. */
+  mode?: ScheduleMode;
+  /** Sent only while `features.proactiveRuns` is on. Omitted for the default model. */
+  modelId?: string;
 }
 
 /**
@@ -96,6 +110,56 @@ export interface UpdateScheduleRequest {
   // reverts to the default agent. Not combinable with the value field.
   clearAssistant?: boolean;
   clearTools?: boolean;
+  /** The quiet-watcher fields, sent only while `features.proactiveRuns` is on. */
+  mode?: ScheduleMode;
+  modelId?: string;
+  /** Revert to the default model. Not combinable with `modelId`. */
+  clearModel?: boolean;
+}
+
+/**
+ * How one run of a personal schedule ended (`ScheduleRunStatus`, quiet-watcher
+ * §3.4). `quiet` and `notify` are a watcher's: nothing new, or found something.
+ */
+export type ScheduleRunStatus = 'completed' | 'error' | 'timeout' | 'paused' | 'quiet' | 'notify';
+
+/** One run of a personal schedule (backend `ScheduleRun`). */
+export interface ScheduleRun {
+  runId: string;
+  scheduleId: string;
+  /** A `ScheduleRunStatus`; typed loosely so a status this build doesn't know still renders. */
+  status: ScheduleRunStatus | string;
+  /** How many new findings a `notify` run reported. */
+  itemCount: number;
+  /** The run's conversation; absent for a quiet run, whose conversation is removed. */
+  sessionId?: string | null;
+  finishedAt: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+}
+
+/** Response from GET /schedules/{id}/runs: the newest 50, newest first. */
+export interface ScheduleRunsResponse {
+  runs: ScheduleRun[];
+}
+
+/** What a watcher carries from one run to the next (backend `WatchState`, quiet-watcher §3.2). */
+export interface WatchState {
+  /** Where the next run checks from, by name (written by the model). */
+  cursors: Record<string, string>;
+  /** What the watcher is keeping an eye on (written by the model). */
+  tracking: string[];
+  /** Finding keys already notified, newest last. Shown only as a count. */
+  seen: string[];
+  version: number;
+  lastRunAt?: string | null;
+  updatedAt?: string | null;
+}
+
+/** Response from GET /schedules/{id}/state; `state` is null when the watcher has none. */
+export interface WatchStateResponse {
+  state: WatchState | null;
 }
 
 /** Response from GET /schedules. */

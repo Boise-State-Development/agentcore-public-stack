@@ -65,5 +65,7 @@ export const environment = {
         releaseLedger: true,
         attachmentCards: true,
         mcpElicitation: true,
+        // CDK_PROACTIVE_RUNS_ENABLED is on in the `development` GitHub environment.
+        proactiveRuns: true,
     } satisfies FeatureFlags,
 };
