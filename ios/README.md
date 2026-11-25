@@ -5,21 +5,44 @@ RBAC, same quotas and the same cost tracking as the web app, on a phone.
 
 ## What it does today
 
-Nothing yet. This is the scaffold: an app that builds, launches in the
-simulator, carries the repo version, and runs its unit tests in CI. It exists
-to settle the project structure, hygiene and gates before any product code
-lands, because those are far harder to retrofit.
+Sign-in, and nothing past it yet:
+
+- **Choose a server.** The user enters the deployment's app-api address. It
+  is checked (`https` anywhere, `http` only on loopback) and must answer
+  `GET /auth/providers` before it is kept.
+- **Sign in** in the system sheet (`ASWebAuthenticationSession`, shared with
+  Safari), straight to the organisation's identity provider when the
+  deployment has one, then exchange a one-time handoff code plus a PKCE
+  verifier for a session. The session goes in the Keychain (this device only,
+  after first unlock) and is sent as `Authorization: BFF <sealed>`.
+- **Stay signed in** across launches, checked with `GET /auth/session`. An
+  expired session goes back to sign-in with a note. Being offline keeps the
+  session and offers Try again.
+- **Sign out**, dropping the local copy first and then telling the server.
+
+The design is `docs/specs/native-app-auth.md`. **The server half is not built
+yet** (that spec's PR 1: `client=native` on `/auth/login` and
+`POST /auth/native/exchange`), so against a real deployment sign-in currently
+fails with "doesn't support signing in from the app yet".
 
 Next up, in order:
 
-1. **Native auth path.** The SPA signs in with an httpOnly session cookie
-   through the BFF and the TUI uses an API key against a tools-less endpoint.
-   Neither fits a phone. The design (OIDC via `ASWebAuthenticationSession`,
-   plus whatever app-api needs to issue a token the phone can hold) gets a
-   spec under `docs/specs/` before any Swift is written.
-2. **API client** in `AgentCoreKit`: sessions, SSE streaming, the event types
-   in the root `CLAUDE.md`.
-3. **Chat surface** in the app target.
+1. **The server half of sign-in** (spec PR 1).
+2. **Conversations, read-only**: the list and a transcript, plain JSON.
+3. **Chat**: sending a turn, SSE streaming, the event types in the root
+   `CLAUDE.md`.
+
+### Trying sign-in locally
+
+Until the server half exists, the flow can be exercised against a stub of the
+contract on loopback (`http://localhost:<port>/api`). Two things to know:
+
+- Build **with** simulator signing (the default). `CODE_SIGNING_ALLOWED=NO`
+  builds an app with no entitlements, and the Keychain then refuses to store
+  the session (`-34018`), which the app reports as "Couldn't save your
+  sign-in".
+- iOS logs that `ASWebAuthenticationSession` support for `http` is deprecated.
+  It works today for loopback only; a local stack behind `https` avoids it.
 
 ## Requirements
 
