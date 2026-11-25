@@ -10,6 +10,7 @@ import { AgentService } from '../../agents/services/agent.service';
 import { ToolService } from '../../services/tool/tool.service';
 import { ToastService } from '../../services/toast/toast.service';
 import { ScheduledPrompt } from '../models/schedule.model';
+import { FEATURES } from '../../services/features';
 
 function stubSchedule(overrides: Partial<ScheduledPrompt> = {}): ScheduledPrompt {
   return {
@@ -86,6 +87,8 @@ describe('ScheduleFormPage', () => {
         { provide: AgentService, useValue: mockAgentService },
         { provide: ToolService, useValue: mockToolService },
         { provide: ToastService, useValue: mockToast },
+        // Quiet watchers off: these specs pin the request bodies sent before they existed.
+        { provide: FEATURES, useValue: { proactiveRuns: false } },
         {
           provide: ActivatedRoute,
           useValue: { snapshot: { paramMap: { get: (key: string) => routeParams[key] ?? null }, queryParamMap: { get: () => null } } },

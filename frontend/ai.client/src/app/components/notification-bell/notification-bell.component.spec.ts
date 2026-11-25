@@ -48,6 +48,12 @@ describe('describeNotification', () => {
     [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', label: 'Morning Briefing', reason: 'oauth_required' } }), 'Your schedule “Morning Briefing” stopped until you reconnect a tool it uses.'],
     [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', reason: 'reauth_required' } }), 'Your schedule stopped until you sign in again.'],
     [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', label: 'Morning Briefing', reason: 'something_new' } }), 'Your schedule “Morning Briefing” stopped.'],
+    // A watcher's finding: the schedule's label and the finding's title, Urgent ahead of a `now` one.
+    [notif({ kind: 'agent_item', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', runId: 'r1', sessionId: 'x', label: 'GitHub watch', title: 'PR 2401 needs your review', urgency: 'today', key: 'k' } }), 'GitHub watch: PR 2401 needs your review'],
+    [notif({ kind: 'agent_item', actorEmail: null, projectId: null, projectName: null, payload: { label: 'GitHub watch', title: 'Build is failing on main', urgency: 'now' } }), 'Urgent — GitHub watch: Build is failing on main'],
+    [notif({ kind: 'agent_item', actorEmail: null, projectId: null, projectName: null, payload: { title: 'New reply', urgency: 'fyi' } }), 'A watcher: New reply'],
+    [notif({ kind: 'agent_item', actorEmail: null, projectId: null, projectName: null, payload: { label: 'Inbox watch', title: '  ' } }), 'Inbox watch: found something new'],
+    [notif({ kind: 'agent_item', actorEmail: null, projectId: null, projectName: null, payload: {} }), 'A watcher: found something new'],
     [notif({ actorEmail: null, projectName: null, payload: {} }), 'Someone added you to a project.'],
     [notif({ actorName: 'Ann Lee' }), 'Ann Lee added you to Enrollment Sync as an editor.'],
   ])('%#: reads as a sentence', (n, text) => {
@@ -258,6 +264,38 @@ describe('NotificationBellComponent', () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     const { component } = render();
     component.open(notif({ kind: 'schedule_paused', projectId: null, projectName: null, payload: { scheduleId: 's1', label: 'W', reason: 'repeated_failures' } }));
+    expect(navigate).toHaveBeenLastCalledWith(['/schedules']);
+  });
+
+  const finding = (payload: AppNotification['payload'] = {}) =>
+    notif({
+      kind: 'agent_item', projectId: null, projectName: null, actorEmail: null,
+      payload: { scheduleId: 'sch-1', runId: 'run-1', sessionId: 'sess-9', label: 'GitHub watch', title: 'PR 2401 needs your review', urgency: 'today', key: 'pr-2401', ...payload },
+    });
+
+  it('a watcher’s finding marks itself read and opens the run’s conversation', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    const n = finding();
+    component.open(n);
+    expect(service.markRead).toHaveBeenCalledWith(n);
+    expect(navigate).toHaveBeenLastCalledWith(['/s', 'sess-9']);
+    expect(sidenav.close).toHaveBeenCalled();
+  });
+
+  it('a finding with no conversation opens its schedule’s page with watchers on, else the list', () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, proactiveRuns: true } });
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(finding({ sessionId: '' }));
+    expect(navigate).toHaveBeenLastCalledWith(['/schedules', 'sch-1']);
+  });
+
+  it('a finding with no conversation opens /schedules with watchers off', () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, proactiveRuns: false } });
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(finding({ sessionId: undefined }));
     expect(navigate).toHaveBeenLastCalledWith(['/schedules']);
   });
 

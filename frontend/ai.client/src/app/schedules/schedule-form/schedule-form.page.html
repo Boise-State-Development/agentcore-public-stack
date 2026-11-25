@@ -96,6 +96,78 @@
           </div>
         </section>
 
+        @if (offersWatchFields()) {
+          <!-- Mode and model (quiet-watcher §3.1): only while features.proactiveRuns is on, for a personal schedule. -->
+          <section class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
+            <fieldset aria-describedby="schedule-mode-help">
+              <legend class="text-sm/6 font-semibold text-gray-900 dark:text-white">What should it do?</legend>
+              <p id="schedule-mode-help" class="mt-1 text-xs/5 text-gray-500 dark:text-gray-400">
+                Either way, every run is listed on the schedule’s page.
+              </p>
+              <div class="mt-4 space-y-4">
+                <div class="flex gap-3">
+                  <input
+                    id="schedule-mode-standard"
+                    type="radio"
+                    value="standard"
+                    formControlName="mode"
+                    aria-describedby="schedule-mode-standard-help"
+                    class="mt-1 size-4 shrink-0 accent-primary-accessible dark:accent-primary-500"
+                  />
+                  <div>
+                    <label for="schedule-mode-standard" class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                      Run and deliver every time
+                    </label>
+                    <p id="schedule-mode-standard-help" class="text-xs/5 text-gray-500 dark:text-gray-400">
+                      Each run leaves a new conversation in your list.
+                    </p>
+                  </div>
+                </div>
+                <div class="flex gap-3">
+                  <input
+                    id="schedule-mode-watch"
+                    type="radio"
+                    value="watch"
+                    formControlName="mode"
+                    aria-describedby="schedule-mode-watch-help"
+                    class="mt-1 size-4 shrink-0 accent-primary-accessible dark:accent-primary-500"
+                  />
+                  <div>
+                    <label for="schedule-mode-watch" class="text-sm/6 font-medium text-gray-900 dark:text-white">
+                      Watch, and only tell me when something is new
+                    </label>
+                    <p id="schedule-mode-watch-help" class="text-xs/5 text-gray-500 dark:text-gray-400">
+                      A run that finds nothing new leaves nothing behind; a finding leaves a conversation and a notification.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </fieldset>
+
+            <div class="mt-6">
+              <label for="schedule-model" class="block text-sm/6 font-medium text-gray-900 dark:text-white">Model</label>
+              <select
+                id="schedule-model"
+                formControlName="modelId"
+                aria-describedby="schedule-model-help"
+                class="mt-2 block w-full max-w-sm rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm/6 text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+              >
+                <option [ngValue]="null">Default</option>
+                @for (choice of modelChoices(); track choice.modelId) {
+                  <option [ngValue]="choice.modelId">{{ choice.label }}</option>
+                }
+              </select>
+              <p id="schedule-model-help" class="mt-1.5 text-xs/5 text-gray-500 dark:text-gray-400">
+                @if (modelsLoading()) {
+                  Loading models…
+                } @else {
+                  Default uses the agent’s model, or your default model. Only models you can use are listed.
+                }
+              </p>
+            </div>
+          </section>
+        }
+
         <!-- Cadence -->
         <section class="rounded-2xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
           <h2 class="text-sm/6 font-semibold text-gray-900 dark:text-white">When it runs</h2>
@@ -206,6 +278,20 @@
                   <option [value]="tz">{{ tz }}</option>
                 }
               </select>
+            </div>
+          }
+
+          @if (offersWatchFields()) {
+            <!-- A note, not an error: an often-checking watcher is allowed, it just costs more. -->
+            <div aria-live="polite">
+              @if (shortIntervalNote(); as note) {
+                <p
+                  data-testid="short-interval-note"
+                  class="mt-3 rounded-2xl bg-state-info-50 px-3 py-2 text-xs/5 text-state-info-800 dark:bg-state-info-900/10 dark:text-state-info-300"
+                >
+                  {{ note }}
+                </p>
+              }
             </div>
           }
         </section>

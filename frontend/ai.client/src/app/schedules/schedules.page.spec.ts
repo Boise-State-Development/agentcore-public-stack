@@ -339,3 +339,63 @@ describe('SchedulesPage with a project schedule', () => {
     expect(item('Weekly digest').querySelector('[data-testid="project-badge"]')?.textContent?.trim()).toBe('In a project');
   });
 });
+
+describe('SchedulesPage and quiet watchers', () => {
+  function render(proactiveRuns: boolean) {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter([]),
+        {
+          provide: ScheduleService,
+          useValue: {
+            schedules$: signal<ScheduledPrompt[]>([
+              stubSchedule({ scheduleId: 'w1', label: 'Inbox watch', mode: 'watch' }),
+              stubSchedule({ scheduleId: 's1', label: 'Morning Briefing', mode: 'standard' }),
+              stubSchedule({ scheduleId: 'p1', label: 'Weekly digest', projectId: 'prj_1', deliverTo: 'project' }),
+            ]),
+            loading$: signal(false),
+            accessible$: signal<boolean | null>(true),
+            loadSchedules: vi.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: GrantService,
+          useValue: { status$: signal<GrantStatus>({ enabled: true }), loading$: signal(false), loadStatus: vi.fn().mockResolvedValue(undefined) },
+        },
+        { provide: ToastService, useValue: { success: vi.fn(), error: vi.fn() } },
+        { provide: ProjectsService, useValue: projectsStub([{ projectId: 'prj_1', name: 'Enrollment Sync' }]) },
+        { provide: FEATURES, useValue: { projects: true, proactiveRuns } },
+      ],
+    });
+    const fixture = TestBed.createComponent(SchedulesPage);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const item = (label: string) => Array.from(el.querySelectorAll('li')).find(li => li.textContent?.includes(label))!;
+    return { el, item };
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('links each personal schedule’s label to its page, keeping Edit and Delete, and badges a watcher', () => {
+    const { item } = render(true);
+    const watch = item('Inbox watch');
+    expect(watch.querySelector('[data-testid="schedule-detail-link"]')?.getAttribute('href')).toBe('/schedules/w1');
+    expect(watch.querySelector('[data-testid="watching-badge"]')?.textContent?.trim()).toBe('Watching');
+    const actions = Array.from(watch.querySelectorAll('button')).map(b => b.textContent?.trim());
+    expect(actions).toEqual(expect.arrayContaining(['Pause', 'Edit', 'Delete']));
+
+    const standard = item('Morning Briefing');
+    expect(standard.querySelector('[data-testid="schedule-detail-link"]')?.getAttribute('href')).toBe('/schedules/s1');
+    expect(standard.querySelector('[data-testid="watching-badge"]')).toBeNull();
+
+    // A project schedule's runs are on its project.
+    expect(item('Weekly digest').querySelector('[data-testid="schedule-detail-link"]')).toBeNull();
+  });
+
+  it('keeps today’s list with the flag off: no detail link, no badge', () => {
+    const { el } = render(false);
+    expect(el.querySelector('[data-testid="schedule-detail-link"]')).toBeNull();
+    expect(el.querySelector('[data-testid="watching-badge"]')).toBeNull();
+  });
+});

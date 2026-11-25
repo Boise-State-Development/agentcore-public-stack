@@ -44,5 +44,6 @@ export const environment = {
         releaseLedger: false,
         attachmentCards: false,
         mcpElicitation: false,
+        proactiveRuns: false,
     } satisfies FeatureFlags,
 };

@@ -11,6 +11,8 @@ const projectsEnabled = () => inject(FEATURES).projects;
 const fieldSetAuthoringEnabled = () => inject(FEATURES).fieldSetAuthoring;
 /** Saved workflows (docs/specs/workflow-designer.md §8.1): every /workflows URL is unmatched while off. */
 const workflowsEnabled = () => inject(FEATURES).workflows;
+/** Quiet watchers (docs/specs/quiet-watcher.md): a schedule's detail page is unmatched while off. */
+const proactiveRunsEnabled = () => inject(FEATURES).proactiveRuns;
 
 export const routes: Routes = [
     {
@@ -196,6 +198,14 @@ export const routes: Routes = [
     {
         path: 'schedules/:scheduleId/edit',
         loadComponent: () => import('./schedules/schedule-form/schedule-form.page').then(m => m.ScheduleFormPage),
+        canActivate: [authGuard],
+    },
+    // One schedule, with its run history and a watcher's state (docs/specs/quiet-watcher.md
+    // §3.4). Below `new` and `:scheduleId/edit` so both still match first.
+    {
+        path: 'schedules/:scheduleId',
+        loadComponent: () => import('./schedules/schedule-detail/schedule-detail.page').then(m => m.ScheduleDetailPage),
+        canMatch: [proactiveRunsEnabled],
         canActivate: [authGuard],
     },
     {

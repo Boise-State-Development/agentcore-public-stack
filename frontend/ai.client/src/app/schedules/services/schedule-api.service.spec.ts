@@ -142,4 +142,30 @@ describe('ScheduleApiService', () => {
 
     await promise;
   });
+
+  it('reads a schedule’s runs and its watch state, and clears the state', async () => {
+    const runs = firstValueFrom(service.runs('sched-abc123def456'));
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne(`${BASE}/sched-abc123def456/runs`);
+      expect(req.request.method).toBe('GET');
+      req.flush({ runs: [] });
+    });
+    expect(await runs).toEqual({ runs: [] });
+
+    const state = firstValueFrom(service.watchState('sched-abc123def456'));
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne(`${BASE}/sched-abc123def456/state`);
+      expect(req.request.method).toBe('GET');
+      req.flush({ state: null });
+    });
+    expect(await state).toEqual({ state: null });
+
+    const cleared = firstValueFrom(service.clearWatchState('sched-abc123def456'));
+    await vi.waitFor(() => {
+      const req = httpMock.expectOne(`${BASE}/sched-abc123def456/state`);
+      expect(req.request.method).toBe('DELETE');
+      req.flush(null, { status: 204, statusText: 'No Content' });
+    });
+    await cleared;
+  });
 });

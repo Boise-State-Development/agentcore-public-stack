@@ -74,7 +74,16 @@
               <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div class="min-w-0">
                   <div class="flex flex-wrap items-center gap-2">
-                    @if (!schedule.projectId) {
+                    @if (!schedule.projectId && features.proactiveRuns) {
+                      <!-- The schedule's own page: its runs, and what a watcher is tracking. -->
+                      <a
+                        [routerLink]="['/schedules', schedule.scheduleId]"
+                        data-testid="schedule-detail-link"
+                        class="truncate text-sm/6 font-semibold text-gray-900 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 dark:text-white"
+                      >
+                        {{ schedule.label }}
+                      </a>
+                    } @else if (!schedule.projectId) {
                       <button
                         type="button"
                         (click)="onEdit(schedule)"
@@ -86,6 +95,12 @@
                       <span class="truncate text-sm/6 font-semibold text-gray-900 dark:text-white">{{ schedule.label }}</span>
                     }
                     <span [class]="stateBadgeClasses(schedule)">{{ stateLabel(schedule) }}</span>
+                    @if (features.proactiveRuns && schedule.mode === 'watch') {
+                      <span
+                        data-testid="watching-badge"
+                        class="inline-flex items-center rounded-2xl bg-state-info-100 px-2.5 py-0.5 text-xs/5 font-medium text-state-info-800 dark:bg-state-info-900/30 dark:text-state-info-300"
+                      >Watching</span>
+                    }
                     @if (schedule.projectId) {
                       @if (projectLink(schedule); as link) {
                         <a
