@@ -4,7 +4,7 @@ import { provideRouter } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { HttpErrorResponse } from '@angular/common/http';
 import { NEVER, of, throwError } from 'rxjs';
-import { ScheduleDetailPage, compactTokens } from './schedule-detail.page';
+import { ScheduleDetailPage, compactTokens, runTokens } from './schedule-detail.page';
 import { ScheduleService } from '../services/schedule.service';
 import { ScheduleApiService } from '../services/schedule-api.service';
 import { ModelService } from '../../session/services/model/model.service';
@@ -172,7 +172,7 @@ describe('ScheduleDetailPage', () => {
       'Found 1',
     ]);
     expect(rows[0].textContent).toContain('5m ago');
-    expect(rows[0].textContent).toContain('40.5k in · 120 out · 0 cached tokens');
+    expect(rows[0].textContent).toContain('Tokens: 40.5k in · 120 out');
     expect(rows[0].querySelector('a')!.getAttribute('href')).toBe('/s/sess-9');
     // A quiet run has no conversation to open.
     expect(rows[2].querySelector('a')).toBeNull();
@@ -180,7 +180,7 @@ describe('ScheduleDetailPage', () => {
 
   it('sums up the last 24 hours above the list', async () => {
     await mount();
-    expect(text('[data-testid="day-summary"]')).toBe('Last 24 hours: Checked 3 times · found something 1 time');
+    expect(text('[data-testid="day-summary"]')).toBe('Last 24 hours: Checked 2 times · found something 1 time · 1 failed');
   });
 
   it('shows what a watcher is tracking: its lines, its cursors and how many findings it remembers', async () => {
@@ -300,5 +300,26 @@ describe('compactTokens', () => {
     expect(compactTokens(12_340)).toBe('12.3k');
     expect(compactTokens(1_200_000)).toBe('1.2M');
     expect(compactTokens(0)).toBe('0');
+  });
+});
+
+describe('runTokens', () => {
+  const base: ScheduleRun = {
+    runId: 'r', scheduleId: 's', status: 'notify', itemCount: 1, finishedAt: '2026-11-25T00:00:00Z',
+    inputTokens: 8, outputTokens: 180, cacheReadTokens: 4325, cacheWriteTokens: 4494,
+  };
+
+  it('names the cache write, which is most of a short run’s cost', () => {
+    // A watcher run measured on dev: two calls, the prefix written once and read once.
+    expect(runTokens(base)).toBe('Tokens: 8 in · 180 out · 4.5k written to cache · 4.3k read from cache');
+  });
+
+  it('reads a row from before cache writes were recorded', () => {
+    const { cacheWriteTokens: _omit, ...old } = base;
+    expect(runTokens(old)).toBe('Tokens: 8 in · 180 out · 4.3k read from cache');
+  });
+
+  it('says nothing for a run that stopped before it started', () => {
+    expect(runTokens({ ...base, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })).toBe('');
   });
 });

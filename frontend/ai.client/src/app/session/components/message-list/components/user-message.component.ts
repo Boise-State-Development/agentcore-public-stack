@@ -17,6 +17,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroArrowPath, heroArrowTurnDownRight, heroArrowUturnLeft, heroCheck, heroExclamationCircle, heroSquare2Stack } from '@ng-icons/heroicons/outline';
 import { ContentBlock, Message, FileAttachmentData, FolderAttachmentData } from '../../../services/models/message.model';
 import { FolderAttachmentChipComponent } from './folder-attachment/folder-attachment-chip.component';
+import { withoutWatchState } from './watch-state';
 import { FileAttachmentBadgeComponent, ImageAttachmentGroupComponent } from './file-attachment';
 import { FEATURES } from '../../../../services/features';
 import { MessageAttachmentsComponent } from '../../attachment-card/message-attachments.component';
@@ -518,6 +519,8 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
     if (read?.rest.trim()) return read.rest;
     const display = this.message().metadata?.['displayText'];
     if (typeof display === 'string' && display.trim()) return display;
+    const watched = this.watchedPrompt();
+    if (watched !== null) return watched;
     return this.message()
       .content.filter((block: ContentBlock) => block.type === 'text' && block.text)
       .map((block: ContentBlock) => block.text as string)
@@ -624,7 +627,17 @@ export class UserMessageComponent implements AfterViewInit, OnDestroy {
     if (metadata && typeof metadata['displayText'] === 'string') {
       return metadata['displayText'];
     }
-    return null;
+    return this.watchedPrompt();
+  });
+
+  /**
+   * A quiet-watcher run's prompt without the `<watch_state>` block the worker
+   * put ahead of it; `null` for every other message. Display only: the stored
+   * message, which the model reads, keeps the block.
+   */
+  private readonly watchedPrompt = computed((): string | null => {
+    const first = this.message().content.find((block: ContentBlock) => block.type === 'text' && block.text);
+    return first?.text ? withoutWatchState(first.text) : null;
   });
 
   /**

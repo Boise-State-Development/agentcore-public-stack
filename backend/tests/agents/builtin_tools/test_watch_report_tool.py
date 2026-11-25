@@ -113,3 +113,43 @@ async def test_appended_after_every_other_family_and_never_cached(on, monkeypatc
     assert watch_names == plain_names + ["report"]
     assert plain.extra_tools_key_described is True
     assert watch.extra_tools_key_described is False
+
+
+# --- Side calls a watch run does not make (dev readout, 2026-11-25) --------------
+# Measured on dev: every watch run also paid a Nova Micro title and a tool-batch
+# summary, for a conversation that is deleted when the run is quiet.
+
+
+def test_a_watch_run_is_recognised_exactly_where_report_is_built(on):
+    assert routes._is_watch_run(InvocationRequest(session_id=HEADLESS, run_mode="watch")) is True
+    assert routes._is_watch_run(InvocationRequest(session_id=HEADLESS)) is False
+    assert routes._is_watch_run(InvocationRequest(session_id="sess-1", run_mode="watch")) is False
+
+
+def test_the_route_skips_the_title_and_tool_summaries_on_a_watch_run():
+    import inspect
+
+    source = inspect.getsource(routes)
+    assert "if is_new_session and input_data.message and not watch_run:" in source
+    assert "turn_tool_summaries=not watch_run," in source
+
+
+def test_tool_batches_are_drained_but_not_summarized_on_a_watch_run(monkeypatch):
+    from agents.main_agent.streaming.stream_coordinator import StreamCoordinator
+
+    monkeypatch.setenv("TOOL_SUMMARIES_ENABLED", "true")
+    drained = []
+
+    class _Hook:
+        def drain_batches(self):
+            drained.append(True)
+            return [{"batchId": "b1", "tools": []}]
+
+    wrapper = SimpleNamespace(agent_status_hook=_Hook())
+    coordinator = StreamCoordinator.__new__(StreamCoordinator)
+    tasks: list = []
+
+    coordinator._spawn_tool_summary_tasks(wrapper, "headless-1", "user-1", tasks, summarize=False)
+
+    assert drained == [True]
+    assert tasks == []

@@ -138,6 +138,9 @@ function times(count: number): string {
   return count === 1 ? '1 time' : `${count} times`;
 }
 
+/** Run statuses that mean the run did its work: a standard run, or a watcher's check either way. */
+const FINISHED: ReadonlySet<string> = new Set(['completed', 'quiet', 'notify']);
+
 /** The fields a last-24-hours summary reads from each run. */
 export interface RunSummaryFields {
   status: string;
@@ -147,7 +150,10 @@ export interface RunSummaryFields {
 /**
  * One line for a schedule's last 24 hours of runs: a watcher's
  * "Checked 22 times · found something 2 times", a standard schedule's
- * "Ran 3 times", or "No runs in the last 24 hours".
+ * "Ran 3 times", or "No runs in the last 24 hours". A run that ended in an
+ * error, a timeout or a pause is not a check or a run: it is counted after
+ * them ("· 1 failed"), so a run that stopped before it started never reads
+ * as one that looked.
  */
 export function lastDayRunSummary(runs: readonly RunSummaryFields[], watching: boolean, now = Date.now()): string {
   const since = now - 24 * 60 * 60_000;
@@ -156,9 +162,12 @@ export function lastDayRunSummary(runs: readonly RunSummaryFields[], watching: b
     return !Number.isNaN(at) && at >= since && at <= now;
   });
   if (recent.length === 0) return 'No runs in the last 24 hours';
-  if (!watching) return `Ran ${times(recent.length)}`;
+  const finished = recent.filter((run) => FINISHED.has(run.status)).length;
+  const failed = recent.length - finished;
+  const tail = failed ? ` · ${failed} failed` : '';
+  if (!watching) return `Ran ${times(finished)}${tail}`;
   const found = recent.filter((run) => run.status === 'notify').length;
-  return `Checked ${times(recent.length)} · found something ${times(found)}`;
+  return `Checked ${times(finished)} · found something ${times(found)}${tail}`;
 }
 
 /** How many runs a day an interval of `minutes` makes (a 15-minute interval is 96). */

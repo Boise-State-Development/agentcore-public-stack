@@ -322,6 +322,7 @@ class ChatAgent(BaseAgent):
         turn_attachment_plan: Optional[Dict[str, Any]] = None,
         turn_pasted_chars: Optional[int] = None,
         cancel_signal: Optional[threading.Event] = None,
+        turn_tool_summaries: bool = True,
     ) -> AsyncGenerator[str, None]:
         """
         Stream agent responses.
@@ -425,5 +426,6 @@ class ChatAgent(BaseAgent):
             turn_clock=turn_clock,
             invocation_state=invocation_state,
             cancel_signal=cancel_signal,
+            turn_tool_summaries=turn_tool_summaries,
         ):
             yield event

@@ -312,6 +312,7 @@ class TestWatchRoutes:
             "inputTokens": 2000,
             "outputTokens": 40,
             "cacheReadTokens": 1200,
+            "cacheWriteTokens": 0,
         }
         assert listing.call_args.args == (USER_ID, SCHEDULE_ID)
 
