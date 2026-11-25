@@ -75,6 +75,7 @@ from strands.hooks import (
 from agents.main_agent.session.hooks.mcp_app_awaiting import (
     call_awaits_user_submission,
 )
+from apis.shared.mcp_elicitation.forms import user_declined
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +284,10 @@ class AgentStatusHook(HookProvider):
             # An MCP App's form waiting for the user reports `isError` on
             # purpose; it has not failed, and it has not done anything yet.
             awaiting = ok and call_awaits_user_submission(event)
-            if ok and not awaiting and isinstance(result, dict):
+            # An MCP server's form the user declined is their decision; the
+            # server reports it as an error, but nothing failed.
+            declined = ok and user_declined(result)
+            if ok and not awaiting and not declined and isinstance(result, dict):
                 # A tool can fail *inside* a successful invocation; Strands
                 # reports that as a result with status "error", not as a raised
                 # exception. The rail's red dot depends on catching both.
@@ -310,6 +314,7 @@ class AgentStatusHook(HookProvider):
                         "result": _stringify(result, _MAX_RESULT_CHARS),
                         "ok": ok,
                         "awaiting": awaiting,
+                        "declined": declined,
                         "durationMs": duration_ms,
                         "integration": _integration_of(event),
                     }

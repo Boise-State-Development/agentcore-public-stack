@@ -235,6 +235,83 @@ class TestMiddleware:
         assert "GitHub asked the user for input in a form this app cannot show" in texts[1]
 
 
+class TestOutcomeNote:
+    """What the model reads after the user answers (spec §13's second finding)."""
+
+    @staticmethod
+    async def _answered(response, *, label="GitHub", status="error"):
+        client = SimpleNamespace(elicitation_enabled=True, context_label=label)
+        name = interrupt_name(0, "confirm", SCHEMA)
+
+        async def next_fn(ctx) -> AsyncIterator[Any]:
+            await elicitation_callback(_context(), _form_params())
+            yield ToolResultEvent(
+                {"toolUseId": "tu-1", "status": status, "content": [{"text": "server reply"}]}
+            )
+
+        (event,) = await _drain(
+            _middleware_context(_mcp_tool(client), answers={name: response}), next_fn
+        )
+        return event.tool_result
+
+    @pytest.mark.asyncio
+    async def test_a_submitted_form_says_so_without_the_answer(self):
+        result = await self._answered(
+            {"action": "accept", "content": {"repository_name": "acme/secret-name"}}
+        )
+
+        texts = [block["text"] for block in result["content"]]
+        assert texts[0] == "server reply"
+        assert texts[1].startswith("The user submitted GitHub's form.")
+        assert "acme/secret-name" not in texts[1]
+        assert result["elicitation"] == {"action": "accept"}
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_a_decline_says_it_was_the_users_choice(self):
+        result = await self._answered({"action": "decline"})
+
+        assert "The user declined GitHub's request for input" in result["content"][-1]["text"]
+        assert result["elicitation"] == {"action": "decline"}
+
+    @pytest.mark.asyncio
+    async def test_a_dismissal_and_a_refused_answer_both_read_as_dismissed(self):
+        for response in ({"action": "cancel"}, {"action": "accept", "content": {"nope": 1}}):
+            result = await self._answered(response)
+            assert result["elicitation"] == {"action": "cancel"}
+            assert "nope" not in result["content"][-1]["text"]
+
+    @pytest.mark.asyncio
+    async def test_a_server_with_no_name_is_named_generically(self):
+        result = await self._answered({"action": "decline"}, label=None)
+
+        assert result["content"][-1]["text"].startswith("The user declined the MCP server's")
+
+    @pytest.mark.asyncio
+    async def test_a_call_that_never_asked_is_untouched(self):
+        client = SimpleNamespace(elicitation_enabled=True, context_label="GitHub")
+        original = {"toolUseId": "tu-1", "status": "success", "content": [{"text": "ok"}]}
+
+        async def next_fn(ctx) -> AsyncIterator[Any]:
+            yield ToolResultEvent(dict(original))
+
+        (event,) = await _drain(_middleware_context(_mcp_tool(client)), next_fn)
+
+        assert event.tool_result == original
+
+
+class TestUserDeclined:
+    def test_only_a_decline_or_dismissal_counts(self):
+        from apis.shared.mcp_elicitation.forms import user_declined
+
+        assert user_declined({"elicitation": {"action": "decline"}})
+        assert user_declined({"elicitation": {"action": "cancel"}})
+        assert not user_declined({"elicitation": {"action": "accept"}})
+        assert not user_declined({"status": "error"})
+        assert not user_declined({"elicitation": "decline"})
+        assert not user_declined(None)
+
+
 class TestLogFilter:
     def _record(self, exc) -> logging.LogRecord:
         return logging.LogRecord("strands", logging.ERROR, __file__, 1, "tool execution failed", (), (type(exc), exc, None))

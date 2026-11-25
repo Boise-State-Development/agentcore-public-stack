@@ -23,6 +23,7 @@ import { ToolApprovalService } from '../../../services/tool-approval/tool-approv
 import { UserQuestionService } from '../../../services/user-question/user-question.service';
 import { BrowserLoginService } from '../../../services/browser-login/browser-login.service';
 import { McpElicitationService } from '../../../services/mcp-elicitation/mcp-elicitation.service';
+import { readElicitationOutcome } from '../../../services/mcp-elicitation/elicitation-outcome';
 import { CompactionSummaryService } from './compaction-summary.service';
 import { SteeringService } from './steering.service';
 import { buildSteeringMessage } from './steering';
@@ -1103,6 +1104,7 @@ export class StreamParserService {
     const status = data.tool_result.status || 'success';
     const structuredContent = data.tool_result.structuredContent;
     const metadata = toolResultMetadata(data.tool_result.metadata);
+    const elicitation = readElicitationOutcome(data.tool_result.elicitation);
 
     const currentBuilder = state.currentMessageBuilder();
     if (!currentBuilder) {
@@ -1149,6 +1151,9 @@ export class StreamParserService {
           ...(structuredContent !== undefined ? { structuredContent } : {}),
           // An MCP App may render from `_meta` (Atlassian's widget context).
           ...(metadata ? { metadata } : {}),
+          // What the user did with an MCP server's form, so a decline is not
+          // read as a failure (`isDeclinedElicitation`).
+          ...(elicitation ? { elicitation } : {}),
         },
         status: status === 'error' ? 'error' : 'complete',
       };

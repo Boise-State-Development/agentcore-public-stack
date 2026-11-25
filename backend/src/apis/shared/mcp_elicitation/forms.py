@@ -460,10 +460,61 @@ def unsupported_form_text(server_name: Optional[str]) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Telling the model and the rail what the user did
+# ---------------------------------------------------------------------------
+
+#: The key on a tool result that records what the user did with a server's
+#: form, as ``{"action": "accept" | "decline" | "cancel"}``. Never the answer.
+#: No model formatter sends a tool result's extra keys to a provider (Bedrock
+#: keeps ``content``, ``toolUseId`` and ``status``), so it rides the SSE
+#: ``tool_result`` and the persisted message without touching the prompt.
+OUTCOME_KEY = "elicitation"
+
+
+def outcome_text(action: str, server_name: Optional[str]) -> str:
+    """The answer-free line the model reads after the server's own reply.
+
+    The answer goes to the server and never to the model (§4), so without this
+    the model sees only the server's reply and guesses at what happened. Each
+    line says what the user did and nothing they entered.
+    """
+    whose = f"{server_name}'s" if server_name else "the MCP server's"
+    if action == "accept":
+        return (
+            f"The user submitted {whose} form. Their answer went to the server and "
+            "is not shown to you; the result above is the server's reply to it."
+        )
+    if action == "decline":
+        return (
+            f"The user declined {whose} request for input, so nothing was submitted. "
+            "That was their choice, not an error: don't call the tool again unless "
+            "they ask."
+        )
+    return (
+        f"The user dismissed {whose} request for input, so nothing was submitted. "
+        "Don't call the tool again unless they ask."
+    )
+
+
+def user_declined(result: Any) -> bool:
+    """True when a tool result ended because the user turned the form down.
+
+    A declined or dismissed form is the user's decision, not a failure, so the
+    status line, the tool census and the summary heading do not count it as
+    one, even though the server reports it as an error.
+    """
+    if not isinstance(result, Mapping):
+        return False
+    outcome = result.get(OUTCOME_KEY)
+    return isinstance(outcome, Mapping) and outcome.get("action") in ("decline", "cancel")
+
+
 __all__: List[str] = [
     "ACTIONS",
     "ELICITATION_EVENT_TYPE",
     "INTERRUPT_NAME_PREFIX",
+    "OUTCOME_KEY",
     "ChoiceOption",
     "ElicitationAnswer",
     "ElicitationForm",
@@ -475,7 +526,9 @@ __all__: List[str] = [
     "event_sse",
     "interrupt_name",
     "normalize_form",
+    "outcome_text",
     "schema_digest",
     "unsupported_form_text",
+    "user_declined",
     "validate_answer",
 ]

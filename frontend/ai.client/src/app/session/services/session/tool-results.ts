@@ -1,4 +1,8 @@
 import { Message } from '../models/message.model';
+import {
+  readElicitationOutcome,
+  type McpElicitationOutcome,
+} from '../../../services/mcp-elicitation/elicitation-outcome';
 
 /**
  * A tool result's MCP `_meta`, which Strands carries as `metadata`, when it is
@@ -43,6 +47,7 @@ export function matchToolResultsToToolUses(messages: Message[]): Message[] {
       status: 'success' | 'error';
       structuredContent?: unknown;
       metadata?: Record<string, unknown>;
+      elicitation?: McpElicitationOutcome;
     }
   >();
 
@@ -86,6 +91,7 @@ export function matchToolResultsToToolUses(messages: Message[]): Message[] {
             }
 
             const metadata = toolResultMetadata(toolResult.metadata);
+            const elicitation = readElicitationOutcome(toolResult.elicitation);
             toolResultMap.set(toolUseId, {
               content: toolResult.content || [],
               status: status,
@@ -93,6 +99,9 @@ export function matchToolResultsToToolUses(messages: Message[]): Message[] {
                 ? { structuredContent: toolResult.structuredContent }
                 : {}),
               ...(metadata ? { metadata } : {}),
+              // What the user did with an MCP server's form, so a declined
+              // one still reads as declined after a reload.
+              ...(elicitation ? { elicitation } : {}),
             });
           }
         }

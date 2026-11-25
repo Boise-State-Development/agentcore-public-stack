@@ -93,6 +93,7 @@ from agents.main_agent.session.hooks.mcp_app_awaiting import (
     call_awaits_user_submission,
 )
 from apis.shared.feature_flags import cost_diagnostics_enabled
+from apis.shared.mcp_elicitation.forms import user_declined
 from apis.shared.oauth.auth_failure import looks_like_auth_failure
 
 logger = logging.getLogger(__name__)
@@ -164,13 +165,14 @@ def _tool_name(event: Any) -> Optional[str]:
 def _call_failed(event: Any) -> bool:
     """A raised exception OR a result reporting ``status == "error"`` —
     the same definition ``AgentStatusHook`` uses for ``ok=False``, which
-    likewise does not count an MCP App form waiting for the user."""
+    likewise does not count an MCP App form waiting for the user, or an MCP
+    server's form the user declined."""
     if getattr(event, "exception", None) is not None:
         return True
     result = getattr(event, "result", None)
     if not (isinstance(result, dict) and result.get("status") == "error"):
         return False
-    return not call_awaits_user_submission(event)
+    return not (call_awaits_user_submission(event) or user_declined(result))
 
 
 def _error_kind(event: Any) -> str:

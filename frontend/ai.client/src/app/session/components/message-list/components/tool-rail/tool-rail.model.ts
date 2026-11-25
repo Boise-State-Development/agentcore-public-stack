@@ -1,3 +1,4 @@
+import type { McpElicitationOutcome } from '../../../../../services/mcp-elicitation/elicitation-outcome';
 import { ToolResultContent } from '../../../../services/models/message.model';
 
 /**
@@ -20,6 +21,7 @@ export interface ToolCallDisplay {
     content: ToolResultContent[];
     structuredContent?: unknown;
     metadata?: Record<string, unknown>;
+    elicitation?: McpElicitationOutcome;
   };
 
   /** Execution status (from toolUseData.status, defaults to 'pending').
@@ -27,8 +29,10 @@ export interface ToolCallDisplay {
    *  paused on an OAuth consent gate — the tool didn't fail, it's waiting
    *  for the user to authorize. ``awaiting_user`` is derived when an MCP
    *  App's form is open for the user to submit: the tool reported an error
-   *  on purpose, but nothing failed and nothing was written yet. */
-  status: 'pending' | 'complete' | 'error' | 'awaiting_auth' | 'awaiting_user';
+   *  on purpose, but nothing failed and nothing was written yet.
+   *  ``declined`` is derived when the user declined or dismissed an MCP
+   *  server's form: the server reports an error, but it was their choice. */
+  status: 'pending' | 'complete' | 'error' | 'awaiting_auth' | 'awaiting_user' | 'declined';
 
   /**
    * Partially-generated long output (e.g. an artifact's HTML) decoded from the

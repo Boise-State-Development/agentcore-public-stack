@@ -333,6 +333,49 @@ def test_the_prompt_says_an_awaiting_call_did_nothing_and_hides_its_text():
     assert "STOP" not in prompt
 
 
+# An MCP server's form the user declined (docs/specs/mcp-elicitation.md §13):
+# GitHub answers a decline with an error, and headed as one it read
+# "Couldn't use Github Issues" for a decision the user made.
+
+
+def _declined(name="delete_repository", integration="GitHub Issues"):
+    return {
+        "toolUseId": name,
+        "toolName": name,
+        "input": '{"repo": "scratch"}',
+        "result": "Repository deletion was not confirmed",
+        "ok": True,
+        "awaiting": False,
+        "declined": True,
+        "durationMs": 5,
+        "integration": integration,
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_all_declined_batch_is_headed_without_a_model(bedrock):
+    summary = await summarize_tool_batch([_declined()])
+
+    assert summary == "You declined the request for input from GitHub Issues"
+    bedrock.converse.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_declined_tool_with_no_catalog_name_is_not_named_by_its_tool(bedrock):
+    summary = await summarize_tool_batch([_declined(integration=None)])
+
+    assert summary == "You declined the request for input"
+
+
+def test_the_prompt_says_a_declined_call_was_the_users_choice():
+    prompt = _build_prompt(_calls() + [_declined()])
+
+    assert "delete_repository [GitHub Issues]" in prompt
+    assert "DECLINED BY USER" in prompt
+    assert "FAILED" not in prompt
+    assert "not confirmed" not in prompt
+
+
 # -- metering (side_call_metering) ----------------------------------------
 
 

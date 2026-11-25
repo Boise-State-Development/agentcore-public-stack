@@ -74,4 +74,23 @@ describe('matchToolResultsToToolUses', () => {
       expect(resultOf(merged)).not.toHaveProperty('metadata');
     }
   });
+  it('keeps what the user did with an MCP server form, and nothing else from it', () => {
+    const merged = matchToolResultsToToolUses(
+      conversation({
+        status: 'error',
+        content: [{ text: 'Repository deletion was not confirmed' }],
+        elicitation: { action: 'decline', extra: 'dropped' },
+      }),
+    );
+
+    expect(resultOf(merged)?.['elicitation']).toEqual({ action: 'decline' });
+  });
+
+  it('drops an outcome it cannot read', () => {
+    const merged = matchToolResultsToToolUses(
+      conversation({ status: 'error', content: [], elicitation: { action: 'shrug' } }),
+    );
+
+    expect(resultOf(merged)).not.toHaveProperty('elicitation');
+  });
 });

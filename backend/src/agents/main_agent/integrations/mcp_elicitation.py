@@ -37,7 +37,7 @@ from __future__ import annotations
 import contextvars
 import logging
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Callable, Dict, Optional, Set
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
 
 from mcp.types import INVALID_REQUEST, ElicitResult, ErrorData
 from strands.interrupt import InterruptException
@@ -47,12 +47,14 @@ from strands.tools.mcp import MCPAgentTool
 from strands.types.events import ToolResultEvent
 
 from apis.shared.mcp_elicitation.forms import (
+    OUTCOME_KEY,
     ElicitationForm,
     InvalidElicitationAnswer,
     UnsupportedElicitation,
     build_reason,
     interrupt_name,
     normalize_form,
+    outcome_text,
     unsupported_form_text,
     validate_answer,
 )
@@ -100,6 +102,8 @@ class CallElicitationSlot:
     keys_in_round: Set[str] = field(default_factory=set)
     pending: Optional[_PendingForm] = None
     unsupported: bool = False
+    #: The action sent back for each form answered on this call, in order.
+    sent_actions: List[str] = field(default_factory=list)
 
     def next_name(self, request_key: str, requested_schema: Any) -> str:
         if request_key in self.keys_in_round:
@@ -155,7 +159,9 @@ async def elicitation_callback(context: Any, params: Any) -> Any:
         # The SPA validates before it posts, so this is a broken or hostile
         # client. Never forward an answer that does not fit the form.
         logger.warning("MCP elicitation answer refused (%s): %s", name, exc)
+        slot.sent_actions.append("cancel")
         return ElicitResult(action="cancel")
+    slot.sent_actions.append(answer.action)
     return ElicitResult(action=answer.action, content=answer.content)
 
 
@@ -179,9 +185,13 @@ def _stored_response(context: ExecuteToolContext, name: str) -> Any:
         return None
 
 
-def _with_note(event: ToolResultEvent, note: str) -> ToolResultEvent:
+def _with_note(
+    event: ToolResultEvent, note: str, outcome: Optional[str] = None
+) -> ToolResultEvent:
     result = dict(event.tool_result)
     result["content"] = [*(result.get("content") or []), {"text": note}]
+    if outcome is not None:
+        result[OUTCOME_KEY] = {"action": outcome}
     return ToolResultEvent(result, exception=event.exception)
 
 
@@ -229,6 +239,11 @@ async def elicitation_middleware(
         return
     if slot.unsupported:
         result_event = _with_note(result_event, unsupported_form_text(server_name))
+    if slot.sent_actions:
+        # The last form answered decides the call: an earlier round the user
+        # submitted is moot once they decline the next one.
+        action = slot.sent_actions[-1]
+        result_event = _with_note(result_event, outcome_text(action, server_name), action)
     yield result_event
 
 

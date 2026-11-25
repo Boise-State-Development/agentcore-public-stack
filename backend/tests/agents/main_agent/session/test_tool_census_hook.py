@@ -162,6 +162,18 @@ def test_an_app_form_waiting_for_the_user_is_not_an_error(hook):
     assert _counts(hook.tally_for_call(0)) == {"issue_write": {"calls": 1, "errors": 0}}
 
 
+def test_an_mcp_form_the_user_declined_is_not_an_error(hook):
+    """A decline is the user's decision, though the server reports an error."""
+    declined = _after("delete_repository", status="error")
+    declined.result["elicitation"] = {"action": "decline"}
+    refused = _after("delete_repository", status="error")
+    refused.result["elicitation"] = {"action": "accept"}
+
+    _turn(hook, [declined, refused])
+
+    assert _counts(hook.tally_for_call(0)) == {"delete_repository": {"calls": 2, "errors": 1}}
+
+
 # -- weight (release-ledger D4) ----------------------------------------------
 
 

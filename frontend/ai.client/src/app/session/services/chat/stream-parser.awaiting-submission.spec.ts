@@ -60,6 +60,21 @@ describe('StreamParserService: a tool result with structuredContent', () => {
     });
   });
 
+  it('keeps what the user did with an MCP server form on the result', () => {
+    // docs/specs/mcp-elicitation.md §13: a decline must not read as a failure.
+    streamToolResult({
+      status: 'error',
+      content: [{ text: 'Repository deletion was not confirmed' }],
+      elicitation: { action: 'decline' },
+    });
+
+    expect(toolUse()?.result).toEqual({
+      status: 'error',
+      content: [{ text: 'Repository deletion was not confirmed' }],
+      elicitation: { action: 'decline' },
+    });
+  });
+
   it('adds no structuredContent key to a result that had none', () => {
     streamToolResult({ status: 'success', content: [{ text: 'ok' }] });
 
