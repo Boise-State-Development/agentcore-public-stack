@@ -168,10 +168,12 @@ using it — the server slides its expiry on each request, exactly as it does fo
 a browser tab. When it does lapse, sign in again; there is no refresh token to
 rotate.
 
-`logout` clears the local copy. It cannot revoke server-side, because the
-session value is opaque to the CLI. The session left on the server lapses on
-its idle timeout or absolute lifetime. Signing out in the web app does not end
-it: the CLI has its own session, separate from the browser's.
+`logout` ends the session on the server first: it presents the stored session
+to `POST /auth/logout`, which deletes it and revokes its Cognito refresh token.
+Then it clears the local copy. If the server can't be reached, the local copy
+is cleared anyway and the server-side session lapses on its idle timeout or
+absolute lifetime. Signing out in the web app does not end the CLI's session,
+and `aps-tui logout` does not sign the browser out: each has its own session.
 
 ### API key
 
@@ -194,7 +196,7 @@ Check your setup at any time:
 
 ```bash
 aps-tui status     # resolved config, credential state, health probe
-aps-tui logout     # clear stored credentials for this deployment
+aps-tui logout     # end the session on the server, then clear stored credentials
 ```
 
 The base URL is the app-api root. On a CloudFront deployment that usually ends

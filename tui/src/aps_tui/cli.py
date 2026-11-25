@@ -386,20 +386,24 @@ def _command_login_api_key(args: argparse.Namespace) -> int:
     return 0
 
 
+#: How long `logout` waits for the server before removing the local copy anyway.
+_LOGOUT_TIMEOUT_SECONDS = 10.0
+
+
 def _command_logout(args: argparse.Namespace) -> int:
-    """Remove every credential stored for this deployment.
+    """End the stored session on the server, then remove every local credential.
 
-    Local only, deliberately. There is no client-side revocation call: the
-    sealed session is opaque to this client, and app-api exposes logout as a
-    cookie-clearing route the CLI has no cookie for. Dropping the local copy is
-    what a CLI can honestly do; the server-side session row then lapses on its
-    idle timeout or absolute lifetime, whichever comes first.
+    A stored session is first presented to ``POST /auth/logout`` as
+    ``Authorization: BFF <sealed>``. app-api deletes the session row behind it
+    and revokes its Cognito refresh token, so the session stops working
+    everywhere, not only on this machine.
 
-    Signing out in the web app does not end it either. The device flow gives
-    the CLI its own session row, separate from any browser's, and web logout
-    deletes only the row behind that browser's cookie; nothing revokes the
-    user's refresh tokens globally. There is no way today to revoke a CLI
-    session from the client or the web app.
+    The server call is best effort. If it cannot be reached or refuses, the
+    local copy is still removed and the user is told the server-side session
+    will lapse on its own (its idle timeout or absolute lifetime). Logging out
+    must never leave the credential on disk because the network was down.
+
+    An API key is only removed locally. Keys are revoked from the web app.
     """
     config = resolve_config(base_url=args.base_url, config_file=args.config_file, use_keyring=False)
     if not config.base_url:
@@ -408,6 +412,10 @@ def _command_logout(args: argparse.Namespace) -> int:
 
     _prepare_credential_store(args, create=False)
     removed_any = False
+
+    sealed, _unavailable = load_session_from_keyring(config.base_url)
+    if sealed:
+        _end_server_session(config.base_url, sealed)
 
     if delete_session_from_keyring(config.base_url):
         print(f"Removed the stored session for {config.base_url}.")
@@ -421,6 +429,44 @@ def _command_logout(args: argparse.Namespace) -> int:
         print(f"Nothing stored for {config.base_url}.")
         return 1
     return 0
+
+
+def _end_server_session(base_url: str, sealed: str) -> bool:
+    """Ask app-api to end the session. Prints the outcome; never raises.
+
+    Redirects are not followed: a redirect would carry the session header to
+    wherever it pointed.
+    """
+    # Lazily, like `login`'s client: the client package imports the whole
+    # stream and catalog stack, which `logout` has no use for.
+    from .client.endpoints import Endpoints
+
+    url = Endpoints(base_url).auth_logout
+    try:
+        response = httpx.post(
+            url,
+            headers={
+                "Authorization": f"BFF {sealed}",
+                "Accept": "application/json",
+                "User-Agent": f"aps-tui/{__version__}",
+            },
+            timeout=_LOGOUT_TIMEOUT_SECONDS,
+            follow_redirects=False,
+        )
+    except httpx.HTTPError as exc:
+        print(
+            f"Could not reach {url} ({type(exc).__name__}); the session will expire on its own.",
+            file=sys.stderr,
+        )
+        return False
+    if response.is_success:
+        print("Signed out on the server.")
+        return True
+    print(
+        f"The server answered HTTP {response.status_code} to sign-out; the session will expire on its own.",
+        file=sys.stderr,
+    )
+    return False
 
 
 def _describe_key(config: Config) -> str:
