@@ -72,6 +72,7 @@ what you get if you set nothing.
 |---|---|:---:|:---:|---|
 | Skills (catalog, picker, authoring) | `CDK_SKILLS_ENABLED` | **ON** | none | Skills routes + runtime resolution |
 | Scheduled / headless runs | `CDK_SCHEDULED_RUNS_ENABLED` | **ON** | when runs fire | "Run now" + headless-grant routes (dispatcher when Phase B lands) |
+| Quiet watcher (proactive runs) | `CDK_PROACTIVE_RUNS_ENABLED` | **OFF** (in development) | none by itself (a watcher's runs cost what scheduled runs do) | Feature switch once finished. A personal schedule can be a **watcher** (`mode: "watch"`) and name the model it runs on (`modelId`, checked like an Agent's model override); every personal schedule run leaves a 30-day history row (`GET /schedules/{id}/runs`), and a watcher's state can be read and cleared (`GET`/`DELETE /schedules/{id}/state`). Set on app-api and both scheduled-runs Lambdas; nothing on the AgentCore Runtime yet. See `docs/specs/quiet-watcher.md` |
 | Memory Spaces | `CDK_MEMORY_SPACES_ENABLED` | **ON** | none | `/memory/spaces` CRUD, runtime tools, SPA panel |
 | Agent Designer | `CDK_AGENTS_API_ENABLED` | **ON** | none | The governed `/agents/*` authoring surface |
 | Agent Marketplace | `CDK_AGENT_MARKETPLACE_ENABLED` | **ON** | none | Listing lifecycle, publisher profiles, admin Review/Listings (app-api only) |

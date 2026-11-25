@@ -17,6 +17,11 @@ it from the sidebar's Schedules entry. It is deliberately *not* behind the
 
 Auth is the standard SPA cookie dependency (``get_current_user_from_session``)
 per the CLAUDE.md app-api rule.
+
+The quiet watcher (docs/specs/quiet-watcher.md) adds a schedule's ``mode`` and
+``modelId``, accepted only while ``PROACTIVE_RUNS_ENABLED`` is on, and three
+routes for personal schedules that 404 while it is off: ``GET …/runs`` and
+``GET``/``DELETE …/state``.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.feature_flags import scheduled_runs_enabled
+from apis.shared.feature_flags import proactive_runs_enabled, scheduled_runs_enabled
 from apis.shared.rbac.service import get_app_role_service
 from apis.shared.scheduled_prompts.service import (
     MIN_INTERVAL_MINUTES,
@@ -42,17 +47,23 @@ from apis.shared.scheduled_prompts.service import (
     delete_scheduled_prompt,
     get_scheduled_prompt,
     list_scheduled_prompts,
+    read_scheduled_prompt,
     remember_owner_email,
     set_schedule_state,
     update_scheduled_prompt,
 )
+from apis.shared.scheduled_prompts.runs import list_schedule_runs
+from apis.shared.scheduled_prompts.watch_state import clear_watch_state, get_watch_state
 from apis.shared.projects.models import normalize_email
 
 from apis.app_api.schedules.models import (
-    CreateScheduleRequest,
+    CreatePersonalScheduleRequest,
     ScheduledPromptResponse,
     ScheduledPromptsListResponse,
+    ScheduleRunsResponse,
+    UpdatePersonalScheduleRequest,
     UpdateScheduleRequest,
+    WatchStateResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +84,49 @@ async def require_scheduled_runs_user(
     if not scheduled_runs_enabled():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return user
+
+
+async def require_proactive_runs_user(
+    user: User = Depends(require_scheduled_runs_user),
+) -> User:
+    """``require_scheduled_runs_user``, then the quiet-watcher flag: 404 while it is off.
+
+    Authentication comes first, so an anonymous caller gets 401 whatever the
+    flag says and the flag's state is never disclosed to one.
+    """
+    if not proactive_runs_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return user
+
+
+_PROACTIVE_OFF_DETAIL = "Watch mode and a schedule's own model are not available here."
+
+
+async def _check_watch_fields(
+    user: User,
+    *,
+    mode: Optional[str],
+    model_id: Optional[str],
+    clear_model: bool = False,
+) -> None:
+    """Refuse the quiet-watcher fields while the flag is off, and a model the caller can't use.
+
+    While off, anything but the defaults (``mode`` unset or ``"standard"``, no
+    ``modelId``, no clear) is a 422, so an older client's request is unchanged.
+    While on, ``modelId`` is held to the same predicate the turn will be
+    (``AppRoleService.can_access_model`` → ``grants_model_access``), which
+    refuses a model with no catalog row.
+    """
+    asks = (mode not in (None, "standard")) or model_id is not None or clear_model
+    if not proactive_runs_enabled():
+        if asks:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_PROACTIVE_OFF_DETAIL)
+        return
+    if model_id is not None and not await get_app_role_service().can_access_model(user, model_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"You can't use the model {model_id!r} for a schedule.",
+        )
 
 
 def _only_state(request: UpdateScheduleRequest) -> bool:
@@ -144,9 +198,10 @@ def _refuse_project_schedule(schedule) -> None:
 
 @router.post("", response_model=ScheduledPromptResponse, status_code=status.HTTP_201_CREATED)
 async def create_schedule(
-    request: CreateScheduleRequest,
+    request: CreatePersonalScheduleRequest,
     user: User = Depends(require_scheduled_runs_user),
 ) -> ScheduledPromptResponse:
+    await _check_watch_fields(user, mode=request.mode, model_id=request.model_id)
     enabled_tools = await _resolve_enabled_tools_snapshot(user, request.enabled_tools)
     try:
         schedule = await create_scheduled_prompt(
@@ -164,6 +219,8 @@ async def create_schedule(
             deliver_email=request.deliver_email,
             # Where a pause notice goes: the scheduled-runs Lambdas can't look it up.
             owner_email=normalize_email(user.email or "") or None,
+            mode=request.mode,
+            model_id=request.model_id,
         )
     except ScheduledPromptLimitExceeded as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -198,7 +255,7 @@ async def get_schedule(
 @router.patch("/{schedule_id}", response_model=ScheduledPromptResponse)
 async def update_schedule(
     schedule_id: str,
-    request: UpdateScheduleRequest,
+    request: UpdatePersonalScheduleRequest,
     user: User = Depends(require_scheduled_runs_user),
 ) -> ScheduledPromptResponse:
     """Edit a schedule's fields and/or transition its state.
@@ -212,6 +269,9 @@ async def update_schedule(
     schedule = _require_schedule_or_404(await get_scheduled_prompt(user.user_id, schedule_id), schedule_id)
     if not (schedule.project_id and request.state == "paused" and _only_state(request)):
         _refuse_project_schedule(schedule)
+    await _check_watch_fields(
+        user, mode=request.mode, model_id=request.model_id, clear_model=request.clear_model
+    )
 
     effective_cadence = request.cadence if request.cadence is not None else schedule.cadence
     effective_weekday = request.weekday if request.weekday is not None else schedule.weekday
@@ -259,6 +319,13 @@ async def update_schedule(
     else:
         tools_arg = UNSET
 
+    if request.clear_model:
+        model_arg = None
+    elif request.model_id is not None:
+        model_arg = request.model_id
+    else:
+        model_arg = UNSET
+
     try:
         schedule = await update_scheduled_prompt(
             user.user_id,
@@ -274,6 +341,8 @@ async def update_schedule(
             assistant_id=assistant_arg,
             enabled_tools=tools_arg,
             deliver_email=request.deliver_email,
+            mode=request.mode,
+            model_id=model_arg,
         )
     except InvalidTimezoneError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -356,4 +425,45 @@ async def delete_schedule(
         )
         return None
     await delete_scheduled_prompt(user.user_id, schedule_id)
+    return None
+
+
+async def _personal_schedule_or_404(user: User, schedule_id: str):
+    """The caller's own personal schedule, or 404 (a project schedule's runs are on the project)."""
+    schedule = await asyncio.to_thread(read_scheduled_prompt, user.user_id, schedule_id)
+    if schedule is None or schedule.project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Schedule not found: {schedule_id}")
+    return schedule
+
+
+@router.get("/{schedule_id}/runs", response_model=ScheduleRunsResponse)
+async def list_schedule_run_history(
+    schedule_id: str,
+    user: User = Depends(require_proactive_runs_user),
+) -> ScheduleRunsResponse:
+    """A personal schedule's runs, newest first (at most 50; rows expire after 30 days)."""
+    await _personal_schedule_or_404(user, schedule_id)
+    runs = await asyncio.to_thread(list_schedule_runs, user.user_id, schedule_id)
+    return ScheduleRunsResponse(runs=runs)
+
+
+@router.get("/{schedule_id}/state", response_model=WatchStateResponse)
+async def get_schedule_watch_state(
+    schedule_id: str,
+    user: User = Depends(require_proactive_runs_user),
+) -> WatchStateResponse:
+    """What a watcher is tracking; ``state`` is null when it has none yet."""
+    await _personal_schedule_or_404(user, schedule_id)
+    state = await asyncio.to_thread(get_watch_state, user.user_id, schedule_id)
+    return WatchStateResponse(state=state)
+
+
+@router.delete("/{schedule_id}/state", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_schedule_watch_state(
+    schedule_id: str,
+    user: User = Depends(require_proactive_runs_user),
+) -> None:
+    """Start over: the watcher's next run reads everything as new."""
+    await _personal_schedule_or_404(user, schedule_id)
+    await asyncio.to_thread(clear_watch_state, user.user_id, schedule_id)
     return None

@@ -203,14 +203,14 @@ What the web app already has to build on:
 
 - `notification-bell`, which renders inbox kinds with one `switch` per family (`describeQuota`, `describeHandoff`);
 - the pause cards in a conversation (approval, question, consent, elicitation);
-- a `/schedules` page and schedule form (`frontend/ai.client/src/app/schedules/`). It has **no menu entry**: that was a deliberate decision in July 2026 to keep scheduled runs low-key. A proactive feature can't stay unlinked, so slice 1 revisits that decision.
+- a `/schedules` page and schedule form (`frontend/ai.client/src/app/schedules/`), with a **Schedules** menu entry (`sidebar-items.ts`, no flag);
 - browser notifications for handoffs, which fire only while a tab is open and hidden. There is **no service worker**, so nothing reaches a closed tab.
 
 | Gap | Web app half | iOS half |
 |---|---|---|
 | G1 Job state | On the job's page: what it is tracking, when each source was last checked, and "start over from now", which resets the cursors | Read-only, later |
 | G2 Silent outcome | Run history on the job's page that shows quiet runs ("checked 22 times today, raised 2, cost $0.02"). Without it a silent job looks broken | — |
-| G3 Triggers | Creating a watcher in the schedule form (source, condition, interval, triage model); a menu entry for schedules; later, connecting a push trigger | — |
+| G3 Triggers | Creating a watcher in the schedule form (source, condition, interval, triage model); later, connecting a push trigger | — |
 | G4 Inbox | `describeAgent` in the bell for the `agent_*` kinds; urgency shown; Dismiss, Snooze and "Not useful" on each item | The inbox list, the app's next screen after read-only conversations |
 | G5 Approvals | Approve, Decline or answer **in the bell**, without opening the conversation. The web app is the first caller of the respond endpoint; the conversation's own pause card is unchanged | Notification actions and the inbox, after re-auth |
 | G6 Push | **Web Push** through a service worker (VAPID), registered in the same device registry as a `web` platform row, and opt-in from Settings. It is the floor for every user without the iOS app, including Android and desktop | APNs |
@@ -232,7 +232,7 @@ Rules for the web app half:
 | Slice | Gaps | Delivers | Web app half (same slice) | Depends on |
 |---|---|---|---|---|
 | **0 — Paused jobs say so** (built) | G4 (`schedule_paused` only), G8 (existing reasons) | A personal schedule that stops tells its owner | The bell's text for `schedule_paused`, linking to the schedule | Nothing. Small, and worth doing alone |
-| **1 — Quiet watcher** | G1, G2, G3 step 1, G4 (`agent_item`) | A 15-minute watcher that is silent until something is new, then raises one inbox item | Watcher fields in the schedule form, run history with quiet runs, job state view, `agent_item` in the bell, a menu entry for schedules | Slice 0 |
+| **1 — Quiet watcher** | G1, G2, G3 step 1, G4 (`agent_item`) | A 15-minute watcher that is silent until something is new, then raises one inbox item | Watcher fields in the schedule form, run history with quiet runs, job state view, `agent_item` in the bell | Slice 0 |
 | **2 — Answer from anywhere** | G5 | Approvals and questions from a headless run land in the inbox and can be answered there | Approve, Decline and answer in the bell | Slice 1's inbox kinds |
 | **3 — Push** | G6, plus the iOS app's inbox and notification actions | `now` items reach a closed tab and a locked phone; Approve works from the notification after re-auth | Web Push: service worker, opt-in in Settings | Slice 2; iOS read-only conversations; `native-app-auth.md` PR 3 (devices) |
 | **4 — Trust** | G7, G8 pre-flight, G9 | Standing instructions, quiet hours, budgets, action audit | Quiet hours and channel rules in Settings, the Connections warning, the budget field, admin spend by `callKind` | Slice 1 |
@@ -255,9 +255,9 @@ Each should be configuration once its slice lands:
 
 ## 6. Open questions
 
-1. **Job vs. schedule.** Is a "job" a schedule with state (an additive field on `ScheduledPrompt`) or a new entity that owns schedules and triggers? An additive field is cheaper; a new entity fits push triggers (G3 step 2) better. Proposed: additive for slice 1, revisit at slice 5.
-2. **Triage model.** Use a Task-models admin row (as titles and summaries do) or the job's own model at low effort? A separate row makes the quiet-run cost predictable.
-3. **Session per notify.** Should a `notify` run append to one long-lived session per job, so the user sees a feed and the prefix is cacheable, instead of a session per run? That trades a growing history (compaction applies) for continuity.
+1. ~~**Job vs. schedule.**~~ **Decided (2026-11-25): a schedule with extra fields** for slice 1 (`docs/specs/quiet-watcher.md`); revisit at slice 5.
+2. ~~**Triage model.**~~ **Decided (2026-11-25): one run on the schedule's own model**, steered to a small model for short intervals; measure quiet-run cost on dev before adding a second stage.
+3. ~~**Session per notify.**~~ **Decided (2026-11-25): a new conversation per notify**, as scheduled runs do today. A per-watcher feed can come later.
 4. **Project-scoped inbox.** Does a project schedule's `notify` go to every member's inbox or only the owner's? Today `notify_members` exists for completed runs; the same rule probably applies.
 5. ~~**Web Push.** Is browser push worth it alongside the iOS app?~~ **Proposed yes (§3a):** the iOS app reaches iPhone users only, so Web Push is the floor for everyone else. The open part is the SPA's first service worker and how it coexists with the BFF cookie and SSE.
 6. **Data in push payloads.** Is "title and ids only" sufficient for a useful lock-screen notification, or does a deployment want an opt-in for a one-line summary?

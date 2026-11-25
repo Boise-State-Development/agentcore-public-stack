@@ -23,6 +23,10 @@ ScheduleCadence = Literal["daily", "weekday", "weekly", "interval"]
 IntervalUnit = Literal["minutes", "hours"]
 ScheduledPromptState = Literal["active", "paused", "paused_error"]
 DeliverTo = Literal["owner", "project"]
+#: "watch" is a quiet watcher (docs/specs/quiet-watcher.md): a run that finds
+#: nothing new leaves nothing behind. Accepted only while PROACTIVE_RUNS_ENABLED
+#: is on; in PR 1.1 it has no effect on the run.
+ScheduleMode = Literal["standard", "watch"]
 
 #: Every headless run's session id starts with this (``run_agent_headless``): a
 #: scheduled run or a "Run now". A tool reads it to tell an unattended turn from a
@@ -111,6 +115,12 @@ class ScheduledPrompt(BaseModel):
     # the project as its Outputs, replacing the previous run's.
     publish_outputs: bool = Field(
         False, alias="publishOutputs", description="Publish each delivered run's artifacts to the project's Outputs"
+    )
+    # Quiet watcher (docs/specs/quiet-watcher.md §3.1). Both are settable only
+    # while PROACTIVE_RUNS_ENABLED is on; a schedule without them behaves as before.
+    mode: ScheduleMode = Field("standard", description="'watch' makes the schedule a quiet watcher")
+    model_id: Optional[str] = Field(
+        None, alias="modelId", description="The model each run uses; None is the Agent's or the user's default"
     )
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")

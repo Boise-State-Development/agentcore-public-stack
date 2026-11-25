@@ -21,7 +21,15 @@ from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Tuple, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .models import DUE_INDEX_PK, DeliverTo, IntervalUnit, ScheduleCadence, ScheduledPrompt, ScheduledPromptState
+from .models import (
+    DUE_INDEX_PK,
+    DeliverTo,
+    IntervalUnit,
+    ScheduleCadence,
+    ScheduledPrompt,
+    ScheduledPromptState,
+    ScheduleMode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +217,8 @@ async def create_scheduled_prompt(
     deliver_to: DeliverTo = "owner",
     notify_members: bool = False,
     publish_outputs: bool = False,
+    mode: ScheduleMode = "standard",
+    model_id: Optional[str] = None,
 ) -> ScheduledPrompt:
     """Create an active scheduled prompt, due at the next occurrence of its cadence.
 
@@ -255,11 +265,16 @@ async def create_scheduled_prompt(
         deliver_to=deliver_to,
         notify_members=notify_members,
         publish_outputs=publish_outputs,
+        mode=mode,
+        model_id=model_id,
         created_at=now,
         updated_at=now,
     )
 
     item = schedule.model_dump(by_alias=True, exclude_none=True)
+    if schedule.mode == "standard":
+        # A standard schedule's record is exactly what it was before watchers.
+        item.pop("mode", None)
     item["PK"] = f"USER#{user_id}"
     item["SK"] = f"SCHEDPROMPT#{schedule.schedule_id}"
     item["GSI3_PK"] = DUE_INDEX_PK
@@ -270,10 +285,15 @@ async def create_scheduled_prompt(
     return schedule
 
 
-async def get_scheduled_prompt(user_id: str, schedule_id: str) -> Optional[ScheduledPrompt]:
+def read_scheduled_prompt(user_id: str, schedule_id: str) -> Optional[ScheduledPrompt]:
+    """The schedule, or ``None``. Blocking (one ``GetItem``): app-api calls it with ``asyncio.to_thread``."""
     response = _get_table().get_item(Key={"PK": f"USER#{user_id}", "SK": f"SCHEDPROMPT#{schedule_id}"})
     item = response.get("Item")
     return ScheduledPrompt.model_validate(item) if item else None
+
+
+async def get_scheduled_prompt(user_id: str, schedule_id: str) -> Optional[ScheduledPrompt]:
+    return read_scheduled_prompt(user_id, schedule_id)
 
 
 async def get_scheduled_prompts(keys: List[Tuple[str, str]]) -> List[ScheduledPrompt]:
@@ -542,6 +562,8 @@ async def update_scheduled_prompt(
     deliver_to: Optional[DeliverTo] = None,
     notify_members: Optional[bool] = None,
     publish_outputs: Optional[bool] = None,
+    mode: Optional[ScheduleMode] = None,
+    model_id: Union[str, None, _Unset] = UNSET,
 ) -> Optional[ScheduledPrompt]:
     """Edit a schedule's fields in place.
 
@@ -555,8 +577,11 @@ async def update_scheduled_prompt(
     ``assistant_id`` and ``enabled_tools`` are *clearable*: pass ``UNSET``
     (the default) to leave them untouched, a value to set them, or ``None``
     to clear them (the attribute is removed — the schedule falls back to the
-    default agent / all-RBAC-allowed tools). All other fields keep the plain
-    ``None`` == "leave unchanged" contract.
+    default agent / all-RBAC-allowed tools). ``model_id`` is clearable the
+    same way (cleared, a run uses the Agent's or the user's default model).
+    All other fields keep the plain ``None`` == "leave unchanged" contract;
+    ``mode="standard"`` removes the attribute, so a standard schedule's record
+    reads as it did before watchers.
     """
     if timezone_name is not None:
         _zone(timezone_name)  # a paused schedule stores it unread until it resumes
@@ -629,7 +654,14 @@ async def update_scheduled_prompt(
     # Clearable fields: UNSET == leave, None == clear (REMOVE the attribute),
     # any other value == set.
     remove_parts: List[str] = []
-    for attr, value in (("assistantId", assistant_id), ("enabledTools", enabled_tools)):
+    if mode == "standard":
+        remove_parts.append("#mode")
+        names["#mode"] = "mode"
+    elif mode is not None:
+        set_parts.append("#mode = :mode")
+        names["#mode"] = "mode"
+        values[":mode"] = mode
+    for attr, value in (("assistantId", assistant_id), ("enabledTools", enabled_tools), ("modelId", model_id)):
         if isinstance(value, _Unset):
             continue
         if value is None:
@@ -656,8 +688,18 @@ async def update_scheduled_prompt(
 
 async def delete_scheduled_prompt(user_id: str, schedule_id: str) -> bool:
     """Delete = total revocation. No orphan timers: the row's absence is
-    the only signal the (future) dispatcher needs — there is nothing else
-    to clean up."""
+    the only signal the dispatcher needs.
+
+    A watcher's state item (``SCHEDSTATE#``) goes with it, best-effort: a
+    failure is logged and never fails the delete. Its run-history rows
+    (``SCHEDRUN#``) are left to their 30-day TTL.
+    """
+    from .watch_state import clear_watch_state
+
     _get_table().delete_item(Key={"PK": f"USER#{user_id}", "SK": f"SCHEDPROMPT#{schedule_id}"})
     logger.info(f"Deleted scheduled prompt {schedule_id} for user {user_id}")
+    try:
+        clear_watch_state(user_id, schedule_id)
+    except Exception:
+        logger.warning("Could not delete the watcher state of schedule %s", schedule_id, exc_info=True)
     return True

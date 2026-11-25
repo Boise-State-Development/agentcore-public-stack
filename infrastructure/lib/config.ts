@@ -82,6 +82,7 @@ export interface AppConfig {
   kbSync: KbSyncConfig;
   managedKb: ManagedKbConfig;
   scheduledRuns: ScheduledRunsConfig;
+  proactiveRuns: ProactiveRunsConfig;
   platformCosts: PlatformCostsConfig;
   memorySpaces: MemorySpacesConfig;
   projects: ProjectsConfig;
@@ -452,6 +453,19 @@ export const MANAGED_KB_RETENTION_WINDOW_DAYS = 30;
  * surface is governed separately by the `scheduled-runs` RBAC capability.
  */
 export interface ScheduledRunsConfig {
+  enabled: boolean;
+}
+
+/**
+ * Quiet watcher (docs/specs/quiet-watcher.md). **Opt-in while in
+ * development**: off unless CDK_PROACTIVE_RUNS_ENABLED=true (or a
+ * `proactiveRuns.enabled: true` cdk.json context). Sets PROACTIVE_RUNS_ENABLED
+ * on app-api (a schedule's `mode` and `modelId`, and the
+ * `/schedules/{id}/runs` and `/schedules/{id}/state` routes) and on both
+ * scheduled-runs Lambdas (the worker's per-run `SCHEDRUN#` history rows). Not
+ * on the AgentCore Runtime yet. A feature switch once finished.
+ */
+export interface ProactiveRunsConfig {
   enabled: boolean;
 }
 
@@ -2090,6 +2104,14 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SCHEDULED_RUNS_ENABLED
         ? process.env.CDK_SCHEDULED_RUNS_ENABLED !== 'false'
         : scope.node.tryGetContext('scheduledRuns')?.enabled ?? true,
+    },
+    proactiveRuns: {
+      // Opt-in while in development: the workflow forwards an EMPTY STRING
+      // when the variable is unset, which falls through to the context and
+      // then to off. Only "true" (any case) turns it on.
+      enabled: process.env.CDK_PROACTIVE_RUNS_ENABLED
+        ? process.env.CDK_PROACTIVE_RUNS_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('proactiveRuns')?.enabled ?? false,
     },
     platformCosts: {
       // Default OFF, opt-in — see PlatformCostsConfig for why this one does

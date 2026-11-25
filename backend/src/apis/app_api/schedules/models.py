@@ -9,8 +9,11 @@ from apis.shared.scheduled_prompts.models import (
     ScheduleCadence,
     ScheduledPrompt,
     ScheduledPromptState,
+    ScheduleMode,
 )
+from apis.shared.scheduled_prompts.runs import ScheduleRun
 from apis.shared.scheduled_prompts.service import MIN_INTERVAL_MINUTES, interval_to_minutes
+from apis.shared.scheduled_prompts.watch_state import WatchState
 
 _MAX_PROMPT_CHARS = 20_000
 
@@ -85,6 +88,33 @@ class UpdateScheduleRequest(BaseModel):
         return self
 
 
+class CreatePersonalScheduleRequest(CreateScheduleRequest):
+    """``POST /schedules``: a personal schedule, which can also be a quiet watcher.
+
+    The watcher fields (docs/specs/quiet-watcher.md §3.1) are on the personal
+    requests only: a project schedule's requests extend the base ones and are
+    unchanged. Refused while PROACTIVE_RUNS_ENABLED is off, unless left at
+    their defaults.
+    """
+
+    mode: ScheduleMode = "standard"
+    model_id: Optional[str] = Field(None, alias="modelId", min_length=1, max_length=256)
+
+
+class UpdatePersonalScheduleRequest(UpdateScheduleRequest):
+    """``PATCH /schedules/{id}``, with the watcher fields. ``clearModel`` reverts to the default model."""
+
+    mode: Optional[ScheduleMode] = None
+    model_id: Optional[str] = Field(None, alias="modelId", min_length=1, max_length=256)
+    clear_model: bool = Field(False, alias="clearModel")
+
+    @model_validator(mode="after")
+    def _clear_model_excludes_model(self) -> "UpdatePersonalScheduleRequest":
+        if self.clear_model and self.model_id is not None:
+            raise ValueError("clearModel cannot be combined with modelId")
+        return self
+
+
 class ScheduledPromptResponse(BaseModel):
     """Public view of a scheduled prompt."""
 
@@ -115,6 +145,8 @@ class ScheduledPromptResponse(BaseModel):
         None, alias="projectId", description="Runs in this project; change or resume it from the project"
     )
     deliver_to: str = Field("owner", alias="deliverTo", description='"project": each run is shared with the project')
+    mode: ScheduleMode = Field("standard", description='"watch": a quiet watcher')
+    model_id: Optional[str] = Field(None, alias="modelId", description="The model each run uses; null is the default")
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
 
@@ -144,6 +176,8 @@ class ScheduledPromptResponse(BaseModel):
             deliver_email=schedule.deliver_email,
             project_id=schedule.project_id,
             deliver_to=schedule.deliver_to,
+            mode=schedule.mode,
+            model_id=schedule.model_id,
             created_at=schedule.created_at,
             updated_at=schedule.updated_at,
         )
@@ -155,3 +189,19 @@ class ScheduledPromptsListResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     schedules: List[ScheduledPromptResponse] = Field(default_factory=list)
+
+
+class ScheduleRunsResponse(BaseModel):
+    """A personal schedule's runs, newest first."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    runs: List[ScheduleRun] = Field(default_factory=list)
+
+
+class WatchStateResponse(BaseModel):
+    """A watcher's state; ``state`` is null when it has none."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    state: Optional[WatchState] = None

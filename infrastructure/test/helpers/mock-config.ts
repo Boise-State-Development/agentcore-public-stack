@@ -176,6 +176,9 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     scheduledRuns: {
       enabled: false,
     },
+    proactiveRuns: {
+      enabled: false,
+    },
     platformCosts: {
       enabled: false,
     },

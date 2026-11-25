@@ -663,6 +663,13 @@ jobs:
       # `CDK_CONVERSATION_INDEX_ENABLED` variable to "true" in an environment
       # to turn it on there. Unset (empty string) or anything else means off.
       CDK_CONVERSATION_INDEX_ENABLED: ${{ vars.CDK_CONVERSATION_INDEX_ENABLED }}
+      # Quiet watcher: a schedule's mode and model, the per-run history rows
+      # and the watcher-state routes (docs/specs/quiet-watcher.md). Set on
+      # app-api and both scheduled-runs Lambdas. Opt-in while in development:
+      # set the `CDK_PROACTIVE_RUNS_ENABLED` variable to "true" in an
+      # environment to turn it on there. Unset (empty string) or anything else
+      # means off.
+      CDK_PROACTIVE_RUNS_ENABLED: ${{ vars.CDK_PROACTIVE_RUNS_ENABLED }}
       # Conversation search read path: GET /sessions/search on app-api
       # (docs/specs/conversation-search.md §5). Default on: set the
       # `CDK_CONVERSATION_SEARCH_ENABLED` variable to "false" in an environment

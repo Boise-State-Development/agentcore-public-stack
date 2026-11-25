@@ -148,6 +148,9 @@ export class ScheduledRunsConstruct extends Construct {
       SCHEDULED_RUNS_ENABLED: config.scheduledRuns.enabled ? 'true' : 'false',
       DYNAMODB_PROJECTS_TABLE_NAME: projectsTable.tableName,
       PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
+      // Quiet watcher (docs/specs/quiet-watcher.md): while on, the worker
+      // writes one SCHEDRUN# history row per personal run.
+      PROACTIVE_RUNS_ENABLED: config.proactiveRuns.enabled ? 'true' : 'false',
     };
 
     const workerLogGroup = new logs.LogGroup(this, 'ScheduledRunsWorkerLogGroup', {
@@ -206,6 +209,7 @@ export class ScheduledRunsConstruct extends Construct {
         SCHEDULED_RUNS_WORKER_FUNCTION_NAME: this.workerLambda.functionName,
         DYNAMODB_PROJECTS_TABLE_NAME: projectsTable.tableName,
         PROJECTS_ENABLED: config.projects.enabled ? 'true' : 'false',
+        PROACTIVE_RUNS_ENABLED: config.proactiveRuns.enabled ? 'true' : 'false',
       },
       description:
         'Scheduled-runs dispatcher - sweeps due schedules on an EventBridge tick, applies the runaway guard, invokes the worker',
