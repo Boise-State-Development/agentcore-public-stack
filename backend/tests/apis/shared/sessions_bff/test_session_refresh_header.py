@@ -248,6 +248,51 @@ class TestHeaderResolution:
         assert body["access_token"] == "access.refreshed"
         refresh.refresh.assert_awaited_once()
 
+    def test_refresher_handle_works_for_a_header_session(self) -> None:
+        """The chat proxy's demand for a fresher token must work without a cookie.
+
+        After the AgentCore Runtime refuses a forwarded token, the proxy calls
+        `request.state.bff_refresh_session` for one with more life. The handle
+        has to resolve the value the request actually presented: built from
+        the (absent) cookie, it raises on a header request and the proxy
+        retries with the token that was just refused.
+        """
+        now = int(time.time())
+        record = _make_record(access_token_exp=now + 120)  # outside the 60s leeway
+        repo = AsyncMock()
+        repo.get.return_value = record
+        repo.try_acquire_refresh_lock.return_value = True
+        codec = _make_codec()
+        refresh = MagicMock()
+        refresh.refresh = AsyncMock(
+            return_value=RefreshResult(
+                access_token="access.fresh",
+                refresh_token="refresh.original",
+                id_token="id.fresh",
+                access_token_exp=now + 3600,
+            )
+        )
+        app = _build_app(
+            config=_enabled_config(),
+            repository=repo,
+            codec=codec,
+            refresh_client=refresh,
+        )
+
+        @app.get("/demand")
+        async def demand(request: Request):
+            before = request.state.bff_session.cognito_access_token
+            healed = await request.state.bff_refresh_session(300)
+            return {"before": before, "after": healed.cognito_access_token if healed else None}
+
+        sealed = codec.seal(CookiePayload(session_id=record.session_id))
+        response = TestClient(app).get("/demand", headers=_bff(sealed))
+
+        assert response.status_code == 200
+        assert response.json() == {"before": "access.original", "after": "access.fresh"}
+        refresh.refresh.assert_awaited_once()
+        assert "set-cookie" not in response.headers
+
 
 # =====================================================================
 # The no-cookie invariant

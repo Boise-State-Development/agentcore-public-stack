@@ -203,7 +203,11 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
             request.state.bff_csrf_token = CSRFHelper.derive_token(
                 record.csrf_secret, record.session_id
             )
-            request.state.bff_refresh_session = self._refresher_for(cookie_value)
+            # Built from the value this request presented, cookie or header.
+            # A header request has no cookie, and a handle built from one
+            # would fail on every call, leaving the chat proxy to retry a
+            # Runtime refusal with the very token that was refused.
+            request.state.bff_refresh_session = self._refresher_for(sealed_value)
             # Decide whether this request should slide the session forward.
             # `_maybe_slide` writes DDB if past the throttle window and returns
             # the cookie Max-Age to re-emit (or None to leave the existing
@@ -233,7 +237,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
         return response
 
     def _refresher_for(
-        self, cookie_value: str
+        self, sealed_value: str
     ) -> Callable[[int], Awaitable[Optional[SessionRecord]]]:
         """A handle a route can call to demand more token lifetime than the
         middleware's leeway guaranteed.
@@ -247,7 +251,7 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
 
         async def refresh(min_remaining_seconds: int) -> Optional[SessionRecord]:
             record, _clear = await self._resolve_session(
-                cookie_value, leeway_seconds=min_remaining_seconds
+                sealed_value, leeway_seconds=min_remaining_seconds
             )
             return record
 
