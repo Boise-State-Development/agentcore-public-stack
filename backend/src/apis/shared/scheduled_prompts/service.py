@@ -403,6 +403,34 @@ async def set_schedule_state(
         raise
 
 
+def remember_owner_email(user_id: str, schedule_id: str, email: str) -> bool:
+    """Record the owner's email on a schedule that has none. Returns whether it wrote.
+
+    The inbox is keyed by email, and the scheduled-runs Lambdas can't read the
+    users table, so a pause notice (``pausing.notify_schedule_paused``) needs the
+    email on the record. Personal schedules created before it was stored get it
+    here, when their owner next lists them. Never overwrites one already there.
+
+    Blocking (one ``UpdateItem``): app-api calls it with ``asyncio.to_thread``.
+    """
+    from botocore.exceptions import ClientError
+
+    if not email:
+        return False
+    try:
+        _get_table().update_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"SCHEDPROMPT#{schedule_id}"},
+            UpdateExpression="SET ownerEmail = :email",
+            ExpressionAttributeValues={":email": email},
+            ConditionExpression="attribute_exists(PK) AND attribute_not_exists(ownerEmail)",
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
 async def rearm_schedule(
     user_id: str,
     schedule_id: str,
