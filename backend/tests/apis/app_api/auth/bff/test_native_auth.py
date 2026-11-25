@@ -472,6 +472,9 @@ class TestLogout:
         assert response.headers.get_list("set-cookie") == []
         assert _rows(repository) == []
         revoke.assert_awaited_once_with(refresh_token="refresh.tok")
+        # Published, so every other task drops its cached copy in one poll.
+        revoked = [i for i in repository._table.scan()["Items"] if i["PK"] == "REVOKED"]
+        assert len(revoked) == 1
 
     def test_cookie_logout_also_revokes(self, native_app, repository, codec, revoke):
         from apis.shared.sessions_bff.models import CookiePayload

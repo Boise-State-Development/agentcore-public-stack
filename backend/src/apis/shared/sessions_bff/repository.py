@@ -11,6 +11,17 @@ Schema (single-table, fits the `BFFSessionsTable` provisioned in Phase 1):
     Optional attrs, written only when set: client ("native" for a phone's
     session), device_model, app_version.
 
+Revocation feed (`revocations.py`):
+
+    PK = REVOKED
+    SK = <epoch ms, 13 digits>#<session_id>
+
+    Attrs: session_id, ttl
+
+One item per ended session, so every app-api task can drop the session from
+its in-process cache within one poll instead of serving it until the cache
+TTL. Read by key range, so DynamoDB's lazy TTL sweep never matters.
+
     Cross-task refresh-lock attrs (added at runtime, never on the initial
     write — both default to "absent" until a refresh contender writes them):
        refresh_lock_owner: short opaque token identifying the leader
@@ -39,11 +50,20 @@ import time
 from typing import Optional
 
 import boto3
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from .models import SessionRecord
 
 logger = logging.getLogger(__name__)
+
+#: Partition holding the revocation feed. Low volume (one item per logout), so
+#: a single partition is far below DynamoDB's per-partition write limit.
+REVOCATION_PK = "REVOKED"
+#: Revocation items outlive every reader's lookback by a wide margin.
+_REVOCATION_TTL_SECONDS = 3600
+#: Bound on one read of the feed. A lookback holds a minute or two of logouts.
+_REVOCATION_READ_LIMIT = 1000
 
 
 class SessionRepository:
@@ -448,3 +468,63 @@ class SessionRepository:
             self._table.delete_item(Key=key)
 
         await asyncio.to_thread(_call)
+
+    async def revoke(self, session_id: str) -> None:
+        """End a session that a client holds: delete its row, then publish it.
+
+        Use this, not `delete`, wherever a session someone may still present
+        is ended (logout today, a devices list later). The row going away is
+        what refuses the session; the revocation item is what makes every
+        other app-api task stop serving its cached copy within one poll of
+        `revocations.run_revocation_watcher`. `delete` alone is right only for
+        a row no client ever received.
+
+        The revocation is written even if the delete fails, so a cached copy
+        is still dropped; a failure of either propagates to the caller.
+        """
+        if not self._enabled:
+            return
+        try:
+            await self.delete(session_id)
+        finally:
+            await self.record_revocation(session_id)
+
+    async def record_revocation(self, session_id: str, *, now: Optional[float] = None) -> None:
+        if not self._enabled:
+            return
+        stamp = time.time() if now is None else now
+        item = {
+            "PK": REVOCATION_PK,
+            "SK": f"{int(stamp * 1000):013d}#{session_id}",
+            "session_id": session_id,
+            "ttl": int(stamp) + _REVOCATION_TTL_SECONDS,
+        }
+
+        def _call() -> None:
+            self._table.put_item(Item=item)
+
+        await asyncio.to_thread(_call)
+
+    async def recent_revocations(self, *, since: float) -> list[str]:
+        """Session ids revoked at or after `since` (epoch seconds)."""
+        if not self._enabled:
+            return []
+        lower = f"{int(since * 1000):013d}"
+
+        def _call() -> list[str]:
+            ids: list[str] = []
+            kwargs: dict = {
+                "KeyConditionExpression": Key("PK").eq(REVOCATION_PK) & Key("SK").gte(lower),
+                "ConsistentRead": True,
+                "ProjectionExpression": "session_id",
+                "Limit": _REVOCATION_READ_LIMIT,
+            }
+            while True:
+                response = self._table.query(**kwargs)
+                ids.extend(i["session_id"] for i in response.get("Items", []) if i.get("session_id"))
+                last = response.get("LastEvaluatedKey")
+                if not last or len(ids) >= _REVOCATION_READ_LIMIT:
+                    return ids
+                kwargs["ExclusiveStartKey"] = last
+
+        return await asyncio.to_thread(_call)

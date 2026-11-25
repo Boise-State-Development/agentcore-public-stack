@@ -114,15 +114,23 @@ async def lifespan(app: FastAPI):
 
     lag_task = asyncio.create_task(run_event_loop_lag_monitor())
 
+    # Ended sessions leave every task's session cache within one poll, not one
+    # cache TTL (apis/shared/sessions_bff/revocations.py). Background only:
+    # one Query per poll, nothing per request.
+    from apis.shared.sessions_bff.revocations import run_revocation_watcher
+
+    revocation_task = asyncio.create_task(run_revocation_watcher())
+
     yield  # Application is running
 
     # Shutdown
     logger.info("=== Agent Core Service Shutting Down ===")
     reconcile_task.cancel()
     lag_task.cancel()
+    revocation_task.cancel()
     # return_exceptions swallows the tasks' CancelledError, so shutdown waits
     # for the loops to finish without re-raising it.
-    await asyncio.gather(reconcile_task, lag_task, return_exceptions=True)
+    await asyncio.gather(reconcile_task, lag_task, revocation_task, return_exceptions=True)
     # TODO: Cleanup agent pool, MCP clients, etc.
 
 # Create FastAPI app with lifespan

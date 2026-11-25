@@ -170,7 +170,7 @@ Per-request cost on app-api is what the terminal's header path costs today: one 
 
 ## Security
 
-- **Cognito tokens never reach the phone.** It holds an opaque sealed id, like the browser. Deleting the row revokes it.
+- **Cognito tokens never reach the phone.** It holds an opaque sealed id, like the browser. Ending the session (`SessionRepository.revoke`) deletes the row, revokes the refresh token and publishes a revocation that every app-api task reads within 5 s. Without that feed, the dev readout measured a signed-out session still answering for about 21 s on tasks that had it cached (the cache TTL is 60 s).
 - **Device theft:** the Keychain item is unavailable before first unlock and does not sync. The user or an admin revokes from the devices list (PR 3). Until then the backstop is the 30 day ceiling and the app's own sign out.
 - **Scheme hijack:** an app that registers the same scheme receives a handoff code it cannot exchange (no verifier), which expires in 120 s and is single-use.
 - **A login link sent to someone else:** a crafted `/auth/login?client=native…` link ends in a redirect to the app scheme on the *victim's* device. The sender never sees the handoff code, and the victim's app has no matching sign-in in progress and ignores it.
