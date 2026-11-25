@@ -30,6 +30,7 @@ import {
   heroExclamationTriangle,
 } from '@ng-icons/heroicons/outline';
 import { AdminToolService } from '../services/admin-tool.service';
+import { FEATURES } from '../../../services/features';
 import { SpinnerComponent } from '../../../components/spinner/spinner.component';
 import { ConnectorsService } from '../../connectors/services/connectors.service';
 import {
@@ -467,6 +468,29 @@ function reservedHeaderValidator(control: AbstractControl): ValidationErrors | n
                     Enable health checks
                   </span>
                 </label>
+
+                @if (features.mcpElicitation) {
+                  <!-- MCP form elicitation (docs/specs/mcp-elicitation.md §6) -->
+                  <label class="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      formControlName="mcpElicitationEnabled"
+                      aria-describedby="mcp-elicitation-help"
+                      class="mt-0.5 size-4 rounded border-gray-300 text-primary-600 focus:ring-2 focus:ring-primary-500 dark:border-gray-600 dark:bg-gray-800"
+                    />
+                    <span class="flex-1">
+                      <span class="block text-sm/6 font-medium text-gray-700 dark:text-gray-300">
+                        Allow this server to ask users for input
+                      </span>
+                      <span id="mcp-elicitation-help" class="mt-1 block text-sm/6 text-gray-600 dark:text-gray-400">
+                        The server may pause a tool call to show the user a form, such as typing a
+                        repository's name to confirm deleting it. Some servers then offer tools they hide
+                        otherwise. With tools listed above, only those tools are offered. With none
+                        listed, every tool the server offers is, including those.
+                      </span>
+                    </span>
+                  </label>
+                }
               </section>
 
               <!-- Forward App Authentication Token -->
@@ -1367,6 +1391,7 @@ export class ToolFormPage implements OnInit {
   private route = inject(ActivatedRoute);
   private adminToolService = inject(AdminToolService);
   private connectorsService = inject(ConnectorsService);
+  protected readonly features = inject(FEATURES);
 
   readonly categories = TOOL_CATEGORIES;
   readonly protocols = TOOL_PROTOCOLS;
@@ -1448,6 +1473,7 @@ export class ToolFormPage implements OnInit {
     mcpHeaders: this.fb.array([] as FormGroup[]),
     mcpTools: this.fb.array([] as FormGroup[]),
     mcpHealthCheckEnabled: [false],
+    mcpElicitationEnabled: [false],
     // A2A Agent configuration
     a2aAgentUrl: [''],
     a2aAgentId: [''],
@@ -1650,6 +1676,7 @@ export class ToolFormPage implements OnInit {
         forwardAuthToken: formValue.forwardAuthToken || false,
         tokenExchangeAudience: formValue.tokenExchangeAudience || null,
         requiresOauthProvider: formValue.requiresOauthProvider || null,
+        elicitationEnabled: !!formValue.mcpElicitationEnabled,
       });
 
       // Merge: keep existing rows (and their needsApproval flag), append any
@@ -1941,6 +1968,7 @@ export class ToolFormPage implements OnInit {
           mcpApiKeyHeader: tool.mcpConfig.apiKeyHeader || '',
           mcpSecretArn: tool.mcpConfig.secretArn || '',
           mcpHealthCheckEnabled: tool.mcpConfig.healthCheckEnabled,
+          mcpElicitationEnabled: tool.mcpConfig.elicitationEnabled ?? false,
         });
         this.mcpHeadersArray.clear();
         for (const [name, value] of Object.entries(tool.mcpConfig.customHeaders ?? {})) {
@@ -2042,6 +2070,9 @@ export class ToolFormPage implements OnInit {
           tools: mcpTools,
           healthCheckEnabled: formValue.mcpHealthCheckEnabled,
           healthCheckIntervalSeconds: 300,
+          // Saved whatever the SPA flag says, so an edit made while the toggle
+          // is hidden keeps the row's setting rather than clearing it.
+          elicitationEnabled: !!formValue.mcpElicitationEnabled,
         };
       }
 

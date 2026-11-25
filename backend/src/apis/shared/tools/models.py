@@ -2005,6 +2005,13 @@ class MCPDiscoverRequest(BaseModel):
     token at runtime. This lets a same-team MCP server that validates a
     forwarded JWT (Lambda Function URL AuthType=NONE) be discovered without
     any IAM invoke permission.
+
+    `elicitation_enabled` mirrors the catalog flag of the same name
+    (docs/specs/mcp-elicitation.md §6): while ``MCP_ELICITATION_ENABLED`` is on,
+    discovery tells an opted-in server the client supports form elicitation,
+    exactly as the agent loop does, so tools a server lists only to clients that
+    can elicit (GitHub's ``delete_repository``) show up for the admin to allow.
+    Discovery never calls a tool, so no form is ever asked for.
     """
 
     server_url: str = Field(..., alias="serverUrl")
@@ -2021,6 +2028,7 @@ class MCPDiscoverRequest(BaseModel):
     requires_oauth_provider: Optional[str] = Field(
         None, alias="requiresOauthProvider"
     )
+    elicitation_enabled: bool = Field(default=False, alias="elicitationEnabled")
 
     model_config = {"populate_by_name": True, "use_enum_values": True}
 
@@ -2039,6 +2047,7 @@ class MCPDiscoverRequest(BaseModel):
             secret_arn=self.secret_arn,
             custom_headers=self.custom_headers,
             tools=[],
+            elicitation_enabled=self.elicitation_enabled,
         )
 
 

@@ -323,3 +323,68 @@ class TestServerConfig:
         assert request.to_model().elicitation_enabled is True
         response = MCPServerConfigResponse.from_model(_config(True))
         assert response.model_dump(by_alias=True)["elicitationEnabled"] is True
+
+
+class TestAdminDiscovery:
+    """Discovery advertises form elicitation to an opted-in server exactly as the
+    agent loop does, so the admin can see and allow the tools a server lists only
+    to clients that can elicit (spec §6). It never calls a tool, so no form is
+    asked for."""
+
+    def _request(self, **overrides):
+        from apis.shared.tools.models import MCPDiscoverRequest
+
+        return MCPDiscoverRequest.model_validate(
+            {"serverUrl": "https://api.githubcopilot.com/mcp/", "authType": "none", **overrides}
+        )
+
+    def test_the_request_carries_the_setting_into_the_config(self):
+        assert self._request(elicitationEnabled=True).to_config().elicitation_enabled is True
+        assert self._request().to_config().elicitation_enabled is False
+
+    @pytest.mark.parametrize(
+        ("flag", "opted_in", "expected"),
+        [("true", True, True), ("true", False, False), ("", True, False)],
+    )
+    def test_the_discovery_client_advertises_only_when_both_say_yes(
+        self, monkeypatch, flag, opted_in, expected
+    ):
+        from agents.main_agent.integrations.external_mcp_client import create_external_mcp_client
+
+        monkeypatch.setenv("MCP_ELICITATION_ENABLED", flag)
+        client = create_external_mcp_client(
+            self._request(elicitationEnabled=opted_in).to_config(), oauth_token=None
+        )
+
+        assert client.elicitation_enabled is expected
+
+    @pytest.mark.asyncio
+    async def test_the_route_builds_its_client_from_the_opted_in_config(self, monkeypatch):
+        from apis.app_api.admin.tools import routes
+        from apis.shared.auth.models import User
+
+        seen = {}
+
+        class _Client:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def list_tools_sync(self):
+                return []
+
+        def fake_create(config, oauth_token=None, **kwargs):
+            seen["elicitation_enabled"] = config.elicitation_enabled
+            return _Client()
+
+        monkeypatch.setattr(
+            "agents.main_agent.integrations.external_mcp_client.create_external_mcp_client",
+            fake_create,
+        )
+        admin = User(email="a@example.edu", user_id="u1", name="A", roles=["system_admin"])
+
+        await routes.admin_discover_mcp_tools(self._request(elicitationEnabled=True), admin=admin)
+
+        assert seen["elicitation_enabled"] is True
