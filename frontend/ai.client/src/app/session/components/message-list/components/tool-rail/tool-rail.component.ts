@@ -24,6 +24,7 @@ import {
   describeToolCall,
   describeToolGroup,
   isAwaitingUserCall,
+  isDeclinedCall,
   isFailedCall,
 } from './tool-summary';
 import {
@@ -249,6 +250,7 @@ export class ToolRailComponent {
   /** The label over a call's raw result. */
   resultLabel(call: ToolCallDisplay): string {
     if (isAwaitingUserCall(call)) return 'Waiting for you';
+    if (isDeclinedCall(call)) return 'Declined';
     return isFailedCall(call) ? 'Error' : 'Result';
   }
 
@@ -316,6 +318,7 @@ export class ToolRailComponent {
       case 'error':          return 'status-dot bg-state-danger-500';
       case 'awaiting_auth':
       case 'awaiting_user':  return 'status-dot bg-primary-500 ring-2 ring-primary-300/40 dark:ring-primary-400/30';
+      case 'declined':       return 'status-dot bg-gray-400 dark:bg-gray-500';
       default:               return 'status-dot bg-gray-400';
     }
   }

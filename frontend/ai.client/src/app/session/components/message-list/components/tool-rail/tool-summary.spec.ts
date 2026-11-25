@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   AWAITING_USER_LINE,
+  DECLINED_LINE,
   describeToolCall,
   describeToolGroup,
   isFailedCall,
@@ -266,5 +267,48 @@ describe('an MCP App form waiting for the user', () => {
 
   it('leaves a real failure counted', () => {
     expect(isFailedCall(call({ status: 'error' }))).toBe(true);
+  });
+});
+
+describe('an MCP server form the user declined', () => {
+  // GitHub answers a declined delete_repository form with an error; the rail
+  // read "1 failed" for a decision the user made (docs/specs/mcp-elicitation.md §13).
+  const declined = (action: 'decline' | 'cancel' = 'decline', overrides: Partial<ToolCallDisplay> = {}) =>
+    call({
+      toolName: 'github_issues___delete_repository',
+      status: 'error',
+      result: {
+        status: 'error',
+        content: [{ text: 'Repository deletion was not confirmed' }],
+        elicitation: { action },
+      },
+      ...overrides,
+    });
+
+  it('is described as declined, not as a failure', () => {
+    expect(describeToolCall(declined())).toBe(DECLINED_LINE);
+    expect(isFailedCall(declined())).toBe(false);
+  });
+
+  it('treats a dismissed form the same way', () => {
+    expect(isFailedCall(declined('cancel'))).toBe(false);
+  });
+
+  it('is not counted among a group\'s failures', () => {
+    const line = describeToolGroup([withJson([1, 2]), declined('decline', { id: 't2' })]);
+    expect(line).not.toContain('failed');
+  });
+
+  it('still counts an answer the server refused as a failure', () => {
+    const refused = call({
+      toolName: 'github_issues___delete_repository',
+      status: 'error',
+      result: {
+        status: 'error',
+        content: [{ text: 'Repository name confirmation did not match' }],
+        elicitation: { action: 'accept' },
+      },
+    });
+    expect(isFailedCall(refused)).toBe(true);
   });
 });

@@ -1,3 +1,4 @@
+import type { McpElicitationOutcome } from '../../../services/mcp-elicitation/elicitation-outcome';
 // models/message.model.ts
 // ============================================================================
 // Core Message and ContentBlock Types
@@ -103,6 +104,8 @@ export interface ToolUseData {
      * context.
      */
     metadata?: Record<string, unknown>;
+    /** What the user did with an MCP server's form on this call (never the answer). */
+    elicitation?: McpElicitationOutcome;
   };
   /** Tool execution status */
   status?: 'pending' | 'complete' | 'error';

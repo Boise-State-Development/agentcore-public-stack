@@ -1,4 +1,5 @@
 import { isAwaitingUserSubmission } from '../../../../services/mcp-apps/awaiting-submission';
+import { isDeclinedElicitation } from '../../../../../services/mcp-elicitation/elicitation-outcome';
 import type { ToolCallDisplay } from './tool-rail.model';
 import { describeMemoryCall, memoryCallKind, memoryRollup, type MemoryCallKind } from './memory-call';
 import { describeSkillScriptCall, scriptRan, scriptRefused, skillScriptCall } from './skill-script-call';
@@ -38,12 +39,24 @@ export function isAwaitingUserCall(call: ToolCallDisplay): boolean {
   return call.status === 'awaiting_user' || isAwaitingUserSubmission(call.result);
 }
 
+/** The line for a call whose MCP server form the user declined or dismissed. */
+export const DECLINED_LINE = 'You declined the request for input';
+
+/**
+ * True when the user declined or dismissed an MCP server's form on this call.
+ * The server reports it as an error; it was the user's decision.
+ */
+export function isDeclinedCall(call: ToolCallDisplay): boolean {
+  return call.status === 'declined' || isDeclinedElicitation(call.result);
+}
+
 /**
  * True when a call failed. An MCP App form waiting for the user reports an
- * error result on purpose and is not counted.
+ * error result on purpose and is not counted, and neither is an MCP server's
+ * form the user declined.
  */
 export function isFailedCall(call: ToolCallDisplay): boolean {
-  if (isAwaitingUserCall(call)) return false;
+  if (isAwaitingUserCall(call) || isDeclinedCall(call)) return false;
   return call.status === 'error' || call.result?.status === 'error';
 }
 
@@ -188,6 +201,8 @@ function withArticle(subject: string): string {
 export function describeToolCall(call: ToolCallDisplay): string {
   // An MCP App's form is open: nothing ran yet, so no verb applies.
   if (isAwaitingUserCall(call)) return AWAITING_USER_LINE;
+  // The user turned the server's form down: nothing ran, so no verb applies.
+  if (isDeclinedCall(call)) return DECLINED_LINE;
 
   const failed = isFailedCall(call);
   const running = call.status === 'pending';

@@ -1,3 +1,4 @@
+import type { McpElicitationOutcome } from '../../../services/mcp-elicitation/elicitation-outcome';
 /**
  * Stream Parser Types
  *
@@ -805,6 +806,8 @@ export interface ToolResultEventData {
     structuredContent?: unknown;
     /** The tool's MCP `_meta`, when it returned one (Strands' `metadata`). */
     metadata?: Record<string, unknown>;
+    /** What the user did with an MCP server's form on this call (never the answer). */
+    elicitation?: unknown;
   };
 }
 
@@ -919,6 +922,7 @@ export interface ContentBlockBuilder {
     status: 'success' | 'error';
     structuredContent?: unknown;
     metadata?: Record<string, unknown>;
+    elicitation?: McpElicitationOutcome;
   };
   status?: 'pending' | 'complete' | 'error';
   isComplete: boolean;
