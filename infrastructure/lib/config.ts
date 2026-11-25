@@ -275,6 +275,17 @@ export interface AppApiConfig {
    * the model call (tens of seconds for a long completion).
    */
   apiConverseMaxInFlight: number;
+  /**
+   * Redirect URIs a native app may end its sign-in on
+   * (NATIVE_AUTH_REDIRECT_URIS, from CDK_NATIVE_AUTH_REDIRECT_URIS,
+   * comma-separated). Empty by default, and the empty list is the switch:
+   * `GET /auth/login?client=native` and `POST /auth/native/exchange` answer
+   * 404 until a deployment names its own app's URI, e.g.
+   * `edu.example.agentcore://auth/callback` (docs/specs/native-app-auth.md D7).
+   * The backend compares exact strings, so each entry must be what the app
+   * sends, character for character.
+   */
+  nativeAuthRedirectUris: string[];
 }
 
 /**
@@ -1922,6 +1933,10 @@ export function loadConfig(scope: cdk.App): AppConfig {
           'context appApi.apiConverseMaxInFlight', scope.node.tryGetContext('appApi')?.apiConverseMaxInFlight))
         ?? API_CONVERSE_MAX_IN_FLIGHT_DEFAULT,
       additionalCorsOrigins: process.env.CDK_APP_API_CORS_ORIGINS || scope.node.tryGetContext('appApi')?.additionalCorsOrigins,
+      nativeAuthRedirectUris: parseNativeAuthRedirectUris(
+        parseListEnv(process.env.CDK_NATIVE_AUTH_REDIRECT_URIS)
+        ?? scope.node.tryGetContext('appApi')?.nativeAuthRedirectUris,
+      ),
     },
     inferenceApi: {
       additionalCorsOrigins: process.env.CDK_INFERENCE_API_CORS_ORIGINS || scope.node.tryGetContext('inferenceApi')?.additionalCorsOrigins,
@@ -2836,6 +2851,35 @@ export function loadConfig(scope: cdk.App): AppConfig {
  * @param value The environment variable value to parse
  * @returns Trimmed, non-empty entries, or undefined if unset/empty
  */
+/**
+ * Validate the native sign-in redirect allowlist (CDK_NATIVE_AUTH_REDIRECT_URIS).
+ *
+ * Each entry is an absolute URI the backend matches exactly, so synth refuses
+ * anything that could not be one: no wildcard (there is no pattern matching,
+ * and a `*` would read as if there were), no fragment, no whitespace, and a
+ * `scheme://` prefix. A comma inside an entry is impossible by construction.
+ * Accepts the parsed env list or a `cdk.context.json` array; absent means [].
+ */
+export function parseNativeAuthRedirectUris(value: string[] | undefined): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('appApi.nativeAuthRedirectUris must be an array of URIs');
+  }
+  const entries = value.map((entry) => String(entry).trim()).filter(Boolean);
+  for (const entry of entries) {
+    if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s#*]+$/.test(entry)) {
+      throw new Error(
+        `CDK_NATIVE_AUTH_REDIRECT_URIS entry "${entry}" is not a redirect URI the native sign-in can match: `
+        + 'use an absolute scheme://… URI with no wildcard, fragment or whitespace, '
+        + 'e.g. edu.example.agentcore://auth/callback.',
+      );
+    }
+  }
+  return entries;
+}
+
 export function parseListEnv(value: string | undefined): string[] | undefined {
   if (value === undefined || value.trim() === '') {
     return undefined;

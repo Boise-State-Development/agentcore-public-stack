@@ -14,9 +14,14 @@ listing the SPA already depends on.
 `cli_router` adds the device-authorization flow (`/auth/cli/*`) the terminal
 client uses to obtain one of these same sessions without a browser redirect
 it can receive.
+
+`native_router` adds `POST /auth/native/exchange`, where a native app trades
+the handoff code the callback's native exit gave it for one of these same
+sessions (docs/specs/native-app-auth.md).
 """
 
 from .cli_routes import router as cli_router
+from .native_routes import router as native_router
 from .routes import router
 
-__all__ = ["cli_router", "router"]
+__all__ = ["cli_router", "native_router", "router"]

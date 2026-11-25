@@ -200,6 +200,12 @@ jobs:
       # them. Set to "true" only for an environment that wants open public
       # registration. Federated sign-in works either way.
       CDK_COGNITO_SELF_SIGNUP_ENABLED: ${{ vars.CDK_COGNITO_SELF_SIGNUP_ENABLED }}
+      # Native-app sign-in (docs/specs/native-app-auth.md). Comma-separated
+      # redirect URIs your own iOS build ends its sign-in on, matched exactly,
+      # e.g. `edu.example.agentcore://auth/callback` (the app's bundle id as the
+      # scheme). Unset/empty keeps native sign-in off: the login's
+      # `client=native` exit and POST /auth/native/exchange answer 404.
+      CDK_NATIVE_AUTH_REDIRECT_URIS: ${{ vars.CDK_NATIVE_AUTH_REDIRECT_URIS }}
       CDK_ARTIFACTS_CERTIFICATE_ARN: ${{ vars.CDK_ARTIFACTS_CERTIFICATE_ARN }}
       # Extra origins allowed to frame the artifacts iframe via CSP
       # frame-ancestors (beyond the deployed SPA origin) — e.g.

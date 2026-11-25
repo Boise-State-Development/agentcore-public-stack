@@ -213,3 +213,27 @@ class CognitoRefreshClient:
             username=username,
             refresh_token=refresh_token,
         )
+
+    def _revoke_sync(self, *, refresh_token: str) -> None:
+        if not self.enabled:
+            raise CognitoRefreshError("BFF refresh client is not configured")
+        try:
+            self._idp().revoke_token(
+                Token=refresh_token,
+                ClientId=self._app_client_id,
+                ClientSecret=self._resolve_client_secret(),
+            )
+        except Exception as exc:
+            raise CognitoRefreshError(str(exc)) from exc
+
+    async def revoke(self, *, refresh_token: str) -> None:
+        """Revoke a refresh token with Cognito `RevokeToken`, off the loop.
+
+        Revoking the refresh token also invalidates every access token minted
+        from it, so a token already forwarded to the Runtime stops working
+        too instead of living out its hour. Requires token revocation on the
+        app client, which is Cognito's default for a new client. Raises
+        `CognitoRefreshError` on any failure; logout treats that as
+        best-effort.
+        """
+        await asyncio.to_thread(self._revoke_sync, refresh_token=refresh_token)

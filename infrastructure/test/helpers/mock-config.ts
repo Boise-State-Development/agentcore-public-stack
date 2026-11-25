@@ -96,6 +96,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
       desiredCount: 1,
       maxCapacity: 2,
       apiConverseMaxInFlight: API_CONVERSE_MAX_IN_FLIGHT_DEFAULT,
+      nativeAuthRedirectUris: [],
     },
     inferenceApi: { runtimePlatformVersion: AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT },
     // Observability mirrors the shipped OSS defaults rather than hardcoded

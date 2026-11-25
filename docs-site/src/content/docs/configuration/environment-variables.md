@@ -38,6 +38,21 @@ whether it costs money — has its own page:
   defaults lives in
   [`infrastructure/lib/config.ts`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/infrastructure/lib/config.ts).
 
+## Native-app sign-in
+
+| GitHub variable | Container variable | Default | What it does |
+|---|---|---|---|
+| `CDK_NATIVE_AUTH_REDIRECT_URIS` | `NATIVE_AUTH_REDIRECT_URIS` (app-api) | empty | Comma-separated redirect URIs your own build of the iOS companion app ends its sign-in on, e.g. `edu.example.agentcore://auth/callback` (the app's bundle id as its scheme). Each is matched **exactly**: no wildcards, no normalisation, and synth refuses an entry that is not an absolute `scheme://…` URI. Empty means no native sign-in: `GET /auth/login?client=native` and `POST /auth/native/exchange` answer 404. There is no separate on/off flag; the list is the switch. |
+
+These are not Cognito callback URLs. Cognito still returns to app-api's own
+`/auth/callback`, which then hands the app a single-use, 120-second handoff
+code on the listed URI; the app trades it for a session at
+`/auth/native/exchange` with the PKCE verifier only it holds. A native session
+does not slide on idle: it lasts 30 days from sign-in
+(`BFF_SESSION_ABSOLUTE_LIFETIME_SECONDS`) unless the user signs out, which also
+revokes its Cognito refresh token. Design:
+[`docs/specs/native-app-auth.md`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/docs/specs/native-app-auth.md).
+
 ## Derived resource names on the AgentCore Runtime
 
 Most of the Runtime's variables used to be resource names that CDK builds from

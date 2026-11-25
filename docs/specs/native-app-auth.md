@@ -1,6 +1,6 @@
 # Native app authentication (iOS companion app)
 
-**Status:** DRAFT, revised 2026-11-24. Design for review, no code yet. Follows the iOS scaffold (PR #1485, `ios/`). The first draft (2026-10-07) was written before the terminal client could sign in with a session; §"What changed since the first draft" lists the differences.
+**Status:** PR 1 (backend) built 2026-11-24; PR 2 (iOS sign-in) merged against a stub. Revised 2026-11-24. Follows the iOS scaffold (PR #1485, `ios/`). The first draft (2026-10-07) was written before the terminal client could sign in with a session; §"What changed since the first draft" lists the differences.
 **Driver:** the iOS companion app needs to sign in and reach the same routes the web app reaches.
 **Refs:** `backend/src/apis/app_api/auth/bff/routes.py`, `backend/src/apis/app_api/auth/bff/cli_routes.py`, `backend/src/apis/shared/middleware/session_refresh.py`, `backend/src/apis/shared/middleware/csrf.py`, `backend/src/apis/shared/sessions_bff/`, `docs/specs/CLI_DEVICE_AUTH_SPEC.md`, `docs/specs/TUI_WEB_PARITY_SPEC.md`, `ios/README.md`.
 
@@ -98,11 +98,11 @@ The price is iOS's standard consent sheet ("AgentCore wants to use *your-host* t
 
 At `GET /auth/callback`, after the existing validation, token exchange, `SessionRecord` write and Users sync, a state that carries a native `redirect_uri` takes its own exit, beside the terminal's:
 
-1. Mark the row `client = "native"` and give it the native `ttl` (D4).
+1. Mark the row `client = "native"` and give it a **provisional** `ttl` of the handoff's 120 s plus 60 s. The exchange gives it the native `ttl` (D4). *(Built this way rather than writing the native `ttl` here: a sign-in the app never finishes would otherwise leave a row holding live Cognito tokens for 30 days that nobody can use or revoke.)*
 2. Mint a **handoff code**: 32 random bytes, stored in the OIDC state store under `HANDOFF#<code>` with `{session_id, code_challenge}` and a **120 s** TTL.
 3. `302` to `<redirect_uri>?handoff=<code>`. **No session cookie is set**, for the reason the terminal's branch gives: the browser would otherwise be logged in as a side effect and would share one refresh token with the app.
 
-`ASWebAuthenticationSession` returns that URL to the app, which calls `POST /auth/native/exchange` with `{"handoff", "code_verifier", "device_name"?, "device_model"?, "app_version"?}`. The route atomically gets-and-deletes the handoff row, checks `S256(code_verifier) == code_challenge`, writes the metadata onto the session row (bounded lengths), seals `CookiePayload(session_id)` and returns `{"session": "<sealed>", "expires_at": <absolute lifetime>, "user": {…the /auth/session shape…}}`. `session` is the field name the terminal's token response uses. A handoff that is missing, expired, already consumed, or whose verifier does not match answers `400 invalid_grant` and deletes the orphaned session row.
+`ASWebAuthenticationSession` returns that URL to the app, which calls `POST /auth/native/exchange` with `{"handoff", "code_verifier", "device_model"?, "app_version"?}` (no `device_name`: the app does not send one, and a device name is often a person's name). The route atomically gets-and-deletes the handoff row (one conditional `DeleteItem` returning the old item), checks `S256(code_verifier) == code_challenge`, writes the native `ttl` and the metadata onto the session row (64 and 32 characters, cut rather than refused), seals `CookiePayload(session_id)` and returns `{"session": "<sealed>", "expires_at": <absolute lifetime>, "user": {…the /auth/session shape…}}`. `session` is the field name the terminal's token response uses. A handoff that is missing, expired, already consumed, or whose verifier does not match answers `400 invalid_grant` and deletes the orphaned session row.
 
 Two rules for the failure paths, both because a non-ephemeral auth session shares Safari's cookies:
 
@@ -121,7 +121,9 @@ A native session does **not** slide. Its `ttl` is set once to `created_at + BFF_
 - The refresh path computes `new_ttl = min(now + session_ttl_seconds, absolute_cap)`. For a native row it is `absolute_cap`.
 - The refresh path rebuilds the record field by field (`updated = SessionRecord(…)`). The new fields must be copied there, or the cached record loses `client` after the first token refresh.
 
-The 30 day ceiling is the one the browser already has, chosen to match the Cognito refresh-token default (the comment on `_DEFAULT_ABSOLUTE_LIFETIME_SECONDS`), so there is no window where the row is alive but cannot be refreshed. Confirm the BFF app client's actual refresh-token validity in PR 1.
+The 30 day ceiling is the one the browser already has, chosen to match the Cognito refresh-token default (the comment on `_DEFAULT_ABSOLUTE_LIFETIME_SECONDS`), so there is no window where the row is alive but cannot be refreshed. **Confirmed in PR 1:** `cognito-construct.ts` sets no `refreshTokenValidity` on the BFF client, so it gets Cognito's 30 day default, and the dev client reads `RefreshTokenValidity: 30` (days) with token revocation enabled. `identity-detailed.test.ts` pins both, so a change to either has to revisit this lifetime.
+
+The refresh path now copies the record with `dataclasses.replace` instead of rebuilding it field by field, so the next field added to `SessionRecord` cannot be dropped the same way.
 
 The terminal keeps the browser's 8 hour window. Giving it this policy is a one-line follow-up once the field exists, and is out of scope here.
 
@@ -208,7 +210,7 @@ This is smaller than the first draft's PR 1 by the middleware branch, the CSRF c
 ## Testing
 
 - Backend unit tests as listed under PR 1, in the ordinary `backend` suite.
-- Local stack: no headless-browser harness. PR 1 allowlists a loopback `redirect_uri` (`http://127.0.0.1/callback`) in the local `.env`; the dev readout completes Cognito in the in-app browser, copies the handoff from the final URL, and exchanges it with `curl`.
+- Local stack: no headless-browser harness. PR 1 allowlists a loopback `redirect_uri` (`http://127.0.0.1/callback`) in the local `.env`; the dev readout completes Cognito in the in-app browser, copies the handoff from the final URL, and exchanges it with `curl`. Cognito only returns to a registered callback, and dev's BFF client registers `http://localhost:8000/auth/callback`, so the local readout needs the app-api that holds `:8000` to be the one with this code. Otherwise run it on dev after deploy with `CDK_NATIVE_AUTH_REDIRECT_URIS` set in the `development` environment.
 - `smoke_turns.py --auth` gains a mode that presents a sealed session in the header, so the existing turn matrix (frame order, interrupt/resume, Stop, restore) runs over the transport the phone uses.
 - iOS: `AgentCoreKitTests` for the state machine and PKCE; one UI-less integration test against a local stub for the exchange; the simulator smoke in `test-ios`.
 

@@ -1091,6 +1091,46 @@ describe('RAG Ingestion Configuration', () => {
   });
 
   // ============================================================
+  // Native sign-in redirect allowlist (docs/specs/native-app-auth.md D7)
+  // ============================================================
+
+  describe('Native sign-in redirect allowlist', () => {
+    afterEach(() => {
+      delete process.env.CDK_NATIVE_AUTH_REDIRECT_URIS;
+    });
+
+    test('is empty by default, which keeps native sign-in off', () => {
+      delete process.env.CDK_NATIVE_AUTH_REDIRECT_URIS;
+      expect(loadConfig(app).appApi.nativeAuthRedirectUris).toEqual([]);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as empty', () => {
+      process.env.CDK_NATIVE_AUTH_REDIRECT_URIS = '';
+      expect(loadConfig(app).appApi.nativeAuthRedirectUris).toEqual([]);
+    });
+
+    test('splits and trims a comma-separated list', () => {
+      process.env.CDK_NATIVE_AUTH_REDIRECT_URIS =
+        ' edu.example.agentcore://auth/callback , http://127.0.0.1/callback ';
+      expect(loadConfig(app).appApi.nativeAuthRedirectUris).toEqual([
+        'edu.example.agentcore://auth/callback',
+        'http://127.0.0.1/callback',
+      ]);
+    });
+
+    test.each([
+      'edu.example.agentcore://*',
+      'edu.example.agentcore://auth/callback#x',
+      'auth/callback',
+      '/auth/callback',
+      'edu.example.agentcore:auth/callback',
+    ])('refuses %s at synth', (entry) => {
+      process.env.CDK_NATIVE_AUTH_REDIRECT_URIS = entry;
+      expect(() => loadConfig(app)).toThrow(/CDK_NATIVE_AUTH_REDIRECT_URIS/);
+    });
+  });
+
+  // ============================================================
   // Session prewarm feature flag — opt-in while in development
   // ============================================================
 

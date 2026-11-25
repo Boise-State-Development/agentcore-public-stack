@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
+#: `SessionRecord.client` for a session handed to a native app through
+#: `POST /auth/native/exchange` (docs/specs/native-app-auth.md D4). Browser and
+#: terminal rows leave the field unset.
+NATIVE_CLIENT = "native"
+
 
 @dataclass
 class SessionRecord:
@@ -25,6 +30,20 @@ class SessionRecord:
     created_at: int  # epoch seconds
     last_seen_at: int  # epoch seconds
     ttl: int  # epoch seconds; DynamoDB `ttl` attribute drives row expiry
+    # Which kind of client holds the session. None for the browser and the
+    # terminal; `NATIVE_CLIENT` for the phone, whose row never slides on idle
+    # (its `ttl` stays `created_at + absolute lifetime`). Every code path that
+    # rebuilds a record must carry these fields, or the session silently falls
+    # back to the browser's 8-hour idle window.
+    client: Optional[str] = None
+    # Bounded, self-reported facts about the native app, written at exchange
+    # for the devices list. Display only; never an access decision.
+    device_model: Optional[str] = None
+    app_version: Optional[str] = None
+
+    @property
+    def is_native(self) -> bool:
+        return self.client == NATIVE_CLIENT
 
     def needs_refresh(self, now_epoch: int, leeway_seconds: int) -> bool:
         """True iff the access token will expire within `leeway_seconds`.

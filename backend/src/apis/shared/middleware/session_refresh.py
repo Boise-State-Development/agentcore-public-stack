@@ -41,6 +41,7 @@ parallel tab refreshes can tumble each other's refresh tokens.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import secrets
 import time
@@ -283,7 +284,14 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
         if remaining_to_cap <= 0:
             return None
 
-        new_max_age = min(self._config.session_ttl_seconds, remaining_to_cap)
+        # A native row never slides (docs/specs/native-app-auth.md D4): its
+        # TTL is the absolute cap from the moment it is handed to the app, so
+        # the throttled write below still records `last_seen_at` for the
+        # devices list but writes the cap back unchanged.
+        if record.is_native:
+            new_max_age = remaining_to_cap
+        else:
+            new_max_age = min(self._config.session_ttl_seconds, remaining_to_cap)
 
         # Throttle: only write to DDB if it's been long enough since the last
         # touch. The cookie re-emit is coupled to the write so the browser
@@ -629,9 +637,11 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                 absolute_cap = (
                     current.created_at + self._config.absolute_lifetime_seconds
                 )
-                new_ttl = min(
-                    now + self._config.session_ttl_seconds,
-                    absolute_cap,
+                # A native row has no idle window, only the cap (D4).
+                new_ttl = (
+                    absolute_cap
+                    if current.is_native
+                    else min(now + self._config.session_ttl_seconds, absolute_cap)
                 )
                 # Detect refresh-token rotation. When Cognito rotates, the OLD
                 # refresh token is dead the moment the new one is issued — so a
@@ -670,16 +680,17 @@ class SessionRefreshMiddleware(BaseHTTPMiddleware):
                         return peer, False
                     self._cache.invalidate(session_id)
                     return None, True
-                updated = SessionRecord(
-                    session_id=current.session_id,
-                    user_id=current.user_id,
-                    username=current.username,
+                # `replace` rather than a field-by-field rebuild, so every field
+                # the refresh does not own (`client` and the device facts
+                # today) is carried over. A rebuild that dropped `client` would
+                # quietly put a native session back on the 8-hour idle window
+                # at its first token refresh.
+                updated = dataclasses.replace(
+                    current,
                     cognito_access_token=refreshed.access_token,
                     cognito_refresh_token=refreshed.refresh_token,
                     id_token=refreshed.id_token,
                     access_token_exp=refreshed.access_token_exp,
-                    csrf_secret=current.csrf_secret,
-                    created_at=current.created_at,
                     last_seen_at=now,
                     ttl=new_ttl,
                 )

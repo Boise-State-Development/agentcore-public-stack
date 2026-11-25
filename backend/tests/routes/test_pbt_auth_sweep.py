@@ -48,6 +48,7 @@ PUBLIC_ROUTE_PATTERNS: set[str] = {
     "/auth/cli/authorize",  # entry point; the caller has no credential yet by definition. Rate-limited per IP.
     "/auth/cli/verify",  # browser leg; authorizes nothing itself — it starts the normal Cognito login, exactly like /auth/login.
     "/auth/cli/token",  # the 256-bit device_code in the body *is* the credential, and it is single-use.
+    "/auth/native/exchange",  # the 256-bit single-use handoff plus the app's PKCE verifier are the credential. Rate-limited per IP; 404 until NATIVE_AUTH_REDIRECT_URIS is set.
     "/chat/api-converse",
     "/system/status",
     "/system/first-boot",

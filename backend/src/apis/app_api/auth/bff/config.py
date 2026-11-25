@@ -30,6 +30,12 @@ class BFFAuthConfig:
     cognito_domain_url: Optional[str]
     callback_url: Optional[str]
     post_login_redirect_url: str
+    # Redirect URIs a native app may ask the login to end on
+    # (`NATIVE_AUTH_REDIRECT_URIS`, comma-separated, empty by default). The
+    # list is the native sign-in's only switch: while it is empty the native
+    # login exit and `POST /auth/native/exchange` answer 404
+    # (docs/specs/native-app-auth.md D7). Compared as exact strings.
+    native_redirect_uris: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "BFFAuthConfig":
@@ -41,7 +47,18 @@ class BFFAuthConfig:
             cognito_domain_url=cognito_domain.rstrip("/") if cognito_domain else None,
             callback_url=callback,
             post_login_redirect_url=post_login,
+            native_redirect_uris=parse_native_redirect_uris(
+                os.environ.get("NATIVE_AUTH_REDIRECT_URIS")
+            ),
         )
+
+    @property
+    def native_auth_enabled(self) -> bool:
+        return bool(self.native_redirect_uris)
+
+    def allows_native_redirect(self, redirect_uri: Optional[str]) -> bool:
+        """Exact-string allowlist check. No normalisation, no patterns."""
+        return bool(redirect_uri) and redirect_uri in self.native_redirect_uris
 
     def is_ready(self) -> bool:
         """True iff every value the auth routes need at runtime is resolved.
@@ -57,3 +74,15 @@ class BFFAuthConfig:
             and self.cognito_domain_url
             and self.callback_url
         )
+
+
+def parse_native_redirect_uris(raw: Optional[str]) -> tuple[str, ...]:
+    """Split `NATIVE_AUTH_REDIRECT_URIS` into its entries.
+
+    An unset GitHub variable arrives as "", which is the empty list. Entries
+    are trimmed and blanks dropped; nothing else is normalised, because the
+    check is an exact match against what the app sends.
+    """
+    if not raw:
+        return ()
+    return tuple(entry.strip() for entry in raw.split(",") if entry.strip())

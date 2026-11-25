@@ -41,6 +41,30 @@ class OIDCStateData:
     # Only the digest is persisted: a read-only compromise of the state table
     # then yields nothing that can be replayed as the cookie.
     browser_binding_hash: Optional[str] = None
+    # Set only by `GET /auth/login?client=native`. The app's own redirect URI
+    # (already exact-matched against `NATIVE_AUTH_REDIRECT_URIS`) and its S256
+    # PKCE challenge. Their presence is what makes the callback take the
+    # native exit: no cookies, a handoff code on a redirect to the app. Kept
+    # apart from `redirect_uri`, which is the Cognito callback URL, and from
+    # `code_verifier`, which is *our* verifier for the Cognito leg.
+    native_redirect_uri: Optional[str] = None
+    native_code_challenge: Optional[str] = None
+
+
+@dataclass
+class NativeHandoff:
+    """A one-time handoff of a fresh native session to the app that began it.
+
+    Written by the callback's native exit under `HANDOFF#<code>` and consumed
+    by `POST /auth/native/exchange`, which must present the verifier whose S256
+    digest is `code_challenge`. `expires_at` travels with the row so an expired
+    handoff can still name the session it would have handed over, and the
+    exchange can delete that orphaned row rather than leave it to its TTL.
+    """
+
+    session_id: str
+    code_challenge: str
+    expires_at: int
 
 
 class StateStore(ABC):
@@ -76,6 +100,25 @@ class StateStore(ABC):
         """
         pass
 
+    @abstractmethod
+    def store_handoff(self, code: str, handoff: NativeHandoff) -> None:
+        """Store a native handoff under `HANDOFF#<code>` until `expires_at`."""
+        pass
+
+    @abstractmethod
+    def take_handoff(self, code: str) -> Optional[NativeHandoff]:
+        """Atomically read and delete a handoff (one-time use).
+
+        Returns the row even when it has expired, so the caller can clean up
+        the session it names; the caller checks `expires_at`. Returns None
+        when no such handoff exists or another caller consumed it first.
+        """
+        pass
+
+
+def _handoff_key(code: str) -> str:
+    return f"HANDOFF#{code}"
+
 
 class InMemoryStateStore(StateStore):
     """In-memory state storage (for single-instance/local development)."""
@@ -84,6 +127,9 @@ class InMemoryStateStore(StateStore):
         """Initialize in-memory storage."""
         # Format: {state: (expires_at, OIDCStateData)}
         self._store: dict[str, tuple[float, Optional[OIDCStateData]]] = {}
+        # Expired handoffs are kept until taken so the exchange can name the
+        # orphaned session; local dev only, so the leak is bounded and moot.
+        self._handoffs: dict[str, NativeHandoff] = {}
 
     def store_state(
         self,
@@ -113,6 +159,14 @@ class InMemoryStateStore(StateStore):
         # Delete after retrieval (one-time use)
         del self._store[state]
         return True, data
+
+    def store_handoff(self, code: str, handoff: NativeHandoff) -> None:
+        self._handoffs[_handoff_key(code)] = handoff
+
+    def take_handoff(self, code: str) -> Optional[NativeHandoff]:
+        # `dict.pop` is atomic under the GIL, so two concurrent exchanges of
+        # one code cannot both receive it.
+        return self._handoffs.pop(_handoff_key(code), None)
 
     def _cleanup_expired(self):
         """Remove expired states."""
@@ -193,6 +247,10 @@ class DynamoDBStateStore(StateStore):
                     item['device_user_code'] = data.device_user_code
                 if data.browser_binding_hash:
                     item['browser_binding_hash'] = data.browser_binding_hash
+                if data.native_redirect_uri:
+                    item['native_redirect_uri'] = data.native_redirect_uri
+                if data.native_code_challenge:
+                    item['native_code_challenge'] = data.native_code_challenge
 
             # Use expiresAt as TTL attribute (DynamoDB will auto-delete)
             self.table.put_item(Item=item)
@@ -266,12 +324,56 @@ class DynamoDBStateStore(StateStore):
                 return_to=item.get('return_to'),
                 device_user_code=item.get('device_user_code'),
                 browser_binding_hash=item.get('browser_binding_hash'),
+                native_redirect_uri=item.get('native_redirect_uri'),
+                native_code_challenge=item.get('native_code_challenge'),
             )
             return True, data
             
         except self._client_error as e:
             logger.error(f"Failed to retrieve state from DynamoDB: {e}")
             return False, None
+
+
+    def store_handoff(self, code: str, handoff: NativeHandoff) -> None:
+        """Store a handoff row. `expiresAt` is the table's TTL attribute."""
+        key = _handoff_key(code)
+        self.table.put_item(
+            Item={
+                'PK': key,
+                'SK': key,
+                'session_id': handoff.session_id,
+                'code_challenge': handoff.code_challenge,
+                'expiresAt': handoff.expires_at,
+                'created_at': int(time.time()),
+            }
+        )
+
+    def take_handoff(self, code: str) -> Optional[NativeHandoff]:
+        """One conditional delete that returns the old item.
+
+        Unlike `get_and_delete_state`'s read-then-delete, this is a single
+        atomic request: two exchanges of one code race on the condition and
+        exactly one receives the item.
+        """
+        key = _handoff_key(code)
+        try:
+            response = self.table.delete_item(
+                Key={'PK': key, 'SK': key},
+                ConditionExpression='attribute_exists(PK)',
+                ReturnValues='ALL_OLD',
+            )
+        except self._client_error as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                return None
+            raise
+        item = response.get('Attributes')
+        if not item or not item.get('session_id'):
+            return None
+        return NativeHandoff(
+            session_id=item['session_id'],
+            code_challenge=item.get('code_challenge') or '',
+            expires_at=int(item.get('expiresAt') or 0),
+        )
 
 
 def create_state_store() -> StateStore:
