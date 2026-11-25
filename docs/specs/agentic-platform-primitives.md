@@ -10,6 +10,8 @@
 - **AgentCore Harness** — the agent-execution loop (`agents/main_agent/`), tracked as an external-pattern scan; here it becomes a *headless run entrypoint*
 - Per-user markdown memory (`docs/specs/user-markdown-memory.md`), Admin Skills + RBAC (`docs/specs/admin-skills-rbac-tool-binding.md`), KB sync (`docs/specs/assistant-kb-sync.md`)
 
+**Follow-on (2026-11-25):** with F1, minimal F2, F3, F5 and F6a built, `docs/specs/proactive-agent-gaps.md` lists what still separates "runs on a clock" from a proactive agent: job state and cursors, a silent outcome, watch triggers, an agent inbox, approvals answered from anywhere, push, standing instructions, connection health, and per-job budgets.
+
 ---
 
 ## 0. Reframe (read first)
