@@ -168,9 +168,10 @@ using it — the server slides its expiry on each request, exactly as it does fo
 a browser tab. When it does lapse, sign in again; there is no refresh token to
 rotate.
 
-`logout` clears the local copy. It cannot revoke server-side — the session value
-is opaque to the CLI — so sign out in the web app if you need it dead
-immediately.
+`logout` clears the local copy. It cannot revoke server-side, because the
+session value is opaque to the CLI. The session left on the server lapses on
+its idle timeout or absolute lifetime. Signing out in the web app does not end
+it: the CLI has its own session, separate from the browser's.
 
 ### API key
 

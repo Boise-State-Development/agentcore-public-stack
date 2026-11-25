@@ -392,9 +392,14 @@ def _command_logout(args: argparse.Namespace) -> int:
     Local only, deliberately. There is no client-side revocation call: the
     sealed session is opaque to this client, and app-api exposes logout as a
     cookie-clearing route the CLI has no cookie for. Dropping the local copy is
-    what a CLI can honestly do; the session then lapses on its TTL. Anyone
-    needing immediate server-side revocation should sign out in the web app,
-    which invalidates the underlying session record.
+    what a CLI can honestly do; the server-side session row then lapses on its
+    idle timeout or absolute lifetime, whichever comes first.
+
+    Signing out in the web app does not end it either. The device flow gives
+    the CLI its own session row, separate from any browser's, and web logout
+    deletes only the row behind that browser's cookie; nothing revokes the
+    user's refresh tokens globally. There is no way today to revoke a CLI
+    session from the client or the web app.
     """
     config = resolve_config(base_url=args.base_url, config_file=args.config_file, use_keyring=False)
     if not config.base_url:
