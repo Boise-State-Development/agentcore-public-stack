@@ -1054,15 +1054,17 @@ async def bff_logout(request: Request) -> Response:
     except Exception as exc:
         logger.warning("Failed to read BFF session row %s on logout: %s", session_id, exc)
     try:
-        await repository.delete(session_id)
+        # Deletes the row and publishes the revocation, which every other
+        # app-api task reads within one poll to drop its cached copy
+        # (apis/shared/sessions_bff/revocations.py).
+        await repository.revoke(session_id)
     except Exception as exc:
         # Logout is idempotent — log the failure but still answer success.
         logger.warning(
-            "Failed to delete BFF session row %s on logout: %s", session_id, exc
+            "Failed to revoke BFF session %s on logout: %s", session_id, exc
         )
 
-    # Local-process cache invalidation. Other tasks lag by ≤ refresh leeway
-    # seconds (documented in apis/shared/sessions_bff/cache.py).
+    # This task's own cache, at once rather than at its next poll.
     try:
         get_default_cache().invalidate(session_id)
     except Exception:

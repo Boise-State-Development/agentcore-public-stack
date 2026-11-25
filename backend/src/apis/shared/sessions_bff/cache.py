@@ -9,12 +9,11 @@ This is not a security boundary — it's a hot-path optimization for
 many-tabs-on-one-page bursts where the same session id hits the BFF dozens
 of times per second. The repository remains the source of truth.
 
-Logout caveat (Phase 3): when `/auth/logout` deletes the DDB row, in-process
-caches on other tasks (and on the same task, until the TTL ticks past) will
-keep serving the old record for up to `refresh_leeway_seconds`. Phase 3's
-logout handler must call `cache.invalidate(session_id)` locally and accept
-that other tasks lag by at most one TTL window — full coherence requires the
-Phase 7 multi-task coordination work.
+Logout: `/auth/logout` deletes the DDB row, invalidates this process's entry
+at once, and publishes a revocation (`SessionRepository.revoke`). Every other
+app-api process drops its entry within `revocations.POLL_INTERVAL_SECONDS` via
+`run_revocation_watcher`. While the feed cannot be read, the bound falls back
+to one TTL window.
 """
 
 from __future__ import annotations
@@ -48,11 +47,9 @@ class SessionCache:
         self._cache.clear()
 
 
-# Process-wide singleton so the refresh middleware and the logout route share
-# the same cache. The middleware seeds the cache on every successful resolve;
-# logout calls `invalidate` here to drop the entry locally without waiting for
-# the TTL window to age out. Other tasks still lag by ≤ refresh_leeway_seconds
-# until Phase 7 adds cross-task coordination.
+# Process-wide singleton so the refresh middleware, the logout route and the
+# revocation watcher share the same cache. The middleware seeds it on every
+# successful resolve; logout and the watcher call `invalidate`.
 _default_cache: Optional[SessionCache] = None
 _default_cache_lock = Lock()
 
