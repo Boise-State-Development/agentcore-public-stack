@@ -173,6 +173,36 @@ describe('SchedulesPage', () => {
     ).toBe(false);
   });
 
+  it('says why the platform stopped a schedule, in the bell’s words', () => {
+    const component = createComponent();
+    expect(component.stopSentence(stubSchedule({ state: 'paused_error', stateReason: 'repeated_failures' }))).toBe(
+      'Stopped after failing several times in a row.',
+    );
+    expect(
+      component.stopSentence(stubSchedule({ state: 'paused_error', stateReason: 'max_runs_per_day_exceeded' })),
+    ).toBe('Stopped after reaching its daily run limit.');
+    // Sign-in and reconnect have their own line and action, so no second sentence.
+    expect(component.stopSentence(stubSchedule({ state: 'paused_error', stateReason: 'reauth_required' }))).toBeNull();
+    expect(component.stopSentence(stubSchedule({ state: 'paused_error', stateReason: 'oauth_required' }))).toBeNull();
+    expect(component.stopSentence(stubSchedule({ state: 'paused_error', stateReason: 'something_new' }))).toBeNull();
+    expect(component.stopSentence(stubSchedule({ state: 'paused', stateReason: null }))).toBeNull();
+  });
+
+  it('offers Resume for a schedule stopped by failures or its daily limit, not for sign-in or reconnect', () => {
+    const component = createComponent();
+    expect(component.canResume(stubSchedule({ state: 'paused' }))).toBe(true);
+    expect(component.canResume(stubSchedule({ state: 'paused_error', stateReason: 'repeated_failures' }))).toBe(true);
+    expect(component.canResume(stubSchedule({ state: 'paused_error', stateReason: 'max_runs_per_day_exceeded' }))).toBe(
+      true,
+    );
+    expect(component.canResume(stubSchedule({ state: 'paused_error', stateReason: 'reauth_required' }))).toBe(false);
+    expect(component.canResume(stubSchedule({ state: 'paused_error', stateReason: 'oauth_required' }))).toBe(false);
+    expect(component.canResume(stubSchedule({ state: 'active' }))).toBe(false);
+    expect(component.canResume(stubSchedule({ state: 'paused_error', stateReason: 'repeated_failures', projectId: 'prj_1' }))).toBe(
+      false,
+    );
+  });
+
   it('onReauthenticate re-enables the grant then resumes the schedule', async () => {
     const component = createComponent();
     const schedule = stubSchedule({ state: 'paused_error', stateReason: 'reauth_required' });
