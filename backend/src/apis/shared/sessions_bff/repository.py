@@ -8,6 +8,9 @@ Schema (single-table, fits the `BFFSessionsTable` provisioned in Phase 1):
     Attrs: user_id, cognito_access_token, cognito_refresh_token, id_token,
            access_token_exp, csrf_secret, created_at, last_seen_at, ttl
 
+    Optional attrs, written only when set: client ("native" for a phone's
+    session), device_model, app_version.
+
     Cross-task refresh-lock attrs (added at runtime, never on the initial
     write — both default to "absent" until a refresh contender writes them):
        refresh_lock_owner: short opaque token identifying the leader
@@ -96,6 +99,9 @@ class SessionRepository:
             created_at=int(item["created_at"]),
             last_seen_at=int(item["last_seen_at"]),
             ttl=int(item["ttl"]),
+            client=item.get("client"),
+            device_model=item.get("device_model"),
+            app_version=item.get("app_version"),
         )
 
     @staticmethod
@@ -115,6 +121,12 @@ class SessionRepository:
         }
         if record.id_token is not None:
             item["id_token"] = record.id_token
+        # Optional attributes are written only when set, so a browser row is
+        # byte-for-byte what it was before native sessions existed.
+        for name in ("client", "device_model", "app_version"):
+            value = getattr(record, name)
+            if value is not None:
+                item[name] = value
         return item
 
     async def get(self, session_id: str) -> Optional[SessionRecord]:
@@ -376,6 +388,55 @@ class SessionRepository:
             # Touch failures are non-critical — log and move on rather than
             # surfacing as a request error.
             logger.warning("BFF session touch failed for %s: %s", session_id, exc)
+
+    async def activate_native(
+        self,
+        session_id: str,
+        *,
+        ttl: int,
+        device_model: Optional[str],
+        app_version: Optional[str],
+    ) -> bool:
+        """Give a native row its full lifetime and its device facts.
+
+        Called once, by `POST /auth/native/exchange`, after the handoff and its
+        verifier check out. Until then the row carries a short provisional
+        `ttl`, so a sign-in the app never finishes leaves nothing alive for
+        long. Conditional on the row still existing, so an exchange racing a
+        delete cannot resurrect a phantom row; returns False in that case.
+        """
+        if not self._enabled:
+            return False
+        update_expr = "SET #ttl = :ttl"
+        expr_values: dict = {":ttl": ttl}
+        for name, value in (
+            ("device_model", device_model),
+            ("app_version", app_version),
+        ):
+            if value is not None:
+                update_expr += f", {name} = :{name}"
+                expr_values[f":{name}"] = value
+        kwargs: dict = {
+            "Key": self._key(session_id),
+            "UpdateExpression": update_expr,
+            "ConditionExpression": "attribute_exists(PK)",
+            "ExpressionAttributeNames": {"#ttl": "ttl"},
+            "ExpressionAttributeValues": expr_values,
+        }
+
+        def _call() -> bool:
+            try:
+                self._table.update_item(**kwargs)
+                return True
+            except ClientError as exc:
+                if (
+                    exc.response.get("Error", {}).get("Code")
+                    == "ConditionalCheckFailedException"
+                ):
+                    return False
+                raise
+
+        return await asyncio.to_thread(_call)
 
     async def delete(self, session_id: str) -> None:
         if not self._enabled:

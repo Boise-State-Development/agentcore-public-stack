@@ -766,4 +766,4 @@ class TestOperationalEdges:
         monkeypatch.setattr(bff_routes, "_get_repository", lambda config: Boom())
         with caplog.at_level("WARNING"):
             await bff_routes._discard_orphan_session("sess-x")
-        assert any("orphaned device session" in record.getMessage() for record in caplog.records)
+        assert any("orphaned session" in record.getMessage() for record in caplog.records)

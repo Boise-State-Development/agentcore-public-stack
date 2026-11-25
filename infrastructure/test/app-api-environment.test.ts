@@ -460,3 +460,27 @@ describe('buildAppApiEnvironment — structured extraction model id', () => {
     expect(on.DOCUMENT_EXTRACT_MODEL_ID).toBe('us.anthropic.test-model');
   });
 });
+
+describe('buildAppApiEnvironment — native sign-in', () => {
+  it('writes an empty allowlist by default, which keeps native sign-in at 404', () => {
+    const env = buildAppApiEnvironment(createMockConfig(), stubParams());
+    expect(env.NATIVE_AUTH_REDIRECT_URIS).toBe('');
+  });
+
+  it('joins the allowlist with commas for the backend reader', () => {
+    const base = createMockConfig();
+    const env = buildAppApiEnvironment(
+      createMockConfig({
+        appApi: {
+          ...base.appApi,
+          nativeAuthRedirectUris: ['edu.example.agentcore://auth/callback', 'http://127.0.0.1/callback'],
+        },
+      }),
+      stubParams(),
+    );
+    expect(env.NATIVE_AUTH_REDIRECT_URIS).toBe(
+      'edu.example.agentcore://auth/callback,http://127.0.0.1/callback',
+    );
+  });
+});
+

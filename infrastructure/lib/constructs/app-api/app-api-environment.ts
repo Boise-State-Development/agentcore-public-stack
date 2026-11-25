@@ -358,6 +358,11 @@ export function buildAppApiEnvironment(
     BFF_POST_LOGIN_REDIRECT_URL: config.domainName
       ? `https://${config.domainName}/`
       : 'http://localhost:4200/',
+    // Native-app sign-in redirect allowlist (docs/specs/native-app-auth.md D7).
+    // Empty by default, which keeps the native login exit and
+    // POST /auth/native/exchange at 404. Not a Cognito callback URL: Cognito
+    // still returns to BFF_AUTH_CALLBACK_URL, and app-api redirects onward.
+    NATIVE_AUTH_REDIRECT_URIS: config.appApi.nativeAuthRedirectUris.join(','),
     INFERENCE_API_URL: params.inferenceApiRuntimeEndpointUrl,
     // Kill switch for the headless "Run now" + headless-grant routes
     // (scheduled-runs PR-1). Cohort access is RBAC (`scheduled-runs`

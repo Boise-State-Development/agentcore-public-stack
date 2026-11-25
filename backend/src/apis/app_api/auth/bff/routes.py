@@ -10,9 +10,15 @@
                          the SPA.
 `GET  /auth/session`   — returns the current user + CSRF token. Read by
                          the SPA on bootstrap to confirm "am I logged in?"
-`POST /auth/logout`    — drops the session row, clears both cookies, and
+`POST /auth/logout`    — drops the session row, revokes its refresh token,
+                         clears both cookies (cookie sessions only), and
                          returns the Cognito Hosted UI logout URL so the
                          SPA can finish the round-trip.
+
+A native app (docs/specs/native-app-auth.md) runs the same login with
+`client=native`; the callback then ends in a one-time handoff code on a
+redirect to the app instead of in cookies, and `POST /auth/native/exchange`
+(`native_routes`) trades it for a sealed session.
 
 Security invariant for the login round-trip: `state` is a public value —
 it rides in a redirect URL and anyone can mint one anonymously — so it is
@@ -45,7 +51,12 @@ from apis.shared.auth.device_grants.service import (
     DeviceGrantService,
 )
 from apis.shared.auth.models import User
-from apis.shared.auth.state_store import OIDCStateData, create_state_store
+from apis.shared.auth.state_store import (
+    NativeHandoff,
+    OIDCStateData,
+    create_state_store,
+)
+from apis.shared.middleware.session_refresh import sealed_session_from_header
 from apis.shared.users.repository import UserRepository
 from apis.shared.users.sync import UserSyncService
 from apis.shared.sessions_bff.cache import get_default_cache
@@ -57,8 +68,16 @@ from apis.shared.sessions_bff.cookie import (
     get_default_codec,
 )
 from apis.shared.sessions_bff.csrf import CSRFHelper
-from apis.shared.sessions_bff.models import CookiePayload, SessionRecord
-from apis.shared.sessions_bff.refresh import resolve_bff_client_secret
+from apis.shared.sessions_bff.models import (
+    NATIVE_CLIENT,
+    CookiePayload,
+    SessionRecord,
+)
+from apis.shared.sessions_bff.refresh import (
+    CognitoRefreshClient,
+    CognitoRefreshError,
+    resolve_bff_client_secret,
+)
 from apis.shared.sessions_bff.repository import SessionRepository
 
 from .config import BFFAuthConfig
@@ -100,6 +119,23 @@ _CODE_VERIFIER_BYTES = 64
 _NONCE_BYTES = 32
 _BROWSER_BINDING_BYTES = 32
 
+# Native handoff (docs/specs/native-app-auth.md D3). The code is the only
+# secret that ever rides a URL to the app, so it is long, single-use and dies
+# quickly; it is worthless without the app's PKCE verifier anyway.
+_HANDOFF_CODE_BYTES = 32
+NATIVE_HANDOFF_TTL_SECONDS = 120
+# The session row is written at the callback with a TTL just past the
+# handoff's, and only gets its full lifetime when the exchange succeeds. A
+# sign-in the app never finishes (killed mid-flow, scheme captured by another
+# app) then leaves a row that dies in minutes rather than one that holds live
+# Cognito tokens for 30 days with nobody able to use or revoke it.
+_NATIVE_PROVISIONAL_TTL_SECONDS = NATIVE_HANDOFF_TTL_SECONDS + 60
+
+# An S256 challenge is base64url(SHA-256(verifier)) without padding: always
+# 43 characters of the URL-safe alphabet (RFC 7636 §4.2). Anything else is a
+# client bug or a `plain` challenge, which we do not accept.
+_S256_CHALLENGE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+
 
 def _pkce_code_challenge(code_verifier: str) -> str:
     """S256 challenge for `code_verifier` — base64url(SHA-256(v)), unpadded.
@@ -132,6 +168,7 @@ _state_store = None
 _repository: Optional[SessionRepository] = None
 _user_sync_service: Optional[UserSyncService] = None
 _device_grant_service: Optional[DeviceGrantService] = None
+_cognito_client: Optional[CognitoRefreshClient] = None
 
 
 def _get_state_store():
@@ -181,6 +218,14 @@ def _get_user_sync_service() -> Optional[UserSyncService]:
     return _user_sync_service
 
 
+def _get_cognito_client() -> CognitoRefreshClient:
+    """Lazy-init the Cognito client logout uses to revoke a refresh token."""
+    global _cognito_client
+    if _cognito_client is None:
+        _cognito_client = CognitoRefreshClient()
+    return _cognito_client
+
+
 def _get_cookie_codec(config: BFFAuthConfig) -> CookieCodec:
     # Delegates to the process-wide singleton in `sessions_bff.cookie` so the
     # codec used here to seal a fresh cookie is the same instance the
@@ -194,10 +239,12 @@ def _get_cookie_codec(config: BFFAuthConfig) -> CookieCodec:
 def _reset_for_tests() -> None:
     """Drop the lazy singletons — only used by the test suite."""
     global _state_store, _repository, _user_sync_service, _device_grant_service
+    global _cognito_client
     _state_store = None
     _repository = None
     _user_sync_service = None
     _device_grant_service = None
+    _cognito_client = None
     _reset_default_codec_for_tests()
 
 
@@ -302,6 +349,9 @@ def _absolutize_return_to(*, return_to: str, base_url: str) -> str:
 async def bff_login(
     provider: Optional[str] = None,
     return_to: Optional[str] = None,
+    client: Optional[str] = None,
+    redirect_uri: Optional[str] = None,
+    code_challenge: Optional[str] = None,
 ) -> RedirectResponse:
     """302 to the Cognito Hosted UI authorize endpoint with a fresh state.
 
@@ -347,8 +397,29 @@ async def bff_login(
     the user simply re-runs login. Tracking a set of live bindings per browser
     would avoid that, at the cost of turning a single cookie compare into
     list-management for a case a user hits by accident, if ever.
+
+    **Native apps** (`client=native`, docs/specs/native-app-auth.md D2/D3)
+    run this same flow inside the system's web-authentication sheet, whose
+    cookie jar carries the binding cookie through to the callback. They add
+    `redirect_uri`, which must exactly match an entry in
+    `NATIVE_AUTH_REDIRECT_URIS` or the answer is 404 (also while the list is
+    empty), and `code_challenge`, the S256 digest of a verifier the app keeps
+    in memory. Both are recorded in the state row and nothing else changes;
+    `return_to` is ignored, since there is no SPA to return to.
     """
     config = BFFAuthConfig.from_env()
+    native = client == NATIVE_CLIENT
+    if native:
+        # 404 rather than 400 so a deployment that has not configured a native
+        # app looks exactly like one whose app-api predates native sign-in;
+        # the app maps 404 to "this server doesn't support the app".
+        if not config.allows_native_redirect(redirect_uri):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+        if not code_challenge or not _S256_CHALLENGE.match(code_challenge):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="code_challenge must be an S256 PKCE challenge.",
+            )
     _require_ready(config)
 
     state = secrets.token_urlsafe(32)
@@ -361,10 +432,12 @@ async def bff_login(
         OIDCStateData(
             redirect_uri=config.callback_url,
             provider_id="cognito-bff",
-            return_to=_sanitized_return_to(return_to),
+            return_to=None if native else _sanitized_return_to(return_to),
             code_verifier=code_verifier,
             nonce=nonce,
             browser_binding_hash=_browser_binding_digest(binding_secret),
+            native_redirect_uri=redirect_uri if native else None,
+            native_code_challenge=code_challenge if native else None,
         ),
         ttl_seconds=_STATE_TTL_SECONDS,
     )
@@ -465,6 +538,15 @@ async def bff_callback(
     `Origin`. Rejecting on those headers would reject every real login while
     an attacker-crafted link looks identical. Browser binding is the control
     that actually distinguishes the two.
+
+    A state minted with `client=native` takes the native exit beside the
+    terminal's device branch (`_complete_native_handoff`). Once such a state
+    has been read, every failure redirects to the app's own redirect URI with
+    `?error=<reason>` and leaves the session cookies alone: the sign-in sheet
+    shares Safari's cookies, so the browser path's clear would sign the user
+    out of the web app in Safari and load the SPA inside the sheet. Failures
+    before the state is read cannot know they are native and keep the browser
+    behaviour.
     """
     config = BFFAuthConfig.from_env()
     _require_ready(config)
@@ -495,6 +577,13 @@ async def bff_callback(
         # terminal — the user re-initiates from /auth/login.
         return _redirect_with_cookies_cleared(config, reason="bad_state")
 
+    native_redirect = state_data.native_redirect_uri if state_data else None
+
+    def fail(reason: str) -> Response:
+        if native_redirect:
+            return _native_failure(config, redirect_uri=native_redirect, reason=reason)
+        return _redirect_with_cookies_cleared(config, reason=reason)
+
     if not _binding_matches(state_data, binding_secret):
         # The state is real but was minted for a different browser. This is
         # the login-CSRF / session-fixation attempt: someone is trying to get
@@ -504,7 +593,16 @@ async def bff_callback(
             "BFF callback rejected: OAuth state is not bound to this browser "
             "(possible login-CSRF attempt)."
         )
-        return _redirect_with_cookies_cleared(config, reason="state_not_bound")
+        return fail("state_not_bound")
+
+    if native_redirect and not (
+        config.allows_native_redirect(native_redirect)
+        and state_data.native_code_challenge
+    ):
+        # The allowlist changed between login and callback, or the row is
+        # malformed. `_native_failure` answers without redirecting anywhere
+        # the allowlist no longer vouches for.
+        return fail("native_unavailable")
 
     try:
         client_secret = resolve_bff_client_secret(
@@ -512,7 +610,7 @@ async def bff_callback(
         )
     except Exception as exc:
         logger.error("BFF client secret resolution failed: %s", exc)
-        return _redirect_with_cookies_cleared(config, reason="server_misconfig")
+        return fail("server_misconfig")
 
     try:
         tokens = await exchange_code_for_tokens(
@@ -524,22 +622,22 @@ async def bff_callback(
             code_verifier=state_data.code_verifier if state_data else None,
         )
     except TokenExchangeError:
-        return _redirect_with_cookies_cleared(config, reason="exchange_failed")
+        return fail("exchange_failed")
 
     if not tokens.id_token:
-        return _redirect_with_cookies_cleared(config, reason="no_id_token")
+        return fail("no_id_token")
 
     try:
         claims = decode_id_token_claims(tokens.id_token)
     except TokenExchangeError:
-        return _redirect_with_cookies_cleared(config, reason="bad_id_token")
+        return fail("bad_id_token")
 
     if not _nonce_matches(state_data, claims):
         logger.warning(
             "BFF callback rejected: ID token nonce does not match the nonce "
             "issued with this authorization request."
         )
-        return _redirect_with_cookies_cleared(config, reason="bad_nonce")
+        return fail("bad_nonce")
 
     now = int(time.time())
     session_id = secrets.token_urlsafe(24)
@@ -555,7 +653,16 @@ async def bff_callback(
         csrf_secret=csrf_secret,
         created_at=now,
         last_seen_at=now,
-        ttl=now + config.bff_config.session_ttl_seconds,
+        # A native row starts with a provisional TTL; the exchange gives it
+        # `created_at + absolute lifetime` (D4). See
+        # `_NATIVE_PROVISIONAL_TTL_SECONDS`.
+        ttl=now
+        + (
+            _NATIVE_PROVISIONAL_TTL_SECONDS
+            if native_redirect
+            else config.bff_config.session_ttl_seconds
+        ),
+        client=NATIVE_CLIENT if native_redirect else None,
     )
 
     repository = _get_repository(config)
@@ -563,7 +670,7 @@ async def bff_callback(
         await repository.put(record)
     except Exception as exc:
         logger.error("Failed to persist BFF session row: %s", exc)
-        return _redirect_with_cookies_cleared(config, reason="persist_failed")
+        return fail("persist_failed")
 
     # Upsert the Users table from the ID-token claims. The per-request sync
     # in `get_current_user_from_session` runs off the access token, which
@@ -595,6 +702,19 @@ async def bff_callback(
         # either way — same as the browser path below.
         clear_oauth_state_cookie(device_response)
         return device_response
+
+    # ─── Native-app branch ─────────────────────────────────────────────
+    # Same reasoning as the device branch: the row above is the *app's*
+    # session, so no cookies. The app receives a one-time handoff code on its
+    # own redirect URI and trades it, with its PKCE verifier, for the sealed
+    # value at `POST /auth/native/exchange`.
+    if native_redirect:
+        return await _complete_native_handoff(
+            config,
+            session_id=session_id,
+            redirect_uri=native_redirect,
+            code_challenge=state_data.native_code_challenge,
+        )
 
     codec = _get_cookie_codec(config)
     sealed = codec.seal(CookiePayload(session_id=session_id))
@@ -704,6 +824,64 @@ async def _complete_device_authorization(
     return device_approved_page()
 
 
+async def _complete_native_handoff(
+    config: BFFAuthConfig,
+    *,
+    session_id: str,
+    redirect_uri: str,
+    code_challenge: str,
+) -> Response:
+    """Park the session behind a handoff code and send the app its code.
+
+    Sets no session cookie. On failure the row is deleted: nobody will ever
+    hold it.
+    """
+    code = secrets.token_urlsafe(_HANDOFF_CODE_BYTES)
+    try:
+        _get_state_store().store_handoff(
+            code,
+            NativeHandoff(
+                session_id=session_id,
+                code_challenge=code_challenge,
+                expires_at=int(time.time()) + NATIVE_HANDOFF_TTL_SECONDS,
+            ),
+        )
+    except Exception as exc:
+        logger.error("Failed to store native handoff: %s", exc)
+        await _discard_orphan_session(session_id)
+        return _native_failure(config, redirect_uri=redirect_uri, reason="handoff_failed")
+
+    response = RedirectResponse(
+        url=_append_query(redirect_uri, {"handoff": code}),
+        status_code=status.HTTP_302_FOUND,
+    )
+    clear_oauth_state_cookie(response)
+    return response
+
+
+def _native_failure(
+    config: BFFAuthConfig, *, redirect_uri: str, reason: str
+) -> Response:
+    """End a native sign-in with `<redirect_uri>?error=<reason>`.
+
+    Leaves the session cookies alone (see `bff_callback`) and drops only the
+    binding cookie, whose authorization request is over either way. If the
+    URI is no longer on the allowlist there is nowhere safe to send the
+    sheet, so the answer is a plain 404.
+    """
+    if not config.allows_native_redirect(redirect_uri):
+        response: Response = JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND, content={"detail": "Not Found"}
+        )
+    else:
+        response = RedirectResponse(
+            url=_append_query(redirect_uri, {"error": reason}),
+            status_code=status.HTTP_302_FOUND,
+        )
+    clear_oauth_state_cookie(response)
+    return response
+
+
 async def _discard_orphan_session(session_id: str) -> None:
     """Delete a session row that no client will ever hold.
 
@@ -715,7 +893,7 @@ async def _discard_orphan_session(session_id: str) -> None:
         await _get_repository(config).delete(session_id)
     except Exception as exc:
         logger.warning(
-            "Failed to delete orphaned device session %s: %s", session_id, exc
+            "Failed to delete orphaned session %s: %s", session_id, exc
         )
 
 
@@ -773,6 +951,12 @@ async def bff_session(
                 record.csrf_secret, record.session_id
             )
 
+    return session_user_payload(user, csrf_token)
+
+
+def session_user_payload(user: User, csrf_token: Optional[str]) -> dict:
+    """The `GET /auth/session` body. The native exchange returns the same
+    shape as its `user`, so the app decodes one type for both."""
     return {
         "user_id": user.user_id,
         "email": user.email,
@@ -815,46 +999,64 @@ def _cognito_logout_url(config: BFFAuthConfig) -> Optional[str]:
 
 @router.post("/logout", summary="Drop the BFF session and clear cookies")
 async def bff_logout(request: Request) -> Response:
-    """Best-effort logout.
+    """Best-effort logout, for a cookie or a header-presented session.
 
-    Reads the session cookie directly rather than going through the dep so
-    we can clear cookies for already-stale sessions too — the user clicked
-    "log out", they get logged out, full stop. Returns the Cognito Hosted
-    UI logout URL so the SPA can finish the round-trip and clear the
-    upstream session cookie too; otherwise Cognito's own session keeps
-    silently re-authenticating the user on the next /authorize.
+    Reads the credential directly rather than going through the dep so a
+    stale session is logged out too: the user clicked "log out", they get
+    logged out, full stop. Returns the Cognito Hosted UI logout URL so the
+    SPA can finish the round-trip and clear the upstream session cookie too;
+    otherwise Cognito's own session keeps silently re-authenticating the user
+    on the next /authorize.
+
+    A session presented as `Authorization: BFF <sealed>` (the terminal, the
+    native app) is deleted the same way, with **no cookie writes**: the
+    request carried no cookie, and clearing cookies in answer to a header
+    could sign an unrelated browser session out of the same client. The cookie
+    wins when both are present, as in `SessionRefreshMiddleware`.
+
+    Either way the row's refresh token is revoked with Cognito, which also
+    kills the access tokens minted from it. Deleting the row alone would
+    leave the last access token valid for up to an hour wherever it had
+    already been forwarded.
     """
     config = BFFAuthConfig.from_env()
     response = JSONResponse(
         status_code=status.HTTP_200_OK,
         content={"post_logout_url": _cognito_logout_url(config)},
     )
-    clear_session_cookies(response)
 
     cookie_value = request.cookies.get(SESSION_COOKIE_NAME)
-    if not cookie_value:
+    sealed = cookie_value or sealed_session_from_header(request)
+    if cookie_value or not sealed:
+        # The browser path, or no credential at all: clear the cookies so a
+        # stale browser stops echoing them.
+        clear_session_cookies(response)
+    if not sealed:
         return response
 
     if not config.bff_config.is_enabled():
-        # No backplane — nothing to delete from. Still clear the cookies on
-        # the way out so a stale browser doesn't keep echoing them.
+        # No backplane — nothing to delete from.
         return response
 
     codec = _get_cookie_codec(config)
     try:
-        payload = codec.unseal(cookie_value)
+        payload = codec.unseal(sealed)
     except CookieDecodeError:
-        # Cookie is unrecoverable; the session row (if any) is unreachable
-        # via this cookie, so drop the cookies and call it done.
+        # Unrecoverable; the session row (if any) is unreachable via this
+        # value, so there is nothing left to do.
         return response
 
     session_id = payload.session_id
     repository = _get_repository(config)
+    record: Optional[SessionRecord] = None
+    try:
+        record = await repository.get(session_id)
+    except Exception as exc:
+        logger.warning("Failed to read BFF session row %s on logout: %s", session_id, exc)
     try:
         await repository.delete(session_id)
     except Exception as exc:
-        # Logout is idempotent — log the failure but still tell the browser
-        # the cookies are gone.
+        # Logout is idempotent — log the failure but still answer success.
         logger.warning(
             "Failed to delete BFF session row %s on logout: %s", session_id, exc
         )
@@ -867,6 +1069,19 @@ async def bff_logout(request: Request) -> Response:
         # Cache miss-or-error must never block logout success.
         logger.debug("Local cache invalidation skipped for %s", session_id)
 
+    if record is not None:
+        await _revoke_refresh_token(record.cognito_refresh_token, session_id=session_id)
+
     return response
 
 
+async def _revoke_refresh_token(refresh_token: str, *, session_id: str) -> None:
+    """Best-effort Cognito `RevokeToken`. The row is already gone, so a
+    failure here leaves a token nobody holds, which expires on its own."""
+    client = _get_cognito_client()
+    if not client.enabled or not refresh_token:
+        return
+    try:
+        await client.revoke(refresh_token=refresh_token)
+    except CognitoRefreshError as exc:
+        logger.warning("Cognito token revocation failed for %s: %s", session_id, exc)

@@ -97,6 +97,30 @@ describe('CognitoConstruct — detailed', () => {
     });
   });
 
+  // A BFF session's absolute lifetime (BFF_SESSION_ABSOLUTE_LIFETIME_SECONDS,
+  // 30 days) and a native session's whole lifetime (docs/specs/native-app-auth.md
+  // D4) assume the BFF client's refresh token lives at least that long, or the
+  // row outlives its ability to refresh. The client sets no validity today, so
+  // it gets Cognito's default of 30 days; and logout's RevokeToken needs
+  // revocation, which a new client has on by default. Pin both: whoever sets
+  // either must revisit the backend lifetime too.
+  it('BFF client keeps the 30-day refresh-token default and token revocation', () => {
+    const clients = t.findResources('AWS::Cognito::UserPoolClient');
+    const bff = Object.values(clients).find((r: any) =>
+      String(r.Properties.ClientName ?? '').includes('bff-app-client'),
+    ) as any;
+    expect(bff).toBeDefined();
+    const props = bff.Properties;
+    if (props.RefreshTokenValidity !== undefined) {
+      const units = props.TokenValidityUnits?.RefreshToken ?? 'days';
+      const days = units === 'days' ? props.RefreshTokenValidity
+        : units === 'hours' ? props.RefreshTokenValidity / 24
+          : props.RefreshTokenValidity / 1440;
+      expect(days).toBeGreaterThanOrEqual(30);
+    }
+    expect(props.EnableTokenRevocation).not.toBe(false);
+  });
+
   it('user pool client supports authorization code grant', () => {
     t.hasResourceProperties('AWS::Cognito::UserPoolClient', {
       AllowedOAuthFlows: ['code'],
