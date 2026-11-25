@@ -4,7 +4,7 @@ Contains Pydantic models for chat API requests and responses.
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from apis.shared.client_tools import ClientToolSpec, validate_client_tools
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -191,6 +191,12 @@ class InvocationRequest(BaseModel):
     # only on the turn that creates the session; afterwards the stored flag
     # decides (``session_is_incognito``), so a later request can't change it.
     incognito: Optional[bool] = None
+    # Quiet watcher (docs/specs/quiet-watcher.md §3.3): the scheduled-runs worker
+    # sends "watch" for a watch schedule's headless run, which then also gets
+    # the `report` tool (only on a headless session, and only while the
+    # Runtime's PROACTIVE_RUNS_ENABLED is on). Absent on every interactive
+    # request, so a web or terminal turn is byte-for-byte unchanged.
+    run_mode: Optional[Literal["watch"]] = None
     # Marketplace D11: this turn was handed to the Agent by an `@`-mention in
     # the composer, rather than the whole conversation being bound to it.
     #

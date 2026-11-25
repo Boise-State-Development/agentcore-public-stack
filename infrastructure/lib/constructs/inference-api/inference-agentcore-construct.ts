@@ -541,6 +541,10 @@ export class InferenceAgentCoreConstruct extends Construct {
         // workflow chain are ON (`agentVersionPinningOn`), so the default costs
         // nothing against the V2 budget.
         ...(agentVersionPinningOn(config) ? { AGENT_VERSION_PINNING_ENABLED: 'true' } : {}),
+        // Quiet watcher (in development): a headless `run_mode: "watch"` turn
+        // gets the `report` tool. Written only while ON, so the default costs
+        // nothing against the V2 payload budget.
+        ...(config.proactiveRuns.enabled ? { PROACTIVE_RUNS_ENABLED: 'true' } : {}),
         // Conversation rewind (default on): the Runtime filters rewound
         // messages at restore and cuts a warm agent's list in place. Spread in
         // only while OFF: the code reads unset as on, so the default costs

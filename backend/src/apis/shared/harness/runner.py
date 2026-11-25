@@ -203,7 +203,10 @@ async def run_agent_headless(
     client_surface: Optional[str] = None,
     client_tools: Optional[List[Dict[str, Any]]] = None,
     interrupt_responses: Optional[List[Dict[str, Any]]] = None,
+    run_mode: Optional[str] = None,
+    incognito: Optional[bool] = None,
     trigger: str = "manual",
+    mark_unread: bool = True,
     invocations_base_url: Optional[str] = None,
     read_timeout_seconds: float = DEFAULT_READ_TIMEOUT_SECONDS,
     max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS,
@@ -233,6 +236,13 @@ async def run_agent_headless(
     Returns a ``RunResult`` in all outcomes except audit-start failure and
     ``HeadlessAuthError`` (both raise: a run we cannot audit or authenticate
     must not execute).
+
+    ``run_mode="watch"`` asks the Runtime for a quiet watcher's run (it builds
+    ``report``, docs/specs/quiet-watcher.md §3.3), and ``incognito=True`` makes
+    the new conversation read long-term memory without adding to it. Both are
+    sent only when given, so every other caller's payload is unchanged.
+    ``mark_unread=False`` leaves the unread dot to the caller: the
+    scheduled-runs worker sets it only on a watch run that notifies.
 
     ``audit_started=True`` means the caller already wrote the start audit
     record for this ``run_id`` (via ``governance.on_run_start``) and the
@@ -302,6 +312,10 @@ async def run_agent_headless(
         payload["client_tools"] = client_tools
     if interrupt_responses is not None:
         payload["interrupt_responses"] = interrupt_responses
+    if run_mode is not None:
+        payload["run_mode"] = run_mode
+    if incognito is not None:
+        payload["incognito"] = incognito
 
     acc = InvocationStreamAccumulator()
     sent_at = time.monotonic()
@@ -416,7 +430,9 @@ async def run_agent_headless(
         # tracker and the user keeps working elsewhere, so the result arrives
         # asynchronously in the sidebar just like a scheduled run. "manual" (the
         # default, used where a caller drains the result itself) stays excluded.
-        if trigger in ("schedule", "run_now") and result.status == "completed":
+        # A caller that decides for itself (a watch run, quiet or not) passes
+        # ``mark_unread=False``.
+        if mark_unread and trigger in ("schedule", "run_now") and result.status == "completed":
             await set_session_unread(session_id, user_id, True)
     except Exception:
         logger.error(

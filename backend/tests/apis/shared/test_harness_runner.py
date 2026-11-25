@@ -541,3 +541,59 @@ def test_chat_proxy_uses_the_shared_resolver():
     from apis.app_api.chat import proxy_routes
 
     assert proxy_routes._build_invocations_url is build_invocations_url
+
+
+# ---------------------------------------------------------------------------
+# Quiet watcher (docs/specs/quiet-watcher.md §3.3)
+# ---------------------------------------------------------------------------
+
+
+_REPORT_STREAM = _sse(
+    ("message_start", '{"role": "assistant"}'),
+    ("tool_use", '{"tool_use": {"name": "report", "tool_use_id": "r1", "input": "{\\"outcome\\": \\"nothing_new\\"}"}}'),
+    ("tool_result", '{"toolUseId": "r1", "result": "Recorded."}'),
+    ("tool_use", '{"toolUseId": "r2", "name": "report", "input": {"outcome": "notify", "items": [{"key": "k1", "title": "T"}]}}'),
+    ("tool_result", '{"toolUseId": "r2", "result": "Recorded."}'),
+    ("message_stop", '{"stopReason": "end_turn"}'),
+    ("done", "{}"),
+)
+
+
+@pytest.mark.asyncio
+async def test_a_watch_run_sends_run_mode_and_incognito_and_leaves_unread_to_the_caller(monkeypatch, delivery_spy):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_REPORT_STREAM)
+
+    _mock_http(monkeypatch, handler)
+    result = await run_agent_headless(
+        user_id="user-1", prompt="check", auth=StaticBearerAuth("t"), invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=RecordingAudit()),
+        trigger="schedule", run_mode="watch", incognito=True, mark_unread=False,
+    )
+    assert seen["payload"]["run_mode"] == "watch"
+    assert seen["payload"]["incognito"] is True
+    assert result.status == "completed"
+    assert delivery_spy["unread"] == []
+    # The last report call wins.
+    assert result.report_input == {"outcome": "notify", "items": [{"key": "k1", "title": "T"}]}
+
+
+@pytest.mark.asyncio
+async def test_run_mode_and_incognito_are_absent_unless_given(monkeypatch, delivery_spy):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_HAPPY_STREAM)
+
+    _mock_http(monkeypatch, handler)
+    result = await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=StaticBearerAuth("t"), invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=RecordingAudit()), trigger="schedule",
+    )
+    assert not {"run_mode", "incognito"} & set(seen["payload"])
+    assert result.report_input is None
+    assert delivery_spy["unread"] == [(result.session_id, "user-1", True)]

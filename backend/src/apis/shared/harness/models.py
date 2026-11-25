@@ -86,5 +86,18 @@ class RunResult:
     # Diagnostic: counts of every SSE event name seen, e.g. {"tool_use": 2}.
     events_seen: Dict[str, int] = field(default_factory=dict)
 
+    @property
+    def report_input(self) -> Optional[Dict[str, Any]]:
+        """The input of the run's last ``report`` call, or ``None`` when it made none.
+
+        A quiet watcher's run (docs/specs/quiet-watcher.md §3.3) ends with
+        ``report``; the last call wins. Derived from ``tool_trace``, so it is not
+        a field of its own and ``to_dict`` is unchanged.
+        """
+        for entry in reversed(self.tool_trace):
+            if entry.name == "report":
+                return entry.input
+        return None
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
