@@ -703,7 +703,9 @@ class BrowserLiveViewResponse(BaseModel):
     )
 
 
-AwaitingInputKind = Literal["oauth", "tool_approval", "user_question", "browser_login"]
+AwaitingInputKind = Literal[
+    "oauth", "tool_approval", "user_question", "browser_login", "mcp_elicitation"
+]
 
 # When a turn paused on more than one prompt, the session list names one. A
 # fixed order keeps a row from flipping between kinds across refetches: the
@@ -713,6 +715,7 @@ _AWAITING_INPUT_ORDER: tuple[AwaitingInputKind, ...] = (
     "browser_login",
     "tool_approval",
     "user_question",
+    "mcp_elicitation",
     "oauth",
 )
 

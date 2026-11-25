@@ -43,5 +43,6 @@ export const environment = {
         knowledgeBaseMode: false,
         releaseLedger: false,
         attachmentCards: false,
+        mcpElicitation: false,
     } satisfies FeatureFlags,
 };

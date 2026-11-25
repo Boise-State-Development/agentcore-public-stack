@@ -64,5 +64,6 @@ export const environment = {
         // CDK_RELEASE_LEDGER_ENABLED is on in the `development` GitHub environment.
         releaseLedger: true,
         attachmentCards: true,
+        mcpElicitation: false,
     } satisfies FeatureFlags,
 };

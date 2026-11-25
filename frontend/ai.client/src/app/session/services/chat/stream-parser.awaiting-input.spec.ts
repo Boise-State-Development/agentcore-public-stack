@@ -1,4 +1,4 @@
-// A turn that pauses on the user ends its stream with one of four prompt
+// A turn that pauses on the user ends its stream with one of five prompt
 // events. Each marks the conversation as waiting on the user, viewed or not,
 // so the session list can show it without refetching. A pre-flight
 // `oauth_required` (no interruptId) paused nothing and must not.
@@ -44,6 +44,19 @@ const EVENTS: Array<[string, Record<string, unknown>, string]> = [
       viewport: { width: 1280, height: 800 },
     },
     'browser_login',
+  ],
+  [
+    'mcp_elicitation_required',
+    {
+      type: 'mcp_elicitation_required',
+      interruptId: 'interrupt-fake-5',
+      toolUseId: 'tooluse-fake-5',
+      toolName: 'github_issues___delete_repository',
+      serverName: 'GitHub',
+      message: 'Type "acme/scratch" to confirm.',
+      fields: [{ name: 'repository_name', kind: 'text', title: 'Repository name', required: true }],
+    },
+    'mcp_elicitation',
   ],
 ];
 

@@ -213,6 +213,67 @@ export interface UserQuestionRequiredEvent {
   questions: UserQuestion[];
 }
 
+/** One choice in a `choice` field of an MCP elicitation form. */
+export interface McpElicitationOption {
+  /** What goes back to the server. */
+  value: string;
+  /** What the user reads. Falls back to `value` on the backend. */
+  label: string;
+}
+
+/** The control kinds the backend's normaliser emits (`apis/shared/mcp_elicitation/forms.py`). */
+export type McpElicitationFieldKind = 'text' | 'number' | 'integer' | 'boolean' | 'choice';
+
+/**
+ * One field of a server's form, already normalised by the backend into the
+ * restricted subset the MCP spec allows: a flat set of primitives and enums.
+ * Bounds that do not apply to a kind are absent or null.
+ */
+export interface McpElicitationField {
+  /** The property name the answer is keyed by. */
+  name: string;
+  kind: McpElicitationFieldKind;
+  title: string;
+  description?: string | null;
+  required: boolean;
+  /** The server's default, if any; typed by `kind`. */
+  default?: unknown;
+  /** (text) `email`, `uri`, `date` or `date-time`. */
+  format?: string | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+  /** (number / integer) */
+  minimum?: number | null;
+  maximum?: number | null;
+  /** (choice) */
+  options?: McpElicitationOption[];
+  multiSelect?: boolean;
+  minItems?: number | null;
+  maxItems?: number | null;
+}
+
+/**
+ * An external MCP server paused a tool call to ask the user for structured
+ * input (`docs/specs/mcp-elicitation.md` §4).
+ *
+ * Sibling of {@link UserQuestionRequiredEvent}, with one difference the UI
+ * must carry: the message and the form come from a **third-party server**, not
+ * from our model. `serverName` is the catalog row's display name, not what the
+ * server calls itself, so a server cannot claim to be someone else.
+ *
+ * The answer never enters the conversation: it goes to the server on the
+ * replayed call, and the model sees only the server's own result.
+ */
+export interface McpElicitationRequiredEvent {
+  type: 'mcp_elicitation_required';
+  interruptId: string;
+  toolUseId: string;
+  toolName: string;
+  serverName: string;
+  message: string;
+  fields: McpElicitationField[];
+}
+
 /**
  * The agent paused so the *user* can sign in to a site it cannot reach.
  *

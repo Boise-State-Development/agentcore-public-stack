@@ -307,4 +307,16 @@ export interface FeatureFlags {
    * next), so `false` locally and in prod, `true` on dev.
    */
   attachmentCards: boolean;
+
+  /**
+   * MCP form elicitation (docs/specs/mcp-elicitation.md): the form an external
+   * MCP server asks the user to fill in partway through a tool call
+   * (`mcp_elicitation_required`), and the admin tool form's per-server
+   * "Allow this server to ask for input" toggle (`elicitationEnabled`).
+   * Backend: MCP_ELICITATION_ENABLED (AgentCore Runtime and app-api), which is
+   * the real gate: while it is off no server is told the client can elicit, so
+   * the event never arrives. In development, so `false` everywhere until an
+   * environment turns the backend on.
+   */
+  mcpElicitation: boolean;
 }
