@@ -153,6 +153,15 @@ def _result_text(result: dict) -> str:
     return " ".join(block.get("text", "") for block in result.get("content") or [])
 
 
+def _server_text(result: dict) -> str:
+    """The server's own reply, without the outcome note the middleware adds."""
+    return (result.get("content") or [{}])[0].get("text", "")
+
+
+def _note(result: dict) -> str:
+    return (result.get("content") or [{}])[-1].get("text", "")
+
+
 def _resume(agent: Agent, interrupt, response) -> None:
     asyncio.run(
         _run(agent, [{"interruptResponse": {"interruptId": interrupt.id, "response": response}}])
@@ -243,7 +252,11 @@ class TestResume:
             assert not agent._interrupt_state.activated
             (result,) = _tool_results(agent)
             assert result["status"] == "success"
-            assert _result_text(result) == f"deleted {REPO}"
+            assert _server_text(result) == f"deleted {REPO}"
+            # The model is told the user answered, never what they answered.
+            assert result["elicitation"] == {"action": "accept"}
+            assert _note(result).startswith("The user submitted GitHub's form.")
+            assert REPO not in _note(result)
 
     def test_the_answer_never_enters_the_conversation(self, server):
         with _client(server) as client:
@@ -266,7 +279,9 @@ class TestResume:
 
             assert deleted == []
             (result,) = _tool_results(agent)
-            assert _result_text(result) == f"{REPO} was not deleted"
+            assert _server_text(result) == f"{REPO} was not deleted"
+            assert result["elicitation"] == {"action": "decline"}
+            assert _note(result).startswith("The user declined GitHub's request for input")
 
     def test_an_answer_that_does_not_fit_is_never_forwarded(self, server, deleted):
         with _client(server) as client:
@@ -279,7 +294,9 @@ class TestResume:
             assert deleted == []
             assert "hunter2" not in json.dumps(server.requests)
             (result,) = _tool_results(agent)
-            assert _result_text(result) == f"{REPO} was not deleted"
+            assert _server_text(result) == f"{REPO} was not deleted"
+            assert result["elicitation"] == {"action": "cancel"}
+            assert "hunter2" not in json.dumps(agent.messages)
 
     def test_a_call_that_asks_twice_pauses_twice_and_keeps_its_first_answer(
         self, server, deleted

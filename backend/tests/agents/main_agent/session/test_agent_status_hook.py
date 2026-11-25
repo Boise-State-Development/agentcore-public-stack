@@ -204,6 +204,46 @@ def test_an_ordinary_call_is_not_awaiting(hook):
 
     (batch,) = hook.drain_batches()
     assert batch["calls"][0]["awaiting"] is False
+    assert batch["calls"][0]["declined"] is False
+
+
+def test_an_mcp_form_the_user_declined_is_not_a_failure(hook):
+    """GitHub answers a declined form with an error; the user chose it (spec §13)."""
+    hook._on_after_tool_call(
+        _after_tool_event(
+            name="delete_repository",
+            result={
+                "status": "error",
+                "content": [{"text": "Repository deletion was not confirmed"}],
+                "elicitation": {"action": "decline"},
+            },
+        )
+    )
+    hook._on_after_tools(MagicMock())
+
+    (status,) = hook.drain_statuses()
+    assert status["ok"] is True
+    (batch,) = hook.drain_batches()
+    assert batch["calls"][0]["declined"] is True
+
+
+def test_an_mcp_form_the_server_refused_after_an_answer_still_fails(hook):
+    hook._on_after_tool_call(
+        _after_tool_event(
+            name="delete_repository",
+            result={
+                "status": "error",
+                "content": [{"text": "Repository name confirmation did not match"}],
+                "elicitation": {"action": "accept"},
+            },
+        )
+    )
+    hook._on_after_tools(MagicMock())
+
+    (status,) = hook.drain_statuses()
+    assert status["ok"] is False
+    (batch,) = hook.drain_batches()
+    assert batch["calls"][0]["declined"] is False
 
 
 def test_raised_exception_is_not_ok(hook):

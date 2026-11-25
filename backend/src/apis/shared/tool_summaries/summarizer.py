@@ -60,6 +60,10 @@ _MAX_CALLS = 8
 # in place of its result (``AgentStatusHook`` records ``awaiting``).
 _AWAITING_LINE = "WAITING FOR USER: a form is open for them to submit; nothing done yet"
 
+# What a call whose MCP server form the user declined shows the model in place
+# of its result (``AgentStatusHook`` records ``declined``).
+_DECLINED_LINE = "DECLINED BY USER: they turned down the request for input; nothing done"
+
 _SUMMARY_SYSTEM_PROMPT = """You describe what an AI assistant just did, in one short past-tense line.
 
 You are given the tool calls the assistant made and what they returned. Write a single line a non-technical person would understand, naming the specific things that were found.
@@ -73,6 +77,7 @@ Guidelines:
 - A call may name the system it belongs to in [brackets]. Refer to a system only by that name, and only when a call carries it. Never guess which system a call belongs to.
 - If a call failed, say so plainly, naming its system from the brackets.
 - A call marked WAITING FOR USER did nothing yet: a form is open for the user to submit. Never say it created, updated or sent anything.
+- A call marked DECLINED BY USER did nothing: the user chose not to go ahead. Say they declined; never call it a failure.
 
 Examples:
 Calls: list_courses [Canvas for Faculty] -> 3 courses (BIO 101, HIST 210, CS 121)
@@ -111,6 +116,8 @@ def _build_prompt(calls: List[Dict[str, Any]]) -> str:
             # ("STOP — do not call any other tools"), and given it a small
             # model heads the batch as if the write had happened.
             lines.append(f"{name}({tool_input}) -> {_AWAITING_LINE}")
+        elif call.get("declined"):
+            lines.append(f"{name}({tool_input}) -> {_DECLINED_LINE}")
         elif not call.get("ok", True):
             lines.append(f"{name}({tool_input}) -> FAILED: {result}")
         else:
@@ -148,6 +155,22 @@ def _awaiting_heading(calls: List[Dict[str, Any]]) -> str:
         return "Waiting for you to submit the form"
     return _truncate(
         f"Waiting for you to submit the form in {_join_names(integrations)}", 90
+    )
+
+
+def _declined_heading(calls: List[Dict[str, Any]]) -> str:
+    """The heading for a batch whose every call is a form the user declined.
+
+    No model involved, like ``_awaiting_heading``: the server's reply is an
+    error, and a small model given it heads the batch as a failure.
+    """
+    integrations = list(
+        dict.fromkeys(str(c["integration"]) for c in calls if c.get("integration"))
+    )
+    if not integrations:
+        return "You declined the request for input"
+    return _truncate(
+        f"You declined the request for input from {_join_names(integrations)}", 90
     )
 
 
@@ -219,10 +242,12 @@ async def summarize_tool_batch(
     """Summarize one finished tool batch, or return ``None``.
 
     ``calls`` are the bounded records captured by ``AgentStatusHook`` —
-    ``{toolUseId, toolName, input, result, ok, awaiting, durationMs,
-    integration}``. A batch where every call failed is headed
+    ``{toolUseId, toolName, input, result, ok, awaiting, declined,
+    durationMs, integration}``. A batch where every call failed is headed
     deterministically (``_failure_heading``) without a model call, and so is
-    one where every call left an MCP App form open (``_awaiting_heading``).
+    one where every call left an MCP App form open (``_awaiting_heading``) or
+    every call is an MCP server's form the user declined
+    (``_declined_heading``).
 
     Returns ``None`` on an empty batch, a disabled flag, a missing Bedrock
     client, a model error, or an empty generation. Every one of those means
@@ -240,6 +265,8 @@ async def summarize_tool_batch(
 
     if all(c.get("awaiting") for c in calls):
         return _awaiting_heading(calls)
+    if all(c.get("declined") for c in calls):
+        return _declined_heading(calls)
     if not any(c.get("ok", True) for c in calls):
         return _failure_heading(calls)
 
