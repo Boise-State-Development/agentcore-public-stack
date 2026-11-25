@@ -263,3 +263,30 @@ App-api's admin discovery advertises form elicitation to an opted-in server too,
 
 - **Advertising form elicitation changes no existing GitHub tool spec**, so turning it on rewrites no cached prefix.
 - **`delete_repository` lives in the `repos` toolset.** Dev's row sends `X-MCP-Toolsets: issues,context`, so the dev run also adds `repos` to that header. The row's non-empty allowlist keeps the toolset's other 22 tools out of `toolConfig`, so the only prefix change on dev is the one deliberate rewrite from allowing `delete_repository`.
+
+**Steps 1–3, the setup (2026-11-25).**
+- **Flags:** `CDK_MCP_ELICITATION_ENABLED=true` in the `development` GitHub environment, deployed with a `platform.yml` dispatch. Afterwards the Runtime carried `MCP_ELICITATION_ENABLED=true` and so did app-api's task definition. `features.mcpElicitation` is on in `environment.development.ts` (#2440).
+- **Dev catalog row (`TOOL#github_issues`):** `elicitationEnabled: true`, `X-MCP-Toolsets: issues,context,repos`, and `delete_repository` added as the 11th allowed tool, with no `needsApproval` (§9.4).
+- **Discover on dev returned `delete_repository`**, so app-api's advertising works in the deployed stack.
+
+**GitHub checks scope before it asks.** With the dev connector's scopes at the time (`read:user, user:email, repo, read:org, project`), GitHub's MCP server refused the `tools/call` for `delete_repository` with a transport-level HTTP 403 in under 400 ms. It asked for nothing, and a direct call with a second token that lacked `delete_repo` did the same. The form can therefore appear only for a token that holds `delete_repo`. **A deployment that wants this flow for GitHub must add `delete_repo` to its GitHub connector**, a decision about what every user's token may do. For the run I added it on dev, ran the checks, and removed it again (17:11 → 17:19 UTC). Removing a scope from the connector does not revoke it from a token already granted on GitHub; that takes revoking the OAuth app's authorization.
+
+**Step 4, the checks.** All four ran against a private scratch repository created for the run, in a conversation started after the deploy, on Haiku 5.5.
+
+| Check | Result |
+|---|---|
+| Decline | The form showed and Decline resumed the turn. GitHub returned "Repository deletion was not confirmed" and the repository was still there |
+| Reload while paused | After a full page load the same form came back from the breadcrumb, and the sidebar kept its needs-input mark |
+| Wrong name | GitHub returned "Repository name confirmation did not match" and the repository was still there |
+| Right name | GitHub deleted the repository (the API then returned 404), and the model reported the deletion |
+
+**Step 3 again, the cost rows** (`GET /admin/costs/sessions/{id}/calls`, 6 model calls across 3 pauses and 3 resumes):
+- `toolConfigHash` and `systemPromptHash` were the same on every call.
+- The first call was `first_write`, and every later call was `hit`, with `wastedUsd` 0.
+- Each resume, including the one made after the reload, read the whole prefix from cache (58.5k → 61.8k tokens).
+
+**Not measured:** step 4's `turn_prelude` timing comparison, flag on versus off.
+
+**Findings for later:**
+- **A decline or a mismatch reads as a failure.** GitHub returns both as an error result, so the tool rail shows "Couldn't use Github Issues · 1 failed" for a decision the user made.
+- **The model cannot tell what the user did.** The answer never reaches it, by design (§4). After a mismatch it guessed at causes and told the user it "can't see GitHub's confirmation form". A one-line, answer-free note in the tool result, such as "the user declined" or "the user answered; the server's reply follows", would let it explain without seeing the content.
