@@ -36,7 +36,12 @@ export interface SessionPreferences {
  * What a conversation's paused turn is waiting on the user for. Matches the
  * backend's `AwaitingInputKind` (`apis/shared/sessions/models.py`).
  */
-export type AwaitingInputKind = 'oauth' | 'tool_approval' | 'user_question' | 'browser_login';
+export type AwaitingInputKind =
+  | 'oauth'
+  | 'tool_approval'
+  | 'user_question'
+  | 'browser_login'
+  | 'mcp_elicitation';
 
 export interface SessionMetadata {
   sessionId: string;

@@ -91,6 +91,13 @@ export interface MCPServerConfig {
   tools: MCPToolEntry[];
   healthCheckEnabled: boolean;
   healthCheckIntervalSeconds: number;
+  /**
+   * MCP form elicitation (docs/specs/mcp-elicitation.md §6): tell this server
+   * the client can show a form partway through a tool call. Only takes effect
+   * while the backend's MCP_ELICITATION_ENABLED is on, and only on 2026-07-28
+   * connections. Absent on rows saved before it existed; reads as `false`.
+   */
+  elicitationEnabled?: boolean;
 }
 
 /** Mirrors `MAX_CUSTOM_HEADERS` in `apis/shared/tools/models.py`. */
@@ -336,6 +343,13 @@ export interface SetToolRolesRequest {
  */
 export interface MCPDiscoverRequest {
   serverUrl: string;
+  /**
+   * The server's `elicitationEnabled` setting, so discovery advertises form
+   * elicitation exactly as the agent loop will and lists the tools a server
+   * offers only to clients that can elicit (docs/specs/mcp-elicitation.md §6).
+   * Takes effect only while the backend's MCP_ELICITATION_ENABLED is on.
+   */
+  elicitationEnabled?: boolean;
   transport: MCPTransport;
   authType: MCPAuthType;
   awsRegion?: string | null;

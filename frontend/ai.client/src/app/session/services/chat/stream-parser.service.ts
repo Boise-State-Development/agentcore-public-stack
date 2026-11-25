@@ -22,6 +22,7 @@ import { OAuthConsentService } from '../../../services/oauth-consent/oauth-conse
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 import { UserQuestionService } from '../../../services/user-question/user-question.service';
 import { BrowserLoginService } from '../../../services/browser-login/browser-login.service';
+import { McpElicitationService } from '../../../services/mcp-elicitation/mcp-elicitation.service';
 import { CompactionSummaryService } from './compaction-summary.service';
 import { SteeringService } from './steering.service';
 import { buildSteeringMessage } from './steering';
@@ -40,6 +41,7 @@ import type {
   ToolApprovalRequiredEvent,
   UserQuestionRequiredEvent,
   BrowserLoginRequiredEvent,
+  McpElicitationRequiredEvent,
   CompactionEvent,
   ArtifactEvent,
   UiResourceEvent,
@@ -192,6 +194,7 @@ export class StreamParserService {
   private toolApprovalService = inject(ToolApprovalService);
   private userQuestionService = inject(UserQuestionService);
   private browserLoginService = inject(BrowserLoginService);
+  private mcpElicitationService = inject(McpElicitationService);
   private compactionSummary = inject(CompactionSummaryService);
   private steering = inject(SteeringService);
   private artifactState = inject(ArtifactStateService);
@@ -840,6 +843,21 @@ export class StreamParserService {
           messageId: lastAssistantId,
         });
         this.chatStateService.markSessionAwaitingInput(state.sessionId, 'browser_login');
+      },
+
+      onMcpElicitationRequired: (data: McpElicitationRequiredEvent) => {
+        const lastAssistantId = this.findLastAssistantId(state);
+        this.mcpElicitationService.requestInput({
+          interruptId: data.interruptId,
+          toolUseId: data.toolUseId,
+          toolName: data.toolName,
+          serverName: data.serverName,
+          message: data.message,
+          fields: data.fields,
+          messageId: lastAssistantId,
+          sessionId: state.sessionId,
+        });
+        this.chatStateService.markSessionAwaitingInput(state.sessionId, 'mcp_elicitation');
       },
 
       onError: (data) => this.handleError(state, data),

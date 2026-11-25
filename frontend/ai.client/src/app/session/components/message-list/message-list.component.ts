@@ -12,6 +12,8 @@ import { PulsatingLoaderComponent } from '../../../components/pulsating-loader.c
 import { OAuthConsentPromptComponent } from './components/oauth-consent-prompt/oauth-consent-prompt.component';
 import { ToolApprovalPromptComponent } from './components/tool-approval-prompt/tool-approval-prompt.component';
 import { UserQuestionPromptComponent } from './components/user-question-prompt/user-question-prompt.component';
+import { McpElicitationPromptComponent } from './components/mcp-elicitation-prompt/mcp-elicitation-prompt.component';
+import { FEATURES } from '../../../services/features';
 import { BrowserLoginPromptComponent } from './components/browser-login-prompt/browser-login-prompt.component';
 import { BrowserPanelComponent } from './components/browser-panel/browser-panel.component';
 import { CompactionSummaryComponent } from './components/compaction-summary/compaction-summary.component';
@@ -52,6 +54,10 @@ import {
   BrowserLoginRequest,
   BrowserLoginService,
 } from '../../../services/browser-login/browser-login.service';
+import {
+  McpElicitationRequest,
+  McpElicitationService,
+} from '../../../services/mcp-elicitation/mcp-elicitation.service';
 import { CompactionSummaryService } from '../../services/chat/compaction-summary.service';
 import { ChatStateService } from '../../services/chat/chat-state.service';
 import { OutageOffer, outageLabel } from '../../services/chat/provider-outage';
@@ -145,6 +151,7 @@ function segmentTurn(messages: readonly Message[]): TurnSegment[] {
     OAuthConsentPromptComponent,
     ToolApprovalPromptComponent,
     UserQuestionPromptComponent,
+    McpElicitationPromptComponent,
     BrowserLoginPromptComponent,
     BrowserPanelComponent,
     CompactionSummaryComponent,
@@ -272,6 +279,8 @@ export class MessageListComponent {
   private toolApprovalService = inject(ToolApprovalService);
   private userQuestionService = inject(UserQuestionService);
   private browserLoginService = inject(BrowserLoginService);
+  private mcpElicitationService = inject(McpElicitationService);
+  private readonly features = inject(FEATURES);
   private compactionSummary = inject(CompactionSummaryService);
   private artifactState = inject(ArtifactStateService);
   private mcpAppCardState = inject(McpAppCardStateService);
@@ -1104,6 +1113,16 @@ export class MessageListComponent {
     const sessionId = this.sessionId();
     if (!sessionId) return [];
     return this.userQuestionService.pending().filter((r) => r.sessionId === sessionId);
+  });
+
+  /** MCP server forms for THIS list's session, filtered for the same reason
+   *  as the prompts above. Behind `features.mcpElicitation` (spec §6): the
+   *  backend flag is the real gate, since while it is off no server is told
+   *  the client can elicit and the event never arrives. */
+  protected pendingMcpElicitations = computed<McpElicitationRequest[]>(() => {
+    const sessionId = this.sessionId();
+    if (!sessionId || !this.features.mcpElicitation) return [];
+    return this.mcpElicitationService.pending().filter((r) => r.sessionId === sessionId);
   });
 
   /** Browser sign-in prompts for THIS list's session, filtered for the same

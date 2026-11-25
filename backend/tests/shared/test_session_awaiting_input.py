@@ -82,11 +82,16 @@ class TestDeriveAwaitingInput:
             (["oauth", "user_question", "tool_approval"], "tool_approval"),
             (["oauth", "user_question"], "user_question"),
             (["user_question", "oauth"], "user_question"),
+            (["oauth", "mcp_elicitation"], "mcp_elicitation"),
+            (["mcp_elicitation", "user_question"], "user_question"),
         ],
     )
     def test_several_kinds_pick_one_regardless_of_order(self, kinds, expected):
         assert derive_awaiting_input(kinds, LIVE, now=NOW) == expected
         assert derive_awaiting_input(list(reversed(kinds)), LIVE, now=NOW) == expected
+
+    def test_a_paused_mcp_form_marks_the_session(self):
+        assert derive_awaiting_input(["mcp_elicitation"], LIVE, now=NOW) == "mcp_elicitation"
 
     def test_unknown_kinds_alone_name_nothing(self):
         assert derive_awaiting_input(["some_future_kind"], LIVE, now=NOW) is None

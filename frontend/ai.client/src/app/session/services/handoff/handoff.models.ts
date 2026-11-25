@@ -23,8 +23,17 @@ export interface WaitingOn {
   name: string;
 }
 
-/** The breadcrumb kinds a source can relay (`apis.shared.handoff.relay`). */
-export type RelayedPromptKind = 'oauth' | 'tool_approval' | 'user_question' | 'browser_login';
+/**
+ * The breadcrumb kinds a source can relay (`apis.shared.handoff.relay`), plus
+ * `mcp_elicitation`, which the relay does not carry yet (elicitation spec §3)
+ * but whose resume still reports to `HandoffRelayService` like every other kind.
+ */
+export type RelayedPromptKind =
+  | 'oauth'
+  | 'tool_approval'
+  | 'user_question'
+  | 'browser_login'
+  | 'mcp_elicitation';
 
 /**
  * One prompt a paused target is waiting on, as its source relays it (handoffs spec §4.3, PR-0.3c).

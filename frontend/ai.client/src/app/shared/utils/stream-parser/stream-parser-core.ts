@@ -50,6 +50,8 @@ import type {
   ToolApprovalRequiredEvent,
   UserQuestionRequiredEvent,
   BrowserLoginRequiredEvent,
+  McpElicitationRequiredEvent,
+  McpElicitationField,
   UserQuestion,
   QuestionOption,
   CompactionEvent,
@@ -111,6 +113,9 @@ export interface StreamParserCallbacks {
 
   // The agent paused so the user can sign in to a site it cannot reach
   onBrowserLoginRequired?: (data: BrowserLoginRequiredEvent) => void;
+
+  // An external MCP server paused a tool call to ask the user for input
+  onMcpElicitationRequired?: (data: McpElicitationRequiredEvent) => void;
 
   // What the agent is doing right now (model/tool boundaries from the
   // runtime's AgentStatusHook). Drives the live status line and supplies the
@@ -558,6 +563,81 @@ export function validateUserQuestionRequiredEvent(
     event.interruptId.length > 0 &&
     typeof event.toolUseId === 'string' &&
     validateUserQuestions(event.questions)
+  );
+}
+
+const MCP_ELICITATION_KINDS: ReadonlySet<string> = new Set([
+  'text',
+  'number',
+  'integer',
+  'boolean',
+  'choice',
+]);
+
+/**
+ * Validate the fields of an MCP server's form.
+ *
+ * The backend has already normalised the server's schema and refused anything
+ * outside the subset it can render, so this guards the transport, not the
+ * server: a field with no name cannot be answered, and a choice with no
+ * options is a dead end. Either drops the whole form, since a half-rendered
+ * one would send the server an answer to a question it did not ask.
+ */
+export function validateMcpElicitationFields(value: unknown): value is McpElicitationField[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    return false;
+  }
+  return value.every((raw: unknown) => {
+    if (!raw || typeof raw !== 'object') return false;
+    const field = raw as Partial<McpElicitationField>;
+    if (
+      typeof field.name !== 'string' ||
+      field.name.length === 0 ||
+      typeof field.kind !== 'string' ||
+      !MCP_ELICITATION_KINDS.has(field.kind) ||
+      typeof field.title !== 'string' ||
+      typeof field.required !== 'boolean'
+    ) {
+      return false;
+    }
+    if (field.kind !== 'choice') return true;
+    return (
+      Array.isArray(field.options) &&
+      field.options.length > 0 &&
+      field.options.every(
+        (option: unknown) =>
+          !!option &&
+          typeof option === 'object' &&
+          typeof (option as { value?: unknown }).value === 'string' &&
+          typeof (option as { label?: unknown }).label === 'string',
+      )
+    );
+  });
+}
+
+/**
+ * Validate McpElicitationRequiredEvent structure.
+ *
+ * Used for the live event AND the reload path: the backend's breadcrumb holds
+ * this same payload JSON-encoded (`PendingInterrupt.elicitation`), so one
+ * predicate decides what is renderable on both and they cannot drift.
+ */
+export function validateMcpElicitationRequiredEvent(
+  data: unknown,
+): data is McpElicitationRequiredEvent {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  const event = data as Partial<McpElicitationRequiredEvent>;
+  return (
+    event.type === 'mcp_elicitation_required' &&
+    typeof event.interruptId === 'string' &&
+    event.interruptId.length > 0 &&
+    typeof event.toolUseId === 'string' &&
+    typeof event.toolName === 'string' &&
+    typeof event.serverName === 'string' &&
+    typeof event.message === 'string' &&
+    validateMcpElicitationFields(event.fields)
   );
 }
 
@@ -1255,6 +1335,14 @@ export function processStreamEvent(
           callbacks.onBrowserLoginRequired?.(data);
         } else {
           callbacks.onParseError?.('browser_login_required: invalid data structure');
+        }
+        break;
+
+      case 'mcp_elicitation_required':
+        if (validateMcpElicitationRequiredEvent(data)) {
+          callbacks.onMcpElicitationRequired?.(data);
+        } else {
+          callbacks.onParseError?.('mcp_elicitation_required: invalid data structure');
         }
         break;
 

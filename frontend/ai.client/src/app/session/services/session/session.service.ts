@@ -60,7 +60,7 @@ export interface PendingInterrupt {
    * written before per-tool approval shipped omit this — backend defaults
    * to "oauth" on read.
    */
-  kind?: 'oauth' | 'tool_approval' | 'user_question';
+  kind?: 'oauth' | 'tool_approval' | 'user_question' | 'browser_login' | 'mcp_elicitation';
   /** Id of the assistant message whose tool call triggered this interrupt, if known */
   triggeringMessageId?: string | null;
   /** ISO 8601 timestamp when the interrupt was recorded */
@@ -85,6 +85,12 @@ export interface PendingInterrupt {
    * never trust it to be renderable.
    */
   questions?: string | null;
+  /**
+   * (mcp_elicitation) JSON-encoded `mcp_elicitation_required` payload: the
+   * server's message and normalised fields, never the user's answer. Validate
+   * with `validateMcpElicitationRequiredEvent` after parsing.
+   */
+  elicitation?: string | null;
 }
 
 /**

@@ -8,7 +8,11 @@ import { FileUploadService, FileMetadata } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
 import { UserQuestionService } from '../../../services/user-question/user-question.service';
-import { validateUserQuestions } from '../../../shared/utils/stream-parser';
+import { McpElicitationService } from '../../../services/mcp-elicitation/mcp-elicitation.service';
+import {
+  validateMcpElicitationRequiredEvent,
+  validateUserQuestions,
+} from '../../../shared/utils/stream-parser';
 import { McpAppStateService } from '../mcp-apps/mcp-app-state.service';
 import { ToolInsightService } from '../chat/tool-insight.service';
 import { DeliveryStateService } from '../handoff/delivery-state.service';
@@ -101,6 +105,7 @@ export class MessageMapService {
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
   private userQuestionService = inject(UserQuestionService);
+  private mcpElicitationService = inject(McpElicitationService);
   private mcpAppState = inject(McpAppStateService);
   private toolInsight = inject(ToolInsightService);
   private handoffState = inject(HandoffStateService);
@@ -683,6 +688,43 @@ export class MessageMapService {
     });
   }
 
+  /**
+   * Re-render an MCP server's form from its persisted breadcrumb.
+   *
+   * The breadcrumb's `elicitation` is the live event's payload JSON-encoded,
+   * so it goes through the same validator as the stream: a form that would
+   * not render live does not render on reload either. The breadcrumb's own
+   * interrupt id wins over the one inside the payload, because it is the id
+   * the resume guard knows.
+   */
+  private hydrateMcpElicitation(
+    sessionId: string,
+    interrupt: PendingInterrupt,
+    messageId: string | undefined,
+  ): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(interrupt.elicitation ?? '');
+    } catch {
+      console.warn('Skipping mcp_elicitation interrupt with unparseable form', interrupt.interruptId);
+      return;
+    }
+    if (!validateMcpElicitationRequiredEvent(parsed)) {
+      console.warn('Skipping mcp_elicitation interrupt with unrenderable form', interrupt.interruptId);
+      return;
+    }
+    this.mcpElicitationService.requestInput({
+      interruptId: interrupt.interruptId,
+      toolUseId: interrupt.toolUseId ?? parsed.toolUseId,
+      toolName: parsed.toolName,
+      serverName: parsed.serverName,
+      message: parsed.message,
+      fields: parsed.fields,
+      messageId,
+      sessionId,
+    });
+  }
+
   private hydratePendingInterrupts(
     sessionId: string,
     interrupts: PendingInterrupt[] | undefined,
@@ -704,6 +746,11 @@ export class MessageMapService {
 
       if (kind === 'user_question') {
         this.hydrateUserQuestion(sessionId, interrupt, messageId);
+        continue;
+      }
+
+      if (kind === 'mcp_elicitation') {
+        this.hydrateMcpElicitation(sessionId, interrupt, messageId);
         continue;
       }
 

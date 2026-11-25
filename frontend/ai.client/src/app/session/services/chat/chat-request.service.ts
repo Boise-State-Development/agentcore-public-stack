@@ -32,6 +32,10 @@ import {
   BrowserLoginResponse,
   BrowserLoginService,
 } from '../../../services/browser-login/browser-login.service';
+import {
+  McpElicitationResponse,
+  McpElicitationService,
+} from '../../../services/mcp-elicitation/mcp-elicitation.service';
 import { ErrorService } from '../../../services/error/error.service';
 import { SystemPromptsService } from '../../../services/system-prompts/system-prompts.service';
 import { isPreviewSession } from '../../../shared/constants/session.constants';
@@ -80,6 +84,7 @@ export class ChatRequestService implements OnDestroy {
   private toolApprovalService = inject(ToolApprovalService);
   private userQuestionService = inject(UserQuestionService);
   private browserLoginService = inject(BrowserLoginService);
+  private mcpElicitationService = inject(McpElicitationService);
   private steering = inject(SteeringService);
   private errorService = inject(ErrorService);
   private failedSends = inject(FailedSendService);
@@ -107,6 +112,9 @@ export class ChatRequestService implements OnDestroy {
     this.browserLoginService.setResumeHandler(async (interruptId, response, context) => {
       await this.resumeFromBrowserLogin(interruptId, response, context?.sessionId);
     });
+    this.mcpElicitationService.setResumeHandler(async (interruptId, response, context) => {
+      await this.resumeFromMcpElicitation(interruptId, response, context?.sessionId);
+    });
   }
 
   /**
@@ -133,6 +141,7 @@ export class ChatRequestService implements OnDestroy {
     this.toolApprovalService.setResumeHandler(null);
     this.userQuestionService.setResumeHandler(null);
     this.browserLoginService.setResumeHandler(null);
+    this.mcpElicitationService.setResumeHandler(null);
   }
 
   async submitChatRequest(
@@ -859,6 +868,30 @@ export class ChatRequestService implements OnDestroy {
       title: 'Sign-in expired',
       message:
         'The browser session ended before the sign-in finished. Please send your message again to start a new one.',
+    });
+  }
+
+  /**
+   * Resume a turn paused on an MCP server's form (`docs/specs/mcp-elicitation.md`).
+   *
+   * The response is `{action: "accept", content}`, `{action: "decline"}` or
+   * `{action: "cancel"}`, never null, which the route refuses before the
+   * lease. The backend replays the tool call from its first round with the
+   * answer, so an answer given long after the server asked still lands; only
+   * an expired paused turn (the snapshot's own TTL) sends the user back to
+   * the composer.
+   */
+  private resumeFromMcpElicitation(
+    interruptId: string,
+    response: McpElicitationResponse,
+    sessionId?: string,
+  ): Promise<ResumeOutcome> {
+    if (!sessionId) {
+      return Promise.resolve('failed');
+    }
+    return this.resumePausedTurn(sessionId, 'mcp_elicitation', [{ interruptId, response }], {
+      title: 'Request expired',
+      message: 'The agent paused too long ago to resume this turn automatically. Please send your message again.',
     });
   }
 

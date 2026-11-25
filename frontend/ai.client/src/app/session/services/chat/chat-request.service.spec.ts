@@ -20,6 +20,7 @@ import { SkillService } from '../../../services/skill/skill.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
 import { ToolApprovalService } from '../../../services/tool-approval/tool-approval.service';
+import { McpElicitationService } from '../../../services/mcp-elicitation/mcp-elicitation.service';
 import { IncognitoChatService } from '../incognito';
 import { HandoffRelayService } from '../handoff/handoff-relay.service';
 
@@ -35,6 +36,7 @@ describe('ChatRequestService', () => {
   // can drive the (private) resume paths the way the consent/approval UIs do.
   let oauthResumeHandler: ((interruptIds: string[], context?: { sessionId?: string }) => Promise<void>) | null;
   let approvalResumeHandler: ((interruptId: string, decision: any, context?: { sessionId?: string }) => Promise<void>) | null;
+  let elicitationResumeHandler: ((interruptId: string, response: any, context?: { sessionId?: string }) => Promise<void>) | null;
 
   beforeEach(() => {
     TestBed.resetTestingModule();
@@ -98,6 +100,14 @@ describe('ChatRequestService', () => {
           useValue: {
             setResumeHandler: vi.fn((handler: any) => {
               approvalResumeHandler = handler;
+            }),
+          },
+        },
+        {
+          provide: McpElicitationService,
+          useValue: {
+            setResumeHandler: vi.fn((handler: any) => {
+              elicitationResumeHandler = handler;
             }),
           },
         },
@@ -825,6 +835,40 @@ describe('ChatRequestService', () => {
         }),
       );
       expect(messageMap.reloadMessagesForSession).toHaveBeenCalledWith('session1');
+    });
+  });
+
+  describe('resumeFromMcpElicitation', () => {
+    it('posts the form answer as the interrupt response, never null', async () => {
+      const messageMap = TestBed.inject(MessageMapService) as any;
+      const response = { action: 'accept', content: { repository_name: 'acme/scratch' } };
+
+      await elicitationResumeHandler!('v1:middleware_execute_tool:tu-1:x', response, { sessionId: 'session1' });
+
+      expect(messageMap.beginContinuationStreaming).toHaveBeenCalledWith('session1');
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          session_id: 'session1',
+          message: '',
+          interrupt_responses: [{ interruptId: 'v1:middleware_execute_tool:tu-1:x', response }],
+        }),
+      );
+      expect(messageMap.reloadMessagesForSession).toHaveBeenCalledWith('session1');
+    });
+
+    it('posts decline as an object', async () => {
+      await elicitationResumeHandler!('int-e', { action: 'decline' }, { sessionId: 'session1' });
+
+      expect(mockChatHttpService.sendChatRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          interrupt_responses: [{ interruptId: 'int-e', response: { action: 'decline' } }],
+        }),
+      );
+    });
+
+    it('sends nothing without a session', async () => {
+      await elicitationResumeHandler!('int-e', { action: 'decline' }, {});
+      expect(mockChatHttpService.sendChatRequest).not.toHaveBeenCalled();
     });
   });
 
