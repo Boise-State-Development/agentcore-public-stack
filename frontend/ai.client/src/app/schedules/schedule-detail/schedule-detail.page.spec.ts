@@ -318,7 +318,7 @@ describe('ScheduleDetailPage', () => {
       const labels = Array.from(el.querySelectorAll('[data-testid="run-list"] li > span')).map((s) => s.textContent?.trim());
       expect(labels[0]).toMatch(/^Waiting for you · expires /);
       expect(labels[1]).toBe('Approved · finished');
-      expect(text('[data-testid="day-summary"]')).toBe('Last 24 hours: Checked 2 times · found something 2 times · 1 waiting for you');
+      expect(text('[data-testid="day-summary"]')).toBe('Last 24 hours: Checked 2 times · found something 0 times · 1 waiting for you');
     });
 
     it('a held watcher shows the banner, and Review opens the same dialog as the bell', async () => {

@@ -18,6 +18,8 @@ from apis.shared.scheduled_prompts.runs import (
     RUN_TTL_SECONDS,
     list_schedule_runs,
     record_schedule_run,
+    record_schedule_run_answered_elsewhere,
+    record_schedule_run_resume,
 )
 from apis.shared.scheduled_prompts.service import (
     UNSET,
@@ -305,6 +307,42 @@ class TestRunRows:
         ]
         assert list_schedule_runs(USER_ID, "sched-aaaaaaaaaaaa", limit=1)[0].run_id == "run-1"
         assert list_schedule_runs(OTHER_USER_ID, "sched-aaaaaaaaaaaa") == []
+
+    def test_an_answer_in_the_conversation_settles_a_waiting_row(self, sessions_metadata_table):
+        key = {"PK": f"USER#{USER_ID}", "SK": "SCHEDRUN#sched-aaaaaaaaaaaa#2026-11-25T01:00:00Z#run-1"}
+        record_schedule_run(
+            _schedule(), run_id="run-1", status="needs_user", session_id="headless-1",
+            finished_at="2026-11-25T01:00:00Z", expires_at="2026-12-02T01:00:00Z", prompt_count=1,
+        )
+        assert record_schedule_run_answered_elsewhere(
+            USER_ID, "sched-aaaaaaaaaaaa", run_finished_at="2026-11-25T01:00:00Z", run_id="run-1"
+        )
+        item = sessions_metadata_table.get_item(Key=key)["Item"]
+        assert item["resolution"] == "answered_elsewhere"
+        assert "expiresAt" not in item
+        assert item["status"] == "needs_user"
+
+    def test_an_inbox_answer_already_on_the_row_keeps_it(self, sessions_metadata_table):
+        record_schedule_run(
+            _schedule(), run_id="run-1", status="needs_user", session_id="headless-1",
+            finished_at="2026-11-25T01:00:00Z", expires_at="2026-12-02T01:00:00Z",
+        )
+        record_schedule_run_resume(
+            USER_ID, "sched-aaaaaaaaaaaa", run_finished_at="2026-11-25T01:00:00Z", run_id="run-1",
+            resolution="approved", resume_run_id="run-r", resumed_at="2026-11-25T02:00:00Z",
+            resume_outcome="finished",
+        )
+        assert not record_schedule_run_answered_elsewhere(
+            USER_ID, "sched-aaaaaaaaaaaa", run_finished_at="2026-11-25T01:00:00Z", run_id="run-1"
+        )
+        (run,) = list_schedule_runs(USER_ID, "sched-aaaaaaaaaaaa")
+        assert run.model_dump(by_alias=True)["resolution"] == "approved"
+
+    def test_a_missing_row_is_not_created(self, sessions_metadata_table):
+        assert not record_schedule_run_answered_elsewhere(
+            USER_ID, "sched-aaaaaaaaaaaa", run_finished_at="2026-11-25T01:00:00Z", run_id="run-gone"
+        )
+        assert list_schedule_runs(USER_ID, "sched-aaaaaaaaaaaa") == []
 
     def test_a_project_schedule_gets_no_row(self, sessions_metadata_table):
         record_schedule_run(

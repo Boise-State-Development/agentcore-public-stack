@@ -106,9 +106,9 @@ describe('lastDayRunSummary', () => {
   });
 
   it('counts a run that waits on the user as a finished run, never a failure', () => {
-    // answer-from-inbox §3.8: it did its work, and a watcher's found something it needs you for.
+    // answer-from-inbox §3.8: it did its work. It is counted as waiting, never as a finding too.
     expect(lastDayRunSummary([run('needs_user', 1), run('quiet', 2)], true, now)).toBe(
-      'Checked 2 times · found something 1 time · 1 waiting for you',
+      'Checked 2 times · found something 0 times · 1 waiting for you',
     );
     expect(lastDayRunSummary([run('needs_user', 1)], false, now)).toBe('Ran 1 time · 1 waiting for you');
   });
@@ -118,9 +118,12 @@ describe('lastDayRunSummary', () => {
     const answered = { ...run('needs_user', 2), resolution: 'approved', resumeOutcome: 'finished' };
     const lapsed = { ...run('needs_user', 3), expiresAt: new Date(now - 60_000).toISOString() };
     expect(lastDayRunSummary([waiting, answered, lapsed, run('error', 4)], true, now)).toBe(
-      'Checked 3 times · found something 3 times · 1 failed · 1 waiting for you',
+      'Checked 3 times · found something 0 times · 1 failed · 1 waiting for you',
     );
     expect(lastDayRunSummary([answered, lapsed], false, now)).toBe('Ran 2 times');
+    // Answered in its conversation: the bell's list marks the history row, which settles it.
+    const elsewhere = { ...run('needs_user', 5), resolution: 'answered_elsewhere' };
+    expect(lastDayRunSummary([elsewhere], true, now)).toBe('Checked 1 time · found something 0 times');
   });
 
   it('counts a standard schedule’s runs, and says when there were none', () => {
