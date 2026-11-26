@@ -762,6 +762,12 @@ jobs:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      # The two switches platform.yml configures the Runtime V2 build warmup
+      # hook under. UpdateAgentRuntime removes hooks an update leaves out, so
+      # when both say the hook should be there the image roll refuses a CLI
+      # too old to carry it (deploy-runtime-image-if-changed.sh).
+      CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION: ${{ vars.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION }}
+      CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED: ${{ vars.CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED }}
 
     outputs:
       image_tag: ${{ steps.deploy.outputs.image_tag }}

@@ -50,11 +50,24 @@ esac
 cd "$PROJECT_ROOT"
 log_info "Deploying ${SERVICE} container image to AgentCore Runtime..."
 
+# The Runtime V2 build warmup hook (docs/specs/agentcore-runtime-v2.md §5b).
+# CloudFormation configures it under the same two switches platform.yml reads;
+# when both say it should be there, the deploy refuses a CLI that would drop
+# it. Same parsing as infrastructure/lib/config.ts: only the literal "true"
+# enables, and the platform version is trimmed.
+EXTRA_ARGS=()
+WARMUP_HOOK_SWITCH="$(printf '%s' "${CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+PLATFORM_VERSION="$(printf '%s' "${CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION:-}" | tr -d '[:space:]')"
+if [[ "$WARMUP_HOOK_SWITCH" == "true" && "$PLATFORM_VERSION" == "V2" ]]; then
+    EXTRA_ARGS+=(--expect-warmup-hook)
+fi
+
 TAG="$(bash "$DEPLOY" \
     --service "$SERVICE" \
     --runtime-id-ssm "$RUNTIME_ID_SSM" \
     --image-uri-ssm "$IMAGE_URI_SSM" \
-    --ecr-repo-uri "$ECR_REPO_URI")"
+    --ecr-repo-uri "$ECR_REPO_URI" \
+    ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})"
 
 log_info "${SERVICE}: ${TAG}"
 

@@ -33,13 +33,33 @@
 # This script waits up to ~20 minutes for READY before issuing the
 # update, and then waits up to ~10 more for the update to settle.
 #
-# Fields CloudFormation owns (platformVersion, capacityProvider-
-# Configuration, ...) must survive the image roll unchanged. The
-# update payload therefore carries every field the CLI's own update
-# skeleton accepts, the script refuses to run on a CLI too old to
-# know platformVersion, and it fails the job if platformVersion
-# differs after the update. See docs/specs/agentcore-runtime-v2.md
-# §3 B1.
+# Fields CloudFormation owns (platformVersion, hooksConfiguration,
+# capacityProviderConfiguration, ...) must survive the image roll
+# unchanged. The update payload therefore carries every field the
+# CLI's own update skeleton accepts, the script refuses to run on a
+# CLI too old to know platformVersion, and it fails the job if
+# platformVersion differs after the update. See
+# docs/specs/agentcore-runtime-v2.md §3 B1.
+#
+# hooksConfiguration (the V2 build warmup hook, spec §5b) gets the
+# same treatment, with one difference: an update that leaves it out
+# REMOVES the hooks, with no error, and a CLI whose service model
+# predates the field can neither read them from get-agent-runtime
+# nor send them. So:
+#   --expect-warmup-hook  the deployment has the hook switched on
+#       (deploy-runtime-image-one.sh passes it). The script then
+#       refuses a CLI that does not know hooksConfiguration (exit 7).
+#   Whenever the CLI does know the field, the script fails the job
+#       (exit 9) if hooksConfiguration differs after the update.
+#
+# A failed hook call fails the update and leaves the Runtime in
+# UPDATE_FAILED, still serving its previous version. AWS's remedy is
+# "fix the cause, then update the runtime again", so UPDATE_FAILED
+# does not stop this script: the next image is how the fix arrives.
+#
+# Exit codes: 2 usage/env, 3 runtime not found, 4 not updatable,
+# 5 update did not reach READY, 6 bad image URI in SSM, 7 CLI too
+# old, 8 platformVersion changed, 9 hooksConfiguration changed.
 #============================================================
 set -euo pipefail
 
@@ -47,11 +67,12 @@ SERVICE=""
 RUNTIME_ID_SSM=""
 IMAGE_URI_SSM=""
 ECR_REPO_URI=""
+EXPECT_WARMUP_HOOK=false
 
 usage() {
     cat <<EOF >&2
 Usage: $0 --service NAME --runtime-id-ssm PATH \\
-          --image-uri-ssm PATH --ecr-repo-uri URI
+          --image-uri-ssm PATH --ecr-repo-uri URI [--expect-warmup-hook]
 EOF
     exit 1
 }
@@ -62,6 +83,7 @@ while [[ $# -gt 0 ]]; do
         --runtime-id-ssm)  RUNTIME_ID_SSM="$2"; shift 2 ;;
         --image-uri-ssm)   IMAGE_URI_SSM="$2"; shift 2 ;;
         --ecr-repo-uri)    ECR_REPO_URI="$2"; shift 2 ;;
+        --expect-warmup-hook) EXPECT_WARMUP_HOOK=true; shift ;;
         -h|--help)         usage ;;
         *)                 echo "Unknown arg: $1" >&2; usage ;;
     esac
@@ -142,10 +164,20 @@ CURRENT_STATUS="$(printf '%s' "$STATE_JSON" \
     | python3 -c 'import json,sys;print(json.load(sys.stdin).get("status","unknown"))')"
 CURRENT_PLATFORM_VERSION="$(printf '%s' "$STATE_JSON" \
     | python3 -c 'import json,sys;print(json.load(sys.stdin).get("platformVersion",""))')"
+# Canonical JSON, so the before/after comparison below is not thrown by key
+# order. Empty when the runtime has no hooks, and also when this CLI's
+# service model predates the field (step 4 tells the two apart).
+hooks_of() {
+    python3 -c 'import json,sys
+hooks = json.load(sys.stdin).get("hooksConfiguration")
+print(json.dumps(hooks, sort_keys=True, separators=(",", ":")) if hooks else "")'
+}
+CURRENT_HOOKS="$(printf '%s' "$STATE_JSON" | hooks_of)"
 
 log "Current container URI: $CURRENT_URI"
 log "Current status: $CURRENT_STATUS"
 log "Current platform version: ${CURRENT_PLATFORM_VERSION:-<not reported>}"
+log "Current lifecycle hooks: ${CURRENT_HOOKS:-<none reported>}"
 
 if [[ "$CURRENT_URI" == "$NEW_CONTAINER_URI" ]]; then
     log "Runtime already on $NEW_CONTAINER_URI — skipping update-agent-runtime."
@@ -216,6 +248,32 @@ if ! printf '%s' "$UPDATE_SKELETON" \
     exit 7
 fi
 
+# 4b. The same question for hooksConfiguration. A CLI that does not know the
+# field reads no hooks from get-agent-runtime and sends none, and an update
+# without hooksConfiguration removes the hooks without an error: the build
+# warmup hook would vanish on the first image roll and every later session
+# would start from an unprepared snapshot. Only a deployment that has the
+# hook switched on is refused; without the switch there is nothing to lose.
+CLI_KNOWS_HOOKS=false
+if printf '%s' "$UPDATE_SKELETON" \
+    | python3 -c 'import json,sys;sys.exit(0 if "hooksConfiguration" in json.load(sys.stdin) else 1)'; then
+    CLI_KNOWS_HOOKS=true
+fi
+if [[ "$EXPECT_WARMUP_HOOK" == "true" ]]; then
+    if [[ "$CLI_KNOWS_HOOKS" != "true" ]]; then
+        log "This AWS CLI ($(aws --version 2>&1)) does not know update-agent-runtime's hooksConfiguration,"
+        log "and this deployment has the build warmup hook switched on (CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED)."
+        log "Updating with it would remove the hook. Upgrade the CLI on this runner, or switch the hook off and run platform.yml."
+        exit 7
+    fi
+    if [[ -z "$CURRENT_HOOKS" ]]; then
+        log "WARNING: the build warmup hook is switched on but the runtime has no hooksConfiguration."
+        log "This script never adds one; platform.yml (CloudFormation) does. Run it to configure the hook."
+    fi
+elif [[ "$CLI_KNOWS_HOOKS" != "true" ]]; then
+    log "Note: this AWS CLI does not know hooksConfiguration; any lifecycle hooks on the runtime cannot be seen or carried."
+fi
+
 # 5. Wait for READY. Poll up to ~20 minutes (120 attempts × 10 sec). A V1
 # update reaches READY in seconds; a V2 update prepares and snapshots the
 # environment first, which AWS documents as several minutes (the dev Runtime's
@@ -237,6 +295,18 @@ wait_for_ready() {
                 ;;
             CREATE_FAILED|UPDATE_FAILED|DELETING)
                 log "$label: terminal status $s — aborting"
+                local reason
+                reason="$(aws bedrock-agentcore-control get-agent-runtime \
+                    --region "$AWS_REGION" \
+                    --agent-runtime-id "$RUNTIME_ID" \
+                    --query 'failureReason' --output text 2>/dev/null || true)"
+                if [[ -n "$reason" && "$reason" != "None" ]]; then
+                    log "$label: failureReason: $reason"
+                fi
+                if [[ -n "$CURRENT_HOOKS" ]]; then
+                    log "$label: this runtime has lifecycle hooks. If one failed, its [LIFECYCLE-HOOK ...] lines are in the"
+                    log "$label: build-logs-* streams of /aws/bedrock-agentcore/runtimes/${RUNTIME_ID}-DEFAULT."
+                fi
                 return 1
                 ;;
             CREATING|UPDATING)
@@ -254,7 +324,16 @@ wait_for_ready() {
     return 1
 }
 
-if [[ "$CURRENT_STATUS" != "READY" ]]; then
+# UPDATE_FAILED is updatable: the runtime keeps serving its previous version
+# and the next update is the documented way out (a lifecycle hook that failed
+# is fixed by an image whose hook passes). Refusing here would leave every
+# later backend deploy stuck behind the one that failed.
+if [[ "$CURRENT_STATUS" == "UPDATE_FAILED" ]]; then
+    PRIOR_FAILURE="$(printf '%s' "$STATE_JSON" \
+        | python3 -c 'import json,sys;print(json.load(sys.stdin).get("failureReason",""))')"
+    log "The previous update failed${PRIOR_FAILURE:+: $PRIOR_FAILURE}"
+    log "Updating again with the new image."
+elif [[ "$CURRENT_STATUS" != "READY" ]]; then
     wait_for_ready "pre-update" || exit 4
 fi
 
@@ -338,6 +417,22 @@ if [[ -n "$CURRENT_PLATFORM_VERSION" ]]; then
     log "Platform version unchanged: $POST_PLATFORM_VERSION"
 else
     log "WARNING: get-agent-runtime reported no platformVersion before the update; nothing to verify."
+fi
+
+# 9. Lifecycle hooks are CloudFormation's to set too. The payload above
+# carried hooksConfiguration forward; prove it, because an update that drops
+# it succeeds, and the only symptom is slower first turns in new sessions.
+if [[ "$CLI_KNOWS_HOOKS" == "true" ]]; then
+    POST_HOOKS="$(aws bedrock-agentcore-control get-agent-runtime \
+        --region "$AWS_REGION" \
+        --agent-runtime-id "$RUNTIME_ID" \
+        --output json | hooks_of)"
+    if [[ "$POST_HOOKS" != "$CURRENT_HOOKS" ]]; then
+        log "Lifecycle hooks changed during the image update: '${CURRENT_HOOKS:-<none>}' -> '${POST_HOOKS:-<none>}'."
+        log "Re-run platform.yml to restore the hooks CloudFormation declares, and fix this script before the next backend deploy."
+        exit 9
+    fi
+    log "Lifecycle hooks unchanged: ${POST_HOOKS:-<none>}"
 fi
 
 log "Done. Runtime now at $NEW_CONTAINER_URI"
