@@ -48,6 +48,10 @@ def _run_prefix(schedule_id: str) -> str:
     return f"{RUN_SK_PREFIX}{schedule_id}#"
 
 
+def _run_key(user_id: str, schedule_id: str, finished_at: str, run_id: str) -> Dict[str, str]:
+    return {"PK": f"USER#{user_id}", "SK": f"{_run_prefix(schedule_id)}{finished_at}#{run_id}"}
+
+
 class ScheduleRun(BaseModel):
     """One run of a personal schedule."""
 
@@ -133,8 +137,7 @@ def record_schedule_run(
         return
     try:
         item: Dict[str, Any] = {
-            "PK": f"USER#{schedule.user_id}",
-            "SK": f"{_run_prefix(schedule.schedule_id)}{finished_at}#{run_id}",
+            **_run_key(schedule.user_id, schedule.schedule_id, finished_at, run_id),
             "runId": run_id,
             "scheduleId": schedule.schedule_id,
             "status": status,
@@ -224,7 +227,7 @@ def record_schedule_run_resume(
         update += " REMOVE " + ", ".join(removes)
     try:
         _service._get_table().update_item(
-            Key={"PK": f"USER#{user_id}", "SK": f"{_run_prefix(schedule_id)}{run_finished_at}#{run_id}"},
+            Key=_run_key(user_id, schedule_id, run_finished_at, run_id),
             UpdateExpression=update,
             ConditionExpression="attribute_exists(PK)",
             ExpressionAttributeNames=names,
@@ -233,4 +236,34 @@ def record_schedule_run_resume(
         return True
     except Exception:
         logger.warning("Could not record the answer on run %s of schedule %s", run_id, schedule_id, exc_info=True)
+        return False
+
+
+def record_schedule_run_answered_elsewhere(
+    user_id: str, schedule_id: str, *, run_finished_at: str, run_id: str
+) -> bool:
+    """Mark a paused run answered in its conversation (answer-from-inbox §3.6).
+
+    That resume goes through ``/chat/stream`` and nothing reads its outcome, so the history row
+    learns of it only when the inbox list finds the pause gone. Sets ``resolution`` and clears
+    ``expiresAt``, so the row stops reading as waiting and never reads as expired. Writes only
+    over a row that exists and that no inbox answer has resolved. Blocking; never raises. False
+    when nothing was written.
+    """
+    try:
+        _service._get_table().update_item(
+            Key=_run_key(user_id, schedule_id, run_finished_at, run_id),
+            UpdateExpression="SET #res = :res REMOVE expiresAt",
+            ConditionExpression="attribute_exists(PK) AND attribute_not_exists(#res)",
+            ExpressionAttributeNames={"#res": "resolution"},
+            ExpressionAttributeValues={":res": "answered_elsewhere"},
+        )
+        return True
+    except Exception as e:  # noqa: BLE001 - a lost condition is the usual case, not an error
+        code = getattr(e, "response", {}).get("Error", {}).get("Code")
+        if code != "ConditionalCheckFailedException":
+            logger.warning(
+                "Could not mark run %s of schedule %s answered in its conversation", run_id, schedule_id,
+                exc_info=True,
+            )
         return False

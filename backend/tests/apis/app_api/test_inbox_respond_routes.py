@@ -113,9 +113,16 @@ def world(monkeypatch):
             invokes.append(payload)
 
         monkeypatch.setattr(inbox_answer, "invoke_inbox_resume", invoke)
+        marked: List[tuple] = []
+
+        def mark(user_id, schedule_id, *, run_finished_at, run_id):
+            marked.append((user_id, schedule_id, run_finished_at, run_id))
+            return True
+
+        monkeypatch.setattr("apis.shared.scheduled_prompts.runs.record_schedule_run_answered_elsewhere", mark)
         yield SimpleNamespace(
             service=service, metas=metas, audit=audit, grants=grants, grant_error=grant_error,
-            invokes=invokes, invoke_error=invoke_error,
+            invokes=invokes, invoke_error=invoke_error, marked=marked,
         )
 
 
@@ -195,6 +202,8 @@ class TestPrompts:
         assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "already_answered")
         stored = _stored(world, row)
         assert stored.resolution.state == "answered_elsewhere" and stored.read_at
+        # The run's history row learns of it too (§3.8).
+        assert world.marked == [(ALICE.user_id, "sch-1", "2026-11-25T01:00:00Z", "run-abc")]
 
     def test_an_expired_pause_is_410_and_resolves_the_row(self, world):
         row = _wait(world)
@@ -328,6 +337,17 @@ class TestReadState:
         assert not by_id[live.notification_id].get("readAt")
         # The live wait and the finding count; the answered wait no longer does.
         assert body["unreadCount"] == 2
+        # Only the answered wait's run is marked in the history; a second list marks nothing more.
+        assert world.marked == [(ALICE.user_id, "sch-1", "2026-11-25T01:00:00Z", "run-abc")]
+        client().get("/notifications")
+        assert len(world.marked) == 1
+
+    def test_listing_an_expired_wait_leaves_the_history_row_to_its_own_expiry(self, world):
+        lapsed = _wait(world, expires=_in(-1))
+        body = client().get("/notifications").json()
+        (n,) = [n for n in body["notifications"] if n["notificationId"] == lapsed.notification_id]
+        assert n["resolution"]["state"] == "expired"
+        assert world.marked == []
 
     def test_listing_with_the_flag_off_reads_no_session(self, world, monkeypatch):
         answered = _wait(world, live=False)

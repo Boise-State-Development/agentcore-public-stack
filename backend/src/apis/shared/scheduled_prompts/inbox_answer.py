@@ -227,14 +227,21 @@ async def settle_unanswered_rows(
             return 0
         if state == "live":
             return 0
-        return 1 if await settle(service, email, n, state) else 0
+        return 1 if await settle(service, email, n, state, user_id=user_id) else 0
 
     return sum(await asyncio.gather(*(one(n) for n in waiting)))
 
 
-async def settle(service: Any, email: str, notification: Notification, state: PauseState) -> bool:
+async def settle(
+    service: Any, email: str, notification: Notification, state: PauseState, *, user_id: str
+) -> bool:
     """Resolve a row whose pause is ``gone`` (``answered_elsewhere``) or ``expired``, if nothing
-    else settled it first. Updates the row in place."""
+    else settled it first. Updates the row in place.
+
+    A pause answered in its conversation also marks the run's history row (§3.8), which nothing
+    else would: that resume never reaches the worker. An expired one needs no write, since the
+    history row reads as expired from its own ``expiresAt``.
+    """
     resolution = NotificationResolution(
         state="answered_elsewhere" if state == "gone" else "expired",
         at=utc_now_iso(),
@@ -245,7 +252,26 @@ async def settle(service: Any, email: str, notification: Notification, state: Pa
     if written:
         notification.resolution = resolution
         notification.read_at = notification.read_at or resolution.at
+        if resolution.state == "answered_elsewhere":
+            await _mark_run_answered_elsewhere(notification, user_id)
     return written
+
+
+async def _mark_run_answered_elsewhere(notification: Notification, user_id: str) -> None:
+    from apis.shared.scheduled_prompts.runs import record_schedule_run_answered_elsewhere
+
+    payload = notification.payload if isinstance(notification.payload, dict) else {}
+    names = [payload.get("scheduleId"), payload.get("runFinishedAt"), payload.get("runId")]
+    if not all(isinstance(v, str) and v for v in names):
+        return
+    schedule_id, run_finished_at, run_id = names
+    await asyncio.to_thread(
+        record_schedule_run_answered_elsewhere,
+        user_id,
+        schedule_id,
+        run_finished_at=run_finished_at,
+        run_id=run_id,
+    )
 
 
 def worker_function_name() -> str:

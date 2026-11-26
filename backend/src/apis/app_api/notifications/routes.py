@@ -189,7 +189,7 @@ async def _live_pause(notification: Notification, user: User) -> inbox_answer.In
     if pause.state == "live":
         return pause
     if notification.resolution is None:
-        await inbox_answer.settle(_svc(), user.email, notification, pause.state)
+        await inbox_answer.settle(_svc(), user.email, notification, pause.state, user_id=user.user_id)
     raise _expired() if pause.state == "expired" else _already_answered()
 
 
