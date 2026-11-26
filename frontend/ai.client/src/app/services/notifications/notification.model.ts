@@ -58,6 +58,10 @@ export interface NotificationResolution {
   outcome?: 'finished' | 'waiting_again' | 'failed' | null;
   at: string;
   resumeRunId?: string | null;
+  /** Set by the scheduled-runs worker as it starts the resume. */
+  workerStartedAt?: string | null;
+  /** Why the Runtime refused a resume the pre-check let through, e.g. `unknown_interrupt`. */
+  reason?: string | null;
 }
 
 /** The inbox kinds a handoff writes. */

@@ -66,6 +66,13 @@ class RunResult:
     #: failure more finely than ``code`` (a refused resume's code is only
     #: ``bad_request``; its kind is ``resume_unavailable``). ``None`` without one.
     error_kind: Optional[str] = None
+    #: The ``stream_error``'s ``metadata.reason``: a refused resume's is ``missing``,
+    #: ``expired`` or ``unknown_interrupt``. ``None`` without one.
+    error_reason: Optional[str] = None
+    #: The HTTP status when the Runtime refused the request outright (``HTTP 409`` is the
+    #: session's single-flight lease: the user is mid-turn in that conversation). ``None``
+    #: when a stream was read.
+    http_status: Optional[int] = None
     title: Optional[str] = None
     tool_trace: List[ToolTraceEntry] = field(default_factory=list)
     # Accumulated usage/metrics from the stream's `metadata_summary` (turn

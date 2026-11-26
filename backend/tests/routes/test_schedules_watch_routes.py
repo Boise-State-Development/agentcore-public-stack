@@ -315,6 +315,10 @@ class TestWatchRoutes:
             "cacheWriteTokens": 0,
             "expiresAt": None,
             "promptCount": 0,
+            "resolution": None,
+            "resumeOutcome": None,
+            "resumeRunId": None,
+            "resumedAt": None,
         }
         assert listing.call_args.args == (USER_ID, SCHEDULE_ID)
 

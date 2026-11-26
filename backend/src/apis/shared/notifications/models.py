@@ -83,6 +83,11 @@ class NotificationResolution(BaseModel):
     outcome: Optional[Literal["finished", "waiting_again", "failed"]] = None
     at: str
     resume_run_id: Optional[str] = Field(None, alias="resumeRunId")
+    # Set by the scheduled-runs worker as it starts the resume (§3.5): a retried event that
+    # finds it set spends no second model call, and a claim is stale 16 minutes after it.
+    worker_started_at: Optional[str] = Field(None, alias="workerStartedAt")
+    # Why the Runtime refused a resume the pre-check let through, e.g. ``unknown_interrupt``.
+    reason: Optional[str] = None
 
 
 class Notification(BaseModel):

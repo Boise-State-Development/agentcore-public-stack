@@ -67,6 +67,16 @@ leaves a ``needs_user`` history row and one ``agent_needs_*`` inbox row, and,
 for a watcher, sets the hold: the watcher skips its runs until that pause is
 answered or expires. While the flag is off, or for a project schedule, it takes
 exactly the ``completed`` path, as it did before the status existed.
+
+The same function resumes such a run when its owner answers it from the inbox
+(``{"kind": "inbox_resume", …}`` from app-api's ``POST /notifications/{id}/respond``,
+docs/specs/answer-from-inbox.md §3.5). It first sets the claim's start mark, one
+conditional write: a retried event that finds the mark spends no second model
+call (it ends the run's audit row and gives the row back to ``retry``), and a
+late event for a claim since retaken is dropped. It then resumes headlessly
+through ``run_agent_headless(interrupt_responses=…)`` on the headless grant the
+respond call renewed, and settles the row, the run's history row and a
+watcher's state with ``finish_resumed_run``. The answers are never logged.
 """
 
 import asyncio
@@ -78,7 +88,9 @@ from typing import Any, Dict, Optional
 
 from apis.shared.harness import (
     CognitoRefreshBearerAuth,
+    GovernanceFloor,
     HeadlessAuthError,
+    RunAuditRecorder,
     RunResult,
     run_agent_headless,
 )
@@ -88,10 +100,12 @@ from apis.shared.projects.schedules import ProjectSchedules
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.pausing import pause_schedule
 from apis.shared.scheduled_prompts.needs_user import (
+    INBOX_RESUME_KIND,
     live_pending_prompts,
     needs_user_kind,
     needs_user_payload,
 )
+from apis.shared.scheduled_prompts.resume_run import finish_resumed_run
 from apis.shared.scheduled_prompts.runs import ScheduleRunStatus, record_schedule_run
 from apis.shared.scheduled_prompts.watch_probe import FullRunTriage, full_run_triage
 from apis.shared.scheduled_prompts.watch_run import (
@@ -593,6 +607,133 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+def _inbox_service():
+    from apis.shared.notifications.service import NotificationService
+
+    return NotificationService()
+
+
+def _audit() -> RunAuditRecorder:
+    return RunAuditRecorder()
+
+
+async def _end_lost_resume(user_id: str, email: str, notification_id: str, resume_run_id: str, why: str) -> None:
+    """A resume event that will not run: end its audit row if nothing did, and give the row back.
+
+    The row goes back to ``retry`` only while this resume still holds the claim, so a newer
+    claim is never touched. Never raises.
+    """
+    from apis.shared.notifications.models import NotificationResolution
+
+    try:
+        await asyncio.to_thread(
+            _audit().end_if_started, user_id=user_id, run_id=resume_run_id, status="error", error=why
+        )
+    except Exception:
+        logger.warning(f"Inbox resume {resume_run_id}: could not end its audit row", exc_info=True)
+    await asyncio.to_thread(
+        _inbox_service().set_resolution,
+        email,
+        notification_id,
+        NotificationResolution(state="retry", at=_now_iso(), resume_run_id=resume_run_id),
+        claimed_by=resume_run_id,
+    )
+
+
+async def run_inbox_resume(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Resume a paused scheduled run with the answers given in the inbox (§3.5)."""
+    user_id = payload["userId"]
+    email = payload["email"]
+    notification_id = payload["notificationId"]
+    resume_run_id = payload["resumeRunId"]
+    session_id = payload["sessionId"]
+    schedule_id = payload.get("scheduleId") or ""
+    service = _inbox_service()
+
+    if not await asyncio.to_thread(service.mark_worker_started, email, notification_id, resume_run_id=resume_run_id):
+        current = await asyncio.to_thread(service.get, email, notification_id)
+        resolution = current.resolution if current is not None else None
+        if (
+            resolution is not None
+            and resolution.state == "applying"
+            and resolution.resume_run_id == resume_run_id
+            and resolution.worker_started_at
+        ):
+            # A retry of an attempt that started and died: never a second model call.
+            logger.warning(f"Inbox resume {resume_run_id}: an earlier attempt started and was lost")
+            await _end_lost_resume(user_id, email, notification_id, resume_run_id, "resume_lost")
+            return {"resumeRunId": resume_run_id, "result": "resume_lost"}
+        logger.info(f"Inbox resume {resume_run_id}: its claim is gone or was retaken; dropping the event")
+        try:
+            await asyncio.to_thread(
+                _audit().end_if_started, user_id=user_id, run_id=resume_run_id, status="error", error="superseded"
+            )
+        except Exception:
+            logger.warning(f"Inbox resume {resume_run_id}: could not end its audit row", exc_info=True)
+        return {"resumeRunId": resume_run_id, "result": "dropped"}
+
+    notification = await asyncio.to_thread(service.get, email, notification_id)
+    schedule = await get_scheduled_prompt(user_id, schedule_id) if schedule_id else None
+    watch_state: Optional[WatchState] = None
+    if schedule is not None and _is_watch(schedule):
+        try:
+            watch_state = await asyncio.to_thread(get_watch_state, user_id, schedule_id)
+        except Exception:
+            logger.warning(f"Inbox resume {resume_run_id}: could not read the watcher's state", exc_info=True)
+
+    try:
+        result = await run_agent_headless(
+            user_id=user_id,
+            prompt="",
+            auth=CognitoRefreshBearerAuth(),
+            session_id=session_id,
+            run_id=resume_run_id,
+            # app-api wrote the start row before its 202; the runner writes the end onto it.
+            audit_started=True,
+            governance=GovernanceFloor(audit=_audit()),
+            interrupt_responses=payload.get("responses") or [],
+            trigger="inbox_respond",
+            mark_unread=False,
+        )
+    except HeadlessAuthError as e:
+        # The grant was renewed a moment ago, so this is rare; nothing resumed.
+        logger.warning(f"Inbox resume {resume_run_id}: could not mint for the user: {e}")
+        await _end_lost_resume(user_id, email, notification_id, resume_run_id, "auth")
+        return {"resumeRunId": resume_run_id, "result": "retry"}
+    except Exception as e:
+        logger.error(f"Inbox resume {resume_run_id}: unexpected failure: {e}", exc_info=True)
+        result = RunResult(
+            run_id=resume_run_id,
+            session_id=session_id,
+            user_id=user_id,
+            status="error",
+            error=str(e)[:500],
+            finished_at=_now_iso(),
+        )
+        try:
+            await GovernanceFloor(audit=_audit()).on_run_end(result=result)
+        except Exception:
+            logger.warning(f"Inbox resume {resume_run_id}: could not end its audit row", exc_info=True)
+
+    if notification is None:
+        logger.warning(f"Inbox resume {resume_run_id}: its notification is gone; nothing to settle")
+        return {"resumeRunId": resume_run_id, "result": result.status}
+    summary = await finish_resumed_run(
+        result=result,
+        notification=notification,
+        email=email,
+        user_id=user_id,
+        resume_run_id=resume_run_id,
+        schedule=schedule,
+        watch_state=watch_state,
+        service=service,
+    )
+    logger.info(f"Inbox resume {resume_run_id}: {summary}")
+    return summary
+
+
 def lambda_handler(event, context):
-    """Async-invoke entry point (InvocationType=Event from the dispatcher)."""
+    """Async-invoke entry point (InvocationType=Event from the dispatcher, or app-api's respond)."""
+    if isinstance(event, dict) and event.get("kind") == INBOX_RESUME_KIND:
+        return asyncio.run(run_inbox_resume(event))
     return asyncio.run(run_schedule(event))

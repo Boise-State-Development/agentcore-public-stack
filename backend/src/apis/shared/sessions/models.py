@@ -247,6 +247,13 @@ class PausedTurnSnapshot(BaseModel):
                     "keeps media blocks in history away from it. None on snapshots "
                     "written before the field existed (treated as False).",
     )
+    run_mode: Optional[Literal["watch"]] = Field(
+        default=None,
+        alias="runMode",
+        description="'watch' when a quiet watcher's headless run paused (answer-from-inbox §3.7): "
+                    "the resume rebuilds `report`, so its toolConfig is the paused turn's and the "
+                    "resumed run can still save its cursors. None for every other turn.",
+    )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
 

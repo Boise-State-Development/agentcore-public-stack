@@ -71,8 +71,12 @@ export interface AppApiIamGrantsProps {
  * This is a pure side-effect function — it mutates the task role's
  * policy by adding statements. Extracted for readability; the grants
  * themselves are byte-identical to the original monolith.
+ *
+ * Returns the managed policy that holds app-api's worker invokes, so a
+ * worker built after app-api (the scheduled-runs worker) can add its
+ * statement there rather than to the role's overflow policies.
  */
-export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
+export function grantAppApiPermissions(props: AppApiIamGrantsProps): { workerInvokePolicy: iam.ManagedPolicy } {
   const { scope, config, taskRole } = props;
 
   // ── Assistants table ──
@@ -406,7 +410,7 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
   // It also carries the managed-KB worker invoke below. The id and description
   // still name memory maintenance because changing a managed policy's
   // description replaces it; a statement added here updates in place.
-  new iam.ManagedPolicy(scope, 'AppApiMemoryMaintenanceInvokePolicy', {
+  const workerInvokePolicy = new iam.ManagedPolicy(scope, 'AppApiMemoryMaintenanceInvokePolicy', {
     roles: [taskRole],
     description: 'app-api: async-invoke the memory maintenance worker (Shared Projects 2.6)',
     statements: [
@@ -919,6 +923,8 @@ export function grantAppApiPermissions(props: AppApiIamGrantsProps): void {
       ],
     }),
   );
+
+  return { workerInvokePolicy };
 }
 
 /**

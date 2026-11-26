@@ -132,6 +132,18 @@ export function needsUserExpired(n: AppNotification, now = Date.now()): boolean 
   return !Number.isNaN(expiresAt) && expiresAt <= now;
 }
 
+/**
+ * A needs-user row still waiting on the user: not settled (or given back to `retry`) and not past
+ * its expiry. Its read state follows the answer, not the click (answer-from-inbox §3.3): opening it
+ * leaves it unread, and the server marks it read once it is answered, here or in the conversation,
+ * or expires.
+ */
+export function needsUserWaiting(n: AppNotification, now = Date.now()): boolean {
+  if (!NEEDS_USER_NOTIFICATION_KINDS.has(n.kind)) return false;
+  if (n.resolution && n.resolution.state !== 'retry') return false;
+  return !needsUserExpired(n, now);
+}
+
 const DECISION_WORDS: Record<string, string> = {
   approved: 'Approved',
   declined: 'Declined',
@@ -504,7 +516,9 @@ export class NotificationBellComponent {
   }
 
   protected open(n: AppNotification): void {
-    void this.service.markRead(n);
+    // A wait stays unread until it is answered or expires, so the badge counts it; the server
+    // settles it. Only while proactive runs are on, since nothing settles it otherwise.
+    if (!(this.features.proactiveRuns && needsUserWaiting(n))) void this.service.markRead(n);
     // A handoff entry opens where the answer is: the source, at the handoff row, for a prompt it
     // relays; otherwise the Agent's conversation, which marks its other entries read. The handoff
     // service loads on demand: the bell is in the initial bundle and the chat stack isn't.
