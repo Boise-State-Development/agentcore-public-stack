@@ -10,6 +10,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from apis.shared.auth.models import User
@@ -19,6 +20,17 @@ from .models import RETENTION_DAYS, Notification, NotificationKind, Notification
 
 #: Rows that wait on the user until answered or expired (answer-from-inbox spec §3.3).
 NEEDS_USER_KINDS = ("agent_needs_approval", "agent_needs_input")
+
+
+def _expiry_now() -> str:
+    """Now as ``YYYY-MM-DDTHH:MM:SSZ``, the format a needs-user row's ``payload.expiresAt`` is written in.
+
+    The same format as ``scheduled_prompts.needs_user.normalize_expiry``, written
+    here rather than imported: this module ships in Lambda images (memory
+    maintenance) that carry no scheduled-prompts or sessions code.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 logger = logging.getLogger(__name__)
 
@@ -215,9 +227,7 @@ class NotificationService:
             return 0
         from boto3.dynamodb.conditions import Attr, Key
 
-        from apis.shared.scheduled_prompts.needs_user import now_expiry_format
-
-        current = now or now_expiry_format()
+        current = now or _expiry_now()
         params: Dict[str, Any] = {
             "KeyConditionExpression": Key("PK").eq(_pk(email)) & Key("SK").begins_with(NOTIF_SK_PREFIX),
             "FilterExpression": Attr("readAt").not_exists()
@@ -247,9 +257,7 @@ class NotificationService:
             return 0
         from botocore.exceptions import ClientError
 
-        from apis.shared.scheduled_prompts.needs_user import now_expiry_format
-
-        current = now or now_expiry_format()
+        current = now or _expiry_now()
         resolved = 0
         for n in notifications:
             expires_at = n.payload.get("expiresAt") if isinstance(n.payload, dict) else None

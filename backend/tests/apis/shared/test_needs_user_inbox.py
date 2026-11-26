@@ -103,6 +103,14 @@ class TestPrompts:
         assert normalize_expiry("2026-12-02T12:00:00.123456+00:00") == "2026-12-02T12:00:00Z"
         assert normalize_expiry("not a date") is None
 
+    def test_the_inbox_compares_now_in_the_payload_s_format(self):
+        # notifications/service.py keeps its own copy of the format so the
+        # images that ship it need no scheduled-prompts code; the two must agree.
+        from apis.shared.notifications.service import _expiry_now
+
+        now = _expiry_now()
+        assert normalize_expiry(now) == now
+
 
 @pytest.fixture()
 def service(monkeypatch):
