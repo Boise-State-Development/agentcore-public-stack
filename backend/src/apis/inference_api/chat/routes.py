@@ -188,8 +188,10 @@ from .service import (
     get_agent,
     live_conversation_agents,
     process_build_count,
+    agent_cache_injected_tools_enabled,
 )
-from .turn_timing import TurnPrelude
+from .turn_timing import TurnPrelude, emit_prepare_record
+from . import prepare as prepare_mode
 from .role_instructions import compose_plain_turn_prompt, resolve_role_instructions
 from .system_prompt_resolver import (
     resolve_active_prompt_text,
@@ -6009,14 +6011,75 @@ def _workflow_prompt_invocation(request: InvocationRequest, current_user: User) 
     )
 
 
+async def _prepare_precheck(
+    session_id: str, user_id: str, session_meta: "SessionMetaSnapshot"
+) -> Optional[prepare_mode.PrepareOutcome]:
+    """Why a prepare should build nothing for this conversation right now, or None.
+
+    A paused turn's agent is the one its resume needs, and a non-resume ``get_agent`` evicts a
+    paused agent. A turn that is streaming owns the conversation's agent; a second build for
+    another selection beside it is not worth the risk for a send that cannot happen until that
+    turn ends. A preview session persists nothing and is rebuilt each time.
+    """
+    if is_preview_session(session_id):
+        return prepare_mode.PrepareOutcome(False, "preview")
+    if session_meta.row and "pausedTurn" in session_meta.row:
+        return prepare_mode.PrepareOutcome(False, "paused")
+    from apis.shared.sessions.session_lease import is_session_lease_held
+
+    if await is_session_lease_held(session_id, user_id):
+        return prepare_mode.PrepareOutcome(False, "turn_active")
+    return None
+
+
+async def _prepare_invocation(request: InvocationRequest, current_user: User) -> dict:
+    """A prewarm call in prepare mode (``chat/prepare.py``): JSON, always 200.
+
+    Runs the turn path with ``prepare=True`` over the request's allowlisted selection. A refusal
+    the shared phases produce (model access, a retired model, an Agent the caller cannot use) is
+    discarded unstreamed, exactly as a handoff brief discards one: a refusal persists only when
+    its generator runs. Nothing a prepare meets is an error to the caller, because the send that
+    follows will meet it too and answer it properly.
+    """
+    started = time.perf_counter()
+    user_id = current_user.user_id
+    session_id = request.session_id
+    # The line the V2 cost readout counts warm calls by; a prepare is one.
+    logger.info("prewarm invocation for session %s", _sanitize_log(session_id))
+    if not prepare_mode.begin(user_id, session_id):
+        outcome = prepare_mode.PrepareOutcome(False, "in_flight")
+        return outcome.body(int((time.perf_counter() - started) * 1000))
+    outcome = prepare_mode.PrepareOutcome(False, "error")
+    try:
+        response = await _run_invocation(prepare_mode.prepare_request(request), current_user, prepare=True)
+        if isinstance(response, prepare_mode.PrepareOutcome):
+            outcome = response
+        else:
+            body = getattr(response, "body_iterator", None)
+            if body is not None and hasattr(body, "aclose"):
+                await body.aclose()
+            outcome = prepare_mode.PrepareOutcome(False, "refused")
+    except HTTPException:
+        outcome = prepare_mode.PrepareOutcome(False, "refused")
+    except Exception:  # noqa: BLE001 - a prepare is best-effort; the send builds its own agent
+        logger.warning("prewarm prepare failed for session %s", _sanitize_log(session_id), exc_info=True)
+    finally:
+        prepare_mode.finish(user_id, session_id, prepared=outcome.prepared)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    emit_prepare_record(session_id=session_id, outcome=outcome, elapsed_ms=elapsed_ms)
+    return outcome.body(elapsed_ms)
+
+
 @router.post("/invocations")
 async def invocations(request: InvocationRequest, current_user: User = Depends(get_current_user_trusted)):
     """The AgentCore Runtime invocation endpoint: a conversation turn, a handoff brief, or a run's prompt steps.
 
     A ``workflow_prompt`` request goes through ``_workflow_prompt_invocation`` and a
-    ``handoff_brief`` request through ``_handoff_brief_invocation``; everything else is a turn,
-    ``_run_invocation``.
+    ``handoff_brief`` request through ``_handoff_brief_invocation``; a prewarm call in prepare
+    mode through ``_prepare_invocation``; everything else is a turn, ``_run_invocation``.
     """
+    if request.warm and request.prepare:
+        return await _prepare_invocation(request, current_user)
     if request.workflow_prompt is not None and not request.warm:
         return _workflow_prompt_invocation(request, current_user)
     if request.handoff_brief is not None and not request.warm:
@@ -6030,8 +6093,13 @@ async def _run_invocation(
     *,
     brief: Optional["Handoff"] = None,
     brief_run: Optional["WorkflowRun"] = None,
+    prepare: bool = False,
 ):
     """One conversation turn, or with ``brief`` the agent build for a handoff brief.
+
+    ``prepare`` is session prewarm's prepare mode (``chat/prepare.py``): the same phases, with
+    everything a brief skips skipped, no lease, and a ``PrepareOutcome`` returned once the
+    agent is built into the cache.
 
     ``brief_run`` makes that brief a workflow run's (``brief`` is one of its kept steps): the
     agent build is the same, only the side call's final message differs.
@@ -6078,6 +6146,10 @@ async def _run_invocation(
     # app-api's `POST /chat/prewarm` is the gate.
     if request.warm:
         logger.info("prewarm invocation for session %s", _sanitize_log(request.session_id))
+        if request.prepare_arm == prepare_mode.ARM_HOLDOUT:
+            # The prepare A/B's control arm: app-api held this conversation's prepare out.
+            # A dictionary write, so the turn that follows can say which arm it was in.
+            prepare_mode.note_arm(current_user.user_id, request.session_id, prepare_mode.ARM_HOLDOUT)
         return {"warmed": True}
 
     input_data = request
@@ -6087,6 +6159,11 @@ async def _run_invocation(
     # recovery, the session-state writes, the KB search, binding validation and persistence. It
     # returns its own stream where a turn would start one.
     is_brief = brief is not None
+    # A prepare builds the agent the next send would use and stops. It skips what a brief
+    # skips, for the same reason (no turn is running), and also the lease: it invokes nothing,
+    # and holding the lease would turn the user's send into a 409.
+    is_prepare = prepare
+    builds_only = is_brief or is_prepare
     auth_token = current_user.raw_token
 
     # Where the pre-stream time goes. Everything between here and the
@@ -6143,6 +6220,10 @@ async def _run_invocation(
     # line, so the four-turn baseline in the agent-state-feedback spec stays
     # comparable across this split.
     prelude.mark("preamble.ownership")
+    if is_prepare:
+        early = await _prepare_precheck(input_data.session_id, user_id, session_meta)
+        if early is not None:
+            return early
     # Resume requests reuse the cached agent and its paused interrupt state;
     # they bypass quota, file resolution, and RAG augmentation because those
     # already ran on the original turn that got paused.
@@ -6361,12 +6442,12 @@ async def _run_invocation(
     session_files_task = _start_session_files_read(
         input_data.session_id,
         user_id,
-        is_brief=is_brief,
+        is_brief=builds_only,
         is_resume=is_resume,
         is_continuation=is_continuation,
         ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
     )
-    attachments = TurnAttachments() if is_brief else await _resolve_turn_attachments(
+    attachments = TurnAttachments() if builds_only else await _resolve_turn_attachments(
         input_data,
         user_id,
         session_meta,
@@ -6384,7 +6465,7 @@ async def _run_invocation(
     # write-ahead attachment marker, all answered from `session_meta`.
     # A brief must leave the session as it was: an interrupted-turn note in particular has to
     # survive for the next real turn, and the stale-marker clears here would drop it.
-    is_new_session, interrupted_turn_reason = (False, None) if is_brief else await _prepare_session_state(
+    is_new_session, interrupted_turn_reason = (False, None) if builds_only else await _prepare_session_state(
         input_data,
         user_id,
         session_meta,
@@ -6462,6 +6543,8 @@ async def _run_invocation(
     # If quota exceeded, stream the quota exceeded message instead of agent response
     if quota_exceeded_event and is_brief:
         return _brief_fallback_response(brief.handoff_id, brief.kind, input_data.session_id, "quota")
+    if quota_exceeded_event and is_prepare:
+        return prepare_mode.PrepareOutcome(False, "quota")
     if quota_exceeded_event:
         return _refuse_turn(
             input_data,
@@ -6588,7 +6671,7 @@ async def _run_invocation(
         if (
             is_agent_mention
             and not is_continuation
-            and not is_brief
+            and not builds_only
             and not is_preview_session(input_data.session_id)
         ):
             thread_is_empty = not await _session_has_messages(
@@ -6609,7 +6692,7 @@ async def _run_invocation(
         # below is untouched either way: this relaxes *binding* semantics, never
         # authorization. Rule in ``agent_binding_policy`` so it is testable without
         # this stack.
-        if not is_continuation and not is_brief and binds_conversation(
+        if not is_continuation and not builds_only and binds_conversation(
             is_agent_mention=is_agent_mention,
             is_preview=is_preview_session(input_data.session_id),
             thread_is_empty=bool(thread_is_empty),
@@ -6664,8 +6747,8 @@ async def _run_invocation(
             # A brief, like a continuation, sends no message of its own, so the project
             # file-status note it would carry is not loaded; and it is not the user using
             # the Agent, so the share and last-used writes are skipped.
-            is_continuation=is_continuation or is_brief,
-            record_use=not is_brief,
+            is_continuation=is_continuation or builds_only,
+            record_use=not builds_only,
             # A saved workflow step's version (workflow-designer §23.3): the step's first
             # turn's request, held to the run's record by acceptance, or the pin on the row
             # B1 already read. No IO.
@@ -6695,7 +6778,7 @@ async def _run_invocation(
         # knowledge-base search would spend a query on "" and augment nothing. The
         # context the original turn retrieved is already in the history being continued.
         # Skipped on a brief too: its message is an instruction, not something to search for.
-        if not is_continuation and not is_brief:
+        if not is_continuation and not builds_only:
             # 3–4. Search the assistant's knowledge base and augment the message.
             # Started here, awaited after the agent build: the build reads
             # neither the chunks nor the augmented message — only the stream
@@ -6745,7 +6828,7 @@ async def _run_invocation(
         # history was produced under other instructions. `thread_is_empty` is the
         # argument that makes a thread-starting mention bind, so it has to be passed
         # here too — dropping it is a silent one-turn Agent all over again.
-        if not is_continuation and not is_brief and binds_conversation(
+        if not is_continuation and not builds_only and binds_conversation(
             is_agent_mention=is_agent_mention,
             is_preview=is_preview_session(input_data.session_id),
             thread_is_empty=bool(thread_is_empty),
@@ -6855,7 +6938,7 @@ async def _run_invocation(
         delivery_turn.prefetch()
 
     session_lease = None
-    if not is_preview_session(input_data.session_id):
+    if not is_preview_session(input_data.session_id) and not is_prepare:
         from apis.shared.sessions.session_lease import (
             acquire_session_lease,
             SessionBusyError,
@@ -7144,6 +7227,10 @@ async def _run_invocation(
                     # of the build was done: ~0 on a warm turn, its downloads on a
                     # conversation's first.
                     prelude.mark("agent_build.kb_full_context")
+                if not is_prepare:
+                    # A prepare may be building this very agent; wait for it rather than
+                    # build twice. A dictionary lookup when none is in flight.
+                    await prepare_mode.wait_for_in_flight(user_id, input_data.session_id)
                 built_agent = await get_agent(
                     session_id=input_data.session_id,
                     user_id=user_id,
@@ -7182,6 +7269,29 @@ async def _run_invocation(
                 # A watch run's agent is never cached, so this marks only its own.
                 _record_run_mode_on(built_agent, input_data)
                 return built_agent
+
+            # A prepare stops here too, with the agent in the cache for the send that follows.
+            # One that could not be cached is not built: nothing would be left of it.
+            if is_prepare:
+                if turn_tools.extra_tools and not (
+                    turn_tools.extra_tools_key_described and agent_cache_injected_tools_enabled()
+                ):
+                    return prepare_mode.PrepareOutcome(False, "uncacheable", stages=prelude.stage_summary())
+                builds_before = process_build_count()
+                try:
+                    await _build_main_agent()
+                except Exception:  # noqa: BLE001 - reported as its own reason, never as a refusal
+                    logger.warning(
+                        "prewarm prepare: the agent build failed for session %s",
+                        _sanitize_log(input_data.session_id),
+                        exc_info=True,
+                    )
+                    return prepare_mode.PrepareOutcome(False, "error", stages=prelude.stage_summary())
+                return prepare_mode.PrepareOutcome(
+                    True,
+                    cache_hit=process_build_count() == builds_before,
+                    stages=prelude.stage_summary(),
+                )
 
             # A handoff brief stops here, with the agent a turn would build: the same phases above,
             # the same `_build_main_agent`. It streams the brief from a side call over a copy of
@@ -7738,6 +7848,12 @@ async def _run_invocation(
                         # always a fresh Runtime process.
                         "sharedSession": agent_build_shared_session_enabled(),
                         "processBuilds": process_build_count(),
+                        # Milliseconds since a prewarm prepare last built this
+                        # conversation's agent in this process; None without one.
+                        "preparedAgeMs": prepare_mode.prepared_age_ms(user_id, input_data.session_id),
+                        # The prepare A/B's arm for this conversation ("treated" or
+                        # "holdout"), or None when no prepare was asked for.
+                        "prepareArm": prepare_mode.arm_of(user_id, input_data.session_id),
                     },
                 )
 

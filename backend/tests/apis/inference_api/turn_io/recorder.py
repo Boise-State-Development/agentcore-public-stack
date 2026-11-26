@@ -293,6 +293,16 @@ class Recorder:
         root = next(self._ids)
         _LINEAGE.set((root,))
 
+    def mark_end(self) -> None:
+        """End a scenario that makes no model call (a prewarm prepare) where a model call would.
+
+        Recorded as a stand-in call on the caller's own lineage, so ``inventory_before_model_call(0)``
+        reads "everything up to here" with the same awaited / concurrent split.
+        """
+        call = self._record("aws", "turn-io", "End", "")
+        if call is not None:
+            self.model_calls.append(call)
+
     async def settle(self) -> None:
         """Let every task the turn spawned finish, so the concurrent lane is complete."""
         pending = [t for t in self.tasks if not t.done()]

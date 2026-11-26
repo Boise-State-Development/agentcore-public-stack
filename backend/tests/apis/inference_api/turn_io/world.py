@@ -34,6 +34,8 @@ USER_NAME = "Pat Example"
 
 CHAT_SESSION = "sess-tio-chat-000000000000001"
 PROJECT_SESSION = "sess-tio-project-0000000000001"
+FRESH_SESSION = "sess-tio-fresh-00000000000001"
+PREPARE_SESSION = "sess-tio-prepare-000000000001"
 UPLOAD_ID = "20261101T000000-tio-upload-0001"
 
 # Cut to the 4,000-character cap on saved instructions (MAX_PERSONAL_INSTRUCTIONS_CHARS): a full one.

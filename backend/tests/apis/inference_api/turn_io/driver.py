@@ -17,6 +17,11 @@ earlier ones filled, as it would on a pinned microVM:
 * ``agent_mention``   — the same conversation, ``@``-mentioning an Agent with a
   knowledge base.
 * ``project_turn``    — a new conversation on a Shared Project's harness.
+* ``fresh_send``      — a new conversation, the first turn's selection and no attachment: the
+  control for the next two.
+* ``prepare``         — session prewarm's prepare mode on another new conversation (``warm`` +
+  ``prepare``, no message): everything it does before it returns, with no model call.
+* ``send_after_prepare`` — that conversation's first send, same selection as ``fresh_send``.
 """
 
 from __future__ import annotations
@@ -125,11 +130,30 @@ async def _run() -> dict:
         ),
     ]
 
+    # Session prewarm's prepare mode (turn-path spec §6F): a send on a new conversation with
+    # and without a prepare ahead of it, and the prepare itself.
+    fresh = dict(base, message="Summarize the open risks in two lines.")
+    turns += [
+        ("fresh_send", dict(fresh, session_id=world_module.FRESH_SESSION), [text_response("Two risks remain.")]),
+        ("prepare", dict(base, session_id=world_module.PREPARE_SESSION, warm=True, prepare=True), []),
+        ("send_after_prepare", dict(fresh, session_id=world_module.PREPARE_SESSION), [text_response("Two risks remain.")]),
+    ]
+
     result: dict = {"scenarios": {}, "problems": []}
     for name, payload, script in turns:
         fake.model.responses = script
         fake.model._calls = 0
         recorder.start_scenario()
+        if payload.get("prepare"):
+            outcome = await routes.invocations(InvocationRequest(**payload), user)
+            made = len(recorder.model_calls)
+            recorder.mark_end()
+            await recorder.settle()
+            if outcome.get("prepared") is not True or made:
+                result["problems"].append(f"{name}: expected a built agent and no model call, got {outcome} with {made} model call(s)")
+                continue
+            result["scenarios"][name] = recorder.inventory_before_model_call(0)
+            continue
         response = await routes.invocations(InvocationRequest(**payload), user)
         frames = []
         async for chunk in response.body_iterator:
