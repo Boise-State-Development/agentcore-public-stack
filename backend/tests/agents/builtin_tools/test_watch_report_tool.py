@@ -189,30 +189,22 @@ def test_the_snapshot_round_trips_run_mode():
     assert "runMode" not in _snapshot().model_dump(by_alias=True, exclude_none=True)
 
 
-def test_the_resumed_tools_are_the_paused_turns(on):
-    """The resume rebuilds ``report`` in its slot, so the resumed ``toolConfig`` is byte-identical
-    to the paused one: the prefix reads from cache, and the run can still save its cursors."""
+def test_a_resume_request_takes_its_run_mode_from_the_snapshot(on):
+    """No resume sends ``run_mode``; the snapshot's builds ``report`` in its slot. The full
+    tool parity (every family, then ``report``) is pinned in ``test_resume_tool_parity.py``."""
+    resumed = routes._resume_request(InvocationRequest(session_id=HEADLESS), _snapshot(run_mode="watch"))
     paused = routes._build_watch_report_tools(InvocationRequest(session_id=HEADLESS, run_mode="watch"))
-    resumed = routes._resume_extra_tools(_snapshot(run_mode="watch"), HEADLESS)
-    assert [t.tool_name for t in resumed] == ["report"]
-    assert _digest(resumed) == _digest(paused)
+    assert _digest(routes._build_watch_report_tools(resumed)) == _digest(paused)
 
 
 def test_no_report_on_any_other_resume(on, monkeypatch):
-    assert routes._resume_extra_tools(_snapshot(), HEADLESS) is None
-    assert routes._resume_extra_tools(_snapshot(run_mode="watch"), "web-session") is None
+    def _report(snapshot, session_id):
+        return routes._build_watch_report_tools(routes._resume_request(InvocationRequest(session_id=session_id), snapshot))
+
+    assert _report(_snapshot(), HEADLESS) == []
+    assert _report(_snapshot(run_mode="watch"), "web-session") == []
     monkeypatch.setenv("PROACTIVE_RUNS_ENABLED", "false")
-    assert routes._resume_extra_tools(_snapshot(run_mode="watch"), HEADLESS) is None
-
-
-def test_client_tools_keep_their_slot_before_report(on):
-    from apis.shared.client_tools import ClientToolSpec
-
-    spec = ClientToolSpec.model_validate(
-        {"name": "shell", "description": "Run a command", "inputSchema": {"type": "object", "properties": {}}}
-    )
-    snapshot = _snapshot(run_mode="watch", client_tools=json.dumps([spec.model_dump(by_alias=True)]))
-    assert [t.tool_name for t in routes._resume_extra_tools(snapshot, HEADLESS)] == ["local_shell", "report"]
+    assert _report(_snapshot(run_mode="watch"), HEADLESS) == []
 
 
 @pytest.mark.asyncio
