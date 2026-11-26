@@ -283,6 +283,15 @@ jobs:
       # "true" in an environment to turn it on there. app-api only. The SPA's
       # matching switch is `features.sessionPrewarm` in src/environments/*.ts.
       CDK_SESSION_PREWARM_ENABLED: ${{ vars.CDK_SESSION_PREWARM_ENABLED }}
+      # Session prewarm prepare: a prewarm request may carry the next send's
+      # selection and the Runtime builds that agent ahead of the send
+      # (docs/specs/turn-path-ttft.md). Opt-in while in development, true only
+      # while `CDK_SESSION_PREWARM_ENABLED` is. app-api only; the SPA's matching
+      # switch is `features.sessionPrewarmPrepare` in src/environments/*.ts.
+      CDK_SESSION_PREWARM_PREPARE_ENABLED: ${{ vars.CDK_SESSION_PREWARM_PREPARE_ENABLED }}
+      # Experiment knob for the prepare A/B readout: whole number 0..100, the
+      # share of conversations held out of prepare (default 0). app-api only.
+      CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT: ${{ vars.CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT }}
       # Quota requests and extensions: users ask for more quota, admins grant
       # additive extensions (docs/specs/quota-requests-and-extensions.md).
       # Opt-in while in development: set `CDK_QUOTA_REQUESTS_ENABLED` to "true"

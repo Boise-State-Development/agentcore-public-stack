@@ -7,7 +7,7 @@
  * objects it can pass to the task definition and IAM grants module.
  */
 
-import { AppConfig, agentVersionPinningOn, buildCorsOrigins, checklistStepsOn, promptStepsOn } from '../../config';
+import { AppConfig, agentVersionPinningOn, buildCorsOrigins, checklistStepsOn, promptStepsOn, sessionPrewarmPrepareOn } from '../../config';
 import { managedKbMetricNamespace } from '../managed-kb/managed-kb-role-construct';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 
@@ -398,6 +398,15 @@ export function buildAppApiEnvironment(
     // Session prewarm (opt-in while in development): gates POST /chat/prewarm.
     // app-api only; the Runtime's warm action is a no-op behind this route.
     SESSION_PREWARM_ENABLED: config.sessionPrewarm.enabled ? 'true' : 'false',
+    // Prewarm prepare (opt-in while in development, needs session prewarm): a
+    // prewarm request may carry the selection and the Runtime builds that agent
+    // ahead of the send. app-api only; the request field triggers it, so the
+    // Runtime's environment budget is untouched.
+    SESSION_PREWARM_PREPARE_ENABLED: sessionPrewarmPrepareOn(config) ? 'true' : 'false',
+    // A/B holdout for the prepare readout: always written (like the managed-KB
+    // numerics), '0' while prepare is off.
+    SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT: String(
+      sessionPrewarmPrepareOn(config) ? config.sessionPrewarm.prepareHoldoutPercent : 0),
     // Quota requests (opt-in while in development): gates /quota/* and the
     // admin request queue. app-api only; extensions resolve everywhere.
     QUOTA_REQUESTS_ENABLED: config.quotaRequests.enabled ? 'true' : 'false',

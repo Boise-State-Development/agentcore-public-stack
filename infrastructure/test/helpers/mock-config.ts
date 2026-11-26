@@ -194,6 +194,8 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     sessionPrewarm: {
       enabled: false,
+      prepareEnabled: false,
+      prepareHoldoutPercent: 0,
     },
     quotaRequests: {
       enabled: false,
