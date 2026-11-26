@@ -153,6 +153,13 @@ jobs:
       # reverts to V1 if this variable is deleted. See
       # docs/specs/agentcore-runtime-v2.md.
       CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION: ${{ vars.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION }}
+      # Runtime V2 build warmup hook (in development): only `true` enables,
+      # and only on a V2 Runtime. AgentCore then calls POST /warmup on the
+      # container twice while it prepares each Runtime version. A failed call
+      # fails the deploy, so turn it on only once the deployed inference-api
+      # image serves the route. backend.yml reads the same variable. See
+      # docs/specs/agentcore-runtime-v2.md §5b.
+      CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED: ${{ vars.CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED }}
       # AgentCore Runtime generation: unset by default. Setting it (e.g. `g2`)
       # renames the Runtime, so this deploy creates a new one with no versions,
       # repoints everything at it and deletes the old one. Live sessions and

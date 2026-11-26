@@ -320,6 +320,17 @@ export interface InferenceApiConfig {
    * `g2`. Runbook: docs/specs/agentcore-runtime-v2.md §11.
    */
   runtimeGeneration?: string;
+  /**
+   * Runtime V2 build warmup hook (CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED),
+   * in development: off unless the variable is the literal `true`. On a V2
+   * Runtime it sets `HooksConfiguration.Build.Warmup` so AgentCore calls
+   * `POST /warmup` on the container twice while it prepares each Runtime
+   * version (`memory` before the snapshot, `disk` after it). Ignored on V1
+   * with a synth warning, because the service rejects hooks there. Nothing is
+   * written to the Runtime's environment. See
+   * docs/specs/agentcore-runtime-v2.md §5b.
+   */
+  runtimeWarmupHookEnabled?: boolean;
 }
 
 export interface RagIngestionConfig {
@@ -1532,6 +1543,14 @@ export const CONVERSATION_RETENTION_DAYS_DEFAULT = 365;
 export const AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT = 'V1';
 
 /**
+ * The Runtime V2 build warmup hook's route on the inference-api container.
+ * Must equal `WARMUP_HOOK_PATH` in
+ * `backend/src/apis/inference_api/warmup_hook.py`; a CDK test reads both. No
+ * port is configured, so AgentCore calls the Runtime's serving port.
+ */
+export const AGENTCORE_RUNTIME_WARMUP_HOOK_PATH = '/warmup';
+
+/**
  * Platform versions the AgentCore Runtime accepts. The CloudFormation schema
  * takes any non-blank string, so the list is ours: a typo like `v2` or `2`
  * fails synth instead of reaching the service. Add a version here when AWS
@@ -1972,6 +1991,14 @@ export function loadConfig(scope: cdk.App): AppConfig {
         || scope.node.tryGetContext('inferenceApi.runtimePlatformVersion')
         || scope.node.tryGetContext('inferenceApi')?.runtimePlatformVersion
         || AGENTCORE_RUNTIME_PLATFORM_VERSION_DEFAULT,
+      // Opt-in while in development (CLAUDE.md "Feature flags"): only the
+      // literal "true" turns it on; an unset workflow variable arrives as ""
+      // and is off. The construct applies it on V2 only.
+      runtimeWarmupHookEnabled: process.env.CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED
+        ? process.env.CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('inferenceApi.runtimeWarmupHookEnabled')
+          ?? scope.node.tryGetContext('inferenceApi')?.runtimeWarmupHookEnabled
+          ?? false,
       // Same chain. Unset (or '', an unset GitHub variable) keeps the
       // original Runtime name, so the template is unchanged.
       runtimeGeneration:
