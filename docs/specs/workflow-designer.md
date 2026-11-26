@@ -1448,9 +1448,15 @@ on the row's kind, and `workflow_prompt_step` gains an additive `kind`.
   fails doesn't stop the step's other sets.
 - **Provenance:** every value goes through `source_provenance` against the document, so each one has a state,
   exactly as in `document_extract`.
-- **The model-facing result** is values and states only, rendered as one table per set and capped at
-  `SEND_BACK_MAX_TOKENS`, as `document_extract`'s turn result is bounded. This is what collect and `prepare` carry
-  as the step's text part.
+- **The model-facing result** is values, states and where each value was found, rendered as one table per set
+  (`| Field | Value | State | Where |`) and capped at `SEND_BACK_MAX_TOKENS`, as `document_extract`'s turn result
+  is bounded. This is what collect and `prepare` carry as the step's text part.
+  - `Where` is the row's locator as `source_provenance` renders it (`p. 18`, `¶ 34`, hedged `p. ~12` when
+    estimated, `—` when nothing was located). It was added on 2026-11-26. Before that, a merge marking up the
+    document had a failed criterion's verdict but not its page. On a 32-page proposal it put none of the 3 audit
+    failures on the right page. It costs about 8 characters a row; a 15-set, 114-criterion audit's answer goes
+    from 6,544 characters to about 7,600 of the 8,000-character cap.
+  - The quote stays display only: one for every row would not fit the cap.
 - **The display rows** keep the quote, the locator and the method, on `WFCHK#<runId>#<stepId>#<set>` rows in
   sessions-metadata. The rows use the `SessionLookupIndex` GSI, as `EXTR#` rows do, with no new infra.
 
