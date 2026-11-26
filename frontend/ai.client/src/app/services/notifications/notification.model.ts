@@ -45,7 +45,8 @@ export const NEEDS_USER_NOTIFICATION_KINDS: ReadonlySet<NotificationKind> = new 
 /** One prompt a paused run waits on, as its inbox row lists it: ids and one display line. */
 export interface NeedsUserPrompt {
   interruptId: string;
-  kind: 'tool_approval' | 'user_question' | 'mcp_elicitation' | 'browser_login';
+  /** `oauth` is a resumed run that now needs a connection (answer-from-inbox §3.6); never answerable here. */
+  kind: 'tool_approval' | 'user_question' | 'mcp_elicitation' | 'browser_login' | 'oauth';
   toolName?: string;
   serverName?: string;
   headline?: string;
@@ -139,3 +140,41 @@ export interface NotificationsResponse {
   unreadCount: number;
   nextCursor?: string | null;
 }
+
+/**
+ * One live prompt behind a needs-user row (`GET /notifications/{id}/prompts`, answer-from-inbox
+ * §3.4): the session's `PendingInterrupt` breadcrumb in the handoff relay's wire shape, plus a
+ * form's `elicitation`. `questions` and `elicitation` are JSON-encoded, as on the breadcrumb.
+ */
+export interface InboxPrompt {
+  interruptId: string;
+  kind: 'oauth' | 'tool_approval' | 'user_question' | 'browser_login' | 'mcp_elicitation';
+  providerId?: string | null;
+  toolUseId?: string | null;
+  toolName?: string | null;
+  toolInput?: string | null;
+  message?: string | null;
+  questions?: string | null;
+  elicitation?: string | null;
+}
+
+export interface InboxPromptsResponse {
+  notificationId: string;
+  sessionId: string;
+  prompts: InboxPrompt[];
+}
+
+/** One answer, in the shape the conversation's own card posts. Never null. */
+export interface InboxAnswer {
+  interruptId: string;
+  response: unknown;
+}
+
+/** `202` of `POST /notifications/{id}/respond`: poll `GET /runs/{resumeRunId}` for the outcome. */
+export interface InboxRespondResponse {
+  resumeRunId: string;
+  resolution: NotificationResolution;
+}
+
+/** Why the server refused a prompts read or an answer (`detail` of the 4xx/5xx). */
+export type InboxRefusalCode = 'already_answered' | 'expired' | 'invalid_answers' | 'unavailable';

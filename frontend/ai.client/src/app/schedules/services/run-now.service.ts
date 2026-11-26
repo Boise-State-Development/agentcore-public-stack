@@ -25,7 +25,28 @@ export const RUN_LOST_AFTER_MS = 16 * 60 * 1000;
 const TERMINAL = new Set<string>(TERMINAL_RUN_STATUSES);
 
 /** A poll's result: the finished run, or `null` when it was given up as lost. */
-type RunOutcome = RunStatusResponse | null;
+export type RunOutcome = RunStatusResponse | null;
+
+/**
+ * Poll `GET /runs/{runId}` until the run ends or counts as lost. A failed poll is skipped, not
+ * fatal: the run is still going on the server either way. The lost clock starts now, on this
+ * browser's clock, so server clock skew can't end a run early. Run now and an answer from the
+ * inbox (answer-from-inbox §3.9) both track a run with it.
+ */
+export function pollRunUntilDone(runApi: RunApiService, runId: string): Observable<RunOutcome> {
+  const startedAt = Date.now();
+  return timer(RUN_POLL_INTERVAL_MS, RUN_POLL_INTERVAL_MS).pipe(
+    exhaustMap(() => runApi.getRun(runId).pipe(catchError(() => of(undefined)))),
+    map((status): RunOutcome | undefined => {
+      if (status && TERMINAL.has(status.status)) {
+        return status;
+      }
+      return Date.now() - startedAt >= RUN_LOST_AFTER_MS ? null : undefined;
+    }),
+    filter((outcome): outcome is RunOutcome => outcome !== undefined),
+    take(1),
+  );
+}
 
 /**
  * Fires a headless "Run now" and tracks it as a persistent background task.
@@ -64,7 +85,7 @@ export class RunNowService {
       .pipe(
         switchMap((response) => {
           started = response;
-          return this.pollUntilDone(response);
+          return pollRunUntilDone(this.runApi, response.runId);
         }),
         finalize(() => this.inFlight.update((n) => n - 1)),
       )
@@ -77,29 +98,6 @@ export class RunNowService {
       });
 
     return taskId;
-  }
-
-  /**
-   * Poll until the run ends or counts as lost. A failed poll is skipped, not
-   * fatal: the run is still going on the server either way. The lost clock
-   * starts at the 202, on this browser's clock, so server clock skew can't
-   * end a run early.
-   */
-  private pollUntilDone(started: RunStartedResponse): Observable<RunOutcome> {
-    const startedAt = Date.now();
-    return timer(RUN_POLL_INTERVAL_MS, RUN_POLL_INTERVAL_MS).pipe(
-      exhaustMap(() =>
-        this.runApi.getRun(started.runId).pipe(catchError(() => of(undefined))),
-      ),
-      map((status): RunOutcome | undefined => {
-        if (status && TERMINAL.has(status.status)) {
-          return status;
-        }
-        return Date.now() - startedAt >= RUN_LOST_AFTER_MS ? null : undefined;
-      }),
-      filter((outcome): outcome is RunOutcome => outcome !== undefined),
-      take(1),
-    );
   }
 
   private resolve(taskId: string, started: RunStartedResponse, result: RunOutcome): void {

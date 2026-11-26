@@ -142,6 +142,12 @@ export interface ScheduleRun {
   /** A `needs_user` run's pause: when it expires and how many prompts it holds (answer-from-inbox §3.8). */
   expiresAt?: string | null;
   promptCount?: number;
+  /** How its pause was answered from the inbox: `approved`, `declined`, `answered`, `skipped`. */
+  resolution?: string | null;
+  /** What the resumed run then did: `finished`, `waiting_again`, `failed`. */
+  resumeOutcome?: string | null;
+  resumeRunId?: string | null;
+  resumedAt?: string | null;
 }
 
 /** Response from GET /schedules/{id}/runs: the newest 50, newest first. */

@@ -6,6 +6,7 @@
  */
 
 import { parseIso } from '../utils/date';
+import { decisionLine } from '../services/notifications/needs-user';
 import { IntervalUnit, ScheduleCadence } from './models/schedule.model';
 
 /**
@@ -109,12 +110,57 @@ export function relativePast(iso: string, now = Date.now()): string {
   return `${Math.floor(diffHours / 24)}d ago`;
 }
 
+/** What a `needs_user` run's history row says about its pause (answer-from-inbox §3.8). */
+export interface RunPauseFields {
+  /** How it was answered: `approved`, `declined`, `answered`, `skipped`, `answered_elsewhere`. */
+  resolution?: string | null;
+  /** What the resumed run did: `finished`, `waiting_again`, `failed`. */
+  resumeOutcome?: string | null;
+  /** When the pause expires, while it waits. */
+  expiresAt?: string | null;
+}
+
+/** "Tue 3:40 PM" within the week, else "Dec 2, 3:40 PM". */
+function expiryMoment(at: Date, now: number): string {
+  const withinWeek = at.getTime() - now < 6 * 24 * 60 * 60_000;
+  return withinWeek
+    ? at.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })
+    : at.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * A run that paused on the user: "Waiting for you · expires Tue 3:40 PM" while it waits, then
+ * "Expired", "Approved · finished", "Answered · failed", "Approved · waiting for you again" or
+ * "Answered in the conversation". `expired` is derived here, on this clock: nothing writes it.
+ */
+export function pausedRunLabel(run: RunPauseFields | null | undefined, now = Date.now()): string {
+  if (run?.resolution === 'answered_elsewhere') return 'Answered in the conversation';
+  if (run?.resolution) return decisionLine(run.resolution, run.resumeOutcome);
+  const at = run?.expiresAt ? parseIso(run.expiresAt) : null;
+  if (!at || Number.isNaN(at.getTime())) return 'Waiting for you';
+  if (at.getTime() <= now) return 'Expired';
+  return `Waiting for you · expires ${expiryMoment(at, now)}`;
+}
+
+/** Whether a `needs_user` run still waits: no answer recorded and its pause not past expiry. */
+export function runStillWaiting(status: string, run: RunPauseFields | null | undefined, now = Date.now()): boolean {
+  if (status !== 'needs_user' || run?.resolution) return false;
+  const at = run?.expiresAt ? parseIso(run.expiresAt).getTime() : Number.NaN;
+  return Number.isNaN(at) || at > now;
+}
+
 /**
  * A run's outcome as a word: the worker's `completed` / `error` / `timeout`, a
  * recorded pause, and a watcher's `quiet` ("Nothing new") and `notify` ("Found 2",
- * from the run's `itemCount`).
+ * from the run's `itemCount`). A run that paused on the user reads from `run` (its
+ * resolution and expiry, {@link pausedRunLabel}).
  */
-export function runStatusLabel(status: string | null | undefined, itemCount?: number | null): string {
+export function runStatusLabel(
+  status: string | null | undefined,
+  itemCount?: number | null,
+  run?: RunPauseFields | null,
+  now = Date.now(),
+): string {
   switch (status) {
     case 'completed':
       return 'Completed';
@@ -129,7 +175,7 @@ export function runStatusLabel(status: string | null | undefined, itemCount?: nu
     case 'notify':
       return itemCount && itemCount > 0 ? `Found ${itemCount}` : 'Found something';
     case 'needs_user':
-      return 'Waiting for you';
+      return pausedRunLabel(run, now);
     default:
       return status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Unknown';
   }
@@ -149,7 +195,7 @@ const FINISHED: ReadonlySet<string> = new Set(['completed', 'quiet', 'notify', '
 const FOUND: ReadonlySet<string> = new Set(['notify', 'needs_user']);
 
 /** The fields a last-24-hours summary reads from each run. */
-export interface RunSummaryFields {
+export interface RunSummaryFields extends RunPauseFields {
   status: string;
   finishedAt: string;
 }
@@ -160,7 +206,8 @@ export interface RunSummaryFields {
  * "Ran 3 times", or "No runs in the last 24 hours". A run that ended in an
  * error, a timeout or a pause is not a check or a run: it is counted after
  * them ("· 1 failed"), so a run that stopped before it started never reads
- * as one that looked.
+ * as one that looked. Runs still waiting on the user add a last tail
+ * ("· 1 waiting for you", answer-from-inbox §3.8).
  */
 export function lastDayRunSummary(runs: readonly RunSummaryFields[], watching: boolean, now = Date.now()): string {
   const since = now - 24 * 60 * 60_000;
@@ -171,7 +218,8 @@ export function lastDayRunSummary(runs: readonly RunSummaryFields[], watching: b
   if (recent.length === 0) return 'No runs in the last 24 hours';
   const finished = recent.filter((run) => FINISHED.has(run.status)).length;
   const failed = recent.length - finished;
-  const tail = failed ? ` · ${failed} failed` : '';
+  const waiting = recent.filter((run) => runStillWaiting(run.status, run, now)).length;
+  const tail = (failed ? ` · ${failed} failed` : '') + (waiting ? ` · ${waiting} waiting for you` : '');
   if (!watching) return `Ran ${times(finished)}${tail}`;
   const found = recent.filter((run) => FOUND.has(run.status)).length;
   return `Checked ${times(finished)} · found something ${times(found)}${tail}`;

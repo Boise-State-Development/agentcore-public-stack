@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, resource, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, resource, signal, untracked } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { firstValueFrom } from 'rxjs';
@@ -14,7 +14,11 @@ import {
   ConfirmationDialogData,
 } from '../../components/confirmation-dialog/confirmation-dialog.component';
 import { parseIso } from '../../utils/date';
-import { cadenceSummary, lastDayRunSummary, relativePast, runStatusLabel } from '../schedule-wording';
+import { cadenceSummary, lastDayRunSummary, relativePast, runStatusLabel, runStillWaiting } from '../schedule-wording';
+import { NotificationsService } from '../../services/notifications/notifications.service';
+import { AppNotification, NEEDS_USER_NOTIFICATION_KINDS } from '../../services/notifications/notification.model';
+import { needsUserReviewable, needsUserWaiting } from '../../services/notifications/needs-user';
+import { InboxAnswerService } from '../services/inbox-answer.service';
 
 /** "950", "12.3k", "1.2M". */
 export function compactTokens(count: number): string {
@@ -61,6 +65,52 @@ interface RunRow {
 
 const BADGE = 'inline-flex items-center rounded-2xl px-2.5 py-0.5 text-xs/5 font-medium';
 
+/** A watcher holding on a run that waits on the user (answer-from-inbox §3.8). */
+export interface WatchHold {
+  sessionId: string;
+  /** "Waiting for you since 9:15 AM", or without a time when the run isn't in the history. */
+  sentence: string;
+  /** The inbox row to review it from, when the bell has it and it can be answered there. */
+  notification: AppNotification | null;
+}
+
+/** "9:15 AM" today, "Mon 9:15 AM" earlier. */
+function sinceMoment(at: Date, now: number): string {
+  const sameDay = new Date(now).toDateString() === at.toDateString();
+  return sameDay
+    ? at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    : at.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+}
+
+/**
+ * The banner's sentence and review target, or null when the watcher isn't holding: no pause on
+ * its state, one past `pausedUntil`, or one the inbox already shows as settled (answered in the
+ * conversation, which the next tick clears from the state).
+ */
+export function watchHold(
+  state: WatchState | null,
+  runs: readonly ScheduleRun[],
+  inbox: readonly AppNotification[],
+  now = Date.now(),
+): WatchHold | null {
+  const sessionId = state?.pausedSessionId;
+  const until = state?.pausedUntil ? parseIso(state.pausedUntil) : null;
+  if (!sessionId || !until || Number.isNaN(until.getTime()) || until.getTime() <= now) return null;
+  const rows = inbox.filter((n) => NEEDS_USER_NOTIFICATION_KINDS.has(n.kind) && n.payload?.sessionId === sessionId);
+  if (rows.length > 0 && !rows.some((n) => needsUserWaiting(n, now))) return null;
+  const paused = runs
+    .filter((run) => run.status === 'needs_user' && run.sessionId === sessionId)
+    .sort((a, b) => parseIso(b.finishedAt).getTime() - parseIso(a.finishedAt).getTime())[0];
+  const pausedAt = paused ? parseIso(paused.finishedAt) : null;
+  const since = pausedAt && !Number.isNaN(pausedAt.getTime()) ? ` since ${sinceMoment(pausedAt, now)}` : '';
+  const day = until.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return {
+    sessionId,
+    sentence: `Waiting for you${since}. Checks resume once you answer, or on ${day} when it expires.`,
+    notification: rows.find((n) => needsUserReviewable(n, now)) ?? null,
+  };
+}
+
 /**
  * One personal schedule (docs/specs/quiet-watcher.md §1, §3.4): what it is, every
  * run it made in the last 30 days (quiet ones included, which leave nothing else
@@ -84,6 +134,8 @@ export class ScheduleDetailPage {
   private readonly models = inject(ModelService);
   private readonly dialog = inject(Dialog);
   private readonly toast = inject(ToastService);
+  private readonly inbox = inject(NotificationsService);
+  private readonly inboxAnswer = inject(InboxAnswerService);
 
   /** From the route (component input binding). */
   readonly scheduleId = input.required<string>();
@@ -151,11 +203,11 @@ export class ScheduleDetailPage {
       .sort((a, b) => parseIso(b.finishedAt).getTime() - parseIso(a.finishedAt).getTime())
       .map((run) => ({
         run,
-        label: runStatusLabel(run.status, run.itemCount),
+        label: runStatusLabel(run.status, run.itemCount, run),
         when: relativePast(run.finishedAt),
         absolute: parseIso(run.finishedAt).toLocaleString(),
         tokens: runTokens(run),
-        badgeClass: this.badgeClass(run.status),
+        badgeClass: this.badgeClass(run),
       }));
   });
 
@@ -180,7 +232,35 @@ export class ScheduleDetailPage {
     return `It remembers ${findings} it has already told you about, so it won’t tell you again.`;
   });
 
+  /** The banner while a watcher holds on a run that waits on the user (§3.8). */
+  readonly hold = computed(() =>
+    this.watching()
+      ? watchHold(this.state(), this.runs.hasValue() ? this.runs.value().runs : [], this.inbox.notifications())
+      : null,
+  );
+
   readonly skeletonRows = [0, 1, 2];
+
+  constructor() {
+    // A resume this tab started settled: its run's history row and the watcher's hold changed.
+    let first = true;
+    effect(() => {
+      this.inboxAnswer.settledCount();
+      if (first) {
+        first = false;
+        return;
+      }
+      untracked(() => {
+        if (this.runs.hasValue()) this.runs.reload();
+        if (this.watchState.hasValue()) this.watchState.reload();
+      });
+    });
+  }
+
+  /** Review the held run's prompts from here, as from the bell. */
+  review(hold: WatchHold): void {
+    if (hold.notification) void this.inboxAnswer.review(hold.notification);
+  }
 
   async startOver(): Promise<void> {
     const schedule = this.personal();
@@ -211,8 +291,8 @@ export class ScheduleDetailPage {
     }
   }
 
-  private badgeClass(status: string): string {
-    switch (status) {
+  private badgeClass(run: ScheduleRun): string {
+    switch (run.status) {
       case 'notify':
         return `${BADGE} bg-state-info-100 text-state-info-800 dark:bg-state-info-900/30 dark:text-state-info-300`;
       case 'completed':
@@ -222,8 +302,23 @@ export class ScheduleDetailPage {
         return `${BADGE} bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/30 dark:text-state-danger-300`;
       case 'paused':
         return `${BADGE} bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/30 dark:text-state-warning-300`;
+      case 'needs_user':
+        return this.pausedBadgeClass(run);
       default:
         return `${BADGE} bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300`;
     }
+  }
+
+  /** Waiting or waiting again reads as a warning; a finished resume as success, a failed one as danger. */
+  private pausedBadgeClass(run: ScheduleRun): string {
+    const warning = `${BADGE} bg-state-warning-100 text-state-warning-800 dark:bg-state-warning-900/30 dark:text-state-warning-300`;
+    if (runStillWaiting(run.status, run) || run.resumeOutcome === 'waiting_again') return warning;
+    if (run.resumeOutcome === 'finished') {
+      return `${BADGE} bg-state-success-100 text-state-success-800 dark:bg-state-success-900/30 dark:text-state-success-300`;
+    }
+    if (run.resumeOutcome === 'failed') {
+      return `${BADGE} bg-state-danger-100 text-state-danger-800 dark:bg-state-danger-900/30 dark:text-state-danger-300`;
+    }
+    return `${BADGE} bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300`;
   }
 }

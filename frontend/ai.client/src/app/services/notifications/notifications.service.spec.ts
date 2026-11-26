@@ -3,7 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { signal } from '@angular/core';
-import { NotificationsService } from './notifications.service';
+import { InboxRefusal, NotificationsService } from './notifications.service';
 import { AppNotification } from './notification.model';
 import { ConfigService } from '../config.service';
 import { SUPPRESS_ERROR_TOAST } from '../../auth/error.interceptor';
@@ -109,5 +109,58 @@ describe('NotificationsService', () => {
     await done;
     expect(service.error()).toContain('couldn’t be loaded');
     expect(service.notifications().length).toBe(1);
+  });
+
+  describe('answering a paused run (answer-from-inbox §3.4–3.5)', () => {
+    const paused = (id: string): AppNotification => ({
+      ...notif(id), kind: 'agent_needs_approval', projectId: null, projectName: null, actorEmail: null,
+      payload: { sessionId: 'headless-1', answerable: true, prompts: [{ interruptId: 'i1', kind: 'tool_approval' }] },
+    });
+
+    it('reads the live prompts without the error toast', async () => {
+      const done = service.prompts('n1');
+      const req = http.expectOne(`${BASE}/n1/prompts`);
+      expect(req.request.context.get(SUPPRESS_ERROR_TOAST)).toBe(true);
+      req.flush({ notificationId: 'n1', sessionId: 'headless-1', prompts: [{ interruptId: 'i1', kind: 'tool_approval' }] });
+      expect((await done).prompts[0].interruptId).toBe('i1');
+    });
+
+    it('posts every answer at once, then shows the row claimed and read', async () => {
+      await load([paused('n1'), notif('n2')], 2);
+      const done = service.respond('n1', [{ interruptId: 'i1', response: 'approved' }]);
+      const req = http.expectOne(`${BASE}/n1/respond`);
+      expect(req.request.method).toBe('POST');
+      expect(req.request.body).toEqual({ responses: [{ interruptId: 'i1', response: 'approved' }] });
+      const resolution = { state: 'applying' as const, decision: 'approved' as const, at: '2026-11-26T12:00:00Z', resumeRunId: 'r-9' };
+      req.flush({ resumeRunId: 'r-9', resolution }, { status: 202, statusText: 'Accepted' });
+      expect((await done).resumeRunId).toBe('r-9');
+      expect(service.notifications()[0].resolution).toEqual(resolution);
+      expect(service.notifications()[0].readAt).toBe('2026-11-26T12:00:00Z');
+      expect(service.unreadCount()).toBe(1);
+    });
+
+    it('a row given back to retry keeps its unread dot', async () => {
+      await load([paused('n1')], 1);
+      service.settled('n1', { state: 'retry', at: '2026-11-26T12:00:00Z' });
+      expect(service.notifications()[0].readAt).toBeNull();
+      expect(service.unreadCount()).toBe(1);
+    });
+
+    it.each([
+      [409, { detail: { code: 'already_answered', message: 'This was already answered.' } }, 'already_answered', 'This was already answered.'],
+      [410, { detail: { code: 'expired', message: 'This expired before it was answered.' } }, 'expired', 'This expired before it was answered.'],
+      [422, { detail: { code: 'invalid_answers', message: 'Answer every prompt.' } }, 'invalid_answers', 'Answer every prompt.'],
+      [503, { detail: { code: 'unavailable', message: 'Couldn’t send the answer. Try again.' } }, 'unavailable', 'Couldn’t send the answer. Try again.'],
+      // The flag off, or not the caller's row: nothing waits here.
+      [404, { detail: 'Notification not found' }, 'already_answered', 'This is no longer waiting for you.'],
+      [500, { detail: 'boom' }, 'unavailable', 'Couldn’t reach the server. Try again.'],
+    ])('a %i reads as %s', async (status, body, code, message) => {
+      const done = service.respond('n1', [{ interruptId: 'i1', response: 'approved' }]);
+      http.expectOne(`${BASE}/n1/respond`).flush(body, { status, statusText: 'Refused' });
+      const refusal = await done.catch((e: unknown) => e);
+      expect(refusal).toBeInstanceOf(InboxRefusal);
+      expect((refusal as InboxRefusal).code).toBe(code);
+      expect((refusal as InboxRefusal).message).toBe(message);
+    });
   });
 });

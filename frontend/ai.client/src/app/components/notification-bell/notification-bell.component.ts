@@ -25,6 +25,13 @@ import { FEATURES } from '../../services/features';
 import { QuotaStatusService } from '../../services/quota/quota-status.service';
 import { QUOTA_NOTIFICATION_KINDS, QuotaRequestService } from '../../services/quota/quota-request.service';
 import { formatAmount, formatQuotaDate, perPeriod } from '../../services/quota/quota-format';
+import {
+  decisionLine,
+  expiresIn,
+  needsUserExpired,
+  needsUserReviewable,
+  needsUserWaiting,
+} from '../../services/notifications/needs-user';
 
 /** Re-read on returning to the tab at most this often. */
 const REFRESH_ON_FOCUS_MS = 60_000;
@@ -124,37 +131,7 @@ function describeAgentItem(n: AppNotification): string {
   return n.payload?.urgency === 'now' ? `Urgent — ${line}` : line;
 }
 
-/** Whether a needs-user row's pause has passed its expiry, judged on this clock (answer-from-inbox §3.8). */
-export function needsUserExpired(n: AppNotification, now = Date.now()): boolean {
-  if (n.resolution?.state === 'expired') return true;
-  if (n.resolution) return false;
-  const expiresAt = typeof n.payload?.expiresAt === 'string' ? parseIso(n.payload.expiresAt).getTime() : Number.NaN;
-  return !Number.isNaN(expiresAt) && expiresAt <= now;
-}
-
-/**
- * A needs-user row still waiting on the user: not settled (or given back to `retry`) and not past
- * its expiry. Its read state follows the answer, not the click (answer-from-inbox §3.3): opening it
- * leaves it unread, and the server marks it read once it is answered, here or in the conversation,
- * or expires.
- */
-export function needsUserWaiting(n: AppNotification, now = Date.now()): boolean {
-  if (!NEEDS_USER_NOTIFICATION_KINDS.has(n.kind)) return false;
-  if (n.resolution && n.resolution.state !== 'retry') return false;
-  return !needsUserExpired(n, now);
-}
-
-const DECISION_WORDS: Record<string, string> = {
-  approved: 'Approved',
-  declined: 'Declined',
-  answered: 'Answered',
-  skipped: 'Skipped',
-};
-const OUTCOME_WORDS: Record<string, string> = {
-  finished: 'finished',
-  waiting_again: 'waiting for you again',
-  failed: 'failed',
-};
+export { needsUserExpired, needsUserWaiting };
 
 /** What became of a needs-user row, or '' while it waits. */
 function needsUserSuffix(n: AppNotification, now: number): string {
@@ -165,11 +142,8 @@ function needsUserSuffix(n: AppNotification, now: number): string {
       return 'Answered in the conversation';
     case 'applying':
       return 'Applying…';
-    case 'answered': {
-      const decision = DECISION_WORDS[resolution.decision ?? ''] ?? 'Answered';
-      const outcome = OUTCOME_WORDS[resolution.outcome ?? ''];
-      return outcome ? `${decision} · ${outcome}` : decision;
-    }
+    case 'answered':
+      return decisionLine(resolution.decision, resolution.outcome);
     default:
       return '';
   }
@@ -270,7 +244,9 @@ export function relativeTime(iso: string, now = Date.now()): string {
  * invitation sent while the tab sat in the background shows up.
  *
  * Opening a notification marks it read and, unless it says you were removed,
- * takes you to what it is about: a handoff's conversation, or the project (its Members tab when someone left). The panel shows the newest 20; the inbox keeps 90
+ * takes you to what it is about: a handoff's conversation, or the project (its Members tab when someone left).
+ * A scheduled run waiting on you stays unread until it is answered, and opens the review dialog
+ * where it can be answered there (answer-from-inbox §3.9). The panel shows the newest 20; the inbox keeps 90
  * days, and older entries are not worth a pager in a menu.
  */
 @Component({
@@ -480,8 +456,12 @@ export class NotificationBellComponent {
     return noted && typeof n.payload?.note === 'string' && n.payload.note ? n.payload.note : null;
   }
 
+  /** When it arrived, and for a run still waiting on the user, when its pause expires (§3.8). */
   protected when(n: AppNotification): string {
-    return relativeTime(n.createdAt);
+    const arrived = relativeTime(n.createdAt);
+    if (!needsUserWaiting(n)) return arrived;
+    const expiry = expiresIn(n.payload?.expiresAt);
+    return expiry ? `${arrived} · ${expiry}` : arrived;
   }
 
   protected onOpened(): void {
@@ -580,10 +560,17 @@ export class NotificationBellComponent {
       this.sidenav.close();
       return;
     }
-    // A paused run opens its conversation, where its card is answered (answer-from-inbox
-    // PR 2.1; the review dialog comes with PR 2.3).
+    // A paused run that can be answered here opens the review dialog (answer-from-inbox §3.9).
+    // Any other one (settled, expired, or waiting on a sign-in) opens its conversation. The
+    // dialog loads on demand: it renders the chat's prompt cards, which the bell's bundle hasn't.
     if (NEEDS_USER_NOTIFICATION_KINDS.has(n.kind)) {
       const { sessionId, scheduleId } = n.payload ?? {};
+      if (this.features.proactiveRuns && needsUserReviewable(n)) {
+        void import('../../schedules/services/inbox-answer.service').then(({ InboxAnswerService }) =>
+          this.injector.get(InboxAnswerService).review(n),
+        );
+        return;
+      }
       if (typeof sessionId === 'string' && sessionId) {
         void this.router.navigate(['/s', sessionId]);
       } else if (this.features.proactiveRuns && typeof scheduleId === 'string' && scheduleId) {
