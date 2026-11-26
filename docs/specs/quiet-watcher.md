@@ -160,3 +160,34 @@ So the honest baseline is a full prefix write per run. Anything that makes a qui
 - **Raw block:** the user bubble no longer shows the `<watch_state>` block.
 - **Summary:** the 24-hour summary no longer counts a run that never started.
 - **Stale error:** a completed run clears `lastError`.
+
+### 6.1 T.0: a Haiku 5.5 watcher (2026-11-26)
+
+`quiet-watcher-triage.md` §8 asks for this before any triage is built: what the cheapest single-stage watcher costs. The same test watcher, on `us.anthropic.claude-haiku-5-5` ($0.11 / $0.55 per MTok), was created from the form and forced through three runs with the §6 recipe. Run 2 came 40 seconds after run 1, and run 3 came 7 minutes after run 2. Dev runs with no 1-hour static TTL (`AGENTCORE_PROMPT_CACHE_STATIC_PREFIX_TTL` unset on the Runtime).
+
+| Run | Outcome | Gap | Tokens (in · out · cache write · cache read) | Cost |
+|---|---|---|---|---|
+| 1 | notify | — | 6 · 379 · 5,873 · 5,529 | $0.00108 |
+| 2 | quiet | 40 s | 6 · 403 · 696 · 10,803 | $0.00044 |
+| 3 | quiet | 7 min | 6 · 603 · 6,055 · 5,568 | $0.00123 |
+
+Every call had the same `systemPromptHash` and `toolConfigHash`.
+
+**What it shows:**
+- **About 7× cheaper than Haiku 4.5 on today's path.** A run that writes the prefix costs about $0.0011–0.0012, against $0.0076. A 15-minute watcher is about **$0.11 a day**, against $0.73.
+- **Haiku 5.5's tools and system point does cache.** That segment is 5,235–5,568 tokens on Haiku 5.5's tokenizer, which clears the minimum Haiku 4.5's 3.9k missed. Run 2's first call read 5,235 tokens from run 1. A run that reads the prefix costs **$0.00044**.
+- **Cache expiry decides the cost.** With the 5-minute default, a 15-minute watcher always arrives after expiry, as run 3 did, and pays the full write every run.
+- **Output is a bigger share.** Haiku 5.5 wrote 379–603 output tokens a run, against Haiku 4.5's 197. That is about a quarter of a cold run's cost and half of a warm run's.
+
+**The 1-hour TTL, probed directly.** `scripts/probe_static_prefix_ttl.py --model-id us.anthropic.claude-haiku-5-5 --base-rate 0.11 --gap-seconds 420` sends its own ~9k-token static prefix twice, 7 minutes apart:
+
+| Arm | Second call: read · write | Pair cost |
+|---|---|---|
+| 5m (today) | 1,484 · 7,500 | $0.002284 |
+| 1h | 8,902 · 82 | $0.002093 |
+
+So Bedrock honours a 1-hour point on Haiku 5.5, and one return within the hour already covers the 2× write premium. The 1,484-token read on the 5m arm's second call is unexplained; it doesn't change the result.
+
+**What 1-hour would mean for a watcher.** A read refreshes a cached entry, so on a 15-minute cadence only the first run of a stretch writes the prefix. Every later run would cost about run 2's $0.00044, roughly **$0.04 a day**. That is an estimate from these figures. The real path wasn't run with 1-hour TTL, because the setting is one Runtime-wide variable, which changes every turn's economics, not only a watcher's (`compaction-model-relative-thresholds.md` §3.6).
+
+**Cost of this check:** six watcher calls, $0.0028 in all, plus four probe calls, $0.0044 by the probe's own pricing. About **$0.007** on Haiku 5.5.
