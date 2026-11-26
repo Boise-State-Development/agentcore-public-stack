@@ -21,6 +21,8 @@
 #      pipeline owns it after first deploy).
 #   4. check-runtime-env-contract.sh → refuse to strip the Runtime's
 #      resource names while the live image cannot derive them.
+#      check-runtime-warmup-hook-image.sh → refuse to configure the
+#      Runtime's build warmup hook while the live image does not serve it.
 #   5. cdk deploy --app cdk.out/ → CFN resolves the SSM-Parameter::
 #      Value<String> template params, picks up the freshly-seeded
 #      bootstrap URI on first deploy or the build-pipeline-written
@@ -69,6 +71,14 @@ bash "${PROJECT_ROOT}/scripts/stack-bootstrap/seed-image-tags.sh"
 # it with whatever image is live. Fails here, before anything changes, when
 # the live image predates that, and says to run backend.yml first.
 bash "${PROJECT_ROOT}/scripts/platform/check-runtime-env-contract.sh" \
+    "cdk.out/${CDK_PROJECT_PREFIX}-PlatformStack.template.json"
+
+# ── 4b. Refuse to configure the build warmup hook under an image without it ──
+# With the hook configured (CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED on a V2
+# Runtime), AgentCore calls POST /warmup on the live image during the update
+# and a 404 fails it. Fails here, before anything changes, when the live image
+# does not declare the route. See docs/specs/agentcore-runtime-v2.md §5b.
+bash "${PROJECT_ROOT}/scripts/platform/check-runtime-warmup-hook-image.sh" \
     "cdk.out/${CDK_PROJECT_PREFIX}-PlatformStack.template.json"
 
 # ── 5. Deploy ──

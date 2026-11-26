@@ -171,6 +171,11 @@ jobs:
       # `true` only after confirming the live inference-api image derives its
       # resource names (docs/specs/agentcore-runtime-v2.md §8).
       SKIP_RUNTIME_ENV_CONTRACT_CHECK: ${{ vars.SKIP_RUNTIME_ENV_CONTRACT_CHECK }}
+      # With the build warmup hook switched on, the deploy refuses to configure
+      # it while the live inference-api image does not serve POST /warmup
+      # (scripts/platform/check-runtime-warmup-hook-image.sh). Set `true` only
+      # for a custom image you have checked.
+      SKIP_RUNTIME_WARMUP_HOOK_IMAGE_CHECK: ${{ vars.SKIP_RUNTIME_WARMUP_HOOK_IMAGE_CHECK }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).

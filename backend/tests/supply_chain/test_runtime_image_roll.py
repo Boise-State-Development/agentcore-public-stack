@@ -79,6 +79,15 @@ elif args[:2] == ["ssm", "get-parameter"]:
     print(state["ssm"][opt("--name")])
 elif args[:2] == ["ecr", "describe-images"]:
     sys.exit(254)
+elif args[:2] == ["ecr", "batch-get-image"]:
+    # One image config per tag; "unreadable" plays a repository this role cannot inspect.
+    tag = opt("--image-ids").split("=", 1)[1]
+    labels = state.get("image_labels", {}).get(tag)
+    if labels == "unreadable" or labels is None:
+        sys.exit(254)
+    print(json.dumps({"config": {"digest": "sha256:config-" + tag}}))
+elif args[:2] == ["ecr", "get-download-url-for-layer"]:
+    print("https://ecr.invalid/" + opt("--layer-digest").split("config-", 1)[1])
 elif args[:2] == ["bedrock-agentcore-control", "get-agent-runtime"]:
     runtime = {k: v for k, v in state["runtime"].items() if known(k)}
     query = opt("--query")
@@ -112,6 +121,21 @@ else:
 '''
 
 
+FAKE_CURL = r'''#!/usr/bin/env python3
+"""A stand-in for curl: serves the image config the fake ECR pointed at."""
+import json
+import os
+import sys
+
+with open(os.environ["FAKE_AWS_STATE"]) as fh:
+    state = json.load(fh)
+tag = sys.argv[-1].rsplit("/", 1)[1]
+print(json.dumps({"config": {"Labels": state["image_labels"][tag]}}))
+'''
+
+HOOK_LABEL = {"org.agentcore-public-stack.runtime-warmup-hook": "warmup-v1"}
+
+
 def _runtime(**overrides: Any) -> Dict[str, Any]:
     runtime: Dict[str, Any] = {
         "agentRuntimeArn": "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/rt-1",
@@ -140,12 +164,17 @@ class Roll:
         fake = bin_dir / "aws"
         fake.write_text(FAKE_AWS.replace("#!/usr/bin/env python3", f"#!{sys.executable}", 1))
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        fake_curl = bin_dir / "curl"
+        fake_curl.write_text(FAKE_CURL.replace("#!/usr/bin/env python3", f"#!{sys.executable}", 1))
+        fake_curl.chmod(fake_curl.stat().st_mode | stat.S_IXUSR)
         self.state_path = tmp_path / "state.json"
         self.state_path.write_text(
             json.dumps(
                 {
                     "ssm": {"/test/image-tag": NEW_URI, "/test/runtime-id": "rt-1"},
                     "runtime": runtime,
+                    # The new image serves the hook unless a test says otherwise.
+                    "image_labels": {"new": HOOK_LABEL},
                     **state,
                 }
             )
@@ -288,6 +317,125 @@ class TestAFailedHook:
 
         assert roll.code == 4
         assert roll.updates == []
+
+
+class TestAnImageThatDoesNotServeTheHook:
+    """A runtime with hooks calls them on the new image. One built before the
+    route existed answers 404 and fails the update, so it is refused first."""
+
+    def test_is_refused_before_anything_is_sent(self, tmp_path):
+        roll = Roll(tmp_path, _runtime(), image_labels={"new": {}}).run("--expect-warmup-hook")
+
+        assert roll.code == 10
+        assert roll.updates == []
+        assert "does not declare" in roll.log
+        assert "set CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED to false and run platform.yml" in roll.log
+
+    def test_is_refused_whoever_configured_the_hook(self, tmp_path):
+        roll = Roll(tmp_path, _runtime(), image_labels={"new": {}}).run()
+
+        assert roll.code == 10
+        assert roll.updates == []
+
+    def test_an_image_that_declares_the_hook_is_rolled(self, tmp_path):
+        roll = Roll(tmp_path, _runtime()).run("--expect-warmup-hook")
+
+        assert roll.code == 0, roll.log
+        assert "Target image declares org.agentcore-public-stack.runtime-warmup-hook=warmup-v1" in roll.log
+
+    def test_an_image_that_cannot_be_inspected_is_rolled_with_a_warning(self, tmp_path):
+        roll = Roll(tmp_path, _runtime(), image_labels={"new": "unreadable"}).run("--expect-warmup-hook")
+
+        assert roll.code == 0, roll.log
+        assert len(roll.updates) == 1
+        assert "could not read org.agentcore-public-stack.runtime-warmup-hook" in roll.log
+
+    def test_a_runtime_without_hooks_takes_any_image(self, tmp_path):
+        roll = Roll(tmp_path, _runtime(hooksConfiguration=None), image_labels={"new": {}}).run()
+
+        assert roll.code == 0, roll.log
+        assert len(roll.updates) == 1
+
+
+class TestPlatformPreflight:
+    """scripts/platform/check-runtime-warmup-hook-image.sh: a CDK deploy that
+    configures the hook is refused while the live image does not serve it."""
+
+    CHECK = REPO_ROOT / "scripts" / "platform" / "check-runtime-warmup-hook-image.sh"
+    LIVE = "123456789012.dkr.ecr.us-west-2.amazonaws.com/test-inference-api:new"
+
+    def _run(self, tmp_path: Path, *, hooked: bool, image_uri: str = LIVE, labels: Any = None, **env: str):
+        template = {
+            "Resources": {
+                "Runtime": {
+                    "Type": "AWS::BedrockAgentCore::Runtime",
+                    "Properties": (
+                        {"HooksConfiguration": {"Build": {"Warmup": {"Action": {"HttpPost": {"Path": "/warmup"}}}}}}
+                        if hooked
+                        else {}
+                    ),
+                }
+            }
+        }
+        path = tmp_path / "template.json"
+        path.write_text(json.dumps(template))
+        roll = Roll(tmp_path, _runtime(), image_labels={"new": HOOK_LABEL if labels is None else labels})
+        return subprocess.run(
+            ["bash", str(self.CHECK), str(path)],
+            env={**roll.env, "CDK_PROJECT_PREFIX": "test", "CDK_AWS_REGION": "us-west-2", "RUNTIME_IMAGE_URI": image_uri, **env},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def test_a_template_without_hooks_is_never_checked(self, tmp_path):
+        result = self._run(tmp_path, hooked=False, labels={})
+        assert result.returncode == 0, result.stderr
+        assert "no lifecycle hooks" in result.stdout
+
+    def test_a_live_image_that_serves_the_hook_passes(self, tmp_path):
+        result = self._run(tmp_path, hooked=True)
+        assert result.returncode == 0, result.stderr
+        assert "safe to configure the hook" in result.stdout
+
+    def test_a_live_image_without_the_route_stops_the_deploy(self, tmp_path):
+        result = self._run(tmp_path, hooked=True, labels={})
+        assert result.returncode == 1
+        assert "does not serve it" in result.stderr
+        assert "run the Backend Deploy workflow (backend.yml) first" in result.stderr
+
+    def test_the_bootstrap_image_stops_the_deploy(self, tmp_path):
+        """A first deploy starts from the CDK bootstrap image, which has no route."""
+        result = self._run(
+            tmp_path,
+            hooked=True,
+            image_uri="123456789012.dkr.ecr.us-west-2.amazonaws.com/cdk-hnb659fds-container-assets-123456789012-us-west-2:abc",
+        )
+        assert result.returncode == 1
+        assert "the CDK bootstrap image, or a custom one" in result.stderr
+
+    def test_an_unreadable_image_stops_the_deploy_and_names_the_override(self, tmp_path):
+        result = self._run(tmp_path, hooked=True, labels="unreadable")
+        assert result.returncode == 1
+        assert "SKIP_RUNTIME_WARMUP_HOOK_IMAGE_CHECK=true" in result.stderr
+
+    def test_the_override_skips_the_check(self, tmp_path):
+        result = self._run(tmp_path, hooked=True, labels={}, SKIP_RUNTIME_WARMUP_HOOK_IMAGE_CHECK="true")
+        assert result.returncode == 0, result.stderr
+
+    def test_the_image_declares_the_label_the_checks_read(self):
+        dockerfile = (REPO_ROOT / "backend" / "Dockerfile.inference-api").read_text()
+        assert 'LABEL org.agentcore-public-stack.runtime-warmup-hook="warmup-v1"' in dockerfile
+
+    def test_the_platform_deploy_runs_the_check_before_cdk_deploy(self):
+        deploy = (REPO_ROOT / "scripts" / "platform" / "deploy.sh").read_text()
+        assert deploy.index("check-runtime-warmup-hook-image.sh\" \\") < deploy.index("npx cdk deploy")
+
+    def test_platform_yml_forwards_the_override(self):
+        text = (REPO_ROOT / ".github" / "workflows" / "platform.yml").read_text()
+        assert (
+            "SKIP_RUNTIME_WARMUP_HOOK_IMAGE_CHECK: ${{ vars.SKIP_RUNTIME_WARMUP_HOOK_IMAGE_CHECK }}" in text
+        )
 
 
 class TestPlatformVersionStillSurvives:

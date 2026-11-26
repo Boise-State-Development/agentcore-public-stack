@@ -52,6 +52,10 @@
 #   Whenever the CLI does know the field, the script fails the job
 #       (exit 9) if hooksConfiguration differs after the update.
 #
+#   When the runtime has hooks, the new image must declare that it
+#       serves them (a label, see step 4c), or the roll is refused
+#       before anything is sent (exit 10).
+#
 # A failed hook call fails the update and leaves the Runtime in
 # UPDATE_FAILED, still serving its previous version. AWS's remedy is
 # "fix the cause, then update the runtime again", so UPDATE_FAILED
@@ -59,7 +63,8 @@
 #
 # Exit codes: 2 usage/env, 3 runtime not found, 4 not updatable,
 # 5 update did not reach READY, 6 bad image URI in SSM, 7 CLI too
-# old, 8 platformVersion changed, 9 hooksConfiguration changed.
+# old, 8 platformVersion changed, 9 hooksConfiguration changed,
+# 10 the runtime has hooks and the new image does not serve them.
 #============================================================
 set -euo pipefail
 
@@ -272,6 +277,29 @@ if [[ "$EXPECT_WARMUP_HOOK" == "true" ]]; then
     fi
 elif [[ "$CLI_KNOWS_HOOKS" != "true" ]]; then
     log "Note: this AWS CLI does not know hooksConfiguration; any lifecycle hooks on the runtime cannot be seen or carried."
+fi
+
+# 4c. A runtime that has lifecycle hooks calls them on the NEW image while it
+# prepares the update, and an image that does not serve the route answers 404
+# and fails it (UPDATE_FAILED, plus a Runtime version spent). That is what
+# rolling back to an image from before the hook existed would do. An image
+# that serves POST /warmup declares it in a label; read it before updating.
+# Refused only when the label is readably absent: an image that cannot be
+# inspected (no ecr:BatchGetImage on a custom repository) is rolled as before.
+if [[ -n "$CURRENT_HOOKS" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    HOOK_LABEL_KEY="org.agentcore-public-stack.runtime-warmup-hook"
+    if HOOK_LABEL="$(bash "${SCRIPT_DIR}/../common/ecr-image-label.sh" "$NEW_CONTAINER_URI" "$HOOK_LABEL_KEY" 2>/dev/null)"; then
+        if [[ -z "$HOOK_LABEL" ]]; then
+            log "The runtime has lifecycle hooks (${CURRENT_HOOKS}), but the image being deployed does not declare"
+            log "that it serves them (no ${HOOK_LABEL_KEY} label). AgentCore would call the hook, get a 404, and fail the update."
+            log "To deploy this image, first set CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED to false and run platform.yml."
+            exit 10
+        fi
+        log "Target image declares ${HOOK_LABEL_KEY}=${HOOK_LABEL}"
+    else
+        log "WARNING: could not read ${HOOK_LABEL_KEY} off the target image; rolling it without that check."
+    fi
 fi
 
 # 5. Wait for READY. Poll up to ~20 minutes (120 attempts × 10 sec). A V1
