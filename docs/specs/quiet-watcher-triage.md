@@ -29,10 +29,10 @@ So a quiet run gets cheaper only if it is **smaller** or **skips the model**. Th
 
 ### 1.2 The baseline to beat is not Haiku 4.5
 
-Before any decider, the cheapest single-stage watcher is a cheaper schedule model. These figures are estimates from catalog rates; none has been measured on a watch run.
+Before any decider, the cheapest single-stage watcher is a cheaper schedule model. T.0 measured it on dev (`quiet-watcher.md` §6.1):
 
-- **Haiku 5.5:** $0.11 / $0.55 per MTok on the `us.*` profile, 10× under Haiku 4.5. Its tokenizer counts ~30% more tokens, so the same prefix is ~5.6k tokens. A watch run would cost **about $0.001** (≈ $0.10 a day).
-- **The cache point may cross the minimum.** At ~5.6k tokens, Haiku 5.5's tools and system point may clear whatever minimum it has (unmeasured; Haiku 4.5's is 4,096). If it does, the 1-hour static TTL could make consecutive 15-minute runs read the prefix instead of writing it.
+- **Haiku 5.5:** $0.11 / $0.55 per MTok on the `us.*` profile, 10× under Haiku 4.5. Its tokenizer makes the tools and system segment 5.2–5.6k tokens. A run that writes the prefix costs **$0.0011–0.0012** (≈ $0.11 a day for a 15-minute watcher). One that reads it costs **$0.00044**.
+- **The cache point does cross the minimum.** Unlike Haiku 4.5's 3.9k prefix, Haiku 5.5's segment caches, and a run 40 s after another read it. But with the 5-minute default a 15-minute watcher always arrives after expiry. A direct probe confirms Bedrock honours the 1-hour point on Haiku 5.5. With it, a 15-minute watcher would pay about **$0.04 a day** (an estimate: the 1-hour setting is Runtime-wide, so the real path wasn't run with it).
 
 The decider's saving has to be stated against the best single-stage watcher, not against today's Haiku 4.5. **§7 shows that once the schedule model is Haiku 5.5, tier 1 does almost all the work and tier 2 adds little.** Tier 2 earns its place on watchers that run a mid-size or frontier model, or whose sources defeat tier 1. PR T.0 (§8) measures this before tier 2 is built.
 
@@ -411,7 +411,7 @@ A triage invocation also costs Runtime compute for a few seconds and the probe's
 | Quiet run settled by | Model cost per run |
 |---|---|
 | Today: full run, Haiku 4.5 | **$0.0076** (measured) |
-| Full run, Haiku 5.5 (single-stage alternative, §1.2) | ~$0.001 (estimate) |
+| Full run, Haiku 5.5 (single-stage alternative, §1.2) | **$0.0011–0.0012** (measured, T.0); ~$0.00044 with a warm static prefix |
 | Tier 1 (fingerprints match) | **$0** (+ Runtime < $0.0001) |
 | Tier 2, Nova Micro | ~$0.0001 |
 | Tier 2, Haiku 5.5 | ~$0.0006 |
