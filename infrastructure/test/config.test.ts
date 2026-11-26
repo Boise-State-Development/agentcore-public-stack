@@ -1160,6 +1160,54 @@ describe('RAG Ingestion Configuration', () => {
     });
   });
 
+  describe('Session prewarm prepare feature flag', () => {
+    afterEach(() => {
+      delete process.env.CDK_SESSION_PREWARM_PREPARE_ENABLED;
+    });
+
+    test('defaults to disabled when unset', () => {
+      delete process.env.CDK_SESSION_PREWARM_PREPARE_ENABLED;
+      expect(loadConfig(app).sessionPrewarm.prepareEnabled).toBe(false);
+    });
+
+    test('treats empty string (unset GitHub Actions variable) as disabled', () => {
+      process.env.CDK_SESSION_PREWARM_PREPARE_ENABLED = '';
+      expect(loadConfig(app).sessionPrewarm.prepareEnabled).toBe(false);
+    });
+
+    describe('holdout percent', () => {
+      afterEach(() => {
+        delete process.env.CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT;
+      });
+
+      test('defaults to 0 when unset or empty', () => {
+        delete process.env.CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT;
+        expect(loadConfig(app).sessionPrewarm.prepareHoldoutPercent).toBe(0);
+        process.env.CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT = '';
+        expect(loadConfig(app).sessionPrewarm.prepareHoldoutPercent).toBe(0);
+      });
+
+      test('a valid value passes through (trimmed), including 100', () => {
+        process.env.CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT = ' 25 ';
+        expect(loadConfig(app).sessionPrewarm.prepareHoldoutPercent).toBe(25);
+        process.env.CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT = '100';
+        expect(loadConfig(app).sessionPrewarm.prepareHoldoutPercent).toBe(100);
+      });
+
+      test.each(['101', '-5', '12.5', 'abc'])('"%s" fails synth', (value) => {
+        process.env.CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT = value;
+        expect(() => loadConfig(app)).toThrow(/CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT/);
+      });
+    });
+
+    test('"true" turns it on, anything else leaves it off', () => {
+      process.env.CDK_SESSION_PREWARM_PREPARE_ENABLED = ' TRUE ';
+      expect(loadConfig(app).sessionPrewarm.prepareEnabled).toBe(true);
+      process.env.CDK_SESSION_PREWARM_PREPARE_ENABLED = 'yes';
+      expect(loadConfig(app).sessionPrewarm.prepareEnabled).toBe(false);
+    });
+  });
+
   // ============================================================
   // Quota requests feature flag — opt-in while in development
   // ============================================================

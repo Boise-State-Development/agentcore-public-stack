@@ -124,6 +124,17 @@ class InvocationRequest(BaseModel):
     # no ownership read, no session or metadata rows, no lease, no quota, no
     # model call. Every other field is ignored on a warm request.
     warm: Optional[bool] = None
+    # With `warm`: also build the agent the next send would use, from the
+    # selection fields on this request (`chat/prepare.py`, PREPARE_FIELDS; every
+    # other field is dropped). Still no lease, no session rows, no quota charge
+    # and no model call. app-api sets it only while
+    # SESSION_PREWARM_PREPARE_ENABLED is on. Ignored without `warm`.
+    prepare: Optional[bool] = None
+    # With a plain `warm`: app-api held this conversation's prepare out of the
+    # A/B (`SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT`), so the Runtime records the
+    # arm for the turn's `prepareArm` property and builds nothing. Only
+    # "holdout" is ever sent; a treated conversation is the one with `prepare`.
+    prepare_arm: Optional[str] = None
     model_id: Optional[str] = None
     temperature: Optional[float] = None
     system_prompt: Optional[str] = None

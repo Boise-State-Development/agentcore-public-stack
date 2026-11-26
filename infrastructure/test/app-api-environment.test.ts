@@ -82,8 +82,35 @@ describe('buildAppApiEnvironment — session prewarm', () => {
     const off = buildAppApiEnvironment(createMockConfig(), stubParams());
     expect(off.SESSION_PREWARM_ENABLED).toBe('false');
 
-    const on = buildAppApiEnvironment(createMockConfig({ sessionPrewarm: { enabled: true } }), stubParams());
+    const on = buildAppApiEnvironment(createMockConfig({ sessionPrewarm: { enabled: true, prepareEnabled: false, prepareHoldoutPercent: 0 } }), stubParams());
     expect(on.SESSION_PREWARM_ENABLED).toBe('true');
+  });
+});
+
+describe('buildAppApiEnvironment — session prewarm prepare', () => {
+  it('is off by default and while session prewarm is off', () => {
+    expect(buildAppApiEnvironment(createMockConfig(), stubParams()).SESSION_PREWARM_PREPARE_ENABLED).toBe('false');
+    const prepareOnly = createMockConfig({ sessionPrewarm: { enabled: false, prepareEnabled: true, prepareHoldoutPercent: 0 } });
+    expect(buildAppApiEnvironment(prepareOnly, stubParams()).SESSION_PREWARM_PREPARE_ENABLED).toBe('false');
+  });
+
+  it('is on only with both switches', () => {
+    const both = createMockConfig({ sessionPrewarm: { enabled: true, prepareEnabled: true, prepareHoldoutPercent: 0 } });
+    expect(buildAppApiEnvironment(both, stubParams()).SESSION_PREWARM_PREPARE_ENABLED).toBe('true');
+  });
+
+  it('passes the holdout percent through, and forces 0 while prepare is off', () => {
+    const base = { enabled: true, prepareEnabled: true };
+    expect(buildAppApiEnvironment(createMockConfig({ sessionPrewarm: { ...base, prepareHoldoutPercent: 0 } }), stubParams())
+      .SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT).toBe('0');
+    expect(buildAppApiEnvironment(createMockConfig({ sessionPrewarm: { ...base, prepareHoldoutPercent: 20 } }), stubParams())
+      .SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT).toBe('20');
+    expect(buildAppApiEnvironment(
+      createMockConfig({ sessionPrewarm: { enabled: true, prepareEnabled: false, prepareHoldoutPercent: 20 } }), stubParams())
+      .SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT).toBe('0');
+    expect(buildAppApiEnvironment(
+      createMockConfig({ sessionPrewarm: { enabled: false, prepareEnabled: true, prepareHoldoutPercent: 20 } }), stubParams())
+      .SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT).toBe('0');
   });
 });
 

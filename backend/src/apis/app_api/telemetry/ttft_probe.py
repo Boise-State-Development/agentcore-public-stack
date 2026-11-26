@@ -12,6 +12,17 @@ fixed shape on a schedule, as one dedicated user, and records:
 - ``TtftProbeWarmCallMs``: how long that warm call took (the session start);
 - ``TtftProbeRuns`` (1 per complete run) or ``TtftProbeFailures``.
 
+While ``session_prewarm_prepare_enabled()`` is true there is a fourth leg, last: a
+third new conversation that the probe *prepares* (``warm`` + ``prepare`` with the
+selection its own turn carries), then sends to after ``PROBE_THINK_SECONDS``:
+
+- ``TtftProbePreparedFirstTokenMs``: that send's first token, measured as the warmed leg's;
+- ``TtftProbePrepareCallMs``: how long the prepare call took.
+
+Whether the prepare took (``prepared``, ``reason``, ``cacheHit``) is a log property, not a
+metric, and a prepare that did not take never fails the run. The prepared leg against the
+warmed leg is the paired read of what a prepare buys on a first turn.
+
 The clock is this task's: from the request leaving to the first
 ``content_block_delta`` arriving, through the Runtime's public data plane, as
 an SPA's request travels after app-api. It skips the browser and the app-api
@@ -44,6 +55,7 @@ from typing import Dict, List, Optional, Tuple
 
 import httpx
 
+from apis.shared.feature_flags import session_prewarm_prepare_enabled
 from apis.shared.harness.auth import CognitoRefreshBearerAuth
 from apis.shared.harness.runner import apply_runtime_session_header, build_invocations_url
 from apis.shared.observability.emf import emit_emf_metrics
@@ -65,7 +77,32 @@ class ProbeResult:
     follow_up_ms: Optional[int] = None
     warmed_ms: Optional[int] = None
     warm_call_ms: Optional[int] = None
+    prepared_ms: Optional[int] = None
+    prepare_call_ms: Optional[int] = None
+    # The prepare leg's answer (prepared / reason / cacheHit); None when the leg did not run.
+    prepare: Optional[Dict[str, object]] = None
     errors: List[str] = field(default_factory=list)
+
+    def prepare_properties(self) -> Dict[str, object]:
+        """The prepare leg's log properties, empty when the leg did not run."""
+        if self.prepare is None:
+            return {}
+        return {
+            "prepared": self.prepare.get("prepared"),
+            "prepareReason": self.prepare.get("reason"),
+            "cacheHit": self.prepare.get("cacheHit"),
+        }
+
+    def log_fields(self) -> Dict[str, object]:
+        """The log line's fields; a run without the prepare leg logs exactly what it always did."""
+        fields = dict(self.__dict__)
+        if self.prepare is None:
+            for name in ("prepared_ms", "prepare_call_ms", "prepare"):
+                fields.pop(name)
+        else:
+            fields.update(self.prepare_properties())
+            fields.pop("prepare")
+        return {**fields, "complete": self.complete}
 
     @property
     def complete(self) -> bool:
@@ -97,16 +134,49 @@ async def stream_first_token(
     return first, None
 
 
-async def warm(client: httpx.AsyncClient, url: str, headers: Dict[str, str], session_id: str) -> Tuple[Optional[int], Optional[str]]:
-    """Send the session-prewarm invocation and time it."""
+async def _post_warm(
+    client: httpx.AsyncClient, url: str, headers: Dict[str, str], body: Dict[str, object]
+) -> Tuple[Optional[int], Optional[str], Optional[Dict[str, object]]]:
+    """POST a prewarm body and return (ms, error, the JSON answer when it is an object)."""
     started = time.monotonic()
     try:
-        response = await client.post(url, json={"session_id": session_id, "warm": True}, headers=headers, timeout=PROBE_TURN_TIMEOUT_SECONDS)
+        response = await client.post(url, json=body, headers=headers, timeout=PROBE_TURN_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:
-        return None, f"warm: {type(exc).__name__}: {exc}"
+        return None, f"warm: {type(exc).__name__}: {exc}", None
     if response.status_code >= 400:
-        return None, f"warm: HTTP {response.status_code}"
-    return int((time.monotonic() - started) * 1000), None
+        return None, f"warm: HTTP {response.status_code}", None
+    elapsed = int((time.monotonic() - started) * 1000)
+    try:
+        answer = response.json()
+    except ValueError:
+        answer = None
+    return elapsed, None, answer if isinstance(answer, dict) else None
+
+
+async def warm(client: httpx.AsyncClient, url: str, headers: Dict[str, str], session_id: str) -> Tuple[Optional[int], Optional[str]]:
+    """Send the session-prewarm invocation and time it."""
+    ms, err, _ = await _post_warm(client, url, headers, {"session_id": session_id, "warm": True})
+    return ms, err
+
+
+async def prepare(
+    client: httpx.AsyncClient, url: str, headers: Dict[str, str], session_id: str, selection: Dict[str, object]
+) -> Tuple[Optional[int], Dict[str, object]]:
+    """Send a prewarm that also builds the agent for ``selection``; return (ms, what it answered).
+
+    The answer always carries ``prepared``, ``reason`` and ``cacheHit``; a call that failed is
+    ``prepared: False`` with the failure as its reason.
+    """
+    body: Dict[str, object] = {"session_id": session_id, "warm": True, "prepare": True, **selection}
+    ms, err, answer = await _post_warm(client, url, headers, body)
+    if err:
+        return None, {"prepared": False, "reason": err, "cacheHit": None}
+    answer = answer or {}
+    return ms, {
+        "prepared": answer.get("prepared") is True,
+        "reason": answer.get("reason"),
+        "cacheHit": answer.get("cacheHit"),
+    }
 
 
 def _headers(bearer: str, session_id: str, user_id: str) -> Dict[str, str]:
@@ -115,11 +185,16 @@ def _headers(bearer: str, session_id: str, user_id: str) -> Dict[str, str]:
     )
 
 
-def _payload(session_id: str, model_id: Optional[str]) -> Dict[str, object]:
-    payload: Dict[str, object] = {"session_id": session_id, "message": PROBE_PROMPT, "enabled_tools": []}
+def _selection(model_id: Optional[str]) -> Dict[str, object]:
+    """The selection fields a probe turn carries; a prepare sends exactly these, so they cannot drift."""
+    selection: Dict[str, object] = {"enabled_tools": []}
     if model_id:
-        payload["model_id"] = model_id
-    return payload
+        selection["model_id"] = model_id
+    return selection
+
+
+def _payload(session_id: str, model_id: Optional[str]) -> Dict[str, object]:
+    return {"session_id": session_id, "message": PROBE_PROMPT, **_selection(model_id)}
 
 
 async def run_probe(
@@ -130,8 +205,12 @@ async def run_probe(
     bearer: str,
     client: httpx.AsyncClient,
     think_seconds: float = PROBE_THINK_SECONDS,
+    prepare_leg: Optional[bool] = None,
 ) -> Tuple[ProbeResult, List[str]]:
-    """The three measured turns. Returns the result and the session ids created."""
+    """The measured turns. Returns the result and the session ids created.
+
+    ``prepare_leg`` defaults to ``session_prewarm_prepare_enabled()``.
+    """
     result = ProbeResult()
     cold = f"{PROBE_SESSION_PREFIX}{uuid.uuid4().hex[:16]}"
     warmed = f"{PROBE_SESSION_PREFIX}{uuid.uuid4().hex[:16]}"
@@ -157,6 +236,19 @@ async def run_probe(
         )
         if err:
             result.errors.append(f"warmed: {err}")
+
+    if session_prewarm_prepare_enabled() if prepare_leg is None else prepare_leg:
+        prepared = f"{PROBE_SESSION_PREFIX}{uuid.uuid4().hex[:16]}"
+        created.append(prepared)
+        result.prepare_call_ms, result.prepare = await prepare(
+            client, invocations_url, _headers(bearer, prepared, user_id), prepared, _selection(model_id)
+        )
+        await asyncio.sleep(think_seconds)
+        result.prepared_ms, err = await stream_first_token(
+            client, invocations_url, _headers(bearer, prepared, user_id), _payload(prepared, model_id)
+        )
+        if err:
+            result.errors.append(f"prepared: {err}")
     return result, created
 
 
@@ -168,6 +260,8 @@ def emit(result: ProbeResult, model_id: Optional[str]) -> None:
         ("TtftProbeFollowUpFirstTokenMs", result.follow_up_ms),
         ("TtftProbeWarmedFirstTokenMs", result.warmed_ms),
         ("TtftProbeWarmCallMs", result.warm_call_ms),
+        ("TtftProbePreparedFirstTokenMs", result.prepared_ms),
+        ("TtftProbePrepareCallMs", result.prepare_call_ms),
     ):
         if value is not None:
             metrics[name] = value
@@ -175,10 +269,13 @@ def emit(result: ProbeResult, model_id: Optional[str]) -> None:
     count_name = "TtftProbeRuns" if result.complete else "TtftProbeFailures"
     metrics[count_name] = 1
     units[count_name] = "Count"
+    properties: Dict[str, object] = {"source": "probe", "modelId": model_id or "user-default", "errors": result.errors or None}
+    if result.prepare is not None:
+        properties.update(result.prepare_properties())
     emit_emf_metrics(
         namespace=TURN_LATENCY_NAMESPACE,
         metrics=metrics,
-        properties={"source": "probe", "modelId": model_id or "user-default", "errors": result.errors or None},
+        properties=properties,
         units=units,
     )
 
@@ -216,7 +313,7 @@ async def main_async() -> int:
                 user_id, model_id, invocations_url=build_invocations_url(base), bearer=bearer, client=client
             )
     emit(result, model_id)
-    logger.info("ttft probe %s", json.dumps({**result.__dict__, "complete": result.complete}))
+    logger.info("ttft probe %s", json.dumps(result.log_fields()))
     if created:
         await _delete_sessions(user_id, created)
     return 0 if result.complete else 1

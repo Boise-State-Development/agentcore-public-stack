@@ -234,7 +234,7 @@ function allFlagsOn(base: AppConfig): AppConfig {
     memorySpaces: { enabled: true },
     projects: { enabled: true },
     userGrants: { enabled: true },
-    sessionPrewarm: { enabled: true },
+    sessionPrewarm: { enabled: true, prepareEnabled: true, prepareHoldoutPercent: 0 },
     quotaRequests: { enabled: true },
     awsLimits: { enabled: true },
     organizeLists: { enabled: true },

@@ -2609,7 +2609,9 @@ export class ChatInputComponent {
     // First keystroke or paste in an existing conversation: start its Runtime
     // microVM while the user finishes typing (session prewarm). A no-op unless
     // the conversation page armed it, and deduped per conversation.
-    this.sessionPrewarm.noteTyping();
+    this.sessionPrewarm.noteTyping({
+      mention: Boolean(this.mentionedAgent() || this.pendingMentionAgentId()),
+    });
     this.settleHints();
     const textarea = event.target as HTMLTextAreaElement;
     // Text cleared by hand: whatever was pasted into it is gone too.

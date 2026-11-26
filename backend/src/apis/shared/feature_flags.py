@@ -1144,6 +1144,48 @@ def session_prewarm_enabled() -> bool:
     return os.environ.get("SESSION_PREWARM_ENABLED", "").strip().lower() == "true"
 
 
+def session_prewarm_prepare_enabled() -> bool:
+    """Whether a prewarm may also build the turn's agent ahead of the send.
+
+    With session prewarm on, ``POST /chat/prewarm`` may carry ``prepare: true``
+    plus the selection the next send would carry (model, tools, skills and the
+    like); app-api then forwards ``warm: true, prepare: true`` and that
+    allowlisted selection, and the Runtime builds and caches the agent so the
+    send finds it warm (``docs/specs/turn-path-ttft.md``). **App-api only**:
+    the Runtime has no copy of this flag, the request field is its trigger and
+    app-api is the gate, so the default spends none of the V2 environment
+    budget.
+
+    **In development, default off**: only ``"true"`` (case-insensitive,
+    stripped) enables it; unset or ``""`` is off. It is on only while
+    ``session_prewarm_enabled()`` is also on, since a prepare is a warm that
+    does more. Once finished it becomes a rollout switch (the change is meant
+    to be invisible to the user): retire it once it has shipped in a production
+    release and then sat there two weeks never flipped, with the prepare
+    readout recorded (``docs/specs/turn-path-ttft.md``).
+    """
+    if not session_prewarm_enabled():
+        return False
+    return os.environ.get("SESSION_PREWARM_PREPARE_ENABLED", "").strip().lower() == "true"
+
+
+def session_prewarm_prepare_holdout_percent() -> int:
+    """Percent of conversations whose prewarm prepare is withheld, for the A/B readout.
+
+    Env ``SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT``: an integer clamped to
+    0..100; unset, empty or unparseable is 0. App-api only. An experiment knob,
+    not a flag: 0 means every prepare is treated (``apis/shared/sessions/prepare_arm.py``
+    names the arm from the conversation id). It exists for the prepare readout
+    and goes away with the rollout switch (``session_prewarm_prepare_enabled``).
+    """
+    raw = os.environ.get("SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    return max(0, min(100, value))
+
+
 def quota_requests_enabled() -> bool:
     """Whether users can request more quota and admins can grant extensions.
 

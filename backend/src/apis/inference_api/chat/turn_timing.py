@@ -368,6 +368,14 @@ class TurnPrelude:
         except Exception:  # noqa: BLE001
             logger.debug("Turn first-token metrics skipped", exc_info=True)
 
+    def stage_summary(self) -> Dict[str, Any]:
+        """The marks so far, as ``{"stages", "groups", "totalMs"}``, for a caller that logs its own line."""
+        return {
+            "stages": {name: int(ms) for name, ms in self._marks},
+            "groups": self._groups(),
+            "totalMs": self.total_ms,
+        }
+
     def _emit_metrics(
         self,
         *,
@@ -409,7 +417,7 @@ class TurnPrelude:
         properties: Dict[str, Any] = {"streamKind": stream_kind, "sessionId": session_id}
         # Properties, never dimensions: `sharedSession` is a kill-switch state
         # and `processBuilds` is unbounded.
-        for key in ("isResume", "deferredBuild", "hasAssistant", "sharedSession", "processBuilds"):
+        for key in ("isResume", "deferredBuild", "hasAssistant", "sharedSession", "processBuilds", "preparedAgeMs", "prepareArm"):
             if extra and key in extra:
                 properties[key] = extra[key]
 
@@ -419,3 +427,44 @@ class TurnPrelude:
             properties=properties,
             units={name: "Milliseconds" for name in metrics},
         )
+
+
+def emit_prepare_record(*, session_id: str, outcome: Any, elapsed_ms: int) -> None:
+    """One log line and one EMF record for a prewarm prepare (``chat/prepare.py``).
+
+    Its own line (``turn_prepare``) and its own two metrics, never ``turn_prelude`` or the stage
+    metrics: a prepare is not a turn, and its build would otherwise read as a slow one in every
+    prelude percentile. ``PrepareMs`` is the whole call; ``PrepareBuilt`` counts the calls that
+    left an agent in the cache. Content-free, like the turn's line. Never raises.
+    """
+    try:
+        payload: Dict[str, Any] = {
+            "sessionId": session_id,
+            "prepared": bool(outcome.prepared),
+            "reason": outcome.reason,
+            "cacheHit": bool(outcome.cache_hit),
+            "ms": int(elapsed_ms),
+            **(outcome.stages or {}),
+            **build_stamp(),
+        }
+        logger.info("turn_prepare %s", json.dumps(payload, default=str))
+    except Exception:  # noqa: BLE001
+        logger.debug("Prepare record skipped", exc_info=True)
+    try:
+        if not turn_latency_metrics_enabled():
+            return
+        from apis.shared.observability.emf import emit_emf_metrics
+
+        emit_emf_metrics(
+            namespace=TURN_LATENCY_EMF_NAMESPACE,
+            metrics={"PrepareMs": int(elapsed_ms), "PrepareBuilt": 1 if outcome.prepared and not outcome.cache_hit else 0},
+            properties={
+                "sessionId": session_id,
+                "prepared": bool(outcome.prepared),
+                "reason": outcome.reason,
+                "cacheHit": bool(outcome.cache_hit),
+            },
+            units={"PrepareMs": "Milliseconds", "PrepareBuilt": "Count"},
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("Prepare metrics skipped", exc_info=True)

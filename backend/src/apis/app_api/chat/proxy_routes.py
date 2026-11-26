@@ -22,7 +22,7 @@ import os
 import re
 import threading
 import time
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -31,7 +31,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.auth.models import User
-from apis.shared.feature_flags import session_fork_enabled, session_prewarm_enabled
+from apis.shared.feature_flags import (
+    session_fork_enabled,
+    session_prewarm_enabled,
+    session_prewarm_prepare_enabled,
+    session_prewarm_prepare_holdout_percent,
+)
+from apis.shared.sessions.prepare_arm import ARM_HOLDOUT, prepare_arm
 from apis.shared.observability.emf import emit_chat_stream_upstream_dropped
 from apis.shared.harness.runner import (
     apply_runtime_session_header,
@@ -221,6 +227,16 @@ _RUNTIME_STARTING_BUDGET_SECONDS = 15.0
 _RUNTIME_STARTING_POLL_SECONDS = (0.25, 0.5)
 
 
+def _apply_oauth_callback_header(headers: Dict[str, str], forwarded_callback: Optional[str]) -> None:
+    """Carry the SPA's ``OAuth2CallbackUrl`` header upstream when it supplied one.
+
+    Shared by the chat stream and a prewarm prepare, so both reach the Runtime
+    with the same header set.
+    """
+    if forwarded_callback:
+        headers["OAuth2CallbackUrl"] = forwarded_callback
+
+
 def _is_runtime_target(target_url: str) -> bool:
     """Whether the proxy talks to the AgentCore Runtime data plane (not local inference-api)."""
     return urlsplit(target_url).netloc.startswith("bedrock-agentcore.")
@@ -360,9 +376,7 @@ async def chat_stream(
     # back to the SPA's `/oauth-complete` page and `oauth_required` SSE
     # events are unusable. Forwarded as-is — the inference-api side
     # re-validates against its own CORS_ORIGINS allowlist.
-    forwarded_callback = request.headers.get("OAuth2CallbackUrl")
-    if forwarded_callback:
-        headers["OAuth2CallbackUrl"] = forwarded_callback
+    _apply_oauth_callback_header(headers, request.headers.get("OAuth2CallbackUrl"))
 
     # The client lifecycle must outlive this handler — closing it via
     # `async with` while a stream is in flight makes httpx drain the upstream
@@ -583,6 +597,60 @@ class PrewarmRequest(BaseModel):
     # A fork's turns run in its root conversation's microVM (see the chat
     # proxy), so that is the one to warm.
     affinity_session_id: Optional[str] = Field(None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    # Prepare: also build the turn's agent ahead of the send. Honoured only
+    # while SESSION_PREWARM_PREPARE_ENABLED is on; the selection below is the
+    # subset of a chat request that decides which agent the turn builds, and
+    # only `_PREPARE_SELECTION_FIELDS` ever reaches the Runtime.
+    prepare: Optional[bool] = None
+    model_id: Optional[str] = None
+    temperature: Optional[float] = None
+    caching_enabled: Optional[bool] = None
+    enabled_tools: Optional[List[str]] = None
+    provider: Optional[str] = None
+    max_tokens: Optional[int] = None
+    inference_params: Optional[Dict[str, Any]] = None
+    rag_assistant_id: Optional[str] = None
+    agent_type: Optional[str] = None
+    enabled_skills: Optional[List[str]] = None
+    selected_prompt_id: Optional[str] = None
+    incognito: Optional[bool] = None
+    agent_mention: Optional[bool] = None
+    system_prompt: Optional[str] = None
+
+
+# The selection fields a prepare may forward. An ALLOWLIST on purpose: a warm
+# call must never be able to run a turn, so a field a chat request carries
+# (message, files, interrupt responses, handoff and workflow fields, client
+# tools, run_mode...) is forwarded only if it is named here, and a field added
+# to the request model later is dropped until someone adds it deliberately.
+_PREPARE_SELECTION_FIELDS: Tuple[str, ...] = (
+    "model_id",
+    "temperature",
+    "caching_enabled",
+    "enabled_tools",
+    "provider",
+    "max_tokens",
+    "inference_params",
+    "rag_assistant_id",
+    "agent_type",
+    "enabled_skills",
+    "selected_prompt_id",
+    "incognito",
+    "agent_mention",
+    "system_prompt",
+)
+
+
+def _prepare_upstream_body(body: PrewarmRequest) -> Dict[str, Any]:
+    """The Runtime body for a prepare: the warm body plus the allowlisted selection."""
+    upstream: Dict[str, Any] = {"session_id": body.session_id, "warm": True, "prepare": True}
+    if body.affinity_session_id and session_fork_enabled():
+        upstream["affinity_session_id"] = body.affinity_session_id
+    for name in _PREPARE_SELECTION_FIELDS:
+        value = getattr(body, name)
+        if value is not None:
+            upstream[name] = value
+    return upstream
 
 
 class _PrewarmLedger:
@@ -597,12 +665,21 @@ class _PrewarmLedger:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._last_warm: Dict[Tuple[str, str], float] = {}
+        # A prepare is its own stage: a page-load warm must not suppress the
+        # prepare that follows it, but a prepare implies a warm.
+        self._last_prepare: Dict[Tuple[str, str], float] = {}
         self._recent_by_user: Dict[str, List[float]] = {}
 
-    def admit(self, user_id: str, session_id: str, now: float) -> str:
-        """``"accepted"``, ``"recently_warmed"`` or ``"rate_limited"``."""
+    def admit(self, user_id: str, session_id: str, now: float, prepare: bool = False) -> str:
+        """``"accepted"``, ``"recently_warmed"`` or ``"rate_limited"``.
+
+        Keyed on ``(user, conversation)`` per stage. A prepare is declined only
+        by an earlier prepare; a plain warm is declined by an earlier warm or
+        prepare. The per-user rate limit is shared by both.
+        """
         with self._lock:
-            last = self._last_warm.get((user_id, session_id))
+            key = (user_id, session_id)
+            last = (self._last_prepare if prepare else self._last_warm).get(key)
             if last is not None and now - last < _PREWARM_REWARM_AFTER_SECONDS:
                 return "recently_warmed"
             recent = [t for t in self._recent_by_user.get(user_id, []) if now - t < 60.0]
@@ -611,14 +688,19 @@ class _PrewarmLedger:
                 return "rate_limited"
             recent.append(now)
             self._recent_by_user[user_id] = recent
-            self._last_warm[(user_id, session_id)] = now
-            if len(self._last_warm) > _PREWARM_LEDGER_MAX_ENTRIES:
+            self._last_warm[key] = now
+            if prepare:
+                self._last_prepare[key] = now
+            if len(self._last_warm) > _PREWARM_LEDGER_MAX_ENTRIES or len(self._last_prepare) > _PREWARM_LEDGER_MAX_ENTRIES:
                 self._prune(now)
             return "accepted"
 
     def _prune(self, now: float) -> None:
         self._last_warm = {
             key: t for key, t in self._last_warm.items() if now - t < _PREWARM_REWARM_AFTER_SECONDS
+        }
+        self._last_prepare = {
+            key: t for key, t in self._last_prepare.items() if now - t < _PREWARM_REWARM_AFTER_SECONDS
         }
         self._recent_by_user = {
             user: [t for t in times if now - t < 60.0]
@@ -630,6 +712,7 @@ class _PrewarmLedger:
         """Tests only."""
         with self._lock:
             self._last_warm.clear()
+            self._last_prepare.clear()
             self._recent_by_user.clear()
 
 
@@ -646,25 +729,50 @@ def _build_prewarm_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=httpx.Timeout(_PREWARM_TIMEOUT_SECONDS))
 
 
-async def _forward_prewarm(session_id: str, user_id: str, access_token: str) -> None:
-    """Send the warm invocation and log how long the start took. Never raises."""
+async def _forward_prewarm(
+    session_id: str,
+    user_id: str,
+    access_token: str,
+    prepare_body: Optional[Dict[str, Any]] = None,
+    oauth_callback_url: Optional[str] = None,
+    holdout_session_id: Optional[str] = None,
+) -> None:
+    """Send the warm invocation and log how long the start took. Never raises.
+
+    ``prepare_body`` (a prepare) replaces the plain warm body and brings the
+    headers up to a chat turn's set, because the Runtime's agent build talks to
+    MCP servers as the user.
+    """
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {access_token}",
     }
     apply_runtime_session_header(headers, session_id, user_id)
-    body = json.dumps({"session_id": session_id, "warm": True})
+    if prepare_body is not None:
+        _apply_oauth_callback_header(headers, oauth_callback_url)
+        body = json.dumps(prepare_body)
+    elif holdout_session_id is not None:
+        # The experiment's holdout arm: a plain warm that says which arm it is. It names the
+        # conversation itself (a fork warms under its root's id), because the Runtime keys the
+        # arm on the conversation the send will name; a warm reads nothing else from the body.
+        body = json.dumps({"session_id": holdout_session_id, "warm": True, "prepare_arm": ARM_HOLDOUT})
+    else:
+        body = json.dumps({"session_id": session_id, "warm": True})
     started = time.monotonic()
     try:
         async with _build_prewarm_client() as client:
             response = await client.post(
                 _build_invocations_url(_inference_api_url()), headers=headers, content=body
             )
-        logger.info(
-            "prewarm forwarded -> %s in %d ms",
-            response.status_code,
-            int((time.monotonic() - started) * 1000),
-        )
+        message = "prewarm forwarded -> %s in %d ms"
+        args: Tuple[Any, ...] = (response.status_code, int((time.monotonic() - started) * 1000))
+        if prepare_body is not None:
+            prepared, reason = _read_prepare_outcome(response)
+            message += " prepare=true prepared=%s reason=%s"
+            args += (prepared, reason)
+        elif holdout_session_id is not None:
+            message += " prepare=holdout"
+        logger.info(message, *args)
     except Exception as exc:  # noqa: BLE001 - a failed warm is a missed optimisation, never an error
         logger.warning(
             "prewarm failed after %d ms: %s",
@@ -673,7 +781,24 @@ async def _forward_prewarm(session_id: str, user_id: str, access_token: str) -> 
         )
 
 
+def _read_prepare_outcome(response: httpx.Response) -> Tuple[str, str]:
+    """``(prepared, reason)`` for the log line, from the Runtime's JSON when it parses."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return "unknown", "-"
+    if not isinstance(payload, dict):
+        return "unknown", "-"
+    prepared = payload.get("prepared")
+    reason = payload.get("reason")
+    return (
+        "true" if prepared is True else "false" if prepared is False else "unknown",
+        reason if isinstance(reason, str) and reason else "-",
+    )
+
+
 async def chat_prewarm(
+    request: Request,
     body: PrewarmRequest,
     current_user: User = Depends(get_current_user_from_session),
 ) -> JSONResponse:
@@ -691,11 +816,29 @@ async def chat_prewarm(
         return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": "skipped"})
 
     warm_id = body.affinity_session_id if body.affinity_session_id and session_fork_enabled() else body.session_id
-    outcome = _prewarm_ledger.admit(current_user.user_id, warm_id, time.monotonic())
+    requested = body.prepare is True and session_prewarm_prepare_enabled()
+    arm = prepare_arm(body.session_id, session_prewarm_prepare_holdout_percent()) if requested else None
+    holdout = arm == ARM_HOLDOUT
+    prepare = requested and not holdout
+    # A holdout is admitted on the prepare stage so repeats dedupe like a treated one.
+    outcome = _prewarm_ledger.admit(current_user.user_id, warm_id, time.monotonic(), prepare=requested)
     if outcome == "accepted":
-        task = asyncio.create_task(
-            _forward_prewarm(warm_id, current_user.user_id, current_user.raw_token)
-        )
+        if prepare:
+            forward = _forward_prewarm(
+                warm_id,
+                current_user.user_id,
+                current_user.raw_token,
+                prepare_body=_prepare_upstream_body(body),
+                oauth_callback_url=request.headers.get("OAuth2CallbackUrl"),
+            )
+        else:
+            forward = _forward_prewarm(
+                warm_id,
+                current_user.user_id,
+                current_user.raw_token,
+                holdout_session_id=body.session_id if holdout else None,
+            )
+        task = asyncio.create_task(forward)
         _prewarm_tasks.add(task)
         task.add_done_callback(_prewarm_tasks.discard)
         key = (current_user.user_id, warm_id)
@@ -703,7 +846,10 @@ async def chat_prewarm(
         task.add_done_callback(
             lambda done, key=key: _prewarm_inflight.pop(key, None) if _prewarm_inflight.get(key) is done else None
         )
-    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={"status": outcome})
+    content: Dict[str, str] = {"status": outcome}
+    if arm is not None:
+        content["prepareArm"] = arm
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=content)
 
 
 router.add_api_route(

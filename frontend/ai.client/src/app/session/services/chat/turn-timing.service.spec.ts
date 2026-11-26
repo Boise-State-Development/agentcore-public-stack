@@ -65,6 +65,39 @@ describe('TurnTimingService', () => {
     httpMock.expectNone(URL);
   });
 
+  it('adds preparedAgeMs only when a prepare was sent', () => {
+    const service = setup();
+    service.start('conv-1', { turnKind: 'followup', warmAgeMs: 9000, preparedAgeMs: 4200 });
+    service.firstToken('conv-1');
+    const req = httpMock.expectOne(URL);
+    expect(req.request.body).toMatchObject({ warmAgeMs: 9000, preparedAgeMs: 4200 });
+    req.flush(null, { status: 204, statusText: 'No Content' });
+  });
+
+  it('carries prepareArm only when known', () => {
+    const service = setup();
+    service.start('conv-1', { turnKind: 'followup', warmAgeMs: 1, preparedAgeMs: 5, prepareArm: 'holdout' });
+    service.firstToken('conv-1');
+    const withArm = httpMock.expectOne(URL);
+    expect(withArm.request.body).toMatchObject({ preparedAgeMs: 5, prepareArm: 'holdout' });
+    withArm.flush(null, { status: 204, statusText: 'No Content' });
+
+    service.start('conv-2', { turnKind: 'followup', warmAgeMs: 1, preparedAgeMs: 5 });
+    service.firstToken('conv-2');
+    const without = httpMock.expectOne(URL);
+    expect(without.request.body).not.toHaveProperty('prepareArm');
+    without.flush(null, { status: 204, statusText: 'No Content' });
+  });
+
+  it('omits preparedAgeMs when none was sent', () => {
+    const service = setup();
+    service.start('conv-1', { turnKind: 'followup', warmAgeMs: null });
+    service.firstToken('conv-1');
+    const req = httpMock.expectOne(URL);
+    expect(req.request.body).not.toHaveProperty('preparedAgeMs');
+    req.flush(null, { status: 204, statusText: 'No Content' });
+  });
+
   it('sends no identity: no session id, user id or message content', () => {
     const service = setup();
     service.start('conv-secret-id', { turnKind: 'followup', warmAgeMs: null });

@@ -611,3 +611,173 @@ def _first_token(prelude):
         logger.removeHandler(handler)
         logger.setLevel(previous)
     return captured
+
+
+class TestStageSummary:
+    """`TurnPrelude.stage_summary` feeds `turn_prepare`'s line (prewarm prepare mode)."""
+
+    def test_reports_marks_groups_and_total(self):
+        prelude = TurnPrelude()
+        prelude.mark("preamble.ownership")
+        prelude.mark("agent_build.mcp")
+
+        summary = prelude.stage_summary()
+
+        assert list(summary["stages"]) == ["preamble.ownership", "agent_build.mcp"]
+        assert all(isinstance(v, int) for v in summary["stages"].values())
+        assert set(summary["groups"]) == {"preamble", "agent_build"}
+        assert isinstance(summary["totalMs"], int)
+
+    def test_does_not_mark_or_emit(self, caplog):
+        prelude = TurnPrelude()
+        prelude.mark("rag")
+        with caplog.at_level(logging.INFO, logger="apis.inference_api.chat.turn_timing"):
+            prelude.stage_summary()
+            prelude.stage_summary()
+
+        assert list(prelude.stage_summary()["stages"]) == ["rag"]
+        assert caplog.records == []
+
+
+class TestEmitPrepareRecord:
+    """`emit_prepare_record`: its own line and its own two metrics, never a turn's."""
+
+    def _outcome(self, **overrides):
+        from apis.inference_api.chat.prepare import PrepareOutcome
+
+        fields = dict(
+            prepared=True,
+            reason=None,
+            cache_hit=False,
+            stages={"stages": {"preamble.ownership": 3, "agent_build.mcp": 40}, "groups": {"preamble": 3}, "totalMs": 50},
+        )
+        fields.update(overrides)
+        return PrepareOutcome(**fields)
+
+    def _lines(self, caplog):
+        return [r for r in caplog.records if r.getMessage().startswith("turn_prepare ")]
+
+    def test_logs_one_turn_prepare_line_with_the_outcome_and_stages(self, monkeypatch, caplog):
+        from apis.inference_api.chat.turn_timing import emit_prepare_record
+
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", lambda **kw: None)
+        with caplog.at_level(logging.INFO, logger="apis.inference_api.chat.turn_timing"):
+            emit_prepare_record(session_id="s-1", outcome=self._outcome(cache_hit=True), elapsed_ms=123)
+
+        lines = self._lines(caplog)
+        assert len(lines) == 1
+        payload = json.loads(lines[0].getMessage()[len("turn_prepare ") :])
+        assert payload["sessionId"] == "s-1"
+        assert payload["prepared"] is True
+        assert payload["reason"] is None
+        assert payload["cacheHit"] is True
+        assert payload["ms"] == 123
+        assert payload["stages"] == {"preamble.ownership": 3, "agent_build.mcp": 40}
+        assert payload["groups"] == {"preamble": 3}
+
+    def test_a_refusal_has_no_stages_on_its_line(self, monkeypatch, caplog):
+        from apis.inference_api.chat.turn_timing import emit_prepare_record
+
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", lambda **kw: None)
+        with caplog.at_level(logging.INFO, logger="apis.inference_api.chat.turn_timing"):
+            emit_prepare_record(
+                session_id="s-1", outcome=self._outcome(prepared=False, reason="quota", stages=None), elapsed_ms=5
+            )
+
+        payload = json.loads(self._lines(caplog)[0].getMessage()[len("turn_prepare ") :])
+        assert payload["prepared"] is False and payload["reason"] == "quota"
+        assert "stages" not in payload
+
+    def test_emf_record_is_two_prepare_metrics_and_no_turn_metric(self, monkeypatch):
+        from apis.inference_api.chat.turn_timing import emit_prepare_record
+
+        calls = []
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", lambda **kw: calls.append(kw))
+
+        emit_prepare_record(session_id="s-1", outcome=self._outcome(), elapsed_ms=123)
+
+        assert len(calls) == 1
+        record = calls[0]
+        assert record["metrics"] == {"PrepareMs": 123, "PrepareBuilt": 1}
+        assert "PreludeTotalMs" not in record["metrics"]
+        assert not any(name.endswith("Ms") and name != "PrepareMs" for name in record["metrics"])
+        assert record["properties"]["reason"] is None
+
+    def test_a_cache_hit_or_a_refusal_is_not_a_build(self, monkeypatch):
+        from apis.inference_api.chat.turn_timing import emit_prepare_record
+
+        calls = []
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", lambda **kw: calls.append(kw))
+
+        emit_prepare_record(session_id="s", outcome=self._outcome(cache_hit=True), elapsed_ms=1)
+        emit_prepare_record(session_id="s", outcome=self._outcome(prepared=False, reason="paused"), elapsed_ms=1)
+
+        assert [c["metrics"]["PrepareBuilt"] for c in calls] == [0, 0]
+
+    def test_the_kill_switch_suppresses_the_metric_record_but_not_the_line(self, monkeypatch, caplog):
+        from apis.inference_api.chat.turn_timing import emit_prepare_record
+
+        monkeypatch.setenv("TURN_LATENCY_METRICS_ENABLED", "false")
+        calls = []
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", lambda **kw: calls.append(kw))
+
+        with caplog.at_level(logging.INFO, logger="apis.inference_api.chat.turn_timing"):
+            emit_prepare_record(session_id="s", outcome=self._outcome(), elapsed_ms=9)
+
+        assert calls == []
+        assert len(self._lines(caplog)) == 1
+
+    def test_never_raises_on_a_malformed_outcome(self, monkeypatch):
+        from apis.inference_api.chat.turn_timing import emit_prepare_record
+
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", lambda **kw: None)
+
+        emit_prepare_record(session_id="s", outcome=object(), elapsed_ms=1)
+        emit_prepare_record(session_id="s", outcome=None, elapsed_ms="not-a-number")  # type: ignore[arg-type]
+
+    def test_a_failing_metrics_emitter_never_raises_and_keeps_the_line(self, monkeypatch, caplog):
+        from apis.inference_api.chat.turn_timing import emit_prepare_record
+
+        def _boom(**kw):
+            raise RuntimeError("emf down")
+
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", _boom)
+        with caplog.at_level(logging.INFO, logger="apis.inference_api.chat.turn_timing"):
+            emit_prepare_record(session_id="s", outcome=self._outcome(), elapsed_ms=1)
+
+        assert len(self._lines(caplog)) == 1
+
+
+class TestPrepareArmProperties:
+    def _properties(self, monkeypatch, extra):
+        captured = {}
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", lambda **kw: captured.update(kw))
+        prelude = TurnPrelude()
+        prelude.mark("preamble.quota")
+        prelude.emit(session_id="s", stream_kind="agent", extra=extra)
+        return captured["properties"]
+
+    def test_arm_and_prepared_age_ride_the_emf_properties(self, monkeypatch):
+        props = self._properties(monkeypatch, {"prepareArm": "treated", "preparedAgeMs": 1200})
+
+        assert props["prepareArm"] == "treated"
+        assert props["preparedAgeMs"] == 1200
+
+    def test_a_none_arm_is_carried_as_none(self, monkeypatch):
+        props = self._properties(monkeypatch, {"prepareArm": None, "preparedAgeMs": None})
+
+        assert props["prepareArm"] is None and props["preparedAgeMs"] is None
+
+    def test_absent_when_not_in_extra(self, monkeypatch):
+        props = self._properties(monkeypatch, {"isResume": False})
+
+        assert "prepareArm" not in props and "preparedAgeMs" not in props
+
+    def test_neither_is_ever_a_metric(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr("apis.shared.observability.emf.emit_emf_metrics", lambda **kw: captured.update(kw))
+        prelude = TurnPrelude()
+        prelude.mark("rag")
+        prelude.emit(session_id="s", stream_kind="agent", extra={"prepareArm": "holdout", "preparedAgeMs": 5})
+
+        assert not {"prepareArm", "preparedAgeMs", "PrepareArm", "PreparedAgeMs"} & set(captured["metrics"])
