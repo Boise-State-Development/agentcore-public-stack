@@ -41,6 +41,14 @@ export interface FeatureFlags {
    */
   sessionPrewarm: boolean;
   /**
+   * Prepare, the second stage of session prewarm: the prewarm request made at
+   * the composer's first input also carries the selection the next send would
+   * use, so the backend can build that turn's agent while the user types. The
+   * backend ignores the extra fields unless its own flag is on.
+   * Backend: SESSION_PREWARM_PREPARE_ENABLED (app-api; in development).
+   */
+  sessionPrewarmPrepare: boolean;
+  /**
    * Client-measured time to first token: the SPA reports each turn's
    * send-to-first-token. No UI. Backend: CLIENT_TURN_TIMING_ENABLED (app-api;
    * `POST /telemetry/turn-timing` 404s while off).

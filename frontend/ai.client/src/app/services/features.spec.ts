@@ -16,6 +16,7 @@ describe('FEATURES', () => {
     // environment.ts is what `ng serve` builds. A developer turns a feature on there
     // (and its backend *_ENABLED) by choice; see CLAUDE.md "Feature flags".
     expect(environment.features.sessionPrewarm).toBe(false);
+    expect(environment.features.sessionPrewarmPrepare).toBe(false);
     expect(environment.features.attachmentKb).toBe(false);
     expect(environment.features.sourceProvenance).toBe(false);
     expect(environment.features.documentExtract).toBe(false);

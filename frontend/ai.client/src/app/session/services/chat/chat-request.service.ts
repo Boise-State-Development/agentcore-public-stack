@@ -11,11 +11,10 @@ import { SessionPrewarmService } from '../session/session-prewarm.service';
 import { ConversationBindingService } from '../session/conversation-binding.service';
 import { IncognitoChatService } from '../incognito';
 import { TurnTimingService } from './turn-timing.service';
+import { TurnSelectionService } from './turn-selection.service';
 import { UserService } from '../../../auth/user.service';
 import { ModelService } from '../model/model.service';
 import { PromptCacheGuardService } from '../prompt-cache/prompt-cache-guard.service';
-import { ToolService } from '../../../services/tool/tool.service';
-import { SkillService } from '../../../services/skill/skill.service';
 import { FileUploadService } from '../../../services/file-upload';
 import { FileAttachmentData, FolderAttachmentData } from '../models/message.model';
 import { OAuthConsentService } from '../../../services/oauth-consent/oauth-consent.service';
@@ -46,15 +45,6 @@ import { ComposerCard, DeliveryAttach, DeliveryStateService } from '../handoff/d
 import { fileLineFor, joinDeliveryBlocks, renderDeliveryBlock, renderDeliveryParts } from '../handoff/handoff-prompt';
 import { FEATURES } from '../../../services/features';
 
-/**
- * How long a send will wait for the tool/skill lists before giving up and
- * assembling the request from whatever has loaded. Long enough to cover a
- * normal `/tools/` + `/skills/` round trip on a cold page, short enough that a
- * hung request is a slightly stale prefix rather than a composer that appears
- * to have swallowed the message.
- */
-const SELECTION_SOURCE_TIMEOUT_MS = 4000;
-
 export interface ContentFile {
   fileName: string;
   fileSize: number;
@@ -77,8 +67,7 @@ export class ChatRequestService implements OnDestroy {
   private userService = inject(UserService);
   private modelService = inject(ModelService);
   private promptCacheGuard = inject(PromptCacheGuardService);
-  private toolService = inject(ToolService);
-  private skillService = inject(SkillService);
+  private turnSelection = inject(TurnSelectionService);
   private fileUploadService = inject(FileUploadService);
   private oauthConsentService = inject(OAuthConsentService);
   private toolApprovalService = inject(ToolApprovalService);
@@ -130,9 +119,13 @@ export class ChatRequestService implements OnDestroy {
     const isFirst =
       (mintedHere || this.sessionService.isNewSession(sessionId)) &&
       this.messageMapService.getMessagesForSession(sessionId)().length === 0;
+    const preparedAgeMs = this.sessionPrewarm.preparedAgeMs(sessionId);
+    const prepareArm = this.sessionPrewarm.prepareArm(sessionId);
     this.turnTiming.start(sessionId, {
       turnKind: isFirst ? 'first' : 'followup',
       warmAgeMs: this.sessionPrewarm.warmAgeMs(sessionId),
+      ...(preparedAgeMs !== null ? { preparedAgeMs } : {}),
+      ...(prepareArm !== null ? { prepareArm } : {}),
     });
   }
 
@@ -632,27 +625,8 @@ export class ChatRequestService implements OnDestroy {
    * It runs AFTER the optimistic UI work (the user's bubble, the streaming
    * state, the route change) so nothing the user sees is delayed by it.
    */
-  private async awaitSelectionSources(): Promise<void> {
-    const settled = Promise.all([
-      this.toolService.ensureLoaded(),
-      this.skillService.ensureLoaded(),
-    ]);
-
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const bound = new Promise<void>(resolve => {
-      timer = setTimeout(resolve, SELECTION_SOURCE_TIMEOUT_MS);
-    });
-
-    try {
-      await Promise.race([settled.then(() => undefined), bound]);
-    } catch {
-      // `ensureLoaded` is documented not to reject; a send must not fail here
-      // even if that ever changes.
-    } finally {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-      }
-    }
+  private awaitSelectionSources(): Promise<void> {
+    return this.turnSelection.awaitSources();
   }
 
   private buildChatRequestObject(
@@ -664,110 +638,40 @@ export class ChatRequestService implements OnDestroy {
     invokedSkillIds?: string[],
     folderAttachmentIds?: string[],
   ) {
-    const selectedModel = this.modelService.getSelectedModel();
-
-    if (!selectedModel) {
-      throw new Error('No model selected. Please select a model before sending a message.');
-    }
-
-    // If using the system default model, send null for model_id to let backend use its default
-    const isDefaultModel = this.modelService.isUsingDefaultModel();
-
-    // What this message writes the prompt cache with, so a later model or
-    // effort pick is weighed against the cache rather than the picker.
-    this.promptCacheGuard.recordSend(session_id, selectedModel.modelId, this.modelService.selectedEffort());
-
-    const requestObject: Record<string, unknown> = {
-      message,
-      session_id,
-      model_id: isDefaultModel ? null : selectedModel.modelId,
-      enabled_tools: this.toolService.getEnabledToolIds(),
-      provider: isDefaultModel ? null : selectedModel.provider,
-    };
-
-    // Incognito chat (#1738). The backend honours it only on the turn that
-    // creates the session; sending it on later turns (e.g. a retry) is harmless.
-    if (this.incognitoChat.isIncognito(session_id)) {
-      requestObject['incognito'] = true;
-    }
-
-    // Skills v2 D6: skills are opt-in, so send the selection only when there is
-    // one. Omitting the key is the "no skills" signal the backend already
-    // defaults to, which keeps a plain turn's payload identical to before and
-    // avoids paying for the skill resolution server-side. Agent-bound
-    // conversations send the locked set, but the backend re-resolves an Agent's
-    // bindings per invoker and replaces this outright — the client is never the
-    // authority here.
-    const enabledSkillIds = this.skillService.getEnabledSkillIds();
-    if (enabledSkillIds.length > 0) {
-      requestObject['enabled_skills'] = enabledSkillIds;
-    }
-
-    // Skills the user invoked with a `/` command in the composer. A strict subset of
-    // `enabled_skills` — the menu only offers skills that are already on — so this
-    // changes nothing about what the turn discloses and nothing about the cacheable
-    // prefix. The backend intersects it against the turn's effective set anyway (an
-    // Agent's bindings can still replace that set) and appends a one-line directive to
-    // the user message telling the model to activate the named skill.
-    if (invokedSkillIds && invokedSkillIds.length > 0) {
-      requestObject['invoked_skills'] = invokedSkillIds;
-    }
-
-    // Per-model inference param overrides, set either in the Settings →
-    // Advanced panel or from the model picker's Effort submenu (which writes
-    // the `effort` / `reasoning_effort` param through the same store).
-    // Backend layers these on top of admin defaults and clamps to the model's
-    // bounds; locked params drop the override silently.
-    if (!isDefaultModel) {
-      const overrides = this.modelService.getInferenceParamOverrides();
-      if (Object.keys(overrides).length > 0) {
-        requestObject['inference_params'] = overrides;
-      }
-    }
-
+    // The selection fields come from the one builder session prewarm's prepare
+    // shares (`TurnSelectionService`), so the two cannot drift. Attachments sit
+    // between the model keys and the Agent keys, as they always have.
+    const attachmentFields: Record<string, unknown> = {};
     // Add file upload IDs if present
     if (fileUploadIds && fileUploadIds.length > 0) {
-      requestObject['file_upload_ids'] = fileUploadIds;
+      attachmentFields['file_upload_ids'] = fileUploadIds;
     }
-
     // Attached Drive folders (drive-folder spec §4.4). Each is ONE attachment
     // against the per-message cap; its files are never on `file_upload_ids`.
     // Omitted when empty so a plain turn's payload is unchanged.
     if (folderAttachmentIds && folderAttachmentIds.length > 0) {
-      requestObject['folder_attachment_ids'] = folderAttachmentIds;
+      attachmentFields['folder_attachment_ids'] = folderAttachmentIds;
     }
 
-    // Add assistant ID if present
-    // NOTE: Field name is 'rag_assistant_id' to avoid collision with AWS Bedrock
-    // AgentCore Runtime's internal 'assistant_id' field handling (causes 424 error)
-    //
-    // Marketplace D11: an `@`-mention wins for this one turn and rides the SAME field,
-    // with `agent_mention` telling the backend not to treat it as a binding — it skips
-    // the "one assistant per session" validation and does not write session preferences.
-    // Sending it as a *different* field would have meant teaching every downstream step
-    // (RAG, binding resolution, memory injection, the resume snapshot) about a second
-    // way to name the agent running the turn; the flag keeps one.
-    //
-    // A mention beats the bound assistant deliberately: the user just named who they
-    // want, in the composer, for this message.
-    if (mentionAgentId) {
-      requestObject['rag_assistant_id'] = mentionAgentId;
-      requestObject['agent_mention'] = true;
-    } else if (assistantId) {
-      requestObject['rag_assistant_id'] = assistantId;
-    } else {
-      // Forward the active conversation mode for non-assistant turns. The
-      // assistant path is intentionally excluded server-side too — assistants
-      // are KB-grounded and a "mode" prompt could contradict the assistant's
-      // own instructions. Sending the id every turn lets the inference path
-      // resolve the prompt without round-tripping session metadata, which
-      // matters on the first turn of a brand-new session (no metadata row
-      // exists yet).
-      const activePromptId = this.systemPromptsService.activePromptId();
-      if (activePromptId) {
-        requestObject['selected_prompt_id'] = activePromptId;
-      }
+    const selection = this.turnSelection.build(session_id, {
+      assistantId,
+      mentionAgentId,
+      invokedSkillIds,
+      attachmentFields,
+    });
+
+    // What this message writes the prompt cache with, so a later model or
+    // effort pick is weighed against the cache rather than the picker.
+    const selectedModel = this.modelService.getSelectedModel();
+    if (selectedModel) {
+      this.promptCacheGuard.recordSend(session_id, selectedModel.modelId, this.modelService.selectedEffort());
     }
+
+    const requestObject: Record<string, unknown> = {
+      message,
+      session_id,
+      ...selection,
+    };
 
     return requestObject;
   }

@@ -23,6 +23,8 @@ import { ToolApprovalService } from '../../../services/tool-approval/tool-approv
 import { McpElicitationService } from '../../../services/mcp-elicitation/mcp-elicitation.service';
 import { IncognitoChatService } from '../incognito';
 import { HandoffRelayService } from '../handoff/handoff-relay.service';
+import { TurnSelectionService } from './turn-selection.service';
+import { PREPARE_SELECTION_KEYS } from '../session/session-prewarm.service';
 
 describe('ChatRequestService', () => {
   let service: ChatRequestService;
@@ -254,6 +256,74 @@ describe('ChatRequestService', () => {
     it('omits the field on a typed turn, so its payload is unchanged', async () => {
       await service.submitChatRequest('Hello', 'session1');
       expect(mockChatHttpService.sendChatRequest.mock.calls[0][0]).not.toHaveProperty('pasted_chars');
+    });
+  });
+
+  describe('the request body and the shared selection', () => {
+    it('posts its keys in the order it always has', async () => {
+      mockSkillService.getEnabledSkillIds.mockReturnValue(['skill-a']);
+      mockModelService.getInferenceParamOverrides.mockReturnValue({ effort: 'high' });
+
+      await service.submitChatRequest(
+        'Hello',
+        'session1',
+        ['file-1'],
+        'agent-1',
+        undefined,
+        ['skill-a'],
+        [{ folderAttachId: 'fa-1' } as never],
+      );
+
+      const sent = mockChatHttpService.sendChatRequest.mock.calls.at(-1)?.[0];
+      expect(Object.keys(sent)).toEqual([
+        'message',
+        'session_id',
+        'model_id',
+        'enabled_tools',
+        'provider',
+        'enabled_skills',
+        'invoked_skills',
+        'inference_params',
+        'file_upload_ids',
+        'folder_attachment_ids',
+        'rag_assistant_id',
+      ]);
+      expect(sent).toEqual({
+        message: 'Hello',
+        session_id: 'session1',
+        model_id: 'test-model',
+        enabled_tools: ['tool1', 'tool2'],
+        provider: 'test',
+        enabled_skills: ['skill-a'],
+        invoked_skills: ['skill-a'],
+        inference_params: { effort: 'high' },
+        file_upload_ids: ['file-1'],
+        folder_attachment_ids: ['fa-1'],
+        rag_assistant_id: 'agent-1',
+      });
+    });
+
+    it('agrees with the prepare on every selection key, built by the same function', async () => {
+      mockSkillService.getEnabledSkillIds.mockReturnValue(['skill-a']);
+      mockModelService.getInferenceParamOverrides.mockReturnValue({ effort: 'high' });
+      const selection = TestBed.inject(TurnSelectionService);
+      const build = vi.spyOn(selection, 'build');
+
+      await service.submitChatRequest('Hello', 'session1', undefined, 'agent-1');
+
+      expect(build).toHaveBeenCalledTimes(1);
+      const sent = mockChatHttpService.sendChatRequest.mock.calls.at(-1)?.[0];
+      const prepared = selection.build('session1', { assistantId: 'agent-1' });
+      for (const key of PREPARE_SELECTION_KEYS) {
+        expect(key in sent).toBe(key in prepared);
+        expect(sent[key]).toEqual(prepared[key]);
+      }
+    });
+
+    it('sends the active mode, not an Agent, when nothing is bound', async () => {
+      await service.submitChatRequest('Hello', 'session1');
+      const sent = mockChatHttpService.sendChatRequest.mock.calls.at(-1)?.[0];
+      expect(sent).not.toHaveProperty('rag_assistant_id');
     });
   });
 

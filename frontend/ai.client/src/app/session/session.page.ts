@@ -330,6 +330,15 @@ export class ConversationPage implements OnDestroy {
   });
 
   constructor() {
+    // Session prewarm's prepare asks what a send from this page would bind to.
+    // The same answer `onMessageSubmitted` gives; a project still resolving to
+    // its harness cannot be told yet, so it prepares nothing.
+    this.sessionPrewarm.setPrepareContext(() => {
+      if (this.binding.projectPending() || (this.binding.queryProjectId() && !this.binding.boundAgentId())) {
+        return null;
+      }
+      return { assistantId: this.binding.boundAgentId() || this.assistant()?.assistantId || undefined };
+    });
     // Moving between new conversations with different bindings changes only
     // the query string, which the route subscription below never sees. The
     // staged id belongs to the draft being left, so it is swapped for the one
