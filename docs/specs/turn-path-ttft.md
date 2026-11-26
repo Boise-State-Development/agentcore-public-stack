@@ -11,6 +11,7 @@ P3b (KB search ahead of the build) shipped (#1411) and read on dev. The agent-bi
 "does this thread have messages?" check now costs one filtered `ListEvents` instead of a
 full history read — see §5 P4. The managed KB search reads its record once (#1416, read on
 dev): a managed follow-up's `rag_wait` is now the managed `Retrieve` itself — see §5 P3c.
+**Progress (2026-11-26):** prewarm prepare built behind `SESSION_PREWARM_PREPARE_ENABLED` (off by default), not yet read on dev — see §5 P7.
 **Supersedes nothing; it joins three specs that each cover one slice of this path:**
 - `docs/specs/turn-latency-preamble.md` — the preamble (455ms → 22–37ms warm) and the
   decomposition of `agent_build`. Its PR-5 (split `agent_build.tools`) shipped as P1a below (#1396) and was read on dev 2026-10-01.
@@ -870,6 +871,70 @@ In the order the V2 spec gives, with two additions from this map:
 - Nothing in P2–P5 touches the prompt, `toolConfig` or restored history. If a change here
   ever needs to, it is a different spec.
 
+### P7 — Prepare the turn at intent (2026-11-26)
+
+**Status: built, behind `SESSION_PREWARM_PREPARE_ENABLED` / `features.sessionPrewarmPrepare` (in development, default off, app-api and SPA only; the Runtime has no flag, the request field is its trigger). Not yet read on dev. Everything below about its effect is a Hypothesis.**
+
+**Why now.** Before this change a prewarm returned right after auth and warmed only the microVM (**Read**, §5a). A prod read on 2026-11-26 shows what that leaves. Two samples, with their caveats: the percentiles are CloudWatch `AgentCoreStack/TurnLatency` over 14 days to 2026-11-26 (about 24k turns); the per-scenario splits are 731 turns on 2026-11-25..26, a holiday week.
+
+| **Measured** (14 d) | p50 | p90 |
+|---|---|---|
+| Browser first answer text | 6.2 s | 15.8 s |
+| Server first output | 4.8 s | 10.3 s |
+| `ModelMs` | 3.7 s | 7.6 s |
+| `PreludeTotalMs` | 0.63 s | 2.6 s |
+
+| **Measured** (731 turns) | Share of turns | Prelude p50 / p90 | Rebuilt agent |
+|---|---|---|---|
+| Follow-up within 5 min | 60% | 0.38 s / 0.92 s | 2% |
+| Idle 5 to 15 min | 13% | 0.61 s / 1.4 s | 3% |
+| Idle 15 to 60 min | 8% | 2.0 s / 5.9 s | 89% |
+| Idle over 60 min | 3% | 4.5 s / 5.9 s | 100% |
+| First turn, or first seen in the window (nearly all prewarmed) | 16% | 1.9 s / 5.7 s | 99% |
+
+The Runtime's idle timeout is 900 s, which is the step between the second and third rows. 77% of the 5 to 60 minute returns were also prompt-cache TTL misses, which a prepare does not address (see *Not in this change*).
+
+Cold build stages, p50 / p90 ms: `tools.gateway` 400 / 660, `tools.extra` 300 / 1,400, `tools.mcp` 0 / 2,100, `prompt` 65 / 1,000, `finalize` 75 to 270 / 760 to 1,900. Cold builds hit 27% of turns. The prelude is a small part of a 6 s wait, but it is the part a prewarm can remove, and a first turn that was prewarmed still pays 1.9 s of it.
+
+**What it does.** On the composer's first input the SPA sends `POST /chat/prewarm` with `prepare: true` and the selection the send would use, built by `TurnSelectionService`, the same builder the send calls. A new conversation keeps its page-load warm and adds the prepare at first input; an existing one sends the prepare instead of the plain warm. The SPA sends a plain warm instead when it cannot tell what the send would use (an unresolved Agent binding, a pending incognito toggle, tool or skill lists not loaded within the bound, an `@`-mention in the composer). app-api honours `prepare` only while the flag and session prewarm are both on, forwards only `_PREPARE_SELECTION_FIELDS` as `warm: true, prepare: true` with the user's token and `OAuth2CallbackUrl`, and admits it on its own ledger stage: a page-load warm never suppresses a prepare, a prepare counts as a warm, one prepare per conversation per rewarm window, and the per-user rate limit is shared. The Runtime (`_prepare_invocation`) runs the turn's own phases through `_run_invocation(prepare=True)` and builds through `_build_main_agent` into the agent cache.
+
+**What it never does:** take the lease, write session rows, charge quota, search a knowledge base, call a model, write Agent use (`record_use` off), or validate and persist an Agent binding. **Read:** on a cache miss the build is a turn's build, so it still creates what that build creates: for a new session, the AgentCore Memory session and agent events (§2D `session_mgr`, `finalize`), and the MCP pre-flight as the user.
+
+**Guards.** Every outcome is a 200 JSON body `{warmed, prepared, reason, cacheHit, ms}`.
+- `preview`: a preview session persists nothing.
+- `paused`: a paused turn's agent is the one its resume needs.
+- `turn_active`: the lease is held, so a turn owns the conversation's agent.
+- `quota`: over quota, nothing built.
+- `refused`: a shared phase refused (model access, retired model, Agent not usable); the stream is discarded unrun.
+- `uncacheable`: injected tools the cache key cannot describe, so nothing would be left of the build.
+- `in_flight`: a prepare for this conversation is already building.
+- `error`: anything else, logged.
+
+**A send during a prepare.** `prepare.py` keeps an in-flight record keyed on `(user, session)`, never the session alone. `_build_main_agent` calls `wait_for_in_flight` before `get_agent`, so the send waits for that build, bounded at 30 s, instead of starting a second. It is a dictionary lookup: no I/O, so I11's inventory is unchanged (**Read**; the inventory test covers it).
+
+**Why the key matches.** A prepare calls the turn's phases and `_build_main_agent`, never a copy, the same rule as the handoff brief. A prepare still misses when the selection changed after the first input, when an attachment's kind flips a tool gate, or when an `@`-mention routes the turn to another Agent. A miss costs what today costs plus one wasted build in a process that is already running.
+
+**What to read on dev before turning it on in prod.**
+1. The `turn_prepare` line and `PrepareMs` / `PrepareBuilt`: reasons, `cacheHit`, build ms.
+2. `preparedAgeMs` on `turn_prelude`; `agent_build` on prepared against unprepared first turns, and on returns after 15 idle minutes.
+3. `ClientPrepareTreatedFirstTokenMs` against `ClientPrepareHoldoutFirstTokenMs` (the browser's two arms; with the holdout at 0 every prepare is treated), and the probe's `TtftProbePreparedFirstTokenMs` against `TtftProbeWarmedFirstTokenMs` (§6E), which is the paired read that needs no user traffic.
+4. app-api's `prewarm forwarded ... prepare=true prepared=... reason=...`.
+5. R3: equal `toolConfigHash` and `systemPromptHash` between a prepared turn and its follow-up.
+6. The share of prepares never followed by a send.
+
+**Running the A/B.** With the flag on, set `CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT=50` and wait until each arm has at least `--min-n` (default 50) eligible turns. The arm is a hash of the conversation id, recorded as `prepareArm` on the server lines and the browser report. Then run `backend/scripts/prepare_ab_readout.py --prefix <prefix> --since 7d --holdout-percent 50` and read the caveats first: mixed builds, arm balance, an arm under its floor, mix shift. Logic: `apis/shared/costs/prepare_ab.py`.
+
+- **The arms are intent to treat.** A treated conversation counts whether or not its prepare built anything, so a refused or cached prepare dilutes the effect and is not excluded.
+- **What it cannot see.** A conversation whose microVM was gone before the send loses its arm on the server lines, equally in both arms; the browser report keeps it. Turns outside the experiment (`prepareArm` null) and resumes are not compared.
+- **The verdict is a fixed rule**, printed with the readout: both server `totalMs` and client first token faster with intervals excluding 0 and no caveat fired is "effect confirmed". Anything under its floor prints `—`, never zero.
+
+**Accept if (Hypothesis, the bar).** Prepared turns' `agent_build` p50 is at the cached-agent level (tens of ms) and their prelude p50 is near the warm follow-up's; `PreludeTotalMs` for unprepared turns does not move; no 409 is attributable to a prepare; R3 holds.
+
+**Not in this change.**
+- Warming the Bedrock prompt cache on idle returns: the 5 to 60 minute band is 77% TTL misses, but a zero-output Converse call is documented only for the first-party API and needs a dev test first.
+- Re-preparing when the selection changes after the first input: it needs a rule for superseding an agent already built, and the first cut is measured without it.
+- Preparing on page load for a new conversation: intent is weaker than a keystroke, and a prepare builds the agent, which a bare warm does not.
+
 ---
 
 ## 6. Regression plan — for hand-off
@@ -917,6 +982,8 @@ merge*): the release readout's per-build prelude table, which lists a stage whos
 moved by more than max(30 ms, 5%), and the `turn-prelude-p50` alarm for a step nobody
 ran a readout for. Between them, an added call fails a PR and slower work on the path
 reaches a reader within a build.
+
+A prewarm prepare (§5 P7) is covered by `tests/apis/inference_api/test_invocations_prepare.py` and must keep I4 (it takes no lease) and I11 (it adds no turn-path round trip).
 
 ### 6B. Per-change checklist
 
@@ -1002,7 +1069,7 @@ How the probe runs (`apis/app_api/telemetry/ttft_probe.py`, `TtftProbeConstruct`
 - Hourly (`cron(17 * * * ? *)`), as a one-off Fargate task on app-api's own task definition family, with app-api's environment and role and the session retention pruner's schedule role (no new IAM resources; the stack is near CloudFormation's 500-resource limit).
 - As one dedicated user, `CDK_TTFT_PROBE_USER_ID` (a Cognito sub). That user needs an **active headless grant**: sign in and enable headless runs, which lasts up to 30 days from that sign-in, so someone signs in with the probe account at least monthly. Its turns count against that user's quota (three short turns an hour). Unset, the schedule is DISABLED and no alarm exists.
 - `CDK_TTFT_PROBE_MODEL_ID` pins the model. Pin one: unset means the user's default, which moves the baseline whenever the default changes.
-- Each run: a cold first turn on a new conversation, a follow-up on it, then a second new conversation prewarmed and sent 5 s later. It records `TtftProbeColdFirstTokenMs`, `TtftProbeFollowUpFirstTokenMs`, `TtftProbeWarmedFirstTokenMs`, `TtftProbeWarmCallMs`, and `TtftProbeRuns` (or `TtftProbeFailures`), then soft-deletes both conversations.
+- Each run: a cold first turn on a new conversation, a follow-up on it, then a second new conversation prewarmed and sent 5 s later. It records `TtftProbeColdFirstTokenMs`, `TtftProbeFollowUpFirstTokenMs`, `TtftProbeWarmedFirstTokenMs`, `TtftProbeWarmCallMs`, and `TtftProbeRuns` (or `TtftProbeFailures`), then soft-deletes both conversations. While `SESSION_PREWARM_PREPARE_ENABLED` (and `SESSION_PREWARM_ENABLED`) is on in app-api's environment, a fourth leg runs last: a third new conversation prepared (`warm` + `prepare` with exactly the selection its turn carries, built by one helper) and sent 5 s later, recording `TtftProbePreparedFirstTokenMs` and `TtftProbePrepareCallMs`; whether the prepare took (`prepared`, `prepareReason`, `cacheHit`) is a log property, and a prepare that did not take never fails the run. The prepared leg against the warmed leg is the paired, traffic-independent read of what a prepare buys on a first turn.
 - One alarm, `ttft-probe-not-reporting`: no complete run for 3 hours, missing data breaching. A lapsed grant, an exhausted quota, a broken image and a stopped schedule all look the same from here; the task's `ttft probe` log line in the app-api log group says which.
 - First manual run on dev (2026-10-10): cold 9,004 ms, prewarmed 2,321 ms, follow-up 1,533 ms, warm call 2,024 ms. One sample is not a baseline; set latency alarms on the probe's daily median after one to two weeks of it.
 

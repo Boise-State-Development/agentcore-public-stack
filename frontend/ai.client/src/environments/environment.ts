@@ -16,6 +16,8 @@ export const environment = {
         conversationSearch: true,
         userGrants: true,
         sessionPrewarm: false,
+        // The backend builds the turn's agent while the user types (SESSION_PREWARM_PREPARE_ENABLED).
+        sessionPrewarmPrepare: false,
         clientTurnTiming: true,
         largeDocumentAttachments: true,
         folderAttachments: true,

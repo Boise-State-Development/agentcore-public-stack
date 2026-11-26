@@ -195,6 +195,8 @@ What was built:
 
 Measure it client-side, as below: first token on a new conversation's first turn, with the page open a few seconds before sending, flag on against off.
 
+Prepare mode (`SESSION_PREWARM_PREPARE_ENABLED`, in development) extends the warm so it also builds the turn's agent; see `docs/specs/turn-path-ttft.md` §5 P7. The Runtime still has no flag for it, so the V2 byte budget is untouched. The `prewarm invocation` log line still counts every warm call, prepares included, so the cost readout's warm count does not separate the two.
+
 
 The blog's tip is to start the session as soon as the user engages, for example when they open a chat or begin typing, instead of waiting for submit. That hides the start time behind the time they spend typing. **V2 does not do this for us.** A microVM starts only when an invocation arrives with a runtime session ID. We pin that ID per conversation (`runtime_session_id_for` in `apis/shared/harness/runner.py`, a hash of the user and the conversation's session ID). So today **every new conversation's first turn is a cold start**, and nothing happens before the user sends.
 

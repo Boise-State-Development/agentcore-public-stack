@@ -5,6 +5,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { DOCUMENT } from '@angular/common';
 import { PLATFORM_ID } from '@angular/core';
 import { SessionPrewarmService } from './session-prewarm.service';
+import { TurnSelectionService } from '../chat/turn-selection.service';
 import { ConfigService } from '../../../services/config.service';
 import { FEATURES } from '../../../services/features';
 import { SUPPRESS_ERROR_TOAST } from '../../../auth/error.interceptor';
@@ -32,8 +33,31 @@ function fakeDocument(initial: DocumentVisibilityState = 'visible') {
 describe('SessionPrewarmService', () => {
   let httpMock: HttpTestingController;
   let doc: ReturnType<typeof fakeDocument>;
+  let selection: {
+    awaitSources: ReturnType<typeof vi.fn>;
+    sourcesLoaded: ReturnType<typeof vi.fn>;
+    incognitoPending: ReturnType<typeof vi.fn>;
+    build: ReturnType<typeof vi.fn>;
+  };
 
-  function setup(options: { enabled?: boolean; visibility?: DocumentVisibilityState; platform?: string } = {}) {
+  beforeEach(() => {
+    selection = {
+      awaitSources: vi.fn().mockResolvedValue(undefined),
+      sourcesLoaded: vi.fn().mockReturnValue(true),
+      incognitoPending: vi.fn().mockReturnValue(false),
+      build: vi.fn().mockReturnValue({
+        model_id: 'm-1',
+        enabled_tools: ['t1'],
+        provider: 'bedrock',
+        invoked_skills: ['never'],
+        message: 'never',
+        file_upload_ids: ['never'],
+        rag_assistant_id: 'agent-1',
+      }),
+    };
+  });
+
+  function setup(options: { enabled?: boolean; prepare?: boolean; visibility?: DocumentVisibilityState; platform?: string } = {}) {
     TestBed.resetTestingModule();
     doc = fakeDocument(options.visibility ?? 'visible');
     TestBed.configureTestingModule({
@@ -41,7 +65,8 @@ describe('SessionPrewarmService', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: ConfigService, useValue: { appApiUrl: () => API } },
-        { provide: FEATURES, useValue: { sessionPrewarm: options.enabled ?? true } },
+        { provide: FEATURES, useValue: { sessionPrewarm: options.enabled ?? true, sessionPrewarmPrepare: options.prepare ?? false } },
+        { provide: TurnSelectionService, useValue: selection },
         { provide: DOCUMENT, useValue: doc },
         { provide: PLATFORM_ID, useValue: options.platform ?? 'browser' },
       ],
@@ -255,6 +280,242 @@ describe('SessionPrewarmService', () => {
       service.warmNewConversation();
       httpMock.expectNone(URL);
       expect(service.claimNewConversationId()).toBe(first.request.body.session_id);
+    });
+  });
+
+  describe('prepare', () => {
+    const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    function prepared(options: { prepare?: boolean } = {}) {
+      const service = setup({ prepare: options.prepare ?? true });
+      service.setPrepareContext(() => ({ assistantId: 'agent-1' }));
+      return service;
+    }
+
+    it('flag off: an existing conversation sends today\'s plain warm and never builds a selection', () => {
+      const service = prepared({ prepare: false });
+      service.armOnTyping('conv-1');
+      service.noteTyping();
+      const req = httpMock.expectOne(URL);
+      expect(req.request.body).toEqual({ session_id: 'conv-1' });
+      expect(selection.build).not.toHaveBeenCalled();
+      req.flush({});
+    });
+
+    it('flag off: a new conversation sends exactly one call across load and typing', () => {
+      const service = prepared({ prepare: false });
+      service.warm('conv-1');
+      service.noteTyping();
+      service.noteTyping();
+      const req = httpMock.expectOne(URL);
+      expect(req.request.body).toEqual({ session_id: 'conv-1' });
+      expect(selection.build).not.toHaveBeenCalled();
+      req.flush({});
+    });
+
+    it('an existing conversation sends one prepare with the allowlisted selection, in place of the warm', async () => {
+      const service = prepared();
+      service.armOnTyping('conv-1');
+      httpMock.expectNone(URL);
+
+      service.noteTyping();
+      await settle();
+      const req = httpMock.expectOne(URL);
+      expect(req.request.body).toEqual({
+        session_id: 'conv-1',
+        prepare: true,
+        model_id: 'm-1',
+        enabled_tools: ['t1'],
+        provider: 'bedrock',
+        rag_assistant_id: 'agent-1',
+      });
+      expect(selection.build).toHaveBeenCalledWith('conv-1', { assistantId: 'agent-1' });
+      req.flush({});
+
+      // Second input: nothing.
+      service.noteTyping();
+      await settle();
+      httpMock.expectNone(URL);
+    });
+
+    it('a new conversation warms on load, prepares on the first input, then sends nothing', async () => {
+      const service = prepared();
+      service.warm('conv-1');
+      const warm = httpMock.expectOne(URL);
+      expect(warm.request.body).toEqual({ session_id: 'conv-1' });
+      warm.flush({});
+
+      service.noteTyping();
+      await settle();
+      const req = httpMock.expectOne(URL);
+      expect(req.request.body).toMatchObject({ session_id: 'conv-1', prepare: true, model_id: 'm-1' });
+      req.flush({});
+
+      service.noteTyping();
+      await settle();
+      httpMock.expectNone(URL);
+    });
+
+    it('a plain warm does not suppress a later prepare, and a second prepare is suppressed', async () => {
+      const service = prepared();
+      service.warm('conv-1');
+      httpMock.expectOne(URL).flush({});
+      service.noteTyping();
+      await settle();
+      httpMock.expectOne(URL).flush({});
+      // Within the window, another prepare for the conversation goes nowhere.
+      service.warm('conv-1');
+      httpMock.expectNone(URL);
+      service.noteTyping();
+      await settle();
+      httpMock.expectNone(URL);
+    });
+
+    it('a real turn counts as both stages', async () => {
+      const service = prepared();
+      service.armOnTyping('conv-1');
+      service.noteTurn('conv-1');
+      service.noteTyping();
+      await settle();
+      httpMock.expectNone(URL);
+    });
+
+    it('a turn that starts while the sources load drops the prepare', async () => {
+      let release: () => void = () => undefined;
+      selection.awaitSources.mockReturnValue(new Promise<void>((resolve) => (release = resolve)));
+      const service = prepared();
+      service.armOnTyping('conv-1');
+      service.noteTyping();
+      service.noteTurn('conv-1');
+      release();
+      await settle();
+      httpMock.expectNone(URL);
+    });
+
+    it('waits for unloaded sources instead of skipping, and sends nothing before they land', async () => {
+      let release: () => void = () => undefined;
+      selection.awaitSources.mockReturnValue(new Promise<void>((resolve) => (release = resolve)));
+      const service = prepared();
+      service.armOnTyping('conv-1');
+      service.noteTyping();
+      await settle();
+      httpMock.expectNone(URL);
+      expect(selection.build).not.toHaveBeenCalled();
+
+      release();
+      await settle();
+      httpMock.expectOne(URL).flush({});
+      expect(selection.awaitSources).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls back to a plain warm when the sources never load', async () => {
+      selection.sourcesLoaded.mockReturnValue(false);
+      const service = prepared();
+      service.armOnTyping('conv-1');
+      service.noteTyping();
+      await settle();
+      const req = httpMock.expectOne(URL);
+      expect(req.request.body).toEqual({ session_id: 'conv-1' });
+      req.flush({});
+    });
+
+    it('falls back to a plain warm when the page cannot tell its binding', async () => {
+      const service = prepared();
+      service.setPrepareContext(() => null);
+      service.armOnTyping('conv-1');
+      service.noteTyping();
+      await settle();
+      const req = httpMock.expectOne(URL);
+      expect(req.request.body).toEqual({ session_id: 'conv-1' });
+      req.flush({});
+    });
+
+    it('an @-mention in the composer skips the prepare; an existing conversation gets the plain warm', async () => {
+      const service = prepared();
+      service.armOnTyping('conv-1');
+      service.noteTyping({ mention: true });
+      await settle();
+      const req = httpMock.expectOne(URL);
+      expect(req.request.body).toEqual({ session_id: 'conv-1' });
+      expect(selection.build).not.toHaveBeenCalled();
+      req.flush({});
+    });
+
+    it('keeps warmAgeMs as the earlier stage and reports preparedAgeMs from the prepare', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const service = prepared();
+      service.warm('conv-1');
+      httpMock.expectOne(URL).flush({});
+      vi.advanceTimersByTime(5000);
+      service.noteTyping();
+      await vi.waitFor(() => httpMock.expectOne(URL).flush({}));
+      vi.advanceTimersByTime(2000);
+      // The warm is the earlier stage: it is older than the prepare by the gap between them.
+      const warmAge = service.warmAgeMs('conv-1') as number;
+      const preparedAge = service.preparedAgeMs('conv-1') as number;
+      expect(warmAge - preparedAge).toBeGreaterThanOrEqual(5000);
+      expect(warmAge).toBeGreaterThanOrEqual(7000);
+    });
+
+    async function prepareWith(service: SessionPrewarmService, id: string, response: unknown) {
+      service.armOnTyping(id);
+      service.noteTyping();
+      await settle();
+      httpMock.expectOne(URL).flush(response as object);
+    }
+
+    it('remembers a treated and a holdout arm from the prepare response', async () => {
+      const service = prepared();
+      await prepareWith(service, 'conv-1', { status: 'accepted', prepareArm: 'treated' });
+      await prepareWith(service, 'conv-2', { status: 'recently_warmed', prepareArm: 'holdout' });
+      expect(service.prepareArm('conv-1')).toBe('treated');
+      expect(service.prepareArm('conv-2')).toBe('holdout');
+    });
+
+    it('records no arm when it is absent, bogus or the response is malformed', async () => {
+      const service = prepared();
+      await prepareWith(service, 'a', { status: 'accepted' });
+      await prepareWith(service, 'b', { status: 'accepted', prepareArm: 'maybe' });
+      await prepareWith(service, 'c', { status: 'accepted', prepareArm: 3 });
+      await prepareWith(service, 'd', null);
+      for (const id of ['a', 'b', 'c', 'd', 'never']) expect(service.prepareArm(id)).toBeNull();
+    });
+
+    it('does not attribute a response that lands after the send began', async () => {
+      const service = prepared();
+      service.armOnTyping('conv-1');
+      service.noteTyping();
+      await settle();
+      const req = httpMock.expectOne(URL);
+      service.noteTurn('conv-1');
+      req.flush({ status: 'accepted', prepareArm: 'treated' });
+      expect(service.prepareArm('conv-1')).toBeNull();
+    });
+
+    it('a plain warm response never sets an arm, and a failed prepare leaves none', async () => {
+      const service = prepared();
+      service.warm('conv-1');
+      httpMock.expectOne(URL).flush({ prepareArm: 'treated' });
+      expect(service.prepareArm('conv-1')).toBeNull();
+      service.noteTyping();
+      await settle();
+      httpMock.expectOne(URL).flush('boom', { status: 500, statusText: 'err' });
+      expect(service.prepareArm('conv-1')).toBeNull();
+    });
+
+    it('flag off: no arm even if a response names one', () => {
+      const service = prepared({ prepare: false });
+      service.armOnTyping('conv-1');
+      service.noteTyping();
+      httpMock.expectOne(URL).flush({ prepareArm: 'treated' });
+      expect(service.prepareArm('conv-1')).toBeNull();
+    });
+
+    it('preparedAgeMs is null for a conversation never prepared', () => {
+      const service = prepared();
+      service.warm('conv-1');
+      httpMock.expectOne(URL).flush({});
+      expect(service.preparedAgeMs('conv-1')).toBeNull();
     });
   });
 

@@ -11,6 +11,13 @@ export interface TurnTimingContext {
   turnKind: 'first' | 'followup';
   /** Milliseconds since this tab prewarmed the conversation, or null when it did not. */
   warmAgeMs: number | null;
+  /**
+   * Milliseconds since this tab sent a prepare request for the conversation.
+   * Omitted when it did not; the report then leaves the field out.
+   */
+  preparedAgeMs?: number | null;
+  /** The backend's A/B arm for the prepare, when it reported one. Omitted otherwise. */
+  prepareArm?: 'treated' | 'holdout' | null;
   modelId?: string | null;
   hasAgent?: boolean;
   hasFiles?: boolean;
@@ -83,6 +90,8 @@ export class TurnTimingService {
           firstTokenMs,
           turnKind: turn.context.turnKind,
           warmAgeMs: turn.context.warmAgeMs,
+          ...(turn.context.preparedAgeMs != null ? { preparedAgeMs: turn.context.preparedAgeMs } : {}),
+          ...(turn.context.prepareArm ? { prepareArm: turn.context.prepareArm } : {}),
           modelId: turn.context.modelId ?? null,
           hasAgent: turn.context.hasAgent ?? false,
           hasFiles: turn.context.hasFiles ?? false,

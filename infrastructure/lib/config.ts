@@ -561,6 +561,26 @@ export interface UserGrantsConfig {
  */
 export interface SessionPrewarmConfig {
   enabled: boolean;
+  /**
+   * Prewarm prepare (docs/specs/turn-path-ttft.md). **Opt-in while in development**:
+   * off unless CDK_SESSION_PREWARM_PREPARE_ENABLED=true (or a
+   * `sessionPrewarm.prepareEnabled: true` cdk.json context), and it needs `enabled`
+   * (see `sessionPrewarmPrepareOn`). Sets SESSION_PREWARM_PREPARE_ENABLED on
+   * **app-api only**: a prewarm request may then carry the selection the next send
+   * would use, and the Runtime builds and caches that agent ahead of the send. The
+   * request field is the trigger and app-api the gate, so the Runtime gets no copy.
+   * A rollout switch once finished (retirement condition in CLAUDE.md).
+   */
+  prepareEnabled: boolean;
+  /**
+   * Experiment knob for the prepare A/B readout (not a feature flag, no SPA flag;
+   * removed with the rollout switch). Sets SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT
+   * on **app-api only**: that share of conversations (by a hash of the id) get a
+   * plain warm instead of a prepare. Whole number 0..100 from
+   * CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT; default 0 (every prepare runs);
+   * anything else fails synth.
+   */
+  prepareHoldoutPercent: number;
 }
 
 /**
@@ -2208,6 +2228,19 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_SESSION_PREWARM_ENABLED
         ? process.env.CDK_SESSION_PREWARM_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('sessionPrewarm')?.enabled ?? false,
+      // Opt-in while in development, same parsing as above; true only while
+      // `enabled` is (see sessionPrewarmPrepareOn).
+      prepareEnabled: process.env.CDK_SESSION_PREWARM_PREPARE_ENABLED
+        ? process.env.CDK_SESSION_PREWARM_PREPARE_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('sessionPrewarm')?.prepareEnabled ?? false,
+      // requireWholeNumber so a typo fails synth rather than running another
+      // holdout than the operator meant; '' (unset GitHub variable) is the default.
+      prepareHoldoutPercent:
+        parseIntEnv(requireWholeNumber(
+          'CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT', process.env.CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT))
+        ?? parseIntEnv(requireWholeNumber(
+          'context sessionPrewarm.prepareHoldoutPercent', scope.node.tryGetContext('sessionPrewarm')?.prepareHoldoutPercent))
+        ?? 0,
     },
     handoffs: {
       // Opt-in while in development, same parsing as sessionPrewarm above.
@@ -3228,6 +3261,13 @@ function validateConfig(config: AppConfig): void {
     );
   }
 
+  const holdout = config.sessionPrewarm.prepareHoldoutPercent;
+  if (!Number.isInteger(holdout) || holdout < 0 || holdout > 100) {
+    throw new Error(
+      `CDK_SESSION_PREWARM_PREPARE_HOLDOUT_PERCENT must be a whole number from 0 to 100. Got: ${holdout}`,
+    );
+  }
+
   // The per-file knowledge-base limit is bounded by Bedrock's own, which is not
   // adjustable: a larger value would admit files Bedrock then refuses after
   // their bytes are stored and reserved.
@@ -3538,6 +3578,14 @@ export function applyStandardTags(stack: cdk.Stack, config: AppConfig): void {
  * @param config  The top-level AppConfig
  * @param additionalOrigins  Optional comma-separated extra origins to append
  */
+/**
+ * Whether prewarm prepare is on for this deployment: its own switch and session
+ * prewarm, which it rides. Written to app-api only; the Runtime has no copy.
+ */
+export function sessionPrewarmPrepareOn(config: Pick<AppConfig, 'sessionPrewarm'>): boolean {
+  return config.sessionPrewarm.enabled && config.sessionPrewarm.prepareEnabled;
+}
+
 /**
  * Whether prompt steps are on for this deployment: their own switch and every flag
  * they need (saved workflows, workflow runs, handoffs). The one answer both

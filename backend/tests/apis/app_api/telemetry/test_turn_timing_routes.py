@@ -95,6 +95,38 @@ def test_a_cold_first_turn_and_a_follow_up_use_their_own_names() -> None:
     assert routes.metrics_for(follow) == {"ClientFirstTokenMs": 1400, "ClientFollowUpFirstTokenMs": 1400}
 
 
+def test_a_prepare_arm_records_under_its_own_name(emitted) -> None:
+    treated = routes.TurnTimingReport(
+        firstTokenMs=1200, turnKind="followup", warmAgeMs=9000, preparedAgeMs=7400, prepareArm="treated"
+    )
+    assert routes.metrics_for(treated) == {
+        "ClientFirstTokenMs": 1200,
+        "ClientFollowUpFirstTokenMs": 1200,
+        "ClientPrepareTreatedFirstTokenMs": 1200,
+    }
+    holdout = routes.TurnTimingReport(firstTokenMs=1500, turnKind="followup", prepareArm="holdout")
+    assert "ClientPrepareHoldoutFirstTokenMs" in routes.metrics_for(holdout)
+    assert "ClientPrepareTreatedFirstTokenMs" not in routes.metrics_for(holdout)
+    resp = _post(TestClient(_app(_user())), preparedAgeMs=7400, prepareArm="treated")
+    assert resp.status_code == 204
+    assert emitted[0]["properties"]["preparedAgeMs"] == 7400
+    assert emitted[0]["properties"]["prepareArm"] == "treated"
+    assert "ClientPrepareTreatedFirstTokenMs" in emitted[0]["metrics"]
+    assert "ClientPreparedFirstTokenMs" not in emitted[0]["metrics"]
+
+
+def test_an_unknown_prepare_arm_is_rejected() -> None:
+    assert _post(TestClient(_app(_user())), prepareArm="other").status_code == 422
+
+
+def test_a_turn_with_no_prepare_keeps_today_s_names(emitted) -> None:
+    resp = _post(TestClient(_app(_user())))
+    assert resp.status_code == 204
+    assert emitted[0]["properties"]["preparedAgeMs"] is None
+    assert emitted[0]["properties"]["prepareArm"] is None
+    assert not [m for m in emitted[0]["metrics"] if m.startswith("ClientPrepare")]
+
+
 def test_records_no_identity(emitted) -> None:
     _post(TestClient(_app(_user("someone-specific"))))
     (record,) = emitted

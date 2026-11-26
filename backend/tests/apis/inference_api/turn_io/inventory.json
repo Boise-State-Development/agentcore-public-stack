@@ -91,6 +91,64 @@
         "1x s3.GetObject user-file-uploads-123456789012  <- apis/shared/files/file_resolver.py:FileResolver._get_bytes  [task FileResolver._resolve_single_file]"
       ]
     },
+    "fresh_send": {
+      "awaited": [
+        "1x bedrock-agentcore.CreateEvent  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager.__init__",
+        "1x bedrock-agentcore.CreateEvent  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager._restore_text_agent  [hook AgentInitializedEvent:AgentCoreMemorySessionManager.register_hooks.<locals>.<lambda>]",
+        "1x bedrock-agentcore.CreateEvent  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager.append_message  [hook MessageAddedEvent:AgentCoreMemorySessionManager.register_hooks.<locals>._on_message_added_persist]",
+        "1x bedrock-agentcore.CreateEvent  <- agents/main_agent/streaming/stream_processor.py:process_agent_stream  [hook MessageAddedEvent:AgentCoreMemorySessionManager.register_hooks.<locals>._on_message_added_persist]",
+        "2x bedrock-agentcore.ListEvents  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager.read_session",
+        "1x dynamodb.BatchGetItem app-roles  <- apis/shared/skills/repository.py:SkillCatalogRepository.batch_get_skills",
+        "24x dynamodb.GetItem app-roles  <- apis/shared/tools/repository.py:ToolCatalogRepository.get_tool",
+        "1x dynamodb.GetItem user-settings  <- apis/shared/user_settings/repository.py:UserSettingsRepository.get_settings",
+        "1x dynamodb.PutItem sessions-metadata  <- apis/shared/sessions/metadata.py:ensure_session_metadata_exists",
+        "1x dynamodb.Query app-roles/SkillOwnerIndex  <- apis/shared/skills/repository.py:SkillCatalogRepository.list_skills_by_owner",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager._get_session_via_gsi",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_backfill_session_aggregates",
+        "2x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_get_session_metadata_cloud",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:load_session_meta",
+        "2x dynamodb.Query user-file-uploads/SessionIndex  <- apis/shared/files/repository.py:FileUploadRepository.list_session_files_sync",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:_backfill_session_aggregates",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/session_lease.py:acquire_session_lease"
+      ],
+      "concurrent": [
+        "1x bedrock-agentcore.ListEvents  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager.list_messages  [task thread agents/main_agent/streaming/history_count.py:HistoryCount.start]",
+        "2x bedrock-agentcore.RetrieveMemoryRecords  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager._fetch_customer_context.<locals>.retrieve_for_namespace  [hook MessageAddedEvent:TurnBasedSessionManager._prefetch_customer_context]  [task thread agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager._prefetch_customer_context]",
+        "1x bedrock-runtime.Converse  <- apis/inference_api/chat/service.py:_converse_for_title  [task generate_conversation_title]",
+        "3x bedrock-runtime.CountTokens  <- agents/main_agent/core/bedrock_count_tokens.py:CountTokensBedrockModel.native_count_tokens  [hook BeforeModelCallEvent:ContextAttributionHook._on_before_model_call]  [task ContextAttributionHook._measure_split]",
+        "1x dynamodb.PutItem sessions-metadata  <- apis/shared/sessions/metadata.py:_store_message_metadata_cloud  [task generate_conversation_title]",
+        "2x dynamodb.PutItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.track_active_user  [task generate_conversation_title]",
+        "1x dynamodb.PutItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.track_active_user_for_model  [task generate_conversation_title]",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_get_session_by_gsi  [task generate_conversation_title]",
+        "1x dynamodb.Query user-file-uploads/SessionIndex  <- apis/shared/files/repository.py:FileUploadRepository.list_session_files_sync  [task _auto_enabled_spreadsheet_tool_ids]",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:_bump_session_aggregates  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:update_session_title  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_daily_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_model_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_monthly_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage._update_cost_sort_key  [task generate_conversation_title]",
+        "3x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage._update_model_breakdown  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_user_cost_summary  [task generate_conversation_title]"
+      ]
+    },
+    "prepare": {
+      "awaited": [
+        "1x bedrock-agentcore.CreateEvent  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager.__init__",
+        "1x bedrock-agentcore.CreateEvent  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager._restore_text_agent  [hook AgentInitializedEvent:AgentCoreMemorySessionManager.register_hooks.<locals>.<lambda>]",
+        "2x bedrock-agentcore.ListEvents  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager.read_session",
+        "1x dynamodb.BatchGetItem app-roles  <- apis/shared/skills/repository.py:SkillCatalogRepository.batch_get_skills",
+        "24x dynamodb.GetItem app-roles  <- apis/shared/tools/repository.py:ToolCatalogRepository.get_tool",
+        "1x dynamodb.GetItem sessions-metadata  <- apis/shared/sessions/session_lease.py:is_session_lease_held",
+        "1x dynamodb.GetItem user-settings  <- apis/shared/user_settings/repository.py:UserSettingsRepository.get_settings",
+        "1x dynamodb.Query app-roles/SkillOwnerIndex  <- apis/shared/skills/repository.py:SkillCatalogRepository.list_skills_by_owner",
+        "2x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_get_session_metadata_cloud",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:load_session_meta",
+        "1x dynamodb.Query user-file-uploads/SessionIndex  <- apis/shared/files/repository.py:FileUploadRepository.list_session_files_sync"
+      ],
+      "concurrent": [
+        "1x dynamodb.Query user-file-uploads/SessionIndex  <- apis/shared/files/repository.py:FileUploadRepository.list_session_files_sync  [task _auto_enabled_spreadsheet_tool_ids]"
+      ]
+    },
     "project_turn": {
       "awaited": [
         "1x bedrock-agentcore.CreateEvent  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager.__init__",
@@ -143,6 +201,41 @@
         "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_user_cost_summary  [task generate_conversation_title]",
         "1x s3.GetObject memory-spaces  <- apis/shared/memory/store.py:MemorySpaceStore.get  [task load_project_memory]",
         "1x s3vectors.QueryVectors  <- apis/shared/embeddings/bedrock_embeddings.py:_search_assistant_knowledgebase_sync  [task _search_and_augment]"
+      ]
+    },
+    "send_after_prepare": {
+      "awaited": [
+        "1x bedrock-agentcore.CreateEvent  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager.append_message  [hook MessageAddedEvent:AgentCoreMemorySessionManager.register_hooks.<locals>._on_message_added_persist]",
+        "1x bedrock-agentcore.CreateEvent  <- agents/main_agent/streaming/stream_processor.py:process_agent_stream  [hook MessageAddedEvent:AgentCoreMemorySessionManager.register_hooks.<locals>._on_message_added_persist]",
+        "1x dynamodb.GetItem user-settings  <- apis/shared/user_settings/repository.py:UserSettingsRepository.get_settings",
+        "1x dynamodb.PutItem sessions-metadata  <- apis/shared/sessions/metadata.py:ensure_session_metadata_exists",
+        "1x dynamodb.Query app-roles/SkillOwnerIndex  <- apis/shared/skills/repository.py:SkillCatalogRepository.list_skills_by_owner",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager._get_session_via_gsi",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_backfill_session_aggregates",
+        "2x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_get_session_metadata_cloud",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:load_session_meta",
+        "2x dynamodb.Query user-file-uploads/SessionIndex  <- apis/shared/files/repository.py:FileUploadRepository.list_session_files_sync",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:_backfill_session_aggregates",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/session_lease.py:acquire_session_lease"
+      ],
+      "concurrent": [
+        "1x bedrock-agentcore.ListEvents  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager.list_messages  [task thread agents/main_agent/streaming/history_count.py:HistoryCount.start]",
+        "2x bedrock-agentcore.RetrieveMemoryRecords  <- agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager._fetch_customer_context.<locals>.retrieve_for_namespace  [hook MessageAddedEvent:TurnBasedSessionManager._prefetch_customer_context]  [task thread agents/main_agent/session/turn_based_session_manager.py:TurnBasedSessionManager._prefetch_customer_context]",
+        "1x bedrock-runtime.Converse  <- apis/inference_api/chat/service.py:_converse_for_title  [task generate_conversation_title]",
+        "3x bedrock-runtime.CountTokens  <- agents/main_agent/core/bedrock_count_tokens.py:CountTokensBedrockModel.native_count_tokens  [hook BeforeModelCallEvent:ContextAttributionHook._on_before_model_call]  [task ContextAttributionHook._measure_split]",
+        "1x dynamodb.PutItem sessions-metadata  <- apis/shared/sessions/metadata.py:_store_message_metadata_cloud  [task generate_conversation_title]",
+        "2x dynamodb.PutItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.track_active_user  [task generate_conversation_title]",
+        "1x dynamodb.PutItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.track_active_user_for_model  [task generate_conversation_title]",
+        "1x dynamodb.Query sessions-metadata/SessionLookupIndex  <- apis/shared/sessions/metadata.py:_get_session_by_gsi  [task generate_conversation_title]",
+        "1x dynamodb.Query user-file-uploads/SessionIndex  <- apis/shared/files/repository.py:FileUploadRepository.list_session_files_sync  [task _auto_enabled_spreadsheet_tool_ids]",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:_bump_session_aggregates  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem sessions-metadata  <- apis/shared/sessions/metadata.py:update_session_title  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_daily_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_model_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem system-cost-rollup  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_monthly_rollup  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage._update_cost_sort_key  [task generate_conversation_title]",
+        "3x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage._update_model_breakdown  [task generate_conversation_title]",
+        "1x dynamodb.UpdateItem user-cost-summary  <- apis/shared/storage/dynamodb_storage.py:DynamoDBStorage.update_user_cost_summary  [task generate_conversation_title]"
       ]
     },
     "tool_round": {

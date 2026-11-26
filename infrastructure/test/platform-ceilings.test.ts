@@ -234,7 +234,7 @@ function allFlagsOn(base: AppConfig): AppConfig {
     memorySpaces: { enabled: true },
     projects: { enabled: true },
     userGrants: { enabled: true },
-    sessionPrewarm: { enabled: true },
+    sessionPrewarm: { enabled: true, prepareEnabled: true, prepareHoldoutPercent: 0 },
     // Adds no resource: a property on the Runtime, and only on V2.
     inferenceApi: { ...base.inferenceApi, runtimeWarmupHookEnabled: true },
     quotaRequests: { enabled: true },

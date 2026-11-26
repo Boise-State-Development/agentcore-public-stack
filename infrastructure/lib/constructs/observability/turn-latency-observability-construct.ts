@@ -220,6 +220,8 @@ export class TurnLatencyObservabilityConstruct extends Construct {
           client('TtftProbeWarmedFirstTokenMs', 'Average', 'prewarmed first turn', HOUR),
           client('TtftProbeFollowUpFirstTokenMs', 'Average', 'follow-up', HOUR),
           client('TtftProbeWarmCallMs', 'Average', 'warm call (session start)', HOUR),
+          client('TtftProbePreparedFirstTokenMs', 'Average', 'prepared first turn', HOUR),
+          client('TtftProbePrepareCallMs', 'Average', 'prepare call (agent build)', HOUR),
         ],
         start: '-P7D',
         leftYAxis: { min: 0 },

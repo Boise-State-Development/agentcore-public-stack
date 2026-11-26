@@ -158,3 +158,157 @@ def test_main_deletes_the_sessions_it_created(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(probe, "emit_emf_metrics", lambda **kw: None)
     assert asyncio.run(probe.main_async()) == 0
     assert deleted == ["ttftprobe-a", "ttftprobe-b"]
+
+
+# --- the prepare leg (flag-gated, last) -------------------------------------------------
+
+
+def _prepare_runtime(seen: List[Dict[str, Any]], *, answer=None, prepare_status: int = 200):
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append({"body": body, "pin": request.headers.get(RUNTIME_SESSION_ID_HEADER)})
+        if body.get("prepare"):
+            if prepare_status >= 400:
+                return httpx.Response(prepare_status, text="no")
+            return httpx.Response(200, json=answer if answer is not None else {"warmed": True, "prepared": True, "reason": None, "cacheHit": False, "ms": 700})
+        if body.get("warm"):
+            return httpx.Response(200, json={"warmed": True})
+        return httpx.Response(200, text=SSE, headers={"content-type": "text/event-stream"})
+
+    return handler
+
+
+def _run_prepare(handler, model_id="us.anthropic.claude-haiku-4-5"):
+    async def go():
+        async with _client(handler) as client:
+            return await probe.run_probe(
+                "probe-user", model_id, invocations_url=URL, bearer="tok", client=client, think_seconds=0, prepare_leg=True
+            )
+
+    return asyncio.run(go())
+
+
+def test_flag_off_sends_the_same_requests_and_metrics_as_before(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SESSION_PREWARM_PREPARE_ENABLED", raising=False)
+    monkeypatch.delenv("SESSION_PREWARM_ENABLED", raising=False)
+    seen: List[Dict[str, Any]] = []
+    result, created = _run(_runtime(seen), model_id="m1")
+    assert len(created) == 2 and len(seen) == 4
+    assert not any("prepare" in s["body"] for s in seen)
+    assert [s["body"] for s in seen if s["body"].get("warm")] == [{"session_id": created[1], "warm": True}]
+    assert result.prepare is None and result.prepared_ms is None and result.prepare_call_ms is None
+    assert set(result.log_fields()) == {
+        "cold_ms", "follow_up_ms", "warmed_ms", "warm_call_ms", "errors", "complete",
+    }
+
+    emitted: List[Dict[str, Any]] = []
+    monkeypatch.setattr(probe, "emit_emf_metrics", lambda **kw: emitted.append(kw))
+    probe.emit(result, "m1")
+    assert not any("Prepar" in name for name in emitted[0]["metrics"])
+    assert set(emitted[0]["properties"]) == {"source", "modelId", "errors"}
+
+
+def test_flag_on_prepares_a_third_conversation_with_the_turns_own_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SESSION_PREWARM_ENABLED", "true")
+    monkeypatch.setenv("SESSION_PREWARM_PREPARE_ENABLED", "true")
+    seen: List[Dict[str, Any]] = []
+
+    async def go():
+        async with _client(_prepare_runtime(seen)) as client:
+            return await probe.run_probe("probe-user", "m1", invocations_url=URL, bearer="tok", client=client, think_seconds=0)
+
+    result, created = asyncio.run(go())
+    assert result.complete, result.errors
+    assert len(created) == 3 and len(set(created)) == 3
+    cold, warmed, prepared = created
+    assert [(s["body"]["session_id"], bool(s["body"].get("warm")), bool(s["body"].get("prepare"))) for s in seen] == [
+        (cold, False, False), (cold, False, False), (warmed, True, False), (warmed, False, False),
+        (prepared, True, True), (prepared, False, False),
+    ]
+    prepare_body, turn_body = seen[4]["body"], seen[5]["body"]
+    assert "message" not in prepare_body
+    selection = {k: v for k, v in turn_body.items() if k not in ("session_id", "message")}
+    assert selection == probe._selection("m1") == {"enabled_tools": [], "model_id": "m1"}
+    assert prepare_body == {"session_id": prepared, "warm": True, "prepare": True, **selection}
+    assert turn_body["message"] == probe.PROBE_PROMPT
+    assert seen[4]["pin"] == seen[5]["pin"] == runtime_session_id_for(prepared, "probe-user")
+    assert isinstance(result.prepared_ms, int) and isinstance(result.prepare_call_ms, int)
+
+
+def test_both_new_metrics_and_the_prepare_properties_are_emitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, _ = _run_prepare(_prepare_runtime([], answer={"warmed": True, "prepared": True, "reason": None, "cacheHit": True, "ms": 5}))
+    emitted: List[Dict[str, Any]] = []
+    monkeypatch.setattr(probe, "emit_emf_metrics", lambda **kw: emitted.append(kw))
+    probe.emit(result, "m1")
+    (record,) = emitted
+    assert record["metrics"]["TtftProbePreparedFirstTokenMs"] == result.prepared_ms
+    assert record["metrics"]["TtftProbePrepareCallMs"] == result.prepare_call_ms
+    assert record["units"]["TtftProbePreparedFirstTokenMs"] == "Milliseconds"
+    assert "TtftProbeRuns" in record["metrics"]
+    assert (record["properties"]["prepared"], record["properties"]["prepareReason"], record["properties"]["cacheHit"]) == (True, None, True)
+    fields = result.log_fields()
+    assert fields["prepared"] is True and fields["cacheHit"] is True and "prepare" not in fields
+
+
+def test_prepared_false_still_sends_and_records_without_failing_the_run() -> None:
+    seen: List[Dict[str, Any]] = []
+    result, _ = _run_prepare(_prepare_runtime(seen, answer={"warmed": True, "prepared": False, "reason": "disabled", "cacheHit": False, "ms": 1}))
+    assert result.complete, result.errors
+    assert result.prepare == {"prepared": False, "reason": "disabled", "cacheHit": False}
+    assert result.prepared_ms is not None and result.prepare_call_ms is not None
+    assert not seen[-1]["body"].get("warm")  # the turn was still sent
+
+
+def test_a_failed_prepare_call_still_sends_and_is_not_a_failure() -> None:
+    seen: List[Dict[str, Any]] = []
+    result, created = _run_prepare(_prepare_runtime(seen, prepare_status=500))
+    assert result.complete, result.errors
+    assert result.prepare_call_ms is None and result.prepared_ms is not None
+    assert result.prepare is not None and result.prepare["prepared"] is False and "HTTP 500" in str(result.prepare["reason"])
+    assert len(created) == 3 and not seen[-1]["body"].get("warm")
+
+
+def test_a_failed_prepared_send_is_a_failure() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body.get("warm"):
+            return httpx.Response(200, json={"warmed": True, "prepared": True})
+        if body["session_id"] == handler.prepared:  # type: ignore[attr-defined]
+            return httpx.Response(424, text="x")
+        return httpx.Response(200, text=SSE, headers={"content-type": "text/event-stream"})
+
+    handler.prepared = None  # type: ignore[attr-defined]
+
+    def wrapped(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if body.get("prepare"):
+            handler.prepared = body["session_id"]  # type: ignore[attr-defined]
+        return handler(request)
+
+    result, _ = _run_prepare(wrapped)
+    assert not result.complete and any(e.startswith("prepared: HTTP 424") for e in result.errors)
+
+
+def test_main_deletes_the_prepared_conversation_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TTFT_PROBE_USER_ID", "probe-user")
+    monkeypatch.setenv("INFERENCE_API_URL", "https://runtime.example")
+
+    class Grant:
+        async def mint_bearer_for_user(self, user_id: str) -> str:
+            return "tok"
+
+    deleted: List[str] = []
+
+    async def fake_delete(user_id: str, session_ids: List[str]) -> None:
+        deleted.extend(session_ids)
+
+    async def fake_run(*args, **kwargs):
+        done = probe.ProbeResult(cold_ms=1, follow_up_ms=1, warmed_ms=1, warm_call_ms=1)
+        return done, ["ttftprobe-a", "ttftprobe-b", "ttftprobe-c"]
+
+    monkeypatch.setattr(probe, "CognitoRefreshBearerAuth", Grant)
+    monkeypatch.setattr(probe, "run_probe", fake_run)
+    monkeypatch.setattr(probe, "_delete_sessions", fake_delete)
+    monkeypatch.setattr(probe, "emit_emf_metrics", lambda **kw: None)
+    assert asyncio.run(probe.main_async()) == 0
+    assert deleted == ["ttftprobe-a", "ttftprobe-b", "ttftprobe-c"]
