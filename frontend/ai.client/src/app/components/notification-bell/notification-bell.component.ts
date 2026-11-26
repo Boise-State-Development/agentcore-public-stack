@@ -16,7 +16,7 @@ import { NgIcon, provideIcons } from '@ng-icons/core';
 import { heroBell } from '@ng-icons/heroicons/outline';
 import { TooltipDirective } from '../tooltip/tooltip.directive';
 import { NotificationsService } from '../../services/notifications/notifications.service';
-import { AppNotification } from '../../services/notifications/notification.model';
+import { AppNotification, NEEDS_USER_NOTIFICATION_KINDS } from '../../services/notifications/notification.model';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { parseIso } from '../../utils/date';
 import { personLabel } from '../../shared/utils/person';
@@ -124,6 +124,66 @@ function describeAgentItem(n: AppNotification): string {
   return n.payload?.urgency === 'now' ? `Urgent — ${line}` : line;
 }
 
+/** Whether a needs-user row's pause has passed its expiry, judged on this clock (answer-from-inbox §3.8). */
+export function needsUserExpired(n: AppNotification, now = Date.now()): boolean {
+  if (n.resolution?.state === 'expired') return true;
+  if (n.resolution) return false;
+  const expiresAt = typeof n.payload?.expiresAt === 'string' ? parseIso(n.payload.expiresAt).getTime() : Number.NaN;
+  return !Number.isNaN(expiresAt) && expiresAt <= now;
+}
+
+const DECISION_WORDS: Record<string, string> = {
+  approved: 'Approved',
+  declined: 'Declined',
+  answered: 'Answered',
+  skipped: 'Skipped',
+};
+const OUTCOME_WORDS: Record<string, string> = {
+  finished: 'finished',
+  waiting_again: 'waiting for you again',
+  failed: 'failed',
+};
+
+/** What became of a needs-user row, or '' while it waits. */
+function needsUserSuffix(n: AppNotification, now: number): string {
+  if (needsUserExpired(n, now)) return 'Expired';
+  const resolution = n.resolution;
+  switch (resolution?.state) {
+    case 'answered_elsewhere':
+      return 'Answered in the conversation';
+    case 'applying':
+      return 'Applying…';
+    case 'answered': {
+      const decision = DECISION_WORDS[resolution.decision ?? ''] ?? 'Answered';
+      const outcome = OUTCOME_WORDS[resolution.outcome ?? ''];
+      return outcome ? `${decision} · ${outcome}` : decision;
+    }
+    default:
+      return '';
+  }
+}
+
+/**
+ * A paused run (answer-from-inbox §3.9): "{label} is waiting for you: approve {tool}",
+ * "…: {headline}" or "…: 2 things to answer", then what became of it once settled.
+ */
+export function describeAgentNeeds(n: AppNotification, now = Date.now()): string {
+  const label = (typeof n.payload?.label === 'string' ? n.payload.label.trim() : '') || 'A scheduled run';
+  const prompts = Array.isArray(n.payload?.prompts) ? n.payload.prompts : [];
+  let what = 'something to answer';
+  if (prompts.length > 1) {
+    what = `${prompts.length} things to answer`;
+  } else if (prompts.length === 1) {
+    const prompt = prompts[0];
+    if (prompt.kind === 'tool_approval' && prompt.toolName) what = `approve ${prompt.toolName}`;
+    else if (prompt.headline) what = prompt.headline;
+    else if (prompt.kind === 'browser_login') what = 'sign in to a site';
+  }
+  const line = `${label} is waiting for you: ${what}`;
+  const suffix = needsUserSuffix(n, now);
+  return suffix ? `${line} · ${suffix}` : line;
+}
+
 /**
  * The sentence a notification reads as. Actor and project fall back to neutral words.
  * `quotaPeriodType` words a quota amount (`per month` / `per day`); unknown reads as monthly.
@@ -133,6 +193,7 @@ export function describeNotification(n: AppNotification, quotaPeriodType?: strin
   if (n.kind.startsWith('handoff_')) return describeHandoff(n);
   if (n.kind === 'schedule_paused') return describeOwnSchedule(n);
   if (n.kind === 'agent_item') return describeAgentItem(n);
+  if (NEEDS_USER_NOTIFICATION_KINDS.has(n.kind)) return describeAgentNeeds(n);
   const who = personLabel(n.actorName, n.actorEmail) || 'Someone';
   const project = n.projectName || 'a project';
   const role = ROLE_PHRASES[n.payload?.role ?? ''] ?? (n.payload?.role ? `a ${n.payload.role}` : null);
@@ -494,6 +555,20 @@ export class NotificationBellComponent {
     // A watcher's finding opens the run's conversation; without one, the schedule's
     // own page where the build has it, else the schedules list.
     if (n.kind === 'agent_item') {
+      const { sessionId, scheduleId } = n.payload ?? {};
+      if (typeof sessionId === 'string' && sessionId) {
+        void this.router.navigate(['/s', sessionId]);
+      } else if (this.features.proactiveRuns && typeof scheduleId === 'string' && scheduleId) {
+        void this.router.navigate(['/schedules', scheduleId]);
+      } else {
+        void this.router.navigate(['/schedules']);
+      }
+      this.sidenav.close();
+      return;
+    }
+    // A paused run opens its conversation, where its card is answered (answer-from-inbox
+    // PR 2.1; the review dialog comes with PR 2.3).
+    if (NEEDS_USER_NOTIFICATION_KINDS.has(n.kind)) {
       const { sessionId, scheduleId } = n.payload ?? {};
       if (typeof sessionId === 'string' && sessionId) {
         void this.router.navigate(['/s', sessionId]);

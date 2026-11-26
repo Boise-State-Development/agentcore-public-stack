@@ -372,6 +372,12 @@ async def run_sample(
         if result.status == "oauth_required":
             providers = ", ".join(o.provider_id for o in result.oauth_required) or "unknown"
             raise OAuthRequiredError(f"{case.id}: the eval user needs consent for {providers}")
+        if result.status == "needs_user":
+            # A tool approval, question, form or sign-in the harness cannot
+            # answer: its own outcome, never scored as a finished turn.
+            status = "needs_user"
+            error = f"paused for the user ({len(result.pending_interrupt_ids)} prompt(s))"
+            break
         if result.status != "completed":
             status = result.status
             error = result.error

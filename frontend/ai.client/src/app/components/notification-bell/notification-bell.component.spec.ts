@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { Router, provideRouter } from '@angular/router';
-import { NotificationBellComponent, describeNotification, relativeTime } from './notification-bell.component';
+import {
+  NotificationBellComponent,
+  describeAgentNeeds,
+  describeNotification,
+  needsUserExpired,
+  relativeTime,
+} from './notification-bell.component';
 import { NotificationsService } from '../../services/notifications/notifications.service';
 import { AppNotification } from '../../services/notifications/notification.model';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
@@ -283,6 +289,19 @@ describe('NotificationBellComponent', () => {
     expect(sidenav.close).toHaveBeenCalled();
   });
 
+  it('a paused run opens its conversation, where its card is answered', () => {
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    const n = notif({
+      kind: 'agent_needs_approval', projectId: null, projectName: null, actorEmail: null,
+      payload: { scheduleId: 'sch-1', runId: 'run-1', sessionId: 'headless-7', label: 'Watcher', prompts: [] },
+    });
+    component.open(n);
+    expect(service.markRead).toHaveBeenCalledWith(n);
+    expect(navigate).toHaveBeenLastCalledWith(['/s', 'headless-7']);
+    expect(sidenav.close).toHaveBeenCalled();
+  });
+
   it('a finding with no conversation opens its schedule’s page with watchers on, else the list', () => {
     TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, proactiveRuns: true } });
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
@@ -384,5 +403,69 @@ describe('NotificationBellComponent', () => {
     fixture.detectChanges();
     expect(onQuotaNotification).toHaveBeenCalledTimes(1);
     expect(onQuotaNotification).toHaveBeenCalledWith('quota_request_decided');
+  });
+});
+
+describe('describeAgentNeeds', () => {
+  const now = Date.parse('2026-11-25T12:00:00Z');
+  const later = '2026-12-02T12:00:00Z';
+  const waiting = (over: Partial<AppNotification> = {}, payload: AppNotification['payload'] = {}) =>
+    notif({
+      kind: 'agent_needs_approval', actorEmail: null, projectId: null, projectName: null,
+      payload: {
+        label: 'Inbox watcher', sessionId: 'headless-1', expiresAt: later, answerable: true,
+        prompts: [{ interruptId: 'i1', kind: 'tool_approval', toolName: 'send_message' }],
+        ...payload,
+      },
+      ...over,
+    });
+
+  it('names the tool to approve, a headline, or how many things wait', () => {
+    expect(describeAgentNeeds(waiting(), now)).toBe('Inbox watcher is waiting for you: approve send_message');
+    expect(
+      describeAgentNeeds(
+        waiting({ kind: 'agent_needs_input' }, { prompts: [{ interruptId: 'q', kind: 'user_question', headline: 'Which calendar?' }] }),
+        now,
+      ),
+    ).toBe('Inbox watcher is waiting for you: Which calendar?');
+    expect(
+      describeAgentNeeds(
+        waiting({}, {
+          prompts: [
+            { interruptId: 'a', kind: 'tool_approval', toolName: 'x' },
+            { interruptId: 'b', kind: 'tool_approval', toolName: 'y' },
+          ],
+        }),
+        now,
+      ),
+    ).toBe('Inbox watcher is waiting for you: 2 things to answer');
+    expect(describeAgentNeeds(waiting({}, { label: '', prompts: [] }), now)).toBe(
+      'A scheduled run is waiting for you: something to answer',
+    );
+  });
+
+  it('says what became of it once settled', () => {
+    const settled = (resolution: AppNotification['resolution']) => describeAgentNeeds(waiting({ resolution }), now);
+    expect(settled({ state: 'answered', decision: 'approved', outcome: 'finished', at: 't' })).toBe(
+      'Inbox watcher is waiting for you: approve send_message · Approved · finished',
+    );
+    expect(settled({ state: 'answered', decision: 'declined', outcome: 'waiting_again', at: 't' })).toContain(
+      '· Declined · waiting for you again',
+    );
+    expect(settled({ state: 'answered_elsewhere', at: 't' })).toContain('· Answered in the conversation');
+    expect(settled({ state: 'expired', at: 't' })).toContain('· Expired');
+    expect(settled({ state: 'retry', at: 't' })).toBe('Inbox watcher is waiting for you: approve send_message');
+  });
+
+  it('reads Expired from its own clock before the server marks it', () => {
+    const lapsed = waiting({}, { expiresAt: '2026-11-25T11:59:59Z' });
+    expect(needsUserExpired(lapsed, now)).toBe(true);
+    expect(describeAgentNeeds(lapsed, now)).toContain('· Expired');
+    expect(needsUserExpired(waiting(), now)).toBe(false);
+  });
+
+  it('is what describeNotification reads for both kinds', () => {
+    expect(describeNotification(waiting())).toContain('is waiting for you: approve send_message');
+    expect(describeNotification(waiting({ kind: 'agent_needs_input' }))).toContain('is waiting for you');
   });
 });

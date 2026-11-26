@@ -121,7 +121,7 @@ export interface UpdateScheduleRequest {
  * How one run of a personal schedule ended (`ScheduleRunStatus`, quiet-watcher
  * §3.4). `quiet` and `notify` are a watcher's: nothing new, or found something.
  */
-export type ScheduleRunStatus = 'completed' | 'error' | 'timeout' | 'paused' | 'quiet' | 'notify';
+export type ScheduleRunStatus = 'completed' | 'error' | 'timeout' | 'paused' | 'quiet' | 'notify' | 'needs_user';
 
 /** One run of a personal schedule (backend `ScheduleRun`). */
 export interface ScheduleRun {
@@ -139,6 +139,9 @@ export interface ScheduleRun {
   cacheReadTokens: number;
   /** Written to the prompt cache; most of a short run's cost. Absent on rows from before it was recorded. */
   cacheWriteTokens?: number;
+  /** A `needs_user` run's pause: when it expires and how many prompts it holds (answer-from-inbox §3.8). */
+  expiresAt?: string | null;
+  promptCount?: number;
 }
 
 /** Response from GET /schedules/{id}/runs: the newest 50, newest first. */
@@ -157,6 +160,9 @@ export interface WatchState {
   version: number;
   lastRunAt?: string | null;
   updatedAt?: string | null;
+  /** Set while the watcher holds on a run that waits on the user (answer-from-inbox §3.2). */
+  pausedSessionId?: string | null;
+  pausedUntil?: string | null;
 }
 
 /** Response from GET /schedules/{id}/state; `state` is null when the watcher has none. */
@@ -203,6 +209,7 @@ export const TERMINAL_RUN_STATUSES = [
   'timeout',
   'oauth_required',
   'client_tool_call',
+  'needs_user',
 ] as const;
 
 /** Response from GET /runs/{runId}: `started` until the run ends. */

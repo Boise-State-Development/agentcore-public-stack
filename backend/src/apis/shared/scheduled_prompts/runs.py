@@ -38,7 +38,10 @@ RUN_SK_PREFIX = "SCHEDRUN#"
 
 #: ``completed`` is a standard run; a watch run ends ``quiet`` (nothing new: its
 #: conversation is soft-deleted) or ``notify`` (``itemCount`` inbox rows written).
-ScheduleRunStatus = Literal["completed", "quiet", "notify", "error", "timeout", "paused"]
+#: ``needs_user`` paused on the user (docs/specs/answer-from-inbox.md §3.8): it
+#: carries the pause's ``expiresAt`` and ``promptCount``, and reads as expired
+#: once ``expiresAt`` passes with no resolution.
+ScheduleRunStatus = Literal["completed", "quiet", "notify", "error", "timeout", "paused", "needs_user"]
 
 
 def _run_prefix(schedule_id: str) -> str:
@@ -62,8 +65,14 @@ class ScheduleRun(BaseModel):
     #: What the run wrote to the prompt cache, at the write premium: on a short
     #: watcher run this is most of the cost, so a row without it reads cheap.
     cache_write_tokens: int = Field(0, alias="cacheWriteTokens")
+    #: A ``needs_user`` run's pause: when it expires and how many prompts it holds.
+    expires_at: Optional[str] = Field(None, alias="expiresAt")
+    prompt_count: int = Field(0, alias="promptCount")
 
-    @field_validator("item_count", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", mode="before")
+    @field_validator(
+        "item_count", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "prompt_count",
+        mode="before",
+    )
     @classmethod
     def _int(cls, value: object) -> int:
         # DynamoDB returns numbers as Decimal.
@@ -104,6 +113,8 @@ def record_schedule_run(
     finished_at: str,
     item_count: int = 0,
     usage: Optional[Dict[str, Any]] = None,
+    expires_at: Optional[str] = None,
+    prompt_count: int = 0,
 ) -> None:
     """Write one run row for a personal schedule. Never raises: a failure is logged.
 
@@ -125,6 +136,10 @@ def record_schedule_run(
         }
         if session_id:
             item["sessionId"] = session_id
+        if expires_at:
+            item["expiresAt"] = expires_at
+        if prompt_count:
+            item["promptCount"] = int(prompt_count)
         _service._get_table().put_item(Item=item)
     except Exception:
         logger.warning(

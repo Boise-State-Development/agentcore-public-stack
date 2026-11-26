@@ -128,6 +128,8 @@ export function runStatusLabel(status: string | null | undefined, itemCount?: nu
       return 'Nothing new';
     case 'notify':
       return itemCount && itemCount > 0 ? `Found ${itemCount}` : 'Found something';
+    case 'needs_user':
+      return 'Waiting for you';
     default:
       return status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Unknown';
   }
@@ -138,8 +140,13 @@ function times(count: number): string {
   return count === 1 ? '1 time' : `${count} times`;
 }
 
-/** Run statuses that mean the run did its work: a standard run, or a watcher's check either way. */
-const FINISHED: ReadonlySet<string> = new Set(['completed', 'quiet', 'notify']);
+/**
+ * Run statuses that mean the run did its work: a standard run, or a watcher's check either way.
+ * A run that paused on the user (`needs_user`) did its work too, and is never a failure.
+ */
+const FINISHED: ReadonlySet<string> = new Set(['completed', 'quiet', 'notify', 'needs_user']);
+/** A watcher's checks that found something; one that needs the user found something it needs them for. */
+const FOUND: ReadonlySet<string> = new Set(['notify', 'needs_user']);
 
 /** The fields a last-24-hours summary reads from each run. */
 export interface RunSummaryFields {
@@ -166,7 +173,7 @@ export function lastDayRunSummary(runs: readonly RunSummaryFields[], watching: b
   const failed = recent.length - finished;
   const tail = failed ? ` · ${failed} failed` : '';
   if (!watching) return `Ran ${times(finished)}${tail}`;
-  const found = recent.filter((run) => run.status === 'notify').length;
+  const found = recent.filter((run) => FOUND.has(run.status)).length;
   return `Checked ${times(finished)} · found something ${times(found)}${tail}`;
 }
 

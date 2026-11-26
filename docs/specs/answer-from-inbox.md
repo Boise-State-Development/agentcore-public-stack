@@ -1,6 +1,6 @@
 # Answer From the Inbox — Slice 2 of the Proactive Agent Gaps
 
-**Status:** Draft build plan. Nothing here is built. The decisions in §2 are proposed; §8 lists what the developer still has to settle.
+**Status:** Build plan. Nothing here is built. The developer settled every open question on 2026-11-25 (§8); §2 records the decisions, and Q1 moved the resume's drain into the scheduled-runs worker (§3.5).
 **Date:** 2026-11-25
 **Targets branch:** `develop`
 **Parent:** `docs/specs/proactive-agent-gaps.md` (slice 2: G5, approvals answered later, from anywhere)
@@ -17,14 +17,14 @@ A scheduled run that stops to ask the user something no longer looks finished. E
 
 The schedule's run history shows the run as **Waiting for you**, then as what happened.
 
-## 2. Decisions (proposed 2026-11-25)
+## 2. Decisions (settled 2026-11-25)
 
 | Question | Proposal | Why |
 |---|---|---|
 | What does the harness call a run that paused on the user? | **`needs_user`**, a new `RunStatus`, carrying the paused interrupt ids. It is classified for every caller, not behind the flag | Today a tool-approval, question, elicitation or browser sign-in pause reads as `completed`, which is wrong for every caller (Run now's toast says "Run finished"). Each caller handles the new status in the same PR, and with the flag off the worker maps it back to exactly today's `completed` path |
 | Where does the prompt's detail live? | **In the session's `PendingInterrupt` breadcrumbs, read on demand.** The inbox row carries ids and one bounded display line per prompt, never the arguments | The breadcrumbs already hold what the conversation's own card shows, and they expire with the pause. Copying a drafted email into an inbox row with a 90-day TTL would keep it 83 days longer than the pause can use it |
-| What is the respond path? | **`POST /notifications/{id}/respond`** on app-api. It checks the item and the live pause under `(session, user)`, claims the item, and resumes **headlessly** through `run_agent_headless(interrupt_responses=…)`, so the Runtime's `/invocations` resume route stays the only resume path | The phone's notification actions (slice 3) cannot hold an SSE stream, so the answer has to drain server-side. That is the same shape as Run now. The gaps spec called it `/inbox/…`; the inbox router is `/notifications`, so the route lives there |
-| Whose token runs the resume? | **The caller's own session access token**, the same one `/chat/stream` forwards, not the headless grant | The user is present and answering. An answer must still work after the 30-day headless grant lapses, which is when a stale pause is most likely |
+| What is the respond path? | **`POST /notifications/{id}/respond`** on app-api. It checks the item and the live pause under `(session, user)`, claims the item, writes the start audit row, and **async-invokes the scheduled-runs worker** with a resume payload. The worker resumes **headlessly** through `run_agent_headless(interrupt_responses=…)`, so the Runtime's `/invocations` resume route stays the only resume path (settled question 1) | The phone's notification actions (slice 3) cannot hold an SSE stream, so the answer has to drain server-side. In the worker, a resume survives an app-api deploy or crash, which would otherwise leave the item "applying" for up to 14 minutes after the user tapped Approve, with nobody watching a tab in slice 3. It also keeps all run bookkeeping (the run's record, the cursors, the history row) in one process. The gaps spec called it `/inbox/…`; the inbox router is `/notifications`, so the route lives there |
+| Whose token runs the resume? | **The headless grant, renewed by the respond call.** The route pins the caller's live session into their grant before the invoke, exactly as Run now does (`_resolve_grant`), and the worker mints from it with `CognitoRefreshBearerAuth` as it does for every run | Follows from settled question 1: the worker has no caller's session, and an access token put in an async-invoke event would sit in Lambda's queue and could outlive its hour on a throttle retry. Renewing on respond keeps the original reason: an answer still works after the 30-day grant lapses, because answering renews it |
 | Where is it answered in the web app? | **A review dialog opened from the bell row.** The bell stays a menu | A `cdkMenu` item can't hold form controls, and approving a send without seeing the draft is the wrong default. The dialog reuses the conversation's prompt components, so "answer in the bell" means "without opening the conversation" |
 | One row per interrupt or per pause? | **One row per pause.** It lists up to 5 prompts, which are answered together in one resume | One resume per pause keeps the session's single-flight lease and the row's claim simple. Two parallel approvals in one tool batch (concurrent tool execution is on in prod) would otherwise race each other for the lease |
 | What does a watcher do while its run waits? | **It holds.** It skips its runs until the pause is answered or expires | Its cursors only advance through `report` at the end of the run, so the next run would find the same item and draft the same reply again: a second approval, or worse, a second send |
@@ -160,25 +160,46 @@ POST /notifications/{notificationId}/respond
      - elicitation: `{action: "accept", content}` / `{action: "decline"}` / `{action: "cancel"}`. The Runtime still checks the content against the server's schema and sends `cancel` on a mismatch.
 
    The shape checks reuse the Runtime's models from `apis.shared`, so the two can't drift.
-4. **Claim.** One conditional `UpdateItem` sets `resolution = {state: "applying", at, resumeRunId}` and `readAt`. Its condition is no resolution, or `retry`, or `applying` older than the harness's 14-minute cap, which is a resume lost to a task restart. This is the race guard between the bell, a second tab and, in slice 3, the phone: the loser gets 409.
-5. **Audit.** The start audit row is written with `trigger: "inbox_respond"` and `resumesRunId`. It records the decision kinds, never the answers. That is the first per-action audit G9 asks for: who approved, and when. Fail-closed, as with Run now.
+4. **Claim.** One conditional `UpdateItem` sets `resolution = {state: "applying", at, resumeRunId}` and `readAt`. Its condition is no resolution, or `retry`, or a **stale** `applying`: one claimed more than 16 minutes ago that no worker has started (an invoke that never ran), or one whose worker started more than 16 minutes ago (a worker that died; its timeout is 15). This is the race guard between the bell, a second tab and, in slice 3, the phone: the loser gets 409.
+5. **Grant.** `_resolve_grant` renews the caller's headless grant from the live session, as `POST /runs/now` does. With no session record and no active grant, the claim is released to `retry` and the route answers 409, as Run now does.
+6. **Audit.** The start audit row is written with `trigger: "inbox_respond"` and `resumesRunId`, under the `resumeRunId`. It records the decision kinds, never the answers. That is the first per-action audit G9 asks for: who approved, and when. Fail-closed, as with Run now: a failed write releases the claim to `retry`.
+7. **Invoke.** One `lambda:InvokeFunction` with `InvocationType=Event` on the scheduled-runs worker, in `asyncio.to_thread` so the boto3 call never blocks the event loop. The payload:
 
-**After the 202**, `spawn_run` runs `run_agent_headless` in the background:
+   ```
+   {kind: "inbox_resume", userId, notificationId, resumeRunId, sessionId, scheduleId, responses}
+   ```
 
-- `session_id` is the paused one and `prompt` is `""`, as the SPA's own resume sends.
-- `interrupt_responses` carries the answers.
-- `auth` is `StaticBearerAuth` with the caller's access token.
-- `trigger` is `"inbox_respond"`, with `mark_unread=False`.
+   It carries no bearer. The answers travel in it as they would in the `/invocations` body, and the worker never logs them. If the invoke is refused, the claim is released to `retry`, the audit row ends `error`, and the route answers 503, so the buttons come back at once.
+
+**In the worker.** `lambda_handler` branches on `kind`; a payload without one is a scheduled run, as today. For `inbox_resume`:
+
+1. **Start mark.** One conditional `UpdateItem` on the inbox row sets `resolution.workerStartedAt`. Its condition is `resolution.state = applying`, `resolution.resumeRunId` equals the payload's, and no `workerStartedAt`. This is what makes Lambda's async retries harmless:
+   - **A retry after the first attempt started** (a crash or a timeout) fails the condition. It spends no second model call: it ends the audit row `error` (`error_kind: resume_lost`) if that row is still `started`, and releases the row to `retry`, so the buttons come back without waiting 16 minutes.
+   - **A retry after a throttle** (the first attempt never ran) passes, and runs normally.
+   - **A late event** for a claim that was since retaken names an old `resumeRunId`, fails the condition, and is dropped.
+
+   So the function's retry settings stay as they are, and scheduled runs keep theirs. Turning retries off would also change every scheduled run.
+2. **Resume.** `run_agent_headless` with:
+   - `run_id` = `resumeRunId` and `audit_started=True`, so the runner writes the end audit row onto the row app-api started;
+   - `session_id` the paused one and `prompt` `""`, as the SPA's own resume sends;
+   - `interrupt_responses` the answers;
+   - `auth` = `CognitoRefreshBearerAuth()`, minting from the grant the route just renewed;
+   - `trigger` = `"inbox_respond"`, with `mark_unread=False`.
+3. **Finish.** `finish_resumed_run` (§3.6).
 
 The Runtime does everything else as it does for the conversation's card: snapshot, expiry check, `_validate_resume_interrupts`, lease, and breadcrumb cleanup. No second resume path exists.
 
+**The tracker works unchanged.** `GET /runs/{runId}` reads the `RUN#` audit row in sessions-metadata. app-api writes its start before the 202, and the worker's `run_agent_headless` writes its end through `GovernanceFloor.on_run_end` on the same key; the worker's role already holds read and write on that table. A dropped retry ends the row itself (step 1), so a tracker never waits on a `started` row that nothing will finish.
+
+**Infrastructure.** app-api gains one `lambda:InvokeFunction` statement on the worker's ARN and `SCHEDULED_RUNS_WORKER_FUNCTION_NAME` in its environment, threaded from `ScheduledRunsConstruct.workerLambda` through `PlatformComputeRefs` (the construct already sets the same name on the dispatcher). It is written only while `PROACTIVE_RUNS_ENABLED` is on, like the flag's other wiring. A policy statement and a variable, not a new resource; app-api's environment has no size budget.
+
 ### 3.6 After the resume
 
-One shared function, `apis/shared/scheduled_prompts/resume_run.py` (`finish_resumed_run`), reads the `RunResult`:
+One shared function, `apis/shared/scheduled_prompts/resume_run.py` (`finish_resumed_run`), reads the `RunResult`. Only the worker calls it, so the run's bookkeeping has one home:
 
 | Result | Inbox row | History row | Else |
 |---|---|---|---|
-| `completed` | `answered`, `outcome: finished` | `resolution`, `resumeOutcome: finished`, tokens added | Unread dot. For a watcher: the resumed `report`'s cursors and tracking saved, its keys added to `seen`, the hold cleared, and **no** `agent_item` rows (open question 3) |
+| `completed` | `answered`, `outcome: finished` | `resolution`, `resumeOutcome: finished`, tokens added | Unread dot. For a watcher: the resumed `report`'s cursors and tracking saved, its keys added to `seen`, the hold cleared, and **no** `agent_item` rows (settled question 3) |
 | `needs_user` again | `answered`, `outcome: waiting_again` | `resumeOutcome: waiting_again`, new `expiresAt` | A new needs-user row for the new pause (§3.2 steps 1, 4, 5), pointing at the same run |
 | `error`, `error_kind: resume_unavailable` | `answered_elsewhere` (reason `unknown_interrupt`) or `expired` | Unchanged | The Runtime's backstop for a race the pre-check missed |
 | `error` with HTTP 409 (the lease: the user is mid-turn in that conversation), or a transport error | `retry` | Unchanged | The buttons come back. Nothing was resumed |
@@ -190,7 +211,7 @@ A resume never pauses or resumes the schedule, and never moves `lastRunSessionId
 **Answered in the conversation instead.** That resume goes through `/chat/stream`, and nothing reads its outcome. Two things follow:
 
 1. **The inbox row.** `GET /messages` of a headless session, with the flag on, resolves that session's open needs-user rows as `answered_elsewhere` once the pause is gone. This is one filtered `Query` on the caller's inbox, the way handoffs mark their entries read on open. It runs only for headless sessions and never on the turn path. The worker's hold check (§3.2) independently sees the pause is gone.
-2. **The watcher's state.** A watch run resumed there still has `report` (§3.7), but no worker reads it, so its cursors don't advance. The next run may raise that finding once. This is accepted for this slice (open question 7).
+2. **The watcher's state.** A watch run resumed there still has `report` (§3.7), but no worker reads it, so its cursors don't advance. The next run may raise that finding once. This is accepted for this slice, and measured on dev (settled question 7, §7).
 
 ### 3.7 `report` on a resumed watch run (Runtime)
 
@@ -267,7 +288,8 @@ The bell never shows tool input or answers outside the dialog. The dialog shows 
   - Without §3.7 the resume would always miss, because `report` would be gone from `toolConfig`. It would also lose the cursors.
 - **A held watcher costs nothing.** No model call happens while it waits, and only one extra `META` read per tick while a pause is open.
 - **The inbox stays small.** It holds ids plus at most five 120-character lines per row. Prompt detail is read from the breadcrumb and goes when the pause goes.
-- **No new resources and no IAM change.** app-api already reads and writes the projects table (inbox) and sessions-metadata (`META`, `SCHEDRUN#`, `SCHEDSTATE#`), and Run now already calls the Runtime. The Runtime gains no environment variable.
+- **No new resources; one IAM statement.** app-api gains `lambda:InvokeFunction` on the scheduled-runs worker and that function's name as a variable, written only while the flag is on (§3.5). app-api's environment has no size budget. Everything else is already granted: app-api reads and writes the projects table (inbox) and sessions-metadata (`META`, `RUN#`), and the worker already reads and writes both, mints from the grant and calls the Runtime. The Runtime gains no environment variable.
+- **The respond call adds one async invoke**, off every turn path. A Lambda cold start sits between Approve and the run's first token; nobody watches that stream, and the tracker shows Applying meanwhile.
 
 ## 5. Flag
 
@@ -288,8 +310,8 @@ The SPA's Review action is behind `features.proactiveRuns`.
 
 | PR | Scope | Behaviour while the flag is on |
 |---|---|---|
-| **2.1: outcome and inbox rows** | `needs_user`, `pending_interrupt_ids` and `error_kind` in the harness; Run now's toast and the eval mapping; the worker's §3.2 branch, the hold, and the `SCHEDSTATE#` fields; the two kinds, `Notification.resolution`, the list's lazy expiry and the `unread_count` filter; the bell's descriptions (Open conversation only); this spec | A paused run lands in the bell and in the history as Waiting, and a watcher holds. The answer is still given in the conversation |
-| **2.2: respond** | `GET /notifications/{id}/prompts`, `POST /notifications/{id}/respond` (claim, audit, background resume), `finish_resumed_run`, the history row update, the `GET /messages` resolution; the Runtime's snapshot `run_mode` and `report` rebuild, with a digest test showing the resumed `toolConfig` equals the paused one | Answerable through the API. Tested with moto and a fake Runtime stream for every row of §3.6 |
+| **2.1: outcome and inbox rows** | `needs_user`, `pending_interrupt_ids` and `error_kind` in the harness; Run now's toast and the eval mapping; the worker's §3.2 branch, the hold, and the `SCHEDSTATE#` fields; the two kinds, `Notification.resolution`, the list's lazy expiry and the `unread_count` filter; the bell's descriptions (Open conversation only); this spec | A paused run lands in the bell and in the history as Waiting, and a watcher holds. The answer is still given in the conversation, so opening the row marks it read as any row does: nothing resolves it on an answer until 2.2's `GET /messages` resolution, and without that a wait answered in the conversation would hold the badge up for 7 days. 2.2 moves read state to follow the answer (§3.3) |
+| **2.2: respond** | `GET /notifications/{id}/prompts`; `POST /notifications/{id}/respond` (claim, grant renewal, audit, async invoke); the worker's `inbox_resume` branch (start mark, retry and late-event no-ops, resume) and `finish_resumed_run`; the history row update; the `GET /messages` resolution; app-api's `InvokeFunction` statement and worker-name variable, with a CDK test that both exist only while the flag is on; the Runtime's snapshot `run_mode` and `report` rebuild, with a digest test showing the resumed `toolConfig` equals the paused one | Answerable through the API. Tested with moto and a fake Runtime stream for every row of §3.6, plus a retried event that spends no second call and a dropped one that ends its audit row |
 | **2.3: the web app** | The review dialog, resolution text, expiry countdown, the history labels and summary tail, the schedule banner, the tracker hand-off | Approve, Decline and answer in the bell |
 | **Dev readout** | See §7 | Decides whether slice 3 (push) can build on it unchanged |
 
@@ -304,17 +326,18 @@ On dev with the flag on, using a personal watcher whose prompt drafts a reply th
 3. **A question pause** from a schedule that uses `ask_user_question`, answered and then skipped.
 4. **The race.** Answer in the conversation first, then in the bell (409 "Already answered"). Answer in the bell while that conversation is mid-turn (`retry`).
 5. **Expiry**, forced by editing the snapshot's `expiresAt` on dev. The row reads "Expired", respond answers 410, and the watcher resumes checking.
-6. **Cost.** The resume's `C#` row has `cacheStatus`, with `toolConfigHash` and `systemPromptHash` equal to the paused call's. State the resume's tokens and dollars, and the held watcher's zero model calls.
+6. **Answered in the conversation.** Count, over the dev run, how often a watch run's pause was answered in its conversation and the next run raised the same finding again (settled question 7).
+7. **Cost.** The resume's `C#` row has `cacheStatus`, with `toolConfigHash` and `systemPromptHash` equal to the paused call's. State the resume's tokens and dollars, and the held watcher's zero model calls.
 
-## 8. Open questions for the developer
+## 8. Settled questions
 
-1. **Drain in app-api or in the worker Lambda?** The proposal is app-api's background task, as Run now does: no new IAM, and the user is present. The alternative is async-invoking the scheduled-runs worker with a resume payload, so all run bookkeeping lives in one process. That survives an app-api deploy mid-resume, at the cost of an `InvokeFunction` grant and a function-name variable on app-api. A resume lost to a restart today ends `applying` and becomes retryable after 14 minutes (§3.5).
-2. **The watcher's hold.** Is holding (no checks for up to 7 days if the user ignores it) right? The alternatives:
-   - keep running with an `awaitingYou` block in `<watch_state>` and trust the model not to redo the work. The quiet watcher already declined to trust the model with dedupe;
-   - give watch runs a shorter pause window. The TTL today is per session kind, not per run.
-3. **A resumed watch run raises no `agent_item` rows.** The user just acted on that run, and anything else it found is in its conversation, marked unread. Is that enough, or should keys new since the pause still notify?
-4. **Run now.** Should a Run now that pauses also raise a bell row? The proposal is no for this slice: the user started it and gets the toast. It is cheap to add later, because the row needs no schedule.
-5. **Project schedules** stay as today until gaps open question 4 settles who receives a project run's inbox items.
-6. **One resume per pause.** Every prompt in a multi-prompt pause must be answered together. Is that acceptable? Partial answers would need a queue for answers that arrive while another resume holds the lease.
-7. **Answers given in the conversation itself.** A resumed watch run's `report` there reaches no worker, so the next run may raise that finding once. Accept for this slice and measure on dev, or have the chat proxy hand a headless session's resume outcome to `finish_resumed_run`?
-8. **Model-written text on the row.** A question's text or a sign-in reason, at most 120 characters, is display text in the user's own inbox, under the `agent_item` title's standard. Confirm. Whether it may go into a push payload is gaps open question 6.
+The developer answered all eight on 2026-11-25. Only the first changed the design.
+
+1. **Drain in the worker Lambda, not app-api.** It is the better experience: a resume lost to an app-api deploy or crash would leave the item "applying" for up to 14 minutes after the user tapped Approve, and in slice 3 a phone action has nobody watching a tab. It also keeps all run bookkeeping (recording the run, advancing cursors) in the worker, so `finish_resumed_run` has one home. The respond route claims, audits and async-invokes the worker (§3.5); app-api gains one `InvokeFunction` statement and the worker's name (§4); a retried event never spends a second model call (§3.5, the start mark); and `GET /runs/{runId}` works unchanged, because the worker ends the audit row app-api started. **Follow-on:** the resume runs on the headless grant, renewed by the respond call from the caller's live session, rather than on the caller's access token, which an async event should not carry (§2).
+2. **Hold, as proposed.** A watcher runs no checks while its run waits, up to the pause TTL.
+3. **After a resume, no `agent_item` rows.** The unread conversation is enough.
+4. **Run now: toast only, no bell row.**
+5. **Project schedules stay out of slice 2.**
+6. **One resume per pause.** Every prompt in a pause is answered together.
+7. **Answers given in the conversation:** accept the one-time duplicate for this slice, and measure on dev how often it happens (§7).
+8. **Model-written text on the bell row,** at most 120 characters: confirmed.
