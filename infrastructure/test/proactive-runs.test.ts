@@ -5,7 +5,9 @@
  *     a cdk.json context;
  *   - app-api and both scheduled-runs Lambdas get PROACTIVE_RUNS_ENABLED;
  *   - the AgentCore Runtime gets it only while on (PR 1.2), so the default
- *     spends none of the V2 environment budget.
+ *     spends none of the V2 environment budget;
+ *   - app-api can async-invoke the scheduled-runs worker, and knows its name,
+ *     only while on (answer-from-inbox PR 2.2, §3.5).
  */
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
@@ -145,5 +147,55 @@ describe('proactive runs wiring', () => {
   it('writes the AgentCore Runtime copy only while on', () => {
     expect(runtimeEnv(off)).not.toHaveProperty('PROACTIVE_RUNS_ENABLED');
     expect(runtimeEnv(on).PROACTIVE_RUNS_ENABLED).toBe('true');
+  });
+});
+
+/**
+ * Whether app-api's task role may invoke the scheduled-runs worker, and where the statement is:
+ * 'invokePolicy' for app-api's worker-invoke managed policy, 'elsewhere' for any other policy on
+ * the role (its overflow policies, which CDK repacks), or false.
+ */
+function appApiInvokesWorker(template: Template): 'invokePolicy' | 'elsewhere' | false {
+  const workerIds = Object.keys(template.findResources('AWS::Lambda::Function')).filter((id) =>
+    id.includes('ScheduledRunsWorkerLambda'),
+  );
+  expect(workerIds).toHaveLength(1);
+  const appApiRoles = Object.entries(template.findResources('AWS::ECS::TaskDefinition'))
+    .filter(([id]) => id.includes('AppApi'))
+    .map(([, td]) => (td as any).Properties.TaskRoleArn?.['Fn::GetAtt']?.[0])
+    .filter(Boolean);
+  expect(appApiRoles.length).toBeGreaterThan(0);
+  let found = false as 'invokePolicy' | 'elsewhere' | false;
+  for (const type of ['AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy']) {
+    for (const [id, policy] of Object.entries(template.findResources(type)) as [string, any][]) {
+      const roles: any[] = policy.Properties.Roles ?? [];
+      if (!roles.some((r) => appApiRoles.includes(r?.Ref))) continue;
+      const invokes = (policy.Properties.PolicyDocument.Statement ?? []).some((st: any) => {
+        const actions: string[] = [].concat(st.Action);
+        return actions.includes('lambda:InvokeFunction') && JSON.stringify(st.Resource).includes(workerIds[0]);
+      });
+      if (invokes) found = id.includes('AppApiMemoryMaintenanceInvokePolicy') && found !== 'elsewhere' ? 'invokePolicy' : 'elsewhere';
+    }
+  }
+  return found;
+}
+
+describe('answering from the inbox', () => {
+  let off: Template;
+  let on: Template;
+  beforeAll(() => {
+    off = synth(false);
+    on = synth(true);
+  });
+
+  it('lets app-api invoke the worker only while on', () => {
+    expect(appApiInvokesWorker(off)).toBe(false);
+    // In app-api's worker-invoke managed policy, never the role's repacked overflow policies.
+    expect(appApiInvokesWorker(on)).toBe('invokePolicy');
+  });
+
+  it("gives app-api the worker's name only while on", () => {
+    expect(appApiEnv(off)).not.toHaveProperty('SCHEDULED_RUNS_WORKER_FUNCTION_NAME');
+    expect(appApiEnv(on).SCHEDULED_RUNS_WORKER_FUNCTION_NAME).toBeDefined();
   });
 });

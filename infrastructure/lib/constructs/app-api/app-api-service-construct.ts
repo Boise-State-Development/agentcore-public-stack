@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecr_assets from 'aws-cdk-lib/aws-ecr-assets';
@@ -112,6 +113,12 @@ export class AppApiServiceConstruct extends Construct {
    * app-api's own code, environment and role. */
   public readonly taskDefinition: ecs.FargateTaskDefinition;
   public readonly securityGroup: ec2.SecurityGroup;
+  /**
+   * The managed policy holding app-api's async invokes of worker Lambdas. A worker built
+   * after app-api adds its statement here, never to the task role, whose overflow policies
+   * CDK packs by an estimate (see app-api-iam-grants.ts).
+   */
+  public readonly workerInvokePolicy: iam.ManagedPolicy;
 
   constructor(scope: Construct, id: string, props: AppApiServiceConstructProps) {
     super(scope, id);
@@ -285,7 +292,7 @@ export class AppApiServiceConstruct extends Construct {
     ecrRepository.grantPull(taskDefinition.obtainExecutionRole());
 
     // ── IAM grants — refs pass-through replaces 30+ string props ──
-    grantAppApiPermissions({
+    const grants = grantAppApiPermissions({
       scope: this,
       config,
       taskRole: taskDefinition.taskRole,
@@ -294,6 +301,7 @@ export class AppApiServiceConstruct extends Construct {
       agentCoreRuntimeLogGroupName: props.agentCoreRuntimeLogGroupName,
       sagemakerExecutionRoleArn: props.sagemakerExecutionRoleArn,
     });
+    this.workerInvokePolicy = grants.workerInvokePolicy;
 
     // ── Target group ──
     const targetGroup = this.targetGroup = new elbv2.ApplicationTargetGroup(this, 'AppApiTargetGroup', {

@@ -160,13 +160,18 @@ class RelayedPrompt(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     interrupt_id: str = Field(..., alias="interruptId")
-    kind: Literal["oauth", "tool_approval", "user_question", "browser_login"]
+    # ``mcp_elicitation`` only for a reader that asks for it (the inbox, answer-from-inbox §3.4):
+    # the handoff relay's own kinds leave it out.
+    kind: Literal["oauth", "tool_approval", "user_question", "browser_login", "mcp_elicitation"]
     provider_id: Optional[str] = Field(None, alias="providerId")
     tool_use_id: Optional[str] = Field(None, alias="toolUseId")
     tool_name: Optional[str] = Field(None, alias="toolName")
     tool_input: Optional[str] = Field(None, alias="toolInput", description="JSON-encoded, as on the breadcrumb")
     message: Optional[str] = None
     questions: Optional[str] = Field(None, description="JSON-encoded, as on the breadcrumb")
+    elicitation: Optional[str] = Field(
+        None, description="(mcp_elicitation) JSON-encoded form, as on the breadcrumb"
+    )
 
     @classmethod
     def from_interrupt(cls, interrupt: PendingInterrupt) -> "RelayedPrompt":
@@ -179,6 +184,7 @@ class RelayedPrompt(BaseModel):
             tool_input=interrupt.tool_input,
             message=interrupt.message,
             questions=interrupt.questions,
+            elicitation=interrupt.elicitation,
         )
 
 

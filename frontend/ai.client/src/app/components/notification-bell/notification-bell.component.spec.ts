@@ -289,17 +289,48 @@ describe('NotificationBellComponent', () => {
     expect(sidenav.close).toHaveBeenCalled();
   });
 
+  const pausedRun = (extra: Partial<AppNotification> = {}) =>
+    notif({
+      kind: 'agent_needs_approval', projectId: null, projectName: null, actorEmail: null,
+      payload: {
+        scheduleId: 'sch-1', runId: 'run-1', sessionId: 'headless-7', label: 'Watcher', prompts: [],
+        expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      },
+      ...extra,
+    });
+
   it('a paused run opens its conversation, where its card is answered', () => {
     const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
     const { component } = render();
-    const n = notif({
-      kind: 'agent_needs_approval', projectId: null, projectName: null, actorEmail: null,
-      payload: { scheduleId: 'sch-1', runId: 'run-1', sessionId: 'headless-7', label: 'Watcher', prompts: [] },
-    });
+    const n = pausedRun();
     component.open(n);
-    expect(service.markRead).toHaveBeenCalledWith(n);
     expect(navigate).toHaveBeenLastCalledWith(['/s', 'headless-7']);
     expect(sidenav.close).toHaveBeenCalled();
+  });
+
+  it('opening a wait leaves it unread with watchers on: it is read once answered or expired', () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, proactiveRuns: true } });
+    vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(pausedRun());
+    component.open(pausedRun({ resolution: { state: 'retry', at: '2026-11-26T00:00:00Z' } }));
+    expect(service.markRead).not.toHaveBeenCalled();
+
+    const settled = pausedRun({ resolution: { state: 'answered_elsewhere', at: '2026-11-26T00:00:00Z' } });
+    component.open(settled);
+    expect(service.markRead).toHaveBeenCalledWith(settled);
+    const lapsed = pausedRun({ payload: { sessionId: 'headless-7', prompts: [], expiresAt: '2026-01-01T00:00:00Z' } });
+    component.open(lapsed);
+    expect(service.markRead).toHaveBeenCalledWith(lapsed);
+  });
+
+  it('opening a wait marks it read with watchers off, since nothing settles it', () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, proactiveRuns: false } });
+    vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    const n = pausedRun();
+    component.open(n);
+    expect(service.markRead).toHaveBeenCalledWith(n);
   });
 
   it('a finding with no conversation opens its schedule’s page with watchers on, else the list', () => {

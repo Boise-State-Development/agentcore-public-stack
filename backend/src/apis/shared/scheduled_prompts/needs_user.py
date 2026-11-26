@@ -35,9 +35,16 @@ MAX_HEADLINE_CHARS = 120
 #: Breadcrumb kinds a scheduled run can pause on for the user. ``oauth`` has its
 #: own status (``oauth_required``) and ``client_tool`` belongs to the terminal.
 USER_PROMPT_KINDS = frozenset({"tool_approval", "user_question", "mcp_elicitation", "browser_login"})
+#: What the inbox reads as a row's pause: the user's prompts, plus an OAuth consent, which a
+#: resume can run into (§3.6) and which only the conversation can answer.
+INBOX_PROMPT_KINDS = USER_PROMPT_KINDS | {"oauth"}
 #: Kinds the inbox's review dialog can answer. A browser sign-in is that
 #: conversation's live view, so its row offers Open conversation only.
 ANSWERABLE_KINDS = frozenset({"tool_approval", "user_question", "mcp_elicitation"})
+
+#: The scheduled-runs worker's event for a resume answered from the inbox (§3.5). An event
+#: without a ``kind`` is a scheduled run.
+INBOX_RESUME_KIND = "inbox_resume"
 
 NeedsUserKind = Literal["agent_needs_approval", "agent_needs_input"]
 NEEDS_USER_KINDS: Tuple[NeedsUserKind, ...] = ("agent_needs_approval", "agent_needs_input")
@@ -152,6 +159,12 @@ def inbox_prompt(interrupt: PendingInterrupt) -> Dict[str, Any]:
         headline = clip_line(interrupt.reason, MAX_HEADLINE_CHARS)
         if headline:
             entry["headline"] = headline
+    elif interrupt.kind == "oauth":
+        # Only a resume writes one (§3.6): the run it continued needs a connection first.
+        provider = clip_line(interrupt.provider_id, MAX_NAME_CHARS)
+        if provider:
+            entry["serverName"] = provider
+            entry["headline"] = clip_line(f"Connect {provider} to continue", MAX_HEADLINE_CHARS)
     return entry
 
 

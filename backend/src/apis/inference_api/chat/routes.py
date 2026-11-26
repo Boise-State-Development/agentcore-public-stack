@@ -4949,6 +4949,44 @@ def _record_client_tools_on(agent, input_data: InvocationRequest) -> None:
         snapshot["client_tools"] = json.dumps([spec.model_dump(by_alias=True) for spec in input_data.client_tools])
 
 
+def _record_run_mode_on(agent, input_data: InvocationRequest) -> None:
+    """Mark a watch run's agent so a pause snapshots ``run_mode`` (answer-from-inbox §3.7)."""
+    snapshot = getattr(agent, "_construction_snapshot", None)
+    if isinstance(snapshot, dict) and _is_watch_run(input_data):
+        snapshot["run_mode"] = "watch"
+
+
+def _watch_report_from_snapshot(snapshot, session_id: str) -> list:
+    """A paused watch run's ``report``, rebuilt for its resume (answer-from-inbox §3.7).
+
+    Only when the snapshot says the paused turn was a watch run, the session is headless and the
+    Runtime's ``PROACTIVE_RUNS_ENABLED`` is on: the conditions ``_is_watch_run`` checks on the
+    request, read from the snapshot because no resume (the inbox's or the conversation's) sends
+    ``run_mode``. No IO: the snapshot is already loaded.
+    """
+    if getattr(snapshot, "run_mode", None) != "watch":
+        return []
+    from apis.shared.feature_flags import proactive_runs_enabled
+    from apis.shared.scheduled_prompts.models import is_headless_session
+
+    if not (is_headless_session(session_id) and proactive_runs_enabled()):
+        return []
+    from agents.builtin_tools.watch_report_tool import make_watch_report_tool
+
+    return [make_watch_report_tool()]
+
+
+def _resume_extra_tools(snapshot, session_id: str) -> Optional[list]:
+    """The injected tools a resume rebuilds, in the slots the paused turn had them.
+
+    Client tools, then a watch run's ``report``, which ``_build_turn_tools`` appends after every
+    other family. A headless watch run carries no client tools, so the resumed ``toolConfig`` is
+    byte-identical to the paused one. None when there are none, as before.
+    """
+    tools = (_client_tools_from_snapshot(snapshot) or []) + _watch_report_from_snapshot(snapshot, session_id)
+    return tools or None
+
+
 def _client_tools_digest(input_data: InvocationRequest) -> str:
     if not input_data.client_tools:
         return ""
@@ -6920,13 +6958,15 @@ async def _run_invocation(
                 is_resume=True,
                 # A key dimension for non-web surfaces; replay the paused turn's.
                 client_surface=snapshot.client_surface or input_data.client_surface,
-                # A watch run's `report` is not rebuilt here (quiet-watcher §3.3): it ends by the worker's "no report" rules.
                 # Client-executed tools are the one injected family a resume
                 # MUST rebuild: Strands re-enters the paused tool body with the
                 # client's response, so the tool has to exist on the rebuilt
                 # agent or the resume fails. The specs ride the snapshot; the
                 # digest is replayed so the key lands on the paused agent.
-                extra_tools=_client_tools_from_snapshot(snapshot),
+                # A watch run's `report` is rebuilt too (answer-from-inbox §3.7),
+                # in its slot after every other family, so the resumed toolConfig
+                # is the paused one and the run can still save its cursors.
+                extra_tools=_resume_extra_tools(snapshot, input_data.session_id),
                 client_tools_digest=_client_tools_digest_from_snapshot(snapshot),
                 # The original turn's key carried what the session had that
                 # document_read returns; the gate is monotonic, so re-asking
@@ -7139,6 +7179,8 @@ async def _run_invocation(
                     # `_client_tools_from_snapshot`). Same specs for a cache hit
                     # by construction — the digest is in the key.
                     _record_client_tools_on(built_agent, input_data)
+                # A watch run's agent is never cached, so this marks only its own.
+                _record_run_mode_on(built_agent, input_data)
                 return built_agent
 
             # A handoff brief stops here, with the agent a turn would build: the same phases above,

@@ -338,6 +338,7 @@ async def run_agent_headless(
                 json=payload,
             ) as response:
                 if response.status_code >= 400:
+                    result.http_status = response.status_code
                     body = await response.aread()
                     result.error = (
                         f"HTTP {response.status_code}: "
@@ -390,6 +391,7 @@ async def run_agent_headless(
     if not result.error and acc.error:
         result.error_code = acc.error_code
         result.error_kind = acc.error_kind
+        result.error_reason = acc.error_reason
     result.error = result.error or acc.error
     if result.status != "timeout":
         if result.error:

@@ -80,6 +80,7 @@ class RunAuditRecorder:
         trigger: str,
         prompt: str,
         title: Optional[str] = None,
+        extra: Optional[dict[str, Any]] = None,
     ) -> None:
         item: dict[str, Any] = {
             "PK": f"USER#{user_id}",
@@ -95,7 +96,34 @@ class RunAuditRecorder:
         }
         if title:
             item["title"] = title
+        # Ids and kinds only (an inbox answer's ``resumesRunId`` and ``decisions``), never
+        # content. They never replace a key the row is built from.
+        for key, value in (extra or {}).items():
+            item.setdefault(key, value)
         self._table().put_item(Item=item)
+
+    def end_if_started(self, *, user_id: str, run_id: str, status: str, error: str) -> bool:
+        """End a run row that nothing finished, if it still reads ``started``.
+
+        For a resume whose worker died (answer-from-inbox §3.5): a retried event that
+        finds the start mark ends the row here, so a tracker polling ``GET /runs/{id}``
+        stops at once. Never overwrites a row the run itself ended.
+        """
+        from botocore.exceptions import ClientError
+
+        try:
+            self._table().update_item(
+                Key={"PK": f"USER#{user_id}", "SK": f"RUN#{run_id}"},
+                UpdateExpression="SET #s = :s, errorDetail = :e, finishedAt = :f",
+                ConditionExpression="#s = :started",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":s": status, ":e": error[:1000], ":f": _now_iso(), ":started": "started"},
+            )
+            return True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return False
+            raise
 
     def record_end(self, *, result: RunResult) -> None:
         self._table().update_item(
@@ -157,9 +185,12 @@ class GovernanceFloor:
         trigger: str,
         prompt: str,
         title: Optional[str] = None,
+        extra: Optional[dict[str, Any]] = None,
     ) -> None:
         """AUDIT — implemented. Failure here fails the run (a run that can't
-        be audited must not execute unattended)."""
+        be audited must not execute unattended). ``extra`` adds ids and
+        kinds to the row, never content."""
+        kwargs: dict[str, Any] = {"extra": extra} if extra else {}
         self._audit.record_start(
             run_id=run_id,
             user_id=user_id,
@@ -167,6 +198,7 @@ class GovernanceFloor:
             trigger=trigger,
             prompt=prompt,
             title=title,
+            **kwargs,
         )
 
     async def check_input(self, *, prompt: str, user_id: str) -> None:

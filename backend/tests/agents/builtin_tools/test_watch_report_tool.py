@@ -153,3 +153,77 @@ def test_tool_batches_are_drained_but_not_summarized_on_a_watch_run(monkeypatch)
 
     assert drained == [True]
     assert tasks == []
+
+
+# ── A paused watch run's resume (answer-from-inbox §3.7) ────────────────────
+
+
+def _snapshot(**fields):
+    from apis.shared.sessions.models import PausedTurnSnapshot
+
+    return PausedTurnSnapshot(captured_at="2026-11-26T00:00:00Z", expires_at="2026-12-03T00:00:00Z", **fields)
+
+
+def _digest(tools) -> str:
+    specs = [t.tool_spec for t in tools or []]
+    return hashlib.sha256(json.dumps(specs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def test_a_watch_runs_agent_records_its_run_mode(on):
+    agent = SimpleNamespace(_construction_snapshot={})
+    routes._record_run_mode_on(agent, InvocationRequest(session_id=HEADLESS, run_mode="watch"))
+    assert agent._construction_snapshot == {"run_mode": "watch"}
+
+    other = SimpleNamespace(_construction_snapshot={})
+    routes._record_run_mode_on(other, InvocationRequest(session_id=HEADLESS))
+    routes._record_run_mode_on(other, InvocationRequest(session_id="web-session", run_mode="watch"))
+    assert other._construction_snapshot == {}
+
+
+def test_the_snapshot_round_trips_run_mode():
+    from apis.shared.sessions.models import PausedTurnSnapshot
+
+    dumped = _snapshot(run_mode="watch").model_dump(by_alias=True, exclude_none=True)
+    assert dumped["runMode"] == "watch"
+    assert PausedTurnSnapshot.model_validate(dumped).run_mode == "watch"
+    assert "runMode" not in _snapshot().model_dump(by_alias=True, exclude_none=True)
+
+
+def test_the_resumed_tools_are_the_paused_turns(on):
+    """The resume rebuilds ``report`` in its slot, so the resumed ``toolConfig`` is byte-identical
+    to the paused one: the prefix reads from cache, and the run can still save its cursors."""
+    paused = routes._build_watch_report_tools(InvocationRequest(session_id=HEADLESS, run_mode="watch"))
+    resumed = routes._resume_extra_tools(_snapshot(run_mode="watch"), HEADLESS)
+    assert [t.tool_name for t in resumed] == ["report"]
+    assert _digest(resumed) == _digest(paused)
+
+
+def test_no_report_on_any_other_resume(on, monkeypatch):
+    assert routes._resume_extra_tools(_snapshot(), HEADLESS) is None
+    assert routes._resume_extra_tools(_snapshot(run_mode="watch"), "web-session") is None
+    monkeypatch.setenv("PROACTIVE_RUNS_ENABLED", "false")
+    assert routes._resume_extra_tools(_snapshot(run_mode="watch"), HEADLESS) is None
+
+
+def test_client_tools_keep_their_slot_before_report(on):
+    from apis.shared.client_tools import ClientToolSpec
+
+    spec = ClientToolSpec.model_validate(
+        {"name": "shell", "description": "Run a command", "inputSchema": {"type": "object", "properties": {}}}
+    )
+    snapshot = _snapshot(run_mode="watch", client_tools=json.dumps([spec.model_dump(by_alias=True)]))
+    assert [t.tool_name for t in routes._resume_extra_tools(snapshot, HEADLESS)] == ["local_shell", "report"]
+
+
+@pytest.mark.asyncio
+async def test_the_coordinator_persists_run_mode():
+    from unittest.mock import AsyncMock
+
+    from agents.main_agent.streaming.stream_coordinator import StreamCoordinator
+
+    agent = SimpleNamespace(_interrupt_state=SimpleNamespace(activated=True))
+    for construction, expected in (({"enabled_tools": [], "run_mode": "watch"}, "watch"), ({"enabled_tools": []}, None)):
+        wrapper = SimpleNamespace(_construction_snapshot=construction)
+        with patch("apis.shared.sessions.metadata.set_paused_turn", new=AsyncMock()) as write:
+            await StreamCoordinator()._persist_paused_turn_snapshot(agent, HEADLESS, "user-1", wrapper)
+        assert write.await_args.args[2].run_mode == expected

@@ -4,6 +4,7 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as kms from 'aws-cdk-lib/aws-kms';
@@ -1163,6 +1164,26 @@ export class PlatformStack extends cdk.Stack {
       inferenceApiRuntimeEndpointUrl: inferenceApi.runtimeEndpointUrl,
       cognitoRegion: this._config.awsRegion,
     });
+
+    // Answering a scheduled run's pause from the inbox (docs/specs/answer-from-inbox.md §3.5):
+    // app-api's POST /notifications/{id}/respond async-invokes the worker with the resume. One
+    // policy statement and one variable, written only while proactive runs are on.
+    // The statement goes in app-api's worker-invoke managed policy, not on the task role, whose
+    // overflow policies CDK repacks (app-api-iam-grants.ts).
+    if (this._config.proactiveRuns.enabled) {
+      appApi.workerInvokePolicy.addStatements(
+        new iam.PolicyStatement({
+          sid: 'ScheduledRunsWorkerInvoke',
+          effect: iam.Effect.ALLOW,
+          actions: ['lambda:InvokeFunction'],
+          resources: [scheduledRuns.workerLambda.functionArn],
+        }),
+      );
+      appApi.taskDefinition.defaultContainer?.addEnvironment(
+        'SCHEDULED_RUNS_WORKER_FUNCTION_NAME',
+        scheduledRuns.workerLambda.functionName,
+      );
+    }
 
     new LambdaAlarmsConstruct(this, 'LambdaAlarms', {
       config: this._config,

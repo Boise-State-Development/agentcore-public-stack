@@ -103,6 +103,9 @@ class InvocationStreamAccumulator:
     client_tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     pending_interrupt_ids: List[str] = field(default_factory=list)
     error_kind: Optional[str] = None
+    #: The ``stream_error``'s ``metadata.reason`` (a refused resume's: ``missing``,
+    #: ``expired`` or ``unknown_interrupt``).
+    error_reason: Optional[str] = None
     usage: Dict[str, Any] = field(default_factory=dict)
     events_seen: Dict[str, int] = field(default_factory=dict)
     #: From the turn's final ``metadata`` frame (the one carrying
@@ -290,6 +293,9 @@ class InvocationStreamAccumulator:
             kind = metadata.get("error_kind") if isinstance(metadata, dict) else None
             if isinstance(kind, str) and kind:
                 self.error_kind = kind
+            reason = metadata.get("reason") if isinstance(metadata, dict) else None
+            if isinstance(reason, str) and reason:
+                self.error_reason = reason
         elif name == "quota_exceeded":
             self.quota_exceeded = True
         elif name == "watch_probe":

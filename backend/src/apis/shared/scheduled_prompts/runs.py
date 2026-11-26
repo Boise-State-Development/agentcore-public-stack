@@ -68,6 +68,15 @@ class ScheduleRun(BaseModel):
     #: A ``needs_user`` run's pause: when it expires and how many prompts it holds.
     expires_at: Optional[str] = Field(None, alias="expiresAt")
     prompt_count: int = Field(0, alias="promptCount")
+    #: How a ``needs_user`` run's pause was answered from the inbox (answer-from-inbox §3.8):
+    #: ``approved``, ``declined``, ``answered`` or ``skipped``, or ``answered_elsewhere`` when
+    #: the Runtime found it already answered. Unset while it waits, and after an answer given
+    #: in the conversation, which nothing reads.
+    resolution: Optional[str] = None
+    #: What the resume did: ``finished``, ``waiting_again`` or ``failed``.
+    resume_outcome: Optional[str] = Field(None, alias="resumeOutcome")
+    resume_run_id: Optional[str] = Field(None, alias="resumeRunId")
+    resumed_at: Optional[str] = Field(None, alias="resumedAt")
 
     @field_validator(
         "item_count", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "prompt_count",
@@ -163,3 +172,65 @@ def list_schedule_runs(user_id: str, schedule_id: str, limit: int = DEFAULT_RUNS
         except Exception as e:
             logger.warning(f"Failed to parse schedule run item: {e}")
     return runs
+
+
+def record_schedule_run_resume(
+    user_id: str,
+    schedule_id: str,
+    *,
+    run_finished_at: str,
+    run_id: str,
+    resolution: str,
+    resume_run_id: str,
+    resumed_at: str,
+    resume_outcome: Optional[str] = None,
+    usage: Optional[Dict[str, Any]] = None,
+    expires_at: Optional[str] = None,
+    prompt_count: Optional[int] = None,
+) -> bool:
+    """Record an inbox answer on the paused run's own row (answer-from-inbox §3.8).
+
+    The resume's tokens are **added**, so a run's cost stays one row. A resume that waits on the
+    user again sets the new pause's ``expiresAt`` and ``promptCount``; one that did not clears
+    ``expiresAt``, so the row never reads as expired after it was answered. Writes only over a
+    row that exists (one past its 30-day TTL is left gone). Never raises; False when nothing
+    was written.
+    """
+    counts = _token_counts(usage)
+    names: Dict[str, str] = {"#res": "resolution"}
+    values: Dict[str, Any] = {":res": resolution, ":rid": resume_run_id, ":at": resumed_at}
+    sets = ["#res = :res", "resumeRunId = :rid", "resumedAt = :at"]
+    removes: List[str] = []
+    if resume_outcome:
+        sets.append("resumeOutcome = :out")
+        values[":out"] = resume_outcome
+    if expires_at:
+        sets.append("expiresAt = :exp")
+        values[":exp"] = expires_at
+    else:
+        removes.append("expiresAt")
+    if prompt_count is not None:
+        sets.append("promptCount = :pc")
+        values[":pc"] = int(prompt_count)
+    adds = []
+    for name, count in counts.items():
+        if count:
+            adds.append(f"{name} :{name}")
+            values[f":{name}"] = count
+    update = "SET " + ", ".join(sets)
+    if adds:
+        update += " ADD " + ", ".join(adds)
+    if removes:
+        update += " REMOVE " + ", ".join(removes)
+    try:
+        _service._get_table().update_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"{_run_prefix(schedule_id)}{run_finished_at}#{run_id}"},
+            UpdateExpression=update,
+            ConditionExpression="attribute_exists(PK)",
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except Exception:
+        logger.warning("Could not record the answer on run %s of schedule %s", run_id, schedule_id, exc_info=True)
+        return False

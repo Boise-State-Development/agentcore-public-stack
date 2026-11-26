@@ -40,12 +40,16 @@ MetaLoader = Callable[[str, str], Awaitable[SessionMetaSnapshot]]
 _RELAYED_KINDS = frozenset({"oauth", "tool_approval", "user_question", "browser_login"})
 
 
-def relayed_prompts_from_row(row: Optional[Dict[str, Any]]) -> List[RelayedPrompt]:
+def relayed_prompts_from_row(
+    row: Optional[Dict[str, Any]], kinds: frozenset = _RELAYED_KINDS
+) -> List[RelayedPrompt]:
     """The prompts a target's ``META`` row is waiting on, as the source relays them.
 
     OAuth consents are deduplicated by ``providerId`` (the SPA's own rule for ``oauth_required``),
     since one connection answers every interrupt waiting on that provider. A browser sign-in
     carries only its interrupt id: the live view is the target's screen, so the relay links there.
+    ``kinds`` is which breadcrumbs count; the inbox (answer-from-inbox §3.4) asks for its own,
+    by the same rule.
     """
     if not row:
         return []
@@ -64,7 +68,7 @@ def relayed_prompts_from_row(row: Optional[Dict[str, Any]]) -> List[RelayedPromp
     prompts: List[RelayedPrompt] = []
     providers: set[str] = set()
     for interrupt in interrupts:
-        if interrupt.kind not in _RELAYED_KINDS:
+        if interrupt.kind not in kinds:
             continue
         if interrupt.kind == "oauth":
             if not interrupt.provider_id or interrupt.provider_id in providers:

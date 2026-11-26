@@ -196,6 +196,7 @@ def save_watch_state(
     *,
     expected_version: Optional[int],
     triage: Optional[FullRunTriage] = None,
+    clear_pause: bool = False,
 ) -> bool:
     """Write ``state`` if nobody else has since the caller read it. Returns whether it wrote.
 
@@ -208,6 +209,9 @@ def save_watch_state(
     same conditional write (triage spec §3.4): each field set, or removed when
     the run left none (a run with no probe removes the probe, its version and
     its run id). ``None`` leaves those attributes as they are.
+
+    ``clear_pause`` removes the hold in the same write: a run resumed from the inbox
+    (answer-from-inbox §3.6) saves its cursors and ends the wait together.
     """
     from botocore.exceptions import ClientError
 
@@ -250,6 +254,9 @@ def save_watch_state(
             else:
                 set_parts.append(f"{attribute} = :{attribute}")
                 values[f":{attribute}"] = value
+
+    if clear_pause:
+        remove_parts += ["pausedSessionId", "pausedUntil"]
 
     if expected_version is None:
         condition = "attribute_not_exists(PK)"

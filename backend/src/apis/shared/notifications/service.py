@@ -283,6 +283,132 @@ class NotificationService:
             resolved += 1
         return resolved
 
+    def get(self, email: str, notification_id: str) -> Optional[Notification]:
+        """One of the caller's notifications, or ``None``. Keyed on the caller's inbox, so
+        another user's id reads as missing."""
+        if not self.enabled or not _normalize(email) or not notification_id:
+            return None
+        item = self.table.get_item(
+            Key={"PK": _pk(email), "SK": f"{NOTIF_SK_PREFIX}{notification_id}"}, ConsistentRead=True
+        ).get("Item")
+        return self._from_item(item) if item else None
+
+    def claim_resolution(
+        self,
+        email: str,
+        notification_id: str,
+        *,
+        resume_run_id: str,
+        decision: str,
+        stale_before: str,
+    ) -> Optional[NotificationResolution]:
+        """Claim a needs-user row for one resume: ``applying``, and read (answer-from-inbox §3.5).
+
+        One conditional write, the race guard between the bell, a second tab and the phone. It
+        wins over no resolution, a ``retry``, or a stale ``applying``: claimed before
+        ``stale_before`` with no worker started (an invoke that never ran), or started before it
+        (a worker that died; its timeout is shorter). Returns the claim, or ``None`` if it lost.
+        """
+        from botocore.exceptions import ClientError
+
+        at = utc_now_iso()
+        resolution = NotificationResolution(state="applying", decision=decision, at=at, resume_run_id=resume_run_id)
+        try:
+            self.table.update_item(
+                Key={"PK": _pk(email), "SK": f"{NOTIF_SK_PREFIX}{notification_id}"},
+                UpdateExpression="SET #r = :r, readAt = if_not_exists(readAt, :at)",
+                ConditionExpression=(
+                    "attribute_exists(PK) AND (attribute_not_exists(#r) OR #r.#s = :retry OR "
+                    "(#r.#s = :applying AND ((attribute_not_exists(#r.#w) AND #r.#at < :stale) "
+                    "OR #r.#w < :stale)))"
+                ),
+                ExpressionAttributeNames={"#r": "resolution", "#s": "state", "#w": "workerStartedAt", "#at": "at"},
+                ExpressionAttributeValues={
+                    ":r": resolution.model_dump(by_alias=True, exclude_none=True),
+                    ":at": at,
+                    ":retry": "retry",
+                    ":applying": "applying",
+                    ":stale": stale_before,
+                },
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return None
+            raise
+        return resolution
+
+    def mark_worker_started(self, email: str, notification_id: str, *, resume_run_id: str) -> bool:
+        """The worker's start mark on a claim (§3.5): only on the ``applying`` claim that names
+        ``resume_run_id`` and has no mark yet. False for a retried or late event."""
+        from botocore.exceptions import ClientError
+
+        try:
+            self.table.update_item(
+                Key={"PK": _pk(email), "SK": f"{NOTIF_SK_PREFIX}{notification_id}"},
+                UpdateExpression="SET #r.#w = :now",
+                ConditionExpression=(
+                    "#r.#s = :applying AND #r.#rid = :rid AND attribute_not_exists(#r.#w)"
+                ),
+                ExpressionAttributeNames={
+                    "#r": "resolution", "#s": "state", "#w": "workerStartedAt", "#rid": "resumeRunId",
+                },
+                ExpressionAttributeValues={":now": utc_now_iso(), ":applying": "applying", ":rid": resume_run_id},
+            )
+            return True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return False
+            raise
+
+    def set_resolution(
+        self,
+        email: str,
+        notification_id: str,
+        resolution: NotificationResolution,
+        *,
+        claimed_by: Optional[str] = None,
+        only_if_unresolved: bool = False,
+    ) -> bool:
+        """Settle a needs-user row. Never raises; False when the condition failed or the write did.
+
+        ``claimed_by`` writes only over the ``applying`` or ``retry`` claim that names that
+        resume, so a late worker never overwrites a newer claim. ``only_if_unresolved`` writes
+        only over a row nothing has settled yet (an answer seen elsewhere, a lapsed pause).
+        A ``retry`` brings the row back to unread, since it waits again; anything else is read.
+        """
+        from botocore.exceptions import ClientError
+
+        names = {"#r": "resolution"}
+        values: Dict[str, Any] = {":r": resolution.model_dump(by_alias=True, exclude_none=True)}
+        if resolution.state == "retry":
+            update = "SET #r = :r REMOVE readAt"
+        else:
+            update = "SET #r = :r, readAt = if_not_exists(readAt, :at)"
+            values[":at"] = resolution.at
+        condition = "attribute_exists(PK)"
+        if claimed_by is not None:
+            condition += " AND #r.#rid = :rid AND #r.#s IN (:applying, :retry)"
+            names.update({"#rid": "resumeRunId", "#s": "state"})
+            values.update({":rid": claimed_by, ":applying": "applying", ":retry": "retry"})
+        if only_if_unresolved:
+            condition += " AND attribute_not_exists(#r)"
+        try:
+            self.table.update_item(
+                Key={"PK": _pk(email), "SK": f"{NOTIF_SK_PREFIX}{notification_id}"},
+                UpdateExpression=update,
+                ConditionExpression=condition,
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+            return True
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                logger.warning("Could not settle notification %s", notification_id, exc_info=True)
+            return False
+        except Exception:
+            logger.warning("Could not settle notification %s", notification_id, exc_info=True)
+            return False
+
     # ── mark read ───────────────────────────────────────────────────────
 
     def mark_read(self, email: str, notification_id: str) -> bool:
