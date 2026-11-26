@@ -10,7 +10,7 @@ import os
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 import boto3
 from botocore.config import Config
@@ -172,8 +172,9 @@ class FileUploadService:
     - File listing and deletion
     """
 
-    # Sibling key, in the same per-upload S3 "folder" as the original.
-    # Stored alongside the original so cleanup happens with the file.
+    # Where this service stored a thumbnail before thumbnails moved under
+    # ``_derived/``: a sibling of the original, in the same per-upload S3
+    # "folder". Still read (an older, smaller render) and deleted with the file.
     THUMBNAIL_KEY_NAME = "_thumb.png"
 
     # Strong refs to fire-and-forget digest builds. The event loop only holds
@@ -1079,11 +1080,12 @@ class FileUploadService:
 
     def _thumbnail_s3_key(self, file_meta: FileMetadata) -> str:
         """
-        Derive the sibling thumbnail key for an original file.
+        The legacy sibling thumbnail key for an original file.
 
-        Originals live at ``user-files/{user}/{session}/{upload_id}/{filename}``,
-        thumbnails at ``user-files/{user}/{session}/{upload_id}/_thumb.png`` —
-        same parent prefix so cleanup paths can find both.
+        Originals live at ``user-files/{user}/{session}/{upload_id}/{filename}``;
+        this service once stored thumbnails at
+        ``user-files/{user}/{session}/{upload_id}/_thumb.png``. Nothing writes
+        there now, but older files still have one.
         """
         base, _, _ = file_meta.s3_key.rpartition("/")
         return f"{base}/{self.THUMBNAIL_KEY_NAME}"
@@ -1094,11 +1096,12 @@ class FileUploadService:
         """
         Return a presigned URL for a PNG thumbnail of the file's first page.
 
-        Serves the prepare Lambda's ``_derived/thumb.png``, or the
-        ``_thumb.png`` this service rendered before that existed. When neither
-        exists it queues a render (``ThumbnailPending``) rather than running
-        PDFium here; only a deployment without the prepare queue still renders
-        in-process.
+        Serves the prepare Lambda's ``_derived/thumb-w720.png``. When that
+        is missing it queues a render rather than running PDFium here, and
+        meanwhile serves an older, smaller render if the file has one
+        (``_derived/thumb.png`` or the ``_thumb.png`` sibling), or raises
+        ``ThumbnailPending`` if it has none. Only a deployment without the
+        prepare queue still renders in-process, into the same key.
 
         Args:
             user_id: The owner's user ID.
@@ -1127,14 +1130,22 @@ class FileUploadService:
                 f"No thumbnail renderer for {file_meta.mime_type}"
             )
 
-        thumb_key = await self._find_thumbnail(file_meta)
-        cached = thumb_key is not None
+        from apis.shared.files.pdf_thumbnail import thumbnail_key
+
+        thumb_key, stale_key = await self._find_thumbnail(file_meta)
+        cached = True
         if thumb_key is None:
             if await self._queue_thumbnail(file_meta):
-                raise ThumbnailPending(f"Thumbnail for {upload_id} is being rendered")
-            # No prepare queue in this deployment: render here, as before.
-            thumb_key = self._thumbnail_s3_key(file_meta)
-            await self._render_and_store_thumbnail(file_meta, thumb_key)
+                if stale_key is None:
+                    raise ThumbnailPending(f"Thumbnail for {upload_id} is being rendered")
+                # The older render is blurry on a 2x screen but better than a
+                # skeleton; the next view gets the one just queued.
+                thumb_key = stale_key
+            else:
+                # No prepare queue in this deployment: render here, as before.
+                thumb_key = thumbnail_key(file_meta.s3_key)
+                await self._render_and_store_thumbnail(file_meta, thumb_key)
+                cached = False
 
         # Generate the presigned URL for the thumbnail. Use the same
         # expiration window as preview URLs so the UI's caching expectations
@@ -1164,23 +1175,34 @@ class FileUploadService:
             cached=cached,
         )
 
-    async def _find_thumbnail(self, file_meta: FileMetadata) -> Optional[str]:
-        """The key of a stored thumbnail, or ``None``.
+    async def _find_thumbnail(self, file_meta: FileMetadata) -> Tuple[Optional[str], Optional[str]]:
+        """``(current, stale)``: the key of a thumbnail at today's size, else
+        of an older, smaller one, each ``None`` when absent.
 
-        The prepare Lambda's ``_derived/thumb.png`` first, then the
-        ``_thumb.png`` this service rendered for files uploaded before it.
+        Current is ``_derived/thumb-w720.png``. Stale is the 256 px
+        ``_derived/thumb.png`` the prepare Lambda wrote before, or the
+        ``_thumb.png`` sibling this service rendered before that; they are
+        looked for only when there is no current one.
         """
-        from apis.shared.files.pdf_thumbnail import thumbnail_key
+        from apis.shared.files.pdf_thumbnail import legacy_thumbnail_keys, thumbnail_key
 
-        for key in (thumbnail_key(file_meta.s3_key), self._thumbnail_s3_key(file_meta)):
-            try:
-                await asyncio.to_thread(self._s3_client.head_object, Bucket=self.bucket_name, Key=key)
-                return key
-            except ClientError as e:
-                if e.response["Error"]["Code"] not in ("404", "NoSuchKey"):
-                    logger.error(f"HEAD failed for thumbnail {key}: {e}")
-                    raise
-        return None
+        current = thumbnail_key(file_meta.s3_key)
+        if await self._object_exists(current):
+            return current, None
+        for key in (*legacy_thumbnail_keys(file_meta.s3_key), self._thumbnail_s3_key(file_meta)):
+            if await self._object_exists(key):
+                return None, key
+        return None, None
+
+    async def _object_exists(self, key: str) -> bool:
+        try:
+            await asyncio.to_thread(self._s3_client.head_object, Bucket=self.bucket_name, Key=key)
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] not in ("404", "NoSuchKey"):
+                logger.error(f"HEAD failed for thumbnail {key}: {e}")
+                raise
+            return False
 
     async def _queue_thumbnail(self, file_meta: FileMetadata) -> bool:
         """Ask the prepare Lambda to render this file's first page.
@@ -1462,7 +1484,7 @@ class FileUploadService:
         if not (
             file_meta.preparation
             or is_reference_document(file_meta)
-            or file_meta.mime_type == "application/pdf"  # its _derived/thumb.png
+            or file_meta.mime_type == "application/pdf"  # its _derived/thumb-w720.png
             or self._has_preview_format(file_meta)  # its _derived/preview.json
             or file_meta.model_image  # its _derived/model-image*.*
         ):
@@ -1483,7 +1505,8 @@ class FileUploadService:
 
     def _delete_thumbnail_object(self, file_meta: FileMetadata) -> None:
         """
-        Best-effort delete of the thumbnail sibling.
+        Best-effort delete of the legacy thumbnail sibling (``_thumb.png``);
+        today's thumbnail goes with ``_derived/``.
 
         S3 ``delete_object`` is idempotent — a missing key is not an error.
         We swallow other errors so a broken thumbnail never blocks deletion

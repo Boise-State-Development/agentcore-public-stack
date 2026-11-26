@@ -1,10 +1,10 @@
-"""A PDF's first page as a small PNG, rendered by the prepare Lambda.
+"""A PDF's first page as a PNG for the attachment card, rendered by the prepare Lambda.
 
 The attachment card shows a PDF's first page. app-api used to render it with
 PDFium on the request that first asked for it, and PDFium has crashed app-api
 tasks in production. The prepare Lambda already opens every PDF at upload (the
 facts pass for a small one, the full preparation for a large one), so it
-renders the page there and stores it at ``_derived/thumb.png``, which app-api
+renders the page there and stores it at ``_derived/thumb-w720.png``, which app-api
 only presigns.
 
 The PNG is encoded here with ``zlib`` rather than Pillow, which the Lambda
@@ -20,11 +20,25 @@ from typing import Any
 
 from apis.shared.files.large_document import derived_prefix
 
-#: Longest side of the thumbnail, in pixels. The card's preview is about
-#: 240×128 logical pixels, so 256 covers a 2× screen.
-THUMBNAIL_MAX_DIMENSION = 256
+#: Width of the thumbnail, in pixels. The card draws the page
+#: ``object-cover object-top``, so its width fills the sheet and the bottom is
+#: cropped: width is the side that has to be sharp. The widest sheet (an
+#: output card's left half) is about 360 logical pixels, so 720 covers a 2×
+#: screen. A dense text page is about 150 KB at this width.
+THUMBNAIL_WIDTH = 720
 
-THUMBNAIL_NAME = "thumb.png"
+#: Tallest thumbnail, in pixels. A page taller than 2:1 (a receipt, a long
+#: scroll) renders narrower rather than many thousands of pixels tall, since
+#: the card only ever shows the top.
+THUMBNAIL_MAX_HEIGHT = 2 * THUMBNAIL_WIDTH
+
+#: The size is in the name so a change of size re-renders: app-api serves an
+#: older name while it queues the new one (``LEGACY_THUMBNAIL_NAMES``).
+THUMBNAIL_NAME = f"thumb-w{THUMBNAIL_WIDTH}.png"
+
+#: Names an earlier renderer stored under ``_derived/``: 256 px on the longest
+#: side, which a 2× screen drew about 3× too large.
+LEGACY_THUMBNAIL_NAMES = ("thumb.png",)
 
 
 class ThumbnailRenderError(Exception):
@@ -32,8 +46,23 @@ class ThumbnailRenderError(Exception):
 
 
 def thumbnail_key(s3_key: str) -> str:
-    """``.../{upload_id}/_derived/thumb.png`` for an original at ``s3_key``."""
+    """``.../{upload_id}/_derived/thumb-w720.png`` for an original at ``s3_key``."""
     return f"{derived_prefix(s3_key)}{THUMBNAIL_NAME}"
+
+
+def legacy_thumbnail_keys(s3_key: str) -> tuple[str, ...]:
+    """Where an earlier, smaller thumbnail of ``s3_key`` may be stored."""
+    return tuple(f"{derived_prefix(s3_key)}{name}" for name in LEGACY_THUMBNAIL_NAMES)
+
+
+def thumbnail_scale(width: float, height: float) -> float:
+    """PDFium's render scale for a page of ``width`` × ``height`` points.
+
+    ``THUMBNAIL_WIDTH`` across, unless that would pass ``THUMBNAIL_MAX_HEIGHT``.
+    """
+    if width <= 0 or height <= 0:
+        raise ThumbnailRenderError("PDF page has zero dimensions")
+    return min(THUMBNAIL_WIDTH / width, THUMBNAIL_MAX_HEIGHT / height)
 
 
 def encode_png(rgb: bytes, width: int, height: int) -> bytes:
@@ -67,11 +96,7 @@ def render_first_page(pdf: Any) -> bytes:
         raise ThumbnailRenderError("PDF has no pages")
     page = pdf[0]
     try:
-        width, height = page.get_size()
-        longest = max(width, height)
-        if longest <= 0:
-            raise ThumbnailRenderError("PDF page has zero dimensions")
-        bitmap = page.render(scale=THUMBNAIL_MAX_DIMENSION / longest, rev_byteorder=True)
+        bitmap = page.render(scale=thumbnail_scale(*page.get_size()), rev_byteorder=True)
         try:
             w, h, stride = bitmap.width, bitmap.height, bitmap.stride
             channels = int(getattr(bitmap, "n_channels", 0) or (stride // w if w else 3))

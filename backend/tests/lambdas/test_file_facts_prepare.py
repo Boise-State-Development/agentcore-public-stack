@@ -127,7 +127,7 @@ class TestFactsOnly:
         # Small-file path: no sidecars, no shards, no preparation, no digest, no index.
         # No sidecar, shard or text layer; a PDF also gets its first-page
         # thumbnail and a Word file its card preview.
-        card = {"pdf": ["_derived/thumb.png"], "docx": ["_derived/preview.json"]}.get(fmt, [])
+        card = {"pdf": ["_derived/thumb-w720.png"], "docx": ["_derived/preview.json"]}.get(fmt, [])
         assert _keys(s3) == sorted([f"user-files/u1/s1/up-1/{filename}", *(f"user-files/u1/s1/up-1/{k}" for k in card)])
         assert row.preparation is None and row.digest is None and row.kb_index is None
 

@@ -58,10 +58,10 @@ send on demand (phase 5, ``attachment_index.indexed_by_budget``); on the
 ``legacy`` profile no small file is ever eligible, as before.
 
 **PDF thumbnail.** Both paths render a PDF's first page to
-``_derived/thumb.png`` (``apis/shared/files/pdf_thumbnail.py``) while the PDF
+``_derived/thumb-w720.png`` (``apis/shared/files/pdf_thumbnail.py``) while the PDF
 is open, so app-api only presigns it and never runs PDFium on a request.
 ``{"action": "thumbnail", "user_id", "upload_id"}`` renders one for a PDF
-uploaded before this existed, when app-api first finds it missing. A page that
+uploaded before this existed (or before today's size), when app-api finds it missing. A page that
 will not render leaves no thumbnail and fails nothing: the card falls back to
 its skeleton.
 
@@ -467,9 +467,10 @@ async def render_thumbnail(
     repository: Optional[FileUploadRepository] = None,
     final_attempt: bool = False,
 ) -> str:
-    """Render the thumbnail of one PDF uploaded before preparation wrote one.
+    """Render the thumbnail of one PDF that has none at today's size.
 
-    app-api queues this the first time it finds ``_derived/thumb.png`` missing.
+    app-api queues this when it finds ``_derived/thumb-w720.png`` missing: a PDF
+    uploaded before preparation rendered one, or before it rendered at that size.
     Raises only on AWS errors before the final attempt, so SQS retries them.
     """
     repository = repository or get_file_upload_repository()
