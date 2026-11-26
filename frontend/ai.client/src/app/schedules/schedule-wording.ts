@@ -191,8 +191,12 @@ function times(count: number): string {
  * A run that paused on the user (`needs_user`) did its work too, and is never a failure.
  */
 const FINISHED: ReadonlySet<string> = new Set(['completed', 'quiet', 'notify', 'needs_user']);
-/** A watcher's checks that found something; one that needs the user found something it needs them for. */
-const FOUND: ReadonlySet<string> = new Set(['notify', 'needs_user']);
+/**
+ * A watcher's checks that found something. A run that paused on the user is not one: while it
+ * waits it is counted as waiting, and once answered its history row can't tell whether the resume
+ * found anything new (`resumeOutcome` is only finished, waiting again or failed).
+ */
+const FOUND: ReadonlySet<string> = new Set(['notify']);
 
 /** The fields a last-24-hours summary reads from each run. */
 export interface RunSummaryFields extends RunPauseFields {
