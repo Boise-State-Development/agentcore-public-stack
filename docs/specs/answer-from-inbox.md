@@ -1,6 +1,6 @@
 # Answer From the Inbox — Slice 2 of the Proactive Agent Gaps
 
-**Status:** Build plan. Nothing here is built. The developer settled every open question on 2026-11-25 (§8); §2 records the decisions, and Q1 moved the resume's drain into the scheduled-runs worker (§3.5).
+**Status:** PR 2.1 is built (#2460, dev-validated 2026-11-26) and PR 2.2 is built (#2468); 2.3, the web app's review dialog, is next. The developer settled every open question on 2026-11-25 (§8); §2 records the decisions, and Q1 moved the resume's drain into the scheduled-runs worker (§3.5).
 **Date:** 2026-11-25
 **Targets branch:** `develop`
 **Parent:** `docs/specs/proactive-agent-gaps.md` (slice 2: G5, approvals answered later, from anywhere)
@@ -166,10 +166,10 @@ POST /notifications/{notificationId}/respond
 7. **Invoke.** One `lambda:InvokeFunction` with `InvocationType=Event` on the scheduled-runs worker, in `asyncio.to_thread` so the boto3 call never blocks the event loop. The payload:
 
    ```
-   {kind: "inbox_resume", userId, notificationId, resumeRunId, sessionId, scheduleId, responses}
+   {kind: "inbox_resume", userId, email, notificationId, resumeRunId, sessionId, scheduleId, responses}
    ```
 
-   It carries no bearer. The answers travel in it as they would in the `/invocations` body, and the worker never logs them. If the invoke is refused, the claim is released to `retry`, the audit row ends `error`, and the route answers 503, so the buttons come back at once.
+   `email` names the inbox the worker settles (`INBOX#{email}`): the worker has no user lookup, and the schedule may be deleted meanwhile. It carries no bearer. The answers travel in it as they would in the `/invocations` body, and the worker never logs them. If the invoke is refused, the claim is released to `retry`, the audit row ends `error`, and the route answers 503, so the buttons come back at once.
 
 **In the worker.** `lambda_handler` branches on `kind`; a payload without one is a scheduled run, as today. For `inbox_resume`:
 
@@ -202,15 +202,15 @@ One shared function, `apis/shared/scheduled_prompts/resume_run.py` (`finish_resu
 | `completed` | `answered`, `outcome: finished` | `resolution`, `resumeOutcome: finished`, tokens added | Unread dot. For a watcher: the resumed `report`'s cursors and tracking saved, its keys added to `seen`, the hold cleared, and **no** `agent_item` rows (settled question 3) |
 | `needs_user` again | `answered`, `outcome: waiting_again` | `resumeOutcome: waiting_again`, new `expiresAt` | A new needs-user row for the new pause (§3.2 steps 1, 4, 5), pointing at the same run |
 | `error`, `error_kind: resume_unavailable` | `answered_elsewhere` (reason `unknown_interrupt`) or `expired` | Unchanged | The Runtime's backstop for a race the pre-check missed |
-| `error` with HTTP 409 (the lease: the user is mid-turn in that conversation), or a transport error | `retry` | Unchanged | The buttons come back. Nothing was resumed |
+| `error` with HTTP 409 (the lease: the user is mid-turn in that conversation), a transport error, or no bearer could be minted | `retry` | Unchanged | The buttons come back. Nothing was resumed |
 | Any other `error`, `timeout` | `answered`, `outcome: failed` | `resumeOutcome: failed` | Unread dot. The schedule's failure streak is **not** touched: the next scheduled run is independent of this one |
-| `oauth_required` | `answered`, `outcome: waiting_again` | `resumeOutcome: waiting_again` | A needs-input row whose prompt is the consent. The schedule is not paused: its next run is a fresh session |
+| `oauth_required` | `answered`, `outcome: waiting_again` | `resumeOutcome: waiting_again` | A needs-input row whose prompt is the consent (`kind: "oauth"`, `serverName` the provider, headline "Connect {provider} to continue"), not answerable in the dialog. The schedule is not paused: its next run is a fresh session |
 
 A resume never pauses or resumes the schedule, and never moves `lastRunSessionId`.
 
 **Answered in the conversation instead.** That resume goes through `/chat/stream`, and nothing reads its outcome. Two things follow:
 
-1. **The inbox row.** `GET /messages` of a headless session, with the flag on, resolves that session's open needs-user rows as `answered_elsewhere` once the pause is gone. This is one filtered `Query` on the caller's inbox, the way handoffs mark their entries read on open. It runs only for headless sessions and never on the turn path. The worker's hold check (§3.2) independently sees the pause is gone.
+1. **The inbox row.** `GET /notifications`, with the flag on, settles the page's waiting needs-user rows whose pause is gone as `answered_elsewhere`, and lapsed ones as `expired`, each marked read (`settle_unanswered_rows`). It reads one `META` per row still waiting, under `(session, caller)`, all at once, usually none; the write is conditional on no resolution, so an inbox answer that landed meanwhile keeps its own. As built, this replaced the planned `GET /messages` hook: that read happens when the conversation opens, *before* the user answers there, so it could never see the answer, while the bell re-reads its list on open and on refocus, after the answer, and the badge comes from the same call. Nothing runs on the turn path. The worker's hold check (§3.2) independently sees the pause is gone.
 2. **The watcher's state.** A watch run resumed there still has `report` (§3.7), but no worker reads it, so its cursors don't advance. The next run may raise that finding once. This is accepted for this slice, and measured on dev (settled question 7, §7).
 
 ### 3.7 `report` on a resumed watch run (Runtime)
@@ -281,14 +281,14 @@ The bell never shows tool input or answers outside the dialog. The dialog shows 
 
 ## 4. Latency, cost and cache
 
-- **The interactive turn path is unchanged.** No new awaited call happens before the first token. A web or terminal turn's snapshot never carries `run_mode`, so the resume path's only addition is a constant spec appended with no IO, on watch-run resumes only. `test_turn_path_io_inventory` stays as is. The respond and prompts routes, the list's lazy expiry and the `GET /messages` resolution are all off the turn path.
+- **The interactive turn path is unchanged.** No new awaited call happens before the first token. A web or terminal turn's snapshot never carries `run_mode`, so the resume path's only addition is a constant spec appended with no IO, on watch-run resumes only. `test_turn_path_io_inventory` stays as is. The respond and prompts routes and the list's lazy expiry and settling are all off the turn path.
 - **A resume continues the same session, so its prefix is unchanged.** The system prompt, `toolConfig` (with `report` rebuilt, §3.7) and history up to the paused `toolUse` are byte-identical to the paused turn's, and it reads from cache if the cache is still warm.
   - An inbox answer usually comes after the cache TTL, so the resume pays **one prefix re-write** at the write premium: 1.25× the model's base input rate at the 5-minute TTL. That is the same as any idle return, and the release ledger already counts it.
   - For the slice 1 watcher on Haiku 4.5, that prefix was about 4.3k tokens, about $0.007 (quiet-watcher §6). It scales with the run's history and its model, and is priced from `curated-models.ts` for the model in play.
   - Without §3.7 the resume would always miss, because `report` would be gone from `toolConfig`. It would also lose the cursors.
 - **A held watcher costs nothing.** No model call happens while it waits, and only one extra `META` read per tick while a pause is open.
 - **The inbox stays small.** It holds ids plus at most five 120-character lines per row. Prompt detail is read from the breadcrumb and goes when the pause goes.
-- **No new resources; one IAM statement.** app-api gains `lambda:InvokeFunction` on the scheduled-runs worker and that function's name as a variable, written only while the flag is on (§3.5). app-api's environment has no size budget. Everything else is already granted: app-api reads and writes the projects table (inbox) and sessions-metadata (`META`, `RUN#`), and the worker already reads and writes both, mints from the grant and calls the Runtime. The Runtime gains no environment variable.
+- **No new resources; one IAM statement.** app-api gains `lambda:InvokeFunction` on the scheduled-runs worker and that function's name as a variable, written only while the flag is on (§3.5). The statement goes in app-api's existing worker-invoke managed policy (`AppApiMemoryMaintenanceInvokePolicy`), never on the task role: a role statement lands in CDK's overflow policies, which it packs by an estimate, and moving statements between them is how an earlier deploy saw AccessDenied. app-api's environment has no size budget. Everything else is already granted: app-api reads and writes the projects table (inbox) and sessions-metadata (`META`, `RUN#`), and the worker already reads and writes both, mints from the grant and calls the Runtime. The Runtime gains no environment variable.
 - **The respond call adds one async invoke**, off every turn path. A Lambda cold start sits between Approve and the run's first token; nobody watches that stream, and the tracker shows Applying meanwhile.
 
 ## 5. Flag
@@ -310,8 +310,8 @@ The SPA's Review action is behind `features.proactiveRuns`.
 
 | PR | Scope | Behaviour while the flag is on |
 |---|---|---|
-| **2.1: outcome and inbox rows** | `needs_user`, `pending_interrupt_ids` and `error_kind` in the harness; Run now's toast and the eval mapping; the worker's §3.2 branch, the hold, and the `SCHEDSTATE#` fields; the two kinds, `Notification.resolution`, the list's lazy expiry and the `unread_count` filter; the bell's descriptions (Open conversation only); this spec | A paused run lands in the bell and in the history as Waiting, and a watcher holds. The answer is still given in the conversation, so opening the row marks it read as any row does: nothing resolves it on an answer until 2.2's `GET /messages` resolution, and without that a wait answered in the conversation would hold the badge up for 7 days. 2.2 moves read state to follow the answer (§3.3) |
-| **2.2: respond** | `GET /notifications/{id}/prompts`; `POST /notifications/{id}/respond` (claim, grant renewal, audit, async invoke); the worker's `inbox_resume` branch (start mark, retry and late-event no-ops, resume) and `finish_resumed_run`; the history row update; the `GET /messages` resolution; app-api's `InvokeFunction` statement and worker-name variable, with a CDK test that both exist only while the flag is on; the Runtime's snapshot `run_mode` and `report` rebuild, with a digest test showing the resumed `toolConfig` equals the paused one | Answerable through the API. Tested with moto and a fake Runtime stream for every row of §3.6, plus a retried event that spends no second call and a dropped one that ends its audit row |
+| **2.1: outcome and inbox rows** | `needs_user`, `pending_interrupt_ids` and `error_kind` in the harness; Run now's toast and the eval mapping; the worker's §3.2 branch, the hold, and the `SCHEDSTATE#` fields; the two kinds, `Notification.resolution`, the list's lazy expiry and the `unread_count` filter; the bell's descriptions (Open conversation only); this spec | A paused run lands in the bell and in the history as Waiting, and a watcher holds. The answer is still given in the conversation, so opening the row marks it read as any row does: nothing resolves it on an answer until 2.2's list settling, and without that a wait answered in the conversation would hold the badge up for 7 days. 2.2 moves read state to follow the answer (§3.3) |
+| **2.2: respond** | `GET /notifications/{id}/prompts`; `POST /notifications/{id}/respond` (claim, grant renewal, audit, async invoke); the worker's `inbox_resume` branch (start mark, retry and late-event no-ops, resume) and `finish_resumed_run`; the history row update; read state that follows the answer: the list settles waits answered in the conversation (§3.6, in place of the planned `GET /messages` hook), and the bell no longer marks a waiting row read when it is opened (§3.3); app-api's `InvokeFunction` statement and worker-name variable, with a CDK test that both exist only while the flag is on; the Runtime's snapshot `run_mode` and `report` rebuild, with a digest test showing the resumed `toolConfig` equals the paused one | Answerable through the API. A wait answered in its conversation leaves the badge on the bell's next read. Tested with moto and a fake Runtime stream for every row of §3.6, plus a retried event that spends no second call and a dropped one that ends its audit row |
 | **2.3: the web app** | The review dialog, resolution text, expiry countdown, the history labels and summary tail, the schedule banner, the tracker hand-off | Approve, Decline and answer in the bell |
 | **Dev readout** | See §7 | Decides whether slice 3 (push) can build on it unchanged |
 
