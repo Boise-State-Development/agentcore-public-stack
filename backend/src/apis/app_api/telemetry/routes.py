@@ -60,6 +60,12 @@ class TurnTimingReport(BaseModel):
     # Milliseconds between the session prewarm and the send, or None when the
     # conversation was not warmed in this tab.
     warm_age_ms: Optional[int] = Field(default=None, alias="warmAgeMs", ge=0, le=86_400_000)
+    # Milliseconds between this tab's prewarm prepare (the agent built ahead of
+    # the send, docs/specs/turn-path-ttft.md) and the send, or None without one.
+    prepared_age_ms: Optional[int] = Field(default=None, alias="preparedAgeMs", ge=0, le=86_400_000)
+    # Which arm of the prepare experiment the conversation is in, as the prewarm
+    # route answered it, or None when no prepare was requested.
+    prepare_arm: Optional[Literal["treated", "holdout"]] = Field(default=None, alias="prepareArm")
     has_agent: bool = Field(default=False, alias="hasAgent")
     has_files: bool = Field(default=False, alias="hasFiles")
     # Whether the tab was visible when the first token arrived: a background
@@ -109,6 +115,12 @@ def metrics_for(report: TurnTimingReport) -> Dict[str, int]:
         metrics["ClientFirstTurnWarmedFirstTokenMs" if warmed else "ClientFirstTurnColdFirstTokenMs"] = value
     else:
         metrics["ClientFollowUpFirstTokenMs"] = value
+    # A metric name per arm, like the warmed/cold split: the treated turns a
+    # prepare ran ahead of against the holdout ones it did not.
+    if report.prepare_arm == "treated":
+        metrics["ClientPrepareTreatedFirstTokenMs"] = value
+    elif report.prepare_arm == "holdout":
+        metrics["ClientPrepareHoldoutFirstTokenMs"] = value
     return metrics
 
 
@@ -131,6 +143,8 @@ async def report_turn_timing(
             "turnKind": report.turn_kind,
             "modelId": report.model_id,
             "warmAgeMs": report.warm_age_ms,
+            "preparedAgeMs": report.prepared_age_ms,
+            "prepareArm": report.prepare_arm,
             "hasAgent": report.has_agent,
             "hasFiles": report.has_files,
             "visible": report.visible,
