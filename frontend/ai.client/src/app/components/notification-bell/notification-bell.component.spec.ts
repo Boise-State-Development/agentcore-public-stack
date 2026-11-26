@@ -17,6 +17,7 @@ import { QuotaRequestService } from '../../services/quota/quota-request.service'
 import { QuotaStatusService } from '../../services/quota/quota-status.service';
 import { environment } from '../../../environments/environment';
 import { HandoffNotificationService } from '../../session/services/handoff/handoff-notification.service';
+import { InboxAnswerService } from '../../schedules/services/inbox-answer.service';
 
 function notif(over: Partial<AppNotification> = {}): AppNotification {
   return {
@@ -322,6 +323,39 @@ describe('NotificationBellComponent', () => {
     const lapsed = pausedRun({ payload: { sessionId: 'headless-7', prompts: [], expiresAt: '2026-01-01T00:00:00Z' } });
     component.open(lapsed);
     expect(service.markRead).toHaveBeenCalledWith(lapsed);
+  });
+
+  it('an answerable wait opens the review dialog with watchers on, and stays unread', async () => {
+    TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, proactiveRuns: true } });
+    const review = vi.fn().mockResolvedValue(undefined);
+    TestBed.overrideProvider(InboxAnswerService, { useValue: { review } });
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    const n = pausedRun({ payload: { ...pausedRun().payload, answerable: true } });
+    component.open(n);
+    await vi.waitFor(() => expect(review).toHaveBeenCalledWith(n));
+    expect(navigate).not.toHaveBeenCalled();
+    expect(service.markRead).not.toHaveBeenCalled();
+  });
+
+  it('a wait the dialog can’t answer, or any wait with watchers off, opens the conversation', () => {
+    const review = vi.fn();
+    TestBed.overrideProvider(InboxAnswerService, { useValue: { review } });
+    TestBed.overrideProvider(FEATURES, { useValue: { ...environment.features, proactiveRuns: false } });
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const { component } = render();
+    component.open(pausedRun({ payload: { ...pausedRun().payload, answerable: true } }));
+    expect(navigate).toHaveBeenLastCalledWith(['/s', 'headless-7']);
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it('a wait says when it expires under when it arrived; a settled one doesn’t', () => {
+    const { component } = render();
+    const expiresAt = new Date(Date.now() + 25 * 3_600_000).toISOString();
+    const waiting = pausedRun({ createdAt: new Date().toISOString(), payload: { ...pausedRun().payload, expiresAt } });
+    expect(component.when(waiting)).toBe('Just now · Expires in 1 day');
+    const settled = pausedRun({ createdAt: new Date().toISOString(), resolution: { state: 'answered', at: 'x' } });
+    expect(component.when(settled)).toBe('Just now');
   });
 
   it('opening a wait marks it read with watchers off, since nothing settles it', () => {

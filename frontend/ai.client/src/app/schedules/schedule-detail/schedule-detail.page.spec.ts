@@ -4,7 +4,11 @@ import { provideRouter } from '@angular/router';
 import { Dialog } from '@angular/cdk/dialog';
 import { HttpErrorResponse } from '@angular/common/http';
 import { NEVER, of, throwError } from 'rxjs';
-import { ScheduleDetailPage, compactTokens, runTokens } from './schedule-detail.page';
+import { signal } from '@angular/core';
+import { ScheduleDetailPage, compactTokens, runTokens, watchHold } from './schedule-detail.page';
+import { NotificationsService } from '../../services/notifications/notifications.service';
+import { AppNotification } from '../../services/notifications/notification.model';
+import { InboxAnswerService } from '../services/inbox-answer.service';
 import { ScheduleService } from '../services/schedule.service';
 import { ScheduleApiService } from '../services/schedule-api.service';
 import { ModelService } from '../../session/services/model/model.service';
@@ -87,6 +91,7 @@ describe('ScheduleDetailPage', () => {
     clearWatchState: ReturnType<typeof vi.fn>;
   };
   let toast: { success: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> };
+  const inboxAnswer = { review: vi.fn().mockResolvedValue(undefined), settledCount: signal(0) };
 
   async function mount(opts: {
     schedule?: ScheduledPrompt | undefined;
@@ -94,6 +99,7 @@ describe('ScheduleDetailPage', () => {
     runs?: ScheduleRun[];
     state?: WatchState | null;
     runsPending?: boolean;
+    inbox?: AppNotification[];
   } = {}): Promise<void> {
     TestBed.resetTestingModule();
     api = {
@@ -118,6 +124,8 @@ describe('ScheduleDetailPage', () => {
         { provide: ModelService, useValue: { modelNameFor: (id: string) => (id === 'us.small' ? 'Small Model' : null) } },
         { provide: ToastService, useValue: toast },
         { provide: FEATURES, useValue: { proactiveRuns: true } },
+        { provide: NotificationsService, useValue: { notifications: signal(opts.inbox ?? []) } },
+        { provide: InboxAnswerService, useValue: inboxAnswer },
       ],
     });
     fixture = TestBed.createComponent(ScheduleDetailPage);
@@ -291,6 +299,48 @@ describe('ScheduleDetailPage', () => {
     expect(api.runs).not.toHaveBeenCalled();
     expect(api.watchState).not.toHaveBeenCalled();
   });
+
+  describe('a run that waits on the user (answer-from-inbox §3.8)', () => {
+    const PAUSE_UNTIL = new Date(NOW + 6 * 86_400_000).toISOString();
+    const waitingRow = (over: Partial<AppNotification> = {}): AppNotification => ({
+      notificationId: 'n1', recipientEmail: 'me@x.edu', kind: 'agent_needs_approval',
+      payload: { scheduleId: 'sched-1', sessionId: 'headless-7', label: 'GitHub watch', expiresAt: PAUSE_UNTIL, answerable: true, prompts: [] },
+      createdAt: ago(20), readAt: null, ...over,
+    });
+    const held: WatchState = { ...STATE, pausedSessionId: 'headless-7', pausedUntil: PAUSE_UNTIL };
+    const pausedRuns = [
+      run({ runId: 'r-wait', status: 'needs_user', sessionId: 'headless-7', finishedAt: ago(20), expiresAt: PAUSE_UNTIL }),
+      run({ runId: 'r-done', status: 'needs_user', sessionId: 'headless-1', finishedAt: ago(90), resolution: 'approved', resumeOutcome: 'finished' }),
+    ];
+
+    it('labels each paused run by what became of it, and adds the waiting tail', async () => {
+      await mount({ runs: pausedRuns, state: held });
+      const labels = Array.from(el.querySelectorAll('[data-testid="run-list"] li > span')).map((s) => s.textContent?.trim());
+      expect(labels[0]).toMatch(/^Waiting for you · expires /);
+      expect(labels[1]).toBe('Approved · finished');
+      expect(text('[data-testid="day-summary"]')).toBe('Last 24 hours: Checked 2 times · found something 2 times · 1 waiting for you');
+    });
+
+    it('a held watcher shows the banner, and Review opens the same dialog as the bell', async () => {
+      const row = waitingRow();
+      await mount({ runs: pausedRuns, state: held, inbox: [row] });
+      const banner = text('[data-testid="watch-hold"]')!;
+      expect(banner).toMatch(/^Waiting for you since .+\. Checks resume once you answer, or on .+ when it expires\. Review$/);
+      (el.querySelector('[data-testid="watch-hold"] button') as HTMLButtonElement).click();
+      expect(inboxAnswer.review).toHaveBeenCalledWith(row);
+    });
+
+    it('without a row the dialog can answer, the banner links to the conversation', async () => {
+      await mount({ runs: pausedRuns, state: held, inbox: [] });
+      const link = el.querySelector('[data-testid="watch-hold"] a');
+      expect(link?.getAttribute('href')).toBe('/s/headless-7');
+    });
+
+    it('a watcher that isn’t holding shows no banner', async () => {
+      await mount({ runs: pausedRuns, state: STATE });
+      expect(el.querySelector('[data-testid="watch-hold"]')).toBeNull();
+    });
+  });
 });
 
 describe('compactTokens', () => {
@@ -321,5 +371,32 @@ describe('runTokens', () => {
 
   it('says nothing for a run that stopped before it started', () => {
     expect(runTokens({ ...base, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })).toBe('');
+  });
+});
+
+describe('watchHold', () => {
+  const now = Date.parse('2026-11-26T18:00:00Z');
+  const until = '2026-12-02T18:00:00Z';
+  const state: WatchState = { cursors: {}, tracking: [], seen: [], version: 1, pausedSessionId: 'headless-7', pausedUntil: until };
+  const row = (over: Partial<AppNotification>): AppNotification => ({
+    notificationId: 'n1', recipientEmail: 'me@x.edu', kind: 'agent_needs_input',
+    payload: { sessionId: 'headless-7', expiresAt: until, answerable: true, prompts: [] },
+    createdAt: '2026-11-26T17:00:00Z', readAt: null, ...over,
+  });
+
+  it('is null with no pause, or one past its expiry', () => {
+    expect(watchHold(null, [], [], now)).toBeNull();
+    expect(watchHold({ ...state, pausedUntil: '2026-11-26T17:59:00Z' }, [], [], now)).toBeNull();
+    expect(watchHold({ ...state, pausedSessionId: null }, [], [], now)).toBeNull();
+  });
+
+  it('is null once the inbox shows the wait settled, ahead of the next tick clearing the state', () => {
+    expect(watchHold(state, [], [row({ resolution: { state: 'answered_elsewhere', at: 'x' } })], now)).toBeNull();
+  });
+
+  it('offers the waiting row to review, and only an answerable one', () => {
+    expect(watchHold(state, [], [row({})], now)?.notification?.notificationId).toBe('n1');
+    expect(watchHold(state, [], [row({ payload: { sessionId: 'headless-7', expiresAt: until, answerable: false } })], now)?.notification).toBeNull();
+    expect(watchHold(state, [], [], now)?.sentence).toMatch(/^Waiting for you\. Checks resume once you answer, or on Dec 2 when it expires\.$/);
   });
 });
