@@ -2718,6 +2718,7 @@ class StreamCoordinator:
                 memory_context=snapshot_source.get("memory_context"),
                 text_only_model=snapshot_source.get("text_only_model"),
                 run_mode=snapshot_source.get("run_mode"),
+                project_id=snapshot_source.get("project_id"),
                 captured_at=now.isoformat(),
                 expires_at=(now + paused_turn_ttl(session_id)).isoformat(),
             )

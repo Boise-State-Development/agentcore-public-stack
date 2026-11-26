@@ -4958,35 +4958,96 @@ def _record_run_mode_on(agent, input_data: InvocationRequest) -> None:
         snapshot["run_mode"] = "watch"
 
 
-def _watch_report_from_snapshot(snapshot, session_id: str) -> list:
-    """A paused watch run's ``report``, rebuilt for its resume (answer-from-inbox §3.7).
+def _record_project_on(agent, turn_project_id: Optional[str]) -> None:
+    """Mark a project harness's agent so a pause snapshots its project.
 
-    Only when the snapshot says the paused turn was a watch run, the session is headless and the
-    Runtime's ``PROACTIVE_RUNS_ENABLED`` is on: the conditions ``_is_watch_run`` checks on the
-    request, read from the snapshot because no resume (the inbox's or the conversation's) sends
-    ``run_mode``. No IO: the snapshot is already loaded.
+    A resume builds ``project_files`` (and not ``knowledge_files``) only for a project's turn, and
+    the memory binding names the project only while memory spaces are on. The project follows from
+    the harness ``assistant_id``, a key element, so a cache hit carries the same value. No IO.
     """
-    if getattr(snapshot, "run_mode", None) != "watch":
-        return []
-    from apis.shared.feature_flags import proactive_runs_enabled
-    from apis.shared.scheduled_prompts.models import is_headless_session
-
-    if not (is_headless_session(session_id) and proactive_runs_enabled()):
-        return []
-    from agents.builtin_tools.watch_report_tool import make_watch_report_tool
-
-    return [make_watch_report_tool()]
+    snapshot = getattr(agent, "_construction_snapshot", None)
+    if isinstance(snapshot, dict) and turn_project_id:
+        snapshot["project_id"] = turn_project_id
 
 
-def _resume_extra_tools(snapshot, session_id: str) -> Optional[list]:
-    """The injected tools a resume rebuilds, in the slots the paused turn had them.
+def _resume_request(input_data: InvocationRequest, snapshot) -> InvocationRequest:
+    """The request a resume builds its tools from: this one, in the paused turn's shape.
 
-    Client tools, then a watch run's ``report``, which ``_build_turn_tools`` appends after every
-    other family. A headless watch run carries no client tools, so the resumed ``toolConfig`` is
-    byte-identical to the paused one. None when there are none, as before.
+    No resume (the conversation's card, the inbox's worker) sends the run mode, the Agent or the
+    client tools; the snapshot recorded them. Snapshot wins, as it does for every other field, so
+    the turn finishes with the tools it was paused with. No IO.
     """
-    tools = (_client_tools_from_snapshot(snapshot) or []) + _watch_report_from_snapshot(snapshot, session_id)
-    return tools or None
+    return input_data.model_copy(
+        update={
+            "rag_assistant_id": snapshot.assistant_id,
+            "run_mode": snapshot.run_mode,
+            "client_tools": _client_tool_specs_from_snapshot(snapshot),
+        }
+    )
+
+
+def _project_memory_from_snapshot(snapshot) -> Optional["ProjectMemoryTurn"]:
+    """A project harness's memory scopes, from the binding the paused turn keyed on, or None.
+
+    The tools close over the scopes alone, and the rendered block rides the snapshot as
+    ``memory_context``, so nothing is re-read. An Agent's single-space binding has no
+    ``projectId`` and builds nothing here, as on the paused turn.
+    """
+    binding = snapshot.memory_binding or {}
+    if not binding.get("projectId"):
+        return None
+    from apis.inference_api.chat.project_memory import ProjectMemoryTurn
+
+    return ProjectMemoryTurn(
+        project_id=binding["projectId"],
+        shared_space_id=binding.get("sharedSpaceId"),
+        personal_space_id=binding.get("personalSpaceId"),
+        memory_context=snapshot.memory_context or "",
+    )
+
+
+def _project_id_from_snapshot(snapshot) -> Optional[str]:
+    """The paused turn's project, or None: recorded since this field, else the memory binding's."""
+    return snapshot.project_id or (snapshot.memory_binding or {}).get("projectId") or None
+
+
+async def _build_resume_tools(
+    input_data: InvocationRequest,
+    snapshot,
+    current_user: User,
+    user_id: str,
+    *,
+    document_ancestor_session_ids: Sequence[str] = (),
+) -> Tuple[InvocationRequest, TurnTools]:
+    """The paused turn's injected tools, built by the turn's own phase (``_build_turn_tools``).
+
+    The snapshot holds the paused turn's *effective* tool ids (``_resolve_effective_tools``'s
+    answer, auto-enables and admin pins included), so that phase is not run again: re-resolving
+    would read the catalog and the session's files again, and an admin pin changed during the
+    pause would move ``toolConfig``. Every family is rebuilt from it in the paused turn's order,
+    then the client tools, exactly as the turn appends them, so the resumed ``toolConfig`` is
+    byte-identical and the paused tool exists to be re-entered. A watch run's ``report`` comes
+    from ``run_mode`` on the request copy, in its slot. The one read is the ``document_read``
+    gate, which the resume made before this for its cache key.
+    """
+    resume_request = _resume_request(input_data, snapshot)
+    project_memory = _project_memory_from_snapshot(snapshot)
+    turn_tools = await _build_turn_tools(
+        resume_request,
+        current_user,
+        user_id,
+        snapshot.enabled_tools,
+        project_memory=project_memory,
+        # The gate is monotonic and asked with no turn kind, as the resume always asked it.
+        turn_has_document=False,
+        text_only_model=bool(snapshot.text_only_model),
+        turn_project_id=_project_id_from_snapshot(snapshot),
+        document_ancestor_session_ids=document_ancestor_session_ids,
+    )
+    client_tools = _build_client_tools(resume_request)
+    if client_tools:
+        turn_tools.extra_tools = turn_tools.extra_tools + client_tools
+    return resume_request, turn_tools
 
 
 def _client_tools_digest(input_data: InvocationRequest) -> str:
@@ -4997,29 +5058,35 @@ def _client_tools_digest(input_data: InvocationRequest) -> str:
     return client_tools_digest(input_data.client_tools)
 
 
-def _client_tools_from_snapshot(snapshot) -> Optional[list]:
-    """Rebuild the paused turn's client tools from its snapshot, or None."""
+def _client_tool_specs_from_snapshot(snapshot) -> Optional[list]:
+    """The paused turn's client tool specs, or None."""
     if not getattr(snapshot, "client_tools", None):
         return None
-    from apis.shared.client_tools import ClientToolSpec, build_client_tools
+    from apis.shared.client_tools import ClientToolSpec
 
     try:
-        specs = [ClientToolSpec.model_validate(item) for item in json.loads(snapshot.client_tools)]
+        return [ClientToolSpec.model_validate(item) for item in json.loads(snapshot.client_tools)] or None
     except Exception as e:  # noqa: BLE001 - a bad snapshot should miss, not 500
         logger.warning("Paused-turn snapshot carries unreadable client_tools: %s", e)
         return None
+
+
+def _client_tools_from_snapshot(snapshot) -> Optional[list]:
+    """Rebuild the paused turn's client tools from its snapshot, or None."""
+    specs = _client_tool_specs_from_snapshot(snapshot)
+    if not specs:
+        return None
+    from apis.shared.client_tools import build_client_tools
+
     return build_client_tools(specs) or None
 
 
 def _client_tools_digest_from_snapshot(snapshot) -> str:
-    if not getattr(snapshot, "client_tools", None):
+    specs = _client_tool_specs_from_snapshot(snapshot)
+    if not specs:
         return ""
-    from apis.shared.client_tools import ClientToolSpec, client_tools_digest
+    from apis.shared.client_tools import client_tools_digest
 
-    try:
-        specs = [ClientToolSpec.model_validate(item) for item in json.loads(snapshot.client_tools)]
-    except Exception:  # noqa: BLE001
-        return ""
     return client_tools_digest(specs)
 
 
@@ -7025,6 +7092,19 @@ async def _run_invocation(
                     resume_inference_params["temperature"] = snapshot.temperature
                 if snapshot.max_tokens is not None:
                     resume_inference_params["max_tokens"] = snapshot.max_tokens
+            # Every injected family the paused turn carried, built by the turn's own phase
+            # from what the snapshot recorded, in the turn's order: an approved call must
+            # find its tool, and the resumed toolConfig must be the paused one or the
+            # cached prefix is re-written. A watch run (never cached) always takes this.
+            resume_request, resume_tools = await _build_resume_tools(
+                input_data,
+                snapshot,
+                current_user,
+                user_id,
+                document_ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
+            )
+            # A resumed watch run skips the tool summaries, as its first leg did.
+            watch_run = _is_watch_run(resume_request)
             agent = await get_agent(
                 session_id=input_data.session_id,
                 user_id=user_id,
@@ -7041,23 +7121,17 @@ async def _run_invocation(
                 is_resume=True,
                 # A key dimension for non-web surfaces; replay the paused turn's.
                 client_surface=snapshot.client_surface or input_data.client_surface,
-                # Client-executed tools are the one injected family a resume
-                # MUST rebuild: Strands re-enters the paused tool body with the
-                # client's response, so the tool has to exist on the rebuilt
-                # agent or the resume fails. The specs ride the snapshot; the
-                # digest is replayed so the key lands on the paused agent.
-                # A watch run's `report` is rebuilt too (answer-from-inbox §3.7),
-                # in its slot after every other family, so the resumed toolConfig
-                # is the paused one and the run can still save its cursors.
-                extra_tools=_resume_extra_tools(snapshot, input_data.session_id),
-                client_tools_digest=_client_tools_digest_from_snapshot(snapshot),
+                # Strands re-enters the paused tool body with the response, so the
+                # tool has to exist on the rebuilt agent: every family, then the
+                # client tools (their digest replayed so the key lands on the paused
+                # agent), then nothing. A watch run's `report` sits in its slot.
+                extra_tools=resume_tools.extra_tools or None,
+                extra_tools_key_described=resume_tools.extra_tools_key_described,
+                client_tools_digest=_client_tools_digest(resume_request),
                 # The original turn's key carried what the session had that
                 # document_read returns; the gate is monotonic, so re-asking
                 # it rebuilds the same key (an orphaned paused agent otherwise).
-                has_document_tools=await _document_tools_gate(
-                    input_data.session_id, user_id,
-                    ancestor_session_ids=fork_ancestor_session_ids(input_data.session_id, session_meta.row),
-                ),
+                has_document_tools=resume_tools.document_tools_kind,
                 # The assistant the original turn ran against is a key element
                 # (spreadsheet tools close over it). Replay the snapshot's
                 # value, not the request's: a snapshot written before the
@@ -7080,12 +7154,9 @@ async def _run_invocation(
                 # pre-existing eviction path.
                 knowledge_context=await _resume_knowledge_context(snapshot.assistant_id, current_user, user_id),
                 text_only_model=bool(snapshot.text_only_model),
-                # Resume never builds injected tools, so an agent built on a
-                # resume *miss* lacks them. Writing it would put a tool-less
-                # agent in the slot the next plain turn hits (same key), and
-                # that turn would silently lose its artifact / document /
-                # spreadsheet / memory tools. Read the paused agent if it is
-                # still cached; never populate.
+                # Read the paused agent if it is still cached; never populate. A
+                # resume's agent is built for one interrupted turn, and a next plain
+                # turn rebuilds from its own request rather than inherit it.
                 cache_write=False,
                 # Resume must rebuild the SAME cache key the original turn used,
                 # or the paused agent is orphaned. New snapshots carry the
@@ -7118,6 +7189,11 @@ async def _run_invocation(
             # container and a 424 Failed Dependency to the caller. Bind it to the
             # snapshot's toolset, the same source the resume `get_agent` used.
             effective_enabled_tools = snapshot.enabled_tools
+            # So a second pause snapshots the same shape: a rebuilt agent's
+            # construction dict has only what get_agent stamps.
+            _record_client_tools_on(agent, resume_request)
+            _record_run_mode_on(agent, resume_request)
+            _record_project_on(agent, _project_id_from_snapshot(snapshot))
         else:
             # The model: the Agent's binding, else the request's, else the
             # user's default, else the catalog's; then the registry's settings.
@@ -7263,11 +7339,12 @@ async def _run_invocation(
                 if client_tools:
                     # The paused-turn snapshot is written from this dict; a
                     # resume rebuilds the client tools from it (see
-                    # `_client_tools_from_snapshot`). Same specs for a cache hit
+                    # `_build_resume_tools`). Same specs for a cache hit
                     # by construction — the digest is in the key.
                     _record_client_tools_on(built_agent, input_data)
                 # A watch run's agent is never cached, so this marks only its own.
                 _record_run_mode_on(built_agent, input_data)
+                _record_project_on(built_agent, turn_project_id)
                 return built_agent
 
             # A prepare stops here too, with the agent in the cache for the send that follows.

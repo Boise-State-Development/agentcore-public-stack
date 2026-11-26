@@ -254,6 +254,13 @@ class PausedTurnSnapshot(BaseModel):
                     "the resume rebuilds `report`, so its toolConfig is the paused turn's and the "
                     "resumed run can still save its cursors. None for every other turn.",
     )
+    project_id: Optional[str] = Field(
+        default=None,
+        alias="projectId",
+        description="The Shared Project whose harness the paused turn ran, so the resume builds "
+                    "`project_files` rather than `knowledge_files`. The memory binding names it "
+                    "only while memory spaces are on. None for every other turn.",
+    )
     captured_at: str = Field(..., alias="capturedAt", description="ISO 8601 timestamp when the turn paused")
     expires_at: str = Field(..., alias="expiresAt", description="ISO 8601 timestamp after which the snapshot is no longer valid for resume")
 
