@@ -520,6 +520,77 @@ async def test_a_model_the_caller_cannot_use_is_refused():
     assert plan.cache_point is True and plan.document_budget and plan.pdf_page_limit
 
 
+@pytest.mark.parametrize(
+    "window, threshold, budget",
+    [
+        (1_000_000, None, 750_000),  # Sonnet 5.5: the window
+        (100_000, 100_000, 75_000),  # Haiku 5.5: under its 5x line
+        (272_000 * 2, 272_000, 204_000),  # the OpenAI family: the long-context line, not the window
+        (None, None, None),
+    ],
+    ids=["window", "window-at-the-line", "line-below-the-window", "no-limit"],
+)
+def test_a_single_call_budgets_against_the_model_never_the_chat_ceiling(window, threshold, budget):
+    assert wp.single_call_document_budget(window, threshold) == budget
+
+
+def _catalog_row(model_id: str, window: int, threshold: Optional[int] = None) -> Any:
+    from apis.shared.models.models import ManagedModel
+
+    fields: Dict[str, Any] = {
+        "id": "m1",
+        "modelId": model_id,
+        "modelName": "A model",
+        "provider": "bedrock",
+        "providerName": "Anthropic",
+        "inputModalities": ["TEXT", "IMAGE"],
+        "outputModalities": ["TEXT"],
+        "maxInputTokens": window,
+        "enabled": True,
+        "inputPricePerMillionTokens": 3.0,
+        "outputPricePerMillionTokens": 15.0,
+        "createdAt": "2026-11-26T00:00:00Z",
+        "updatedAt": "2026-11-26T00:00:00Z",
+    }
+    if threshold:
+        fields.update(
+            longContextThresholdTokens=threshold, longContextInputMultiplier=5.0, longContextOutputMultiplier=5.0
+        )
+    return ManagedModel.model_validate(fields)
+
+
+@pytest.mark.asyncio
+async def test_a_proposal_sized_pdf_fits_a_large_window_model_and_stays_under_a_long_context_line():
+    """A 32-page proposal (~80K tokens) stopped ``too_large`` on every model under the chat-ceiling rule."""
+    from apis.shared.models.retirement import EffectiveModel
+
+    proposal = WholeDocument(
+        upload_id="f1",
+        filename="proposal.pdf",
+        fmt="pdf",
+        pdf_bytes=PDF,
+        pages=32,
+        facts=FileFacts(
+            filename="proposal.pdf", mime_type="application/pdf", size_bytes=508_963, page_count=32, text_tokens=21_000
+        ),
+    )
+    sonnet = "us.anthropic.claude-sonnet-5-5"
+    plans = {}
+    for model_id, row in ((sonnet, _catalog_row(sonnet, 1_000_000)), (MODEL, _catalog_row(MODEL, 100_000, 100_000))):
+        effective = EffectiveModel(requested_id=model_id, model_id=model_id, record=row)
+        with patch("apis.shared.models.retirement.resolve_effective_model", AsyncMock(return_value=effective)), patch(
+            "apis.shared.rbac.service.get_app_role_service"
+        ) as service:
+            service.return_value.can_access_model = AsyncMock(return_value=True)
+            plans[model_id] = await wp.resolve_model_plan(object(), model_id)  # type: ignore[arg-type]
+
+    assert 70_000 < wp.document_tokens([proposal], sonnet) < 90_000
+    assert not wp.too_large([proposal], plans[sonnet])
+    # Haiku 5.5's row stops at its 5x line, so the same proposal would cross onto the second rate card.
+    assert plans[MODEL].document_budget == 75_000
+    assert wp.too_large([proposal], plans[MODEL])
+
+
 @pytest.mark.asyncio
 async def test_a_text_only_model_runs_a_step_that_reads_only_steps_and_refuses_one_that_reads_files():
     steps = StepStore({"h1": "open", "h2": "open"})

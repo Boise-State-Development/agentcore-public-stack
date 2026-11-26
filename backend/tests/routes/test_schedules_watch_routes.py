@@ -313,6 +313,8 @@ class TestWatchRoutes:
             "outputTokens": 40,
             "cacheReadTokens": 1200,
             "cacheWriteTokens": 0,
+            "expiresAt": None,
+            "promptCount": 0,
         }
         assert listing.call_args.args == (USER_ID, SCHEDULE_ID)
 
@@ -345,7 +347,21 @@ class TestWatchRoutes:
             "version": 3,
             "lastRunAt": "2026-11-25T01:00:00Z",
             "updatedAt": "2026-11-25T01:00:01Z",
+            "pausedSessionId": None,
+            "pausedUntil": None,
         }
+
+    def test_a_held_watcher_s_state_names_its_wait(self, monkeypatch):
+        """answer-from-inbox §3.8: the schedule page's banner reads the hold from the state."""
+        client = _client(monkeypatch)
+        _stub_read(monkeypatch, _make_schedule(mode="watch"))
+        state = WatchState(version=2, paused_session_id="headless-7", paused_until="2026-12-02T12:00:00Z")
+        monkeypatch.setattr(schedules_routes, "get_watch_state", MagicMock(return_value=state))
+
+        response = client.get(f"/schedules/{SCHEDULE_ID}/state")
+
+        body = response.json()["state"]
+        assert (body["pausedSessionId"], body["pausedUntil"]) == ("headless-7", "2026-12-02T12:00:00Z")
 
     def test_start_over_clears_the_state(self, monkeypatch):
         client = _client(monkeypatch)

@@ -1179,8 +1179,14 @@ reads work as they do for Agent steps. The envelope is unchanged: 8 steps.
   in `apis/shared/files/` does this: `readable_view` resolves references, then the S3 read.
 - **Other kinds go as text**, rendered the way documents-as-text on Converse renders them.
 - **A prepared large document goes as its text.**
-- **Over the document budget the step stops with `too_large`.** The budget is 0.5 × the model's chat ceiling,
-  which is 50K on Haiku 5.5 and keeps under its 100K 5× line. v1 does not truncate.
+- **Over the document budget the step stops with `too_large`.** A step is one call with no history, so its
+  budget is 0.75 × the model's single-call limit: its input window, or the long-context line where the row
+  declares one, whichever is lower (`single_call_document_budget`). That is 75K on Haiku 5.5, under its 100K 5×
+  line, and 750K on Sonnet 5.5. v1 does not truncate.
+  - The first rule was 0.5 × the model's *chat* ceiling, the compaction ceiling for a conversation that grows
+    every turn. On dev that was 25K on Haiku 5.5 and 50K on Sonnet 5.5. A 32-page NSF proposal is about 80K
+    (1,565 a page plus its text), so every real proposal stopped `too_large` on every model (2026-11-26). The
+    earlier dev checks had used a 4-page PDF.
 
 **The output.**
 - `maxTokens` is 16,000, with the model's default effort. Reasoning counts against the limit on Haiku 5.5 and

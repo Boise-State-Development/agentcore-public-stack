@@ -10,12 +10,27 @@ import logging
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from apis.shared.auth.models import User
 from apis.shared.timestamps import utc_now_iso
 
-from .models import RETENTION_DAYS, Notification, NotificationKind
+from .models import RETENTION_DAYS, Notification, NotificationKind, NotificationResolution
+
+#: Rows that wait on the user until answered or expired (answer-from-inbox spec §3.3).
+NEEDS_USER_KINDS = ("agent_needs_approval", "agent_needs_input")
+
+
+def _expiry_now() -> str:
+    """Now as ``YYYY-MM-DDTHH:MM:SSZ``, the format a needs-user row's ``payload.expiresAt`` is written in.
+
+    The same format as ``scheduled_prompts.needs_user.normalize_expiry``, written
+    here rather than imported: this module ships in Lambda images (memory
+    maintenance) that carry no scheduled-prompts or sessions code.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 logger = logging.getLogger(__name__)
 
@@ -201,14 +216,22 @@ class NotificationService:
         more = len(items) > limit or bool(last)
         return page, (page[-1].notification_id if more and page else None)
 
-    def unread_count(self, email: str) -> int:
+    def unread_count(self, email: str, *, now: Optional[str] = None) -> int:
+        """Unread rows, less any needs-user row whose pause has expired.
+
+        An expired wait never holds the badge up, even before anything has
+        marked it expired (``payload.expiresAt`` is compared as a string, in
+        ``needs_user.normalize_expiry``'s format). ``now`` is for tests.
+        """
         if not self.enabled or not _normalize(email):
             return 0
         from boto3.dynamodb.conditions import Attr, Key
 
+        current = now or _expiry_now()
         params: Dict[str, Any] = {
             "KeyConditionExpression": Key("PK").eq(_pk(email)) & Key("SK").begins_with(NOTIF_SK_PREFIX),
-            "FilterExpression": Attr("readAt").not_exists(),
+            "FilterExpression": Attr("readAt").not_exists()
+            & (Attr("payload.expiresAt").not_exists() | Attr("payload.expiresAt").gt(current)),
             "Select": "COUNT",
         }
         total = 0
@@ -219,6 +242,46 @@ class NotificationService:
             if not last:
                 return total
             params["ExclusiveStartKey"] = last
+
+    # ── needs-user rows ─────────────────────────────────────────────────
+
+    def expire_lapsed(self, email: str, notifications: List[Notification], *, now: Optional[str] = None) -> int:
+        """Resolve this page's waiting needs-user rows whose pause has expired, in place.
+
+        Lazy by design: no process runs at expiry. Each is one conditional
+        write (no resolution yet), so a row being answered at the same moment
+        keeps its answer. Resolving a row marks it read. Returns how many it
+        resolved; a failed write is logged and the row is left as it was.
+        """
+        if not self.enabled or not _normalize(email):
+            return 0
+        from botocore.exceptions import ClientError
+
+        current = now or _expiry_now()
+        resolved = 0
+        for n in notifications:
+            expires_at = n.payload.get("expiresAt") if isinstance(n.payload, dict) else None
+            if n.kind not in NEEDS_USER_KINDS or n.resolution is not None:
+                continue
+            if not isinstance(expires_at, str) or expires_at > current:
+                continue
+            at = utc_now_iso()
+            try:
+                self.table.update_item(
+                    Key={"PK": _pk(email), "SK": f"{NOTIF_SK_PREFIX}{n.notification_id}"},
+                    UpdateExpression="SET #r = :r, readAt = if_not_exists(readAt, :at)",
+                    ConditionExpression="attribute_exists(PK) AND attribute_not_exists(#r)",
+                    ExpressionAttributeNames={"#r": "resolution"},
+                    ExpressionAttributeValues={":r": {"state": "expired", "at": at}, ":at": at},
+                )
+            except ClientError as e:
+                if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                    logger.warning("Could not mark notification %s expired", n.notification_id, exc_info=True)
+                continue
+            n.resolution = NotificationResolution(state="expired", at=at)
+            n.read_at = n.read_at or at
+            resolved += 1
+        return resolved
 
     # ── mark read ───────────────────────────────────────────────────────
 

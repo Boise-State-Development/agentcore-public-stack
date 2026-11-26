@@ -59,6 +59,14 @@ leaves for the triage stage (docs/specs/quiet-watcher-triage.md §3.4): its
 probe (from the ``watch_probe`` frame and the tool trace), ``lastFullRunAt``
 and ``wakeAt``. The run's outcome is the same either way.
 A standard schedule, or any schedule while the flag is off, runs as before.
+
+A run that paused on the user (``needs_user``: a tool approval, a question, a
+form or a browser sign-in, docs/specs/answer-from-inbox.md §3.2) is, while the
+flag is on and for a personal schedule, recorded as done (the streak resets),
+leaves a ``needs_user`` history row and one ``agent_needs_*`` inbox row, and,
+for a watcher, sets the hold: the watcher skips its runs until that pause is
+answered or expires. While the flag is off, or for a project schedule, it takes
+exactly the ``completed`` path, as it did before the status existed.
 """
 
 import asyncio
@@ -79,6 +87,11 @@ from apis.shared.projects.schedule_delivery import ScheduleDelivery
 from apis.shared.projects.schedules import ProjectSchedules
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.pausing import pause_schedule
+from apis.shared.scheduled_prompts.needs_user import (
+    live_pending_prompts,
+    needs_user_kind,
+    needs_user_payload,
+)
 from apis.shared.scheduled_prompts.runs import ScheduleRunStatus, record_schedule_run
 from apis.shared.scheduled_prompts.watch_probe import FullRunTriage, full_run_triage
 from apis.shared.scheduled_prompts.watch_run import (
@@ -89,8 +102,10 @@ from apis.shared.scheduled_prompts.watch_run import (
 )
 from apis.shared.scheduled_prompts.watch_state import (
     WatchState,
+    clear_watch_pause,
     get_watch_state,
     save_watch_state,
+    set_watch_pause,
 )
 from apis.shared.scheduled_prompts.service import (
     get_scheduled_prompt,
@@ -125,6 +140,8 @@ async def _record_history(
     *,
     item_count: int = 0,
     with_session: bool = True,
+    expires_at: Optional[str] = None,
+    prompt_count: int = 0,
 ) -> None:
     """Leave the run's history row: personal schedules only, and only while the flag is on.
 
@@ -143,6 +160,8 @@ async def _record_history(
         finished_at=(result.finished_at if result is not None else None) or _now_iso(),
         item_count=item_count,
         usage=result.usage if result is not None else None,
+        expires_at=expires_at,
+        prompt_count=prompt_count,
     )
 
 
@@ -343,6 +362,137 @@ async def _finish_watch_run(
     return {"scheduleId": schedule_id, "result": "quiet"}
 
 
+async def _load_meta_row(session_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    """The session's ``META`` row for this user, or ``None``. One read."""
+    from apis.shared.sessions.metadata import load_session_meta
+
+    return (await load_session_meta(session_id, user_id)).row
+
+
+async def _pause_still_live(user_id: str, session_id: str) -> bool:
+    """Whether ``session_id`` still waits on the user (``derive_awaiting_input``'s rule)."""
+    from apis.shared.sessions.models import derive_awaiting_input
+
+    row = await _load_meta_row(session_id, user_id)
+    if not row:
+        return False
+    kinds = [(item or {}).get("kind") for item in row.get("pendingInterrupts") or [] if isinstance(item, dict)]
+    paused = row.get("pausedTurn") or {}
+    expires_at = paused.get("expiresAt") if isinstance(paused, dict) else None
+    return derive_awaiting_input(kinds, expires_at) is not None
+
+
+async def _watcher_holds(schedule: ScheduledPrompt, state: Optional[WatchState]) -> bool:
+    """Whether a watcher skips this run because an earlier run still waits on the user (§3.2).
+
+    Reads the paused session's ``META`` only while a hold is set and unexpired.
+    A hold whose pause has gone (answered, superseded or expired) is cleared,
+    and the watcher runs. Fails open: an error clears nothing and runs.
+    """
+    if state is None or not state.paused_session_id:
+        return False
+    session_id = state.paused_session_id
+    try:
+        if state.holding() and await _pause_still_live(schedule.user_id, session_id):
+            return True
+        await asyncio.to_thread(clear_watch_pause, schedule.user_id, schedule.schedule_id, session_id=session_id)
+    except Exception:
+        logger.warning(f"Schedule {schedule.schedule_id}: could not check the watcher's hold", exc_info=True)
+    return False
+
+
+def _notify_needs_user(schedule: ScheduledPrompt, result: RunResult, prompts, expires_at: Optional[str]) -> bool:
+    """The run's one ``agent_needs_*`` inbox row, to the owner. Returns whether it was written."""
+    email = schedule.owner_email
+    if not email:
+        logger.info(f"Schedule {schedule.schedule_id}: no owner email on record, so no inbox row")
+        return False
+    from apis.shared.notifications.service import NotificationService
+
+    return NotificationService().notify_own(
+        recipient_email=email,
+        kind=needs_user_kind(prompts),
+        payload=needs_user_payload(
+            schedule_id=schedule.schedule_id,
+            run_id=result.run_id,
+            run_finished_at=result.finished_at,
+            session_id=result.session_id,
+            label=schedule.label,
+            expires_at=expires_at,
+            prompts=prompts,
+        ),
+    ) is not None
+
+
+async def _record_completed(schedule: ScheduledPrompt, result: RunResult) -> Dict[str, Any]:
+    """A standard run that finished: reset the streak, deliver to a project, leave the history row."""
+    await record_run_result(
+        schedule.user_id, schedule.schedule_id, status="completed", session_id=result.session_id
+    )
+    share_id = None
+    if schedule.project_id and schedule.deliver_to == "project" and result.session_id:
+        share_id = await asyncio.to_thread(ScheduleDelivery().deliver, schedule, result.session_id)
+    await _record_project_run(schedule, "completed", share_id)
+    await _record_history(schedule, "completed", result)
+    logger.info(f"Schedule {schedule.schedule_id}: run {result.run_id} completed (session {result.session_id})")
+    return {"scheduleId": schedule.schedule_id, "result": "completed", "sessionId": result.session_id}
+
+
+async def _finish_needs_user_run(
+    schedule: ScheduledPrompt,
+    result: RunResult,
+    watch_state: Optional[WatchState],
+    watch: bool,
+) -> Dict[str, Any]:
+    """A personal run that paused on the user, while the flag is on (§3.2)."""
+    schedule_id = schedule.schedule_id
+    prompts: list = []
+    expires_at: Optional[str] = None
+    try:
+        row = await _load_meta_row(result.session_id, schedule.user_id)
+        prompts, expires_at = live_pending_prompts(row, result.pending_interrupt_ids)
+    except Exception:
+        logger.warning(f"Schedule {schedule_id}: could not read run {result.run_id}'s pause", exc_info=True)
+    if not prompts:
+        # Answered or cleared before the worker looked: the run is simply done.
+        # A watcher's run is not quiet (it asked the user), so it keeps its conversation.
+        logger.info(f"Schedule {schedule_id}: run {result.run_id} paused, but the pause is gone")
+        return await _record_completed(schedule, result)
+
+    await record_run_result(schedule.user_id, schedule_id, status="completed", session_id=result.session_id)
+    await _record_history(schedule, "needs_user", result, expires_at=expires_at, prompt_count=len(prompts))
+    await asyncio.to_thread(_notify_needs_user, schedule, result, prompts, expires_at)
+    if watch:
+        # A watch run leaves the unread dot to the worker, and this one holds a card.
+        try:
+            from apis.shared.sessions.metadata import set_session_unread
+
+            await set_session_unread(result.session_id, schedule.user_id, True)
+        except Exception:
+            logger.warning(f"Schedule {schedule_id}: could not mark the run unread", exc_info=True)
+        if expires_at:
+            try:
+                held = await asyncio.to_thread(
+                    set_watch_pause,
+                    schedule.user_id,
+                    schedule_id,
+                    session_id=result.session_id,
+                    paused_until=expires_at,
+                    expected_version=watch_state.version if watch_state is not None else None,
+                )
+                if not held:
+                    logger.warning(f"Schedule {schedule_id}: watcher state moved on during the run; no hold set")
+            except Exception:
+                logger.warning(f"Schedule {schedule_id}: could not set the watcher's hold", exc_info=True)
+    logger.info(f"Schedule {schedule_id}: run {result.run_id} waits on the user ({len(prompts)} prompt(s))")
+    return {
+        "scheduleId": schedule_id,
+        "result": "needs_user",
+        "sessionId": result.session_id,
+        "promptCount": len(prompts),
+    }
+
+
 async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
     schedule_id = payload["scheduleId"]
     user_id = payload["userId"]
@@ -368,6 +518,11 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if watch:
             watch_state = await asyncio.to_thread(get_watch_state, user_id, schedule_id)
+            if await _watcher_holds(schedule, watch_state):
+                # Nothing is invoked and no history row is written: the
+                # schedule page shows the wait from the state (§3.8).
+                logger.info(f"Schedule {schedule_id}: holding while an earlier run waits on the user")
+                return {"scheduleId": schedule_id, "result": "held"}
             prompt = build_watch_prompt(schedule.prompt_text, watch_state)
         result: RunResult = await run_agent_headless(
             user_id=user_id,
@@ -403,6 +558,12 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
             detail = f"provider={first.provider_id} authorization_url={first.authorization_url}"
         return await _pause_reauth(schedule, "oauth_required", detail, result)
 
+    if result.status == "needs_user":
+        if proactive_runs_enabled() and not schedule.project_id:
+            return await _finish_needs_user_run(schedule, result, watch_state, watch)
+        # Flag off, or a project schedule: exactly as a completed run, as before.
+        result.status = "completed"
+
     if result.status == "completed" and watch and result.quota_exceeded:
         # The "answer" is the quota message, not a finding: a watcher that can't
         # run is a failure (streak, then a schedule_paused notice), never a bell item.
@@ -419,16 +580,7 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
         return await _finish_watch_run(schedule, result, watch_state)
 
     if result.status == "completed":
-        await record_run_result(
-            user_id, schedule_id, status="completed", session_id=result.session_id
-        )
-        share_id = None
-        if schedule.project_id and schedule.deliver_to == "project" and result.session_id:
-            share_id = await asyncio.to_thread(ScheduleDelivery().deliver, schedule, result.session_id)
-        await _record_project_run(schedule, "completed", share_id)
-        await _record_history(schedule, "completed", result)
-        logger.info(f"Schedule {schedule_id}: run {result.run_id} completed (session {result.session_id})")
-        return {"scheduleId": schedule_id, "result": "completed", "sessionId": result.session_id}
+        return await _record_completed(schedule, result)
 
     # error / timeout — record and apply the consecutive-failure breaker.
     return await _record_failure_and_maybe_pause(

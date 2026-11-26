@@ -642,3 +642,19 @@ async def test_a_reload_check_reads_every_turn_and_records_an_uncovered_pass():
     assert no_cut["passed"]
     assert no_cut["uncovered"] == ["skill.reloads_after_cut skill_creator: no cut after its activation"]
     json.dumps(no_cut)
+
+
+class UserPauseRunner:
+    """A turn that pauses on a tool approval, which the harness cannot answer."""
+
+    async def __call__(self, **kwargs):
+        return RunResult(run_id="r0", session_id=kwargs["session_id"], user_id="u", status="needs_user",
+                         final_message="I drafted it; approve to send.", started_at="t", finished_at="t",
+                         pending_interrupt_ids=["int-a"])
+
+
+@pytest.mark.asyncio
+async def test_a_pause_on_the_user_is_its_own_outcome_never_a_pass():
+    row = await run_sample(_terminal_case({"output": "x = 42"}), sample=0, model_id="m", run_turn=UserPauseRunner())
+    assert not row["passed"] and row["status"] == "needs_user"
+    assert row["error"] == "paused for the user (1 prompt(s))"

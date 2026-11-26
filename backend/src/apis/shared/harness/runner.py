@@ -384,10 +384,12 @@ async def run_agent_headless(
     result.usage = acc.finalize_usage()
     result.oauth_required = acc.oauth_required
     result.client_tool_calls = acc.client_tool_calls
+    result.pending_interrupt_ids = acc.pending_interrupt_ids
     result.title = acc.title
     result.events_seen = acc.events_seen
     if not result.error and acc.error:
         result.error_code = acc.error_code
+        result.error_kind = acc.error_kind
     result.error = result.error or acc.error
     if result.status != "timeout":
         if result.error:
@@ -396,6 +398,8 @@ async def run_agent_headless(
             result.status = "oauth_required"
         elif acc.client_tool_calls:
             result.status = "client_tool_call"
+        elif acc.done and acc.pending_interrupt_ids:
+            result.status = "needs_user"
         elif acc.done:
             result.status = "completed"
         else:
@@ -433,7 +437,9 @@ async def run_agent_headless(
         # default, used where a caller drains the result itself) stays excluded.
         # A caller that decides for itself (a watch run, quiet or not) passes
         # ``mark_unread=False``.
-        if mark_unread and trigger in ("schedule", "run_now") and result.status == "completed":
+        # ``needs_user`` keeps the dot it always had (a paused run read as
+        # ``completed``): the conversation holds the card the user must answer.
+        if mark_unread and trigger in ("schedule", "run_now") and result.status in ("completed", "needs_user"):
             await set_session_unread(session_id, user_id, True)
     except Exception:
         logger.error(

@@ -17,6 +17,12 @@ canonical JSON text), ``fingerprintVersion``, ``probeRunId``,
 ``lastFullRunAt`` and ``wakeAt``. They are worker bookkeeping, so they are
 excluded from the model's dump and never reach ``GET /schedules/{id}/state``.
 
+``pausedSessionId`` and ``pausedUntil`` are set while a run of the watcher
+waits on the user (docs/specs/answer-from-inbox.md §3.2): the watcher **holds**,
+skipping its runs, until that pause is answered or expires. They are written
+and cleared on their own, never by :func:`save_watch_state`, so a state save
+neither sets nor clears a hold.
+
 The bounds are enforced by truncating, never by raising: the state is written
 from a model's report, and a report that overshoots must still save what fits
 rather than lose the whole run's progress.
@@ -95,6 +101,24 @@ class WatchState(BaseModel):
     probe_run_id: Optional[str] = Field(None, alias="probeRunId", exclude=True)
     last_full_run_at: Optional[str] = Field(None, alias="lastFullRunAt", exclude=True)
     wake_at: Optional[str] = Field(None, alias="wakeAt", exclude=True)
+    paused_session_id: Optional[str] = Field(
+        None, alias="pausedSessionId", description="The run's conversation that waits on the user"
+    )
+    paused_until: Optional[str] = Field(
+        None, alias="pausedUntil", description="When that pause expires; the hold ends then at the latest"
+    )
+
+    def holding(self, now: Optional[datetime] = None) -> bool:
+        """Whether a hold is set and has not passed ``pausedUntil``. Says nothing about the pause itself."""
+        if not self.paused_session_id or not self.paused_until:
+            return False
+        try:
+            until = datetime.fromisoformat(self.paused_until.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return False
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        return until > (now or datetime.now(timezone.utc))
 
     @field_validator("cursors", mode="before")
     @classmethod
@@ -247,6 +271,74 @@ def save_watch_state(
             logger.info(
                 "Watcher state for schedule %s moved past version %s; not saved", schedule_id, expected_version
             )
+            return False
+        raise
+
+
+def set_watch_pause(
+    user_id: str,
+    schedule_id: str,
+    *,
+    session_id: str,
+    paused_until: str,
+    expected_version: Optional[int],
+) -> bool:
+    """Hold the watcher on ``session_id``'s pause, if nobody wrote since the caller read.
+
+    Leaves the cursors, tracking and ``seen`` alone, and bumps the version like
+    every conditional write. ``expected_version`` is ``None`` for a watcher with
+    no state yet. Returns whether it wrote; any error but the condition raises.
+    """
+    from botocore.exceptions import ClientError
+
+    values: Dict[str, object] = {
+        ":session": session_id,
+        ":until": paused_until,
+        ":version": (expected_version or 0) + 1,
+        ":updated_at": _now_iso(),
+    }
+    if expected_version is None:
+        condition = "attribute_not_exists(PK)"
+    else:
+        condition = "#version = :expected"
+        values[":expected"] = expected_version
+    try:
+        _service._get_table().update_item(
+            Key=_key(user_id, schedule_id),
+            UpdateExpression=(
+                "SET pausedSessionId = :session, pausedUntil = :until, #version = :version, updatedAt = :updated_at"
+            ),
+            ConditionExpression=condition,
+            ExpressionAttributeNames={"#version": "version"},
+            ExpressionAttributeValues=values,
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            logger.info("Watcher state for schedule %s moved past version %s; hold not set", schedule_id, expected_version)
+            return False
+        raise
+
+
+def clear_watch_pause(user_id: str, schedule_id: str, *, session_id: str) -> bool:
+    """End the hold on ``session_id``'s pause. Returns whether it cleared one.
+
+    Conditional on the hold still naming that session, so a newer hold is never
+    cleared by mistake. The version is left alone: the run that follows saves
+    its state against the version it read before this.
+    """
+    from botocore.exceptions import ClientError
+
+    try:
+        _service._get_table().update_item(
+            Key=_key(user_id, schedule_id),
+            UpdateExpression="REMOVE pausedSessionId, pausedUntil",
+            ConditionExpression="pausedSessionId = :session",
+            ExpressionAttributeValues={":session": session_id},
+        )
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
             return False
         raise
 

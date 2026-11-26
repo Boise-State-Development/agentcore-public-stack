@@ -164,6 +164,17 @@ describe('RunNowService', () => {
     expect(task.detail).toContain('connect an account');
   });
 
+  it('finishes a run that waits on the user with Open, not as a failure', () => {
+    mockRunApi.getRun.mockReturnValue(of(runStatus({ status: 'needs_user' })));
+    service.run({ prompt: 'Go' });
+    poll();
+
+    const [task] = tasks.tasks();
+    expect(task.status).toBe('completed');
+    expect(task.detail).toBe('Waiting for your answer');
+    expect(task.viewLabel).toBe('Open');
+  });
+
   it('keeps polling through a failed poll', () => {
     mockRunApi.getRun
       .mockReturnValueOnce(throwError(() => new Error('504')))

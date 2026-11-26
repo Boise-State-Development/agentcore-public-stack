@@ -18,7 +18,13 @@ from typing import Any, Dict, List, Literal, Optional
 # oauth_required   — the turn finished but at least one connector tool needs
 #                    user consent (headless runs cannot pop a consent window;
 #                    callers should surface the authorization URL to the user)
-RunStatus = Literal["completed", "error", "timeout", "oauth_required", "client_tool_call"]
+# client_tool_call — the turn paused on a tool the request declared in
+#                    ``client_tools`` (the eval harness's terminal cases)
+# needs_user       — the turn paused on the user: a tool approval, a question,
+#                    an MCP form or a browser sign-in. ``pending_interrupt_ids``
+#                    names the pauses; their detail is in the session's
+#                    ``PendingInterrupt`` breadcrumbs (answer-from-inbox.md §3.1)
+RunStatus = Literal["completed", "error", "timeout", "oauth_required", "client_tool_call", "needs_user"]
 
 
 @dataclass
@@ -56,6 +62,10 @@ class RunResult:
     #: Runtime's own retries. ``None`` for an error that had no such frame
     #: (HTTP, transport, timeout) and for a turn without an error.
     error_code: Optional[str] = None
+    #: The ``stream_error`` frame's ``metadata.error_kind``, which names the
+    #: failure more finely than ``code`` (a refused resume's code is only
+    #: ``bad_request``; its kind is ``resume_unavailable``). ``None`` without one.
+    error_kind: Optional[str] = None
     title: Optional[str] = None
     tool_trace: List[ToolTraceEntry] = field(default_factory=list)
     # Accumulated usage/metrics from the stream's `metadata_summary` (turn
@@ -68,6 +78,11 @@ class RunResult:
     #: ``{interruptId, toolUseId, toolName, arguments}``. Only a caller that
     #: sends ``client_tools`` (the eval harness's terminal cases) ever sees one.
     client_tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    #: The ``interruptId`` of every pause on the user (``tool_approval_required``,
+    #: ``user_question_required``, ``mcp_elicitation_required``,
+    #: ``browser_login_required``), in stream order. Ids only: the harness holds
+    #: no tool input, and the detail is read from the breadcrumbs.
+    pending_interrupt_ids: List[str] = field(default_factory=list)
     started_at: str = ""
     finished_at: str = ""
     #: The Runtime's own timing, from the turn's final ``metadata`` frame:
