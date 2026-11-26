@@ -123,6 +123,8 @@ The triage pass is metered like any side call (`callKind: "proactive_triage"`). 
 
 ### G5 — Approvals answered later, from anywhere
 
+**Build plan:** `docs/specs/answer-from-inbox.md` (slice 2). It puts the respond route under the existing inbox router, as `POST /notifications/{notificationId}/respond`.
+
 **Gap.** The pause machinery already does the hard part. A headless run's pause stays resumable for 7 days, and resume is a POST with an `interrupt_responses` entry. But:
 
 - `run_agent_headless` classifies only `oauth_required` and `client_tool_call`. A **tool-approval** or **question** pause reads as `completed`.
