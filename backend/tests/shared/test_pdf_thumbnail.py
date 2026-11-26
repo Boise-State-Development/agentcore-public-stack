@@ -9,11 +9,15 @@ import pytest
 
 from apis.shared.files.document_read import _open_pdf
 from apis.shared.files.pdf_thumbnail import (
-    THUMBNAIL_MAX_DIMENSION,
+    THUMBNAIL_MAX_HEIGHT,
+    THUMBNAIL_WIDTH,
+    ThumbnailRenderError,
     _to_rgb,
     encode_png,
+    legacy_thumbnail_keys,
     render_first_page,
     thumbnail_key,
+    thumbnail_scale,
 )
 from tests.shared.test_document_read import build_pdf
 
@@ -58,16 +62,42 @@ def test_rgba_rows_with_padding_become_packed_rgb():
     assert _to_rgb(buffer, 2, 2, 9, 4) == bytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
 
 
-def test_first_page_renders_within_the_bound():
+def test_first_page_renders_at_the_cards_width():
     pdf = _open_pdf(build_pdf(["Quarterly report", "Page two"]))
     try:
         width, height, rows = _decode(render_first_page(pdf))
     finally:
         pdf.close()
-    assert max(width, height) == THUMBNAIL_MAX_DIMENSION
+    # The card fills its width and crops the bottom, so width is what must
+    # cover a 2x screen; the old 256 px longest side left a portrait page 198 px wide.
+    assert width == THUMBNAIL_WIDTH
+    assert height > width
     assert len(rows) == width * height * 3
     assert min(rows) < 128  # the page's text, not a blank image
 
 
+@pytest.mark.parametrize(
+    "size,expected",
+    [
+        ((612, 792), (THUMBNAIL_WIDTH, 932)),  # Letter portrait
+        ((792, 612), (THUMBNAIL_WIDTH, 556)),  # Letter landscape
+        ((200, 2000), (144, THUMBNAIL_MAX_HEIGHT)),  # a receipt: narrower, never thousands of px tall
+    ],
+)
+def test_the_scale_fills_the_width_within_the_height_cap(size, expected):
+    scale = thumbnail_scale(*size)
+    assert (round(size[0] * scale), round(size[1] * scale)) == expected
+
+
+def test_a_zero_sized_page_will_not_scale():
+    with pytest.raises(ThumbnailRenderError):
+        thumbnail_scale(0, 792)
+
+
 def test_thumbnail_sits_in_the_uploads_derived_folder():
-    assert thumbnail_key("user-files/u1/s1/up-1/report.pdf") == "user-files/u1/s1/up-1/_derived/thumb.png"
+    assert thumbnail_key("user-files/u1/s1/up-1/report.pdf") == "user-files/u1/s1/up-1/_derived/thumb-w720.png"
+
+
+def test_the_size_is_in_the_name_so_a_new_size_renders_again():
+    assert str(THUMBNAIL_WIDTH) in thumbnail_key("user-files/u1/s1/up-1/report.pdf")
+    assert legacy_thumbnail_keys("user-files/u1/s1/up-1/report.pdf") == ("user-files/u1/s1/up-1/_derived/thumb.png",)

@@ -15,15 +15,11 @@ import io
 import logging
 from typing import Callable, Dict
 
+from apis.shared.files import pdf_thumbnail
 from apis.shared.files.pdfium_lock import serialized_pdfium
 
 logger = logging.getLogger(__name__)
 
-
-# Bounded box for the longest dimension of a generated thumbnail. The UI's
-# attachment card body is ~240x128 logical pixels, so 256 covers retina
-# without being wasteful on storage / CPU.
-THUMBNAIL_MAX_DIMENSION = 256
 
 
 class ThumbnailUnsupportedError(Exception):
@@ -70,7 +66,7 @@ class ThumbnailRenderer:
        clean fit. Either flavor can stay scaled to zero when idle.
     2. Have app-api enqueue render requests (SQS or a synchronous HTTPS call
        behind an internal ALB) instead of importing the converter. The render
-       service writes the resulting PNG to the same `_thumb.png` sibling key
+       service writes the resulting PNG to the same `_derived/` thumbnail key
        the PDF path uses, so the cache-and-serve flow on this side is
        unchanged.
     3. Keep the dispatcher's public API stable: callers should still get a PNG
@@ -99,8 +95,7 @@ class ThumbnailRenderer:
             raw: The raw file bytes.
 
         Returns:
-            PNG-encoded bytes for a thumbnail bounded by
-            THUMBNAIL_MAX_DIMENSION on its longest side.
+            PNG-encoded bytes sized by ``pdf_thumbnail.thumbnail_scale``.
 
         Raises:
             ThumbnailUnsupportedError: No renderer is registered for mime_type.
@@ -135,13 +130,12 @@ class ThumbnailRenderer:
 
             page = pdf[0]
             try:
-                width, height = page.get_size()
-                longest = max(width, height)
-                if longest <= 0:
-                    raise ThumbnailRenderError("PDF page has zero dimensions")
-
-                # Scale so the longest side lands at THUMBNAIL_MAX_DIMENSION.
-                scale = THUMBNAIL_MAX_DIMENSION / longest
+                # The prepare Lambda's size, so both renderers fill the
+                # same key with the same image.
+                try:
+                    scale = pdf_thumbnail.thumbnail_scale(*page.get_size())
+                except pdf_thumbnail.ThumbnailRenderError as e:
+                    raise ThumbnailRenderError(str(e)) from e
                 bitmap = page.render(scale=scale)
                 pil_image = bitmap.to_pil()
             finally:

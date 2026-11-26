@@ -17,7 +17,8 @@ from apis.shared.files.models import FileMetadata, FileStatus
 BUCKET = "test-thumbs"
 QUEUE_URL = "https://sqs.us-west-2.amazonaws.com/123456789012/test-large-document-prepare"
 KEY = "user-files/u1/s1/up-1/report.pdf"
-DERIVED = "user-files/u1/s1/up-1/_derived/thumb.png"
+DERIVED = "user-files/u1/s1/up-1/_derived/thumb-w720.png"
+OLD_DERIVED = "user-files/u1/s1/up-1/_derived/thumb.png"  # 256 px, before the 720 px width
 LEGACY = "user-files/u1/s1/up-1/_thumb.png"
 
 
@@ -67,16 +68,26 @@ class TestThumbnail:
         bucket.put_object(Bucket=BUCKET, Key=DERIVED, Body=b"\x89PNG")
         service, renderer, sqs = _service(bucket)
         response = await service.get_or_create_thumbnail("u1", "up-1")
-        assert "_derived/thumb.png" in response.url and response.cached is True
+        assert "_derived/thumb-w720.png" in response.url and response.cached is True
         renderer.render.assert_not_called()
         sqs.send_message.assert_not_called()
 
-    async def test_serves_a_thumbnail_rendered_before_the_lambda_did(self, bucket, queue):
-        bucket.put_object(Bucket=BUCKET, Key=LEGACY, Body=b"\x89PNG")
+    @pytest.mark.parametrize("stale", [OLD_DERIVED, LEGACY])
+    async def test_an_older_smaller_thumbnail_is_served_while_the_new_one_is_queued(self, bucket, queue, stale):
+        bucket.put_object(Bucket=BUCKET, Key=stale, Body=b"\x89PNG")
         service, renderer, sqs = _service(bucket)
         response = await service.get_or_create_thumbnail("u1", "up-1")
-        assert "_thumb.png" in response.url and "_derived" not in response.url
+        assert stale in response.url and response.cached is True
         renderer.render.assert_not_called()
+        assert json.loads(sqs.send_message.call_args.kwargs["MessageBody"])["action"] == "thumbnail"
+
+    async def test_the_current_thumbnail_wins_over_an_older_one(self, bucket, queue):
+        bucket.put_object(Bucket=BUCKET, Key=OLD_DERIVED, Body=b"\x89PNG old")
+        bucket.put_object(Bucket=BUCKET, Key=DERIVED, Body=b"\x89PNG")
+        service, renderer, sqs = _service(bucket)
+        response = await service.get_or_create_thumbnail("u1", "up-1")
+        assert "_derived/thumb-w720.png" in response.url
+        sqs.send_message.assert_not_called()
 
     async def test_a_missing_thumbnail_is_queued_never_rendered_here(self, bucket, queue):
         service, renderer, sqs = _service(bucket)
@@ -94,13 +105,17 @@ class TestThumbnail:
             await service.get_or_create_thumbnail("u1", "up-1")
         renderer.render.assert_not_called()
 
-    async def test_without_the_prepare_queue_it_renders_in_process_as_before(self, bucket, no_queue):
+    @pytest.mark.parametrize("stale", [None, LEGACY])
+    async def test_without_the_prepare_queue_it_renders_in_process_into_the_derived_key(self, bucket, no_queue, stale):
+        if stale:
+            bucket.put_object(Bucket=BUCKET, Key=stale, Body=b"\x89PNG old")
         service, renderer, sqs = _service(bucket)
         response = await service.get_or_create_thumbnail("u1", "up-1")
         renderer.render.assert_called_once()
         sqs.send_message.assert_not_called()
-        assert bucket.get_object(Bucket=BUCKET, Key=LEGACY)["Body"].read() == b"\x89PNG in-process"
-        assert response.cached is False
+        # Under _derived/, never a new sibling: a sibling of the original reads as an original upload.
+        assert bucket.get_object(Bucket=BUCKET, Key=DERIVED)["Body"].read() == b"\x89PNG in-process"
+        assert "_derived/thumb-w720.png" in response.url and response.cached is False
 
 
 def test_the_route_answers_202_while_a_render_is_queued():

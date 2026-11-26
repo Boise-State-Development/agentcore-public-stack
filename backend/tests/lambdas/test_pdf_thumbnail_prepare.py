@@ -1,4 +1,4 @@
-"""The prepare Lambda renders a PDF's first page to ``_derived/thumb.png``
+"""The prepare Lambda renders a PDF's first page to ``_derived/thumb-w720.png``
 (moto S3 + DynamoDB), on both its paths and for a PDF uploaded before it did."""
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from lambdas.large_document_prepare import handler
 from tests.lambdas.test_large_document_prepare import _body, _keys, _upload, store  # noqa: F401 - fixture
 from tests.shared.test_document_read import build_docx, build_pdf
 
-THUMB = "user-files/u1/s1/up-1/_derived/thumb.png"
+THUMB = "user-files/u1/s1/up-1/_derived/thumb-w720.png"
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 

@@ -96,10 +96,10 @@ class TestPrepare:
             f"{base}_derived/pages-0011-0020.pdf",
             f"{base}_derived/pages-0021-0023.pdf",
             f"{base}_derived/text.jsonl",
-            f"{base}_derived/thumb.png",
+            f"{base}_derived/thumb-w720.png",
             f"{base}manual.pdf",
         ]
-        assert _body(s3, f"{base}_derived/thumb.png").startswith(b"\x89PNG\r\n\x1a\n")
+        assert _body(s3, f"{base}_derived/thumb-w720.png").startswith(b"\x89PNG\r\n\x1a\n")
         assert ld.decode_text_layer(_body(s3, f"{base}_derived/text.jsonl")) == PAGES
         row = await repository.get_file("u1", "up-1")
         prep = row.preparation
