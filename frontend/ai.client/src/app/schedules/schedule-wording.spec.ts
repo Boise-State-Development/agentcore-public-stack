@@ -36,6 +36,7 @@ describe('runStatusLabel', () => {
     expect(runStatusLabel('error')).toBe('Failed');
     expect(runStatusLabel('timeout')).toBe('Timed out');
     expect(runStatusLabel('paused')).toBe('Paused');
+    expect(runStatusLabel('needs_user')).toBe('Waiting for you');
   });
 
   it('words a watcher’s quiet and notify runs, counting what it found', () => {
@@ -71,6 +72,14 @@ describe('lastDayRunSummary', () => {
     expect(lastDayRunSummary([run('notify', 1), run('error', 2), run('timeout', 3)], true, now)).toBe(
       'Checked 1 time · found something 1 time · 2 failed',
     );
+  });
+
+  it('counts a run that waits on the user as a finished run, never a failure', () => {
+    // answer-from-inbox §3.8: it did its work, and a watcher's found something it needs you for.
+    expect(lastDayRunSummary([run('needs_user', 1), run('quiet', 2)], true, now)).toBe(
+      'Checked 2 times · found something 1 time',
+    );
+    expect(lastDayRunSummary([run('needs_user', 1)], false, now)).toBe('Ran 1 time');
   });
 
   it('counts a standard schedule’s runs, and says when there were none', () => {

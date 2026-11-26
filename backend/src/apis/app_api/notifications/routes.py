@@ -60,6 +60,8 @@ def list_notifications(
 ) -> NotificationsResponse:
     try:
         items, next_cursor = _svc().list(user.email, limit=limit, cursor=cursor, unread_only=unread_only)
+        # A wait past its expiry reads "Expired" from here on (answer-from-inbox §3.8).
+        _svc().expire_lapsed(user.email, items)
         unread = _svc().unread_count(user.email)
     except Exception:
         logger.exception("Failed to read notifications")

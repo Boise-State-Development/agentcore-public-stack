@@ -597,3 +597,77 @@ async def test_run_mode_and_incognito_are_absent_unless_given(monkeypatch, deliv
     assert not {"run_mode", "incognito"} & set(seen["payload"])
     assert result.report_input is None
     assert delivery_spy["unread"] == [(result.session_id, "user-1", True)]
+
+
+# ---------------------------------------------------------------------------
+# needs_user (answer-from-inbox §3.1)
+# ---------------------------------------------------------------------------
+
+
+def _pause_stream(*frames: tuple[str, str]) -> bytes:
+    return _sse(
+        ("message_start", '{"role": "assistant"}'),
+        ("content_block_delta", '{"contentBlockIndex": 0, "type": "text", "text": "Drafted a reply."}'),
+        ("message_stop", '{"stopReason": "tool_use"}'),
+        *frames,
+        ("done", "{}"),
+    )
+
+
+_APPROVAL = ("tool_approval_required", '{"type": "tool_approval_required", "interruptId": "int-a", '
+             '"toolUseId": "tu-a", "toolName": "send_message", "toolInput": "{}", "message": "Send it?"}')
+_QUESTION = ("user_question_required", '{"type": "user_question_required", "interruptId": "int-q", '
+             '"toolUseId": "tu-q", "questions": []}')
+_FORM = ("mcp_elicitation_required", '{"type": "mcp_elicitation_required", "interruptId": "int-f"}')
+_LOGIN = ("browser_login_required", '{"type": "browser_login_required", "interruptId": "int-l"}')
+_OAUTH = ("oauth_required", '{"providerId": "github", "authorizationUrl": "https://example.test/consent"}')
+
+
+async def _run_stream(monkeypatch, stream: bytes, **kwargs):
+    _mock_http(monkeypatch, lambda request: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=stream))
+    return await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=SpyBearerAuth("b"),
+        invocations_base_url="http://localhost:8001", governance=GovernanceFloor(audit=RecordingAudit()),
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_pause_on_the_user_is_needs_user_with_every_interrupt_id(monkeypatch, delivery_spy):
+    result = await _run_stream(monkeypatch, _pause_stream(_APPROVAL, _QUESTION, _FORM, _LOGIN, _APPROVAL))
+    assert result.status == "needs_user"
+    # In stream order, each once; ids only, no tool input.
+    assert result.pending_interrupt_ids == ["int-a", "int-q", "int-f", "int-l"]
+    assert result.to_dict()["pending_interrupt_ids"] == ["int-a", "int-q", "int-f", "int-l"]
+
+
+@pytest.mark.asyncio
+async def test_oauth_still_wins_over_a_pause_on_the_user(monkeypatch, delivery_spy):
+    result = await _run_stream(monkeypatch, _pause_stream(_APPROVAL, _OAUTH))
+    assert result.status == "oauth_required"
+
+
+@pytest.mark.asyncio
+async def test_an_error_wins_over_a_pause_on_the_user(monkeypatch, delivery_spy):
+    stream = _pause_stream(
+        _APPROVAL,
+        ("stream_error", '{"type": "stream_error", "code": "bad_request", "message": "Send your message again.", '
+                         '"metadata": {"error_kind": "resume_unavailable"}}'),
+    )
+    result = await _run_stream(monkeypatch, stream)
+    assert result.status == "error"
+    assert (result.error_code, result.error_kind) == ("bad_request", "resume_unavailable")
+
+
+@pytest.mark.asyncio
+async def test_a_paused_scheduled_run_keeps_its_unread_dot(monkeypatch, delivery_spy):
+    result = await _run_stream(monkeypatch, _pause_stream(_APPROVAL), trigger="schedule")
+    assert result.status == "needs_user"
+    assert delivery_spy["unread"] == [(result.session_id, "user-1", True)]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_with_no_pause_is_completed_with_no_ids(monkeypatch, delivery_spy):
+    result = await _run_stream(monkeypatch, _HAPPY_STREAM)
+    assert (result.status, result.pending_interrupt_ids, result.error_kind) == ("completed", [], None)

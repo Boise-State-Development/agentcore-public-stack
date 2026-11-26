@@ -30,7 +30,35 @@ export type NotificationKind =
   | 'handoff_done'
   | 'handoff_stopped'
   // A quiet watcher found something new (quiet-watcher §3.3, §3.5): one per finding.
-  | 'agent_item';
+  | 'agent_item'
+  // A scheduled run paused on the user (answer-from-inbox §3.3): one per pause.
+  // `agent_needs_approval` when every prompt is a tool approval.
+  | 'agent_needs_approval'
+  | 'agent_needs_input';
+
+/** The inbox kinds that wait on the user until answered or expired. */
+export const NEEDS_USER_NOTIFICATION_KINDS: ReadonlySet<NotificationKind> = new Set([
+  'agent_needs_approval',
+  'agent_needs_input',
+]);
+
+/** One prompt a paused run waits on, as its inbox row lists it: ids and one display line. */
+export interface NeedsUserPrompt {
+  interruptId: string;
+  kind: 'tool_approval' | 'user_question' | 'mcp_elicitation' | 'browser_login';
+  toolName?: string;
+  serverName?: string;
+  headline?: string;
+}
+
+/** How a needs-user row was settled (backend `NotificationResolution`); absent while it waits. */
+export interface NotificationResolution {
+  state: 'applying' | 'answered' | 'answered_elsewhere' | 'expired' | 'retry';
+  decision?: 'approved' | 'declined' | 'answered' | 'skipped' | null;
+  outcome?: 'finished' | 'waiting_again' | 'failed' | null;
+  at: string;
+  resumeRunId?: string | null;
+}
 
 /** The inbox kinds a handoff writes. */
 export const HANDOFF_NOTIFICATION_KINDS: ReadonlySet<NotificationKind> = new Set([
@@ -62,7 +90,9 @@ export interface AppNotification {
    * `handoff_needs_input` entry, so a click opens where the answer is;
    * for a watcher's finding (`agent_item`, no actor or project): `scheduleId`, `runId`,
    * `sessionId`, `label` (the schedule's), `title` (the finding's short display line),
-   * `urgency` (`now` | `today` | `fyi`) and `key` (the finding's stable identity).
+   * `urgency` (`now` | `today` | `fyi`) and `key` (the finding's stable identity);
+   * for a paused run (`agent_needs_*`, no actor or project): `scheduleId`, `runId`,
+   * `runFinishedAt`, `sessionId`, `label`, `expiresAt`, `answerable` and up to five `prompts`.
    */
   payload: {
     role?: string;
@@ -89,9 +119,14 @@ export interface AppNotification {
     sessionId?: string;
     urgency?: 'now' | 'today' | 'fyi';
     key?: string;
+    runFinishedAt?: string;
+    expiresAt?: string;
+    answerable?: boolean;
+    prompts?: NeedsUserPrompt[];
   } & Record<string, unknown>;
   createdAt: string;
   readAt?: string | null;
+  resolution?: NotificationResolution | null;
 }
 
 export interface NotificationsResponse {

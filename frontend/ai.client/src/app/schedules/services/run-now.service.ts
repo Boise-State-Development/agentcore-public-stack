@@ -122,6 +122,15 @@ export class RunNowService {
         viewLabel: 'View result',
         onView: () => this.openResult(result),
       });
+    } else if (result.status === 'needs_user') {
+      // The run paused on an approval, a question, a form or a sign-in: the
+      // conversation holds the card to answer.
+      this.tasks.complete(taskId, {
+        detail: 'Waiting for your answer',
+        route,
+        viewLabel: 'Open',
+        onView: () => this.openResult(result),
+      });
     } else if (result.status === 'oauth_required') {
       this.tasks.fail(taskId, 'A tool needs you to connect an account first.', route);
     } else {

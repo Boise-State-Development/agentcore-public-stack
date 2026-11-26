@@ -44,6 +44,13 @@ NotificationKind = Literal[
     # {scheduleId, runId, sessionId, label, title, urgency, key}, never the item's summary.
     # Written with no actor: the recipient is the schedule's owner.
     "agent_item",
+    # A scheduled run paused on the user (answer-from-inbox spec §3.3): one per pause, payload
+    # {scheduleId, runId, runFinishedAt, sessionId, label, expiresAt, answerable,
+    # prompts: [{interruptId, kind, toolName?, serverName?, headline?}]}, at most 5 prompts and
+    # never tool input, options, fields or answers. ``agent_needs_approval`` when every prompt is
+    # a tool approval. Written with no actor: the recipient is the schedule's owner.
+    "agent_needs_approval",
+    "agent_needs_input",
     # Quota requests and extensions (quota-requests spec §11.1). Not project
     # events: projectId is unset and the payload carries the ids.
     "quota_request_submitted",
@@ -60,6 +67,24 @@ NotificationKind = Literal[
 ]
 
 
+ResolutionState = Literal["applying", "answered", "answered_elsewhere", "expired", "retry"]
+
+
+class NotificationResolution(BaseModel):
+    """How a needs-user row was settled (answer-from-inbox spec §3.3). Absent while it waits.
+
+    A top-level attribute beside the payload, so the payload stays as written.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    state: ResolutionState
+    decision: Optional[Literal["approved", "declined", "answered", "skipped"]] = None
+    outcome: Optional[Literal["finished", "waiting_again", "failed"]] = None
+    at: str
+    resume_run_id: Optional[str] = Field(None, alias="resumeRunId")
+
+
 class Notification(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -72,3 +97,4 @@ class Notification(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(..., alias="createdAt")
     read_at: Optional[str] = Field(None, alias="readAt")
+    resolution: Optional[NotificationResolution] = None

@@ -26,6 +26,15 @@ logger = logging.getLogger(__name__)
 
 _TOOL_RESULT_PREVIEW_CHARS = 2000
 
+#: Interrupt frames that pause a turn on the user. ``oauth_required`` and
+#: ``client_tool_call`` are not here: each has its own status.
+USER_PAUSE_EVENTS = frozenset({
+    "tool_approval_required",
+    "user_question_required",
+    "mcp_elicitation_required",
+    "browser_login_required",
+})
+
 
 async def iter_sse_events(
     lines: AsyncIterator[str],
@@ -92,6 +101,8 @@ class InvocationStreamAccumulator:
     tool_trace: List[ToolTraceEntry] = field(default_factory=list)
     oauth_required: List[OAuthConsentRequired] = field(default_factory=list)
     client_tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    pending_interrupt_ids: List[str] = field(default_factory=list)
+    error_kind: Optional[str] = None
     usage: Dict[str, Any] = field(default_factory=dict)
     events_seen: Dict[str, int] = field(default_factory=dict)
     #: From the turn's final ``metadata`` frame (the one carrying
@@ -259,6 +270,10 @@ class InvocationStreamAccumulator:
                 "toolName": payload.get("toolName"),
                 "arguments": payload.get("arguments") or {},
             })
+        elif name in USER_PAUSE_EVENTS:
+            interrupt_id = payload.get("interruptId")
+            if isinstance(interrupt_id, str) and interrupt_id and interrupt_id not in self.pending_interrupt_ids:
+                self.pending_interrupt_ids.append(interrupt_id)
         elif name in ("stream_error", "error"):
             self.error = str(
                 payload.get("message") or payload.get("error") or payload
@@ -269,6 +284,9 @@ class InvocationStreamAccumulator:
             )
             if isinstance(code, str) and code:
                 self.error_code = code
+            kind = metadata.get("error_kind") if isinstance(metadata, dict) else None
+            if isinstance(kind, str) and kind:
+                self.error_kind = kind
         elif name == "quota_exceeded":
             self.quota_exceeded = True
         elif name == "done":
