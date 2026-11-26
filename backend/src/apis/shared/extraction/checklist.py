@@ -426,11 +426,16 @@ def _cell(text: Any) -> str:
 
 
 def render_set(result: SetResult) -> str:
-    """One set as a Markdown table of values and states, bounded as ``document_extract``'s result is.
+    """One set as a Markdown table of values, states and where each was found, bounded as
+    ``document_extract``'s result is.
 
-    Values and states only: the quotes, locators and methods are display, kept on the ``WFCHK#``
-    row. Each value is cut at ``rows.MAX_VALUE_CHARS``, and a set whose values pass
-    ``rows.MAX_RESULT_CHARS`` keeps its names and states alone (``model_facing_result``).
+    The ``Where`` column is the row's rendered locator (``"p. 18"``, ``"¶ 34"``, hedged when
+    estimated), a few characters a row, so a later step can point at the place a value came from:
+    without it a merge that marks up the document could not find a failed criterion's page. The
+    quotes and methods stay display, kept on the ``WFCHK#`` row: a quote for every row would not fit
+    the step's stored answer (``SEND_BACK_MAX_TOKENS``). Each value is cut at
+    ``rows.MAX_VALUE_CHARS``, and a set whose values pass ``rows.MAX_RESULT_CHARS`` keeps its names,
+    states and places alone (``model_facing_result``).
     """
     heading = f"### {_cell(result.title or result.name)}"
     if result.status != "done" or result.field_set is None:
@@ -438,14 +443,18 @@ def render_set(result: SetResult) -> str:
         return f"{heading}\n\nNot filled in: {reason}."
     payload = model_facing_result(list(result.rows), field_set=result.field_set, artifact_id=None, schema_enforced=True)
     titles = {row.field.name: row.field.title or row.field.name for row in result.rows}
+    places = {row.field.name: _cell(row.locator_text) if row.locator_text else "—" for row in result.rows}
     omitted = bool(payload.get("valuesOmitted"))
     if omitted:
-        lines = [heading, "", "| Field | State |", "|---|---|"]
-        lines += [f"| {_cell(titles.get(f['name'], f['name']))} | {f['state']} |" for f in payload["fields"]]
+        lines = [heading, "", "| Field | State | Where |", "|---|---|---|"]
+        lines += [
+            f"| {_cell(titles.get(f['name'], f['name']))} | {f['state']} | {places.get(f['name'], '—')} |"
+            for f in payload["fields"]
+        ]
         lines += ["", "(Values left out to keep this short; the step's table has them.)"]
         return "\n".join(lines)
     listed = {row.field.name: list_text(row.value) for row in result.rows}
-    lines = [heading, "", "| Field | Value | State |", "|---|---|---|"]
+    lines = [heading, "", "| Field | Value | State | Where |", "|---|---|---|---|"]
     for item in payload["fields"]:
         value = item.get("value")
         as_list = listed.get(item["name"])
@@ -453,7 +462,8 @@ def render_set(result: SetResult) -> str:
             # The bounded text with the checklist's separator: the same length, cut the same way.
             value = as_list if len(as_list) <= MAX_VALUE_CHARS else as_list[: MAX_VALUE_CHARS - 1].rstrip() + "…"
         lines.append(
-            f"| {_cell(titles.get(item['name'], item['name']))} | {_cell(value) if value else 'not found'} | {item['state']} |"
+            f"| {_cell(titles.get(item['name'], item['name']))} | {_cell(value) if value else 'not found'} | {item['state']}"
+            f" | {places.get(item['name'], '—')} |"
         )
     return "\n".join(lines)
 

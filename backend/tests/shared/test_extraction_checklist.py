@@ -233,7 +233,7 @@ def test_row_fields_are_the_display_rows_with_null_for_not_found():
     assert by_name["total_request"]["value"] is None
 
 
-def test_the_answer_is_one_table_per_set_with_values_and_states_only():
+def test_the_answer_is_one_table_per_set_with_values_states_and_places():
     answers = cl.read_answers(
         SET, {"fields": [{"name": "total_request", "value": "$598,400", "quote": "Total | $598,400"}]}
     )
@@ -245,9 +245,12 @@ def test_the_answer_is_one_table_per_set_with_values_and_states_only():
         ]
     )
 
-    assert text.startswith("### Budget values\n\n| Field | Value | State |\n|---|---|---|")
-    assert "| Total request | $598,400 | supported |" in text
-    assert "| PI | not found | unverified |" in text  # no quote: nothing was traced
+    assert text.startswith("### Budget values\n\n| Field | Value | State | Where |\n|---|---|---|---|")
+    total = next(line for line in text.splitlines() if line.startswith("| Total request |"))
+    assert total.startswith("| Total request | $598,400 | supported | ")
+    by_name = {row.field.name: row for row in rows}
+    assert total.endswith(f" | {by_name['total_request'].locator_text} |") and by_name["total_request"].locator_text == "p. 1"
+    assert "| PI | not found | unverified | — |" in text  # no quote: nothing was traced
     assert "Total \\| $598,400" not in text  # the quote is display, never in the answer
     assert "### compliance-plans\n\nNot filled in: the model did not record an answer, twice." in text
 
@@ -261,7 +264,7 @@ def test_a_set_too_long_to_carry_its_values_keeps_names_and_states():
         cl.SetResult(name="wide", title="Wide", status="done", field_set=wide, rows=tuple(cl.verified_rows(wide, answers, [None])))
     )
 
-    assert "| Field | State |" in text
+    assert "| Field | State | Where |" in text
     assert long_value not in text
 
 
@@ -366,8 +369,8 @@ def test_a_list_reads_as_items_separated_by_semicolons_on_the_row_and_in_the_tab
 
     assert fields["aims"]["value"] == "Smith, Jane; Doe, John"
     assert fields["partners"]["value"] is None
-    assert "| Aims | Smith, Jane; Doe, John | unverified |" in text
-    assert "| Partners | not found | unverified |" in text
+    assert "| Aims | Smith, Jane; Doe, John | unverified | — |" in text
+    assert "| Partners | not found | unverified | — |" in text
 
 
 def test_a_long_list_is_cut_at_the_value_bound_in_the_table():
