@@ -670,6 +670,13 @@ jobs:
       # environment to turn it on there. Unset (empty string) or anything else
       # means off.
       CDK_PROACTIVE_RUNS_ENABLED: ${{ vars.CDK_PROACTIVE_RUNS_ENABLED }}
+      # Quiet watcher triage (docs/specs/quiet-watcher-triage.md §8): a full
+      # watch run leaves a probe for the triage stage. Set on the scheduled-runs
+      # worker, and on the AgentCore Runtime only while on. True only while
+      # CDK_PROACTIVE_RUNS_ENABLED is. Opt-in while in development: set the
+      # `CDK_WATCH_TRIAGE_ENABLED` variable to "true" in an environment to turn
+      # it on there. Unset (empty string) or anything else means off.
+      CDK_WATCH_TRIAGE_ENABLED: ${{ vars.CDK_WATCH_TRIAGE_ENABLED }}
       # Conversation search read path: GET /sessions/search on app-api
       # (docs/specs/conversation-search.md §5). Default on: set the
       # `CDK_CONVERSATION_SEARCH_ENABLED` variable to "false" in an environment

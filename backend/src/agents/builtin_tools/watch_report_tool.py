@@ -19,6 +19,10 @@ Design notes
   carries ``run_mode: "watch"`` while the Runtime's ``PROACTIVE_RUNS_ENABLED`` is on, so it is in
   neither ``INJECTED_TOOL_IDS`` nor ``KEY_DESCRIBED_INJECTED_TOOL_IDS``. The bounds below are told
   to the model; the worker enforces them.
+* **``state.wakeAt``** (quiet-watcher triage spec §3.3): the one time the model knows a tracked
+  item comes due, so a later triage forces a full run then even if no source changed. Optional
+  and additive, so it has no flag of its own: ``report``'s gate gates it. The worker keeps the
+  earliest future value, drops a past one and clamps one beyond 30 days (``watch_probe``).
 """
 
 from __future__ import annotations
@@ -45,7 +49,8 @@ _DESCRIPTION = (
     f"one notification per item: at most {MAX_ITEMS} items, title at most {MAX_TITLE_CHARS} "
     f"characters, summary at most {MAX_SUMMARY_CHARS}. Give each item a stable key (a message id "
     "or URL), so the same finding is never announced twice. state is carried to the next run: "
-    "cursors (where to check from next time) and tracking (what you are keeping an eye on)."
+    "cursors (where to check from next time) and tracking (what you are keeping an eye on). "
+    "Set state.wakeAt when something you are tracking comes due at a time."
 )
 
 _INPUT_SCHEMA: Dict[str, Any] = {
@@ -72,6 +77,10 @@ _INPUT_SCHEMA: Dict[str, Any] = {
                 "properties": {
                     "cursors": {"type": "object", "additionalProperties": {"type": "string"}},
                     "tracking": {"type": "array", "items": {"type": "string"}},
+                    "wakeAt": {
+                        "type": "string",
+                        "description": "ISO 8601. Run the full check at or after this time, even if nothing changes",
+                    },
                 },
             },
         },

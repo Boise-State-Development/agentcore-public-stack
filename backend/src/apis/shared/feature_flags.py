@@ -322,6 +322,27 @@ def proactive_runs_enabled() -> bool:
     return os.environ.get("PROACTIVE_RUNS_ENABLED", "").strip().lower() == "true"
 
 
+def watch_triage_enabled() -> bool:
+    """Whether a quiet watcher's full runs leave a probe for the triage stage.
+
+    ``docs/specs/quiet-watcher-triage.md`` §8. While on, a headless watch run
+    on the AgentCore Runtime registers ``WatchProbeRecorder`` and streams one
+    ``watch_probe`` frame, and the scheduled-runs worker stores the probe,
+    ``fingerprintVersion``, ``probeRunId``, ``lastFullRunAt`` and ``wakeAt`` on
+    the watcher's ``SCHEDSTATE#`` row. PR T.1 only records: a run's outcome is
+    the same either way. **Opt-in while in development**: only ``"true"``
+    enables it; an unset GitHub variable arrives as ``""`` and is off. It needs
+    ``PROACTIVE_RUNS_ENABLED`` too, here as in CDK, which writes the variable
+    on the worker always and on the Runtime only while both are on.
+
+    A **feature switch** once finished: it trades an audited, bounded recall
+    risk for cost, which a deployment may reasonably not want.
+    """
+    if os.environ.get("WATCH_TRIAGE_ENABLED", "").strip().lower() != "true":
+        return False
+    return proactive_runs_enabled()
+
+
 def memory_spaces_enabled() -> bool:
     """Whether the Memory Spaces feature is enabled for this environment.
 

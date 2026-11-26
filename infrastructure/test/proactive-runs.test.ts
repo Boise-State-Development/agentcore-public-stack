@@ -49,7 +49,7 @@ function load(ctx: Record<string, unknown> = {}): AppConfig {
 function synth(enabled: boolean): Template {
   const config = createMockConfig({
     scheduledRuns: { enabled: true },
-    proactiveRuns: { enabled },
+    proactiveRuns: { enabled, watchTriageEnabled: false },
   });
   const app = new cdk.App();
   mockSsmContext(app, config);

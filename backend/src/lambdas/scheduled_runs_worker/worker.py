@@ -54,6 +54,10 @@ row, ``lastRunSessionId`` untouched) or **notifies** (unread dot, one
 ``agent_item`` inbox row per new finding), by ``watch_run.decide_watch_outcome``.
 Either way the state is saved, conditional on the version the run read. A
 failed, timed-out or consent-blocked watch run takes the paths above unchanged.
+While ``WATCH_TRIAGE_ENABLED`` is on, that same write also stores what the run
+leaves for the triage stage (docs/specs/quiet-watcher-triage.md §3.4): its
+probe (from the ``watch_probe`` frame and the tool trace), ``lastFullRunAt``
+and ``wakeAt``. The run's outcome is the same either way.
 A standard schedule, or any schedule while the flag is off, runs as before.
 """
 
@@ -70,12 +74,13 @@ from apis.shared.harness import (
     RunResult,
     run_agent_headless,
 )
-from apis.shared.feature_flags import proactive_runs_enabled
+from apis.shared.feature_flags import proactive_runs_enabled, watch_triage_enabled
 from apis.shared.projects.schedule_delivery import ScheduleDelivery
 from apis.shared.projects.schedules import ProjectSchedules
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.pausing import pause_schedule
 from apis.shared.scheduled_prompts.runs import ScheduleRunStatus, record_schedule_run
+from apis.shared.scheduled_prompts.watch_probe import FullRunTriage, full_run_triage
 from apis.shared.scheduled_prompts.watch_run import (
     WatchOutcome,
     build_watch_prompt,
@@ -207,6 +212,7 @@ async def _save_watch_state(
     previous: Optional[WatchState],
     outcome: WatchOutcome,
     finished_at: str,
+    triage: Optional[FullRunTriage] = None,
 ) -> None:
     """Save the watcher's next state, conditional on the version the run read. Never raises."""
     try:
@@ -216,6 +222,7 @@ async def _save_watch_state(
             schedule.schedule_id,
             next_watch_state(previous, outcome, finished_at),
             expected_version=previous.version if previous is not None else None,
+            triage=triage,
         )
         if not saved:
             logger.warning(f"Schedule {schedule.schedule_id}: watcher state moved on during the run; not saved")
@@ -262,12 +269,41 @@ def _notify_items(schedule: ScheduledPrompt, result: RunResult, outcome: WatchOu
     return written
 
 
+def _full_run_triage(schedule: ScheduledPrompt, result: RunResult) -> Optional[FullRunTriage]:
+    """What a completed full run leaves for triage (triage spec §3.4), or ``None`` while it is off.
+
+    Never raises: bookkeeping for a later stage must not cost this run its state.
+    A run whose probe can't be read leaves none, so the old baseline is removed
+    rather than outliving the full run that replaced it.
+    """
+    if not watch_triage_enabled():
+        return None
+    try:
+        triage = full_run_triage(
+            frame=result.watch_probe,
+            tool_trace=result.tool_trace,
+            run_id=result.run_id,
+            finished_at=result.finished_at,
+            now=datetime.now(timezone.utc),
+        )
+    except Exception:
+        logger.warning(f"Schedule {schedule.schedule_id}: could not read the run's probe", exc_info=True)
+        return FullRunTriage(last_full_run_at=result.finished_at or _now_iso())
+    logger.info(
+        f"Schedule {schedule.schedule_id}: watch run {result.run_id} "
+        + (f"left a probe of {len(triage.probe)} call(s)" if triage.probe else "left no probe")
+        + (f", wakeAt {triage.wake_at}" if triage.wake_at else "")
+    )
+    return triage
+
+
 async def _finish_watch_run(
     schedule: ScheduledPrompt,
     result: RunResult,
     previous: Optional[WatchState],
 ) -> Dict[str, Any]:
     """A completed watch run: quiet or notify (spec §3.3), then save the state."""
+    triage = _full_run_triage(schedule, result)
     outcome = decide_watch_outcome(
         result.report_input,
         result.final_message,
@@ -287,7 +323,7 @@ async def _finish_watch_run(
         await record_run_result(schedule.user_id, schedule_id, status="completed", session_id=result.session_id)
         await asyncio.to_thread(_notify_items, schedule, result, outcome)
         await _record_history(schedule, "notify", result, item_count=len(outcome.items))
-        await _save_watch_state(schedule, previous, outcome, result.finished_at)
+        await _save_watch_state(schedule, previous, outcome, result.finished_at, triage)
         logger.info(f"Schedule {schedule_id}: watch run {result.run_id} notified {len(outcome.items)} item(s)")
         return {
             "scheduleId": schedule_id,
@@ -302,7 +338,7 @@ async def _finish_watch_run(
         await asyncio.to_thread(_soft_delete_quiet_session, schedule.user_id, result.session_id)
     await record_run_result(schedule.user_id, schedule_id, status="completed")
     await _record_history(schedule, "quiet", result, with_session=False)
-    await _save_watch_state(schedule, previous, outcome, result.finished_at)
+    await _save_watch_state(schedule, previous, outcome, result.finished_at, triage)
     logger.info(f"Schedule {schedule_id}: watch run {result.run_id} was quiet")
     return {"scheduleId": schedule_id, "result": "quiet"}
 

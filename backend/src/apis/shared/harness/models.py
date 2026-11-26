@@ -78,6 +78,11 @@ class RunResult:
     #: The stream carried ``quota_exceeded``: the "answer" is the quota message,
     #: not the model's. The status stays ``completed``, as the turn did.
     quota_exceeded: bool = False
+    #: The ``watch_probe`` frame of a full watch run while ``WATCH_TRIAGE_ENABLED``
+    #: is on (quiet-watcher triage §3.1): ``{fingerprintVersion, probeable,
+    #: reason?, calls: [{toolUseId, name, fingerprint}]}``. Ids and hashes only;
+    #: the inputs are on ``tool_trace``. ``None`` on any other run.
+    watch_probe: Optional[Dict[str, Any]] = None
     #: The caller's view of the same turn: from sending the request to the
     #: first streamed text delta, and to the stream's end. These include the
     #: network and the Runtime's session routing, which the frame cannot see.

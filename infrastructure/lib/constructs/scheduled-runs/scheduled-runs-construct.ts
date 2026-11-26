@@ -14,7 +14,7 @@ import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as path from 'path';
 import { Construct } from 'constructs';
 
-import { AppConfig } from '../../config';
+import { AppConfig, watchTriageOn } from '../../config';
 import { AlarmFactory } from '../observability/alarm-factory';
 import { logRetentionFor } from '../observability/log-retention';
 
@@ -151,6 +151,10 @@ export class ScheduledRunsConstruct extends Construct {
       // Quiet watcher (docs/specs/quiet-watcher.md): while on, the worker
       // writes one SCHEDRUN# history row per personal run.
       PROACTIVE_RUNS_ENABLED: config.proactiveRuns.enabled ? 'true' : 'false',
+      // Quiet watcher triage (docs/specs/quiet-watcher-triage.md §8): while on,
+      // a completed watch run's probe, lastFullRunAt and wakeAt go on its
+      // SCHEDSTATE# row. Only the worker reads it; the dispatcher doesn't.
+      WATCH_TRIAGE_ENABLED: watchTriageOn(config) ? 'true' : 'false',
     };
 
     const workerLogGroup = new logs.LogGroup(this, 'ScheduledRunsWorkerLogGroup', {
