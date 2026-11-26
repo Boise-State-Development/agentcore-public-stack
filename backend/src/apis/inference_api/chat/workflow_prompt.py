@@ -355,7 +355,7 @@ async def resolve_model_plan(user: User, model_id: str) -> ModelPlan:
     A model with no row is refused (it would price to nothing), as is one this call path cannot send
     to (``prompt_model_supported``, the rule the run sheet blocks by too).
     """
-    from apis.shared.files.attachment_plan import ModelFacts, document_budget, pdf_page_limit, token_profile
+    from apis.shared.files.attachment_plan import ModelFacts, pdf_page_limit
     from apis.shared.models.retirement import resolve_effective_model
     from apis.shared.rbac.service import get_app_role_service
 
@@ -378,32 +378,35 @@ async def resolve_model_plan(user: User, model_id: str) -> ModelPlan:
         return ModelPlan(model_id=effective.model_id, refusal="model_refused")
 
     context_window = int(record.max_input_tokens) if record.max_input_tokens else None
-    profile = token_profile()
-    ceiling = _chat_ceiling(context_window)
-    facts = ModelFacts(model_id=effective.model_id, context_window=context_window, chat_ceiling=ceiling or context_window)
+    facts = ModelFacts(model_id=effective.model_id, context_window=context_window)
     return ModelPlan(
         model_id=effective.model_id,
         context_window=context_window,
-        document_budget=document_budget(facts, profile),
+        document_budget=single_call_document_budget(context_window, record.long_context_threshold_tokens),
         pdf_page_limit=pdf_page_limit(facts),
         cache_point=bedrock_cache_points_supported(effective.model_id),
         reads_documents=prompt_model_supported(record, reads_files=True),
     )
 
 
-def _chat_ceiling(context_window: Optional[int]) -> Optional[int]:
-    """The compaction ceiling the model runs under in chat, which the document budget is a share of."""
-    try:
-        from agents.main_agent.session.compaction_models import CompactionConfig
-        from agents.main_agent.session.compaction_policy import CompactionPolicy
+#: Share of a model's single-call input limit the documents may take. The rest holds the system
+#: prompt, the run request, the instruction, earlier steps' results (each capped at
+#: ``SEND_BACK_MAX_TOKENS``) and, on a checklist step, the ``record_checklist`` tool.
+SINGLE_CALL_DOCUMENT_SHARE = 0.75
 
-        config = CompactionConfig.from_env()
-        if not config.enabled:
-            return None
-        return CompactionPolicy.resolve(config, context_window).ceiling
-    except Exception:  # noqa: BLE001 - the context window stands in
-        logger.warning("workflow prompt: compaction ceiling unavailable", exc_info=True)
+
+def single_call_document_budget(context_window: Optional[int], long_context_threshold: Optional[int]) -> Optional[int]:
+    """Tokens of documents one prompt or checklist call may send, or ``None`` when the row names no limit.
+
+    A step is one call with no history, so the chat compaction ceiling (which bounds a conversation
+    that grows every turn) is not its limit. Its limit is the model's input window, or the
+    long-context line where the row declares one (Haiku 5.5's 5x rate card past 100K), whichever
+    is lower, so a step never crosses onto the second rate card.
+    """
+    limits = [int(v) for v in (context_window, long_context_threshold) if v]
+    if not limits:
         return None
+    return int(min(limits) * SINGLE_CALL_DOCUMENT_SHARE)
 
 
 def document_tokens(documents: Sequence[WholeDocument], model_id: str) -> int:
