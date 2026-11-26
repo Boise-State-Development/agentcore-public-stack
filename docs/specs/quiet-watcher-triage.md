@@ -1,6 +1,6 @@
 # Quiet Watcher — The Second Triage Stage
 
-**Status:** Design. Nothing here is built or approved.
+**Status:** Design. PR T.1 (record the probe) is built behind `WATCH_TRIAGE_ENABLED`; see §8.1. Nothing past it is built.
 **Date:** 2026-11-25
 **Targets branch:** `develop`
 **Parent:** `docs/specs/quiet-watcher.md` (slice 1). This is the "second triage stage" its §5 dev-readout row and its §6 readout leave open. Gap context: `docs/specs/proactive-agent-gaps.md` G2 ("Triage split") and §3's target of under $0.001 per quiet run.
@@ -313,7 +313,7 @@ The decider adds **nothing** to the interactive turn path or to any conversation
 
 ### 6.2 The corpus
 
-The corpus lives at `backend/evals/cases/watch_triage.json`. It is synthetic, under eval-harness D6: no recorded conversation, real person, organisation or identifier. It follows the existing fixtures' method:
+The corpus lives at `backend/evals/watch_triage/corpus.json`. Not under `evals/cases/`: the eval harness loads every file there as eval cases (`load_cases`), and this corpus is not one. It is synthetic, under eval-harness D6: no recorded conversation, real person, organisation or identifier. It follows the existing fixtures' method:
 
 1. Run the probe once against **dev test accounts** (the dev GitHub connector's test repo, a dev Drive folder, a fixture web page) to capture realistic result shapes.
 2. Rewrite every name and id to synthetic ones.
@@ -455,6 +455,17 @@ So the PR plan (§8) builds tier 1 and the shadow first. **Tier 2 is built only 
 | **T.3: tier 2, in shadow** | The `watch_triage` task (no default model); `watch_decider.py` (constant system prompt, strict `verdict` tool, digest-pinned); the `watch_triage` `callKind` in `SIDE_CALL_KINDS`; the session-row check from §4.2 | Same outcomes; changed runs record what the decider would have said |
 | **T.4: the recall bar** | The full corpus (§6.2) and `watch_triage_recall.py`; a run per candidate model with its cost; the 7-day dev shadow readout (§6.5) recorded in this spec | Decides which models may be assigned, and whether T.5 ships |
 | **T.5: gate on** | The worker skips the full run when triage settles quiet; a quiet triage leaves only its run row and state; the staleness floor and `wakeAt` backstops; the `WatchTriageLateFinding` metric and alarm; the run history shows "Checked, no change" (tier 1) or "Checked by the decider" (tier 2) | Quiet runs cost tier 1 or tier 2 |
+
+### 8.1 T.1 as built
+
+- **The fingerprint is of the tool's own result.** `WatchProbeRecorder` is registered at `HookOrder.SDK_FIRST`, so it runs before the offloader (order 70) and the MCP App note rewrite `event.result`. That is what a T.2 replay of the same call returns, so the two compare like for like.
+- **The frame's calls are ordered by the stream, not the hook.** A concurrent batch finishes in any order. The worker orders the probe by the run's `tool_trace` (the order the model asked), and stores nothing when the frame and the trace name different calls.
+- **No probe on a resumed or continued leg.** That leg's agent sees only part of the run's calls, and a probe must cover all of them.
+- **`input` is stored as canonical JSON text**, not a map. DynamoDB refuses floats, and the 2,000-character bound is counted on that text.
+- **Hidden from the state route.** The five fields are excluded from `WatchState`'s dump, so `GET /schedules/{id}/state` is unchanged.
+- **A run whose probe can't be read leaves none.** The old baseline is removed rather than outliving the full run that replaced it, and `lastFullRunAt` still moves.
+- **`report` spec growth, measured on dev** with `scripts/measure_tool_spec_tokens.py`'s CountTokens helper against Haiku 4.5: 364 → 416 tokens (+52), 1,303 → 1,497 characters. Haiku 5.5 refuses CountTokens.
+- **The coverage corpus's first slice** has 6 prompts (one per source shape) and 39 variants, all synthetic.
 
 T.1 and T.2 can ship before anyone decides on tier 2. A deployment that never assigns a `watch_triage` model gets tier 1 alone.
 

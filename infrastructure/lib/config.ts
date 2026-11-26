@@ -468,6 +468,16 @@ export interface ScheduledRunsConfig {
  */
 export interface ProactiveRunsConfig {
   enabled: boolean;
+  /**
+   * The quiet watcher's triage stage (docs/specs/quiet-watcher-triage.md §8).
+   * **Opt-in while in development**: off unless CDK_WATCH_TRIAGE_ENABLED=true
+   * (or a `proactiveRuns.watchTriageEnabled: true` cdk.json context), and
+   * true only while `enabled` is (`watchTriageOn`). Sets WATCH_TRIAGE_ENABLED
+   * on the scheduled-runs worker, and on the AgentCore Runtime only while on.
+   * PR T.1: a full watch run leaves a probe; outcomes don't change. A feature
+   * switch once finished.
+   */
+  watchTriageEnabled: boolean;
 }
 
 /**
@@ -2113,6 +2123,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
       enabled: process.env.CDK_PROACTIVE_RUNS_ENABLED
         ? process.env.CDK_PROACTIVE_RUNS_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('proactiveRuns')?.enabled ?? false,
+      // Same opt-in ternary. Read through `watchTriageOn`, which also needs
+      // `enabled`, never on its own.
+      watchTriageEnabled: process.env.CDK_WATCH_TRIAGE_ENABLED
+        ? process.env.CDK_WATCH_TRIAGE_ENABLED.trim().toLowerCase() === 'true'
+        : scope.node.tryGetContext('proactiveRuns')?.watchTriageEnabled ?? false,
     },
     platformCosts: {
       // Default OFF, opt-in — see PlatformCostsConfig for why this one does
@@ -3509,6 +3524,15 @@ export function promptStepsOn(config: Pick<AppConfig, 'handoffs' | 'workflowRuns
     config.workflows.enabled &&
     config.workflows.promptStepsEnabled
   );
+}
+
+/**
+ * Whether the quiet watcher's triage stage is on: its own switch and the
+ * watcher's (docs/specs/quiet-watcher-triage.md §8). The one answer the worker's
+ * and the Runtime's environments are written from.
+ */
+export function watchTriageOn(config: Pick<AppConfig, 'proactiveRuns'>): boolean {
+  return config.proactiveRuns.enabled && config.proactiveRuns.watchTriageEnabled;
 }
 
 /**

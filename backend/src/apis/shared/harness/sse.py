@@ -115,6 +115,9 @@ class InvocationStreamAccumulator:
     #: A ``quota_exceeded`` frame: the user is over their limit, so the turn's
     #: "answer" is the quota message streamed as text, not the model's.
     quota_exceeded: bool = False
+    #: The ``watch_probe`` frame a full watch run streams before ``done``
+    #: (quiet-watcher triage §3.1), as sent; ``None`` when none came.
+    watch_probe: Optional[Dict[str, Any]] = None
 
     _current: List[str] = field(default_factory=list)
     _messages: List[str] = field(default_factory=list)
@@ -289,6 +292,8 @@ class InvocationStreamAccumulator:
                 self.error_kind = kind
         elif name == "quota_exceeded":
             self.quota_exceeded = True
+        elif name == "watch_probe":
+            self.watch_probe = {k: v for k, v in payload.items() if k != "type"}
         elif name == "done":
             self.done = True
 

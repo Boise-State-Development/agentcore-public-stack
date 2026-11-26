@@ -33,7 +33,7 @@ def test_the_spec_is_pinned():
     spec = make_watch_report_tool().tool_spec
     digest = hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert spec["name"] == "report"
-    assert digest == "9fbc3b02eb9a9df38214b71900776a846e83aad36f0a4882251276f09b5c01b9"
+    assert digest == "bd5dee301a4175b9b9c5bc6b3c31c37394152cb126ede342fdae6f054eac471c"
 
 
 def test_every_instance_has_the_same_spec():

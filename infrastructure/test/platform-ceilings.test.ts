@@ -228,7 +228,7 @@ function allFlagsOn(base: AppConfig): AppConfig {
       docReconcilerArmed: true,
     },
     scheduledRuns: { enabled: true },
-    proactiveRuns: { enabled: true },
+    proactiveRuns: { enabled: true, watchTriageEnabled: true },
     platformCosts: { enabled: true },
     feedbackEvalSampling: { enabled: true },
     memorySpaces: { enabled: true },
