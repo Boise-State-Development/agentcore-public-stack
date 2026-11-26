@@ -11,7 +11,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { Construct } from 'constructs';
-import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getAgentRuntimeName, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins, checklistStepsOn, promptStepsOn, agentVersionPinningOn } from '../../config';
+import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getAgentRuntimeName, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins, checklistStepsOn, promptStepsOn, agentVersionPinningOn, watchTriageOn } from '../../config';
 import { AlarmFactory } from '../observability/alarm-factory';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import {
@@ -545,6 +545,11 @@ export class InferenceAgentCoreConstruct extends Construct {
         // gets the `report` tool. Written only while ON, so the default costs
         // nothing against the V2 payload budget.
         ...(config.proactiveRuns.enabled ? { PROACTIVE_RUNS_ENABLED: 'true' } : {}),
+        // Quiet watcher triage (in development): a headless watch run records
+        // its probe and streams `watch_probe`. Written only while it and the
+        // watcher are both ON (`watchTriageOn`), so the default costs nothing
+        // against the V2 payload budget.
+        ...(watchTriageOn(config) ? { WATCH_TRIAGE_ENABLED: 'true' } : {}),
         // Conversation rewind (default on): the Runtime filters rewound
         // messages at restore and cuts a warm agent's list in place. Spread in
         // only while OFF: the code reads unset as on, so the default costs

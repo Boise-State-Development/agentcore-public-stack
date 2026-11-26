@@ -10,6 +10,13 @@ has already notified about, newest last, so a finding is never announced
 twice. ``version`` makes every write conditional, so two runs of the same
 watcher can never both advance it.
 
+While ``WATCH_TRIAGE_ENABLED`` is on, a completed full run also writes what the
+triage stage needs (docs/specs/quiet-watcher-triage.md §3.4): ``probe`` (the
+run's read-only calls, each ``{name, input, fingerprint}`` with ``input`` as
+canonical JSON text), ``fingerprintVersion``, ``probeRunId``,
+``lastFullRunAt`` and ``wakeAt``. They are worker bookkeeping, so they are
+excluded from the model's dump and never reach ``GET /schedules/{id}/state``.
+
 ``pausedSessionId`` and ``pausedUntil`` are set while a run of the watcher
 waits on the user (docs/specs/answer-from-inbox.md §3.2): the watcher **holds**,
 skipping its runs, until that pause is answered or expires. They are written
@@ -33,6 +40,7 @@ from typing import Dict, Iterable, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import service as _service
+from .watch_probe import MAX_PROBE_CALLS, MAX_PROBE_INPUT_CHARS, FullRunTriage
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +93,14 @@ class WatchState(BaseModel):
     version: int = Field(0, description="Bumped on every write; a write names the version it read")
     last_run_at: Optional[str] = Field(None, alias="lastRunAt")
     updated_at: Optional[str] = Field(None, alias="updatedAt")
+    # Triage bookkeeping (triage spec §3.4), read here and written only through
+    # ``save_watch_state(triage=…)``. Excluded from dumps, so the state route never
+    # shows them and the round trip in ``save_watch_state`` never rewrites them.
+    probe: Optional[List[Dict[str, str]]] = Field(None, exclude=True)
+    fingerprint_version: Optional[int] = Field(None, alias="fingerprintVersion", exclude=True)
+    probe_run_id: Optional[str] = Field(None, alias="probeRunId", exclude=True)
+    last_full_run_at: Optional[str] = Field(None, alias="lastFullRunAt", exclude=True)
+    wake_at: Optional[str] = Field(None, alias="wakeAt", exclude=True)
     paused_session_id: Optional[str] = Field(
         None, alias="pausedSessionId", description="The run's conversation that waits on the user"
     )
@@ -138,6 +154,32 @@ class WatchState(BaseModel):
         # DynamoDB returns numbers as Decimal.
         return int(value) if value is not None else 0
 
+    @field_validator("fingerprint_version", mode="before")
+    @classmethod
+    def _int_fingerprint_version(cls, value: object) -> Optional[int]:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @field_validator("probe", mode="before")
+    @classmethod
+    def _whole_probe(cls, value: object) -> Optional[List[Dict[str, str]]]:
+        """The probe as stored, or ``None``: a probe that breaks a bound is no probe, never part of one."""
+        if not isinstance(value, (list, tuple)) or not value or len(value) > MAX_PROBE_CALLS:
+            return None
+        probe: List[Dict[str, str]] = []
+        for call in value:
+            if not isinstance(call, dict):
+                return None
+            name, tool_input, fingerprint = call.get("name"), call.get("input"), call.get("fingerprint")
+            if not all(isinstance(v, str) and v for v in (name, tool_input, fingerprint)):
+                return None
+            if len(tool_input) > MAX_PROBE_INPUT_CHARS:
+                return None
+            probe.append({"name": name, "input": tool_input, "fingerprint": fingerprint})
+        return probe
+
 
 def get_watch_state(user_id: str, schedule_id: str) -> Optional[WatchState]:
     """The watcher's state, or ``None`` when it has none (never run, or started over)."""
@@ -153,6 +195,7 @@ def save_watch_state(
     state: WatchState,
     *,
     expected_version: Optional[int],
+    triage: Optional[FullRunTriage] = None,
 ) -> bool:
     """Write ``state`` if nobody else has since the caller read it. Returns whether it wrote.
 
@@ -160,6 +203,11 @@ def save_watch_state(
     watcher with no state yet. The write sets the version to one more than
     that, so a second writer holding the same read loses. ``state.version`` is
     ignored. A conditional failure returns ``False``; any other error raises.
+
+    ``triage`` is what a completed full run leaves for the triage stage, in the
+    same conditional write (triage spec §3.4): each field set, or removed when
+    the run left none (a run with no probe removes the probe, its version and
+    its run id). ``None`` leaves those attributes as they are.
     """
     from botocore.exceptions import ClientError
 
@@ -184,6 +232,25 @@ def save_watch_state(
         set_parts.append("lastRunAt = :last_run_at")
         values[":last_run_at"] = clamped.last_run_at
 
+    remove_parts: List[str] = []
+    if triage is not None:
+        fields = {
+            "probe": WatchState.model_validate({"probe": triage.probe}).probe,
+            "fingerprintVersion": triage.fingerprint_version,
+            "probeRunId": triage.probe_run_id,
+            "lastFullRunAt": triage.last_full_run_at,
+            "wakeAt": triage.wake_at,
+        }
+        if fields["probe"] is None:
+            # One unit: a probe without its version or run id can't be compared.
+            fields["fingerprintVersion"] = fields["probeRunId"] = None
+        for attribute, value in fields.items():
+            if value is None:
+                remove_parts.append(attribute)
+            else:
+                set_parts.append(f"{attribute} = :{attribute}")
+                values[f":{attribute}"] = value
+
     if expected_version is None:
         condition = "attribute_not_exists(PK)"
     else:
@@ -193,7 +260,7 @@ def save_watch_state(
     try:
         _service._get_table().update_item(
             Key=_key(user_id, schedule_id),
-            UpdateExpression="SET " + ", ".join(set_parts),
+            UpdateExpression="SET " + ", ".join(set_parts) + (" REMOVE " + ", ".join(remove_parts) if remove_parts else ""),
             ConditionExpression=condition,
             ExpressionAttributeNames={"#version": "version"},
             ExpressionAttributeValues=values,

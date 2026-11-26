@@ -178,6 +178,7 @@ export function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig 
     },
     proactiveRuns: {
       enabled: false,
+      watchTriageEnabled: false,
     },
     platformCosts: {
       enabled: false,

@@ -199,6 +199,7 @@ from .system_prompt_resolver import (
 from apis.shared.security.log_sanitize import scrub_log
 
 if TYPE_CHECKING:
+    from agents.main_agent.session.hooks.watch_probe import WatchProbeRecorder
     from apis.inference_api.chat.project_memory import ProjectMemoryTurn
     from apis.shared.handoff.models import Handoff
     from apis.shared.handoff.runs import WorkflowRun
@@ -1229,6 +1230,43 @@ def _is_watch_run(input_data: InvocationRequest) -> bool:
     from apis.shared.scheduled_prompts.models import is_headless_session
 
     return is_headless_session(input_data.session_id) and proactive_runs_enabled()
+
+
+def _attach_watch_probe_recorder(
+    agent: Any,
+    input_data: InvocationRequest,
+    *,
+    is_resume: bool,
+    is_continuation: bool,
+) -> Optional["WatchProbeRecorder"]:
+    """Register a full watch run's ``WatchProbeRecorder`` on its agent (quiet-watcher triage §3.1).
+
+    Only where ``report`` is built (:func:`_is_watch_run`) and while the Runtime's
+    ``WATCH_TRIAGE_ENABLED`` is on, so an interactive turn never carries it. A watch run's agent
+    is never cached (``report`` is not a key element), so the hook dies with the run. Not on a
+    resume or a continuation: that leg sees only part of the run's calls, and a probe must
+    cover all of them, so the run leaves none. No IO.
+    """
+    if is_resume or is_continuation or not _is_watch_run(input_data):
+        return None
+
+    from apis.shared.feature_flags import watch_triage_enabled
+
+    if not watch_triage_enabled():
+        return None
+    strands_agent = getattr(agent, "agent", None)
+    if strands_agent is None:
+        return None
+
+    from agents.main_agent.session.hooks.watch_probe import WatchProbeRecorder
+
+    recorder = WatchProbeRecorder()
+    recorder.register(strands_agent)
+    return recorder
+
+
+def _is_done_frame(frame: Any) -> bool:
+    return isinstance(frame, str) and frame.startswith("event: done\n")
 
 
 def _build_watch_report_tools(input_data: InvocationRequest) -> list:
@@ -7408,6 +7446,13 @@ async def _run_invocation(
                 else None
             )
 
+            # A full watch run's probe (quiet-watcher triage §3.1), streamed once, just
+            # before `done`. None on every turn that is not a headless watch run while
+            # WATCH_TRIAGE_ENABLED is on, and on a resume or a continuation.
+            watch_probe = _attach_watch_probe_recorder(
+                agent, input_data, is_resume=is_resume, is_continuation=is_continuation
+            )
+
             async for event in agent.stream_async(
                 final_message,
                 session_id=input_data.session_id,
@@ -7454,6 +7499,9 @@ async def _run_invocation(
                 cancel_signal=turn_cancel_signal,
                 turn_tool_summaries=not watch_run,
             ):
+                if watch_probe is not None and _is_done_frame(event):
+                    yield watch_probe.sse_frame()
+                    watch_probe = None
                 yield event
                 # Interleave the finished title between agent events (same
                 # non-blocking drain pattern as the MCP Apps broker in the
