@@ -210,7 +210,7 @@ A resume never pauses or resumes the schedule, and never moves `lastRunSessionId
 
 **Answered in the conversation instead.** That resume goes through `/chat/stream`, and nothing reads its outcome. Two things follow:
 
-1. **The inbox row.** `GET /notifications`, with the flag on, settles the page's waiting needs-user rows whose pause is gone as `answered_elsewhere`, and lapsed ones as `expired`, each marked read (`settle_unanswered_rows`). It reads one `META` per row still waiting, under `(session, caller)`, all at once, usually none; the write is conditional on no resolution, so an inbox answer that landed meanwhile keeps its own. As built, this replaced the planned `GET /messages` hook: that read happens when the conversation opens, *before* the user answers there, so it could never see the answer, while the bell re-reads its list on open and on refocus, after the answer, and the badge comes from the same call. Nothing runs on the turn path. The worker's hold check (§3.2) independently sees the pause is gone.
+1. **The inbox row and the run's history row.** `GET /notifications`, with the flag on, settles the page's waiting needs-user rows whose pause is gone as `answered_elsewhere`, and lapsed ones as `expired`, each marked read (`settle_unanswered_rows`). It reads one `META` per row still waiting, under `(session, caller)`, all at once, usually none; the write is conditional on no resolution, so an inbox answer that landed meanwhile keeps its own. As built, this replaced the planned `GET /messages` hook: that read happens when the conversation opens, *before* the user answers there, so it could never see the answer, while the bell re-reads its list on open and on refocus, after the answer, and the badge comes from the same call. Nothing runs on the turn path. The worker's hold check (§3.2) independently sees the pause is gone. A row settled `answered_elsewhere` (here or by the 409 on prompts or respond) also marks its run's `SCHEDRUN#` row `resolution: answered_elsewhere` and clears its `expiresAt` (`record_schedule_run_answered_elsewhere`), one conditional write on no resolution, so the history reads "Answered in the conversation" instead of "Waiting for you" until it expired (found on dev, 2026-11-26). An expired row writes nothing there: the history row reads as expired from its own `expiresAt`.
 2. **The watcher's state.** A watch run resumed there still has `report` (§3.7), but no worker reads it, so its cursors don't advance. The next run may raise that finding once. This is accepted for this slice, and measured on dev (settled question 7, §7).
 
 ### 3.7 `report` on a resumed watch run (Runtime)
@@ -247,8 +247,8 @@ The resumed turn's tokens are **added** to the row, so a run's cost stays one ro
 **The 24-hour summary** (`lastDayRunSummary`):
 
 - A `needs_user` run is a finished run, or a finished check for a watcher. It did its work, so it is never counted with the failures. Today it would fall into "· 1 failed".
-- For a watcher, it also counts as "found something". It found something it needed the user for.
-- Waiting runs add a tail: "Checked 22 times · found something 2 times · 1 waiting for you".
+- For a watcher, it does **not** count as "found something". While it waits it is in the tail, and counting it as a finding too would count it twice (dev, 2026-11-26: two paused checks that found nothing read "found something 2 times · 1 waiting for you"). Once answered, `resumeOutcome` can't say whether the resume found anything new.
+- Waiting runs add a tail: "Checked 22 times · found something 1 time · 1 waiting for you".
 
 While a watcher holds, its schedule page shows a banner from `SCHEDSTATE#`: "Waiting for you since 9:15 AM. Checks resume once you answer, or on Dec 2 when it expires." It has a Review button that opens the same dialog. `GET /schedules/{id}/state` returns the two fields.
 
