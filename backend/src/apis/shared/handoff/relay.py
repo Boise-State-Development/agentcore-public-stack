@@ -50,8 +50,8 @@ def relayed_prompts_from_row(
     since one connection answers every interrupt waiting on that provider. A browser sign-in
     carries only its interrupt id: the live view is the target's screen, so the relay links there.
     ``kinds`` is which breadcrumbs count; the inbox (answer-from-inbox §3.4) asks for its own,
-    by the same rule. ``now`` is the clock the pause's expiry is judged against (the wall clock
-    when omitted), so a caller that judged its own expiry at one time judges this one at the same.
+    by the same rule. ``now`` is the caller's clock for the pause's expiry; the wall clock when
+    ``None``.
     """
     if not row:
         return []
