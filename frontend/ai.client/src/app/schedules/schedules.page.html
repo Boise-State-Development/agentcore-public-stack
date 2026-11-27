@@ -140,14 +140,14 @@
                   @if (needsReauth(schedule)) {
                     <div class="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-state-warning-50 px-3 py-2 dark:bg-state-warning-900/10">
                       <ng-icon name="heroExclamationTriangle" class="size-4 shrink-0 text-state-warning-600 dark:text-state-warning-400" aria-hidden="true" />
-                      <span class="text-xs/5 text-state-warning-800 dark:text-state-warning-300">Your access expired.</span>
+                      <span class="text-xs/5 text-state-warning-800 dark:text-state-warning-300">Scheduled runs are off for your account.</span>
                       <button
                         type="button"
                         (click)="onReauthenticate(schedule)"
                         [disabled]="isBusy(schedule.scheduleId)"
                         class="text-xs/5 font-semibold text-state-warning-900 underline hover:no-underline disabled:opacity-50 dark:text-state-warning-200"
                       >
-                        Log in and re-enable
+                        Turn back on
                       </button>
                     </div>
                   } @else if (needsOAuthReconnect(schedule)) {

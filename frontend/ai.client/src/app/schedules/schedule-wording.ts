@@ -69,7 +69,10 @@ export const SCHEDULE_STOPS: Record<string, { mine: string; theirs: string }> = 
   project_deleted: { mine: 'because the project was deleted', theirs: 'because the project was deleted' },
   projects_disabled: { mine: 'because Projects is switched off', theirs: 'because Projects is switched off' },
   repeated_failures: { mine: 'after failing several times in a row', theirs: 'after failing several times in a row' },
-  reauth_required: { mine: 'until you sign in again', theirs: 'until its creator signs in again' },
+  reauth_required: {
+    mine: 'until you turn scheduled runs back on in Schedules',
+    theirs: 'until its creator turns scheduled runs back on',
+  },
   oauth_required: { mine: 'until you reconnect a tool it uses', theirs: 'until its creator reconnects a tool it uses' },
   max_runs_per_day_exceeded: { mine: 'after reaching its daily run limit', theirs: 'after reaching its daily run limit' },
 };

@@ -239,7 +239,7 @@ export class SchedulesPage implements OnInit {
 
   /**
    * Why the platform stopped a schedule, for every reason except the two with
-   * their own action above (sign in again, reconnect a tool). The same words
+   * their own action above (turn scheduled runs back on, reconnect a tool). The same words
    * the notification bell uses, so the bell and this page never disagree.
    * Null for anything but a `paused_error` schedule, or a reason this build doesn't know.
    */

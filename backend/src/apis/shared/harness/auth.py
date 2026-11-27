@@ -120,6 +120,15 @@ class CognitoRefreshBearerAuth:
                 refresh_token=grant.cognito_refresh_token,
             )
         except CognitoRefreshError as exc:
+            if exc.refused:
+                # The token can never mint again. Marking the grant is what
+                # makes this recoverable: GET /runs/grant then reads disabled,
+                # and /schedules offers Enable, which re-pins a live token.
+                # Best-effort: the run fails with HeadlessAuthError either way.
+                try:
+                    await self._grants.mark_needs_reauth(grant.grant_id, grant.cognito_refresh_token)
+                except Exception:
+                    logger.warning("Could not mark headless grant %s needs_reauth", grant.grant_id, exc_info=True)
             raise HeadlessAuthError(
                 f"Cognito refused the refresh exchange for user {user_id} "
                 f"(grant {grant.grant_id}): {exc}"

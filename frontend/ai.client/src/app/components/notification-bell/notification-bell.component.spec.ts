@@ -45,7 +45,7 @@ describe('describeNotification', () => {
     [notif({ kind: 'project_memory_maintenance', payload: { runId: 'r1', fileCount: 1 } }), 'Memory maintenance that ann@x.edu ran suggests changes to 1 file in Enrollment Sync’s memory.'],
     [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'member_removed', createdBy: 'me@x.edu' } }), 'Your schedule “Weekly status” in Enrollment Sync stopped because you’re no longer a member.'],
     [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'not_editor', createdBy: 'ed@x.edu' } }), 'The schedule “Weekly status” in Enrollment Sync stopped because its creator is no longer an editor.'],
-    [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'reauth_required', createdBy: 'me@x.edu' } }), 'Your schedule “Weekly status” in Enrollment Sync stopped until you sign in again.'],
+    [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'reauth_required', createdBy: 'me@x.edu' } }), 'Your schedule “Weekly status” in Enrollment Sync stopped until you turn scheduled runs back on in Schedules.'],
     [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'paused_by_editor', createdBy: 'me@x.edu' } }), 'ann@x.edu paused your schedule “Weekly status” in Enrollment Sync.'],
     [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'deleted', createdBy: 'me@x.edu' } }), 'ann@x.edu deleted your schedule “Weekly status” in Enrollment Sync.'],
     [notif({ kind: 'project_schedule_paused', payload: { label: 'Weekly status', reason: 'max_runs_per_day_exceeded', createdBy: 'ed@x.edu' } }), 'The schedule “Weekly status” in Enrollment Sync stopped after reaching its daily run limit.'],
@@ -53,7 +53,7 @@ describe('describeNotification', () => {
     // A personal schedule the platform stopped: always the reader's own, never in a project.
     [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', label: 'Morning Briefing', reason: 'repeated_failures' } }), 'Your schedule “Morning Briefing” stopped after failing several times in a row.'],
     [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', label: 'Morning Briefing', reason: 'oauth_required' } }), 'Your schedule “Morning Briefing” stopped until you reconnect a tool it uses.'],
-    [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', reason: 'reauth_required' } }), 'Your schedule stopped until you sign in again.'],
+    [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', reason: 'reauth_required' } }), 'Your schedule stopped until you turn scheduled runs back on in Schedules.'],
     [notif({ kind: 'schedule_paused', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', label: 'Morning Briefing', reason: 'something_new' } }), 'Your schedule “Morning Briefing” stopped.'],
     // A watcher's finding: the schedule's label and the finding's title, Urgent ahead of a `now` one.
     [notif({ kind: 'agent_item', actorEmail: null, projectId: null, projectName: null, payload: { scheduleId: 's1', runId: 'r1', sessionId: 'x', label: 'GitHub watch', title: 'PR 2401 needs your review', urgency: 'today', key: 'k' } }), 'GitHub watch: PR 2401 needs your review'],

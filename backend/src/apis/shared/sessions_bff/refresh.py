@@ -105,7 +105,25 @@ class CognitoRefreshError(Exception):
 
     Always treat as terminal: the cookie should be cleared and the user
     re-authenticated.
+
+    ``refused`` is True only when Cognito itself rejected the refresh token
+    (``NotAuthorizedException``: revoked, expired or otherwise invalid), as
+    opposed to a call that never got an answer (throttling, a network error, a
+    missing secret). A headless grant whose token was refused can never mint
+    again, so it is marked for re-enabling; one that merely failed to reach
+    Cognito is left alone and retried by the next run.
     """
+
+    def __init__(self, message: str, *, refused: bool = False) -> None:
+        super().__init__(message)
+        self.refused = refused
+
+
+def _is_refusal(exc: Exception) -> bool:
+    """Whether a Cognito SDK error is a rejection of the token itself."""
+    response = getattr(exc, "response", None)
+    code = (response or {}).get("Error", {}).get("Code") if isinstance(response, dict) else None
+    return code == "NotAuthorizedException"
 
 
 class CognitoRefreshClient:
@@ -180,7 +198,7 @@ class CognitoRefreshClient:
             )
         except Exception as exc:
             logger.warning("BFF Cognito refresh failed for %s: %s", username, exc)
-            raise CognitoRefreshError(str(exc)) from exc
+            raise CognitoRefreshError(str(exc), refused=_is_refusal(exc)) from exc
 
         result = response.get("AuthenticationResult") or {}
         access_token = result.get("AccessToken")
