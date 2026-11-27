@@ -33,7 +33,7 @@ State for the `kaizen-research` skill's standing watches: what is tracked, what 
    | `build_prompt_cache_key()` in `bedrock_responses.py` | `strands/models/_openai_cache.py::apply_cache_config` — **already on upstream main**, maps `CacheConfig.cache_key` → `prompt_cache_key`. **Keep ours; do not adopt this as a swap.** Ours is derived from the system-prompt and tool-spec fingerprints, so same-prefix requests from *different* conversations route to one cache. Upstream's default key is `strands-<session_id>` (#4083), so a swap makes every new GPT conversation's first call write the static prefix instead of reading it (`scoping/strands-1-55-to-1-63-adoption-audit.md` ▸ #3; the 1.65.0 readout's row 7 agrees). Passing our own key as `cache_key` would keep the routing, but that only moves the same line, and it buys the next hazard: ⚠️ **(checked on the 1.65.0 bump)** since 1.64.0 (#5418) any `cache_config` on `OpenAIResponsesModel` also places `prompt_cache_breakpoint` checkpoints through the history on GPT-5.6, the end-of-history placement measured at +11.8%. So any future `cache_config` on that path needs `messages_ttl=False` and a green `TestNoUpstreamMessageCheckpoints`. |
    | `apply_explicit_prompt_cache()` (breakpoints) | No upstream equivalent yet — `apply_cache_config` emits no `prompt_cache_breakpoint`. Ours is OFF by default (measured 57% worse); don't re-enable without re-running the probe. |
    | `cache_ttl_seconds_for()` in `observability/prompt_cache.py` | A model-derived TTL upstream. Note `apply_cache_config` maps ttl to `prompt_cache_retention` (`in_memory`/`24h`), *not* GPT-5.6's `prompt_cache_options.ttl: "30m"` — so these are not yet the same concept. |
-   | `bedrock_cache_points_supported()` + the hand-placed system cachePoint | **NOTHING upstream can retire this — settled by measurement 2026-09-11, do not re-propose.** `format_request` copies `system_prompt_content` verbatim and `_apply_system_cache_ttl` never removes a point, so the block reaches Bedrock, which answers `AccessDeniedException` on a model that can't cache. The rejection is Bedrock's, not the SDK's. Only its `tools_ttl` half is redundant (upstream applies the same test at `bedrock.py:579`). ⚠️ **(2026-11-20)** upstream main (#6149/#6292, not yet released) now places Nova *message* cache points under `strategy="auto"`, with no tools point and no TTL. Since `model_config.py:689` passes `auto` for every Bedrock model and `cache_points.py:19` still refuses Nova its system point, a cataloged Nova model would get message points with no system point ahead of them. On the 1.66 bump, probe Nova and decide whether to widen `cache_points.py` (system point only). |
+   | `bedrock_cache_points_supported()` + the hand-placed system cachePoint | **NOTHING upstream can retire this — settled by measurement 2026-09-11, do not re-propose.** `format_request` copies `system_prompt_content` verbatim and `_apply_system_cache_ttl` never removes a point, so the block reaches Bedrock, which answers `AccessDeniedException` on a model that can't cache. The rejection is Bedrock's, not the SDK's. Only its `tools_ttl` half is redundant (upstream applies the same test at `bedrock.py:579`). ⚠️ **(2026-11-20; released in python/v1.66.0, 2026-11-27 check)** upstream (#6149/#6292) now places Nova *message* cache points under `strategy="auto"`, with no tools point and no TTL. Since `model_config.py:689` passes `auto` for every Bedrock model and `cache_points.py:19` still refuses Nova its system point, a cataloged Nova model would get message points with no system point ahead of them. On the 1.66 bump, probe Nova and decide whether to widen `cache_points.py` (system point only). |
 
    ⚠️ **harness-sdk#4618 (tracked from 2026-09-25) inverts our convention. It is a
    pin-bump hazard, not a subtraction.** #4618 proposes one canonical `Usage`
@@ -85,6 +85,14 @@ State for the `kaizen-research` skill's standing watches: what is tracked, what 
      SDK half alone after a pin bump.
    - Movement on #3546 / #4617 / #4618, and whether #4193 has reached a release.
      All of them change what our cost math may assume.
+   - **Status 2026-11-27:** #4618 unchanged. `_total_prompt_tokens` is still at `telemetry/metrics.py:184` in
+     the python/v1.67.0 wheel, so there is no bump gate. #6399 (1.67.0) adds `usage_by_model` and a
+     genai-prices cost plugin. It doesn't change the `Usage` convention and isn't a swap for `CostCalculator`.
+     #6082/#6149 (Nova `auto` cache points) **shipped in 1.66.0**. A cataloged Nova chat model now gets up to
+     three message points and Strands' own system point, so the 09-11 coverage gap closes upstream for Nova.
+     No curated row is a Nova chat model, so the probe is owed only when one is added. #6396 (GPT-6.2 system
+     prompt cached as a `developer` message) also shipped in 1.66.0; it applies only to GPT-6.2, which we don't
+     curate yet. See `scoping/strands-1-67-0-readout.md`.
    - **Status 2026-11-20:** #4618 still open (updated 11-18), no PR; the cost-estimation design
      (#6298/#6399) explicitly defers to it. `_total_prompt_tokens` still at `telemetry/metrics.py:184`
      on main, so no bump gate. #3546/#4617 closed 09-28. GPT-6.2 (Sol/Astra, GA 11-17) caches its
@@ -162,6 +170,16 @@ State for the `kaizen-research` skill's standing watches: what is tracked, what 
    item with **Surface: docs**. This skill still never edits the specs; the sync lands
    in its own small PR after review, like every other idea. An empty week says
    "no drift found" explicitly, so silence is distinguishable from not checking.
+
+   **Upstream signals to track (2026-11-27):** python/v1.66.0 and v1.67.0 change nothing in Python
+   `strands/multiagent/` beyond #6281's docstring. §4.2's two verify-firsts have no upstream answer, and no §4
+   substrate row retires. #6088 merged and shipped in 1.67.0: the harness now uses the vended `make_subagent`,
+   which removes §9 Q5's "#6088 is open" caveat. #5933's `sort_tools` shipped default `False`, but the PR says
+   sorting will become the default (#5700 closed), so a flip stays a bump gate under `test_tool_config_order.py`.
+   (#6536, stable MCP tool order, is TypeScript-only.) Watch next: `PresetOptions` leaving `api/needs-review`,
+   and any `multiagent/_agent_tool_streamer.py` or `_InterruptState` change. Our code: workflow step 2 (prompt
+   and checklist steps, version pinning) is built, and the patterns doc trails it by 11 new rows plus 10 still
+   open from 11-13 and 11-20. Fold them into one docs PR.
 
    **Upstream signals to track (2026-11-20):** harness-sdk#6088 (the harness adopting the vended
    `subagent` tool, which bears on §9 Q5's builder leaning) and #6281 (the default builder passes
