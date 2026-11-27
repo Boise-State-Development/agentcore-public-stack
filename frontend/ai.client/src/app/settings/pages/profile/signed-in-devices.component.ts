@@ -61,7 +61,7 @@ import { SignedInDevice, SignedInDevicesService } from './signed-in-devices.serv
         </div>
         <span role="status" class="sr-only">Loading signed-in apps and terminals</span>
       } @else if (devices.devices.error() && !devices.devices.hasValue()) {
-        <p class="px-6 py-4 text-sm/6 text-red-700 dark:text-red-400">
+        <p class="px-6 py-4 text-sm/6 text-state-danger-700 dark:text-state-danger-400">
           Couldn't load your signed-in apps and terminals. Try again later.
         </p>
       } @else if (devices.devices.hasValue() && devices.devices.value().length === 0) {
@@ -92,7 +92,7 @@ import { SignedInDevice, SignedInDevicesService } from './signed-in-devices.serv
               </div>
               <button
                 type="button"
-                class="shrink-0 rounded-md px-3 py-1.5 text-sm/6 font-medium text-red-700 ring-1 ring-inset ring-red-200 transition-colors hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600 disabled:opacity-50 dark:text-red-400 dark:ring-red-400/30 dark:hover:bg-red-400/10"
+                class="shrink-0 rounded-md px-3 py-1.5 text-sm/6 font-medium text-state-danger-700 ring-1 ring-inset ring-state-danger-200 transition-colors hover:bg-state-danger-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-state-danger-600 disabled:opacity-50 dark:text-state-danger-400 dark:ring-state-danger-400/30 dark:hover:bg-state-danger-400/10"
                 [disabled]="signingOut() === device.deviceId"
                 [attr.aria-label]="'Sign out ' + title(device)"
                 (click)="signOut(device)"
