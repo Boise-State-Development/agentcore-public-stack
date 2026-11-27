@@ -27,6 +27,18 @@ bounded by ``WARMUP_READY_TIMEOUT_SECONDS``, well inside the Runtime's
 120-second health deadline; past it the server starts and warm-up finishes in
 the background, as before.
 
+The Runtime V2 build warmup hook (``warmup_hook.py``, ``POST /warmup``) does
+not replace this ordering. AWS's guidance for a Runtime with the hook is to
+pass the health check fast and load everything in the hook's ``memory`` call;
+this module keeps holding ``/ping`` whether or not the hook is configured, for
+three reasons. The container cannot tell that the hook is configured without a
+variable, and the V2 environment is a 2,560-byte budget. ``UpdateAgentRuntime``
+replaces the whole hook configuration, so an update that leaves it out removes
+the hook without an error, and a snapshot that depended on the hook would then
+be taken cold. And the hold costs a deploy under a second, once. With the hook
+configured, its ``memory`` call runs :func:`run_warmup` a second time, which
+finds everything already loaded.
+
 Best-effort throughout: a failure here is logged and the first turn simply
 pays what it always paid.
 

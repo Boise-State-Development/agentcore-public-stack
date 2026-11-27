@@ -153,6 +153,13 @@ jobs:
       # reverts to V1 if this variable is deleted. See
       # docs/specs/agentcore-runtime-v2.md.
       CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION: ${{ vars.CDK_AGENTCORE_RUNTIME_PLATFORM_VERSION }}
+      # Runtime V2 build warmup hook (in development): only `true` enables,
+      # and only on a V2 Runtime. AgentCore then calls POST /warmup on the
+      # container twice while it prepares each Runtime version. A failed call
+      # fails the deploy, so turn it on only once the deployed inference-api
+      # image serves the route. backend.yml reads the same variable. See
+      # docs/specs/agentcore-runtime-v2.md §5b.
+      CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED: ${{ vars.CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED }}
       # AgentCore Runtime generation: unset by default. Setting it (e.g. `g2`)
       # renames the Runtime, so this deploy creates a new one with no versions,
       # repoints everything at it and deletes the old one. Live sessions and
@@ -164,6 +171,11 @@ jobs:
       # `true` only after confirming the live inference-api image derives its
       # resource names (docs/specs/agentcore-runtime-v2.md §8).
       SKIP_RUNTIME_ENV_CONTRACT_CHECK: ${{ vars.SKIP_RUNTIME_ENV_CONTRACT_CHECK }}
+      # With the build warmup hook switched on, the deploy refuses to configure
+      # it while the live inference-api image does not serve POST /warmup
+      # (scripts/platform/check-runtime-warmup-hook-image.sh). Set `true` only
+      # for a custom image you have checked.
+      SKIP_RUNTIME_WARMUP_HOOK_IMAGE_CHECK: ${{ vars.SKIP_RUNTIME_WARMUP_HOOK_IMAGE_CHECK }}
       CDK_ALB_SUBDOMAIN: ${{ vars.CDK_ALB_SUBDOMAIN }}
       CDK_CERTIFICATE_ARN: ${{ vars.CDK_CERTIFICATE_ARN }}
       # Shared us-east-1 CloudFront cert (wildcard covering {domain} + *.{domain}).

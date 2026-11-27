@@ -11,7 +11,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { Construct } from 'constructs';
-import { AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getAgentRuntimeName, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins, checklistStepsOn, promptStepsOn, agentVersionPinningOn, watchTriageOn } from '../../config';
+import { AGENTCORE_RUNTIME_WARMUP_HOOK_PATH, AppConfig, DEFAULT_ASSISTANT_KB_FULL_CONTEXT_MAX_TOKENS, getAgentRuntimeName, getResourceName, getTruncatedResourceName, applyStandardTags, buildCorsOrigins, checklistStepsOn, promptStepsOn, agentVersionPinningOn, watchTriageOn } from '../../config';
 import { AlarmFactory } from '../observability/alarm-factory';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 import {
@@ -619,6 +619,35 @@ export class InferenceAgentCoreConstruct extends Construct {
     // that keeps the runtime id. aws-cdk-lib 2.265.0 has no typed
     // `platformVersion` (2.272.0 adds one), hence the override.
     this.runtime.addPropertyOverride('PlatformVersion', config.inferenceApi.runtimePlatformVersion);
+
+    // Runtime V2 build warmup hook (docs/specs/agentcore-runtime-v2.md §5b).
+    // While AgentCore prepares a Runtime version it calls POST /warmup on the
+    // container twice, `memory` before the snapshot and `disk` after it
+    // (apis/inference_api/warmup_hook.py). V2 only: the service answers a V1
+    // Runtime that carries hooks with a ValidationException, so on V1 the
+    // switch is ignored with a warning rather than failing a V2 -> V1
+    // rollback at synth. A property override like PlatformVersion above:
+    // aws-cdk-lib 2.274.0 has no typed `hooksConfiguration`, and the
+    // CloudFormation resource schema does. Off, the property is absent, and
+    // an update without it removes the hook. Nothing reaches the Runtime's
+    // environment.
+    //
+    // UpdateAgentRuntime replaces the whole hook configuration, so the
+    // image-roll path must resend it on every update
+    // (scripts/build/deploy-runtime-image-if-changed.sh carries it forward
+    // and fails the job if it changed).
+    if (config.inferenceApi.runtimeWarmupHookEnabled) {
+      if (config.inferenceApi.runtimePlatformVersion === 'V2') {
+        this.runtime.addPropertyOverride('HooksConfiguration', {
+          Build: { Warmup: { Action: { HttpPost: { Path: AGENTCORE_RUNTIME_WARMUP_HOOK_PATH } } } },
+        });
+      } else {
+        cdk.Annotations.of(this).addWarning(
+          'CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED is true but the Runtime platform version is ' +
+          `${config.inferenceApi.runtimePlatformVersion}. Build warmup hooks exist on V2 only, so none is configured.`,
+        );
+      }
+    }
 
     // V2 caps the environment payload at 2,560 bytes and CloudFormation only
     // finds out from UpdateAgentRuntime, after which its rollback fails the

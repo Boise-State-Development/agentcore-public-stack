@@ -1,6 +1,6 @@
 # AgentCore Runtime V2 migration
 
-**Status:** plan steps 1–3 shipped in 1.27.0. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4, PR A (#1533) and PR B (#1535), is merged to `develop`, and **dev has run V2 since 2026-10-10 19:10Z** (step 5). V2 must not be selected on any release before PR B ships (§8). **The first GB-hours readout (2026-10-16, §9) is "need more data" for prod:** on dev, V2 used about as many GB-hours per day as V1 while carrying more traffic, and Runtime spend roughly doubled. **Prod has run V2 since 2026-10-16 19:25Z** (1.28.0), and the prod readout (2026-10-20, §10) gives its V1 baseline — **1.179 GB-hours per session** — and reads prod's first V2 days as cost-neutral to modestly cheaper, not the near-doubling dev saw. Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev`.
+**Status:** plan steps 1–3 shipped in 1.27.0. The V2 build warmup hook was spiked on dev on 2026-11-26 (§5b): built behind a switch that is off everywhere, recommended to ship dev first. The first dev V2 attempt (2026-10-09) failed on an environment-variable size limit (B4) and was rolled back to V1. Step 4, PR A (#1533) and PR B (#1535), is merged to `develop`, and **dev has run V2 since 2026-10-10 19:10Z** (step 5). V2 must not be selected on any release before PR B ships (§8). **The first GB-hours readout (2026-10-16, §9) is "need more data" for prod:** on dev, V2 used about as many GB-hours per day as V1 while carrying more traffic, and Runtime spend roughly doubled. **Prod has run V2 since 2026-10-16 19:25Z** (1.28.0), and the prod readout (2026-10-20, §10) gives its V1 baseline — **1.179 GB-hours per session** — and reads prod's first V2 days as cost-neutral to modestly cheaper, not the near-doubling dev saw. Tracks `docs/kaizen/review-queue.md ▸ [2026-09-25] A/B the V2 AgentCore Runtime in dev`.
 **Sources:**
 - The AWS ML blog post [The new AgentCore Runtime: elastic, optimized, and consistently fast starts](https://aws.amazon.com/blogs/machine-learning/the-new-agentcore-runtime-elastic-optimized-and-consistently-fast-starts/) (2026-09-18).
 - The [What's New post](https://aws.amazon.com/about-aws/whats-new/2026/09/new-agentcore-runtime-generally-available).
@@ -10,6 +10,7 @@
 - The failed dev V2 update on 2026-10-09 (§3 B4), and read-only `GetAgentRuntime` calls against the dev and prod runtimes that day.
 - The AgentCore pricing page and the Price List API, read on 2026-10-16. Read-only Cost Explorer, CloudWatch and Logs Insights queries against the dev account the same day (§9).
 - Read-only Cost Explorer, CloudWatch and Logs Insights queries against the **prod** account on 2026-10-20 (§10), covering 2026-09-29 → 2026-10-20.
+- AWS's [lifecycle hooks](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-lifecycle-hooks.html), [V2 optimization](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-v2-optimize.html) and [troubleshooting](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-troubleshooting.html) pages, the CloudFormation registry schema, and the dev and prod Runtime log groups, all read on 2026-11-26 (§5b).
 
 Labels used in this document:
 - **Verified**: checked against AWS or our tree on 2026-09-27.
@@ -235,6 +236,180 @@ A later step could also pre-build the agent for the currently selected model and
 **Flag.** In development, so it defaults OFF, with a backend flag (`SESSION_PREWARM_ENABLED`) and a matching SPA flag (`features.sessionPrewarm`), per the Feature Flags section of CLAUDE.md. The backend is the gate: while the flag is off, the endpoint 404s and the SPA never calls it.
 
 **Interaction with B2.1.** A prewarm puts a real request right after restore, which narrows the stale-idle-clock window. It does not replace the fix, because unwarmed paths (warming off, or a failed warm call) still restore cold.
+
+## 5b. The build warmup hook (spike, 2026-11-26)
+
+**Status: built behind `CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED` (in development, default off), measured on dev, off in dev and prod.** Recommendation in §5b.7. Issue #2473.
+
+### 5b.1 What AWS added, and what we had
+
+A V2 Runtime can declare `hooksConfiguration.build.warmup` ([lifecycle hooks](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-lifecycle-hooks.html), [optimize for V2](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-v2-optimize.html)). While AgentCore prepares a Runtime version, on every `CreateAgentRuntime` and `UpdateAgentRuntime`, it POSTs the hook twice, naming the call in `X-Amzn-Bedrock-AgentCore-Runtime-Warmup-Type`:
+
+| Call | When | What it is for |
+|---|---|---|
+| `memory` | after `/ping` passes, before the snapshot | what the process holds when it returns is what every session starts with |
+| `disk` | after the snapshot | the files read during it are made fast for new sessions; without it a file in the snapshot is slow the first time each session reads it |
+
+The two calls share a fixed 120 s. A call that does not answer 2xx fails the create or update. `/ping` must keep answering throughout. V2 only, and microVMs only (a `ValidationException` on V1 or with a capacity provider).
+
+Before this, `warmup.py` did the `memory` half by holding `/ping` until warm-up finished (B2.2), and nothing did the `disk` half.
+
+### 5b.2 What was built
+
+- **`POST /warmup` on inference-api** (`apis/inference_api/warmup_hook.py`), on the serving port. It is not a data-plane route: AgentCore calls it inside the container during create and update, which is why CLAUDE.md's Inference API boundary allows it.
+  - `memory`: `run_warmup()` again. Startup already ran it, so this is milliseconds.
+  - `disk`: one throwaway agent build with no network (a preview session id, so the in-memory session manager; no catalog read; the local tools passed as `extra_tools`; built through `agent_types.create_agent`, never `get_agent`, so the agent cache and the build counter are untouched), one formatted traceback, then a read of every loaded module's source within a 15 s budget.
+  - The work runs on a worker thread, so `/ping` keeps answering, and the route is excluded from activity tracking, so `/ping` keeps saying `Healthy`.
+- **CDK**: `HooksConfiguration.Build.Warmup.Action.HttpPost.Path = /warmup` as a property override beside `PlatformVersion` (the pinned `aws-cdk-lib` 2.274.0 has no typed property; the CloudFormation schema has had it since at least 2026-11-26). Only when the switch is on **and** the platform version is V2; on V1 the switch is ignored with a synth warning. No port, so AgentCore calls the serving port. Nothing is written to the Runtime's environment.
+- **The image roll** (`deploy-runtime-image-if-changed.sh`): see §5b.4.
+
+### 5b.3 Decisions
+
+1. **The hold-`/ping` contract stays, hook or no hook.** AWS's guidance with a hook is "pass the health check fast, load in the `memory` call". We keep holding `/ping` because (a) the container cannot know the hook is configured without a variable, and the V2 environment is a 2,560-byte budget; (b) `UpdateAgentRuntime` removes a hook an update leaves out, silently, and a snapshot that depended on the hook would then be taken cold; (c) the hold costs a deploy under a second. V1 and hook-less V2 behave exactly as before. The `memory` call is therefore a second, idempotent pass.
+2. **Nothing in the handler fails a deploy by choice.** Every step is best-effort and logged; a step that raises is skipped; a phase past its own bound (45 s each) answers 200 and finishes on its thread; an unknown or missing warmup type answers 200 and does nothing, so a third type AWS adds later cannot fail a deploy of this image. A deploy fails only when the container cannot serve the route at all (no route, a crashed process), which is the failure worth stopping a deploy for. The price of a skipped step is the one paid before the hook existed.
+3. **Nothing new is loaded before the snapshot.** The `memory` call loads only what startup already loads. The throwaway build runs in the `disk` call, after the snapshot, so no stub state, TTL cache or token can be shared by every session.
+4. **Not covered by the `disk` call**, because it cannot be done without a user or the network: the AgentCore Memory session manager and its restore (`session_mgr`, `finalize`), the Gateway and MCP stages, everything in the route before the build (ownership, files, quota), and the model call.
+
+### 5b.4 The image roll
+
+`UpdateAgentRuntime` replaces the whole hook configuration: an update without `hooksConfiguration` removes the hook and still succeeds. This is B1 again, with a worse symptom (nothing fails; first turns get slower).
+
+- The update payload is built from `get-agent-runtime` filtered by the CLI's own update skeleton, so a CLI that knows the field carries it. The runner's CLI did on 2026-11-26.
+- A CLI whose service model predates the field can neither read nor send it. With the switch on (`backend.yml` reads the same two variables `platform.yml` does and passes `--expect-warmup-hook`), the script refuses such a CLI (exit 7) before sending anything.
+- After the update the script compares `hooksConfiguration` before and after and fails the job on a difference (exit 9).
+- **`UPDATE_FAILED` no longer stops the script.** A failed hook call leaves the Runtime in `UPDATE_FAILED` with the previous version still serving, and AWS's remedy is "fix the cause, then update the runtime again". The script used to treat `UPDATE_FAILED` as terminal (exit 4), which would have left every later backend deploy stuck behind the one that failed. It now logs the `failureReason` and sends the next image.
+- Tests: `backend/tests/supply_chain/test_runtime_image_roll.py` runs the real script against a fake `aws` that applies an update the way the service does.
+
+**Ordering hazard, the reason the switch is off by default.** Once the hook is configured, an image without the route fails its own deploy (404 on the hook). So the image goes first: deploy a release that serves `/warmup`, then turn the switch on and run `platform.yml`. Turning it off is `platform.yml` again with the variable unset.
+
+**Two guards make that ordering a refusal, not a failed update.** An image that serves the route carries the label `org.agentcore-public-stack.runtime-warmup-hook=warmup-v1` (`Dockerfile.inference-api`), read without pulling the image (`scripts/common/ecr-image-label.sh`):
+
+- `scripts/platform/check-runtime-warmup-hook-image.sh` runs before `cdk deploy`. When the synthesized Runtime carries `HooksConfiguration` and the live image does not declare the label, or is the CDK bootstrap image a first deploy starts from, the deploy stops with what to do. `SKIP_RUNTIME_WARMUP_HOOK_IMAGE_CHECK=true` is the override for a custom image.
+- The image roll reads the label off the **new** image when the Runtime already has hooks, and refuses one without it (exit 10) before sending anything. That is the rollback-to-an-older-release case. An image it cannot inspect is rolled with a warning.
+
+The hazard is not hypothetical. During this spike the hook was on in dev from a feature branch when a `develop` merge started a Backend Deploy whose image had no route. The hook was removed with a direct `UpdateAgentRuntime` that finished under a minute before that deploy began its image roll, which then succeeded. Neither guard existed on `develop` at the time.
+
+### 5b.5 Dev measurement (2026-11-26)
+
+**What was measured.** `turn_prelude` and `turn_first_token` lines for first turns in new conversations, driven through app-api's `/chat/stream` as the eval user with `smoke_turns.py`'s transport: one short prompt, five local tools enabled, each conversation on its own microVM (25 of 25 in every run). Each run is 25 sessions started as soon as a new Runtime version reported `READY`: a **wave** of 12 at once, then 13 one after another. Four of the five runs are on the same inference-api image (`9e1d8110`), so the only thing that differs between them is the snapshot.
+
+| Run | Runtime version | Hook | Snapshot |
+|---|---|---|---|
+| A0 | the one before 78 (develop image `971f0bdc`) | no | about two hours old, already used by other sessions |
+| A1 | 78 | no | new, first snapshot of image `9e1d8110` |
+| B1 | 79 | **yes** | new, same image |
+| A2 | 80 | no | new, same image |
+| A3 | 81 (develop image `8dbd2225`) | no | new, first snapshot of that image |
+
+**Finding 1: the cost is real, and on dev it is paid by the first sessions on each new snapshot.** In all three no-hook runs on a new snapshot, exactly the 12 wave sessions and the first sequential one built cold (13 of 25), and the other 12 were warm. On the aged snapshot (A0) none of 25 was cold. "Cold" here means the four local build stages (`prompt`, `hooks`, `plugins`, `strands_agent`) summed past 300 ms; warm they sum to about 70 ms.
+
+**Finding 2: with the hook, no session built cold.** 0 of 25 in B1, wave included.
+
+Wave sessions (12 a run), milliseconds, p50 / p90 and the range:
+
+| Stage | A1 | A2 | A3 | **B1 (hook)** |
+|---|---|---|---|---|
+| `agent_build` | 1,568 / 1,676 (1,542–1,678) | 890 / 931 (808–996) | 902 / 1,094 (771–1,600) | **380 / 387 (329–409)** |
+| `prompt` | 524 / 629 | 262 / 278 | 264 / 508 | **53 / 58** |
+| `registry` | 100 / 116 | 74 / 77 | 76 / 116 | **42 / 50** |
+| `hooks` | 181 / 206 | 74 / 96 | 118 / 142 | **8 / 10** |
+| `plugins` | 221 / 252 | 62 / 68 | 62 / 70 | **2 / 2** |
+| `strands_agent` | 276 / 321 | 126 / 145 | 126 / 176 | **6 / 9** |
+| `finalize` | 76 / 84 | 76 / 96 | 68 / 76 | 76 / 81 |
+| `session_mgr` | 178 / 197 | 171 / 189 | 169 / 191 | 174 / 193 |
+| whole prelude (`totalMs`) | 2,706 / 2,945 | 1,756 / 1,820 | 1,774 / 1,896 | **939 / 1,032** |
+| server first token | 4,250 / 4,396 | 2,986 / 3,159 | 2,884 / 3,171 | **1,938 / 2,390** |
+| before the handler (client − server first token) | 3,230 / 3,614 | 2,487 / 3,108 | 2,928 / 3,439 | **2,252 / 2,454** |
+| client first token | 7,484 / 7,843 | 5,436 / 6,288 | 5,924 / 6,382 | **4,227 / 4,846** |
+
+All 25 sessions of each run, p50 / p90:
+
+| Stage | A0 (aged) | A1 | A2 | A3 | **B1 (hook)** |
+|---|---|---|---|---|---|
+| `agent_build` | 350 / 443 | 864 / 1,666 | 808 / 914 | 771 / 1,055 | **373 / 426** |
+| `prompt` | 48 / 57 | 256 / 591 | 225 / 276 | 227 / 296 | **53 / 59** |
+| `registry` | 40 / 46 | 75 / 108 | 65 / 77 | 71 / 103 | **42 / 50** |
+| `hooks` | 8 / 9 | 70 / 198 | 62 / 92 | 59 / 140 | **8 / 10** |
+| `plugins` | 2 / 2 | 73 / 242 | 46 / 64 | 48 / 68 | **2 / 2** |
+| `strands_agent` | 6 / 8 | 123 / 307 | 113 / 141 | 113 / 168 | **6 / 8** |
+| `finalize` | 72 / 82 | 75 / 85 | 74 / 86 | 68 / 82 | 75 / 81 |
+| whole prelude | 866 / 995 | 1,733 / 2,851 | 1,582 / 1,783 | 1,527 / 1,884 | **912 / 1,020** |
+| client first token | 3,685 / 4,126 | 5,513 / 7,779 | 4,860 / 6,071 | 5,325 / 6,298 | **3,991 / 4,505** |
+
+**Which stages improved, by the rule set before measuring** (a stage improved only if its p90 moved by more than the same-day spread between two before-runs). The three before-runs disagree with each other more than expected: A1, the first no-hook snapshot of the day, was about twice as cold as A2 and A3. So the rule is applied twice, over all 25 sessions:
+
+| Stage (p90) | Before: A1 / A2 / A3 | After: B1 | Spread A2–A3 | Spread, all three | Move from the nearest before-run | Improved |
+|---|---|---|---|---|---|---|
+| `agent_build` | 1,666 / 914 / 1,055 | 426 | 141 | 752 | 488 | yes against A2–A3; **not** against the three-run spread |
+| `prompt` | 591 / 276 / 296 | 59 | 20 | 315 | 217 | same |
+| `registry` | 108 / 77 / 103 | 50 | 26 | 31 | 27 | yes against A2–A3 by 1 ms; treat as no evidence |
+| `hooks` | 198 / 92 / 140 | 10 | 48 | 106 | 82 | yes against A2–A3 only |
+| `plugins` | 242 / 64 / 68 | 2 | 4 | 178 | 62 | yes against A2–A3 only |
+| `strands_agent` | 307 / 141 / 168 | 8 | 27 | 166 | 133 | yes against A2–A3 only |
+| `finalize` | 85 / 86 / 82 | 81 | 4 | 4 | 1 | no (and none expected: it is the network restore) |
+
+Read strictly, with A1 in the spread, no stage clears the bar: one after-run cannot be separated from a before-run population that itself ranges 2×. What the data does support without that rule: the wave ranges do not overlap for `agent_build`, `prompt`, `hooks`, `plugins` or `strands_agent` (the slowest of 12 hook sessions built in 409 ms; the fastest of 36 no-hook wave sessions in 771 ms), and the cold count went from 13, 13 and 13 of 25 to 0 of 25. **One after-run is still one after-run.** §5b.8 lists the runs that would close this.
+
+**Finding 3: more than the build got faster.** The throwaway build covers the local build stages, which are about 0.5 to 1.2 s of a cold session's penalty. But a cold wave session's first token reached the client 1.2 to 3.3 s later than a hook session's, and it was not only the build: the rest of the prelude (about 870 to 1,140 ms cold against 560 ms) and the time before our handler moved in all three comparisons, and the first model call in two. Either the `disk` call's own request (routing, middleware) and build touch more shared pages than the stage names suggest, or configuring the hook changes how the platform prepares the snapshot. This spike cannot tell which; the no-op `disk` arm in §5b.8 would.
+
+**The hook's own cost** (`build-logs-*` streams of the Runtime log group, version 79). AgentCore made each call twice, a few seconds apart, as its documentation says a line "can appear more than once":
+
+```text
+[LIFECYCLE-HOOK 1795724284192] [LIFECYCLE] warmup hook (memory) started with 120.0 s of the 120 s warmup budget left
+[LIFECYCLE-HOOK 1795724284210] [LIFECYCLE] warmup hook (memory) succeeded in 0.0 s (120.0 s of the 120 s warmup budget left)
+[LIFECYCLE-HOOK 1795724382462] [LIFECYCLE] warmup hook (disk) started with 120.0 s of the 120 s warmup budget left
+[LIFECYCLE-HOOK 1795724390155] [LIFECYCLE] warmup hook (disk) succeeded in 7.7 s (112.3 s of the 120 s warmup budget left)
+[LIFECYCLE-HOOK 1795724391370] [LIFECYCLE] warmup hook (disk) succeeded in 8.3 s (111.7 s of the 120 s warmup budget left)
+```
+
+| | Time | Of the 120 s |
+|---|---|---|
+| `memory` (the startup warm-up again) | 15–18 ms | 0% |
+| `disk`: throwaway agent build | 438–494 ms | 0.4% |
+| `disk`: one traceback | 0 ms | 0% |
+| `disk`: read 3,638 module sources (46 MB) | 7.3–7.8 s | 6.5% |
+| **`disk` total** | **7.7–8.3 s** | **7%** |
+
+**What it adds to a deploy: nothing measurable.** `UPDATING` to `READY` took 3 min 29 s for the no-hook image roll (version 78), 3 min 32 s for the update that configured the hook (79) and 3 min 20 s for the update that removed it (80). The hook's 8 s is inside the run-to-run variation.
+
+**What the measurement cost:** about 130 turns at $0.000128 each (an 11.4k-token prefix read from the prompt cache), roughly $0.03.
+
+### 5b.6 What prod would get (read-only, 2026-11-26)
+
+The same split on prod's Runtime log group over 72 hours, first build in each new microVM, turns that built an agent (n = 489; ids only, no content):
+
+| Age of the snapshot when the session started | Sessions | Built cold | Local stages p50 / p90 |
+|---|---|---|---|
+| under 10 minutes | 4 | 4 | 850 / 1,717 ms |
+| 10 to 60 minutes | 19 | 18 | 1,000 / 1,633 ms |
+| 1 to 6 hours | 61 | 50 | 808 / 1,045 ms |
+| 6 to 24 hours | 248 | 79 | 89 / 2,016 ms |
+| over 24 hours | 157 | 47 | 86 / 1,999 ms |
+| **all** | **489** | **198 (40%)** | 97 / 1,970 ms |
+
+Warm builds spend 81 / 111 ms (p50 / p90) in the local stages and cold ones 1,213 / 2,191 ms. So prod is not dev: on dev the cold builds end after about 13 sessions, and in prod 30% of new microVMs still build cold on a snapshot more than a day old. Cold and warm builds follow the previous new microVM by the same gap (3 minutes at the median for both), so it is not idle time.
+
+If the hook does in prod what it did on dev, the saving is about 1.1 s of build time, plus whatever of the rest of the cold penalty comes with it, on roughly 40% of the turns that start a microVM. **That "if" is the open question.** Dev shows the hook removes the cold builds that follow an update. It cannot show that it removes the ones prod still has days later, because dev had none left to remove (A0). Only a prod readout of the same query can.
+
+### 5b.7 Recommendation: ship, behind the switch, dev first
+
+1. Merge this with the switch off. It is inert: a route nothing calls, a property that is not synthesized, and deploy-script checks that pass when the Runtime has no hooks.
+2. Turn the switch on in dev once the merged image is live, and run §5b.8 there.
+3. Take it to prod with a release, switch on, only after dev has had it for a week with no failed update. Then read §5b.6's query again: the share of new microVMs that build cold is the number that says whether prod got what dev did.
+
+Keep the `disk` build. It costs half a second of a deploy and is the only part of the hook that does what AWS says the `disk` call is for. The 7.5 s source read is the part to question: it targets one first traceback per session, which was not measured here.
+
+Do not replace the hold-`/ping` contract with the hook (§5b.3).
+
+### 5b.8 Not done, in the order to do it
+
+Each needs the hook on in dev, which is safe once every `develop` image serves the route.
+
+1. **A second and third hook run**, one of them on the first snapshot of a new image through the image roll. That closes the "one after-run" gap in §5b.5 and proves the carry-forward on a real roll (only the fake-`aws` test has run it).
+2. **A hook run whose `disk` call does nothing.** If its sessions are as warm as B1's, the benefit comes from having a hook at all and the throwaway build is decoration; if they are cold, the build is what does it.
+3. **A deliberate failed hook on dev** (an image whose route answers 500), to see the `UPDATE_FAILED` state and the fix-forward for real. The script's handling is tested only against the fake.
+4. **Extend the `disk` call past the build.** Finding 3 says most of a cold session's penalty is outside the stages the throwaway build names. A best-effort DynamoDB read and a signed request to the model endpoint would exercise the client paths the prelude and the model call use. They need the network, so each must be bounded and unable to fail the call.
+5. **The first-traceback stall**: measure it with and without the source read before keeping 7.5 s of deploy for it.
 
 ## 6. Open questions for AWS or the docs
 

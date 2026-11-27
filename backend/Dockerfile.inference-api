@@ -112,6 +112,16 @@ ENV APP_BUILD=${APP_BUILD}
 # table and bucket names. Bump the value only with a matching change there.
 LABEL org.agentcore-public-stack.runtime-env-contract="derived-names-v1"
 
+# Runtime V2 build warmup hook (docs/specs/agentcore-runtime-v2.md §5b). This
+# image serves POST /warmup (apis/inference_api/warmup_hook.py). With the hook
+# configured, AgentCore calls it while it prepares each Runtime version, and
+# an image that answers 404 fails that update. scripts/platform/deploy.sh
+# reads this label off the LIVE image before a CDK deploy that configures the
+# hook, and the image roll reads it off the NEW image when the Runtime
+# already has one; both refuse an image without it. Remove the label only
+# together with the route.
+LABEL org.agentcore-public-stack.runtime-warmup-hook="warmup-v1"
+
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 # Print every thread's Python stack to stderr when the interpreter dies on a

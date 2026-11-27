@@ -91,6 +91,55 @@ Switch one environment at a time, dev first, and give it a week before prod.
 Set the variable to `V1` and run `platform.yml`. The property is always written
 explicitly, V1 included, so this is a deterministic in-place update.
 
+## The build warmup hook (in development)
+
+On V2 every new session starts from a snapshot, and a file in the snapshot is
+slow the first time a session reads it. On a new snapshot that made the first
+dozen sessions build their agent in 0.9 to 1.7 seconds where later ones took
+0.4. AgentCore can call a hook in your container while it prepares each Runtime
+version, so those reads happen once, at deploy time. The inference-api serves
+that hook at `POST /warmup`. It is off by default while in development.
+
+To turn it on:
+
+1. Be on V2, and have deployed a release whose inference-api image serves the
+   route (`backend.yml`). The image goes first: once the hook is configured,
+   AgentCore calls it on whatever image is live, and an image without the
+   route fails the update.
+2. Set `CDK_AGENTCORE_RUNTIME_WARMUP_HOOK_ENABLED=true` in the GitHub
+   environment and run `platform.yml`. Before it deploys, it checks that the
+   live image serves the hook and stops with instructions if it does not.
+3. Look in the Runtime's log group
+   (`/aws/bedrock-agentcore/runtimes/<runtime id>-DEFAULT`), in the streams
+   named `build-logs-…`, for `[LIFECYCLE-HOOK …] warmup hook (memory) succeeded`
+   and `warmup hook (disk) succeeded`. On dev the two took 8 of the 120
+   seconds AgentCore allows, and the update took no longer than without them.
+
+To turn it off, set the variable to `false` (or delete it) and run
+`platform.yml`.
+
+What to know before you do:
+
+- **A hook call that fails, fails the update.** The Runtime goes to
+  `UPDATE_FAILED` and keeps serving its previous version. The handler is built
+  never to fail on its own account (every step is best-effort, and it answers
+  `200` whatever they did), so in practice this means an image that does not
+  have the route. The next `backend.yml` with a working image fixes it: the
+  deploy script updates a Runtime in `UPDATE_FAILED`, and prints the
+  `failureReason`.
+- **Rolling back to a release from before the hook** needs the switch off
+  first. The image roll refuses (exit 10) to put an image without the route
+  under a Runtime that has the hook.
+- **The runner's AWS CLI must know `hooksConfiguration`.** An update that
+  leaves the hook out removes it without an error, so with the switch on the
+  image roll refuses a CLI too old to send it (exit 7), and it fails the job
+  if the hook is different after the roll (exit 9). GitHub's `ubuntu-24.04`
+  image was new enough on 2026-11-26.
+- **On V1 the switch does nothing**, with a warning at synth.
+
+The measurements and the open questions are in
+[`docs/specs/agentcore-runtime-v2.md`](https://github.com/Boise-State-Development/agentcore-public-stack/blob/main/docs/specs/agentcore-runtime-v2.md) §5b.
+
 ## Recovery runbook
 
 If a Runtime update leaves the stack in `UPDATE_ROLLBACK_FAILED`:

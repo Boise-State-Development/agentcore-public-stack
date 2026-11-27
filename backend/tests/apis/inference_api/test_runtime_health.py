@@ -316,6 +316,14 @@ class TestInvocationActivityMiddleware:
         assert probe == [STATUS_HEALTHY]
         assert self.tracker.in_flight == 0
 
+    def test_the_build_warmup_hook_is_not_activity(self):
+        """AgentCore polls `/ping` while its V2 build warmup hook runs, before
+        any session exists; the hook must not read as a turn in flight."""
+        from apis.inference_api.runtime_health import _NON_ACTIVITY_PATHS
+        from apis.inference_api.warmup_hook import WARMUP_HOOK_PATH
+
+        assert WARMUP_HOOK_PATH in _NON_ACTIVITY_PATHS
+
     def test_counter_released_when_the_handler_raises(self):
         client, _ = self._client()
         with pytest.raises(RuntimeError):

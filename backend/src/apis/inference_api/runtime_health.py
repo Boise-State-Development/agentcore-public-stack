@@ -92,7 +92,11 @@ logger = logging.getLogger(__name__)
 
 # `/ping` is the reaper's own poll and must never count as activity — it is
 # the one request that arrives continuously on a completely idle container.
-_NON_ACTIVITY_PATHS = frozenset({"/ping"})
+# `/warmup` is the Runtime V2 build warmup hook (`warmup_hook.py`): AgentCore
+# calls it while preparing a Runtime version, before any session exists, and
+# polls `/ping` meanwhile. It is not a session's work, so `/ping` keeps
+# answering a plain `Healthy` through it and the idle origin does not move.
+_NON_ACTIVITY_PATHS = frozenset({"/ping", "/warmup"})
 
 
 class RuntimeActivityTracker:

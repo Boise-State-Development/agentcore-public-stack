@@ -192,10 +192,14 @@ logger.info("Added AgentCore Runtime activity tracking middleware")
 #from health.health import router as health_router
 from apis.inference_api.chat.routes import router as agentcore_router
 from apis.inference_api.chat.voice_routes import router as voice_router
+from apis.inference_api.warmup_hook import router as warmup_hook_router
 # Include routers
 #app.include_router(health_router)
 app.include_router(agentcore_router)  # AgentCore Runtime endpoints: /ping, /invocations
 app.include_router(voice_router)  # WebSocket voice streaming endpoint
+# Runtime V2 build warmup hook (POST /warmup). AgentCore calls it inside the
+# container while it prepares a Runtime version; it is not a data-plane route.
+app.include_router(warmup_hook_router)
 # Connector consent flows live on app-api now: the AgentCore Runtime data plane
 # only proxies /invocations and /ping, so user-facing /connectors/* paths can't
 # be reached through this service. See apis/app_api/connectors/routes.py.
