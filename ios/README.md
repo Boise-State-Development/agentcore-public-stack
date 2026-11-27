@@ -5,7 +5,7 @@ RBAC, same quotas and the same cost tracking as the web app, on a phone.
 
 ## What it does today
 
-Sign-in, and nothing past it yet:
+Sign-in, and reading your conversations:
 
 - **Choose a server.** The user enters the deployment's app-api address. It
   is checked (`https` anywhere, `http` only on loopback) and must answer
@@ -19,6 +19,16 @@ Sign-in, and nothing past it yet:
   expired session goes back to sign-in with a note. Being offline keeps the
   session and offers Try again.
 - **Sign out**, dropping the local copy first and then telling the server.
+- **Conversations**, newest first, a page at a time (`GET /sessions`), with
+  the unread dot a scheduled run leaves and a "Waiting for your answer" line
+  on a conversation paused on a prompt. Pull to refresh.
+- **Read a conversation** (`GET /sessions/{id}/messages`, every page): the
+  text as markdown, each tool call as one line saying whether it finished,
+  attachments as labelled chips, and a paused prompt (an approval, a
+  question, a form, a sign-in) as a card that says it is waiting. Answering
+  it from the app is next. Anything newer than the app (a content type it
+  doesn't know) shows as "Not shown in this app" rather than failing.
+  Side by side on iPad, pushed on iPhone.
 
 The design is `docs/specs/native-app-auth.md`. The server half
 (`client=native` on `/auth/login` and `POST /auth/native/exchange`) is in
@@ -28,10 +38,11 @@ app-api, off until a deployment lists the app's redirect address in
 
 Next up, in order:
 
-1. **Conversations, read-only**: the list and a transcript, plain JSON.
-2. **Chat**: sending a turn, SSE streaming, the event types in the root
+1. **Inbox**: the notifications, and answering a waiting run from the phone.
+2. **Signed-in devices**: list and revoke app sessions (spec PR 3).
+3. **Push** notifications.
+4. **Chat**: sending a turn, SSE streaming, the event types in the root
    `CLAUDE.md`.
-3. **Signed-in devices**: list and revoke app sessions (spec PR 3).
 
 ### Trying sign-in
 
