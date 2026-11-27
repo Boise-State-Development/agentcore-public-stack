@@ -779,3 +779,26 @@ def test_rescore_reapplies_the_current_checks_without_touching_answers(tmp_path,
     assert "rescoredAt" in json.loads((run / "meta.json").read_text())
     out = capsys.readouterr().out
     assert "2 sample(s) changed" in out and "tool_selection.a, tool_selection.b" in out
+
+
+def test_scripts_call_the_headless_runner_with_arguments_it_takes():
+    """A renamed keyword on ``run_agent_headless`` broke every eval run with a TypeError.
+
+    ``run`` needs a deployed stack, so no offline test reached the call. This reads the
+    scripts' own calls and checks each keyword against the runner's signature.
+    """
+    import ast
+    import inspect
+
+    from apis.shared.harness import run_agent_headless
+
+    accepted = set(inspect.signature(run_agent_headless).parameters)
+    scripts = Path(eval_harness.__file__).parent
+    calls = 0
+    for path in sorted(scripts.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "run_agent_headless":
+                calls += 1
+                unknown = {k.arg for k in node.keywords if k.arg} - accepted
+                assert not unknown, f"{path.name} passes {sorted(unknown)}"
+    assert calls >= 1

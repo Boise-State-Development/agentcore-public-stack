@@ -595,7 +595,8 @@ async def cmd_run(args: argparse.Namespace) -> int:
             auth=auth,
             invocations_base_url=args.invocations_url,
             trigger=EVAL_TRIGGER,
-            timeout_seconds=args.timeout,
+            read_timeout_seconds=args.timeout,
+            max_duration_seconds=args.timeout,
             **kwargs,
         )
 
