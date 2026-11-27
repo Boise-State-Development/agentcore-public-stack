@@ -1,6 +1,6 @@
 # Proactive Trust — Slice 4 of the Proactive Agent Gaps
 
-**Status:** Build plan. Nothing here is built. The developer settled §12 on 2026-11-27, except Q9 (re-pin at sign-in), which waits on the live logout check (§5.2). The PR plan (§11) can start; each build PR is the developer's call. PR 4.0 is merged and dev-checked (#2495).
+**Status:** Build plan. Nothing here is built. The developer settled §12 on 2026-11-27, except Q9 (re-pin at sign-in). The live logout check has reported (§5.2), and Q9 now waits on the developer's call on its recommendation. The PR plan (§11) can start; each build PR is the developer's call. PR 4.0 is merged and dev-checked (#2495).
 **Date:** 2026-11-26
 **Targets branch:** `develop`
 **Parent:** `docs/specs/proactive-agent-gaps.md` (slice 4: G7 standing instructions and dismissals, G8's pre-flight, G9 budgets and governance)
@@ -259,7 +259,7 @@ The grant's own docstring states the policy as "the platform may act headlessly 
 
 - **Which sign-ins.** Only the web app's. The callback also serves the terminal's device flow and the phone's native exchange, whose sessions never slide on idle (`client = "native"`). Pinning a CLI or phone token would tie scheduled runs to a device the user may revoke from the devices list.
 
-**Signing out stops scheduled runs (checked 2026-11-27 in code and config; not yet run live).**
+**Signing out stops scheduled runs (found in code and config, then confirmed live on dev, 2026-11-27).**
 
 - **The same token.** The BFF app client (`cognito-construct.ts`, the same construct on every deployment) leaves refresh-token rotation off and token revocation on. Read from dev's user pool on 2026-11-27: `RefreshTokenRotation` unset, `EnableTokenRevocation: true`. So a grant stores exactly the refresh token of the session it was pinned from. `persist_rotated_refresh_token` never fires.
 - **Logout revokes it.** `POST /auth/logout` calls Cognito `RevokeToken` on that session's token (`_revoke_refresh_token` in `apis/app_api/auth/bff/routes.py`).
@@ -279,7 +279,22 @@ Only Run now, or revoking and re-enabling the grant, pins a live token again, an
 2. **Stop logout from killing it.** Before `RevokeToken`, app-api reads the user's active grant (one Query on `HeadlessGrantUserIndex`). If the grant holds this session's token, logout skips the revocation and tells the user scheduled runs keep going, with a link to turn them off. Revoking the session row still signs the browser out. The grant's token stays alive only as long as the grant, which the user can revoke from `/schedules`.
 3. **The cleaner end state** gives the grant its own refresh token, from a sign-in made for it, so no browser session shares it. That is a design of its own, and the only way the two lifetimes truly separate.
 
-**The live check** (a dev schedule on Haiku 5.5, one run, sign out the pinned session, a second run) is ready to run on the developer's own dev account once they approve it in that session. Its result replaces "not yet run live" above.
+**The live check, on dev (2026-11-27).**
+
+1. Enable scheduled runs from the developer's in-app browser session pinned the grant to it.
+2. A no-tools Haiku 5.5 schedule, forced through the dispatcher, completed.
+3. The browser then switched to a second dev user: sign out, then sign in as the other user.
+4. A second forced run of the same schedule failed at the mint with Cognito's `NotAuthorizedException`, "Refresh Token has been revoked". The worker paused it with `reauth_required`.
+
+What else it showed:
+
+- **Switching accounts is enough to trigger it.** No one has to mean "stop my schedules"; signing out to use another account, or signing out on a shared machine, does it.
+- **Every schedule on the account stops, not only the one that ran.** Five triage-readout watchers on the same account each paused with `reauth_required` at their next run, 15:56–16:11 UTC.
+- **Recovery took exactly the steps §5.2 describes:**
+  - signing back in fixed nothing, because a sign-in doesn't re-pin;
+  - `/schedules` offered no Enable banner, because the revoked grant still read `enabled: true`;
+  - only an explicit `POST /runs/grant` from the new session, then **Resume** on each paused schedule, brought them back.
+- **Cost:** two Haiku 5.5 runs, about $0.002.
 
 This changes what consent means: from "act as me for 30 days after I click Enable" to "act as me while I keep signing in". That is the developer's call.
 
@@ -526,7 +541,7 @@ The PlatformStack resource count (`docs/specs/platform-stack-resource-budget.md`
 
 ## 12. Decisions
 
-The developer settled these on 2026-11-27, taking the recommendation on each. Q9 stays open until the live logout check reports.
+The developer settled these on 2026-11-27, taking the recommendation on each. Q9 stays open: the live logout check has reported (§5.2), and its recommendation waits on the developer.
 
 1. **Default budget, the interval floor, and a per-user cap.** **Decided (Phil, 2026-11-27).** `SCHEDULE_DEFAULT_MAX_COST_PER_DAY` ships at **$0.50** a day. That is about 4.5× a Haiku 5.5 15-minute watcher ($0.11) and below a Haiku 4.5 one ($0.73). A budget is required on any schedule under 60 minutes, watch or standard. There is no per-model interval floor and no per-user daily cap: the budget bounds each schedule, and the monthly quota bounds the user (§4.2–§4.4).
 2. **A run past the budget.** **Decided (Phil, 2026-11-27).** Hold until the schedule's next local midnight, with one `fyi` bell row, and pause after 3 consecutive days at the budget (§4.2).
@@ -536,7 +551,7 @@ The developer settled these on 2026-11-27, taking the recommendation on each. Q9
 6. **Quiet hours.** **Decided (Phil, 2026-11-27).** Per user, and `now` breaks through, which the user can turn off (`nowBreaksThrough`). Slice 4 ships the data and the bell rule; the Settings form ships with Push in slice 3 (§6).
 7. **Writes without asking.** **Decided (Phil, 2026-11-27).** A **watch** run asks before every `write`-class call unless the schedule lists the tool in `actWithoutAsking`. `unclassified` calls are audited, not gated. Standard schedules are audit only (§7.5).
 8. **Who sees the action audit, and for how long.** **Decided (Phil, 2026-11-27).** The owner, in full, on the schedule page. Admins see ids and counts only, through the existing audit console's scope, and never the conversation. Rows are kept **365 days**, matching `apis/shared/audit`'s retention (§7.4).
-9. **Re-pin the headless grant at sign-in** (§5.2). **Open.** The code and config check (§5.2) found that signing out of the pinned session kills the grant today, in prod as well, and that the user is then told to do something that doesn't fix it. The live check on dev is pending the developer's approval in the session that runs it.
+9. **Re-pin the headless grant at sign-in** (§5.2). **Open.** The code and config check (§5.2) found that signing out of the pinned session kills the grant today, in prod as well, and that the user is then told to do something that doesn't fix it. The live check on dev confirmed it on 2026-11-27: the next run failed with "Refresh Token has been revoked", every schedule on the account paused, and only re-enabling plus Resume recovered them.
    **Recommendation, updated with that finding:** fix the failure first. Mark a refused grant `needs_reauth` so the Enable banner returns and the bell says "Turn scheduled runs back on" (§5.2 fix 1), and stop logout from revoking the grant's token (fix 2). Then re-pin at web sign-ins for users with an active grant. Re-pinning alone would make the newest session, the one a user is most likely to sign out of, the pinned one.
 10. **The connector pre-flight.** **Decided (Phil, 2026-11-27).** Held. It is built only if data shows `oauth_required` pauses are common. The grant-expiry warning (§5.1) ships regardless (§5.3).
 11. **Ship the action audit ahead of the rest.** **Decided (Phil, 2026-11-27).** After the dev readout, the audit gets its own default-on **rollout switch** (`HEADLESS_ACTION_AUDIT_ENABLED=false` opts out), retired on the default condition. The PR that adds it adds a line to tracking issue #1422 (§10.1).
