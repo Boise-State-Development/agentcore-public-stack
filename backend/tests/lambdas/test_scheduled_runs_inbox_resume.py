@@ -277,7 +277,11 @@ class TestFinish:
 
         assert _row(row["notificationId"])["resolution"]["state"] == state
         (run,) = list_schedule_runs(USER_ID, schedule.schedule_id)
-        assert run.resolution is None
+        if state == "answered_elsewhere":
+            # Settled here, so the bell's list never reaches it: the history says so itself.
+            assert (run.resolution, run.expires_at) == ("answered_elsewhere", None)
+        else:
+            assert run.resolution is None and run.expires_at
 
     @pytest.mark.parametrize(
         "overrides",
