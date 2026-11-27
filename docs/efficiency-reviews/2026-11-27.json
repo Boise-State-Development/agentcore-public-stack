@@ -1,0 +1,7982 @@
+{
+ "window": {
+  "start": "2026-10-30",
+  "end": "2026-11-27",
+  "calls": 65036,
+  "cost_usd": 3071.67,
+  "users": 1836,
+  "thumbs_joined": 15,
+  "thumbs_read": 24
+ },
+ "overall": {
+  "turns": 43731,
+  "cost_usd": 2982.23,
+  "cost_per_turn": 0.0682,
+  "cost_per_completed_turn": 0.0971,
+  "calls_per_turn": 1.39,
+  "turn_p50_s": 10.6,
+  "turn_p90_s": 40.1,
+  "ttft_p50_s": 2.1,
+  "ttft_p90_s": 7.9,
+  "completed_share": 0.9824,
+  "outcome_n": 31254,
+  "tool_error_turn_share": 0.1281,
+  "thumbs_up": 13,
+  "thumbs_down": 2,
+  "down_rate": null,
+  "copied_share": 0.0098,
+  "model_time_share": 0.827,
+  "wasted_usd": 64.61
+ },
+ "this_week": {
+  "turns": 3014,
+  "cost_usd": 286.8,
+  "cost_per_turn": 0.0952,
+  "cost_per_completed_turn": 0.0973,
+  "calls_per_turn": 1.63,
+  "turn_p50_s": 11.9,
+  "turn_p90_s": 49.2,
+  "ttft_p50_s": 1.7,
+  "ttft_p90_s": 11.1,
+  "completed_share": 0.9784,
+  "outcome_n": 3014,
+  "tool_error_turn_share": 0.0948,
+  "thumbs_up": 3,
+  "thumbs_down": 0,
+  "down_rate": null,
+  "copied_share": 0.0036,
+  "model_time_share": 0.797,
+  "wasted_usd": 3.58
+ },
+ "last_week": {
+  "turns": 18596,
+  "cost_usd": 911.32,
+  "cost_per_turn": 0.049,
+  "cost_per_completed_turn": 0.0496,
+  "calls_per_turn": 1.23,
+  "turn_p50_s": 10.3,
+  "turn_p90_s": 26.3,
+  "ttft_p50_s": 2.0,
+  "ttft_p90_s": 7.5,
+  "completed_share": 0.988,
+  "outcome_n": 18596,
+  "tool_error_turn_share": 0.1208,
+  "thumbs_up": 4,
+  "thumbs_down": 1,
+  "down_rate": null,
+  "copied_share": 0.0092,
+  "model_time_share": 0.853,
+  "wasted_usd": 16.17
+ },
+ "cache": [
+  {
+   "status": "hit",
+   "calls": 52649,
+   "cost_usd": 1639.31,
+   "share": 0.534,
+   "wasted_usd": 0.0
+  },
+  {
+   "status": "miss_ttl_expired",
+   "calls": 4662,
+   "cost_usd": 952.2,
+   "share": 0.31,
+   "wasted_usd": 0.0
+  },
+  {
+   "status": "first_write",
+   "calls": 4158,
+   "cost_usd": 331.68,
+   "share": 0.108,
+   "wasted_usd": 0.0
+  },
+  {
+   "status": "partial_miss",
+   "calls": 250,
+   "cost_usd": 71.78,
+   "share": 0.023,
+   "wasted_usd": 55.41
+  },
+  {
+   "status": "uncached",
+   "calls": 1891,
+   "cost_usd": 58.78,
+   "share": 0.019,
+   "wasted_usd": 0.0
+  },
+  {
+   "status": "miss_avoidable",
+   "calls": 107,
+   "cost_usd": 11.8,
+   "share": 0.004,
+   "wasted_usd": 9.2
+  },
+  {
+   "status": "estimated",
+   "calls": 166,
+   "cost_usd": 5.48,
+   "share": 0.002,
+   "wasted_usd": 0.0
+  },
+  {
+   "status": "unknown",
+   "calls": 1153,
+   "cost_usd": 0.63,
+   "share": 0.0,
+   "wasted_usd": 0.0
+  }
+ ],
+ "models": [
+  {
+   "key": "claude-sonnet-5",
+   "turns": 30370,
+   "cost_usd": 1673.65,
+   "cost_per_turn": 0.0551,
+   "cost_per_completed_turn": 0.0859,
+   "calls_per_turn": 1.29,
+   "turn_p50_s": 10.9,
+   "turn_p90_s": 37.7,
+   "ttft_p50_s": 2.4,
+   "ttft_p90_s": 7.9,
+   "completed_share": 0.9831,
+   "outcome_n": 19818,
+   "tool_error_turn_share": 0.1274,
+   "thumbs_up": 7,
+   "thumbs_down": 1,
+   "down_rate": null,
+   "copied_share": 0.0105,
+   "model_time_share": 0.853,
+   "wasted_usd": 42.9
+  },
+  {
+   "key": "claude-opus-5-5",
+   "turns": 2875,
+   "cost_usd": 817.71,
+   "cost_per_turn": 0.2844,
+   "cost_per_completed_turn": 0.4411,
+   "calls_per_turn": 1.94,
+   "turn_p50_s": 18.9,
+   "turn_p90_s": 112.9,
+   "ttft_p50_s": 2.9,
+   "ttft_p90_s": 16.2,
+   "completed_share": 0.9707,
+   "outcome_n": 1910,
+   "tool_error_turn_share": 0.1899,
+   "thumbs_up": 2,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0104,
+   "model_time_share": 0.852,
+   "wasted_usd": 7.5
+  },
+  {
+   "key": "claude-sonnet-5-5",
+   "turns": 5548,
+   "cost_usd": 372.79,
+   "cost_per_turn": 0.0672,
+   "cost_per_completed_turn": 0.0684,
+   "calls_per_turn": 1.38,
+   "turn_p50_s": 10.3,
+   "turn_p90_s": 32.6,
+   "ttft_p50_s": 1.6,
+   "ttft_p90_s": 7.2,
+   "completed_share": 0.9822,
+   "outcome_n": 5548,
+   "tool_error_turn_share": 0.0722,
+   "thumbs_up": 2,
+   "thumbs_down": 1,
+   "down_rate": null,
+   "copied_share": 0.0124,
+   "model_time_share": 0.796,
+   "wasted_usd": 7.09
+  },
+  {
+   "key": "openai.gpt-6.1-sol",
+   "turns": 1106,
+   "cost_usd": 53.01,
+   "cost_per_turn": 0.0479,
+   "cost_per_completed_turn": 0.0545,
+   "calls_per_turn": 2.1,
+   "turn_p50_s": 9.7,
+   "turn_p90_s": 62.8,
+   "ttft_p50_s": 1.5,
+   "ttft_p90_s": 5.0,
+   "completed_share": 0.9779,
+   "outcome_n": 995,
+   "tool_error_turn_share": 0.1167,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0018,
+   "model_time_share": 0.714,
+   "wasted_usd": 4.49
+  },
+  {
+   "key": "openai.gpt-6-sol",
+   "turns": 438,
+   "cost_usd": 32.63,
+   "cost_per_turn": 0.0745,
+   "cost_per_completed_turn": 0.219,
+   "calls_per_turn": 2.35,
+   "turn_p50_s": 7.9,
+   "turn_p90_s": 44.8,
+   "ttft_p50_s": 1.0,
+   "ttft_p90_s": 3.4,
+   "completed_share": 0.9803,
+   "outcome_n": 152,
+   "tool_error_turn_share": 0.2033,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0,
+   "model_time_share": 0.47,
+   "wasted_usd": 1.94
+  },
+  {
+   "key": "openai.gpt-5.6-terra",
+   "turns": 1952,
+   "cost_usd": 18.14,
+   "cost_per_turn": 0.0093,
+   "cost_per_completed_turn": 0.0095,
+   "calls_per_turn": 1.03,
+   "turn_p50_s": 3.0,
+   "turn_p90_s": 5.8,
+   "ttft_p50_s": 0.6,
+   "ttft_p90_s": 1.3,
+   "completed_share": 0.9995,
+   "outcome_n": 1912,
+   "tool_error_turn_share": 0.0952,
+   "thumbs_up": 2,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0031,
+   "model_time_share": 0.451,
+   "wasted_usd": 0.17
+  },
+  {
+   "key": "claude-haiku-4-5-20251001-v1:0",
+   "turns": 248,
+   "cost_usd": 6.43,
+   "cost_per_turn": 0.0259,
+   "cost_per_completed_turn": null,
+   "calls_per_turn": 1.29,
+   "turn_p50_s": 7.5,
+   "turn_p90_s": 23.9,
+   "ttft_p50_s": 1.2,
+   "ttft_p90_s": 3.2,
+   "completed_share": null,
+   "outcome_n": 17,
+   "tool_error_turn_share": 0.1951,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0,
+   "model_time_share": 0.719,
+   "wasted_usd": 0.33
+  },
+  {
+   "key": "openai.gpt-6-luna",
+   "turns": 619,
+   "cost_usd": 2.35,
+   "cost_per_turn": 0.0038,
+   "cost_per_completed_turn": 0.0061,
+   "calls_per_turn": 2.62,
+   "turn_p50_s": 12.9,
+   "turn_p90_s": 54.1,
+   "ttft_p50_s": 2.5,
+   "ttft_p90_s": 9.6,
+   "completed_share": 0.9673,
+   "outcome_n": 397,
+   "tool_error_turn_share": 0.1187,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0,
+   "model_time_share": 0.574,
+   "wasted_usd": 0.16
+  },
+  {
+   "key": "claude-haiku-5-5",
+   "turns": 511,
+   "cost_usd": 2.29,
+   "cost_per_turn": 0.0045,
+   "cost_per_completed_turn": 0.0052,
+   "calls_per_turn": 1.77,
+   "turn_p50_s": 10.4,
+   "turn_p90_s": 32.5,
+   "ttft_p50_s": 1.5,
+   "ttft_p90_s": 7.2,
+   "completed_share": 0.9673,
+   "outcome_n": 459,
+   "tool_error_turn_share": 0.1534,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0,
+   "model_time_share": 0.748,
+   "wasted_usd": 0.04
+  },
+  {
+   "key": "openai.gpt-5.4",
+   "turns": 25,
+   "cost_usd": 2.19,
+   "cost_per_turn": 0.0878,
+   "cost_per_completed_turn": null,
+   "calls_per_turn": 1.0,
+   "turn_p50_s": 8.8,
+   "turn_p90_s": 16.4,
+   "ttft_p50_s": 0.5,
+   "ttft_p90_s": 0.9,
+   "completed_share": null,
+   "outcome_n": 10,
+   "tool_error_turn_share": null,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0,
+   "model_time_share": 0.479,
+   "wasted_usd": 0.0
+  },
+  {
+   "key": "moonshotai.kimi-k3",
+   "turns": 4,
+   "cost_usd": 0.89,
+   "cost_per_turn": null,
+   "cost_per_completed_turn": null,
+   "calls_per_turn": null,
+   "turn_p50_s": null,
+   "turn_p90_s": null,
+   "ttft_p50_s": null,
+   "ttft_p90_s": null,
+   "completed_share": null,
+   "outcome_n": 3,
+   "tool_error_turn_share": null,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": null,
+   "model_time_share": 0.644,
+   "wasted_usd": 0.0
+  },
+  {
+   "key": "google.gemma-4-31b",
+   "turns": 35,
+   "cost_usd": 0.15,
+   "cost_per_turn": 0.0043,
+   "cost_per_completed_turn": 0.0049,
+   "calls_per_turn": 1.74,
+   "turn_p50_s": 12.0,
+   "turn_p90_s": 38.8,
+   "ttft_p50_s": 1.8,
+   "ttft_p90_s": 4.9,
+   "completed_share": 0.9394,
+   "outcome_n": 33,
+   "tool_error_turn_share": null,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0,
+   "model_time_share": 0.644,
+   "wasted_usd": 0.0
+  }
+ ],
+ "versions": [
+  {
+   "key": "1.35.0",
+   "turns": 9491,
+   "cost_usd": 680.54,
+   "cost_per_turn": 0.0717,
+   "cost_per_completed_turn": 0.0737,
+   "calls_per_turn": 1.51,
+   "turn_p50_s": 10.6,
+   "turn_p90_s": 47.8,
+   "ttft_p50_s": 1.9,
+   "ttft_p90_s": 7.0,
+   "completed_share": 0.9726,
+   "outcome_n": 9491,
+   "tool_error_turn_share": 0.1359,
+   "thumbs_up": 2,
+   "thumbs_down": 1,
+   "down_rate": null,
+   "copied_share": 0.0054,
+   "model_time_share": 0.802,
+   "wasted_usd": 11.02
+  },
+  {
+   "key": "1.36.1",
+   "turns": 8632,
+   "cost_usd": 447.42,
+   "cost_per_turn": 0.0518,
+   "cost_per_completed_turn": 0.0525,
+   "calls_per_turn": 1.25,
+   "turn_p50_s": 10.9,
+   "turn_p90_s": 27.5,
+   "ttft_p50_s": 2.4,
+   "ttft_p90_s": 6.1,
+   "completed_share": 0.9877,
+   "outcome_n": 8632,
+   "tool_error_turn_share": 0.1241,
+   "thumbs_up": 1,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0119,
+   "model_time_share": 0.863,
+   "wasted_usd": 6.86
+  },
+  {
+   "key": "1.37.0",
+   "turns": 8913,
+   "cost_usd": 334.49,
+   "cost_per_turn": 0.0375,
+   "cost_per_completed_turn": 0.0379,
+   "calls_per_turn": 1.17,
+   "turn_p50_s": 9.2,
+   "turn_p90_s": 21.9,
+   "ttft_p50_s": 1.5,
+   "ttft_p90_s": 8.6,
+   "completed_share": 0.9898,
+   "outcome_n": 8913,
+   "tool_error_turn_share": 0.1217,
+   "thumbs_up": 2,
+   "thumbs_down": 1,
+   "down_rate": null,
+   "copied_share": 0.0072,
+   "model_time_share": 0.848,
+   "wasted_usd": 5.94
+  },
+  {
+   "key": "1.38.0",
+   "turns": 2012,
+   "cost_usd": 216.68,
+   "cost_per_turn": 0.1077,
+   "cost_per_completed_turn": 0.11,
+   "calls_per_turn": 1.55,
+   "turn_p50_s": 13.4,
+   "turn_p90_s": 52.8,
+   "ttft_p50_s": 2.0,
+   "ttft_p90_s": 12.0,
+   "completed_share": 0.9791,
+   "outcome_n": 2012,
+   "tool_error_turn_share": 0.095,
+   "thumbs_up": 1,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0025,
+   "model_time_share": 0.836,
+   "wasted_usd": 3.99
+  },
+  {
+   "key": "1.40.0",
+   "turns": 1379,
+   "cost_usd": 124.07,
+   "cost_per_turn": 0.09,
+   "cost_per_completed_turn": 0.0916,
+   "calls_per_turn": 1.65,
+   "turn_p50_s": 10.8,
+   "turn_p90_s": 48.0,
+   "ttft_p50_s": 1.6,
+   "ttft_p90_s": 9.9,
+   "completed_share": 0.9819,
+   "outcome_n": 1379,
+   "tool_error_turn_share": 0.0957,
+   "thumbs_up": 2,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0058,
+   "model_time_share": 0.785,
+   "wasted_usd": 2.26
+  },
+  {
+   "key": "1.39.0",
+   "turns": 593,
+   "cost_usd": 69.35,
+   "cost_per_turn": 0.117,
+   "cost_per_completed_turn": 0.121,
+   "calls_per_turn": 1.99,
+   "turn_p50_s": 14.4,
+   "turn_p90_s": 66.8,
+   "ttft_p50_s": 1.8,
+   "ttft_p90_s": 11.2,
+   "completed_share": 0.9663,
+   "outcome_n": 593,
+   "tool_error_turn_share": 0.1061,
+   "thumbs_up": 1,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0,
+   "model_time_share": 0.754,
+   "wasted_usd": 0.46
+  }
+ ],
+ "turn_shape": [
+  {
+   "key": "1",
+   "turns": 37479,
+   "cost_usd": 1635.13,
+   "cost_per_turn": 0.0436,
+   "cost_per_completed_turn": 0.0613,
+   "calls_per_turn": 1.0,
+   "turn_p50_s": 9.1,
+   "turn_p90_s": 22.8,
+   "ttft_p50_s": 2.1,
+   "ttft_p90_s": 7.1,
+   "completed_share": 0.9851,
+   "outcome_n": 27057,
+   "tool_error_turn_share": 0.0,
+   "thumbs_up": 13,
+   "thumbs_down": 2,
+   "down_rate": null,
+   "copied_share": 0.011,
+   "model_time_share": 0.846,
+   "wasted_usd": 45.85,
+   "time_share": 0.545,
+   "cost_share": 0.532
+  },
+  {
+   "key": "2",
+   "turns": 3505,
+   "cost_usd": 540.6,
+   "cost_per_turn": 0.1542,
+   "cost_per_completed_turn": 0.2366,
+   "calls_per_turn": 2.0,
+   "turn_p50_s": 29.8,
+   "turn_p90_s": 91.5,
+   "ttft_p50_s": 2.5,
+   "ttft_p90_s": 16.3,
+   "completed_share": 0.9757,
+   "outcome_n": 2342,
+   "tool_error_turn_share": 0.0334,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0014,
+   "model_time_share": 0.874,
+   "wasted_usd": 10.63,
+   "time_share": 0.177,
+   "cost_share": 0.176
+  },
+  {
+   "key": "3-4",
+   "turns": 1537,
+   "cost_usd": 321.85,
+   "cost_per_turn": 0.2094,
+   "cost_per_completed_turn": 0.3177,
+   "calls_per_turn": 3.33,
+   "turn_p50_s": 39.4,
+   "turn_p90_s": 114.0,
+   "ttft_p50_s": 2.3,
+   "ttft_p90_s": 10.0,
+   "completed_share": 0.9575,
+   "outcome_n": 1058,
+   "tool_error_turn_share": 0.1485,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0033,
+   "model_time_share": 0.783,
+   "wasted_usd": 5.89,
+   "time_share": 0.101,
+   "cost_share": 0.105
+  },
+  {
+   "key": "5-9",
+   "turns": 863,
+   "cost_usd": 264.29,
+   "cost_per_turn": 0.3062,
+   "cost_per_completed_turn": 0.4832,
+   "calls_per_turn": 6.27,
+   "turn_p50_s": 67.0,
+   "turn_p90_s": 182.6,
+   "ttft_p50_s": 2.6,
+   "ttft_p90_s": 10.1,
+   "completed_share": 0.9415,
+   "outcome_n": 581,
+   "tool_error_turn_share": 0.3048,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0035,
+   "model_time_share": 0.756,
+   "wasted_usd": 1.94,
+   "time_share": 0.092,
+   "cost_share": 0.086
+  },
+  {
+   "key": "10+",
+   "turns": 347,
+   "cost_usd": 220.36,
+   "cost_per_turn": 0.6351,
+   "cost_per_completed_turn": 1.0697,
+   "calls_per_turn": 16.04,
+   "turn_p50_s": 149.9,
+   "turn_p90_s": 428.6,
+   "ttft_p50_s": 2.8,
+   "ttft_p90_s": 12.1,
+   "completed_share": 0.9537,
+   "outcome_n": 216,
+   "tool_error_turn_share": 0.562,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0058,
+   "model_time_share": 0.737,
+   "wasted_usd": 0.3,
+   "time_share": 0.085,
+   "cost_share": 0.072
+  }
+ ],
+ "duration_bands": [
+  {
+   "key": "10-30 s",
+   "turns": 16945,
+   "cost_usd": 987.72,
+   "cost_per_turn": 0.0583,
+   "cost_per_completed_turn": 0.0805,
+   "calls_per_turn": 1.17,
+   "turn_p50_s": 14.9,
+   "turn_p90_s": 24.3,
+   "ttft_p50_s": 3.6,
+   "ttft_p90_s": 7.3,
+   "completed_share": 0.9797,
+   "outcome_n": 12518,
+   "tool_error_turn_share": 0.0789,
+   "thumbs_up": 5,
+   "thumbs_down": 1,
+   "down_rate": null,
+   "copied_share": 0.0078,
+   "model_time_share": 0.836,
+   "wasted_usd": 18.13
+  },
+  {
+   "key": "30-90 s",
+   "turns": 4803,
+   "cost_usd": 870.87,
+   "cost_per_turn": 0.1813,
+   "cost_per_completed_turn": 0.3033,
+   "calls_per_turn": 2.44,
+   "turn_p50_s": 45.2,
+   "turn_p90_s": 75.3,
+   "ttft_p50_s": 8.1,
+   "ttft_p90_s": 20.0,
+   "completed_share": 0.968,
+   "outcome_n": 2966,
+   "tool_error_turn_share": 0.1104,
+   "thumbs_up": 2,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0148,
+   "model_time_share": 0.823,
+   "wasted_usd": 22.18
+  },
+  {
+   "key": "over 90 s",
+   "turns": 1347,
+   "cost_usd": 725.99,
+   "cost_per_turn": 0.539,
+   "cost_per_completed_turn": 0.9272,
+   "calls_per_turn": 6.14,
+   "turn_p50_s": 137.2,
+   "turn_p90_s": 301.6,
+   "ttft_p50_s": 5.3,
+   "ttft_p90_s": 49.5,
+   "completed_share": 0.9244,
+   "outcome_n": 847,
+   "tool_error_turn_share": 0.2679,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0178,
+   "model_time_share": 0.849,
+   "wasted_usd": 7.89
+  },
+  {
+   "key": "under 10 s",
+   "turns": 20636,
+   "cost_usd": 397.64,
+   "cost_per_turn": 0.0193,
+   "cost_per_completed_turn": 0.0269,
+   "calls_per_turn": 1.01,
+   "turn_p50_s": 5.9,
+   "turn_p90_s": 9.0,
+   "ttft_p50_s": 1.2,
+   "ttft_p90_s": 2.3,
+   "completed_share": 0.9908,
+   "outcome_n": 14923,
+   "tool_error_turn_share": 0.0952,
+   "thumbs_up": 6,
+   "thumbs_down": 1,
+   "down_rate": null,
+   "copied_share": 0.0096,
+   "model_time_share": 0.77,
+   "wasted_usd": 16.41
+  }
+ ],
+ "tool_error_split": [
+  {
+   "key": "clean",
+   "turns": 5467,
+   "cost_usd": 1054.66,
+   "cost_per_turn": 0.1929,
+   "cost_per_completed_turn": 0.2963,
+   "calls_per_turn": 3.08,
+   "turn_p50_s": 37.5,
+   "turn_p90_s": 118.4,
+   "ttft_p50_s": 2.5,
+   "ttft_p90_s": 13.8,
+   "completed_share": 0.9629,
+   "outcome_n": 3697,
+   "tool_error_turn_share": 0.0,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0022,
+   "model_time_share": 0.814,
+   "wasted_usd": 18.19
+  },
+  {
+   "key": "tool error",
+   "turns": 803,
+   "cost_usd": 294.73,
+   "cost_per_turn": 0.367,
+   "cost_per_completed_turn": 0.6039,
+   "calls_per_turn": 7.81,
+   "turn_p50_s": 64.8,
+   "turn_p90_s": 258.9,
+   "ttft_p50_s": 2.5,
+   "ttft_p90_s": 10.6,
+   "completed_share": 0.9439,
+   "outcome_n": 517,
+   "tool_error_turn_share": 1.0,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0025,
+   "model_time_share": 0.764,
+   "wasted_usd": 0.73
+  }
+ ],
+ "surface": [
+  {
+   "key": "plain chat",
+   "turns": 22999,
+   "cost_usd": 2230.26,
+   "cost_per_turn": 0.097,
+   "cost_per_completed_turn": 0.1553,
+   "calls_per_turn": 1.56,
+   "turn_p50_s": 13.1,
+   "turn_p90_s": 56.2,
+   "ttft_p50_s": 2.4,
+   "ttft_p90_s": 9.7,
+   "completed_share": 0.9698,
+   "outcome_n": 14812,
+   "tool_error_turn_share": 0.1012,
+   "thumbs_up": 11,
+   "thumbs_down": 1,
+   "down_rate": null,
+   "copied_share": 0.0087,
+   "model_time_share": 0.823,
+   "wasted_usd": 61.82
+  },
+  {
+   "key": "agent",
+   "turns": 19335,
+   "cost_usd": 540.78,
+   "cost_per_turn": 0.028,
+   "cost_per_completed_turn": 0.0354,
+   "calls_per_turn": 1.1,
+   "turn_p50_s": 7.9,
+   "turn_p90_s": 18.5,
+   "ttft_p50_s": 1.7,
+   "ttft_p90_s": 5.6,
+   "completed_share": 0.9965,
+   "outcome_n": 15348,
+   "tool_error_turn_share": 0.241,
+   "thumbs_up": 2,
+   "thumbs_down": 1,
+   "down_rate": null,
+   "copied_share": 0.0116,
+   "model_time_share": 0.838,
+   "wasted_usd": 2.04
+  },
+  {
+   "key": "project",
+   "turns": 1397,
+   "cost_usd": 211.19,
+   "cost_per_turn": 0.1512,
+   "cost_per_completed_turn": 0.2021,
+   "calls_per_turn": 2.44,
+   "turn_p50_s": 20.9,
+   "turn_p90_s": 78.7,
+   "ttft_p50_s": 2.4,
+   "ttft_p90_s": 11.2,
+   "completed_share": 0.9552,
+   "outcome_n": 1094,
+   "tool_error_turn_share": 0.2278,
+   "thumbs_up": 0,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0029,
+   "model_time_share": 0.822,
+   "wasted_usd": 0.75
+  }
+ ],
+ "documents": [
+  {
+   "key": "no documents",
+   "turns": 38135,
+   "cost_usd": 2308.63,
+   "cost_per_turn": 0.0605,
+   "cost_per_completed_turn": 0.0853,
+   "calls_per_turn": 1.38,
+   "turn_p50_s": 10.3,
+   "turn_p90_s": 36.0,
+   "ttft_p50_s": 2.0,
+   "ttft_p90_s": 7.1,
+   "completed_share": 0.9829,
+   "outcome_n": 27542,
+   "tool_error_turn_share": 0.1329,
+   "thumbs_up": 11,
+   "thumbs_down": 2,
+   "down_rate": null,
+   "copied_share": 0.0106,
+   "model_time_share": 0.818,
+   "wasted_usd": 48.75
+  },
+  {
+   "key": "with documents",
+   "turns": 5596,
+   "cost_usd": 673.6,
+   "cost_per_turn": 0.1204,
+   "cost_per_completed_turn": 0.1854,
+   "calls_per_turn": 1.43,
+   "turn_p50_s": 13.7,
+   "turn_p90_s": 70.1,
+   "ttft_p50_s": 2.7,
+   "ttft_p90_s": 12.9,
+   "completed_share": 0.9787,
+   "outcome_n": 3712,
+   "tool_error_turn_share": 0.1051,
+   "thumbs_up": 2,
+   "thumbs_down": 0,
+   "down_rate": null,
+   "copied_share": 0.0043,
+   "model_time_share": 0.866,
+   "wasted_usd": 15.87
+  }
+ ],
+ "tool_time_share": 0.105,
+ "tools": [
+  {
+   "tool": "browse_web",
+   "calls": 5516,
+   "errors": 292,
+   "error_rate": 0.0529,
+   "error_kinds": {
+    "result_error": 79
+   },
+   "error_rate_excluding_auth": 0.0529,
+   "mean_s": 2.87,
+   "result_chars_per_call": 2576,
+   "turns": 1139,
+   "cost_of_turns_usd": 244.42,
+   "down_rate": null
+  },
+  {
+   "tool": "create_artifact",
+   "calls": 1149,
+   "errors": 4,
+   "error_rate": 0.0035,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.26,
+   "result_chars_per_call": 118,
+   "turns": 1114,
+   "cost_of_turns_usd": 243.83,
+   "down_rate": null
+  },
+  {
+   "tool": "brave-search___brave_web_search",
+   "calls": 4543,
+   "errors": 2,
+   "error_rate": 0.0004,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 1.51,
+   "result_chars_per_call": 5025,
+   "turns": 1350,
+   "cost_of_turns_usd": 239.27,
+   "down_rate": null
+  },
+  {
+   "tool": "update_artifact",
+   "calls": 981,
+   "errors": 4,
+   "error_rate": 0.0041,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.17,
+   "result_chars_per_call": 63,
+   "turns": 908,
+   "cost_of_turns_usd": 182.15,
+   "down_rate": null
+  },
+  {
+   "tool": "retrieve_offloaded_content",
+   "calls": 1537,
+   "errors": 90,
+   "error_rate": 0.0586,
+   "error_kinds": {
+    "exception": 9
+   },
+   "error_rate_excluding_auth": 0.0586,
+   "mean_s": 0.11,
+   "result_chars_per_call": 6435,
+   "turns": 403,
+   "cost_of_turns_usd": 178.18,
+   "down_rate": null
+  },
+  {
+   "tool": "analyze_spreadsheet",
+   "calls": 2085,
+   "errors": 272,
+   "error_rate": 0.1305,
+   "error_kinds": {
+    "result_error": 73
+   },
+   "error_rate_excluding_auth": 0.1305,
+   "mean_s": 2.54,
+   "result_chars_per_call": 3891,
+   "turns": 521,
+   "cost_of_turns_usd": 160.28,
+   "down_rate": null
+  },
+  {
+   "tool": "document_read",
+   "calls": 1351,
+   "errors": 18,
+   "error_rate": 0.0133,
+   "error_kinds": {
+    "result_error": 10
+   },
+   "error_rate_excluding_auth": 0.0133,
+   "mean_s": 0.4,
+   "result_chars_per_call": 4223,
+   "turns": 398,
+   "cost_of_turns_usd": 152.45,
+   "down_rate": null
+  },
+  {
+   "tool": "read_file_content",
+   "calls": 428,
+   "errors": 11,
+   "error_rate": 0.0257,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 2.08,
+   "result_chars_per_call": 24126,
+   "turns": 174,
+   "cost_of_turns_usd": 140.7,
+   "down_rate": null
+  },
+  {
+   "tool": "fetch_url_content",
+   "calls": 897,
+   "errors": 83,
+   "error_rate": 0.0925,
+   "error_kinds": {
+    "result_error": 50
+   },
+   "error_rate_excluding_auth": 0.0925,
+   "mean_s": 1.46,
+   "result_chars_per_call": 8143,
+   "turns": 229,
+   "cost_of_turns_usd": 89.83,
+   "down_rate": null
+  },
+  {
+   "tool": "cludo-search___search_boise_state",
+   "calls": 1008,
+   "errors": 1,
+   "error_rate": 0.001,
+   "error_kinds": {
+    "result_error": 1
+   },
+   "error_rate_excluding_auth": 0.001,
+   "mean_s": 2.4,
+   "result_chars_per_call": 4499,
+   "turns": 605,
+   "cost_of_turns_usd": 87.96,
+   "down_rate": null
+  },
+  {
+   "tool": "create_word_document",
+   "calls": 237,
+   "errors": 11,
+   "error_rate": 0.0464,
+   "error_kinds": {
+    "result_error": 1
+   },
+   "error_rate_excluding_auth": 0.0464,
+   "mean_s": 2.76,
+   "result_chars_per_call": 461,
+   "turns": 190,
+   "cost_of_turns_usd": 81.46,
+   "down_rate": null
+  },
+  {
+   "tool": "read_sheet_range",
+   "calls": 224,
+   "errors": 14,
+   "error_rate": 0.0625,
+   "error_kinds": {
+    "result_error": 7
+   },
+   "error_rate_excluding_auth": 0.0625,
+   "mean_s": 1.45,
+   "result_chars_per_call": 6795,
+   "turns": 63,
+   "cost_of_turns_usd": 56.66,
+   "down_rate": null
+  },
+  {
+   "tool": "search_files",
+   "calls": 192,
+   "errors": 73,
+   "error_rate": 0.3802,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.99,
+   "result_chars_per_call": 5174,
+   "turns": 85,
+   "cost_of_turns_usd": 47.48,
+   "down_rate": null
+  },
+  {
+   "tool": "list_spreadsheets",
+   "calls": 203,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.02,
+   "result_chars_per_call": 146,
+   "turns": 201,
+   "cost_of_turns_usd": 46.04,
+   "down_rate": null
+  },
+  {
+   "tool": "create_excel_spreadsheet",
+   "calls": 124,
+   "errors": 8,
+   "error_rate": 0.0645,
+   "error_kinds": {
+    "result_error": 4,
+    "exception": 1
+   },
+   "error_rate_excluding_auth": 0.0645,
+   "mean_s": 2.82,
+   "result_chars_per_call": 471,
+   "turns": 109,
+   "cost_of_turns_usd": 45.74,
+   "down_rate": null
+  },
+  {
+   "tool": "memory_save",
+   "calls": 189,
+   "errors": 57,
+   "error_rate": 0.3016,
+   "error_kinds": {
+    "result_error": 24
+   },
+   "error_rate_excluding_auth": 0.3016,
+   "mean_s": 0.43,
+   "result_chars_per_call": 242,
+   "turns": 114,
+   "cost_of_turns_usd": 38.27,
+   "down_rate": null
+  },
+  {
+   "tool": "memory_read",
+   "calls": 193,
+   "errors": 2,
+   "error_rate": 0.0104,
+   "error_kinds": {
+    "result_error": 1
+   },
+   "error_rate_excluding_auth": 0.0104,
+   "mean_s": 0.17,
+   "result_chars_per_call": 4227,
+   "turns": 132,
+   "cost_of_turns_usd": 36.11,
+   "down_rate": null
+  },
+  {
+   "tool": "replace_text_in_doc",
+   "calls": 585,
+   "errors": 19,
+   "error_rate": 0.0325,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 1.09,
+   "result_chars_per_call": 96,
+   "turns": 36,
+   "cost_of_turns_usd": 35.74,
+   "down_rate": null
+  },
+  {
+   "tool": "skills",
+   "calls": 141,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.0,
+   "result_chars_per_call": 10616,
+   "turns": 127,
+   "cost_of_turns_usd": 34.97,
+   "down_rate": null
+  },
+  {
+   "tool": "policy-search___search_policies",
+   "calls": 118,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 2.46,
+   "result_chars_per_call": 11398,
+   "turns": 81,
+   "cost_of_turns_usd": 31.86,
+   "down_rate": null
+  },
+  {
+   "tool": "verify_sources",
+   "calls": 130,
+   "errors": 12,
+   "error_rate": 0.0923,
+   "error_kinds": {
+    "result_error": 12
+   },
+   "error_rate_excluding_auth": 0.0923,
+   "mean_s": 0.44,
+   "result_chars_per_call": 201,
+   "turns": 72,
+   "cost_of_turns_usd": 31.26,
+   "down_rate": null
+  },
+  {
+   "tool": "modify_word_document",
+   "calls": 117,
+   "errors": 33,
+   "error_rate": 0.2821,
+   "error_kinds": {
+    "result_error": 11
+   },
+   "error_rate_excluding_auth": 0.2821,
+   "mean_s": 2.1,
+   "result_chars_per_call": 590,
+   "turns": 65,
+   "cost_of_turns_usd": 31.01,
+   "down_rate": null
+  },
+  {
+   "tool": "policy-search___get_policy_by_number",
+   "calls": 56,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 1.62,
+   "result_chars_per_call": 15594,
+   "turns": 43,
+   "cost_of_turns_usd": 27.85,
+   "down_rate": null
+  },
+  {
+   "tool": "update_sheet_range",
+   "calls": 179,
+   "errors": 4,
+   "error_rate": 0.0223,
+   "error_kinds": {
+    "result_error": 1
+   },
+   "error_rate_excluding_auth": 0.0223,
+   "mean_s": 1.3,
+   "result_chars_per_call": 87,
+   "turns": 42,
+   "cost_of_turns_usd": 26.07,
+   "down_rate": null
+  },
+  {
+   "tool": "list_assignments",
+   "calls": 100,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 2.43,
+   "result_chars_per_call": 12301,
+   "turns": 35,
+   "cost_of_turns_usd": 24.55,
+   "down_rate": null
+  }
+ ],
+ "tools_this_week": [
+  {
+   "tool": "browse_web",
+   "calls": 889,
+   "errors": 42,
+   "error_rate": 0.0472,
+   "error_kinds": {
+    "result_error": 42
+   },
+   "error_rate_excluding_auth": 0.0472,
+   "mean_s": 3.22,
+   "result_chars_per_call": 2549,
+   "turns": 143,
+   "cost_of_turns_usd": 45.09,
+   "down_rate": null
+  },
+  {
+   "tool": "document_read",
+   "calls": 260,
+   "errors": 3,
+   "error_rate": 0.0115,
+   "error_kinds": {
+    "result_error": 3
+   },
+   "error_rate_excluding_auth": 0.0115,
+   "mean_s": 0.55,
+   "result_chars_per_call": 7614,
+   "turns": 74,
+   "cost_of_turns_usd": 33.14,
+   "down_rate": null
+  },
+  {
+   "tool": "brave-search___brave_web_search",
+   "calls": 503,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 2.91,
+   "result_chars_per_call": 4764,
+   "turns": 124,
+   "cost_of_turns_usd": 32.86,
+   "down_rate": null
+  },
+  {
+   "tool": "create_artifact",
+   "calls": 119,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.24,
+   "result_chars_per_call": 115,
+   "turns": 118,
+   "cost_of_turns_usd": 32.29,
+   "down_rate": null
+  },
+  {
+   "tool": "fetch_url_content",
+   "calls": 209,
+   "errors": 23,
+   "error_rate": 0.11,
+   "error_kinds": {
+    "result_error": 23
+   },
+   "error_rate_excluding_auth": 0.11,
+   "mean_s": 1.81,
+   "result_chars_per_call": 9923,
+   "turns": 41,
+   "cost_of_turns_usd": 21.57,
+   "down_rate": null
+  },
+  {
+   "tool": "retrieve_offloaded_content",
+   "calls": 52,
+   "errors": 1,
+   "error_rate": 0.0192,
+   "error_kinds": {
+    "exception": 1
+   },
+   "error_rate_excluding_auth": 0.0192,
+   "mean_s": 0.31,
+   "result_chars_per_call": 9674,
+   "turns": 26,
+   "cost_of_turns_usd": 12.83,
+   "down_rate": null
+  },
+  {
+   "tool": "update_artifact",
+   "calls": 70,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.18,
+   "result_chars_per_call": 63,
+   "turns": 70,
+   "cost_of_turns_usd": 12.4,
+   "down_rate": null
+  },
+  {
+   "tool": "workspace_write",
+   "calls": 28,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.16,
+   "result_chars_per_call": 462,
+   "turns": 18,
+   "cost_of_turns_usd": 10.54,
+   "down_rate": null
+  },
+  {
+   "tool": "cludo-search___search_boise_state",
+   "calls": 124,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 2.99,
+   "result_chars_per_call": 4177,
+   "turns": 74,
+   "cost_of_turns_usd": 10.53,
+   "down_rate": null
+  },
+  {
+   "tool": "analyze_spreadsheet",
+   "calls": 175,
+   "errors": 17,
+   "error_rate": 0.0971,
+   "error_kinds": {
+    "result_error": 17
+   },
+   "error_rate_excluding_auth": 0.0971,
+   "mean_s": 3.53,
+   "result_chars_per_call": 3075,
+   "turns": 58,
+   "cost_of_turns_usd": 10.48,
+   "down_rate": null
+  },
+  {
+   "tool": "verify_sources",
+   "calls": 39,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.76,
+   "result_chars_per_call": 153,
+   "turns": 31,
+   "cost_of_turns_usd": 6.82,
+   "down_rate": null
+  },
+  {
+   "tool": "search_files",
+   "calls": 6,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 5,
+   "cost_of_turns_usd": 4.94,
+   "down_rate": null
+  },
+  {
+   "tool": "get_file_metadata",
+   "calls": 5,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 5,
+   "cost_of_turns_usd": 4.94,
+   "down_rate": null
+  },
+  {
+   "tool": "create_file",
+   "calls": 5,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 5,
+   "cost_of_turns_usd": 4.43,
+   "down_rate": null
+  },
+  {
+   "tool": "skills",
+   "calls": 20,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.0,
+   "result_chars_per_call": 13281,
+   "turns": 20,
+   "cost_of_turns_usd": 4.42,
+   "down_rate": null
+  },
+  {
+   "tool": "get_file_permissions",
+   "calls": 4,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 4,
+   "cost_of_turns_usd": 4.34,
+   "down_rate": null
+  },
+  {
+   "tool": "read_file_content",
+   "calls": 8,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 4,
+   "cost_of_turns_usd": 4.34,
+   "down_rate": null
+  },
+  {
+   "tool": "create_excel_spreadsheet",
+   "calls": 7,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 7,
+   "cost_of_turns_usd": 2.92,
+   "down_rate": null
+  },
+  {
+   "tool": "memory_read",
+   "calls": 31,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.17,
+   "result_chars_per_call": 4586,
+   "turns": 18,
+   "cost_of_turns_usd": 2.75,
+   "down_rate": null
+  },
+  {
+   "tool": "workspace_read",
+   "calls": 14,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 9,
+   "cost_of_turns_usd": 2.5,
+   "down_rate": null
+  },
+  {
+   "tool": "memory_save",
+   "calls": 30,
+   "errors": 12,
+   "error_rate": 0.4,
+   "error_kinds": {
+    "result_error": 12
+   },
+   "error_rate_excluding_auth": 0.4,
+   "mean_s": 0.4,
+   "result_chars_per_call": 223,
+   "turns": 14,
+   "cost_of_turns_usd": 2.2,
+   "down_rate": null
+  },
+  {
+   "tool": "create_word_document",
+   "calls": 8,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 8,
+   "cost_of_turns_usd": 2.17,
+   "down_rate": null
+  },
+  {
+   "tool": "policy-search___search_policies",
+   "calls": 6,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 5,
+   "cost_of_turns_usd": 1.78,
+   "down_rate": null
+  },
+  {
+   "tool": "list_spreadsheets",
+   "calls": 10,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 10,
+   "cost_of_turns_usd": 1.77,
+   "down_rate": null
+  },
+  {
+   "tool": "workspace_list",
+   "calls": 6,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 5,
+   "cost_of_turns_usd": 1.51,
+   "down_rate": null
+  },
+  {
+   "tool": "knowledge_files",
+   "calls": 58,
+   "errors": 2,
+   "error_rate": 0.0345,
+   "error_kinds": {
+    "result_error": 2
+   },
+   "error_rate_excluding_auth": 0.0345,
+   "mean_s": 0.22,
+   "result_chars_per_call": 2717,
+   "turns": 8,
+   "cost_of_turns_usd": 1.31,
+   "down_rate": null
+  },
+  {
+   "tool": "project_files",
+   "calls": 8,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 7,
+   "cost_of_turns_usd": 0.93,
+   "down_rate": null
+  },
+  {
+   "tool": "read_powerpoint_presentation",
+   "calls": 4,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 4,
+   "cost_of_turns_usd": 0.64,
+   "down_rate": null
+  },
+  {
+   "tool": "list_courses",
+   "calls": 2,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 2,
+   "cost_of_turns_usd": 0.57,
+   "down_rate": null
+  },
+  {
+   "tool": "get_syllabus",
+   "calls": 2,
+   "errors": 2,
+   "error_rate": null,
+   "error_kinds": {
+    "result_error": 2
+   },
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 2,
+   "cost_of_turns_usd": 0.57,
+   "down_rate": null
+  },
+  {
+   "tool": "list_assignments",
+   "calls": 2,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 2,
+   "cost_of_turns_usd": 0.57,
+   "down_rate": null
+  },
+  {
+   "tool": "list_modules",
+   "calls": 2,
+   "errors": 2,
+   "error_rate": null,
+   "error_kinds": {
+    "result_error": 2
+   },
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 2,
+   "cost_of_turns_usd": 0.57,
+   "down_rate": null
+  },
+  {
+   "tool": "get_assignment_details",
+   "calls": 26,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 4.67,
+   "result_chars_per_call": 2317,
+   "turns": 2,
+   "cost_of_turns_usd": 0.57,
+   "down_rate": null
+  },
+  {
+   "tool": "list_pages",
+   "calls": 2,
+   "errors": 2,
+   "error_rate": null,
+   "error_kinds": {
+    "result_error": 2
+   },
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 2,
+   "cost_of_turns_usd": 0.57,
+   "down_rate": null
+  },
+  {
+   "tool": "run_code",
+   "calls": 26,
+   "errors": 3,
+   "error_rate": 0.1154,
+   "error_kinds": {
+    "result_error": 3
+   },
+   "error_rate_excluding_auth": 0.1154,
+   "mean_s": 4.19,
+   "result_chars_per_call": 729,
+   "turns": 8,
+   "cost_of_turns_usd": 0.48,
+   "down_rate": null
+  },
+  {
+   "tool": "brave-search___brave_news_search",
+   "calls": 7,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 6,
+   "cost_of_turns_usd": 0.46,
+   "down_rate": null
+  },
+  {
+   "tool": "calculator",
+   "calls": 8,
+   "errors": 3,
+   "error_rate": null,
+   "error_kinds": {
+    "result_error": 3
+   },
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.46,
+   "down_rate": null
+  },
+  {
+   "tool": "list_word_documents",
+   "calls": 2,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 2,
+   "cost_of_turns_usd": 0.41,
+   "down_rate": null
+  },
+  {
+   "tool": "run_report",
+   "calls": 21,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 6.88,
+   "result_chars_per_call": 7111,
+   "turns": 3,
+   "cost_of_turns_usd": 0.41,
+   "down_rate": null
+  },
+  {
+   "tool": "shared_conversations_list",
+   "calls": 4,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 4,
+   "cost_of_turns_usd": 0.41,
+   "down_rate": null
+  },
+  {
+   "tool": "update_sheet_range",
+   "calls": 4,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.35,
+   "down_rate": null
+  },
+  {
+   "tool": "list_powerpoint_presentations",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.34,
+   "down_rate": null
+  },
+  {
+   "tool": "get_course_details",
+   "calls": 1,
+   "errors": 1,
+   "error_rate": null,
+   "error_kinds": {
+    "result_error": 1
+   },
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.34,
+   "down_rate": null
+  },
+  {
+   "tool": "list_discussion_topics",
+   "calls": 1,
+   "errors": 1,
+   "error_rate": null,
+   "error_kinds": {
+    "result_error": 1
+   },
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.34,
+   "down_rate": null
+  },
+  {
+   "tool": "list_rubrics",
+   "calls": 1,
+   "errors": 1,
+   "error_rate": null,
+   "error_kinds": {
+    "result_error": 1
+   },
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.34,
+   "down_rate": null
+  },
+  {
+   "tool": "list_excel_spreadsheets",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.31,
+   "down_rate": null
+  },
+  {
+   "tool": "issue_write",
+   "calls": 3,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 3,
+   "cost_of_turns_usd": 0.29,
+   "down_rate": null
+  },
+  {
+   "tool": "create_powerpoint_presentation",
+   "calls": 3,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 3,
+   "cost_of_turns_usd": 0.28,
+   "down_rate": null
+  },
+  {
+   "tool": "redline_word_document",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.22,
+   "down_rate": null
+  },
+  {
+   "tool": "projects_write",
+   "calls": 28,
+   "errors": 1,
+   "error_rate": 0.0357,
+   "error_kinds": {
+    "result_error": 1
+   },
+   "error_rate_excluding_auth": 0.0357,
+   "mean_s": 7.01,
+   "result_chars_per_call": 679,
+   "turns": 3,
+   "cost_of_turns_usd": 0.21,
+   "down_rate": null
+  },
+  {
+   "tool": "add_issue_comment",
+   "calls": 3,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 3,
+   "cost_of_turns_usd": 0.21,
+   "down_rate": null
+  },
+  {
+   "tool": "get_custom_dimensions_and_metrics",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.21,
+   "down_rate": null
+  },
+  {
+   "tool": "get_property_details",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.21,
+   "down_rate": null
+  },
+  {
+   "tool": "list_property_annotations",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.21,
+   "down_rate": null
+  },
+  {
+   "tool": "search_threads",
+   "calls": 12,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 4,
+   "cost_of_turns_usd": 0.19,
+   "down_rate": null
+  },
+  {
+   "tool": "get_thread",
+   "calls": 23,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.78,
+   "result_chars_per_call": 4267,
+   "turns": 5,
+   "cost_of_turns_usd": 0.19,
+   "down_rate": null
+  },
+  {
+   "tool": "memory_list",
+   "calls": 2,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 2,
+   "cost_of_turns_usd": 0.19,
+   "down_rate": null
+  },
+  {
+   "tool": "get_file_contents",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.18,
+   "down_rate": null
+  },
+  {
+   "tool": "projects_list",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.18,
+   "down_rate": null
+  },
+  {
+   "tool": "search_issues",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.18,
+   "down_rate": null
+  },
+  {
+   "tool": "get_threads_digest",
+   "calls": 4,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 4,
+   "cost_of_turns_usd": 0.17,
+   "down_rate": null
+  },
+  {
+   "tool": "memory_query",
+   "calls": 3,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 2,
+   "cost_of_turns_usd": 0.17,
+   "down_rate": null
+  },
+  {
+   "tool": "boise-state-reporting___search_definitions",
+   "calls": 4,
+   "errors": 2,
+   "error_rate": null,
+   "error_kinds": {
+    "result_error": 2
+   },
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.15,
+   "down_rate": null
+  },
+  {
+   "tool": "boise-state-reporting___lookup_definition",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.15,
+   "down_rate": null
+  },
+  {
+   "tool": "brave-search___brave_image_search",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.14,
+   "down_rate": null
+  },
+  {
+   "tool": "get_current_user",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.13,
+   "down_rate": null
+  },
+  {
+   "tool": "shared_conversation_read",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.09,
+   "down_rate": null
+  },
+  {
+   "tool": "create_draft",
+   "calls": 13,
+   "errors": 1,
+   "error_rate": null,
+   "error_kinds": {
+    "result_error": 1
+   },
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 13,
+   "cost_of_turns_usd": 0.05,
+   "down_rate": null
+  },
+  {
+   "tool": "get_message",
+   "calls": 15,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 9,
+   "cost_of_turns_usd": 0.04,
+   "down_rate": null
+  },
+  {
+   "tool": "modify_word_document",
+   "calls": 1,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.04,
+   "down_rate": null
+  },
+  {
+   "tool": "search_messages",
+   "calls": 39,
+   "errors": 0,
+   "error_rate": 0.0,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": 0.84,
+   "result_chars_per_call": 485,
+   "turns": 7,
+   "cost_of_turns_usd": 0.03,
+   "down_rate": null
+  },
+  {
+   "tool": "ask_user_question",
+   "calls": 1,
+   "errors": 1,
+   "error_rate": null,
+   "error_kinds": {
+    "result_error": 1
+   },
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 1,
+   "cost_of_turns_usd": 0.03,
+   "down_rate": null
+  },
+  {
+   "tool": "list_drafts",
+   "calls": 3,
+   "errors": 0,
+   "error_rate": null,
+   "error_kinds": {},
+   "error_rate_excluding_auth": null,
+   "mean_s": null,
+   "result_chars_per_call": null,
+   "turns": 3,
+   "cost_of_turns_usd": 0.01,
+   "down_rate": null
+  }
+ ],
+ "sessions": {
+  "conversations": 6547,
+  "top_1pct_share": 0.241,
+  "top_5pct_share": 0.517,
+  "premium_light_conversations": 201,
+  "premium_light_usd": 63.77,
+  "endings": {
+   "clean": 4273,
+   "empty answer": 3,
+   "tool error": 161,
+   "error": 15,
+   "interrupted": 6,
+   "stopped": 6
+  },
+  "ended_badly_share": 0.0428
+ },
+ "quality": {
+  "outcomes": {
+   "completed": 30715,
+   "paused": 415,
+   "stopped": 62,
+   "error": 35,
+   "interrupted": 27
+  },
+  "empty_answers": 11,
+  "rewound_turns": 41,
+  "down_reasons": {
+   "instructions": 1,
+   "none": 3,
+   "tool_failed": 5
+  },
+  "down_then_retried": 2,
+  "implicit_signals": {
+   "copy": 474,
+   "continue": 20
+  },
+  "tool_error_kinds": {
+   "result_error": 451,
+   "exception": 11,
+   "auth": 1
+  },
+  "estimated_usage_calls": 166
+ },
+ "coverage": {
+  "turns_with_outcome": 0.715,
+  "turns_with_ttft": 0.991,
+  "tool_turns_with_timing": 0.672,
+  "turns_with_thumb": 0.0003,
+  "turns_with_version": 0.715,
+  "turns_with_implicit_signal": 0.0101,
+  "tool_errors_with_kind": 0.318,
+  "output_tokens_with_composition": 0.45
+ },
+ "output": [
+  {
+   "model": "claude-sonnet-5",
+   "turns": 13535,
+   "output_tokens": 13935466,
+   "text_chars": 15044115,
+   "reasoning_chars": 3914312,
+   "signature_chars": 27379636,
+   "est_reasoning_share": 0.634
+  },
+  {
+   "model": "claude-sonnet-5-5",
+   "turns": 5517,
+   "output_tokens": 9224000,
+   "text_chars": 11790536,
+   "reasoning_chars": 3130978,
+   "signature_chars": 11070732,
+   "est_reasoning_share": 0.387
+  },
+  {
+   "model": "claude-opus-5-5",
+   "turns": 1257,
+   "output_tokens": 5441478,
+   "text_chars": 3370751,
+   "reasoning_chars": 3489901,
+   "signature_chars": 10572752,
+   "est_reasoning_share": 0.627
+  },
+  {
+   "model": "openai.gpt-6.1-sol",
+   "turns": 558,
+   "output_tokens": 543104,
+   "text_chars": 1002801,
+   "reasoning_chars": 0,
+   "signature_chars": 0,
+   "est_reasoning_share": 0.0
+  },
+  {
+   "model": "claude-haiku-5-5",
+   "turns": 272,
+   "output_tokens": 530060,
+   "text_chars": 440224,
+   "reasoning_chars": 254858,
+   "signature_chars": 1097080,
+   "est_reasoning_share": 0.668
+  },
+  {
+   "model": "openai.gpt-6-luna",
+   "turns": 218,
+   "output_tokens": 272281,
+   "text_chars": 258357,
+   "reasoning_chars": 0,
+   "signature_chars": 0,
+   "est_reasoning_share": 0.0
+  },
+  {
+   "model": "openai.gpt-6-sol",
+   "turns": 54,
+   "output_tokens": 74571,
+   "text_chars": 207682,
+   "reasoning_chars": 0,
+   "signature_chars": 0,
+   "est_reasoning_share": 0.0
+  },
+  {
+   "model": "openai.gpt-5.6-terra",
+   "turns": 39,
+   "output_tokens": 41615,
+   "text_chars": 169888,
+   "reasoning_chars": 0,
+   "signature_chars": 0,
+   "est_reasoning_share": 0.0
+  },
+  {
+   "model": "google.gemma-4-31b",
+   "turns": 11,
+   "output_tokens": 7135,
+   "text_chars": 26899,
+   "reasoning_chars": 0,
+   "signature_chars": 0,
+   "est_reasoning_share": null
+  },
+  {
+   "model": "openai.gpt-5.4",
+   "turns": 10,
+   "output_tokens": 4011,
+   "text_chars": 18366,
+   "reasoning_chars": 0,
+   "signature_chars": 0,
+   "est_reasoning_share": null
+  },
+  {
+   "model": "moonshotai.kimi-k3",
+   "turns": 3,
+   "output_tokens": 1439,
+   "text_chars": 5625,
+   "reasoning_chars": 0,
+   "signature_chars": 0,
+   "est_reasoning_share": null
+  }
+ ],
+ "evals": {
+  "runs": 45,
+  "models": [
+   {
+    "model": "claude-sonnet-5",
+    "runs": 2,
+    "gate_failures": 0,
+    "latest": "2026-11-14",
+    "latest_gate_failed": false,
+    "families": 14,
+    "spend_share": 0.561
+   },
+   {
+    "model": "claude-opus-5-5",
+    "runs": 10,
+    "gate_failures": 0,
+    "latest": "2026-11-23",
+    "latest_gate_failed": false,
+    "families": 13,
+    "spend_share": 0.274
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "runs": 10,
+    "gate_failures": 0,
+    "latest": "2026-11-23",
+    "latest_gate_failed": false,
+    "families": 13,
+    "spend_share": 0.125
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "runs": 1,
+    "gate_failures": 0,
+    "latest": "2026-11-14",
+    "latest_gate_failed": false,
+    "families": 14,
+    "spend_share": 0.002
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "runs": 22,
+    "gate_failures": 1,
+    "latest": "2026-11-23",
+    "latest_gate_failed": false,
+    "families": 13,
+    "spend_share": 0.001
+   }
+  ],
+  "spend_share_with_eval": 0.963,
+  "models_without_eval": [
+   {
+    "model": "openai.gpt-6.1-sol",
+    "spend_share": 0.018
+   },
+   {
+    "model": "openai.gpt-6-sol",
+    "spend_share": 0.011
+   }
+  ],
+  "efficiency": [
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "agent_harness",
+    "runs": 1,
+    "durationMs": {
+     "mean": 4754.3,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 1542.0,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 10237.7,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 1.4,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 122.4,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 0.4,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "attachment_tools",
+    "runs": 1,
+    "durationMs": {
+     "mean": 8219.4,
+     "change": null,
+     "n": 12
+    },
+    "firstTokenMs": {
+     "mean": 1651.7,
+     "change": null,
+     "n": 12
+    },
+    "inputTokens": {
+     "mean": 18223.4,
+     "change": null,
+     "n": 12
+    },
+    "modelCalls": {
+     "mean": 2.2,
+     "change": null,
+     "n": 12
+    },
+    "outputTokens": {
+     "mean": 215.3,
+     "change": null,
+     "n": 12
+    },
+    "toolCalls": {
+     "mean": 1.2,
+     "change": null,
+     "n": 12
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "document_qa",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5737.1,
+     "change": null,
+     "n": 24
+    },
+    "firstTokenMs": {
+     "mean": 1844.5,
+     "change": null,
+     "n": 24
+    },
+    "inputTokens": {
+     "mean": 15024.5,
+     "change": null,
+     "n": 24
+    },
+    "modelCalls": {
+     "mean": 1.8,
+     "change": null,
+     "n": 24
+    },
+    "outputTokens": {
+     "mean": 114.0,
+     "change": null,
+     "n": 24
+    },
+    "toolCalls": {
+     "mean": 0.8,
+     "change": null,
+     "n": 24
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "general_chat",
+    "runs": 1,
+    "durationMs": {
+     "mean": 8698.2,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 1656.8,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 4912.2,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 559.7,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "instruction_following",
+    "runs": 1,
+    "durationMs": {
+     "mean": 2680.0,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1364.3,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 5098.1,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 25.8,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "project_kb",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5082.5,
+     "change": null,
+     "n": 13
+    },
+    "firstTokenMs": {
+     "mean": 1493.4,
+     "change": null,
+     "n": 13
+    },
+    "inputTokens": {
+     "mean": 13761.2,
+     "change": null,
+     "n": 13
+    },
+    "modelCalls": {
+     "mean": 1.2,
+     "change": null,
+     "n": 13
+    },
+    "outputTokens": {
+     "mean": 57.8,
+     "change": null,
+     "n": 13
+    },
+    "toolCalls": {
+     "mean": 0.2,
+     "change": null,
+     "n": 13
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "project_memory",
+    "runs": 1,
+    "durationMs": {
+     "mean": 7530.3,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 1728.0,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 19439.4,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.2,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 218.0,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 1.1,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "refusal",
+    "runs": 1,
+    "durationMs": {
+     "mean": 8889.5,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 1433.0,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 4881.8,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 550.0,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "retention",
+    "runs": 1,
+    "durationMs": {
+     "mean": 11480.0,
+     "change": null,
+     "n": 7
+    },
+    "firstTokenMs": {
+     "mean": 1667.9,
+     "change": null,
+     "n": 7
+    },
+    "inputTokens": {
+     "mean": 17503.3,
+     "change": null,
+     "n": 7
+    },
+    "modelCalls": {
+     "mean": 3.4,
+     "change": null,
+     "n": 7
+    },
+    "outputTokens": {
+     "mean": 489.3,
+     "change": null,
+     "n": 7
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 7
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "skill_outcome",
+    "runs": 1,
+    "durationMs": {
+     "mean": 12010.3,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1682.9,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 17382.6,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 665.2,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.8,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "skill_selection",
+    "runs": 1,
+    "durationMs": {
+     "mean": 8356.0,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 1649.5,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 17108.9,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 2.5,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 365.1,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "terminal",
+    "runs": 1,
+    "durationMs": {
+     "mean": 4691.7,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 1776.0,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8734.3,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 133.7,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "tool_selection",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5176.1,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1484.3,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 12803.1,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.9,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 123.9,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "manual",
+    "family": "usage_patterns",
+    "runs": 1,
+    "durationMs": {
+     "mean": 14116.4,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1686.9,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 25175.1,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 3.7,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 717.2,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 2.1,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "agent_harness",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5644.1,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2154.6,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 10222.9,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 1.4,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 148.2,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "attachment_tools",
+    "runs": 1,
+    "durationMs": {
+     "mean": 9217.9,
+     "change": null,
+     "n": 12
+    },
+    "firstTokenMs": {
+     "mean": 1640.6,
+     "change": null,
+     "n": 12
+    },
+    "inputTokens": {
+     "mean": 19103.1,
+     "change": null,
+     "n": 12
+    },
+    "modelCalls": {
+     "mean": 2.4,
+     "change": null,
+     "n": 12
+    },
+    "outputTokens": {
+     "mean": 255.5,
+     "change": null,
+     "n": 12
+    },
+    "toolCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 12
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "document_qa",
+    "runs": 1,
+    "durationMs": {
+     "mean": 8479.9,
+     "change": null,
+     "n": 22
+    },
+    "firstTokenMs": {
+     "mean": 2776.7,
+     "change": null,
+     "n": 22
+    },
+    "inputTokens": {
+     "mean": 20623.8,
+     "change": null,
+     "n": 22
+    },
+    "modelCalls": {
+     "mean": 2.4,
+     "change": null,
+     "n": 22
+    },
+    "outputTokens": {
+     "mean": 208.2,
+     "change": null,
+     "n": 22
+    },
+    "toolCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 22
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "general_chat",
+    "runs": 1,
+    "durationMs": {
+     "mean": 10033.0,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 2901.2,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 4846.2,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 688.2,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "instruction_following",
+    "runs": 1,
+    "durationMs": {
+     "mean": 2629.3,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1372.8,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 5032.1,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 29.6,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "project_kb",
+    "runs": 1,
+    "durationMs": {
+     "mean": 7867.7,
+     "change": null,
+     "n": 13
+    },
+    "firstTokenMs": {
+     "mean": 2764.5,
+     "change": null,
+     "n": 13
+    },
+    "inputTokens": {
+     "mean": 18116.1,
+     "change": null,
+     "n": 13
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 13
+    },
+    "outputTokens": {
+     "mean": 168.5,
+     "change": null,
+     "n": 13
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": null,
+     "n": 13
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "project_memory",
+    "runs": 1,
+    "durationMs": {
+     "mean": 9666.3,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2224.8,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 21152.6,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.4,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 325.2,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 1.7,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "refusal",
+    "runs": 1,
+    "durationMs": {
+     "mean": 10043.3,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 3094.3,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 4814.0,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 715.3,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "retention",
+    "runs": 1,
+    "durationMs": {
+     "mean": 14699.8,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 2933.5,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 20075.2,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.9,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 687.6,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.1,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "skill_outcome",
+    "runs": 1,
+    "durationMs": {
+     "mean": 19167.5,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2768.0,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 22292.0,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.7,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 1221.9,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 2.4,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "skill_selection",
+    "runs": 1,
+    "durationMs": {
+     "mean": 12799.9,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 2640.4,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 14391.6,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 2.1,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 753.2,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "terminal",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5460.0,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 1832.8,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8600.7,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 161.8,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "tool_selection",
+    "runs": 1,
+    "durationMs": {
+     "mean": 6368.9,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 1696.9,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 12554.4,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.9,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 182.2,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "manual",
+    "family": "usage_patterns",
+    "runs": 1,
+    "durationMs": {
+     "mean": 15752.1,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2051.2,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 24508.8,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 3.6,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 853.0,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 2.1,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "agent_harness",
+    "runs": 10,
+    "durationMs": {
+     "mean": 5930.5,
+     "change": -0.017,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2240.7,
+     "change": -0.161,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 13413.4,
+     "change": 0.32,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 1.6,
+     "change": 0.143,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 210.6,
+     "change": 0.098,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 0.6,
+     "change": 0.5,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "attachment_tools",
+    "runs": 10,
+    "durationMs": {
+     "mean": 14329.0,
+     "change": 0.561,
+     "n": 15
+    },
+    "firstTokenMs": {
+     "mean": 3502.5,
+     "change": 0.492,
+     "n": 15
+    },
+    "inputTokens": {
+     "mean": 76449.2,
+     "change": 3.179,
+     "n": 15
+    },
+    "modelCalls": {
+     "mean": 3.1,
+     "change": 0.363,
+     "n": 15
+    },
+    "outputTokens": {
+     "mean": 822.9,
+     "change": 1.943,
+     "n": 15
+    },
+    "toolCalls": {
+     "mean": 1.7,
+     "change": 0.25,
+     "n": 15
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "document_qa",
+    "runs": 10,
+    "durationMs": {
+     "mean": 8728.9,
+     "change": 0.138,
+     "n": 22
+    },
+    "firstTokenMs": {
+     "mean": 2489.9,
+     "change": 0.018,
+     "n": 22
+    },
+    "inputTokens": {
+     "mean": 31953.7,
+     "change": 0.536,
+     "n": 22
+    },
+    "modelCalls": {
+     "mean": 2.5,
+     "change": 0.091,
+     "n": 22
+    },
+    "outputTokens": {
+     "mean": 374.7,
+     "change": 0.411,
+     "n": 22
+    },
+    "toolCalls": {
+     "mean": 1.8,
+     "change": 0.364,
+     "n": 22
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "instruction_following",
+    "runs": 10,
+    "durationMs": {
+     "mean": 2399.9,
+     "change": -0.003,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1228.2,
+     "change": 0.014,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 5031.1,
+     "change": 0.0,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 31.7,
+     "change": -0.014,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "project_kb",
+    "runs": 10,
+    "durationMs": {
+     "mean": 7477.5,
+     "change": 0.038,
+     "n": 13
+    },
+    "firstTokenMs": {
+     "mean": 3568.5,
+     "change": -0.116,
+     "n": 13
+    },
+    "inputTokens": {
+     "mean": 15401.1,
+     "change": 0.126,
+     "n": 13
+    },
+    "modelCalls": {
+     "mean": 1.3,
+     "change": 0.062,
+     "n": 13
+    },
+    "outputTokens": {
+     "mean": 334.0,
+     "change": 0.223,
+     "n": 13
+    },
+    "toolCalls": {
+     "mean": 0.4,
+     "change": 0.667,
+     "n": 13
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "project_memory",
+    "runs": 10,
+    "durationMs": {
+     "mean": 10416.6,
+     "change": -0.095,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 4249.7,
+     "change": 0.029,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 23222.2,
+     "change": -0.068,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": -0.064,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 502.6,
+     "change": -0.134,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 1.9,
+     "change": -0.223,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "refusal",
+    "runs": 10,
+    "durationMs": {
+     "mean": 5728.1,
+     "change": -0.093,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 3546.4,
+     "change": 0.001,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 4814.8,
+     "change": 0.0,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 634.4,
+     "change": -0.014,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "retention",
+    "runs": 10,
+    "durationMs": {
+     "mean": 10157.6,
+     "change": -0.062,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 2880.2,
+     "change": -0.052,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 19396.4,
+     "change": 0.004,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.8,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 645.6,
+     "change": 0.092,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "skill_outcome",
+    "runs": 10,
+    "durationMs": {
+     "mean": 13792.5,
+     "change": 0.159,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2889.6,
+     "change": -0.022,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 17950.1,
+     "change": 0.032,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": 0.017,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 1318.7,
+     "change": 0.311,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 1.7,
+     "change": -0.15,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "skill_selection",
+    "runs": 10,
+    "durationMs": {
+     "mean": 10054.6,
+     "change": 0.027,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 2376.9,
+     "change": -0.216,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 17190.4,
+     "change": 0.17,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 2.5,
+     "change": 0.111,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 851.1,
+     "change": 0.216,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.6,
+     "change": 0.3,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "terminal",
+    "runs": 10,
+    "durationMs": {
+     "mean": 4530.5,
+     "change": -0.062,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 2015.0,
+     "change": -0.037,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8607.5,
+     "change": 0.001,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": 0.0,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 190.0,
+     "change": 0.009,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": 0.0,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "tool_selection",
+    "runs": 10,
+    "durationMs": {
+     "mean": 8711.9,
+     "change": 0.388,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1398.3,
+     "change": -0.026,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 12690.4,
+     "change": -0.065,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.9,
+     "change": -0.056,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 190.6,
+     "change": -0.337,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.0,
+     "change": -0.1,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "nightly",
+    "family": "usage_patterns",
+    "runs": 10,
+    "durationMs": {
+     "mean": 11359.8,
+     "change": -0.194,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2069.4,
+     "change": -0.183,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 23396.8,
+     "change": -0.072,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 3.4,
+     "change": -0.073,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 855.8,
+     "change": -0.177,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 2.0,
+     "change": -0.053,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "agent_harness",
+    "runs": 1,
+    "durationMs": {
+     "mean": 3962.5,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 870.5,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 10179.7,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 1.4,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 102.6,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "attachment_tools",
+    "runs": 1,
+    "durationMs": {
+     "mean": 7316.1,
+     "change": null,
+     "n": 12
+    },
+    "firstTokenMs": {
+     "mean": 1261.1,
+     "change": null,
+     "n": 12
+    },
+    "inputTokens": {
+     "mean": 18738.2,
+     "change": null,
+     "n": 12
+    },
+    "modelCalls": {
+     "mean": 2.3,
+     "change": null,
+     "n": 12
+    },
+    "outputTokens": {
+     "mean": 203.2,
+     "change": null,
+     "n": 12
+    },
+    "toolCalls": {
+     "mean": 1.3,
+     "change": null,
+     "n": 12
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "document_qa",
+    "runs": 1,
+    "durationMs": {
+     "mean": 3693.5,
+     "change": null,
+     "n": 24
+    },
+    "firstTokenMs": {
+     "mean": 1106.9,
+     "change": null,
+     "n": 24
+    },
+    "inputTokens": {
+     "mean": 12216.8,
+     "change": null,
+     "n": 24
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 24
+    },
+    "outputTokens": {
+     "mean": 67.7,
+     "change": null,
+     "n": 24
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": null,
+     "n": 24
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "general_chat",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5947.5,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 723.0,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 4845.2,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 542.5,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "instruction_following",
+    "runs": 1,
+    "durationMs": {
+     "mean": 1983.3,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 724.2,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 5031.1,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 32.8,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "project_kb",
+    "runs": 1,
+    "durationMs": {
+     "mean": 3950.1,
+     "change": null,
+     "n": 13
+    },
+    "firstTokenMs": {
+     "mean": 783.8,
+     "change": null,
+     "n": 13
+    },
+    "inputTokens": {
+     "mean": 12952.8,
+     "change": null,
+     "n": 13
+    },
+    "modelCalls": {
+     "mean": 1.2,
+     "change": null,
+     "n": 13
+    },
+    "outputTokens": {
+     "mean": 40.8,
+     "change": null,
+     "n": 13
+    },
+    "toolCalls": {
+     "mean": 0.2,
+     "change": null,
+     "n": 13
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "project_memory",
+    "runs": 1,
+    "durationMs": {
+     "mean": 7342.7,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1013.7,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 29451.3,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 3.3,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 302.7,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 2.6,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "refusal",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5956.1,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 823.2,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 3609.8,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 499.5,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "retention",
+    "runs": 1,
+    "durationMs": {
+     "mean": 8961.9,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 745.6,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 19226.1,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.8,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 606.2,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "skill_outcome",
+    "runs": 1,
+    "durationMs": {
+     "mean": 8806.3,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 894.7,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 16673.4,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.4,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 703.0,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 2.0,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "skill_selection",
+    "runs": 1,
+    "durationMs": {
+     "mean": 7920.0,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 804.9,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 17080.9,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 2.5,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 593.9,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.9,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "terminal",
+    "runs": 1,
+    "durationMs": {
+     "mean": 3313.3,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 914.2,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8588.7,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 110.2,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "tool_selection",
+    "runs": 1,
+    "durationMs": {
+     "mean": 4116.8,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 862.6,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 12677.7,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.9,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 136.7,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "manual",
+    "family": "usage_patterns",
+    "runs": 1,
+    "durationMs": {
+     "mean": 10110.7,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 829.7,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 23681.6,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 3.5,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 641.2,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 2.0,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "agent_harness",
+    "runs": 3,
+    "durationMs": {
+     "mean": 5497.7,
+     "change": 0.101,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2013.3,
+     "change": 0.044,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 13413.6,
+     "change": 0.32,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 1.6,
+     "change": 0.143,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 204.4,
+     "change": 0.251,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 0.6,
+     "change": 0.5,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "attachment_tools",
+    "runs": 3,
+    "durationMs": {
+     "mean": 13709.8,
+     "change": 0.675,
+     "n": 15
+    },
+    "firstTokenMs": {
+     "mean": 2908.9,
+     "change": 0.768,
+     "n": 15
+    },
+    "inputTokens": {
+     "mean": 76632.7,
+     "change": 3.076,
+     "n": 15
+    },
+    "modelCalls": {
+     "mean": 3.1,
+     "change": 0.314,
+     "n": 15
+    },
+    "outputTokens": {
+     "mean": 841.9,
+     "change": 1.695,
+     "n": 15
+    },
+    "toolCalls": {
+     "mean": 1.7,
+     "change": 0.176,
+     "n": 15
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "document_qa",
+    "runs": 3,
+    "durationMs": {
+     "mean": 6304.7,
+     "change": -0.018,
+     "n": 21
+    },
+    "firstTokenMs": {
+     "mean": 2449.7,
+     "change": 0.243,
+     "n": 21
+    },
+    "inputTokens": {
+     "mean": 17997.9,
+     "change": 0.022,
+     "n": 21
+    },
+    "modelCalls": {
+     "mean": 2.0,
+     "change": -0.003,
+     "n": 21
+    },
+    "outputTokens": {
+     "mean": 231.0,
+     "change": 0.104,
+     "n": 21
+    },
+    "toolCalls": {
+     "mean": 1.0,
+     "change": -0.04,
+     "n": 21
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "general_chat",
+    "runs": 3,
+    "durationMs": {
+     "mean": 6065.3,
+     "change": 0.04,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 2499.5,
+     "change": -0.321,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 4846.2,
+     "change": 0.0,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 695.7,
+     "change": 0.145,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "instruction_following",
+    "runs": 3,
+    "durationMs": {
+     "mean": 2227.3,
+     "change": -0.038,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1083.9,
+     "change": -0.01,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 5032.1,
+     "change": 0.0,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 32.1,
+     "change": -0.033,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "project_kb",
+    "runs": 3,
+    "durationMs": {
+     "mean": 8853.6,
+     "change": 0.111,
+     "n": 13
+    },
+    "firstTokenMs": {
+     "mean": 4076.5,
+     "change": 0.098,
+     "n": 13
+    },
+    "inputTokens": {
+     "mean": 17147.8,
+     "change": 0.026,
+     "n": 13
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": 0.0,
+     "n": 13
+    },
+    "outputTokens": {
+     "mean": 305.2,
+     "change": -0.044,
+     "n": 13
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": -0.143,
+     "n": 13
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "project_memory",
+    "runs": 3,
+    "durationMs": {
+     "mean": 10319.8,
+     "change": -0.032,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 3885.1,
+     "change": -0.03,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 23894.2,
+     "change": -0.002,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 2.7,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 540.8,
+     "change": -0.026,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 2.2,
+     "change": -0.091,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "refusal",
+    "runs": 3,
+    "durationMs": {
+     "mean": 5632.0,
+     "change": -0.036,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 2857.0,
+     "change": -0.148,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 4815.8,
+     "change": 0.0,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 619.9,
+     "change": -0.05,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "retention",
+    "runs": 3,
+    "durationMs": {
+     "mean": 10032.8,
+     "change": -0.009,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 2544.9,
+     "change": 0.058,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 19370.6,
+     "change": 0.003,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.8,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 646.9,
+     "change": 0.054,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "skill_outcome",
+    "runs": 3,
+    "durationMs": {
+     "mean": 12536.8,
+     "change": 0.024,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2717.3,
+     "change": -0.091,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 17952.2,
+     "change": -0.005,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": 0.0,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 1173.9,
+     "change": -0.054,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 1.7,
+     "change": -0.105,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "skill_selection",
+    "runs": 3,
+    "durationMs": {
+     "mean": 9593.6,
+     "change": -0.023,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 2361.4,
+     "change": -0.01,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 15881.8,
+     "change": -0.012,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 2.4,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 760.2,
+     "change": -0.038,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.4,
+     "change": -0.154,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "terminal",
+    "runs": 3,
+    "durationMs": {
+     "mean": 4179.5,
+     "change": -0.1,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 1680.5,
+     "change": -0.186,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8602.3,
+     "change": 0.0,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": 0.0,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 175.0,
+     "change": -0.036,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": 0.0,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "tool_selection",
+    "runs": 3,
+    "durationMs": {
+     "mean": 5120.2,
+     "change": -0.145,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1266.0,
+     "change": -0.029,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 13846.2,
+     "change": -0.0,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 2.0,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 213.1,
+     "change": 0.084,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.1,
+     "change": 0.0,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-haiku-5-5",
+    "track": "release",
+    "family": "usage_patterns",
+    "runs": 3,
+    "durationMs": {
+     "mean": 11874.1,
+     "change": -0.042,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2023.1,
+     "change": -0.094,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 22755.7,
+     "change": -0.059,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 3.3,
+     "change": -0.072,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 874.8,
+     "change": 0.011,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 2.0,
+     "change": 0.0,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "agent_harness",
+    "runs": 1,
+    "durationMs": {
+     "mean": 2921.8,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 745.7,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8027.7,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.3,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 143.2,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.3,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "attachment_tools",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5463.0,
+     "change": null,
+     "n": 12
+    },
+    "firstTokenMs": {
+     "mean": 793.2,
+     "change": null,
+     "n": 12
+    },
+    "inputTokens": {
+     "mean": 13680.0,
+     "change": null,
+     "n": 12
+    },
+    "modelCalls": {
+     "mean": 2.2,
+     "change": null,
+     "n": 12
+    },
+    "outputTokens": {
+     "mean": 167.2,
+     "change": null,
+     "n": 12
+    },
+    "toolCalls": {
+     "mean": 1.2,
+     "change": null,
+     "n": 12
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "document_qa",
+    "runs": 1,
+    "durationMs": {
+     "mean": 3541.7,
+     "change": null,
+     "n": 23
+    },
+    "firstTokenMs": {
+     "mean": 842.8,
+     "change": null,
+     "n": 23
+    },
+    "inputTokens": {
+     "mean": 11392.0,
+     "change": null,
+     "n": 23
+    },
+    "modelCalls": {
+     "mean": 1.7,
+     "change": null,
+     "n": 23
+    },
+    "outputTokens": {
+     "mean": 84.3,
+     "change": null,
+     "n": 23
+    },
+    "toolCalls": {
+     "mean": 0.7,
+     "change": null,
+     "n": 23
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "general_chat",
+    "runs": 1,
+    "durationMs": {
+     "mean": 3867.0,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 686.2,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 3802.7,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 325.7,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "instruction_following",
+    "runs": 1,
+    "durationMs": {
+     "mean": 1870.1,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 712.2,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 3947.4,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 25.0,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "project_kb",
+    "runs": 1,
+    "durationMs": {
+     "mean": 4108.1,
+     "change": null,
+     "n": 12
+    },
+    "firstTokenMs": {
+     "mean": 734.7,
+     "change": null,
+     "n": 12
+    },
+    "inputTokens": {
+     "mean": 12342.0,
+     "change": null,
+     "n": 12
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 12
+    },
+    "outputTokens": {
+     "mean": 84.7,
+     "change": null,
+     "n": 12
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": null,
+     "n": 12
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "project_memory",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5045.1,
+     "change": null,
+     "n": 7
+    },
+    "firstTokenMs": {
+     "mean": 758.0,
+     "change": null,
+     "n": 7
+    },
+    "inputTokens": {
+     "mean": 16630.7,
+     "change": null,
+     "n": 7
+    },
+    "modelCalls": {
+     "mean": 2.4,
+     "change": null,
+     "n": 7
+    },
+    "outputTokens": {
+     "mean": 186.1,
+     "change": null,
+     "n": 7
+    },
+    "toolCalls": {
+     "mean": 1.4,
+     "change": null,
+     "n": 7
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "refusal",
+    "runs": 1,
+    "durationMs": {
+     "mean": 4225.5,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 703.0,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 3779.1,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 343.5,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "retention",
+    "runs": 1,
+    "durationMs": {
+     "mean": 7472.9,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 701.2,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 15248.1,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.8,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 535.6,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "skill_outcome",
+    "runs": 1,
+    "durationMs": {
+     "mean": 7062.2,
+     "change": null,
+     "n": 4
+    },
+    "firstTokenMs": {
+     "mean": 689.2,
+     "change": null,
+     "n": 4
+    },
+    "inputTokens": {
+     "mean": 11408.5,
+     "change": null,
+     "n": 4
+    },
+    "modelCalls": {
+     "mean": 2.0,
+     "change": null,
+     "n": 4
+    },
+    "outputTokens": {
+     "mean": 662.8,
+     "change": null,
+     "n": 4
+    },
+    "toolCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 4
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "skill_selection",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5015.0,
+     "change": null,
+     "n": 7
+    },
+    "firstTokenMs": {
+     "mean": 729.0,
+     "change": null,
+     "n": 7
+    },
+    "inputTokens": {
+     "mean": 10650.0,
+     "change": null,
+     "n": 7
+    },
+    "modelCalls": {
+     "mean": 2.0,
+     "change": null,
+     "n": 7
+    },
+    "outputTokens": {
+     "mean": 308.3,
+     "change": null,
+     "n": 7
+    },
+    "toolCalls": {
+     "mean": 1.3,
+     "change": null,
+     "n": 7
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "terminal",
+    "runs": 1,
+    "durationMs": {
+     "mean": 2945.4,
+     "change": null,
+     "n": 5
+    },
+    "firstTokenMs": {
+     "mean": 736.0,
+     "change": null,
+     "n": 5
+    },
+    "inputTokens": {
+     "mean": 7075.4,
+     "change": null,
+     "n": 5
+    },
+    "modelCalls": {
+     "mean": 1.6,
+     "change": null,
+     "n": 5
+    },
+    "outputTokens": {
+     "mean": 80.0,
+     "change": null,
+     "n": 5
+    },
+    "toolCalls": {
+     "mean": 0.6,
+     "change": null,
+     "n": 5
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "tool_selection",
+    "runs": 1,
+    "durationMs": {
+     "mean": 3133.0,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 792.1,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 9698.2,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.9,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 113.1,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-haiku-4-5-20251001-v1:0",
+    "track": "release",
+    "family": "usage_patterns",
+    "runs": 1,
+    "durationMs": {
+     "mean": 7278.8,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 702.8,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 17590.8,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.4,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 465.1,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 2.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "agent_harness",
+    "runs": 1,
+    "durationMs": {
+     "mean": 4392.6,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 1517.3,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 10236.9,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 1.4,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 106.9,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 0.4,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "attachment_tools",
+    "runs": 1,
+    "durationMs": {
+     "mean": 9293.0,
+     "change": null,
+     "n": 12
+    },
+    "firstTokenMs": {
+     "mean": 1628.4,
+     "change": null,
+     "n": 12
+    },
+    "inputTokens": {
+     "mean": 21746.8,
+     "change": null,
+     "n": 12
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": null,
+     "n": 12
+    },
+    "outputTokens": {
+     "mean": 269.2,
+     "change": null,
+     "n": 12
+    },
+    "toolCalls": {
+     "mean": 1.7,
+     "change": null,
+     "n": 12
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "document_qa",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5344.5,
+     "change": null,
+     "n": 24
+    },
+    "firstTokenMs": {
+     "mean": 1757.7,
+     "change": null,
+     "n": 24
+    },
+    "inputTokens": {
+     "mean": 14709.5,
+     "change": null,
+     "n": 24
+    },
+    "modelCalls": {
+     "mean": 1.8,
+     "change": null,
+     "n": 24
+    },
+    "outputTokens": {
+     "mean": 111.7,
+     "change": null,
+     "n": 24
+    },
+    "toolCalls": {
+     "mean": 0.7,
+     "change": null,
+     "n": 24
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "general_chat",
+    "runs": 1,
+    "durationMs": {
+     "mean": 9576.2,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 2760.5,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 4911.2,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 546.5,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "instruction_following",
+    "runs": 1,
+    "durationMs": {
+     "mean": 2974.6,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1717.9,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 5097.1,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 24.6,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "project_kb",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5257.9,
+     "change": null,
+     "n": 13
+    },
+    "firstTokenMs": {
+     "mean": 2166.2,
+     "change": null,
+     "n": 13
+    },
+    "inputTokens": {
+     "mean": 14800.8,
+     "change": null,
+     "n": 13
+    },
+    "modelCalls": {
+     "mean": 1.3,
+     "change": null,
+     "n": 13
+    },
+    "outputTokens": {
+     "mean": 104.0,
+     "change": null,
+     "n": 13
+    },
+    "toolCalls": {
+     "mean": 0.3,
+     "change": null,
+     "n": 13
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "project_memory",
+    "runs": 1,
+    "durationMs": {
+     "mean": 8481.6,
+     "change": null,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2356.6,
+     "change": null,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 19548.7,
+     "change": null,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.2,
+     "change": null,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 224.1,
+     "change": null,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 1.1,
+     "change": null,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "refusal",
+    "runs": 1,
+    "durationMs": {
+     "mean": 9234.9,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 1713.6,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 4880.8,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 556.6,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "retention",
+    "runs": 1,
+    "durationMs": {
+     "mean": 15313.9,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 1738.5,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 19735.4,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.8,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 691.5,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "skill_outcome",
+    "runs": 1,
+    "durationMs": {
+     "mean": 11689.6,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1612.3,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 17338.3,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 714.3,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.7,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "skill_selection",
+    "runs": 1,
+    "durationMs": {
+     "mean": 8259.2,
+     "change": null,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 1682.8,
+     "change": null,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 15951.4,
+     "change": null,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 2.4,
+     "change": null,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 368.0,
+     "change": null,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.4,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "terminal",
+    "runs": 1,
+    "durationMs": {
+     "mean": 4877.2,
+     "change": null,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 1983.8,
+     "change": null,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8719.2,
+     "change": null,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": null,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 113.3,
+     "change": null,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "tool_selection",
+    "runs": 1,
+    "durationMs": {
+     "mean": 5708.9,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1837.7,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 12801.7,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.9,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 120.7,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5",
+    "track": "release",
+    "family": "usage_patterns",
+    "runs": 1,
+    "durationMs": {
+     "mean": 13796.6,
+     "change": null,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1743.9,
+     "change": null,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 26532.0,
+     "change": null,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 3.8,
+     "change": null,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 665.7,
+     "change": null,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 2.2,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "agent_harness",
+    "runs": 2,
+    "durationMs": {
+     "mean": 5474.1,
+     "change": -0.102,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2316.0,
+     "change": -0.146,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 10314.5,
+     "change": 0.012,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 1.4,
+     "change": 0.0,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 150.0,
+     "change": 0.018,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": 0.0,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "attachment_tools",
+    "runs": 2,
+    "durationMs": {
+     "mean": 10015.1,
+     "change": 0.14,
+     "n": 14
+    },
+    "firstTokenMs": {
+     "mean": 2401.0,
+     "change": 0.356,
+     "n": 14
+    },
+    "inputTokens": {
+     "mean": 61757.7,
+     "change": 2.665,
+     "n": 14
+    },
+    "modelCalls": {
+     "mean": 2.3,
+     "change": 0.097,
+     "n": 14
+    },
+    "outputTokens": {
+     "mean": 213.3,
+     "change": -0.084,
+     "n": 14
+    },
+    "toolCalls": {
+     "mean": 1.1,
+     "change": -0.082,
+     "n": 14
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "document_qa",
+    "runs": 2,
+    "durationMs": {
+     "mean": 9409.4,
+     "change": 0.121,
+     "n": 23
+    },
+    "firstTokenMs": {
+     "mean": 2658.9,
+     "change": -0.043,
+     "n": 23
+    },
+    "inputTokens": {
+     "mean": 26681.4,
+     "change": 0.346,
+     "n": 23
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": 0.113,
+     "n": 23
+    },
+    "outputTokens": {
+     "mean": 261.3,
+     "change": 0.311,
+     "n": 23
+    },
+    "toolCalls": {
+     "mean": 1.7,
+     "change": 0.188,
+     "n": 23
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "general_chat",
+    "runs": 2,
+    "durationMs": {
+     "mean": 9342.5,
+     "change": -0.049,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 3206.0,
+     "change": -0.099,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 4846.2,
+     "change": 0.0,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 658.7,
+     "change": -0.03,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "instruction_following",
+    "runs": 2,
+    "durationMs": {
+     "mean": 2797.7,
+     "change": -0.013,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1551.1,
+     "change": 0.003,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 5032.1,
+     "change": 0.0,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 30.3,
+     "change": 0.0,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "project_kb",
+    "runs": 2,
+    "durationMs": {
+     "mean": 7495.0,
+     "change": -0.064,
+     "n": 13
+    },
+    "firstTokenMs": {
+     "mean": 3130.0,
+     "change": -0.104,
+     "n": 13
+    },
+    "inputTokens": {
+     "mean": 17010.9,
+     "change": -0.023,
+     "n": 13
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": 0.0,
+     "n": 13
+    },
+    "outputTokens": {
+     "mean": 157.4,
+     "change": 0.11,
+     "n": 13
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": 0.0,
+     "n": 13
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "project_memory",
+    "runs": 2,
+    "durationMs": {
+     "mean": 10126.1,
+     "change": -0.104,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 2247.4,
+     "change": -0.178,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 22620.3,
+     "change": 0.001,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 359.9,
+     "change": 0.062,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.9,
+     "change": 0.0,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "refusal",
+    "runs": 2,
+    "durationMs": {
+     "mean": 8148.1,
+     "change": -0.03,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 3814.8,
+     "change": -0.016,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 3610.5,
+     "change": 0.0,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 519.8,
+     "change": -0.042,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "retention",
+    "runs": 2,
+    "durationMs": {
+     "mean": 14006.4,
+     "change": -0.05,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 3289.4,
+     "change": -0.039,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 19288.9,
+     "change": -0.002,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.8,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 624.1,
+     "change": -0.033,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "skill_outcome",
+    "runs": 2,
+    "durationMs": {
+     "mean": 17282.3,
+     "change": -0.094,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 3069.6,
+     "change": -0.212,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 19420.9,
+     "change": -0.033,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.5,
+     "change": -0.038,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 1147.9,
+     "change": 0.0,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 2.4,
+     "change": 0.0,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "skill_selection",
+    "runs": 2,
+    "durationMs": {
+     "mean": 13846.0,
+     "change": 0.041,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 2813.4,
+     "change": -0.012,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 14485.4,
+     "change": 0.0,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 2.1,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 834.0,
+     "change": 0.001,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.6,
+     "change": 0.0,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "terminal",
+    "runs": 2,
+    "durationMs": {
+     "mean": 5284.0,
+     "change": -0.128,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 1767.0,
+     "change": -0.229,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8600.7,
+     "change": 0.0,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": 0.0,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 145.8,
+     "change": -0.061,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": 0.0,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "tool_selection",
+    "runs": 2,
+    "durationMs": {
+     "mean": 6729.4,
+     "change": 0.022,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1506.6,
+     "change": -0.041,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 13501.4,
+     "change": 0.001,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 2.0,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 239.7,
+     "change": 0.144,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.1,
+     "change": 0.0,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "release",
+    "family": "usage_patterns",
+    "runs": 2,
+    "durationMs": {
+     "mean": 15230.3,
+     "change": -0.094,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2242.4,
+     "change": -0.121,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 22012.6,
+     "change": -0.032,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 3.2,
+     "change": -0.03,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 835.2,
+     "change": -0.029,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 1.7,
+     "change": -0.056,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "agent_harness",
+    "runs": 7,
+    "durationMs": {
+     "mean": 5767.9,
+     "change": 0.079,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2446.7,
+     "change": 0.129,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 10343.8,
+     "change": 0.012,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 1.4,
+     "change": 0.0,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 164.4,
+     "change": 0.001,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": 0.0,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "attachment_tools",
+    "runs": 7,
+    "durationMs": {
+     "mean": 11348.4,
+     "change": 0.323,
+     "n": 14
+    },
+    "firstTokenMs": {
+     "mean": 3593.8,
+     "change": 1.04,
+     "n": 14
+    },
+    "inputTokens": {
+     "mean": 62329.6,
+     "change": 2.676,
+     "n": 14
+    },
+    "modelCalls": {
+     "mean": 2.4,
+     "change": 0.131,
+     "n": 14
+    },
+    "outputTokens": {
+     "mean": 259.9,
+     "change": 0.171,
+     "n": 14
+    },
+    "toolCalls": {
+     "mean": 1.1,
+     "change": -0.02,
+     "n": 14
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "document_qa",
+    "runs": 7,
+    "durationMs": {
+     "mean": 10864.4,
+     "change": 0.236,
+     "n": 23
+    },
+    "firstTokenMs": {
+     "mean": 3119.1,
+     "change": 0.036,
+     "n": 23
+    },
+    "inputTokens": {
+     "mean": 33047.1,
+     "change": 0.504,
+     "n": 23
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": 0.025,
+     "n": 23
+    },
+    "outputTokens": {
+     "mean": 282.9,
+     "change": 0.174,
+     "n": 23
+    },
+    "toolCalls": {
+     "mean": 1.8,
+     "change": 0.089,
+     "n": 23
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "instruction_following",
+    "runs": 7,
+    "durationMs": {
+     "mean": 2959.0,
+     "change": 0.12,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1713.6,
+     "change": 0.22,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 5031.1,
+     "change": -0.0,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 29.8,
+     "change": -0.018,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "project_kb",
+    "runs": 7,
+    "durationMs": {
+     "mean": 8068.5,
+     "change": 0.278,
+     "n": 13
+    },
+    "firstTokenMs": {
+     "mean": 3543.9,
+     "change": 0.278,
+     "n": 13
+    },
+    "inputTokens": {
+     "mean": 24980.2,
+     "change": 0.649,
+     "n": 13
+    },
+    "modelCalls": {
+     "mean": 1.7,
+     "change": 0.269,
+     "n": 13
+    },
+    "outputTokens": {
+     "mean": 184.7,
+     "change": 0.661,
+     "n": 13
+    },
+    "toolCalls": {
+     "mean": 0.8,
+     "change": 1.308,
+     "n": 13
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "project_memory",
+    "runs": 7,
+    "durationMs": {
+     "mean": 10817.9,
+     "change": 0.082,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 3175.9,
+     "change": 0.264,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 22624.1,
+     "change": -0.042,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": -0.042,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 347.2,
+     "change": -0.01,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.9,
+     "change": -0.056,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "refusal",
+    "runs": 7,
+    "durationMs": {
+     "mean": 8164.8,
+     "change": -0.017,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 3709.0,
+     "change": 0.135,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 3609.8,
+     "change": -0.0,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 511.2,
+     "change": -0.026,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "retention",
+    "runs": 7,
+    "durationMs": {
+     "mean": 14269.6,
+     "change": -0.017,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 3462.0,
+     "change": 0.029,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 19273.0,
+     "change": -0.038,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.8,
+     "change": -0.032,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 617.4,
+     "change": -0.093,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": -1.0,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "skill_outcome",
+    "runs": 7,
+    "durationMs": {
+     "mean": 16755.0,
+     "change": 0.031,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 3558.4,
+     "change": 0.133,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 18120.3,
+     "change": 0.08,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.6,
+     "change": 0.083,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 966.9,
+     "change": -0.039,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 2.1,
+     "change": 0.105,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "skill_selection",
+    "runs": 7,
+    "durationMs": {
+     "mean": 14169.8,
+     "change": 0.007,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 3165.1,
+     "change": 0.155,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 14487.5,
+     "change": 0.003,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 2.1,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 836.5,
+     "change": -0.06,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.6,
+     "change": 0.0,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "terminal",
+    "runs": 7,
+    "durationMs": {
+     "mean": 5499.0,
+     "change": -0.037,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 2207.8,
+     "change": 0.082,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8598.7,
+     "change": -0.0,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": 0.0,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 139.5,
+     "change": -0.224,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": 0.0,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "tool_selection",
+    "runs": 7,
+    "durationMs": {
+     "mean": 6826.8,
+     "change": -0.128,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1570.8,
+     "change": -0.068,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 13484.3,
+     "change": -0.059,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 2.0,
+     "change": -0.053,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 216.8,
+     "change": -0.177,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.1,
+     "change": -0.167,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-opus-5-5",
+    "track": "nightly",
+    "family": "usage_patterns",
+    "runs": 7,
+    "durationMs": {
+     "mean": 15792.7,
+     "change": 0.025,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 2345.1,
+     "change": 0.03,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 22740.0,
+     "change": 0.003,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 3.3,
+     "change": 0.0,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 867.4,
+     "change": 0.011,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 1.8,
+     "change": 0.0,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "agent_harness",
+    "runs": 7,
+    "durationMs": {
+     "mean": 3509.8,
+     "change": 0.059,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 970.1,
+     "change": 0.289,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 9566.6,
+     "change": -0.06,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 1.3,
+     "change": -0.071,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 100.6,
+     "change": -0.133,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 0.4,
+     "change": -0.2,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "attachment_tools",
+    "runs": 7,
+    "durationMs": {
+     "mean": 8287.7,
+     "change": 0.314,
+     "n": 14
+    },
+    "firstTokenMs": {
+     "mean": 2388.6,
+     "change": 1.734,
+     "n": 14
+    },
+    "inputTokens": {
+     "mean": 57999.5,
+     "change": 1.968,
+     "n": 14
+    },
+    "modelCalls": {
+     "mean": 2.5,
+     "change": 0.034,
+     "n": 14
+    },
+    "outputTokens": {
+     "mean": 199.8,
+     "change": -0.048,
+     "n": 14
+    },
+    "toolCalls": {
+     "mean": 1.2,
+     "change": -0.143,
+     "n": 14
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "document_qa",
+    "runs": 7,
+    "durationMs": {
+     "mean": 5552.3,
+     "change": 0.705,
+     "n": 23
+    },
+    "firstTokenMs": {
+     "mean": 965.2,
+     "change": -0.069,
+     "n": 23
+    },
+    "inputTokens": {
+     "mean": 25615.2,
+     "change": 1.005,
+     "n": 23
+    },
+    "modelCalls": {
+     "mean": 2.0,
+     "change": 0.325,
+     "n": 23
+    },
+    "outputTokens": {
+     "mean": 170.2,
+     "change": 1.204,
+     "n": 23
+    },
+    "toolCalls": {
+     "mean": 1.3,
+     "change": 1.236,
+     "n": 23
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "instruction_following",
+    "runs": 7,
+    "durationMs": {
+     "mean": 2034.9,
+     "change": 0.06,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 826.0,
+     "change": 0.151,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 5031.1,
+     "change": -0.0,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 31.9,
+     "change": 0.063,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "project_kb",
+    "runs": 7,
+    "durationMs": {
+     "mean": 3679.8,
+     "change": 0.219,
+     "n": 13
+    },
+    "firstTokenMs": {
+     "mean": 1157.3,
+     "change": 0.509,
+     "n": 13
+    },
+    "inputTokens": {
+     "mean": 15226.0,
+     "change": 0.175,
+     "n": 13
+    },
+    "modelCalls": {
+     "mean": 1.3,
+     "change": 0.133,
+     "n": 13
+    },
+    "outputTokens": {
+     "mean": 69.3,
+     "change": 0.71,
+     "n": 13
+    },
+    "toolCalls": {
+     "mean": 0.3,
+     "change": 1.0,
+     "n": 13
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "project_memory",
+    "runs": 7,
+    "durationMs": {
+     "mean": 6880.3,
+     "change": 0.042,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1158.1,
+     "change": 0.222,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 27504.6,
+     "change": -0.034,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 3.1,
+     "change": -0.034,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 307.7,
+     "change": 0.049,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 2.4,
+     "change": 0.0,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "refusal",
+    "runs": 7,
+    "durationMs": {
+     "mean": 5393.1,
+     "change": -0.106,
+     "n": 7
+    },
+    "firstTokenMs": {
+     "mean": 995.4,
+     "change": 0.134,
+     "n": 5
+    },
+    "inputTokens": {
+     "mean": 3437.7,
+     "change": -0.048,
+     "n": 7
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 7
+    },
+    "outputTokens": {
+     "mean": 403.9,
+     "change": -0.204,
+     "n": 7
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 7
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "retention",
+    "runs": 7,
+    "durationMs": {
+     "mean": 9895.9,
+     "change": 0.089,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 832.9,
+     "change": -0.142,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 19397.9,
+     "change": 0.007,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.8,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 672.8,
+     "change": 0.083,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "skill_outcome",
+    "runs": 7,
+    "durationMs": {
+     "mean": 9245.8,
+     "change": 0.043,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 1148.0,
+     "change": 0.295,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 15945.7,
+     "change": -0.007,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.3,
+     "change": 0.0,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 750.7,
+     "change": 0.072,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 1.9,
+     "change": 0.0,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "skill_selection",
+    "runs": 7,
+    "durationMs": {
+     "mean": 8060.4,
+     "change": 0.035,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 860.0,
+     "change": -0.06,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 16633.5,
+     "change": 0.027,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 2.4,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 571.1,
+     "change": -0.013,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.8,
+     "change": 0.0,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "terminal",
+    "runs": 7,
+    "durationMs": {
+     "mean": 3133.5,
+     "change": -0.022,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 972.7,
+     "change": 0.167,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8588.7,
+     "change": -0.0,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": 0.0,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 107.2,
+     "change": -0.053,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": 0.0,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "tool_selection",
+    "runs": 7,
+    "durationMs": {
+     "mean": 4270.4,
+     "change": 0.044,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 1266.9,
+     "change": 0.54,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 12677.7,
+     "change": -0.0,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.9,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 135.9,
+     "change": -0.111,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "nightly",
+    "family": "usage_patterns",
+    "runs": 7,
+    "durationMs": {
+     "mean": 9804.0,
+     "change": 0.022,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 1079.8,
+     "change": 0.342,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 23586.6,
+     "change": -0.01,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 3.5,
+     "change": -0.016,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 610.0,
+     "change": -0.075,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 2.0,
+     "change": 0.0,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "agent_harness",
+    "runs": 2,
+    "durationMs": {
+     "mean": 3140.8,
+     "change": -0.062,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 742.6,
+     "change": -0.024,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 10299.9,
+     "change": 0.012,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 1.4,
+     "change": 0.0,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 99.5,
+     "change": -0.076,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": 0.0,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "attachment_tools",
+    "runs": 2,
+    "durationMs": {
+     "mean": 7508.9,
+     "change": -0.05,
+     "n": 14
+    },
+    "firstTokenMs": {
+     "mean": 1494.6,
+     "change": -0.042,
+     "n": 14
+    },
+    "inputTokens": {
+     "mean": 57198.7,
+     "change": -0.013,
+     "n": 14
+    },
+    "modelCalls": {
+     "mean": 2.4,
+     "change": -0.029,
+     "n": 14
+    },
+    "outputTokens": {
+     "mean": 189.3,
+     "change": -0.04,
+     "n": 14
+    },
+    "toolCalls": {
+     "mean": 1.1,
+     "change": -0.059,
+     "n": 14
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "document_qa",
+    "runs": 2,
+    "durationMs": {
+     "mean": 5161.5,
+     "change": 0.635,
+     "n": 23
+    },
+    "firstTokenMs": {
+     "mean": 928.9,
+     "change": 0.14,
+     "n": 23
+    },
+    "inputTokens": {
+     "mean": 24102.6,
+     "change": 0.965,
+     "n": 23
+    },
+    "modelCalls": {
+     "mean": 2.1,
+     "change": 0.412,
+     "n": 23
+    },
+    "outputTokens": {
+     "mean": 162.0,
+     "change": 1.503,
+     "n": 23
+    },
+    "toolCalls": {
+     "mean": 1.2,
+     "change": 1.545,
+     "n": 23
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "general_chat",
+    "runs": 2,
+    "durationMs": {
+     "mean": 6018.7,
+     "change": -0.043,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 699.0,
+     "change": -0.101,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 4846.2,
+     "change": -0.0,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 553.5,
+     "change": -0.0,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "instruction_following",
+    "runs": 2,
+    "durationMs": {
+     "mean": 1869.4,
+     "change": -0.055,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 704.9,
+     "change": -0.053,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 5032.1,
+     "change": -0.0,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 34.8,
+     "change": 0.047,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "project_kb",
+    "runs": 2,
+    "durationMs": {
+     "mean": 4505.0,
+     "change": 0.124,
+     "n": 13
+    },
+    "firstTokenMs": {
+     "mean": 1234.2,
+     "change": 0.119,
+     "n": 13
+    },
+    "inputTokens": {
+     "mean": 15229.2,
+     "change": 0.107,
+     "n": 13
+    },
+    "modelCalls": {
+     "mean": 1.3,
+     "change": 0.062,
+     "n": 13
+    },
+    "outputTokens": {
+     "mean": 89.2,
+     "change": 0.525,
+     "n": 13
+    },
+    "toolCalls": {
+     "mean": 0.3,
+     "change": 0.333,
+     "n": 13
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "project_memory",
+    "runs": 2,
+    "durationMs": {
+     "mean": 6715.1,
+     "change": -0.082,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 965.1,
+     "change": -0.051,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 26466.2,
+     "change": -0.07,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 3.0,
+     "change": -0.069,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 292.3,
+     "change": -0.062,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 2.3,
+     "change": -0.087,
+     "n": 9
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "refusal",
+    "runs": 2,
+    "durationMs": {
+     "mean": 5713.6,
+     "change": 0.034,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 809.0,
+     "change": -0.151,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 3610.5,
+     "change": 0.05,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 492.9,
+     "change": 0.167,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "retention",
+    "runs": 2,
+    "durationMs": {
+     "mean": 8694.2,
+     "change": -0.043,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 674.1,
+     "change": -0.13,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 19197.1,
+     "change": -0.001,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 3.8,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 588.2,
+     "change": -0.009,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 0.0,
+     "change": null,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "skill_outcome",
+    "runs": 2,
+    "durationMs": {
+     "mean": 8399.2,
+     "change": -0.107,
+     "n": 10
+    },
+    "firstTokenMs": {
+     "mean": 721.7,
+     "change": -0.446,
+     "n": 10
+    },
+    "inputTokens": {
+     "mean": 15999.5,
+     "change": -0.081,
+     "n": 10
+    },
+    "modelCalls": {
+     "mean": 2.3,
+     "change": -0.08,
+     "n": 10
+    },
+    "outputTokens": {
+     "mean": 697.1,
+     "change": -0.063,
+     "n": 10
+    },
+    "toolCalls": {
+     "mean": 1.9,
+     "change": -0.095,
+     "n": 10
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "skill_selection",
+    "runs": 2,
+    "durationMs": {
+     "mean": 7904.1,
+     "change": -0.004,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 735.6,
+     "change": -0.044,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 15356.4,
+     "change": -0.054,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 2.2,
+     "change": -0.053,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 633.5,
+     "change": 0.119,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.6,
+     "change": -0.071,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "terminal",
+    "runs": 2,
+    "durationMs": {
+     "mean": 3085.5,
+     "change": -0.027,
+     "n": 6
+    },
+    "firstTokenMs": {
+     "mean": 836.8,
+     "change": -0.019,
+     "n": 6
+    },
+    "inputTokens": {
+     "mean": 8590.2,
+     "change": -0.0,
+     "n": 6
+    },
+    "modelCalls": {
+     "mean": 1.5,
+     "change": 0.0,
+     "n": 6
+    },
+    "outputTokens": {
+     "mean": 110.7,
+     "change": 0.002,
+     "n": 6
+    },
+    "toolCalls": {
+     "mean": 0.5,
+     "change": 0.0,
+     "n": 6
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "tool_selection",
+    "runs": 2,
+    "durationMs": {
+     "mean": 3260.9,
+     "change": -0.105,
+     "n": 8
+    },
+    "firstTokenMs": {
+     "mean": 789.2,
+     "change": -0.043,
+     "n": 8
+    },
+    "inputTokens": {
+     "mean": 12554.4,
+     "change": -0.0,
+     "n": 8
+    },
+    "modelCalls": {
+     "mean": 1.9,
+     "change": 0.0,
+     "n": 8
+    },
+    "outputTokens": {
+     "mean": 129.0,
+     "change": 0.007,
+     "n": 8
+    },
+    "toolCalls": {
+     "mean": 1.0,
+     "change": 0.0,
+     "n": 8
+    }
+   },
+   {
+    "model": "claude-sonnet-5-5",
+    "track": "release",
+    "family": "usage_patterns",
+    "runs": 2,
+    "durationMs": {
+     "mean": 9196.2,
+     "change": -0.071,
+     "n": 9
+    },
+    "firstTokenMs": {
+     "mean": 758.2,
+     "change": -0.063,
+     "n": 9
+    },
+    "inputTokens": {
+     "mean": 23037.4,
+     "change": -0.058,
+     "n": 9
+    },
+    "modelCalls": {
+     "mean": 3.4,
+     "change": -0.043,
+     "n": 9
+    },
+    "outputTokens": {
+     "mean": 635.2,
+     "change": -0.001,
+     "n": 9
+    },
+    "toolCalls": {
+     "mean": 1.9,
+     "change": -0.101,
+     "n": 9
+    }
+   }
+  ]
+ },
+ "leads": [
+  "cost per turn moved +94% week over week (0.049 -> 0.0952): worse",
+  "median turn time moved +16% week over week (10.3 -> 11.9): worse",
+  "median first token moved -15% week over week (2.0 -> 1.7): better",
+  "share of tool turns with an error moved -22% week over week (0.1208 -> 0.0948): better",
+  "tool `fetch_url_content` failed 11% of 209 calls in the last 7 days (auth retries excluded)",
+  "tool `memory_save` failed 40% of 30 calls in the last 7 days (auth retries excluded)",
+  "calls after the cache expired are 31% of spend ($952.2)",
+  "unexplained cache waste is $65, over 2% of spend",
+  "premium models on short, tool-free conversations: $63.77 across 201",
+  "eval agent_harness on claude-haiku-5-5 (nightly): inputTokens +32% per passing case across 10 runs",
+  "eval agent_harness on claude-haiku-5-5 (nightly): toolCalls +50% per passing case across 10 runs",
+  "eval attachment_tools on claude-haiku-5-5 (nightly): outputTokens +194% per passing case across 10 runs",
+  "eval attachment_tools on claude-haiku-5-5 (nightly): inputTokens +318% per passing case across 10 runs",
+  "eval attachment_tools on claude-haiku-5-5 (nightly): toolCalls +25% per passing case across 10 runs",
+  "eval attachment_tools on claude-haiku-5-5 (nightly): durationMs +56% per passing case across 10 runs",
+  "eval attachment_tools on claude-haiku-5-5 (nightly): firstTokenMs +49% per passing case across 10 runs",
+  "eval document_qa on claude-haiku-5-5 (nightly): outputTokens +41% per passing case across 10 runs",
+  "eval document_qa on claude-haiku-5-5 (nightly): inputTokens +54% per passing case across 10 runs",
+  "eval document_qa on claude-haiku-5-5 (nightly): toolCalls +36% per passing case across 10 runs",
+  "eval project_kb on claude-haiku-5-5 (nightly): outputTokens +22% per passing case across 10 runs",
+  "eval project_kb on claude-haiku-5-5 (nightly): toolCalls +67% per passing case across 10 runs",
+  "eval project_memory on claude-haiku-5-5 (nightly): toolCalls -22% per passing case across 10 runs",
+  "eval skill_outcome on claude-haiku-5-5 (nightly): outputTokens +31% per passing case across 10 runs",
+  "eval skill_selection on claude-haiku-5-5 (nightly): outputTokens +22% per passing case across 10 runs",
+  "eval skill_selection on claude-haiku-5-5 (nightly): toolCalls +30% per passing case across 10 runs",
+  "eval skill_selection on claude-haiku-5-5 (nightly): firstTokenMs -22% per passing case across 10 runs",
+  "eval tool_selection on claude-haiku-5-5 (nightly): outputTokens -34% per passing case across 10 runs",
+  "eval tool_selection on claude-haiku-5-5 (nightly): durationMs +39% per passing case across 10 runs",
+  "eval agent_harness on claude-haiku-5-5 (release): outputTokens +25% per passing case across 3 runs",
+  "eval agent_harness on claude-haiku-5-5 (release): inputTokens +32% per passing case across 3 runs",
+  "eval agent_harness on claude-haiku-5-5 (release): toolCalls +50% per passing case across 3 runs",
+  "eval attachment_tools on claude-haiku-5-5 (release): outputTokens +170% per passing case across 3 runs",
+  "eval attachment_tools on claude-haiku-5-5 (release): inputTokens +308% per passing case across 3 runs",
+  "eval attachment_tools on claude-haiku-5-5 (release): durationMs +68% per passing case across 3 runs",
+  "eval attachment_tools on claude-haiku-5-5 (release): firstTokenMs +77% per passing case across 3 runs",
+  "eval document_qa on claude-haiku-5-5 (release): firstTokenMs +24% per passing case across 3 runs",
+  "eval general_chat on claude-haiku-5-5 (release): firstTokenMs -32% per passing case across 3 runs",
+  "eval attachment_tools on claude-opus-5-5 (release): inputTokens +266% per passing case across 2 runs",
+  "eval attachment_tools on claude-opus-5-5 (release): firstTokenMs +36% per passing case across 2 runs",
+  "eval document_qa on claude-opus-5-5 (release): outputTokens +31% per passing case across 2 runs",
+  "eval document_qa on claude-opus-5-5 (release): inputTokens +35% per passing case across 2 runs",
+  "eval skill_outcome on claude-opus-5-5 (release): firstTokenMs -21% per passing case across 2 runs",
+  "eval terminal on claude-opus-5-5 (release): firstTokenMs -23% per passing case across 2 runs",
+  "eval attachment_tools on claude-opus-5-5 (nightly): inputTokens +268% per passing case across 7 runs",
+  "eval attachment_tools on claude-opus-5-5 (nightly): durationMs +32% per passing case across 7 runs",
+  "eval attachment_tools on claude-opus-5-5 (nightly): firstTokenMs +104% per passing case across 7 runs",
+  "eval document_qa on claude-opus-5-5 (nightly): inputTokens +50% per passing case across 7 runs",
+  "eval document_qa on claude-opus-5-5 (nightly): durationMs +24% per passing case across 7 runs",
+  "eval instruction_following on claude-opus-5-5 (nightly): firstTokenMs +22% per passing case across 7 runs",
+  "eval project_kb on claude-opus-5-5 (nightly): outputTokens +66% per passing case across 7 runs",
+  "eval project_kb on claude-opus-5-5 (nightly): inputTokens +65% per passing case across 7 runs",
+  "eval project_kb on claude-opus-5-5 (nightly): toolCalls +131% per passing case across 7 runs",
+  "eval project_kb on claude-opus-5-5 (nightly): durationMs +28% per passing case across 7 runs",
+  "eval project_kb on claude-opus-5-5 (nightly): firstTokenMs +28% per passing case across 7 runs",
+  "eval project_memory on claude-opus-5-5 (nightly): firstTokenMs +26% per passing case across 7 runs",
+  "eval retention on claude-opus-5-5 (nightly): toolCalls -100% per passing case across 7 runs",
+  "eval terminal on claude-opus-5-5 (nightly): outputTokens -22% per passing case across 7 runs",
+  "eval agent_harness on claude-sonnet-5-5 (nightly): toolCalls -20% per passing case across 7 runs",
+  "eval agent_harness on claude-sonnet-5-5 (nightly): firstTokenMs +29% per passing case across 7 runs",
+  "eval attachment_tools on claude-sonnet-5-5 (nightly): inputTokens +197% per passing case across 7 runs",
+  "eval attachment_tools on claude-sonnet-5-5 (nightly): durationMs +31% per passing case across 7 runs",
+  "eval attachment_tools on claude-sonnet-5-5 (nightly): firstTokenMs +173% per passing case across 7 runs",
+  "eval document_qa on claude-sonnet-5-5 (nightly): outputTokens +120% per passing case across 7 runs",
+  "eval document_qa on claude-sonnet-5-5 (nightly): inputTokens +100% per passing case across 7 runs",
+  "eval document_qa on claude-sonnet-5-5 (nightly): toolCalls +124% per passing case across 7 runs",
+  "eval document_qa on claude-sonnet-5-5 (nightly): durationMs +70% per passing case across 7 runs",
+  "eval project_kb on claude-sonnet-5-5 (nightly): outputTokens +71% per passing case across 7 runs",
+  "eval project_kb on claude-sonnet-5-5 (nightly): toolCalls +100% per passing case across 7 runs",
+  "eval project_kb on claude-sonnet-5-5 (nightly): durationMs +22% per passing case across 7 runs",
+  "eval project_kb on claude-sonnet-5-5 (nightly): firstTokenMs +51% per passing case across 7 runs",
+  "eval project_memory on claude-sonnet-5-5 (nightly): firstTokenMs +22% per passing case across 7 runs",
+  "eval refusal on claude-sonnet-5-5 (nightly): outputTokens -20% per passing case across 7 runs",
+  "eval skill_outcome on claude-sonnet-5-5 (nightly): firstTokenMs +30% per passing case across 7 runs",
+  "eval tool_selection on claude-sonnet-5-5 (nightly): firstTokenMs +54% per passing case across 7 runs",
+  "eval usage_patterns on claude-sonnet-5-5 (nightly): firstTokenMs +34% per passing case across 7 runs",
+  "eval document_qa on claude-sonnet-5-5 (release): outputTokens +150% per passing case across 2 runs",
+  "eval document_qa on claude-sonnet-5-5 (release): inputTokens +96% per passing case across 2 runs",
+  "eval document_qa on claude-sonnet-5-5 (release): toolCalls +154% per passing case across 2 runs",
+  "eval document_qa on claude-sonnet-5-5 (release): durationMs +64% per passing case across 2 runs",
+  "eval project_kb on claude-sonnet-5-5 (release): outputTokens +52% per passing case across 2 runs",
+  "eval project_kb on claude-sonnet-5-5 (release): toolCalls +33% per passing case across 2 runs",
+  "eval skill_outcome on claude-sonnet-5-5 (release): firstTokenMs -45% per passing case across 2 runs",
+  "turns with 2+ model calls carry 46% of all turn time"
+ ],
+ "previous_run": {
+  "window": {
+   "start": "2026-10-23",
+   "end": "2026-11-20",
+   "calls": 79175,
+   "cost_usd": 3449.02,
+   "users": 1918,
+   "thumbs_joined": 13,
+   "thumbs_read": 26
+  },
+  "this_week": {
+   "turns": 17795,
+   "cost_usd": 800.86,
+   "cost_per_turn": 0.045,
+   "cost_per_completed_turn": 0.0455,
+   "calls_per_turn": 1.21,
+   "turn_p50_s": 10.1,
+   "turn_p90_s": 24.9,
+   "ttft_p50_s": 2.0,
+   "ttft_p90_s": 7.2,
+   "completed_share": 0.9886,
+   "outcome_n": 17795,
+   "tool_error_turn_share": 0.1231,
+   "thumbs_up": 3,
+   "thumbs_down": 1,
+   "down_rate": null,
+   "copied_share": 0.0096,
+   "model_time_share": 0.856,
+   "wasted_usd": 13.76
+  }
+ }
+}
