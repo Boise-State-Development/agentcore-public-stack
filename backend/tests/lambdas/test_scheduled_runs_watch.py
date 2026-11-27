@@ -402,3 +402,57 @@ class TestPrompt:
             label="Label",
         )
         assert [(i.key, i.title) for i in outcome.items] == [("k", "Label")]
+
+
+class TestAWatchRunThatWrote:
+    """A known write is never quiet (docs/specs/proactive-trust.md §7.3, PR 4.2)."""
+
+    async def test_a_write_keeps_its_conversation_even_after_nothing_new(self, inbox, sessions_metadata_table, monkeypatch):
+        schedule = await _schedule()
+        result = _result(trace=[_report(outcome="nothing_new")], write_count=1)
+        _stub(monkeypatch, result)
+
+        outcome = await _run(schedule)
+
+        assert outcome["result"] == "notify" and outcome["itemCount"] == 0
+        row = _session_row(sessions_metadata_table)
+        assert row.get("status") != "deleted" and row.get("unread") is True
+        record = await get_scheduled_prompt(USER_ID, schedule.schedule_id)
+        assert record.last_run_session_id == SESSION
+        [run] = list_schedule_runs(USER_ID, schedule.schedule_id)
+        assert (run.status, run.write_count, run.item_count, run.session_id) == ("notify", 1, 0, SESSION)
+        assert _inbox() == []  # nothing new to tell; the conversation is kept for the write
+
+    async def test_only_unclassified_calls_stay_quiet(self, inbox, sessions_metadata_table, monkeypatch):
+        schedule = await _schedule()
+        _stub(monkeypatch, _result(trace=[_report(outcome="nothing_new")], unclassified_count=2))
+
+        outcome = await _run(schedule)
+
+        await _assert_quiet(sessions_metadata_table, schedule, outcome)
+        [run] = list_schedule_runs(USER_ID, schedule.schedule_id)
+        assert run.write_count == 0
+
+    async def test_the_run_carries_its_schedule_and_exemptions(self, inbox, sessions_metadata_table, monkeypatch):
+        schedule = await _schedule()
+        sessions_metadata_table.update_item(
+            Key={"PK": f"USER#{USER_ID}", "SK": f"SCHEDPROMPT#{schedule.schedule_id}"},
+            UpdateExpression="SET actWithoutAsking = :a",
+            ExpressionAttributeValues={":a": ["mail-mcp/create_draft"]},
+        )
+        calls = _stub(monkeypatch, _result(trace=[_report(outcome="nothing_new")]))
+
+        await _run(schedule)
+
+        assert calls[0]["schedule_id"] == schedule.schedule_id
+        assert calls[0]["act_without_asking"] == ["mail-mcp/create_draft"]
+        assert calls[0]["trigger"] == "schedule"
+
+
+async def test_decide_watch_outcome_keeps_a_run_that_wrote():
+    quiet = decide_watch_outcome({"outcome": "nothing_new", "state": {"cursors": {"a": 1}}}, "", [], run_id="r", label="L")
+    assert quiet.notify is False
+    kept = decide_watch_outcome(
+        {"outcome": "nothing_new", "state": {"cursors": {"a": 1}}}, "", [], run_id="r", label="L", write_count=2
+    )
+    assert kept.notify is True and kept.items == [] and kept.cursors == {"a": 1}

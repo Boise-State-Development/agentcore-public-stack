@@ -3,7 +3,7 @@ Gateway MCP client integration for managed tool execution
 """
 import logging
 from dataclasses import dataclass, field
-from typing import List, Optional, Any, Set
+from typing import Any, Dict, List, Optional, Set
 from agents.main_agent.integrations.gateway_mcp_client import (
     GatewayAuthError,
     get_gateway_client_if_enabled,
@@ -27,6 +27,10 @@ class GatewayToolResolution:
 
     runtime_ids: List[str] = field(default_factory=list)
     approval_names: Set[str] = field(default_factory=set)
+    #: Names (same shape) whose catalog entry an admin marked ``writes``, and the
+    #: catalog tool id each name came from (the action audit, proactive-trust §7.1).
+    write_names: Set[str] = field(default_factory=set)
+    tool_ids: Dict[str, str] = field(default_factory=dict)
 
 
 async def resolve_gateway_tools(
@@ -42,6 +46,8 @@ async def resolve_gateway_tools(
     """
     expanded: List[str] = []
     approval_names: Set[str] = set()
+    write_names: Set[str] = set()
+    tool_ids: Dict[str, str] = {}
     for tool_id in gateway_tool_ids:
         if "___" in tool_id:
             # Already a runtime gateway id (RBAC-enabled, no catalog row).
@@ -60,6 +66,13 @@ async def resolve_gateway_tools(
                 for entry in entries or []
                 if getattr(entry, "needs_approval", False)
             )
+            write_names.update(
+                f"{target}___{entry.name}"
+                for entry in entries or []
+                if getattr(entry, "writes", False)
+            )
+            for entry in entries or []:
+                tool_ids.setdefault(f"{target}___{entry.name}", base)
 
         if tool_name is not None:
             # Scoped: a single tool of this target. The target name is required
@@ -83,7 +96,9 @@ async def resolve_gateway_tools(
 
     seen: set = set()
     runtime_ids = [x for x in expanded if not (x in seen or seen.add(x))]
-    return GatewayToolResolution(runtime_ids=runtime_ids, approval_names=approval_names)
+    return GatewayToolResolution(
+        runtime_ids=runtime_ids, approval_names=approval_names, write_names=write_names, tool_ids=tool_ids
+    )
 
 
 async def expand_gateway_tool_ids(
@@ -124,6 +139,20 @@ class GatewayIntegration:
         # Tool names (`<target>___<tool>`) that pause for user approval,
         # set with the client they belong to (#454).
         self._approval_names: Set[str] = set()
+        self._write_names: Set[str] = set()
+        self._tool_ids: Dict[str, str] = {}
+
+    def write_names_for_client(self, client: Any) -> Set[str]:
+        """Names marked ``writes`` when ``client`` is this agent's Gateway client; else empty."""
+        if client is not None and client is self.client:
+            return set(self._write_names)
+        return set()
+
+    def tool_id_for_name(self, client: Any, name: str) -> Optional[str]:
+        """The catalog tool id a Gateway tool name came from, or None."""
+        if client is not None and client is self.client:
+            return self._tool_ids.get(name)
+        return None
 
     def approval_names_for_client(self, client: Any) -> Set[str]:
         """Names that pause for approval when ``client`` is this agent's
@@ -138,6 +167,8 @@ class GatewayIntegration:
         enabled_gateway_tool_ids: List[str],
         auth_token: Optional[str] = None,
         approval_names: Optional[Set[str]] = None,
+        write_names: Optional[Set[str]] = None,
+        tool_ids: Optional[Dict[str, str]] = None,
     ) -> Optional[Any]:
         """
         Get Gateway MCP client if gateway tools are enabled
@@ -179,6 +210,8 @@ class GatewayIntegration:
             return None
 
         self._approval_names = set(approval_names or ()) if self.client else set()
+        self._write_names = set(write_names or ()) if self.client else set()
+        self._tool_ids = dict(tool_ids or {}) if self.client else {}
         if self.client:
             logger.info(f"✅ Gateway MCP client created (Managed Integration with Strands 1.16+)")
             logger.info(f"   Enabled Gateway tool IDs: {enabled_gateway_tool_ids}")

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from decimal import Decimal
 from typing import List, Optional
 
@@ -66,6 +67,7 @@ from apis.shared.scheduled_prompts.budget import (
     respect_hold,
     utc_now,
 )
+from apis.shared.scheduled_prompts.actions import list_schedule_actions
 from apis.shared.scheduled_prompts.runs import list_schedule_runs
 from apis.shared.scheduled_prompts.watch_state import clear_watch_state, get_watch_state
 from apis.shared.projects.models import normalize_email
@@ -73,6 +75,7 @@ from apis.shared.projects.models import normalize_email
 from apis.app_api.schedules.models import (
     CreatePersonalScheduleRequest,
     ScheduledPromptResponse,
+    ScheduleActionsResponse,
     ScheduledPromptsListResponse,
     ScheduleRunsResponse,
     UpdatePersonalScheduleRequest,
@@ -168,6 +171,46 @@ def _update_budget(request: UpdatePersonalScheduleRequest, schedule, *, cadence,
     if short and schedule.max_cost_per_day is None:
         return default_max_cost_per_day()
     return UNSET
+
+
+_EXEMPTION_OFF_DETAIL = "A schedule's Act without asking list is not available here."
+_EXEMPTION_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}/[A-Za-z0-9_.:-]{1,128}$")
+
+
+async def _check_act_without_asking(user: User, entries: Optional[List[str]]) -> Optional[List[str]]:
+    """The validated ``actWithoutAsking`` list (proactive-trust §7.5), or None for none.
+
+    Refused while the flag is off. Each entry names one tool on one server,
+    ``{catalogId}/{toolName}``, never a whole server, and must be a tool the caller
+    may use by RBAC (the server's id, the scoped ``id::tool``, or the wildcard), not
+    the schedule's ``enabledTools``, which may be null. Order kept, duplicates dropped.
+    """
+    if entries is None:
+        return None
+    if not proactive_runs_enabled():
+        if entries:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_EXEMPTION_OFF_DETAIL)
+        return None
+    cleaned = list(dict.fromkeys(entry.strip() for entry in entries))
+    bad = [entry for entry in cleaned if not _EXEMPTION_RE.match(entry)]
+    if bad:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"actWithoutAsking entries are '<toolId>/<toolName>', one tool each: {bad[0]!r}",
+        )
+    if not cleaned:
+        return []
+    permissions = await get_app_role_service().resolve_user_permissions(user)
+    granted = set(permissions.tools or [])
+    for entry in cleaned:
+        catalog_id, tool_name = entry.split("/", 1)
+        if "*" in granted or catalog_id in granted or f"{catalog_id}::{tool_name}" in granted:
+            continue
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"You can't use {entry!r}, so a schedule can't run it without asking.",
+        )
+    return cleaned
 
 
 def _resume_time(schedule) -> str:
@@ -283,6 +326,7 @@ async def create_schedule(
 ) -> ScheduledPromptResponse:
     await _check_watch_fields(user, mode=request.mode, model_id=request.model_id)
     budget = _create_budget(request)
+    exemptions = await _check_act_without_asking(user, request.act_without_asking)
     enabled_tools = await _resolve_enabled_tools_snapshot(user, request.enabled_tools)
     try:
         schedule = await create_scheduled_prompt(
@@ -303,6 +347,7 @@ async def create_schedule(
             mode=request.mode,
             model_id=request.model_id,
             max_cost_per_day=budget,
+            act_without_asking=exemptions or None,
         )
     except ScheduledPromptLimitExceeded as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -381,6 +426,12 @@ async def update_schedule(
                 detail=f"interval must be at least {MIN_INTERVAL_MINUTES} minutes",
             )
 
+    if "act_without_asking" in request.model_fields_set:
+        exemptions_arg = await _check_act_without_asking(user, request.act_without_asking or [])
+        exemptions_arg = exemptions_arg or None
+    else:
+        exemptions_arg = UNSET
+
     budget_arg = _update_budget(
         request,
         schedule,
@@ -433,6 +484,7 @@ async def update_schedule(
             mode=request.mode,
             model_id=model_arg,
             max_cost_per_day=budget_arg,
+            act_without_asking=exemptions_arg,
         )
     except InvalidTimezoneError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -521,6 +573,21 @@ async def list_schedule_run_history(
     await _personal_schedule_or_404(user, schedule_id)
     runs = await asyncio.to_thread(list_schedule_runs, user.user_id, schedule_id)
     return ScheduleRunsResponse(runs=runs)
+
+
+@router.get("/{schedule_id}/actions", response_model=ScheduleActionsResponse)
+async def list_schedule_action_audit(
+    schedule_id: str,
+    user: User = Depends(require_proactive_runs_user),
+) -> ScheduleActionsResponse:
+    """A personal schedule's audited calls, newest first (at most 50; rows are kept 365 days).
+
+    Every call its unattended runs made that is not known to be read-only, recorded before
+    it ran (docs/specs/proactive-trust.md §7.4). Ids, classes and outcomes only.
+    """
+    await _personal_schedule_or_404(user, schedule_id)
+    actions = await asyncio.to_thread(list_schedule_actions, user.user_id, schedule_id)
+    return ScheduleActionsResponse(actions=actions)
 
 
 @router.get("/{schedule_id}/state", response_model=WatchStateResponse)

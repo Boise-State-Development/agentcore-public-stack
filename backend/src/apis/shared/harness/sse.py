@@ -130,6 +130,8 @@ class InvocationStreamAccumulator:
     #: ``cost`` (no call was priced, as on a quota-refused turn); ``None`` when
     #: the frame never arrived, so the cost is unknown, never a stand-in.
     cost_usd: Optional[float] = None
+    #: The action audit's marks (docs/specs/proactive-trust.md §7.3): how many of the
+    #: run's ``tool_result`` frames carried ``audited: "write"`` / ``"unclassified"``.
     #: A ``quota_exceeded`` frame: the user is over their limit, so the turn's
     #: "answer" is the quota message streamed as text, not the model's.
     quota_exceeded: bool = False
@@ -147,6 +149,17 @@ class InvocationStreamAccumulator:
     #: without this a run's usage would be its last model call only.
     _call_usage_totals: Dict[str, int] = field(default_factory=dict)
     _model_calls: int = 0
+    #: toolUseId -> the class its ``tool_result`` frame's ``audited`` named.
+    _audited: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def write_count(self) -> int:
+        """The run's calls the action audit recorded as ``write`` (proactive-trust §7.3)."""
+        return sum(1 for value in self._audited.values() if value == "write")
+
+    @property
+    def unclassified_count(self) -> int:
+        return sum(1 for value in self._audited.values() if value == "unclassified")
 
     @property
     def final_message(self) -> str:
@@ -210,6 +223,12 @@ class InvocationStreamAccumulator:
                 except json.JSONDecodeError:
                     pass  # partial prefix; a later re-emit will complete it
         elif name in ("tool_result", "tool_error"):
+            audited = payload.get("audited")
+            inner = payload.get("tool_result")
+            if audited in ("write", "unclassified") and isinstance(inner, dict):
+                inner_id = str(inner.get("toolUseId") or inner.get("tool_use_id") or "")
+                if inner_id:
+                    self._audited[inner_id] = audited
             # Flat event-formatter payload ({toolUseId, result}) or the
             # message-shaped passthrough ({"message": {"content":
             # [{"toolResult": {toolUseId, status, content: [{text}]}}]}}).
@@ -227,6 +246,9 @@ class InvocationStreamAccumulator:
                 tool_use_id = str(
                     tr.get("toolUseId") or tr.get("tool_use_id") or ""
                 )
+                if audited in ("write", "unclassified") and tool_use_id:
+                    # One call can reach the stream on two paths; count it once.
+                    self._audited[tool_use_id] = audited
                 entry = self._trace_by_id.get(tool_use_id)
                 if entry is None and self.tool_trace:
                     entry = self.tool_trace[-1]

@@ -106,6 +106,19 @@ def _items(raw: Any, label: str) -> List[WatchItem]:
     return items
 
 
+def _keep_for_writes(outcome: WatchOutcome, write_count: int) -> WatchOutcome:
+    """A quiet outcome made not quiet by the run's writes; anything else unchanged."""
+    if write_count <= 0 or outcome.notify:
+        return outcome
+    return WatchOutcome(
+        notify=True,
+        items=[],
+        seen_keys=outcome.seen_keys,
+        cursors=outcome.cursors,
+        tracking=outcome.tracking,
+    )
+
+
 def decide_watch_outcome(
     report_input: Optional[Dict[str, Any]],
     final_message: str,
@@ -113,8 +126,28 @@ def decide_watch_outcome(
     *,
     run_id: str,
     label: str,
+    write_count: int = 0,
 ) -> WatchOutcome:
-    """Apply the spec's outcome table to a completed run.
+    """Apply the spec's outcome table to a completed run (:func:`_decide_from_report`).
+
+    A run that made a ``write``-class call (``write_count``, the action audit's count,
+    docs/specs/proactive-trust.md §7.3) is never quiet: it keeps its conversation even
+    when it reported ``nothing_new``, with no inbox row unless it reported items. An
+    ``unclassified`` call changes nothing.
+    """
+    outcome = _decide_from_report(report_input, final_message, seen, run_id=run_id, label=label)
+    return _keep_for_writes(outcome, write_count)
+
+
+def _decide_from_report(
+    report_input: Optional[Dict[str, Any]],
+    final_message: str,
+    seen: List[str],
+    *,
+    run_id: str,
+    label: str,
+) -> WatchOutcome:
+    """The outcome table, by what the run reported.
 
     - ``report(nothing_new)``: quiet.
     - ``report(notify)``: notify for the items whose keys are not in ``seen``

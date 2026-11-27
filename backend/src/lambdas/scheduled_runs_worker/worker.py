@@ -220,6 +220,7 @@ async def _record_history(
         triage=_RUN_TRIAGE.get(),
         cost_usd=cost_usd,
         cost_pending=cost_pending,
+        write_count=result.write_count if result is not None else 0,
     )
     if cost_pending:
         await asyncio.to_thread(mark_cost_pending, schedule.user_id, schedule.schedule_id)
@@ -391,6 +392,8 @@ async def _finish_watch_run(
         previous.seen if previous is not None else [],
         run_id=result.run_id,
         label=schedule.label,
+        # A run that wrote is never quiet (proactive-trust §7.3).
+        write_count=result.write_count,
     )
     schedule_id = schedule.schedule_id
 
@@ -669,6 +672,10 @@ async def run_schedule(payload: Dict[str, Any]) -> Dict[str, Any]:
             rag_assistant_id=schedule.assistant_id,
             enabled_tools=schedule.enabled_tools,
             trigger="schedule",
+            # The action audit's listing partition, and a watcher's write exemptions
+            # (proactive-trust §7.2, §7.5).
+            schedule_id=schedule.schedule_id,
+            act_without_asking=schedule.act_without_asking if watch else None,
             **run_config,
         )
     except HeadlessAuthError as e:

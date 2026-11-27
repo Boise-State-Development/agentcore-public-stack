@@ -155,6 +155,19 @@ class ChatAgent(BaseAgent):
             if offloader is not None:
                 plugins.append(offloader)
 
+            # The action audit (docs/specs/proactive-trust.md §7.2): an
+            # ExecuteToolStage middleware on every agent, inert unless the
+            # invocation's state carries an unattended run, which it reads per
+            # call and never keeps. Added before MCP elicitation so it wraps it:
+            # a form's pause-and-replay of one call meets one row. A deployment
+            # constant, so no agent-cache key element.
+            from apis.shared.feature_flags import headless_action_audit_enabled
+
+            if headless_action_audit_enabled():
+                from agents.main_agent.core.action_audit import HeadlessActionAudit
+
+                plugins.append(HeadlessActionAudit(facts=self.tool_facts))
+
             # MCP form elicitation (docs/specs/mcp-elicitation.md): the
             # ExecuteToolStage middleware that pauses on an opted-in server's
             # form and replays the call with the answer. A deployment constant,

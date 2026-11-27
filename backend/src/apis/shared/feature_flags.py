@@ -1899,3 +1899,28 @@ def analyze_sandbox_reuse_enabled() -> bool:
     the literal ``"false"`` (case-insensitive) disables.
     """
     return os.environ.get("ANALYZE_SANDBOX_REUSE_ENABLED", "").strip().lower() != "false"
+
+
+def headless_action_audit_enabled() -> bool:
+    """Whether an unattended run's calls that are not known to be read-only are audited.
+
+    On, the Runtime's ``HeadlessActionAudit`` middleware
+    (``agents/main_agent/core/action_audit.py``, docs/specs/proactive-trust.md §7)
+    writes one ``RUNACT#{runId}#{toolUseId}`` row in sessions-metadata before each
+    such call of a scheduled run, a Run now or an inbox resume runs, fails closed
+    when it can't, and marks the call's ``tool_result`` frame ``audited``. Only the
+    harness sends the request fields that make a run unattended, so an interactive
+    turn is never audited and pays one dictionary lookup per tool call. Nothing
+    reaches the prompt, ``toolConfig`` or history beyond the error on a failed write.
+
+    **Default ON with a kill switch** (a rollout switch, §12 Q11): unset or empty
+    resolves to enabled; only the literal ``"false"`` (case-insensitive) disables.
+    Off, nothing is written and no frame is marked; a run's calls run as before.
+    The watch-run write gate (§7.5) is not this switch's: it stays behind
+    ``PROACTIVE_RUNS_ENABLED`` alone, and shares only the classification.
+
+    **Retires** on the default condition (CLAUDE.md, tracking issue #1422): shipped
+    in a production release, then at least two weeks there with the switch never
+    flipped and the dev readout's action counts recorded.
+    """
+    return os.environ.get("HEADLESS_ACTION_AUDIT_ENABLED", "").strip().lower() != "false"

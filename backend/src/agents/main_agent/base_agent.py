@@ -539,6 +539,62 @@ class BaseAgent(ABC):
             approval_details_lookup=approval_details_lookup,
         )
 
+    def tool_facts(self) -> "ToolFacts":
+        """What the action audit classifies this agent's calls by (proactive-trust §7.1).
+
+        The same sources the approval gate reads (``needs_approval`` per MCP client or
+        Gateway client, and the skill-authoring writes), plus the catalog's ``writes``
+        marker and the catalog id behind each tool. Every lookup reads a set or a map
+        the build already filled, so a call is classified with no I/O. Read per call:
+        the Gateway client is built after the plugins.
+        """
+        from agents.builtin_tools.skill_authoring.approval import (
+            APPROVAL_TOOL_NAMES as SKILL_AUTHORING_APPROVAL_NAMES,
+        )
+        from agents.main_agent.core.action_audit import ToolFacts
+        from agents.main_agent.integrations.external_mcp_client import (
+            get_external_mcp_integration,
+        )
+        from strands.tools.mcp import MCPAgentTool
+
+        integration = get_external_mcp_integration()
+        owner = self
+
+        def _gateway_for(client: object):
+            gateway = getattr(owner, "gateway_integration", None)
+            return gateway if gateway is not None and client is getattr(gateway, "client", None) else None
+
+        def approval_names(tool: object) -> set[str]:
+            if isinstance(tool, MCPAgentTool):
+                gateway = _gateway_for(tool.mcp_client)
+                if gateway is not None:
+                    return set(gateway.approval_names_for_client(tool.mcp_client))
+                return set(integration.approval_names_for_client(tool.mcp_client))
+            return set()
+
+        def write_names(tool: object) -> set[str]:
+            if isinstance(tool, MCPAgentTool):
+                gateway = _gateway_for(tool.mcp_client)
+                if gateway is not None:
+                    return set(gateway.write_names_for_client(tool.mcp_client))
+                return set(integration.write_names_for_client(tool.mcp_client))
+            return set()
+
+        def tool_id(tool: object):
+            if isinstance(tool, MCPAgentTool):
+                gateway = _gateway_for(tool.mcp_client)
+                if gateway is not None:
+                    return gateway.tool_id_for_name(tool.mcp_client, getattr(tool, "tool_name", ""))
+                return integration.tool_id_for_client(tool.mcp_client)
+            return getattr(tool, "tool_name", None)
+
+        return ToolFacts(
+            approval_names=approval_names,
+            write_names=write_names,
+            tool_id=tool_id,
+            skill_write_names=frozenset(SKILL_AUTHORING_APPROVAL_NAMES),
+        )
+
     def _build_oauth_consent_hook(self) -> OAuthConsentHook:
         """Construct the OAuth consent hook with closures over the MCP
         integration and provider repository so it stays decoupled from them.
@@ -664,6 +720,8 @@ class BaseAgent(ABC):
                 resolution.runtime_ids,
                 auth_token=self.auth_token,
                 approval_names=resolution.approval_names,
+                write_names=getattr(resolution, "write_names", None),
+                tool_ids=getattr(resolution, "tool_ids", None),
             )
             if gateway_client:
                 local_tools = self.gateway_integration.add_to_tool_list(local_tools)

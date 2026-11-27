@@ -500,6 +500,12 @@ class ExternalMCPIntegration:
         # than a global tool-name list (so two MCP servers can share a tool
         # name and only one is gated).
         self._approval_names_for_client_id: dict[int, set[str]] = {}
+        # MCPClient identity -> tool names an admin marked ``writes``, and -> the
+        # catalog tool id it was built from. Read by the action audit's
+        # classification (agents/main_agent/core/action_audit.py), like the
+        # approval names: snapshotted at client-build time, no I/O per call.
+        self._write_names_for_client_id: dict[int, set[str]] = {}
+        self._tool_id_for_client_id: dict[int, str] = {}
         # user_id -> {provider_id: authorization_url} for OAuth-gated tools
         # whose pre-flight failed because the user has not consented yet.
         # Drained by the stream coordinator (`take_pending_consents`) so the
@@ -704,6 +710,14 @@ class ExternalMCPIntegration:
         """Return the set of tool names on `client` flagged needs_approval."""
         return self._approval_names_for_client_id.get(id(client), set())
 
+    def write_names_for_client(self, client: Any) -> set[str]:
+        """Return the set of tool names on `client` an admin marked ``writes``."""
+        return self._write_names_for_client_id.get(id(client), set())
+
+    def tool_id_for_client(self, client: Any) -> Optional[str]:
+        """Return the catalog tool id `client` was built from, or None."""
+        return self._tool_id_for_client_id.get(id(client))
+
     async def _preflight(self, client: MCPClient, *, off_loop: bool = False) -> None:
         """Start ``client`` and list its tools, off the calling event loop.
 
@@ -836,6 +850,8 @@ class ExternalMCPIntegration:
                 self._client_versions.pop(cache_key, None)
                 self._provider_for_client_id.pop(id(stale), None)
                 self._approval_names_for_client_id.pop(id(stale), None)
+                self._write_names_for_client_id.pop(id(stale), None)
+                self._tool_id_for_client_id.pop(id(stale), None)
 
             static_token: Optional[str] = None
             token_provider: Optional[Callable[[], Optional[str]]] = None
@@ -988,6 +1004,11 @@ class ExternalMCPIntegration:
                 approval_names = tool.mcp_config.approval_required_names()
                 if approval_names:
                     self._approval_names_for_client_id[id(client)] = approval_names
+                marked = getattr(tool.mcp_config, "write_marked_names", None)
+                write_names = marked() if callable(marked) else set()
+                if write_names:
+                    self._write_names_for_client_id[id(client)] = write_names
+                self._tool_id_for_client_id[id(client)] = tool_id
                 auth_label = (
                     " (with OIDC forwarding)" if forward_auth and static_token
                     else " (OAuth)" if provider_id
@@ -1281,6 +1302,8 @@ class ExternalMCPIntegration:
             self._client_versions.pop(key, None)
             self._provider_for_client_id.pop(id(client), None)
             self._approval_names_for_client_id.pop(id(client), None)
+            self._write_names_for_client_id.pop(id(client), None)
+            self._tool_id_for_client_id.pop(id(client), None)
 
         # Their UI catalog entries point at the clients just dropped.
         try:
@@ -1313,6 +1336,8 @@ class ExternalMCPIntegration:
             self._client_versions.pop(key, None)
             self._provider_for_client_id.pop(id(client), None)
             self._approval_names_for_client_id.pop(id(client), None)
+            self._write_names_for_client_id.pop(id(client), None)
+            self._tool_id_for_client_id.pop(id(client), None)
 
         if keys_to_remove:
             logger.info(f"Cleared {len(keys_to_remove)} cached MCP clients for tool {tool_id}")

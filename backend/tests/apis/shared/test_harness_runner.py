@@ -671,3 +671,76 @@ async def test_a_paused_scheduled_run_keeps_its_unread_dot(monkeypatch, delivery
 async def test_a_turn_with_no_pause_is_completed_with_no_ids(monkeypatch, delivery_spy):
     result = await _run_stream(monkeypatch, _HAPPY_STREAM)
     assert (result.status, result.pending_interrupt_ids, result.error_kind) == ("completed", [], None)
+
+
+# ---------------------------------------------------------------------------
+# The action audit's request fields (docs/specs/proactive-trust.md §7.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "trigger, schedule_id, expected",
+    [
+        ("schedule", "sched-1", {"run_trigger": "schedule", "run_schedule_id": "sched-1"}),
+        ("run_now", None, {"run_trigger": "run_now"}),
+        ("inbox_respond", "sched-1", {"run_trigger": "inbox_respond"}),
+    ],
+)
+async def test_an_unattended_run_sends_its_run(monkeypatch, delivery_spy, trigger, schedule_id, expected):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_HAPPY_STREAM)
+
+    _mock_http(monkeypatch, handler)
+    await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=StaticBearerAuth("t"), invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=RecordingAudit()), run_id="run-abc", trigger=trigger,
+        schedule_id=schedule_id, act_without_asking=["mail/create_draft"],
+    )
+    payload = seen["payload"]
+    assert payload["run_id"] == "run-abc"
+    for field, value in expected.items():
+        assert payload[field] == value
+    if "run_schedule_id" not in expected:
+        assert "run_schedule_id" not in payload
+    assert payload["act_without_asking"] == ["mail/create_draft"]
+
+
+@pytest.mark.asyncio
+async def test_any_other_trigger_sends_no_run(monkeypatch, delivery_spy):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_HAPPY_STREAM)
+
+    _mock_http(monkeypatch, handler)
+    await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=StaticBearerAuth("t"), invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=RecordingAudit()), schedule_id="sched-1",
+    )
+    assert not {"run_id", "run_trigger", "run_schedule_id", "act_without_asking"} & set(seen["payload"])
+
+
+@pytest.mark.asyncio
+async def test_audited_frames_become_the_runs_write_count(monkeypatch, delivery_spy):
+    stream = _sse(
+        ("tool_result", json.dumps({"audited": "write", "tool_result": {"toolUseId": "t1", "status": "success"}})),
+        ("tool_result", json.dumps({"audited": "write", "message": {"content": [{"toolResult": {"toolUseId": "t1"}}]}})),
+        ("tool_result", json.dumps({"audited": "unclassified", "tool_result": {"toolUseId": "t2"}})),
+        ("tool_result", json.dumps({"tool_result": {"toolUseId": "t3"}})),
+        ("done", "{}"),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream)
+
+    _mock_http(monkeypatch, handler)
+    result = await run_agent_headless(
+        user_id="user-1", prompt="ping", auth=StaticBearerAuth("t"), invocations_base_url="http://localhost:8001",
+        governance=GovernanceFloor(audit=RecordingAudit()), trigger="schedule",
+    )
+    assert (result.write_count, result.unclassified_count) == (1, 1)

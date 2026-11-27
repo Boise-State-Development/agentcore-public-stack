@@ -102,6 +102,11 @@ class RunResult:
     #: ``None`` when the frame never came: a timeout, a cut stream, a provider
     #: error. A schedule's budget counts it (docs/specs/proactive-trust.md §4.1).
     cost_usd: Optional[float] = None
+    #: Calls the Runtime's action audit recorded as ``write`` / ``unclassified``
+    #: (their ``tool_result`` frames' ``audited``). A watch run with a write is
+    #: never quiet (docs/specs/proactive-trust.md §7.3).
+    write_count: int = 0
+    unclassified_count: int = 0
     #: The stream carried ``quota_exceeded``: the "answer" is the quota message,
     #: not the model's. The status stays ``completed``, as the turn did.
     quota_exceeded: bool = False

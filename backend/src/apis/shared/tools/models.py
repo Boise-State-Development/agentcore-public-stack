@@ -173,6 +173,15 @@ class MCPToolEntry(BaseModel):
         default=False,
         description="If true, the agent must request user confirmation before invoking this tool.",
     )
+    writes: bool = Field(
+        default=False,
+        description=(
+            "If true, this tool changes something outside the conversation. An unattended "
+            "run's call to it is audited as a write, keeps a watch run from being quiet, and "
+            "on a watch run asks first (docs/specs/proactive-trust.md §7.1). Read where the "
+            "tool's metadata already is, so it changes no turn's request."
+        ),
+    )
     always_on: bool = Field(
         default=False,
         description=(
@@ -192,6 +201,7 @@ class MCPToolEntry(BaseModel):
         return {
             "name": self.name,
             "needsApproval": self.needs_approval,
+            "writes": self.writes,
             "alwaysOn": self.always_on,
             "description": self.description,
         }
@@ -201,6 +211,8 @@ class MCPToolEntry(BaseModel):
         return cls(
             name=data.get("name", ""),
             needs_approval=bool(data.get("needsApproval", False)),
+            # Absent on every row written before the action audit, so it reads False.
+            writes=bool(data.get("writes", False)),
             # Absent on every row written before always-on shipped, so it reads
             # back False and the entry behaves exactly as it did.
             always_on=bool(data.get("alwaysOn", False)),
@@ -450,6 +462,10 @@ class MCPServerConfig(BaseModel):
     def approval_required_names(self) -> set[str]:
         """Return the names of tools flagged as requiring user approval."""
         return {entry.name for entry in self.tools if entry.needs_approval}
+
+    def write_marked_names(self) -> set[str]:
+        """Return the names of tools an admin marked ``writes`` (proactive-trust §7.1)."""
+        return {entry.name for entry in self.tools if entry.writes}
 
 
 _DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
@@ -764,6 +780,10 @@ class MCPGatewayConfig(BaseModel):
     def approval_required_names(self) -> set[str]:
         """Return the names of tools flagged as requiring user approval."""
         return {entry.name for entry in self.tools if entry.needs_approval}
+
+    def write_marked_names(self) -> set[str]:
+        """Return the names of tools an admin marked ``writes`` (proactive-trust §7.1)."""
+        return {entry.name for entry in self.tools if entry.writes}
 
 
 class A2AAgentConfig(BaseModel):
@@ -1475,6 +1495,7 @@ class MCPToolEntryPayload(BaseModel):
 
     name: str
     needs_approval: bool = Field(default=False, alias="needsApproval")
+    writes: bool = False
     always_on: bool = Field(default=False, alias="alwaysOn")
     description: Optional[str] = None
 
@@ -1484,6 +1505,7 @@ class MCPToolEntryPayload(BaseModel):
         return MCPToolEntry(
             name=self.name,
             needs_approval=self.needs_approval,
+            writes=self.writes,
             always_on=self.always_on,
             description=self.description,
         )
@@ -1493,6 +1515,7 @@ class MCPToolEntryPayload(BaseModel):
         return cls(
             name=entry.name,
             needs_approval=entry.needs_approval,
+            writes=entry.writes,
             always_on=entry.always_on,
             description=entry.description,
         )
