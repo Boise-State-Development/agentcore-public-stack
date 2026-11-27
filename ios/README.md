@@ -19,6 +19,9 @@ Sign-in, reading your conversations, and your inbox:
   expired session goes back to sign-in with a note. Being offline keeps the
   session and offers Try again.
 - **Sign out**, dropping the local copy first and then telling the server.
+  The phone can also be signed out from the web app (Settings → Profile →
+  Signed-in apps and terminals) or by an admin; the app notices when it
+  returns to the foreground and goes back to sign-in.
 - **Conversations**, newest first, a page at a time (`GET /sessions`), with
   the unread dot a scheduled run leaves and a "Waiting for your answer" line
   on a conversation paused on a prompt. Pull to refresh.
@@ -48,9 +51,8 @@ app-api, off until a deployment lists the app's redirect address in
 
 Next up, in order:
 
-1. **Signed-in devices**: list and revoke app sessions (spec PR 3).
-2. **Push** notifications.
-3. **Chat**: sending a turn, SSE streaming, the event types in the root
+1. **Push** notifications.
+2. **Chat**: sending a turn, SSE streaming, the event types in the root
    `CLAUDE.md`.
 
 ### Trying sign-in

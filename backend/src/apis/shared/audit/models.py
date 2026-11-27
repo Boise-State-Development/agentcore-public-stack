@@ -158,6 +158,13 @@ class AuditAction:
     # set or clear, with the model id and effort before and after.
     TASK_MODEL_UPDATED = "task_model.updated"
 
+    # Signed-in apps and terminals (docs/specs/native-app-auth.md D9), target
+    # ``user`` keyed by the user id: an admin signed all of a user's native-app
+    # and terminal sessions out. ``after`` holds the count and whether the
+    # user's headless grant kept a token. A user signing out their own device
+    # is not an admin mutation and writes no record.
+    USER_DEVICES_REVOKED = "user.devices_revoked"
+
 
 ALL_ACTIONS: frozenset[str] = frozenset(
     v for k, v in vars(AuditAction).items() if not k.startswith("_") and isinstance(v, str)
@@ -179,6 +186,7 @@ TARGET_AWS_LIMIT_REQUEST = "aws_limit_request"
 TARGET_SKILL = "skill"
 TARGET_CONVERSATION = "conversation"
 TARGET_TASK_MODEL = "task_model"
+TARGET_USER = "user"
 
 
 @dataclass

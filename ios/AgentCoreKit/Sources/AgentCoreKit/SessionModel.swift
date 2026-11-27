@@ -210,6 +210,22 @@ public final class SessionModel {
         }
     }
 
+    /// Check the saved session is still good, as the app comes back to the
+    /// foreground. A session signed out elsewhere (the web app's Signed-in apps
+    /// and terminals, an admin, its 30 days running out) goes to sign-in at
+    /// once, rather than on the first tap. Offline, or a server error, changes
+    /// nothing: the session may well be fine.
+    public func revalidate() async {
+        guard case .signedIn = phase, let server, let sealed = sessionStore.load(for: server) else { return }
+        do {
+            _ = try await makeClient(server).currentUser(session: sealed)
+        } catch .unauthorized {
+            sessionEnded()
+        } catch {
+            logger.info("Couldn't recheck the session; keeping it")
+        }
+    }
+
     /// What the signed-in screens call the server with.
     func signedInAPI() -> SignedInAPI? {
         guard let server, let sealed = sessionStore.load(for: server) else { return nil }

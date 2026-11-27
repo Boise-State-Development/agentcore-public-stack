@@ -4,11 +4,19 @@ import SwiftUI
 @main
 struct AgentCoreApp: App {
     @State private var session = SessionModel.live()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView(session: session)
                 .task { await session.start() }
+        }
+        // A session signed out from another device while the app was away
+        // goes back to sign-in as soon as the app is back.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                Task { await session.revalidate() }
+            }
         }
     }
 }

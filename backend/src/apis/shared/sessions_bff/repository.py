@@ -11,6 +11,14 @@ Schema (single-table, fits the `BFFSessionsTable` provisioned in Phase 1):
     Optional attrs, written only when set: client ("native" for a phone's
     session), device_model, app_version.
 
+Device pointers (one per app or terminal session, for the devices list):
+
+    PK = DEVICES#<user_id>
+    SK = DEVICE#<device_id>
+
+    Attrs: device_id, session_id, user_id, kind, device_model, app_version,
+           created_at, ttl
+
 Revocation feed (`revocations.py`):
 
     PK = REVOKED
@@ -53,7 +61,7 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
-from .models import SessionRecord
+from .models import DEVICE_SK_PREFIX, DEVICES_PK_PREFIX, DevicePointer, SessionRecord
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +72,8 @@ REVOCATION_PK = "REVOKED"
 _REVOCATION_TTL_SECONDS = 3600
 #: Bound on one read of the feed. A lookback holds a minute or two of logouts.
 _REVOCATION_READ_LIMIT = 1000
+#: Bound on one user's device pointers. A pointer lives at most 30 days.
+_DEVICE_READ_LIMIT = 200
 
 
 class SessionRepository:
@@ -488,6 +498,83 @@ class SessionRepository:
             await self.delete(session_id)
         finally:
             await self.record_revocation(session_id)
+
+    # ─── Device pointers (docs/specs/native-app-auth.md D9) ──────────────
+    #
+    # The table is keyed by session id, so "this user's sessions" needs a
+    # lookup path. One pointer per app or terminal session, under the user,
+    # written when the session is handed over. The session row stays the
+    # truth: a pointer whose row is gone is dropped when it is next read.
+
+    @staticmethod
+    def _device_key(user_id: str, device_id: str) -> dict:
+        return {"PK": f"{DEVICES_PK_PREFIX}{user_id}", "SK": f"{DEVICE_SK_PREFIX}{device_id}"}
+
+    async def put_device_pointer(self, pointer: DevicePointer) -> None:
+        """Record that `pointer.session_id` is one of the user's apps or terminals."""
+        if not self._enabled:
+            return
+        item: dict = {
+            **self._device_key(pointer.user_id, pointer.device_id),
+            "device_id": pointer.device_id,
+            "session_id": pointer.session_id,
+            "user_id": pointer.user_id,
+            "kind": pointer.kind,
+            "created_at": pointer.created_at,
+            "ttl": pointer.ttl,
+        }
+        for name in ("device_model", "app_version"):
+            value = getattr(pointer, name)
+            if value is not None:
+                item[name] = value
+
+        def _call() -> None:
+            self._table.put_item(Item=item)
+
+        await asyncio.to_thread(_call)
+
+    async def list_device_pointers(self, user_id: str) -> list[DevicePointer]:
+        """Every pointer under the user, live session or not."""
+        if not self._enabled:
+            return []
+
+        def _call() -> list[dict]:
+            items: list[dict] = []
+            kwargs: dict = {
+                "KeyConditionExpression": Key("PK").eq(f"{DEVICES_PK_PREFIX}{user_id}")
+                & Key("SK").begins_with(DEVICE_SK_PREFIX),
+                "ConsistentRead": True,
+            }
+            while True:
+                response = self._table.query(**kwargs)
+                items.extend(response.get("Items", []))
+                last = response.get("LastEvaluatedKey")
+                if not last or len(items) >= _DEVICE_READ_LIMIT:
+                    return items
+                kwargs["ExclusiveStartKey"] = last
+
+        return [DevicePointer.from_item(item) for item in await asyncio.to_thread(_call)]
+
+    async def get_device_pointer(self, user_id: str, device_id: str) -> Optional[DevicePointer]:
+        if not self._enabled:
+            return None
+        key = self._device_key(user_id, device_id)
+
+        def _call() -> Optional[dict]:
+            return self._table.get_item(Key=key, ConsistentRead=True).get("Item")
+
+        item = await asyncio.to_thread(_call)
+        return DevicePointer.from_item(item) if item else None
+
+    async def delete_device_pointer(self, user_id: str, device_id: str) -> None:
+        if not self._enabled:
+            return
+        key = self._device_key(user_id, device_id)
+
+        def _call() -> None:
+            self._table.delete_item(Key=key)
+
+        await asyncio.to_thread(_call)
 
     async def record_revocation(self, session_id: str, *, now: Optional[float] = None) -> None:
         if not self._enabled:

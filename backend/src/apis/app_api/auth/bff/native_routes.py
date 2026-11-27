@@ -38,11 +38,12 @@ from pydantic import BaseModel, Field
 from apis.shared.auth.dependencies import get_current_user_from_session
 from apis.shared.rate_limit import RateLimiter
 from apis.shared.sessions_bff.csrf import CSRFHelper
-from apis.shared.sessions_bff.models import CookiePayload
+from apis.shared.sessions_bff.models import DEVICE_KIND_NATIVE, CookiePayload, DevicePointer
 
 from .cli_routes import _client_key, _enforce
 from .config import BFFAuthConfig
 from .routes import (
+    put_device_pointer_quietly,
     _discard_orphan_session,
     _get_cookie_codec,
     _get_repository,
@@ -176,15 +177,29 @@ async def native_exchange(request: Request, body: NativeExchangeRequest) -> JSON
         return _invalid_grant()
 
     expires_at = record.created_at + config.bff_config.absolute_lifetime_seconds
+    device_model = _bounded(body.device_model, _DEVICE_MODEL_MAX)
+    app_version = _bounded(body.app_version, _APP_VERSION_MAX)
     activated = await repository.activate_native(
         record.session_id,
         ttl=expires_at,
-        device_model=_bounded(body.device_model, _DEVICE_MODEL_MAX),
-        app_version=_bounded(body.app_version, _APP_VERSION_MAX),
+        device_model=device_model,
+        app_version=app_version,
     )
     if not activated:
         # The row vanished between the read and the write (a delete raced us).
         return _invalid_grant()
+
+    # So the user can find and sign out this phone (`/auth/devices`).
+    await put_device_pointer_quietly(
+        repository,
+        DevicePointer.for_session(
+            record,
+            kind=DEVICE_KIND_NATIVE,
+            ttl=expires_at,
+            device_model=device_model,
+            app_version=app_version,
+        ),
+    )
 
     sealed = _get_cookie_codec(config).seal(CookiePayload(session_id=record.session_id))
     csrf_token = CSRFHelper.derive_token(record.csrf_secret, record.session_id)

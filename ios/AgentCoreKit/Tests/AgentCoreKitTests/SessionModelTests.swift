@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import AgentCoreKit
@@ -219,5 +220,67 @@ struct SessionModelTests {
         #expect(model.phase == .needsServer)
         #expect(servers.saved == nil)
         #expect(sessions.load(for: server) == nil)
+    }
+
+    /// A server whose answer to `GET /auth/session` can change between calls.
+    /// `status()` of -1 means no answer at all.
+    private static func switchable(_ status: @escaping @Sendable () -> Int) -> StubTransport {
+        StubTransport { request in
+            switch request.path {
+            case "/api/auth/providers": return (200, Fixtures.providers)
+            case "/api/auth/session":
+                let code = status()
+                guard code != -1 else { throw URLError(.notConnectedToInternet) }
+                return (code, Fixtures.user)
+            default: return (404, "{}")
+            }
+        }
+    }
+
+    @Test("a session signed out elsewhere goes to sign-in when the app comes back")
+    func revalidateSignedOutElsewhere() async throws {
+        let server = try Fixtures.server
+        let status = Mutex(200)
+        let sessions = MemorySessionStore([server.baseURL.absoluteString: "sealed-value"])
+        let model = Self.model(
+            transport: Self.switchable { status.withLock { $0 } }, servers: MemoryServerStore(server),
+            sessions: sessions)
+        await model.start()
+        if case .signedIn = model.phase {} else { Issue.record("expected to start signed in") }
+
+        status.withLock { $0 = 401 }
+        await model.revalidate()
+
+        #expect(model.phase == .signedOut)
+        #expect(model.problem == .sessionExpired)
+        #expect(sessions.load(for: server) == nil)
+    }
+
+    @Test(
+        "a session that still works, or a server that can't answer, stays signed in",
+        arguments: [200, 503, -1])
+    func revalidateKeeps(status code: Int) async throws {
+        let server = try Fixtures.server
+        let status = Mutex(200)
+        let sessions = MemorySessionStore([server.baseURL.absoluteString: "sealed-value"])
+        let model = Self.model(
+            transport: Self.switchable { status.withLock { $0 } }, servers: MemoryServerStore(server),
+            sessions: sessions)
+        await model.start()
+
+        status.withLock { $0 = code }
+        await model.revalidate()
+
+        if case .signedIn = model.phase {} else { Issue.record("expected to stay signed in, got \(model.phase)") }
+        #expect(sessions.load(for: server) == "sealed-value")
+    }
+
+    @Test("revalidating with nobody signed in asks the server nothing")
+    func revalidateSignedOut() async {
+        let transport = Self.server()
+        let model = Self.model(transport: transport)
+        await model.start()
+        await model.revalidate()
+        #expect(transport.requests.isEmpty)
     }
 }
