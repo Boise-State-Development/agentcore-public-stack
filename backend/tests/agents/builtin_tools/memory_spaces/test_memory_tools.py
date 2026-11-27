@@ -81,14 +81,16 @@ class TestProjectHarnessSpecs:
         specs = self._specs()
         for name in ("memory_save", "memory_propose"):
             arg = specs[name]["inputSchema"]["json"]["properties"]["description"]["description"]
-            assert f"at most {MAX_DESCRIPTION_CHARS} characters" in " ".join(arg.split()), name
+            # A target well under the limit: told only the limit, a model aimed at it and overshot.
+            assert f"about 100 characters and never over {MAX_DESCRIPTION_CHARS}" in " ".join(arg.split()), name
+        assert MAX_DESCRIPTION_CHARS >= 150
         description = " ".join(specs["memory_save"]["description"].split())
-        assert f"in {MAX_DESCRIPTION_CHARS} characters or fewer (a longer one is refused" in description
+        assert f"in about 100 characters (one over {MAX_DESCRIPTION_CHARS} is refused" in description
 
     #: The specs sit in the cacheable ``toolConfig``. A change here is a deliberate
     #: prefix rewrite at deploy: update the pin with it and state the token delta in
-    #: the PR. Last changed when memory_save and memory_propose stated the description limit.
-    SPEC_DIGEST = "62abf9315212c879a9f04a54ef1cc47f4aa0f7fce037e21dd6f8d62fc76958e2"
+    #: the PR. Last changed when the description target became about 100 characters.
+    SPEC_DIGEST = "8628517cbbc7362627d2d94821fe3b0cf258ea63082c276003afc5128a79ed82"
 
     def test_the_specs_are_pinned(self):
         import hashlib
