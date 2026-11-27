@@ -221,7 +221,7 @@ struct QuestionsSection: View {
     @Binding var draft: QuestionsDraft
 
     var body: some View {
-        ForEach(Array(questions.enumerated()), id: \.offset) { index, question in
+        ForEach(Array(questions.enumerated()), id: \.offset) { _, question in
             Section {
                 ForEach(question.options, id: \.label) { option in
                     ChoiceRow(
@@ -231,8 +231,7 @@ struct QuestionsSection: View {
                         draft.toggle(option.label, for: question)
                     }
                 }
-                TextField(
-                    "Other", text: otherBinding(question.header), axis: .vertical)
+                TextField("Other", text: otherBinding(question.header), axis: .vertical)
             } header: {
                 Text(question.question)
                     .textCase(nil)
@@ -240,13 +239,12 @@ struct QuestionsSection: View {
                 if question.multiSelect {
                     Text("Choose any that apply.")
                 }
-                if index == questions.count - 1 {
-                    Toggle("Skip these questions", isOn: $draft.skipped)
-                        .padding(.top, 8)
-                }
             }
+            .disabled(draft.skipped)
         }
-        .disabled(draft.skipped)
+        Section {
+            Toggle("Skip these questions", isOn: $draft.skipped)
+        }
     }
 
     private func otherBinding(_ header: String) -> Binding<String> {
@@ -372,6 +370,8 @@ struct ChoiceRow: View {
             }
             .contentShape(.rect)
         }
+        // Plain, so the row reads as text with a checkmark, not as a tinted link.
+        .buttonStyle(.plain)
         .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
