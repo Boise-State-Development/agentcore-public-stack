@@ -33,4 +33,13 @@ export interface BffSessionResponse extends BffSessionUser {
  */
 export interface BffLogoutResponse {
   post_logout_url: string | null;
+  /**
+   * True when the user's headless grant holds this session's refresh token,
+   * so the BFF signed the session out but kept the token alive for scheduled
+   * runs. The sign-in page then tells the user their scheduled runs keep going.
+   */
+  scheduled_runs_continue?: boolean;
 }
+
+/** sessionStorage key that carries `scheduled_runs_continue` across the Cognito logout hop. */
+export const SCHEDULED_RUNS_CONTINUE_KEY = 'signed-out-scheduled-runs-continue';

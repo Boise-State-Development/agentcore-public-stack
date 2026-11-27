@@ -63,6 +63,12 @@ GRANT_USER_INDEX_NAME = "HeadlessGrantUserIndex"
 
 _STATUS_ACTIVE = "active"
 _STATUS_REVOKED = "revoked"
+#: Cognito refused the grant's refresh token (signed out of the session it was
+#: pinned from before logout kept it alive, expired, or revoked upstream). The
+#: grant can't mint until the user enables scheduled runs again, which re-pins
+#: it and sets it back to active. Not "active", so ``GET /runs/grant`` reads
+#: ``enabled: false`` and ``/schedules`` offers Enable again.
+_STATUS_NEEDS_REAUTH = "needs_reauth"
 
 
 def _max_age_seconds() -> int:
@@ -78,17 +84,26 @@ class HeadlessGrant:
     user_id: str
     username: str  # Cognito username; required for SECRET_HASH on refresh
     cognito_refresh_token: str
-    status: str  # "active" | "revoked"
+    status: str  # "active" | "needs_reauth" | "revoked"
     created_at: int  # epoch seconds (grant creation)
     updated_at: int  # epoch seconds (last enable/re-pin or token rotation)
     token_issued_at: int  # epoch seconds — login that produced the token
     ttl: int  # epoch seconds; DynamoDB TTL = token_issued_at + max age
     last_used_at: Optional[int] = None
     revoked_at: Optional[int] = None
+    #: The BFF session whose refresh token the grant holds. Logout and a re-pin
+    #: read it to decide whether anyone else still holds the token before it is
+    #: revoked. ``None`` on a grant pinned before this was recorded.
+    pinned_session_id: Optional[str] = None
 
     @property
     def is_active(self) -> bool:
         return self.status == _STATUS_ACTIVE and self.ttl > int(time.time())
+
+    @property
+    def is_renewable(self) -> bool:
+        """Active, or waiting to be re-enabled, and inside its window: ``enable`` reuses it."""
+        return self.status in (_STATUS_ACTIVE, _STATUS_NEEDS_REAUTH) and self.ttl > int(time.time())
 
 
 class HeadlessGrantService:
@@ -141,6 +156,7 @@ class HeadlessGrantService:
             ttl=int(item["ttl"]),
             last_used_at=int(item["last_used_at"]) if "last_used_at" in item else None,
             revoked_at=int(item["revoked_at"]) if "revoked_at" in item else None,
+            pinned_session_id=item.get("pinned_session_id") or None,
         )
 
     def _query_grants_sync(self, user_id: str) -> list[dict]:
@@ -174,6 +190,15 @@ class HeadlessGrantService:
                 return grant
         return None
 
+    async def _get_renewable_grant(self, user_id: str) -> Optional[HeadlessGrant]:
+        """The newest grant ``enable`` may re-pin: active or ``needs_reauth``, unexpired. Never a revoked one."""
+        items = await asyncio.to_thread(self._query_grants_sync, user_id)
+        for item in items:
+            grant = self._item_to_grant(item)
+            if grant.is_renewable:
+                return grant
+        return None
+
     async def enable(
         self,
         *,
@@ -181,6 +206,7 @@ class HeadlessGrantService:
         username: str,
         refresh_token: str,
         token_issued_at: Optional[int] = None,
+        session_id: Optional[str] = None,
     ) -> HeadlessGrant:
         """Create (or renew) the user's grant from an attended session.
 
@@ -189,28 +215,38 @@ class HeadlessGrantService:
         login instant anchors the grant's TTL, because Cognito's
         refresh-token validity runs from token issuance, not from when we
         pin it. Re-enabling re-pins the token onto the existing grant
-        (stable ``grant_id`` for audit continuity) and slides the window.
+        (stable ``grant_id`` for audit continuity) and slides the window. A
+        grant marked ``needs_reauth`` is re-pinned the same way and becomes
+        active again; a revoked one is never reused, so enabling after a
+        revoke creates a new grant. ``session_id`` is the session the token
+        came from, recorded as ``pinned_session_id``.
         """
         now = int(time.time())
         issued_at = token_issued_at or now
         ttl = issued_at + _max_age_seconds()
 
-        existing = await self.get_active_grant(user_id)
+        existing = await self._get_renewable_grant(user_id)
         if existing is not None:
             def _renew() -> None:
+                values = {
+                    ":rt": refresh_token,
+                    ":now": now,
+                    ":iss": issued_at,
+                    ":ttl": ttl,
+                    ":active": _STATUS_ACTIVE,
+                }
+                set_parts = (
+                    "SET cognito_refresh_token = :rt, updated_at = :now, "
+                    "token_issued_at = :iss, #ttl = :ttl, #s = :active"
+                )
+                if session_id:
+                    set_parts += ", pinned_session_id = :sid"
+                    values[":sid"] = session_id
                 self._get_table().update_item(
                     Key=self._key(existing.grant_id),
-                    UpdateExpression=(
-                        "SET cognito_refresh_token = :rt, updated_at = :now, "
-                        "token_issued_at = :iss, #ttl = :ttl"
-                    ),
-                    ExpressionAttributeNames={"#ttl": "ttl"},
-                    ExpressionAttributeValues={
-                        ":rt": refresh_token,
-                        ":now": now,
-                        ":iss": issued_at,
-                        ":ttl": ttl,
-                    },
+                    UpdateExpression=set_parts + (" REMOVE needs_reauth_at" if session_id else " REMOVE needs_reauth_at, pinned_session_id"),
+                    ExpressionAttributeNames={"#ttl": "ttl", "#s": "status"},
+                    ExpressionAttributeValues=values,
                 )
 
             await asyncio.to_thread(_renew)
@@ -221,6 +257,8 @@ class HeadlessGrantService:
             existing.updated_at = now
             existing.token_issued_at = issued_at
             existing.ttl = ttl
+            existing.status = _STATUS_ACTIVE
+            existing.pinned_session_id = session_id
             return existing
 
         grant = HeadlessGrant(
@@ -233,6 +271,7 @@ class HeadlessGrantService:
             updated_at=now,
             token_issued_at=issued_at,
             ttl=ttl,
+            pinned_session_id=session_id,
         )
 
         def _put() -> None:
@@ -248,6 +287,7 @@ class HeadlessGrantService:
                     "updated_at": grant.updated_at,
                     "token_issued_at": grant.token_issued_at,
                     "ttl": grant.ttl,
+                    **({"pinned_session_id": session_id} if session_id else {}),
                 }
             )
 
@@ -266,7 +306,7 @@ class HeadlessGrantService:
         now = int(time.time())
         revoked_any = False
         for item in items:
-            if item.get("status") != _STATUS_ACTIVE:
+            if item.get("status") not in (_STATUS_ACTIVE, _STATUS_NEEDS_REAUTH):
                 continue
             grant_id = str(item["grant_id"])
 
@@ -285,6 +325,44 @@ class HeadlessGrantService:
             logger.info("Revoked headless grant %s for user %s", grant_id, user_id)
             revoked_any = True
         return revoked_any
+
+    async def mark_needs_reauth(self, grant_id: str, refresh_token: str) -> bool:
+        """Mark a grant whose refresh token Cognito refused. Returns whether it changed it.
+
+        Conditional on the grant still being active and still holding
+        ``refresh_token``, so a re-pin that landed between the refused mint and
+        this write is never undone. The dead token is REMOVEd in the same
+        write: a grant keeps no credential it can't use.
+        """
+
+        def _mark() -> bool:
+            now = int(time.time())
+            try:
+                self._get_table().update_item(
+                    Key=self._key(grant_id),
+                    UpdateExpression=(
+                        "SET #s = :needs, needs_reauth_at = :now, updated_at = :now "
+                        "REMOVE cognito_refresh_token"
+                    ),
+                    ConditionExpression="#s = :active AND cognito_refresh_token = :rt",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={
+                        ":needs": _STATUS_NEEDS_REAUTH,
+                        ":active": _STATUS_ACTIVE,
+                        ":rt": refresh_token,
+                        ":now": now,
+                    },
+                )
+                return True
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                    return False
+                raise
+
+        marked = await asyncio.to_thread(_mark)
+        if marked:
+            logger.info("Headless grant %s marked needs_reauth: Cognito refused its token", grant_id)
+        return marked
 
     async def persist_rotated_refresh_token(
         self, grant_id: str, refresh_token: str

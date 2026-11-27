@@ -3,7 +3,12 @@ import { HttpClient, HttpErrorResponse, HttpHeaders } from '@angular/common/http
 import { firstValueFrom } from 'rxjs';
 
 import { ConfigService } from '../services/config.service';
-import { BffLogoutResponse, BffSessionResponse, BffSessionUser } from './bff-session.model';
+import {
+  BffLogoutResponse,
+  BffSessionResponse,
+  BffSessionUser,
+  SCHEDULED_RUNS_CONTINUE_KEY,
+} from './bff-session.model';
 import { ComposerDraftStorageService } from '../session/services/session/composer-draft-storage.service';
 import { QuotaWarningService } from '../services/quota/quota-warning.service';
 import { PreflightDismissalStorageService } from '../services/oauth-consent/preflight-dismissal-storage.service';
@@ -262,6 +267,14 @@ export class SessionService {
         }),
       );
       postLogoutUrl = response?.post_logout_url ?? null;
+      if (response?.scheduled_runs_continue) {
+        // Survives the Cognito logout hop in this tab, so /auth/login can say so.
+        try {
+          sessionStorage.setItem(SCHEDULED_RUNS_CONTINUE_KEY, '1');
+        } catch {
+          // Storage blocked: the note is a convenience; signing out still works.
+        }
+      }
     } finally {
       this._user.set(null);
       this._csrfToken.set(null);

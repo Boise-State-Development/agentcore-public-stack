@@ -80,6 +80,18 @@ def get_headless_grant_service() -> HeadlessGrantService:
     return _grant_service
 
 
+def get_grant_token_deps():
+    """The BFF session repository and Cognito client a grant's token bookkeeping uses.
+
+    The same singletons ``/auth/logout`` uses, so one process has one of each;
+    tests monkeypatch this factory.
+    """
+    from apis.app_api.auth.bff.config import BFFAuthConfig
+    from apis.app_api.auth.bff.routes import _get_cognito_client, _get_repository
+
+    return _get_repository(BFFAuthConfig.from_env()), _get_cognito_client()
+
+
 def get_run_audit_recorder() -> RunAuditRecorder:
     """Lazy module singleton; tests monkeypatch this factory."""
     global _audit_recorder
@@ -224,11 +236,13 @@ async def _resolve_grant(request: Request, user: User) -> HeadlessGrant:
     grants = get_headless_grant_service()
     session_record = getattr(request.state, "bff_session", None)
     if session_record is not None:
-        return await grants.enable(
-            user_id=user.user_id,
-            username=session_record.username,
-            refresh_token=session_record.cognito_refresh_token,
-            token_issued_at=session_record.created_at,
+        # Re-pinning to this session also revokes the token the grant held
+        # before, once no live session holds it (``grant_tokens``).
+        from apis.app_api.auth.bff import grant_tokens
+
+        repository, cognito = get_grant_token_deps()
+        return await grant_tokens.pin_grant(
+            session_record, grants=grants, repository=repository, cognito=cognito
         )
     grant = await grants.get_active_grant(user.user_id)
     if grant is None:
@@ -406,8 +420,25 @@ async def revoke_grant(
     user: User = Depends(require_scheduled_runs_user),
 ) -> GrantRevokeResponse:
     """Revoke the caller's headless grant (total revocation — the stored
-    credential is deleted in the same write)."""
-    revoked = await get_headless_grant_service().revoke(user.user_id)
+    credential is deleted in the same write).
+
+    The token it held is also revoked with Cognito once no live session holds
+    it: a sign-out that kept the token alive for the grant (``bff_logout``)
+    leaves it to this revoke to end it.
+    """
+    grants = get_headless_grant_service()
+    previous = await grants.get_active_grant(user.user_id)
+    revoked = await grants.revoke(user.user_id)
+    if revoked and previous is not None:
+        from apis.app_api.auth.bff import grant_tokens
+
+        repository, cognito = get_grant_token_deps()
+        await grant_tokens.release_refresh_token(
+            previous.cognito_refresh_token,
+            previous.pinned_session_id,
+            repository=repository,
+            cognito=cognito,
+        )
     return GrantRevokeResponse(revoked=revoked)
 
 

@@ -330,3 +330,136 @@ class TestCognitoRefreshBearerAuth:
         await auth.mint_bearer_for_user("user-1")
 
         assert grants.persisted == [("hlg-abc", "rt-rotated")]
+
+
+# ---------------------------------------------------------------------------
+# needs_reauth: a refused token makes the grant recoverable (proactive-trust §5.2)
+# ---------------------------------------------------------------------------
+
+
+class _MarkingGrants(FakeGrants):
+    def __init__(self, grant):
+        super().__init__(grant)
+        self.marked: list[tuple[str, str]] = []
+
+    async def mark_needs_reauth(self, grant_id: str, refresh_token: str):
+        self.marked.append((grant_id, refresh_token))
+        return True
+
+
+class TestRefusedTokenMarksTheGrant:
+    @pytest.mark.asyncio
+    async def test_a_refused_refresh_marks_needs_reauth(self):
+        grants = _MarkingGrants(_live_grant())
+        auth = CognitoRefreshBearerAuth(
+            grants=grants,
+            refresh_client=FakeRefreshClient(error=CognitoRefreshError("Refresh Token has been revoked", refused=True)),
+        )
+
+        with pytest.raises(HeadlessAuthError):
+            await auth.mint_bearer_for_user("user-1")
+
+        assert grants.marked == [("hlg-abc", "rt-stored")]
+
+    @pytest.mark.asyncio
+    async def test_a_transient_failure_leaves_the_grant_alone(self):
+        grants = _MarkingGrants(_live_grant())
+        auth = CognitoRefreshBearerAuth(
+            grants=grants, refresh_client=FakeRefreshClient(error=CognitoRefreshError("throttled"))
+        )
+
+        with pytest.raises(HeadlessAuthError):
+            await auth.mint_bearer_for_user("user-1")
+
+        assert grants.marked == []
+
+    @pytest.mark.asyncio
+    async def test_a_failed_mark_still_raises_the_auth_error(self):
+        class Failing(_MarkingGrants):
+            async def mark_needs_reauth(self, grant_id, refresh_token):
+                raise RuntimeError("ddb down")
+
+        auth = CognitoRefreshBearerAuth(
+            grants=Failing(_live_grant()),
+            refresh_client=FakeRefreshClient(error=CognitoRefreshError("revoked", refused=True)),
+        )
+
+        with pytest.raises(HeadlessAuthError):
+            await auth.mint_bearer_for_user("user-1")
+
+
+class TestRefusalClassification:
+    def test_not_authorized_is_a_refusal(self):
+        from apis.shared.sessions_bff.refresh import _is_refusal
+
+        refused = ClientError({"Error": {"Code": "NotAuthorizedException", "Message": "revoked"}}, "InitiateAuth")
+        throttled = ClientError({"Error": {"Code": "TooManyRequestsException", "Message": "slow"}}, "InitiateAuth")
+        assert _is_refusal(refused)
+        assert not _is_refusal(throttled)
+        assert not _is_refusal(RuntimeError("network"))
+
+
+class TestNeedsReauthGrant:
+    @pytest.mark.asyncio
+    async def test_mark_is_conditional_on_the_token_it_refused(self):
+        table = FakeTable([_grant_item()])
+        service = _service(table)
+
+        assert await service.mark_needs_reauth("hlg-abc", "rt-stored")
+
+        (call,) = table.update_calls
+        assert call["ExpressionAttributeValues"][":needs"] == "needs_reauth"
+        assert call["ExpressionAttributeValues"][":rt"] == "rt-stored"
+        assert "cognito_refresh_token = :rt" in call["ConditionExpression"]
+        assert "REMOVE cognito_refresh_token" in call["UpdateExpression"]
+
+    @pytest.mark.asyncio
+    async def test_a_repin_that_won_the_race_is_not_undone(self):
+        table = FakeTable([_grant_item()])
+        table.update_error = ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+        service = _service(table)
+
+        assert not await service.mark_needs_reauth("hlg-abc", "rt-stored")
+
+    @pytest.mark.asyncio
+    async def test_a_needs_reauth_grant_is_not_active(self):
+        service = _service(FakeTable([_grant_item(status="needs_reauth")]))
+        assert await service.get_active_grant("user-1") is None
+
+    @pytest.mark.asyncio
+    async def test_enabling_reuses_it_and_sets_it_active(self):
+        table = FakeTable([_grant_item(status="needs_reauth")])
+        service = _service(table)
+
+        grant = await service.enable(user_id="user-1", username="user1", refresh_token="rt-new", session_id="sess-1")
+
+        assert grant.grant_id == "hlg-abc" and grant.status == "active"
+        assert not table.put_items
+        (call,) = table.update_calls
+        values = call["ExpressionAttributeValues"]
+        assert values[":active"] == "active" and values[":sid"] == "sess-1"
+        assert "REMOVE needs_reauth_at" in call["UpdateExpression"]
+
+    @pytest.mark.asyncio
+    async def test_a_revoked_grant_stays_revoked(self):
+        table = FakeTable([_grant_item(status="revoked")])
+        service = _service(table)
+
+        grant = await service.enable(user_id="user-1", username="user1", refresh_token="rt-new")
+
+        assert grant.grant_id != "hlg-abc"
+        assert table.put_items and not table.update_calls
+
+    @pytest.mark.asyncio
+    async def test_revoke_covers_a_needs_reauth_grant(self):
+        table = FakeTable([_grant_item(status="needs_reauth")])
+        assert await _service(table).revoke("user-1")
+
+    @pytest.mark.asyncio
+    async def test_enable_records_the_pinned_session(self):
+        table = FakeTable()
+        grant = await _service(table).enable(
+            user_id="user-1", username="user1", refresh_token="rt-1", session_id="sess-1"
+        )
+        assert grant.pinned_session_id == "sess-1"
+        assert table.put_items[0]["pinned_session_id"] == "sess-1"

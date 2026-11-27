@@ -6,6 +6,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionService } from './session.service';
+import { SCHEDULED_RUNS_CONTINUE_KEY } from './bff-session.model';
 import { ConfigService } from '../services/config.service';
 import {
   PREFLIGHT_DISMISSALS_KEY,
@@ -402,6 +403,28 @@ describe('SessionService', () => {
 
       expect(service.csrfHeaders()).toEqual({ 'X-CSRF-Token': 'csrf-secret-abc' });
       expect(service.csrfHttpHeaders().get('X-CSRF-Token')).toBe('csrf-secret-abc');
+    });
+  });
+
+  describe('logout', () => {
+    afterEach(() => sessionStorage.removeItem(SCHEDULED_RUNS_CONTINUE_KEY));
+
+    it('remembers for the sign-in page that scheduled runs keep going', async () => {
+      const done = service.logout();
+      httpMock
+        .expectOne('http://localhost:8000/auth/logout')
+        .flush({ post_logout_url: null, scheduled_runs_continue: true });
+      await done;
+
+      expect(sessionStorage.getItem(SCHEDULED_RUNS_CONTINUE_KEY)).toBe('1');
+    });
+
+    it('remembers nothing for an ordinary sign-out', async () => {
+      const done = service.logout();
+      httpMock.expectOne('http://localhost:8000/auth/logout').flush({ post_logout_url: null });
+      await done;
+
+      expect(sessionStorage.getItem(SCHEDULED_RUNS_CONTINUE_KEY)).toBeNull();
     });
   });
 

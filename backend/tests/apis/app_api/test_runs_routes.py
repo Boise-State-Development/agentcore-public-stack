@@ -75,16 +75,19 @@ class FakeGrantService:
     async def get_active_grant(self, user_id: str):
         return self.grant
 
-    async def enable(self, *, user_id, username, refresh_token, token_issued_at=None):
+    async def enable(self, *, user_id, username, refresh_token, token_issued_at=None, session_id=None):
         self.enable_calls.append(
             {
                 "user_id": user_id,
                 "username": username,
                 "refresh_token": refresh_token,
                 "token_issued_at": token_issued_at,
+                "session_id": session_id,
             }
         )
         self.grant = _grant(user_id)
+        self.grant.cognito_refresh_token = refresh_token
+        self.grant.pinned_session_id = session_id
         return self.grant
 
     async def revoke(self, user_id: str) -> bool:
@@ -176,9 +179,33 @@ def _close_undrained_runs():
 class FakeSessionRecord:
     """Just the SessionRecord fields the route reads."""
 
+    user_id = "user-1"
+    session_id = "sess-live"
     username = "user1"
     cognito_refresh_token = "rt-live"
     created_at = NOW - 3600
+
+
+class FakeSessionRepository:
+    """The BFF session table, as the grant's token bookkeeping reads it."""
+
+    enabled = True
+
+    def __init__(self, records: Optional[dict] = None):
+        self.records = dict(records or {})
+
+    async def get(self, session_id: str):
+        return self.records.get(session_id)
+
+
+class FakeCognito:
+    enabled = True
+
+    def __init__(self):
+        self.revoked: list[str] = []
+
+    async def revoke(self, *, refresh_token: str) -> None:
+        self.revoked.append(refresh_token)
 
 
 def _completed_result() -> RunResult:
@@ -216,6 +243,8 @@ def _make_client(
     mint_error: Optional[Exception] = None,
     audit: Optional[FakeAudit] = None,
     role_tools: Optional[list[str]] = None,
+    sessions: Optional[FakeSessionRepository] = None,
+    cognito: Optional[FakeCognito] = None,
 ) -> tuple[TestClient, Harness]:
     monkeypatch.delenv("SKIP_AUTH", raising=False)
     if flag is None:
@@ -230,6 +259,9 @@ def _make_client(
     monkeypatch.setattr(runs_routes, "get_headless_auth", lambda: h.auth)
     monkeypatch.setattr(runs_routes, "get_app_role_service", lambda: FakeRoleService(role_tools))
     monkeypatch.setattr(runs_routes, "spawn_run", h.spawned.append)
+    h.sessions = sessions or FakeSessionRepository()
+    h.cognito = cognito or FakeCognito()
+    monkeypatch.setattr(runs_routes, "get_grant_token_deps", lambda: (h.sessions, h.cognito))
 
     async def fake_run(**kwargs):
         h.run_calls.append(kwargs)
@@ -577,6 +609,7 @@ class TestEnableGrant:
         assert enable["username"] == "user1"
         assert enable["refresh_token"] == "rt-live"
         assert enable["token_issued_at"] == NOW - 3600
+        assert enable["session_id"] == "sess-live"
 
     def test_refreshes_an_existing_grant_from_a_new_session(self, monkeypatch):
         grants = FakeGrantService(grant=_grant())
@@ -642,3 +675,59 @@ class TestGrantRoutes:
         assert client.delete("/runs/grant").json() == {"revoked": True}
         assert h.grants.revoke_calls == ["user-1"]
         assert client.delete("/runs/grant").json() == {"revoked": False}
+
+    def test_revoke_also_revokes_a_token_no_session_holds(self, monkeypatch):
+        """Logout kept the token alive for the grant; revoking the grant must end it."""
+        grant = _grant()
+        grant.pinned_session_id = "sess-signed-out"
+        client, h = _make_client(monkeypatch, grants=FakeGrantService(grant))
+
+        assert client.delete("/runs/grant").json() == {"revoked": True}
+        assert h.cognito.revoked == ["rt-stored"]
+
+    def test_revoke_leaves_a_token_its_live_session_still_holds(self, monkeypatch):
+        grant = _grant()
+        grant.pinned_session_id = "sess-live"
+        live = FakeSessionRecord()
+        live.cognito_refresh_token = "rt-stored"
+        client, h = _make_client(
+            monkeypatch, grants=FakeGrantService(grant), sessions=FakeSessionRepository({"sess-live": live})
+        )
+
+        assert client.delete("/runs/grant").json() == {"revoked": True}
+        assert h.cognito.revoked == []
+
+    def test_revoke_leaves_a_legacy_grants_token_alone(self, monkeypatch):
+        """A grant pinned before the session was recorded: its session may still be live."""
+        client, h = _make_client(monkeypatch, grants=FakeGrantService(_grant()))
+
+        client.delete("/runs/grant")
+
+        assert h.cognito.revoked == []
+
+
+class TestRepinReleasesTheOldToken:
+    def test_repin_revokes_the_token_of_a_signed_out_session(self, monkeypatch):
+        grant = _grant()
+        grant.pinned_session_id = "sess-old"
+        client, h = _make_client(monkeypatch, grants=FakeGrantService(grant), with_session_record=True)
+
+        assert client.post("/runs/grant").status_code == 200
+        assert h.grants.grant.cognito_refresh_token == "rt-live"
+        assert h.cognito.revoked == ["rt-stored"]
+
+    def test_repin_keeps_the_token_of_a_live_session(self, monkeypatch):
+        grant = _grant()
+        grant.pinned_session_id = "sess-old"
+        old = FakeSessionRecord()
+        old.cognito_refresh_token = "rt-stored"
+        client, h = _make_client(
+            monkeypatch,
+            grants=FakeGrantService(grant),
+            with_session_record=True,
+            sessions=FakeSessionRepository({"sess-old": old}),
+        )
+
+        client.post("/runs/grant")
+
+        assert h.cognito.revoked == []

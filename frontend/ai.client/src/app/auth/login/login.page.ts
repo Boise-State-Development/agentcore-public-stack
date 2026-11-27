@@ -4,11 +4,23 @@ import { HttpClient } from '@angular/common/http';
 import { ActivatedRoute, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { SessionService } from '../session.service';
+import { SCHEDULED_RUNS_CONTINUE_KEY } from '../bff-session.model';
 import { SidenavService } from '../../services/sidenav/sidenav.service';
 import { ConfigService } from '../../services/config.service';
 import { SystemService } from '../../services/system.service';
 import { BrandingService } from '../../../branding/branding.service';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
+
+/** Read and clear the logout's "scheduled runs continue" note, so it shows once. */
+function takeScheduledRunsContinue(): boolean {
+  try {
+    const value = sessionStorage.getItem(SCHEDULED_RUNS_CONTINUE_KEY);
+    sessionStorage.removeItem(SCHEDULED_RUNS_CONTINUE_KEY);
+    return value === '1';
+  } catch {
+    return false;
+  }
+}
 
 interface AuthProviderPublicInfo {
   provider_id: string;
@@ -74,6 +86,14 @@ interface AuthProviderPublicListResponse {
                 Sign in to continue
               </p>
             </div>
+
+            @if (scheduledRunsContinue()) {
+              <div class="w-full rounded-lg border border-state-info-200 bg-state-info-50 p-4 dark:border-state-info-900/40 dark:bg-state-info-900/10" role="status">
+                <p class="text-sm/6 text-state-info-900 dark:text-state-info-200">
+                  You're signed out. Your scheduled runs keep running. To stop them, sign in and turn them off on the Schedules page.
+                </p>
+              </div>
+            }
 
             @if (errorMessage()) {
               <div class="w-full p-4 bg-state-danger-50 dark:bg-state-danger-900/20 border border-state-danger-200 dark:border-state-danger-800 rounded-lg" role="alert">
@@ -184,6 +204,8 @@ export class LoginPage implements OnInit, OnDestroy {
   providersLoading = signal(true);
   activeProviderId = signal<string | null>(null);
   cognitoLoginVisible = signal(true);
+  /** Set once, from the logout that kept the user's scheduled runs going (`SessionService.logout`). */
+  readonly scheduledRunsContinue = signal(takeScheduledRunsContinue());
 
   /**
    * `?local=1` is the break-glass path: it shows the Cognito button even when

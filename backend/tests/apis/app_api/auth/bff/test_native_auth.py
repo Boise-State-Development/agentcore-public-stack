@@ -258,6 +258,16 @@ class TestNativeCallback:
         # Provisional until the exchange: minutes, not the 8 h browser window.
         assert int(row["ttl"]) - int(row["created_at"]) <= bff_routes._NATIVE_PROVISIONAL_TTL_SECONDS
 
+    def test_never_repins_a_headless_grant(self, native_app, monkeypatch):
+        """The phone's session must never become the one a scheduled-runs grant holds."""
+        repin = AsyncMock()
+        monkeypatch.setattr(bff_routes, "_repin_grant_after_web_sign_in", repin)
+
+        callback, _ = _sign_in(native_app, monkeypatch)
+
+        assert callback.status_code == 302
+        repin.assert_not_awaited()
+
     def test_the_handoff_works_on_a_loopback_redirect(self, native_app, monkeypatch):
         callback, _ = _sign_in(native_app, monkeypatch, redirect_uri=LOOPBACK_REDIRECT)
         assert callback.headers["location"].startswith(LOOPBACK_REDIRECT + "?handoff=")
