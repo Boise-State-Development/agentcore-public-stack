@@ -889,6 +889,35 @@ class TestPrepareArm:
 
         assert self._extras(_turn_request(), _user())["prepareArm"] == "treated"
 
+    def test_only_the_first_turn_after_a_prepare_reports_it(self, world):
+        """A prepare can only help the next turn; a follow-up in the arm would dilute the A/B."""
+        assert _invoke(_prepare_request())["prepared"] is True
+
+        first = self._extras(_turn_request(), _user())
+        follow_up = self._extras(_turn_request(), _user())
+
+        assert first["prepareArm"] == "treated" and isinstance(first["preparedAgeMs"], int)
+        assert follow_up["prepareArm"] is None and follow_up["preparedAgeMs"] is None
+
+    def test_only_the_first_turn_after_a_holdout_reports_it(self, world):
+        _invoke(InvocationRequest(session_id=SESSION, warm=True, prepare_arm="holdout"))
+
+        assert self._extras(_turn_request(), _user())["prepareArm"] == "holdout"
+        assert self._extras(_turn_request(), _user())["prepareArm"] is None
+
+    def test_a_second_prepare_puts_the_next_turn_back_in_the_arm(self, world):
+        assert _invoke(_prepare_request())["prepared"] is True
+        self._extras(_turn_request(), _user())
+        _invoke(_prepare_request())
+
+        assert self._extras(_turn_request(), _user())["prepareArm"] == "treated"
+
+    def test_another_users_turn_does_not_take_the_arm(self, world):
+        _invoke(InvocationRequest(session_id=SESSION, warm=True, prepare_arm="holdout"))
+
+        assert self._extras(_turn_request(), _user("bob"))["prepareArm"] is None
+        assert self._extras(_turn_request(), _user())["prepareArm"] == "holdout"
+
     def test_treated_even_when_the_prepare_built_nothing(self, world):
         quota = TurnQuota(exceeded_event=MagicMock(message="over"))
         with patch.object(routes, "_check_turn_quota", AsyncMock(return_value=quota)):

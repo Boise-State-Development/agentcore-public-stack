@@ -52,8 +52,8 @@ PREPARE_FIELDS: Tuple[str, ...] = (
 #: loop, so in practice the send cannot run until it is over; this bounds the awaits around it.
 IN_FLIGHT_WAIT_SECONDS = 30.0
 
-#: Finished prepares remembered for the turn's ``preparedAgeMs`` property. One microVM serves
-#: one conversation, so this only ever holds a handful.
+#: Finished prepares remembered until the next send claims them for its ``preparedAgeMs``
+#: property. One microVM serves one conversation, so this only ever holds a handful.
 _COMPLETED_MAX = 64
 
 #: The two arms of the prepare A/B, as recorded on a turn. "treated" means a prepare was
@@ -102,7 +102,7 @@ def _key(user_id: str, session_id: str) -> Tuple[str, str]:
 
 
 def note_arm(user_id: str, session_id: str, arm: str) -> None:
-    """Remember which arm of the prepare A/B this conversation is in, for the turn's record.
+    """Remember which arm of the prepare A/B this conversation is in, for its next send's record.
 
     In process, like everything here: both arms start the microVM with the same warm call, so
     a conversation whose microVM is gone by the time it sends is missing from both alike.
@@ -166,6 +166,23 @@ def prepared_age_ms(user_id: str, session_id: str) -> Optional[int]:
     if at is None:
         return None
     return max(0, int((time.monotonic() - at) * 1000))
+
+
+def claim_for_turn(user_id: str, session_id: str) -> Tuple[Optional[int], Optional[str]]:
+    """``(preparedAgeMs, prepareArm)`` for the turn's record, taken once.
+
+    A prepare can only help the first send after it, so only that send is compared: this
+    forgets both facts as it returns them, and every later turn reads ``(None, None)`` until
+    the conversation is prepared or held out again. Without that, an arm's follow-ups (which
+    no prepare touched) sit in its median and pull the two arms together.
+
+    No I/O: two dictionary lookups on the turn path.
+    """
+    key = _key(user_id, session_id)
+    claimed = (prepared_age_ms(user_id, session_id), arm_of(user_id, session_id))
+    _completed_at.pop(key, None)
+    _arms.pop(key, None)
+    return claimed
 
 
 def reset_for_tests() -> None:
