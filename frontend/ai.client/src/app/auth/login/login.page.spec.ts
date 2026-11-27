@@ -74,11 +74,28 @@ describe('LoginPage', () => {
   describe('after a sign-out that kept scheduled runs going', () => {
     afterEach(() => sessionStorage.removeItem(SCHEDULED_RUNS_CONTINUE_KEY));
 
-    it('says the scheduled runs keep running, once', () => {
+    it('says the scheduled runs keep running', () => {
       sessionStorage.setItem(SCHEDULED_RUNS_CONTINUE_KEY, '1');
       configure();
 
       expect(fixture.nativeElement.textContent).toContain('Your scheduled runs keep running');
+    });
+
+    it('still says so on the page Cognito returns to, after logout rendered it once', () => {
+      sessionStorage.setItem(SCHEDULED_RUNS_CONTINUE_KEY, '1');
+      configure(); // the instant render before the browser leaves for Cognito
+      configure(); // the page the user actually sees
+
+      expect(fixture.nativeElement.textContent).toContain('Your scheduled runs keep running');
+    });
+
+    it('forgets the note once the user starts signing in', async () => {
+      sessionStorage.setItem(SCHEDULED_RUNS_CONTINUE_KEY, '1');
+      configure();
+      await respond({ providers: [] });
+
+      fixture.componentInstance.handleCognitoLogin();
+
       expect(sessionStorage.getItem(SCHEDULED_RUNS_CONTINUE_KEY)).toBeNull();
     });
 
