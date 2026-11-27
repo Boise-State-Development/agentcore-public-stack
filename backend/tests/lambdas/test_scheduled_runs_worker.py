@@ -12,7 +12,7 @@ import pytest
 
 from apis.shared.harness.auth import HeadlessAuthError
 from apis.shared.harness.models import OAuthConsentRequired, RunResult
-from apis.shared.scheduled_prompts.service import create_scheduled_prompt, get_scheduled_prompt
+from apis.shared.scheduled_prompts.service import create_scheduled_prompt, get_scheduled_prompt, set_schedule_state
 from lambdas.scheduled_runs_worker import worker
 
 pytestmark = pytest.mark.asyncio
@@ -235,3 +235,25 @@ class TestMissingSchedule:
     async def test_missing_schedule_drops_run(self, sessions_metadata_table, bff_sessions_table):
         result = await worker.run_schedule({"scheduleId": "sched-missing", "userId": USER_ID})
         assert result["result"] == "dropped"
+
+
+class TestScheduleNoLongerActive:
+    """A schedule paused after the dispatcher re-armed it doesn't run (#2494)."""
+
+    @pytest.mark.parametrize("state", ["paused", "paused_error"])
+    async def test_paused_schedule_drops_run(self, sessions_metadata_table, bff_sessions_table, monkeypatch, state):
+        schedule = await _make_schedule()
+        await set_schedule_state(USER_ID, schedule.schedule_id, state, state_reason="paused_by_owner")
+
+        async def fake_run(**kwargs):
+            raise AssertionError("a paused schedule must not run")
+
+        monkeypatch.setattr(worker, "run_agent_headless", fake_run)
+
+        result = await worker.run_schedule(_payload(schedule))
+
+        assert result["result"] == "dropped"
+        updated = await get_scheduled_prompt(USER_ID, schedule.schedule_id)
+        assert updated.state == state
+        assert updated.last_run_status is None
+        assert updated.runs_today == 0

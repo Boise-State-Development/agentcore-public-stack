@@ -33,10 +33,17 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-#: Floor for the custom "every N" cadence. Below this a schedule fires faster
-#: than the runaway guard (``max_runs_per_day``) tolerates and just self-pauses;
-#: 15 minutes keeps the smallest interval useful without inviting a hot loop.
+#: Floor for the custom "every N" cadence: 15 minutes keeps the smallest
+#: interval useful without inviting a hot loop. The runaway guard allows such a
+#: schedule its cadence's runs a day (``runaway_ceiling``).
 MIN_INTERVAL_MINUTES = 15
+
+#: Runs a day an ``interval`` schedule may make beyond what its cadence implies
+#: before the runaway guard pauses it. A UTC day can hold one fire more than
+#: ``1440 / interval``, and an edit or a resume restarts the interval from now,
+#: which can add a few more. A stuck re-arm fires on every 5-minute tick, far
+#: past this.
+RUNAWAY_SLACK_RUNS = 4
 
 
 class _Unset:
@@ -145,6 +152,25 @@ def interval_to_minutes(value: Optional[int], unit: Optional[IntervalUnit]) -> O
     if value is None or unit is None:
         return None
     return value * 60 if unit == "hours" else value
+
+
+def runaway_ceiling(schedule: ScheduledPrompt) -> int:
+    """The most runs ``schedule`` may make in a UTC day before the runaway guard pauses it.
+
+    The guard exists to catch a schedule firing faster than its cadence (a stuck
+    re-arm), not to cap the cadence its owner chose. ``max_runs_per_day`` is 24
+    for every schedule (nothing sets it), so an ``interval`` schedule under an
+    hour would pause itself partway through each day: a 15-minute one after 24
+    of its 96 runs. Such a schedule is allowed its cadence's runs plus
+    ``RUNAWAY_SLACK_RUNS``. Every other cadence keeps ``max_runs_per_day``.
+    Derived here, from the cadence the dispatcher already holds, so nothing is
+    stored and an edit to the cadence can't leave it stale.
+    """
+    minutes = interval_to_minutes(schedule.interval_value, schedule.interval_unit)
+    if schedule.cadence != "interval" or not minutes or minutes <= 0:
+        return schedule.max_runs_per_day
+    implied = -(-1440 // minutes)  # ceil(1440 / minutes)
+    return max(schedule.max_runs_per_day, implied + RUNAWAY_SLACK_RUNS)
 
 
 def compute_next_run_at(

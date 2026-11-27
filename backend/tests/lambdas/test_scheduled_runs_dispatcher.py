@@ -11,9 +11,12 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.service import (
+    RUNAWAY_SLACK_RUNS,
     get_scheduled_prompt,
     create_scheduled_prompt,
+    runaway_ceiling,
     set_schedule_state,
 )
 from lambdas.scheduled_runs_dispatcher import dispatcher
@@ -43,14 +46,21 @@ def no_metrics(monkeypatch):
     monkeypatch.setattr(dispatcher, "_emit_metrics", lambda counts: None)
 
 
-async def _make_due_schedule(sessions_metadata_table, *, max_runs_per_day=24, label="Morning Briefing"):
+async def _make_due_schedule(
+    sessions_metadata_table, *, max_runs_per_day=24, label="Morning Briefing", interval_minutes=None
+):
+    cadence_kwargs = (
+        {"cadence": "interval", "interval_value": interval_minutes, "interval_unit": "minutes"}
+        if interval_minutes
+        else {"cadence": "daily"}
+    )
     schedule = await create_scheduled_prompt(
         user_id=USER_ID,
         label=label,
         prompt_text="Summarize my day",
-        cadence="daily",
         hour_local=9,
         timezone_name="America/Boise",
+        **cadence_kwargs,
     )
     # Force it due immediately (create_scheduled_prompt always computes a
     # future next_run_at) and set the runaway-guard ceiling for this test.
@@ -121,6 +131,106 @@ class TestRunawayGuard:
 
         assert counts["Dispatched"] == 1
         assert counts["PausedRunaway"] == 0
+
+
+def _set_runs_today(sessions_metadata_table, schedule, runs):
+    sessions_metadata_table.update_item(
+        Key={"PK": f"USER#{USER_ID}", "SK": f"SCHEDPROMPT#{schedule.schedule_id}"},
+        UpdateExpression="SET runsToday = :n, runsTodayDate = :today",
+        ExpressionAttributeValues={":n": runs, ":today": date.today().isoformat()},
+    )
+
+
+class TestRunawayCeilingFollowsCadence:
+    """An interval schedule is allowed the runs its cadence implies (#2494).
+
+    Before, every schedule's ceiling was the default 24, so a 15-minute one
+    paused itself after 24 of its 96 daily runs.
+    """
+
+    async def test_fifteen_minute_schedule_runs_past_24(self, sessions_metadata_table, invoked_workers):
+        schedule = await _make_due_schedule(sessions_metadata_table, interval_minutes=15)
+        _set_runs_today(sessions_metadata_table, schedule, 24)
+
+        counts = await dispatcher.dispatch_once()
+
+        assert counts["Dispatched"] == 1
+        assert counts["PausedRunaway"] == 0
+        updated = await get_scheduled_prompt(USER_ID, schedule.schedule_id)
+        assert updated.state == "active"
+
+    async def test_fifteen_minute_schedule_last_allowed_run(self, sessions_metadata_table, invoked_workers):
+        schedule = await _make_due_schedule(sessions_metadata_table, interval_minutes=15)
+        _set_runs_today(sessions_metadata_table, schedule, 96 + RUNAWAY_SLACK_RUNS - 1)
+
+        counts = await dispatcher.dispatch_once()
+
+        assert counts["Dispatched"] == 1
+
+    async def test_schedule_firing_past_its_cadence_still_pauses(self, sessions_metadata_table, invoked_workers):
+        """A stuck re-arm fires every tick, far past the cadence: the guard still catches it."""
+        schedule = await _make_due_schedule(sessions_metadata_table, interval_minutes=15)
+        _set_runs_today(sessions_metadata_table, schedule, 96 + RUNAWAY_SLACK_RUNS)
+
+        counts = await dispatcher.dispatch_once()
+
+        assert counts["PausedRunaway"] == 1
+        assert invoked_workers == []
+        updated = await get_scheduled_prompt(USER_ID, schedule.schedule_id)
+        assert updated.state == "paused_error"
+        assert updated.state_reason == "max_runs_per_day_exceeded"
+
+    async def test_hourly_or_slower_interval_keeps_the_stored_ceiling(self, sessions_metadata_table, invoked_workers):
+        schedule = await _make_due_schedule(sessions_metadata_table, interval_minutes=360)
+        _set_runs_today(sessions_metadata_table, schedule, 24)
+
+        counts = await dispatcher.dispatch_once()
+
+        assert counts["PausedRunaway"] == 1
+
+
+class TestRunawayCeiling:
+    """``runaway_ceiling`` per cadence."""
+
+    @staticmethod
+    def _schedule(**fields):
+        base = dict(
+            schedule_id="sched-1",
+            user_id=USER_ID,
+            label="x",
+            prompt_text="x",
+            cadence="daily",
+            hour_local=9,
+            timezone="America/Boise",
+            created_at=PAST,
+            updated_at=PAST,
+        )
+        base.update(fields)
+        return ScheduledPrompt.model_validate(base)
+
+    @pytest.mark.parametrize("cadence,extra", [("daily", {}), ("weekday", {}), ("weekly", {"weekday": 0})])
+    async def test_clock_cadences_keep_max_runs_per_day(self, cadence, extra):
+        assert runaway_ceiling(self._schedule(cadence=cadence, **extra)) == 24
+        assert runaway_ceiling(self._schedule(cadence=cadence, max_runs_per_day=3, **extra)) == 3
+
+    @pytest.mark.parametrize(
+        "value,unit,expected",
+        [
+            (15, "minutes", 96 + RUNAWAY_SLACK_RUNS),
+            (20, "minutes", 72 + RUNAWAY_SLACK_RUNS),
+            (45, "minutes", 32 + RUNAWAY_SLACK_RUNS),  # ceil(1440 / 45) = 32
+            (60, "minutes", 24 + RUNAWAY_SLACK_RUNS),
+            (1, "hours", 24 + RUNAWAY_SLACK_RUNS),
+            (6, "hours", 24),  # 4 + slack is under the stored 24
+        ],
+    )
+    async def test_interval_allows_its_cadence(self, value, unit, expected):
+        schedule = self._schedule(cadence="interval", interval_value=value, interval_unit=unit)
+        assert runaway_ceiling(schedule) == expected
+
+    async def test_a_raised_stored_ceiling_is_kept(self):
+        schedule = self._schedule(cadence="interval", interval_value=15, interval_unit="minutes", max_runs_per_day=500)
+        assert runaway_ceiling(schedule) == 500
 
 
 class TestConditionalRearm:

@@ -20,9 +20,10 @@ order, mirroring the KB-sync dispatcher
                        service pauses it when the change happens; this is the
                        backstop for a pause that write missed.
 2. Runaway guard      — `runs_today` (reset on UTC date rollover) compared
-                       against the schedule's own `max_runs_per_day`. A
-                       schedule that would exceed its ceiling is paused
-                       instead of dispatched.
+                       against `runaway_ceiling`: the schedule's own
+                       `max_runs_per_day`, raised for an interval schedule to
+                       the runs its cadence implies. A schedule that would
+                       exceed its ceiling is paused instead of dispatched.
 3. Re-arm BEFORE work — `next_run_at` advances via a conditional write
                        (`rearm_schedule`) before the worker is invoked, so
                        a double-fired tick is idempotent: the second
@@ -45,6 +46,7 @@ from typing import Any, Dict
 from apis.shared.scheduled_prompts.service import (
     list_due_schedules,
     rearm_schedule,
+    runaway_ceiling,
 )
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.pausing import pause_schedule
@@ -149,16 +151,18 @@ async def _dispatch_schedule(schedule: ScheduledPrompt, now: datetime, counts: D
             counts["PausedProject"] += 1
             return
 
-    # Guard 2 — runaway: would firing this schedule exceed its own daily
-    # ceiling? Check BEFORE re-arming/invoking, using the rollover-aware
-    # counter (a run this tick would be the (runs_today + 1)th today).
+    # Guard 2 — runaway: would firing this schedule exceed its daily ceiling?
+    # Check BEFORE re-arming/invoking, using the rollover-aware counter (a run
+    # this tick would be the (runs_today + 1)th today). The ceiling allows an
+    # interval schedule the runs its cadence implies (``runaway_ceiling``).
     runs_today = _runs_today(schedule, today)
-    if runs_today >= schedule.max_runs_per_day:
+    ceiling = runaway_ceiling(schedule)
+    if runs_today >= ceiling:
         # Tells the owner, and leaves a run row on a project schedule's project.
         await pause_schedule(schedule, "max_runs_per_day_exceeded")
         logger.warning(
             f"Schedule {schedule.schedule_id}: runaway guard tripped "
-            f"({runs_today}/{schedule.max_runs_per_day} runs today); pausing"
+            f"({runs_today}/{ceiling} runs today); pausing"
         )
         counts["PausedRunaway"] += 1
         return
