@@ -47,6 +47,10 @@ The specs state the description's length limit (2026-11-27). ``memory_save`` ask
 "the rule itself" as the description and never said it is capped, so a model wrote the
 whole rule and was refused: in production that one refusal was 24 of the 41 failed saves
 whose result length was recorded over 28 days, each one a file re-sent in full.
+
+They ask for about 100 characters, not the limit itself. Told "at most 160", a model aimed
+at 160 and could not count that exactly: on dev one save went 178, 168, 168, then 156, and
+most descriptions landed within 20 characters of the limit.
 """
 
 from __future__ import annotations
@@ -706,9 +710,10 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
 
         `description` is the file's line in that scope's MEMORY.md index, which appears
         in every conversation and is often all a later one reads. Send it on every save,
-        in 160 characters or fewer (a longer one is refused and nothing is saved), and when your change makes it wrong (a date, number, name or rule it states),
-        write a new one: the index line is rewritten to match it. The save writes that
-        line itself, so don't also save MEMORY.md to add or change a file's line.
+        in about 100 characters (one over 160 is refused and nothing is saved), and when
+        your change makes it wrong (a date, number, name or rule it states), write a new
+        one: the index line is rewritten to match it. The save writes that line itself,
+        so don't also save MEMORY.md to add or change a file's line.
 
         "mine" is the member's own and always writable. "project" is shared with every
         member and needs the editor role; a viewer can save to "mine" instead, or use
@@ -720,8 +725,8 @@ def make_project_memory_save_tool(scopes: ProjectMemoryScopes):
             slug: The file name: lowercase words joined by "-", optionally grouped
                 with "/" (e.g. "decisions/vendor"), or "MEMORY.md" for the index.
             text: The file's items, one "- " line each.
-            description: One line of at most 160 characters summing up the file as saved;
-                it is the file's MEMORY.md line. For a preference or rule, the rule itself,
+            description: One short line, about 100 characters and never over 160, summing
+                up the file as saved; it is the file's MEMORY.md line. For a preference or rule, the rule itself,
                 kept that short: the full wording goes in `text`. Ignored for "MEMORY.md".
             replaces: Only to rename a file: its current name. Leave empty otherwise.
         """
@@ -752,7 +757,8 @@ def make_project_memory_propose_tool(scopes: ProjectMemoryScopes):
         Args:
             slug: The project file to create or change, as in `memory_save`.
             text: The whole proposed file, one "- " item per line.
-            description: One line of at most 160 characters describing the file.
+            description: One short line, about 100 characters and never over 160,
+                describing the file.
         """
         session_id = _session_of(tool_context)
         return await _propose(scopes, slug, text, description, session_id, unattended=is_headless_session(session_id))
