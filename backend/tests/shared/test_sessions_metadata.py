@@ -1717,3 +1717,113 @@ class TestDeletedSessionStaysDeleted:
         row = sessions_metadata_table.get_item(Key={"PK": "USER#u1", "SK": "S#s1"})["Item"]
         assert "GSI4_PK" not in row
         assert await list_user_sessions("u1") == ([], None)
+
+
+class TestPausedTurnClaim:
+    """One resume per pause (#2486): the claim a resume takes in place of its snapshot read."""
+
+    @staticmethod
+    async def _paused(session_id="s1", user_id="u1"):
+        from apis.shared.sessions.metadata import (
+            ensure_session_metadata_exists, load_session_meta, set_paused_turn,
+        )
+        from apis.shared.sessions.models import PausedTurnSnapshot
+
+        await ensure_session_metadata_exists(session_id, user_id)
+        await set_paused_turn(
+            session_id, user_id,
+            PausedTurnSnapshot(
+                enabledTools=["calendar"], capturedAt="2026-11-27T00:00:00Z",
+                expiresAt="2026-12-04T00:00:00Z",
+            ),
+        )
+        return await load_session_meta(session_id, user_id)
+
+    @staticmethod
+    async def _claim_field(session_id="s1", user_id="u1"):
+        from apis.shared.sessions.metadata import _get_session_by_gsi, get_dynamodb_table
+        import os
+
+        row = await _get_session_by_gsi(
+            session_id, user_id, get_dynamodb_table(os.environ["DYNAMODB_SESSIONS_METADATA_TABLE_NAME"])
+        )
+        return ((row or {}).get("pausedTurn") or {}).get("resumeClaim")
+
+    @pytest.mark.asyncio
+    async def test_the_first_claim_returns_the_snapshot_and_a_second_is_taken(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import claim_paused_turn
+
+        meta = await self._paused()
+        first = await claim_paused_turn("s1", "u1", meta)
+        second = await claim_paused_turn("s1", "u1", meta)
+
+        assert first.outcome == "claimed" and first.owner
+        assert first.snapshot.enabled_tools == ["calendar"]
+        assert (second.outcome, second.snapshot) == ("taken", None)
+
+    @pytest.mark.asyncio
+    async def test_a_pause_that_ended_is_missing(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import claim_paused_turn, clear_paused_turn
+
+        meta = await self._paused()
+        await clear_paused_turn("s1", "u1")
+        assert (await claim_paused_turn("s1", "u1", meta)).outcome == "missing"
+
+    @pytest.mark.asyncio
+    async def test_a_new_pause_replaces_the_claim(self, sessions_metadata_table):
+        """A resume that pauses again writes a fresh snapshot, and its next answer can run."""
+        from apis.shared.sessions.metadata import claim_paused_turn
+
+        meta = await self._paused()
+        assert (await claim_paused_turn("s1", "u1", meta)).outcome == "claimed"
+        meta = await self._paused()
+        assert await self._claim_field() is None
+        assert (await claim_paused_turn("s1", "u1", meta)).outcome == "claimed"
+
+    @pytest.mark.asyncio
+    async def test_a_stale_claim_is_taken_over(self, sessions_metadata_table):
+        """A resume that died without releasing its claim never strands the pause."""
+        import time
+
+        from apis.shared.sessions import metadata
+
+        meta = await self._paused()
+        dead = await metadata.claim_paused_turn("s1", "u1", meta)
+        sessions_metadata_table.update_item(
+            Key={"PK": "USER#u1", "SK": meta.row["SK"]},
+            UpdateExpression="SET pausedTurn.resumeClaim.#at = :old",
+            ExpressionAttributeNames={"#at": "at"},
+            ExpressionAttributeValues={":old": int(time.time()) - metadata.PAUSED_TURN_CLAIM_STALE_SECONDS - 1},
+        )
+        fresh = await metadata.claim_paused_turn("s1", "u1", meta)
+        assert fresh.outcome == "claimed" and fresh.owner != dead.owner
+
+    @pytest.mark.asyncio
+    async def test_release_removes_only_its_own_claim(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import claim_paused_turn, release_paused_turn_claim
+
+        meta = await self._paused()
+        claim = await claim_paused_turn("s1", "u1", meta)
+        await release_paused_turn_claim("s1", "u1", "someone-else")
+        assert (await self._claim_field())["owner"] == claim.owner
+        await release_paused_turn_claim("s1", "u1", claim.owner)
+        assert await self._claim_field() is None
+        assert (await claim_paused_turn("s1", "u1", meta)).outcome == "claimed"
+
+    @pytest.mark.asyncio
+    async def test_a_row_that_moved_since_the_preamble_is_claimed_at_its_new_key(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import SessionMetaSnapshot, claim_paused_turn
+
+        meta = await self._paused()
+        moved = SessionMetaSnapshot(row={**meta.row, "SK": "S#ACTIVE#2000-01-01T00:00:00Z#s1"}, owned_by_other=False)
+        claim = await claim_paused_turn("s1", "u1", moved)
+        assert claim.outcome == "claimed" and claim.snapshot is not None
+
+    @pytest.mark.asyncio
+    async def test_no_row_in_hand_reads_the_snapshot_unguarded(self, sessions_metadata_table):
+        from apis.shared.sessions.metadata import SessionMetaSnapshot, claim_paused_turn
+
+        await self._paused()
+        claim = await claim_paused_turn("s1", "u1", SessionMetaSnapshot(row=None, owned_by_other=False))
+        assert claim.outcome == "unguarded" and claim.snapshot is not None
+        assert await self._claim_field() is None

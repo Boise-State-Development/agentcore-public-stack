@@ -148,9 +148,14 @@ the user. They call `acquire_session_lease(..., force=True)`:
 - It still *installs* a lease, so a fresh duplicate that arrives *during* the
   resume is itself rejected — the session stays single-flight end to end.
 
-Two concurrent resumes for one session is not a real vector (resume is an
-explicit post-OAuth user action), so `force` overwrite between them is
-acceptable.
+Two concurrent resumes of one pause **are** a real vector: one pause can be
+answered from the inbox and from its conversation, from two tabs, and later from a
+phone, and before #2486 both ran the paused turn and wrote two results for one tool
+call. So a resume claims its pause before it takes the lease (`claim_paused_turn`, one
+conditional write that also returns the snapshot), and a resume that lost the claim is
+refused as `resume_unavailable` / `already_resumed` without ever touching the lease.
+`force` is still right for the one resume that holds the claim
+(`docs/specs/answer-from-inbox.md` §3.6).
 
 ### Placement & release wiring
 

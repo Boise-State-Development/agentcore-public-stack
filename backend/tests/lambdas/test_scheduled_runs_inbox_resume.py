@@ -256,7 +256,13 @@ class TestFinish:
         assert state.paused_until == run.expires_at and state.holding()
 
     @pytest.mark.parametrize(
-        ("reason", "state"), [("unknown_interrupt", "answered_elsewhere"), ("expired", "expired")]
+        ("reason", "state"),
+        [
+            ("unknown_interrupt", "answered_elsewhere"),
+            ("expired", "expired"),
+            # The conversation's answer reached the pause first and is running it (#2486).
+            ("already_resumed", "answered_elsewhere"),
+        ],
     )
     async def test_the_runtime_refused_the_resume(self, inbox, sessions_metadata_table, monkeypatch, reason, state):
         schedule, row = await _paused(monkeypatch, sessions_metadata_table)

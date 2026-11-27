@@ -23,6 +23,7 @@ session's rows by prefix):
 respectively. Only ``C#`` / ``D#`` / ``F#`` rows carry a ``ttl``.
 """
 
+import asyncio
 import logging
 import json
 import math
@@ -3855,6 +3856,149 @@ async def get_paused_turn(session_id: str, user_id: str) -> Optional[PausedTurnS
     if not metadata:
         return None
     return metadata.paused_turn
+
+
+#: How long a resume's claim on its pause holds before another answer may take it. A resume's
+#: stream ends within 600 s, and the scheduled-runs worker that drives an inbox resume times out
+#: at 15 minutes, so a claim this old belongs to a resume that died without releasing it.
+PAUSED_TURN_CLAIM_STALE_SECONDS = 15 * 60
+
+#: The claim's field inside ``pausedTurn``. Nested so that writing the next pause
+#: (``set_paused_turn`` replaces the whole map) or ending this one (``clear_paused_turn``)
+#: drops it with no write of its own. ``PausedTurnSnapshot`` ignores the extra key.
+_RESUME_CLAIM_FIELD = "resumeClaim"
+
+
+@dataclass(frozen=True)
+class PausedTurnClaim:
+    """What a resume found when it claimed its pause (``claim_paused_turn``).
+
+    ``claimed``: this resume holds the pause and may run it, from ``snapshot``.
+    ``taken``: another resume of the same pause holds it, so this one must not run.
+    ``missing``: no pause is left (answered and finished, superseded, or never written).
+    ``unguarded``: no row to claim on (no table, or the preamble read none), so the
+    snapshot was read as before and nothing is held.
+    """
+
+    outcome: Literal["claimed", "taken", "missing", "unguarded"]
+    snapshot: Optional[PausedTurnSnapshot] = None
+    owner: Optional[str] = None
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
+
+
+async def claim_paused_turn(
+    session_id: str, user_id: str, meta: "SessionMetaSnapshot"
+) -> PausedTurnClaim:
+    """Claim a session's pause for one resume, and return its snapshot.
+
+    Two answers to one pause (the bell and the conversation, two tabs, a phone) each send a
+    resume, and a resume takes the session lease with ``force`` so that nothing blocks it.
+    Without a claim both would run the paused turn, each writing its own result for the one
+    paused tool call (#2486). The claim is one conditional ``UpdateItem`` on the ``META`` row
+    the preamble already read: it stamps an owner on ``pausedTurn`` unless a live claim is
+    there, and returns the row, so it **replaces** the snapshot read a resume made before and
+    adds no round trip. Whichever answer arrives first wins, by whichever path.
+
+    The claim lasts until the pause ends (the resume finishes and clears ``pausedTurn``, or
+    pauses again and replaces it), or until the resume releases it
+    (``release_paused_turn_claim``), or until it is ``PAUSED_TURN_CLAIM_STALE_SECONDS`` old.
+
+    Fails open, like the session lease: any error other than a lost condition reads the
+    snapshot without a claim (``unguarded``), so a DynamoDB fault never blocks a resume.
+    """
+    import time
+    import uuid
+
+    from botocore.exceptions import ClientError
+
+    table_name = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    row = meta.row if meta is not None else None
+    sk = row.get("SK") if row else None
+    if not table_name or not sk:
+        return PausedTurnClaim("unguarded", snapshot=await get_paused_turn(session_id, user_id))
+
+    table = get_dynamodb_table(table_name)
+    owner = uuid.uuid4().hex
+    now = int(time.time())
+    # One retry, for a row whose SK moved (it carries `last_message_at`) after the preamble read.
+    for _ in range(2):
+        try:
+            response = await asyncio.to_thread(
+                table.update_item,
+                Key={"PK": f"USER#{user_id}", "SK": sk},
+                UpdateExpression="SET #pt.#rc = :claim",
+                ConditionExpression=(
+                    "attribute_exists(#pt) AND "
+                    "(attribute_not_exists(#pt.#rc) OR #pt.#rc.#at < :stale)"
+                ),
+                ExpressionAttributeNames={"#pt": "pausedTurn", "#rc": _RESUME_CLAIM_FIELD, "#at": "at"},
+                ExpressionAttributeValues={
+                    ":claim": {"owner": owner, "at": now},
+                    ":stale": now - PAUSED_TURN_CLAIM_STALE_SECONDS,
+                },
+                ReturnValues="ALL_NEW",
+                ReturnValuesOnConditionCheckFailure="ALL_OLD",
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                logger.warning("Could not claim the paused turn of %s; resuming unguarded", session_id, exc_info=True)
+                return PausedTurnClaim("unguarded", snapshot=await get_paused_turn(session_id, user_id))
+            old = e.response.get("Item")
+            if old is not None:
+                return PausedTurnClaim("taken" if "pausedTurn" in old else "missing")
+            fresh = await _get_session_by_gsi(session_id, user_id, table)
+            fresh_sk = fresh.get("SK") if fresh else None
+            if not fresh_sk or fresh_sk == sk:
+                return PausedTurnClaim("missing")
+            sk = fresh_sk
+            continue
+        except Exception:
+            logger.warning("Could not claim the paused turn of %s; resuming unguarded", session_id, exc_info=True)
+            return PausedTurnClaim("unguarded", snapshot=await get_paused_turn(session_id, user_id))
+        item = _convert_decimal_to_float(response.get("Attributes") or {})
+        try:
+            snapshot = PausedTurnSnapshot.model_validate(item.get("pausedTurn") or {})
+        except Exception:
+            logger.error("Claimed an unreadable paused turn for %s", session_id, exc_info=True)
+            snapshot = None
+        logger.info("Claimed the paused turn of %s (owner=%s)", session_id, owner)
+        return PausedTurnClaim("claimed", snapshot=snapshot, owner=owner, session_id=session_id, user_id=user_id)
+    return PausedTurnClaim("missing")
+
+
+async def release_paused_turn_claim(session_id: str, user_id: str, owner: str) -> None:
+    """Give a pause back after a resume that didn't end it, so the next answer can run it.
+
+    Called when a claimed resume ends without finishing or re-pausing the turn: a refusal (an
+    unknown interrupt id), an error before the stream, or a stream that stopped early. Removes
+    only this owner's claim. Reads the row first and writes nothing when the claim is already
+    gone, which is the usual case: a finished resume cleared ``pausedTurn``, and a re-paused one
+    replaced it. Runs after the stream, never before the first token. Best-effort.
+    """
+    table_name = os.environ.get("DYNAMODB_SESSIONS_METADATA_TABLE_NAME")
+    if not table_name or not owner:
+        return
+    try:
+        table = get_dynamodb_table(table_name)
+        existing = await _get_session_by_gsi(session_id, user_id, table)
+        sk = existing.get("SK") if existing else None
+        claim = ((existing or {}).get("pausedTurn") or {}).get(_RESUME_CLAIM_FIELD) or {}
+        if not sk or claim.get("owner") != owner:
+            return
+        await asyncio.to_thread(
+            table.update_item,
+            Key={"PK": f"USER#{user_id}", "SK": sk},
+            UpdateExpression="REMOVE #pt.#rc",
+            ConditionExpression="#pt.#rc.#o = :owner",
+            ExpressionAttributeNames={"#pt": "pausedTurn", "#rc": _RESUME_CLAIM_FIELD, "#o": "owner"},
+            ExpressionAttributeValues={":owner": owner},
+        )
+        logger.info("Released the paused-turn claim of %s (owner=%s)", session_id, owner)
+    except Exception as e:
+        code = getattr(e, "response", {}).get("Error", {}).get("Code")
+        if code != "ConditionalCheckFailedException":
+            logger.warning("Could not release the paused-turn claim of %s", session_id, exc_info=True)
 
 
 async def clear_paused_turn(

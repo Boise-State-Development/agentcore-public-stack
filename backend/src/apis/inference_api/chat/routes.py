@@ -292,7 +292,21 @@ async def _lease_heartbeat_loop(lease, agent, cancel_signal: Optional[threading.
             return
 
 
-async def _release_turn_lease(heartbeat_task, lease) -> None:
+async def _release_resume_claim(claim) -> None:
+    """Give a resume's claim on its pause back, so the next answer can run the turn.
+
+    A no-op unless this resume holds the claim. ``release_paused_turn_claim`` writes nothing
+    when the pause already ended or was replaced, which is how a finished or re-paused resume
+    leaves it. Best-effort, after the stream or on a pre-stream exit, never before a token.
+    """
+    if claim is None or claim.outcome != "claimed" or not claim.owner:
+        return
+    from apis.shared.sessions.metadata import release_paused_turn_claim
+
+    await release_paused_turn_claim(claim.session_id, claim.user_id, claim.owner)
+
+
+async def _release_turn_lease(heartbeat_task, lease, resume_claim=None) -> None:
     """End the turn's lease heartbeat and release the lease. Cancellation-proof.
 
     This runs from a stream generator's ``finally``, and the case that matters
@@ -318,6 +332,7 @@ async def _release_turn_lease(heartbeat_task, lease) -> None:
         from apis.shared.sessions.session_lease import release_session_lease
 
         await release_session_lease(lease)
+        await _release_resume_claim(resume_claim)
 
     try:
         await asyncio.shield(asyncio.ensure_future(_do()))
@@ -5090,7 +5105,7 @@ def _client_tools_digest_from_snapshot(snapshot) -> str:
     return client_tools_digest(specs)
 
 
-ResumeUnavailableReason = Literal["missing", "expired", "unknown_interrupt"]
+ResumeUnavailableReason = Literal["missing", "expired", "unknown_interrupt", "already_resumed"]
 
 
 class ResumeUnavailable(Exception):
@@ -5114,6 +5129,11 @@ _RESUME_UNAVAILABLE_CONSENT_MESSAGE = (
     "longer pick up where it left off. Send your message again and it will run "
     "with the connection in place."
 )
+_RESUME_ALREADY_ANSWERED_MESSAGE = (
+    "This was already answered, so this answer wasn't used. The request carries on "
+    "with the first answer it got."
+)
+
 _RESUME_UNAVAILABLE_MESSAGE = (
     "The request that was waiting for your answer can no longer pick up where "
     "it left off. Send your message again to start it fresh."
@@ -5143,6 +5163,23 @@ async def _resume_unavailable_turn(
         get_pending_interrupts,
         remove_pending_interrupts,
     )
+
+    if reason == "already_resumed":
+        # Another answer to the same pause holds it and is running the turn (#2486). Its
+        # snapshot and breadcrumbs are that resume's to settle, so nothing is retired here.
+        return _refuse_turn(
+            input_data,
+            user_id,
+            message=_RESUME_ALREADY_ANSWERED_MESSAGE,
+            stop_reason="error",
+            metadata_event=ConversationalErrorEvent(
+                code=ErrorCode.BAD_REQUEST,
+                message=_RESUME_ALREADY_ANSWERED_MESSAGE,
+                recoverable=False,
+                metadata={"error_kind": "resume_unavailable", "reason": reason},
+            ),
+            persist=False,
+        )
 
     submitted_ids = {
         entry.interruptId for entry in (input_data.interrupt_responses or [])
@@ -7081,8 +7118,22 @@ async def _run_invocation(
     if delivery_turn is not None:
         delivery_turn.prefetch()
 
+    # A resume claims its pause first, in the write that also reads the snapshot (it replaces
+    # the read below took), so two answers to one pause never both run the turn (#2486). One
+    # that lost the claim, or found the pause gone, is refused before it touches the lease: a
+    # resume takes the lease with `force`, and taking it here would orphan the running turn's.
+    resume_claim = None
+    if is_resume:
+        from apis.shared.sessions.metadata import claim_paused_turn
+
+        resume_claim = await claim_paused_turn(input_data.session_id, user_id, session_meta)
+
     session_lease = None
-    if not is_preview_session(input_data.session_id) and not is_prepare:
+    if (
+        not is_preview_session(input_data.session_id)
+        and not is_prepare
+        and (resume_claim is None or resume_claim.outcome in ("claimed", "unguarded"))
+    ):
         from apis.shared.sessions.session_lease import (
             acquire_session_lease,
             SessionBusyError,
@@ -7145,9 +7196,11 @@ async def _run_invocation(
         document_read_available = False
         if is_resume:
             from datetime import datetime, timezone
-            from apis.shared.sessions.metadata import get_paused_turn
 
-            snapshot = await get_paused_turn(input_data.session_id, user_id)
+            if resume_claim.outcome == "taken":
+                logger.warning("Resume rejected: another answer is already resuming this pause")
+                raise ResumeUnavailable("already_resumed")
+            snapshot = resume_claim.snapshot
             if not snapshot:
                 logger.warning("Resume rejected: no paused_turn snapshot found")
                 raise ResumeUnavailable("missing")
@@ -8027,7 +8080,7 @@ async def _run_invocation(
                 disconnected = True
                 raise
             finally:
-                await _release_turn_lease(heartbeat_task, session_lease)
+                await _release_turn_lease(heartbeat_task, session_lease, resume_claim)
                 if handoff_turn is not None:
                     # After the stream, never before a token: what this turn ended as, onto the
                     # source conversation's handoff row (§4.3).
@@ -8054,6 +8107,7 @@ async def _run_invocation(
         # won't stream an agent, so its generator finally never runs.
         from apis.shared.sessions.session_lease import release_session_lease
         await release_session_lease(session_lease)
+        await _release_resume_claim(resume_claim)
         return await _resume_unavailable_turn(input_data, user_id, e.reason)
     except HTTPException:
         # Re-raise HTTP exceptions as-is (e.g., from auth). Release the lease
@@ -8061,6 +8115,7 @@ async def _run_invocation(
         # so its generator finally never runs.
         from apis.shared.sessions.session_lease import release_session_lease
         await release_session_lease(session_lease)
+        await _release_resume_claim(resume_claim)
         raise
     except Exception as e:
         # Stream error as a conversational assistant message for better UX.
@@ -8069,6 +8124,7 @@ async def _run_invocation(
         logger.error("Error in invocations", exc_info=True)
         from apis.shared.sessions.session_lease import release_session_lease
         await release_session_lease(session_lease)
+        await _release_resume_claim(resume_claim)
 
         error_event = build_conversational_error_event(code=ErrorCode.AGENT_ERROR, error=e, session_id=input_data.session_id, recoverable=True)
 

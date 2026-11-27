@@ -20,7 +20,8 @@ import { HandoffStateService } from './handoff-state.service';
  *
  * - `resumed`: the turn picked up the answer.
  * - `conflict`: the answer arrived after the pause was already answered or gone: the resume guard
- *   refused it (`missing`, `unknown_interrupt`) or the turn was already running again (409).
+ *   refused it (`missing`, `unknown_interrupt`, or `already_resumed` when another answer to the
+ *   same pause is running it) or the turn was already running again (409).
  * - `expired`: the pause outlived its snapshot.
  * - `failed`: anything else; the caller's own error handling applies.
  */
