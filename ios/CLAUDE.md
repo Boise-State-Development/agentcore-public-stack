@@ -8,7 +8,7 @@ This adds to the repo-root `CLAUDE.MD` and doesn't replace it. The root file's c
 - **Swift 6.2 toolchain** (`.swift-version`, `swift-tools-version: 6.2`), Swift 6 language mode, `SWIFT_STRICT_CONCURRENCY = complete`, **every warning is an error** in both the app and the package. Xcode 26 or newer; CI builds with Xcode 27.
 - **Thin app, fat package.** The app target holds views and app lifecycle only. Models, networking, SSE parsing, auth and anything testable without a UI go in the local `AgentCoreKit` package.
 - Bundle id `org.example.agentcore` is a placeholder. A real one comes from the untracked `Config/Local.xcconfig`.
-- Status: sign-in works end to end against a deployment (`docs/specs/native-app-auth.md`), and the signed-in screen is a read-only conversation list and transcript. Next is the inbox (answering a waiting run from the phone), then signed-in devices, push, and chat with streaming.
+- Status: sign-in works end to end against a deployment (`docs/specs/native-app-auth.md`), and the signed-in app has two tabs: a read-only conversation list and transcript, and the inbox, which answers a waiting scheduled run from the phone. Next are signed-in devices, push, and chat with streaming.
 
 ## Open source first
 
@@ -49,9 +49,11 @@ ios/
 │   ├── RootView.swift          Switches screens on SessionModel.phase.
 │   ├── ServerView.swift        Enter and check the server address.
 │   ├── SignInView.swift        Providers and the ASWebAuthenticationSession sheet.
-│   ├── SignedInView.swift      The signed-in split view, and the account sheet with Sign out.
+│   ├── SignedInView.swift      The signed-in tabs, the conversations split view, and the account sheet with Sign out.
 │   ├── ConversationListView.swift  Conversations, newest first, paged; pull to refresh.
 │   ├── TranscriptView.swift    One conversation, read-only: markdown, tool rows, attachment chips, paused prompts.
+│   ├── InboxView.swift         The inbox: every row kind, the unread badge, Mark all read.
+│   ├── InboxReviewView.swift   Answer a waiting run: approvals, questions, forms; then how the run ended.
 │   ├── PreviewData.swift       Example data and a no-network transport for #Preview.
 │   ├── ProblemText.swift       SessionModel.Problem in words.
 │   ├── AppInfo.swift           Build-time facts (marketing version from Info.plist).
@@ -93,6 +95,7 @@ ios/
 - **The app is a third client of the API and SSE contract**, after the SPA and the terminal client (root `CLAUDE.MD`, Cross-Package Contracts). app-api's route handlers define the shape, and Swift models match them. A renamed or reshaped event breaks all three clients. When the app needs a different shape, change the backend and every client in one PR.
 - **Decode leniently.** Ignore unknown JSON fields and skip unknown SSE event names (log each once per turn), as the TUI does, so a new backend event never breaks a shipped app. `tui/src/aps_tui/client/agent_events.py` is a working reference parser.
 - **The same rule holds for stored messages.** `GET /sessions/{id}/messages` decodes only what the transcript shows (`MessageWireModels.swift`), through `LenientList` and `lenient(_:forKey:)`, so one element that doesn't decode costs that element, never the screen. An unknown content block type renders as "Not shown in this app", a message that doesn't decode stays as a placeholder, and the replay fields (`toolSummaries`, `handoffs`, …) are ignored by not being declared. Add a field by decoding it the same way, with a fixture test.
+- **Answers go out exactly as the web app's cards send them.** `POST /notifications/{id}/respond` takes, per prompt, `"approved"` / `"declined"`, `{answers: {header: {selected, text?}}}` / `{skipped: true}`, or `{action: "accept", content}` / `{action: "decline"}`, never null (`inbox_answer._decision_for`). `InboxAnswers.swift` builds them and checks a form with the server's own rules (`validate_answer`), so the server never refuses what the app sends. Answers are encoded with default keys: a key strategy would rewrite the user's question headers and form field names.
 - **Two key spellings.** The `/auth/*` routes answer in snake_case; the `/sessions` routes answer in their Pydantic aliases (camelCase). `AgentCoreClient.decode` takes the key strategy per call.
 - **Errors arrive as assistant messages** (`stream_error`) inside a 200 stream, not as HTTP error codes. Render them in the conversation.
 - **Auth** (`docs/specs/native-app-auth.md`):

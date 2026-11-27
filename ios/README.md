@@ -5,7 +5,7 @@ RBAC, same quotas and the same cost tracking as the web app, on a phone.
 
 ## What it does today
 
-Sign-in, and reading your conversations:
+Sign-in, reading your conversations, and your inbox:
 
 - **Choose a server.** The user enters the deployment's app-api address. It
   is checked (`https` anywhere, `http` only on loopback) and must answer
@@ -29,6 +29,16 @@ Sign-in, and reading your conversations:
   it from the app is next. Anything newer than the app (a content type it
   doesn't know) shows as "Not shown in this app" rather than failing.
   Side by side on iPad, pushed on iPhone.
+- **Inbox** (`GET /notifications`), with an unread badge on its tab: a
+  scheduled run waiting on you, a watcher's finding, a handoff that finished,
+  a project or quota update. Opening one marks it read.
+- **Answer a waiting run from the phone**: approve or decline a tool (with
+  what it will send), answer the agent's questions, or fill in a connected
+  service's form. Every answer goes in one request
+  (`POST /notifications/{id}/respond`), then the app follows the run
+  (`GET /runs/{id}`) and says how it ended. A sign-in or an account
+  connection still needs the web app. The server half is the deployment's
+  `PROACTIVE_RUNS_ENABLED`; without it, the app opens the conversation instead.
 
 The design is `docs/specs/native-app-auth.md`. The server half
 (`client=native` on `/auth/login` and `POST /auth/native/exchange`) is in
@@ -38,10 +48,9 @@ app-api, off until a deployment lists the app's redirect address in
 
 Next up, in order:
 
-1. **Inbox**: the notifications, and answering a waiting run from the phone.
-2. **Signed-in devices**: list and revoke app sessions (spec PR 3).
-3. **Push** notifications.
-4. **Chat**: sending a turn, SSE streaming, the event types in the root
+1. **Signed-in devices**: list and revoke app sessions (spec PR 3).
+2. **Push** notifications.
+3. **Chat**: sending a turn, SSE streaming, the event types in the root
    `CLAUDE.md`.
 
 ### Trying sign-in

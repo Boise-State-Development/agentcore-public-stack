@@ -211,9 +211,9 @@ public final class SessionModel {
     }
 
     /// What the signed-in screens call the server with.
-    func conversationSource() -> ConversationSource? {
+    func signedInAPI() -> SignedInAPI? {
         guard let server, let sealed = sessionStore.load(for: server) else { return nil }
-        return ConversationSource(client: makeClient(server), sealed: sealed) { [weak self] in
+        return SignedInAPI(client: makeClient(server), sealed: sealed) { [weak self] in
             self?.sessionEnded()
         }
     }
