@@ -11,14 +11,28 @@ import { SystemService } from '../../services/system.service';
 import { BrandingService } from '../../../branding/branding.service';
 import { SpinnerComponent } from '../../components/spinner/spinner.component';
 
-/** Read and clear the logout's "scheduled runs continue" note, so it shows once. */
-function takeScheduledRunsContinue(): boolean {
+/**
+ * Whether the last logout kept the user's scheduled runs going.
+ *
+ * Read without clearing. Logout renders this page for an instant before the
+ * browser leaves for Cognito's logout URL, and the user only sees the page
+ * Cognito sends them back to. Clearing on that first read lost the note on
+ * dev, so it is cleared when the user starts a sign-in instead
+ * (`forgetScheduledRunsContinue`). sessionStorage ends with the tab anyway.
+ */
+function readScheduledRunsContinue(): boolean {
   try {
-    const value = sessionStorage.getItem(SCHEDULED_RUNS_CONTINUE_KEY);
-    sessionStorage.removeItem(SCHEDULED_RUNS_CONTINUE_KEY);
-    return value === '1';
+    return sessionStorage.getItem(SCHEDULED_RUNS_CONTINUE_KEY) === '1';
   } catch {
     return false;
+  }
+}
+
+function forgetScheduledRunsContinue(): void {
+  try {
+    sessionStorage.removeItem(SCHEDULED_RUNS_CONTINUE_KEY);
+  } catch {
+    // Storage blocked: nothing was stored either.
   }
 }
 
@@ -204,8 +218,8 @@ export class LoginPage implements OnInit, OnDestroy {
   providersLoading = signal(true);
   activeProviderId = signal<string | null>(null);
   cognitoLoginVisible = signal(true);
-  /** Set once, from the logout that kept the user's scheduled runs going (`SessionService.logout`). */
-  readonly scheduledRunsContinue = signal(takeScheduledRunsContinue());
+  /** From the logout that kept the user's scheduled runs going (`SessionService.logout`). */
+  readonly scheduledRunsContinue = signal(readScheduledRunsContinue());
 
   /**
    * `?local=1` is the break-glass path: it shows the Cognito button even when
@@ -278,6 +292,7 @@ export class LoginPage implements OnInit, OnDestroy {
   }
 
   handleCognitoLogin(): void {
+    forgetScheduledRunsContinue();
     this.isLoading.set(true);
     this.activeProviderId.set(null);
     this.errorMessage.set(null);
@@ -286,6 +301,7 @@ export class LoginPage implements OnInit, OnDestroy {
   }
 
   handleProviderLogin(provider: AuthProviderPublicInfo): void {
+    forgetScheduledRunsContinue();
     this.isLoading.set(true);
     this.activeProviderId.set(provider.provider_id);
     this.errorMessage.set(null);
