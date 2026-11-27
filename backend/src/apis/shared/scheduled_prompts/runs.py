@@ -9,9 +9,13 @@ in the sessions-metadata table, expiring after 30 days through the table's
 ``ttl`` attribute. A project schedule's runs are on the project instead
 (``ProjectSchedules.record_run``), so they get no row here.
 
-Tokens are kept, not dollars: a run's ``C#`` cost rows land asynchronously from
-the Runtime, and tokens are enough to tell a 2k-token quiet run from a
-40k-token one.
+Tokens are kept, and dollars too (docs/specs/proactive-trust.md §4.1): ``costUsd``
+is the turn's cost from its final ``metadata`` frame, which arrives on the stream
+the worker reads, so nothing waits on the ``C#`` rows the Runtime writes after
+``done``. A run whose frame never came is ``costPending`` instead, and the
+schedule's next run fills ``costUsd`` in from the session's chat-call ``C#`` rows
+(``budget.reconcile_pending_costs``). An inbox resume adds its cost, as it adds
+its tokens.
 
 Blocking, like ``watch_state``: callers use ``asyncio.to_thread``.
 """
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -84,6 +89,16 @@ class ScheduleRun(BaseModel):
     #: A watcher's shadow triage (quiet-watcher triage §6.5): ``{verdict, reason, tier?, ms?}``,
     #: ``verdict`` one of ``quiet``, ``escalate`` or ``skipped``. Absent on every other run.
     triage: Optional[Dict[str, Any]] = None
+    #: What the run cost in USD (the main agent's calls; a resume's added). ``None`` while
+    #: ``costPending``, and on rows written before budgets.
+    cost_usd: Optional[float] = Field(None, alias="costUsd")
+    #: The run's cost never arrived; the schedule's next run fills it in.
+    cost_pending: bool = Field(False, alias="costPending")
+
+    @field_validator("cost_usd", mode="before")
+    @classmethod
+    def _usd(cls, value: object) -> Optional[float]:
+        return float(value) if value is not None else None
 
     @field_validator(
         "item_count", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "prompt_count",
@@ -128,6 +143,13 @@ def _token_counts(usage: Optional[Dict[str, Any]]) -> Dict[str, int]:
     }
 
 
+def _usd_decimal(value: Optional[float]) -> Optional[Decimal]:
+    """A cost as the ``Decimal`` DynamoDB stores, at the budget's precision."""
+    from .budget import to_usd
+
+    return to_usd(value)
+
+
 def record_schedule_run(
     schedule: ScheduledPrompt,
     *,
@@ -140,11 +162,14 @@ def record_schedule_run(
     expires_at: Optional[str] = None,
     prompt_count: int = 0,
     triage: Optional[Dict[str, Any]] = None,
+    cost_usd: Optional[float] = None,
+    cost_pending: bool = False,
 ) -> None:
     """Write one run row for a personal schedule. Never raises: a failure is logged.
 
     Writes nothing for a project schedule, whose runs are on the project. ``triage`` is a
     watcher's shadow verdict (quiet-watcher triage §6.5), enums and a duration only.
+    ``cost_usd`` is the run's cost; ``cost_pending`` marks a run whose cost never arrived.
     """
     if schedule.project_id:
         return
@@ -167,6 +192,11 @@ def record_schedule_run(
             item["promptCount"] = int(prompt_count)
         if triage:
             item["triage"] = dict(triage)
+        cost = _usd_decimal(cost_usd)
+        if cost is not None:
+            item["costUsd"] = cost
+        elif cost_pending:
+            item["costPending"] = True
         _service._get_table().put_item(Item=item)
     except Exception:
         logger.warning(
@@ -205,10 +235,11 @@ def record_schedule_run_resume(
     usage: Optional[Dict[str, Any]] = None,
     expires_at: Optional[str] = None,
     prompt_count: Optional[int] = None,
+    cost_usd: Optional[float] = None,
 ) -> bool:
     """Record an inbox answer on the paused run's own row (answer-from-inbox §3.8).
 
-    The resume's tokens are **added**, so a run's cost stays one row. A resume that waits on the
+    The resume's tokens and ``costUsd`` are **added**, so a run's cost stays one row. A resume that waits on the
     user again sets the new pause's ``expiresAt`` and ``promptCount``; one that did not clears
     ``expiresAt``, so the row never reads as expired after it was answered. Writes only over a
     row that exists (one past its 30-day TTL is left gone). Never raises; False when nothing
@@ -235,6 +266,10 @@ def record_schedule_run_resume(
         if count:
             adds.append(f"{name} :{name}")
             values[f":{name}"] = count
+    cost = _usd_decimal(cost_usd)
+    if cost:
+        adds.append("costUsd :costUsd")
+        values[":costUsd"] = cost
     update = "SET " + ", ".join(sets)
     if adds:
         update += " ADD " + ", ".join(adds)

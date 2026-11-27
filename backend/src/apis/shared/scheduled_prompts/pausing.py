@@ -3,7 +3,8 @@
 The scheduled-runs dispatcher and worker stop a schedule on their own for a
 few reasons: its runaway guard tripped (``max_runs_per_day_exceeded``), it
 failed several times in a row (``repeated_failures``), its owner must sign in
-again (``reauth_required``) or reconnect a tool (``oauth_required``), or, for
+again (``reauth_required``) or reconnect a tool (``oauth_required``), it
+reached its daily budget three days in a row (``budget``), or, for
 a project schedule, its creator's standing in the project changed.
 
 Every one of those goes through :func:`pause_schedule`, so the owner is always
@@ -22,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from .models import ScheduledPrompt
 from .service import set_schedule_state
@@ -33,11 +34,14 @@ logger = logging.getLogger(__name__)
 SCHEDULE_PAUSED_KIND = "schedule_paused"
 
 
-async def pause_schedule(schedule: ScheduledPrompt, reason: str, *, notifications=None) -> bool:
+async def pause_schedule(
+    schedule: ScheduledPrompt, reason: str, *, notifications=None, details: Optional[Dict[str, Any]] = None
+) -> bool:
     """Pause ``schedule`` as ``paused_error`` for ``reason`` and tell its owner. Returns whether it paused.
 
     ``schedule`` is the record as the caller read it before the run. Blocking
-    DynamoDB calls run off the event loop.
+    DynamoDB calls run off the event loop. ``details`` adds to a personal
+    schedule's bell payload (a budget pause's amounts, ``budget.budget_payload``).
     """
     if schedule.project_id:
         # Imported here: the projects package imports this one.
@@ -47,12 +51,18 @@ async def pause_schedule(schedule: ScheduledPrompt, reason: str, *, notification
 
     paused = await set_schedule_state(schedule.user_id, schedule.schedule_id, "paused_error", state_reason=reason)
     if paused:
-        await asyncio.to_thread(notify_schedule_paused, schedule, reason, notifications)
+        await asyncio.to_thread(notify_schedule_paused, schedule, reason, notifications, details)
     return paused
 
 
-def notify_schedule_paused(schedule: ScheduledPrompt, reason: str, service=None) -> bool:
+def notify_schedule_paused(
+    schedule: ScheduledPrompt, reason: str, service=None, details: Optional[Dict[str, Any]] = None
+) -> bool:
     """Write ``schedule_paused`` to the owner's inbox. Never raises; returns whether it wrote.
+
+    ``details`` are extra payload fields (ids, amounts and times only). A budget's
+    hold until local midnight writes one too, with ``resumesAt``, though the
+    schedule stays active (docs/specs/proactive-trust.md §4.2).
 
     The inbox is keyed by email. A schedule created before its owner's email
     was recorded has none until the owner next lists their schedules
@@ -72,7 +82,7 @@ def notify_schedule_paused(schedule: ScheduledPrompt, reason: str, service=None)
         written = service.notify_own(
             recipient_email=email,
             kind=SCHEDULE_PAUSED_KIND,
-            payload={"scheduleId": schedule.schedule_id, "label": schedule.label, "reason": reason},
+            payload={**(details or {}), "scheduleId": schedule.schedule_id, "label": schedule.label, "reason": reason},
         )
         return written is not None
     except Exception:

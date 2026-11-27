@@ -97,6 +97,11 @@ class RunResult:
     #: coordinator's time to first token. ``None`` when the frame never came.
     turn_duration_ms: Optional[int] = None
     first_token_ms: Optional[int] = None
+    #: The turn's cost in USD from that final frame's ``cost.total`` (the main
+    #: agent's calls, priced as the ``C#`` rows are; side calls are not in it).
+    #: ``None`` when the frame never came: a timeout, a cut stream, a provider
+    #: error. A schedule's budget counts it (docs/specs/proactive-trust.md §4.1).
+    cost_usd: Optional[float] = None
     #: The stream carried ``quota_exceeded``: the "answer" is the quota message,
     #: not the model's. The status stays ``completed``, as the turn did.
     quota_exceeded: bool = False

@@ -22,12 +22,19 @@ The quiet watcher (docs/specs/quiet-watcher.md) adds a schedule's ``mode`` and
 ``modelId``, accepted only while ``PROACTIVE_RUNS_ENABLED`` is on, and three
 routes for personal schedules that 404 while it is off: ``GET …/runs`` and
 ``GET``/``DELETE …/state``.
+
+Slice 4 (docs/specs/proactive-trust.md §4) adds ``maxCostPerDay``, accepted only
+while the flag is on, and required there on an interval under 60 minutes: left
+out, the deployment's ``SCHEDULE_DEFAULT_MAX_COST_PER_DAY`` fills it in; an
+explicit null is a 422. A resume, and an edit that recomputes ``nextRunAt``, never
+lands inside a budget hold; a budget raised above today's spend releases it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -51,6 +58,13 @@ from apis.shared.scheduled_prompts.service import (
     remember_owner_email,
     set_schedule_state,
     update_scheduled_prompt,
+)
+from apis.shared.scheduled_prompts.budget import (
+    SHORT_INTERVAL_MINUTES,
+    default_max_cost_per_day,
+    requires_budget,
+    respect_hold,
+    utc_now,
 )
 from apis.shared.scheduled_prompts.runs import list_schedule_runs
 from apis.shared.scheduled_prompts.watch_state import clear_watch_state, get_watch_state
@@ -100,6 +114,72 @@ async def require_proactive_runs_user(
 
 
 _PROACTIVE_OFF_DETAIL = "Watch mode and a schedule's own model are not available here."
+_BUDGET_OFF_DETAIL = "A schedule's daily budget is not available here."
+_BUDGET_REQUIRED_DETAIL = (
+    f"maxCostPerDay is required for a schedule that runs more often than every {SHORT_INTERVAL_MINUTES} minutes."
+)
+
+
+def _budget_given(request) -> bool:
+    """Whether the body named ``maxCostPerDay`` at all (a null included), not just set it."""
+    return "max_cost_per_day" in request.model_fields_set
+
+
+def _create_budget(request: CreatePersonalScheduleRequest) -> Optional[Decimal]:
+    """The new schedule's ``maxCostPerDay`` (docs/specs/proactive-trust.md §4.4).
+
+    While the flag is off, a budget is refused and none is stored. While on, an
+    interval under 60 minutes must have one: left out, the deployment's default
+    fills it in, so the user sees a number rather than an error; an explicit null
+    is a 422 naming the field.
+    """
+    given = _budget_given(request)
+    if not proactive_runs_enabled():
+        if given and request.max_cost_per_day is not None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_BUDGET_OFF_DETAIL)
+        return None
+    short = requires_budget(request.cadence, interval_to_minutes(request.interval_value, request.interval_unit))
+    if given:
+        if request.max_cost_per_day is None and short:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_BUDGET_REQUIRED_DETAIL)
+        return request.max_cost_per_day
+    return default_max_cost_per_day() if short else None
+
+
+def _update_budget(request: UpdatePersonalScheduleRequest, schedule, *, cadence, interval_minutes):
+    """A PATCH's ``maxCostPerDay`` argument: ``UNSET``, a value, or ``None`` to clear it.
+
+    The same rule as create, against the cadence the edit leaves: an explicit null on
+    an interval under 60 minutes is a 422, and an edit that leaves such a schedule
+    with no budget gets the default.
+    """
+    given = _budget_given(request)
+    if not proactive_runs_enabled():
+        if given and request.max_cost_per_day is not None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_BUDGET_OFF_DETAIL)
+        return UNSET
+    if schedule.project_id:
+        return UNSET
+    short = requires_budget(cadence, interval_minutes)
+    if given:
+        if request.max_cost_per_day is None and short:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_BUDGET_REQUIRED_DETAIL)
+        return request.max_cost_per_day
+    if short and schedule.max_cost_per_day is None:
+        return default_max_cost_per_day()
+    return UNSET
+
+
+def _resume_time(schedule) -> str:
+    """A resumed schedule's ``nextRunAt``: its cadence from now, never inside a budget hold."""
+    next_run_at = compute_next_run_at(
+        schedule.cadence,
+        schedule.hour_local,
+        schedule.timezone,
+        weekday=schedule.weekday,
+        interval_minutes=interval_to_minutes(schedule.interval_value, schedule.interval_unit),
+    )
+    return respect_hold(schedule, next_run_at, utc_now())
 
 
 async def _check_watch_fields(
@@ -202,6 +282,7 @@ async def create_schedule(
     user: User = Depends(require_scheduled_runs_user),
 ) -> ScheduledPromptResponse:
     await _check_watch_fields(user, mode=request.mode, model_id=request.model_id)
+    budget = _create_budget(request)
     enabled_tools = await _resolve_enabled_tools_snapshot(user, request.enabled_tools)
     try:
         schedule = await create_scheduled_prompt(
@@ -221,6 +302,7 @@ async def create_schedule(
             owner_email=normalize_email(user.email or "") or None,
             mode=request.mode,
             model_id=request.model_id,
+            max_cost_per_day=budget,
         )
     except ScheduledPromptLimitExceeded as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -299,6 +381,13 @@ async def update_schedule(
                 detail=f"interval must be at least {MIN_INTERVAL_MINUTES} minutes",
             )
 
+    budget_arg = _update_budget(
+        request,
+        schedule,
+        cadence=effective_cadence,
+        interval_minutes=interval_to_minutes(effective_interval_value, effective_interval_unit),
+    )
+
     # Clear intent is explicit — a bare null means "leave unchanged", so the
     # service uses the UNSET sentinel for "untouched". Clearing the assistant
     # reverts to the default agent; clearing tools re-snapshots the caller's
@@ -343,20 +432,14 @@ async def update_schedule(
             deliver_email=request.deliver_email,
             mode=request.mode,
             model_id=model_arg,
+            max_cost_per_day=budget_arg,
         )
     except InvalidTimezoneError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     if request.state is not None and request.state != schedule.state:
         if request.state == "active":
-            next_run_at = compute_next_run_at(
-                schedule.cadence,
-                schedule.hour_local,
-                schedule.timezone,
-                weekday=schedule.weekday,
-                interval_minutes=interval_to_minutes(schedule.interval_value, schedule.interval_unit),
-            )
-            await set_schedule_state(user.user_id, schedule_id, "active", next_run_at=next_run_at)
+            await set_schedule_state(user.user_id, schedule_id, "active", next_run_at=_resume_time(schedule))
         else:
             await set_schedule_state(user.user_id, schedule_id, "paused", state_reason="Paused by user")
         schedule = await get_scheduled_prompt(user.user_id, schedule_id)
@@ -391,14 +474,7 @@ async def resume_schedule(
         return ScheduledPromptResponse.from_schedule(schedule)
     _refuse_project_schedule(schedule)
 
-    next_run_at = compute_next_run_at(
-        schedule.cadence,
-        schedule.hour_local,
-        schedule.timezone,
-        weekday=schedule.weekday,
-        interval_minutes=interval_to_minutes(schedule.interval_value, schedule.interval_unit),
-    )
-    await set_schedule_state(user.user_id, schedule_id, "active", next_run_at=next_run_at)
+    await set_schedule_state(user.user_id, schedule_id, "active", next_run_at=_resume_time(schedule))
     schedule = await get_scheduled_prompt(user.user_id, schedule_id)
     return ScheduledPromptResponse.from_schedule(schedule)
 

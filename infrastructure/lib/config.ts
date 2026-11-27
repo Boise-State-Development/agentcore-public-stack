@@ -489,6 +489,34 @@ export interface ProactiveRunsConfig {
    * switch once finished.
    */
   watchTriageEnabled: boolean;
+  /**
+   * The daily budget, in USD, a schedule under 60 minutes gets when its request
+   * names none (docs/specs/proactive-trust.md §4.3). **Configuration, not a
+   * flag:** a positive number as a string, from CDK_SCHEDULE_DEFAULT_MAX_COST_PER_DAY
+   * (or a `proactiveRuns.scheduleDefaultMaxCostPerDay` cdk.json context), default
+   * `'0.50'`. Written to app-api as SCHEDULE_DEFAULT_MAX_COST_PER_DAY, whatever
+   * the flag says; app-api reads it only while PROACTIVE_RUNS_ENABLED is on.
+   * Optional so a test config can leave it out; unset means the default.
+   */
+  scheduleDefaultMaxCostPerDay?: string;
+}
+
+/** The budget a schedule under 60 minutes gets by default (proactive-trust §12 Q1). */
+export const DEFAULT_SCHEDULE_MAX_COST_PER_DAY = '0.50';
+
+/**
+ * A default daily budget from the workflow variable or context: blank is the
+ * default, anything that isn't a positive number fails synth rather than
+ * shipping a budget app-api would silently replace.
+ */
+export function parseScheduleDefaultMaxCostPerDay(raw: unknown): string {
+  const text = typeof raw === 'string' ? raw.trim() : raw === undefined || raw === null ? '' : String(raw);
+  if (!text) return DEFAULT_SCHEDULE_MAX_COST_PER_DAY;
+  const value = Number(text);
+  if (!/^\d+(\.\d+)?$/.test(text) || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`CDK_SCHEDULE_DEFAULT_MAX_COST_PER_DAY must be a positive number of dollars, got ${JSON.stringify(text)}`);
+  }
+  return text;
 }
 
 /**
@@ -2175,6 +2203,11 @@ export function loadConfig(scope: cdk.App): AppConfig {
       watchTriageEnabled: process.env.CDK_WATCH_TRIAGE_ENABLED
         ? process.env.CDK_WATCH_TRIAGE_ENABLED.trim().toLowerCase() === 'true'
         : scope.node.tryGetContext('proactiveRuns')?.watchTriageEnabled ?? false,
+      // Configuration: the workflow forwards '' when unset, which means the default.
+      scheduleDefaultMaxCostPerDay: parseScheduleDefaultMaxCostPerDay(
+        process.env.CDK_SCHEDULE_DEFAULT_MAX_COST_PER_DAY ||
+          scope.node.tryGetContext('proactiveRuns')?.scheduleDefaultMaxCostPerDay,
+      ),
     },
     platformCosts: {
       // Default OFF, opt-in — see PlatformCostsConfig for why this one does

@@ -24,6 +24,13 @@ order, mirroring the KB-sync dispatcher
                        `max_runs_per_day`, raised for an interval schedule to
                        the runs its cadence implies. A schedule that would
                        exceed its ceiling is paused instead of dispatched.
+2b. Budget            — while PROACTIVE_RUNS_ENABLED is on, a personal schedule
+                       held for its daily budget (`budgetHoldUntil`), or whose
+                       budget is below today's spend (one its owner lowered), is
+                       not run (docs/specs/proactive-trust.md §4.2). It is
+                       **re-armed** to the hold's end, never just skipped: a
+                       skipped schedule stays most-overdue, and twenty of them
+                       would fill every tick's sweep and starve the rest.
 3. Re-arm BEFORE work — `next_run_at` advances via a conditional write
                        (`rearm_schedule`) before the worker is invoked, so
                        a double-fired tick is idempotent: the second
@@ -48,6 +55,8 @@ from apis.shared.scheduled_prompts.service import (
     rearm_schedule,
     runaway_ceiling,
 )
+from apis.shared.feature_flags import proactive_runs_enabled
+from apis.shared.scheduled_prompts.budget import budget_hold_end, later
 from apis.shared.scheduled_prompts.models import ScheduledPrompt
 from apis.shared.scheduled_prompts.pausing import pause_schedule
 from apis.shared.projects.schedules import run_block_reason
@@ -167,6 +176,18 @@ async def _dispatch_schedule(schedule: ScheduledPrompt, now: datetime, counts: D
         counts["PausedRunaway"] += 1
         return
 
+    # Guard 2b — the daily budget. Always re-arms, so an over-budget schedule
+    # leaves the due index's head until its hold ends.
+    if proactive_runs_enabled():
+        hold_end = budget_hold_end(schedule, now)
+        if hold_end is not None:
+            rearm_to = later(hold_end, _next_run_at(schedule, now)) or hold_end
+            won = await rearm_schedule(schedule.user_id, schedule.schedule_id, schedule.next_run_at, rearm_to)
+            counts["HeldBudget" if won else "RearmLost"] += 1
+            if won:
+                logger.info(f"Schedule {schedule.schedule_id}: over its daily budget; re-armed to {rearm_to}")
+            return
+
     # Guard 3 — re-arm before work; losing the conditional write means
     # another dispatcher tick already claimed this schedule.
     new_next = _next_run_at(schedule, now)
@@ -193,6 +214,7 @@ async def dispatch_once() -> Dict[str, int]:
         "Dispatched": 0,
         "PausedRunaway": 0,
         "PausedProject": 0,
+        "HeldBudget": 0,
         "RearmLost": 0,
     }
 

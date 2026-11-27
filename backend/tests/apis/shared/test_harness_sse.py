@@ -189,6 +189,29 @@ def test_accumulator_timing_ignores_malformed_values():
     assert acc.turn_duration_ms is None and acc.first_token_ms is None
 
 
+def test_accumulator_keeps_the_turns_cost_from_the_final_frame():
+    """A schedule's budget counts ``cost.total`` (proactive-trust §4.1); a per-call frame has none."""
+    acc = InvocationStreamAccumulator()
+    acc.handle("metadata", {"usage": {"inputTokens": 5}, "cost": {"total": 9.9}})
+    assert acc.cost_usd is None  # not the turn's frame
+    acc.handle("metadata", {
+        "usage": {"inputTokens": 5},
+        "turnDurationMs": 7810,
+        "cost": {"total": 0.0123, "inputCost": 0.01, "outputCost": 0.0023, "cacheReadCost": 0.0, "cacheWriteCost": 0.0},
+    })
+    assert acc.cost_usd == 0.0123
+
+
+def test_accumulator_cost_is_zero_on_a_final_frame_without_one_and_none_without_the_frame():
+    acc = InvocationStreamAccumulator()
+    assert acc.cost_usd is None  # the frame never came: unknown, never a stand-in
+    acc.handle("metadata", {"turnDurationMs": 120})
+    assert acc.cost_usd == 0.0  # nothing was priced, as on a quota-refused turn
+    bad = InvocationStreamAccumulator()
+    bad.handle("metadata", {"turnDurationMs": 120, "cost": {"total": "lots"}})
+    assert bad.cost_usd == 0.0
+
+
 def test_accumulator_notes_a_quota_exceeded_frame():
     acc = InvocationStreamAccumulator()
     acc.handle("quota_exceeded", {"message": "over"})

@@ -1,5 +1,6 @@
 """Schedule API request/response models."""
 
+from decimal import Decimal
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -16,6 +17,8 @@ from apis.shared.scheduled_prompts.service import MIN_INTERVAL_MINUTES, interval
 from apis.shared.scheduled_prompts.watch_state import WatchState
 
 _MAX_PROMPT_CHARS = 20_000
+#: The largest daily budget a schedule may set, USD: a typo guard, not a policy.
+MAX_BUDGET_USD = Decimal("1000")
 
 
 class CreateScheduleRequest(BaseModel):
@@ -99,6 +102,9 @@ class CreatePersonalScheduleRequest(CreateScheduleRequest):
 
     mode: ScheduleMode = "standard"
     model_id: Optional[str] = Field(None, alias="modelId", min_length=1, max_length=256)
+    #: USD a day (docs/specs/proactive-trust.md §4.2). Left out, an interval under 60
+    #: minutes gets ``SCHEDULE_DEFAULT_MAX_COST_PER_DAY``; an explicit null there is a 422.
+    max_cost_per_day: Optional[Decimal] = Field(None, alias="maxCostPerDay", gt=0, le=MAX_BUDGET_USD)
 
 
 class UpdatePersonalScheduleRequest(UpdateScheduleRequest):
@@ -107,6 +113,9 @@ class UpdatePersonalScheduleRequest(UpdateScheduleRequest):
     mode: Optional[ScheduleMode] = None
     model_id: Optional[str] = Field(None, alias="modelId", min_length=1, max_length=256)
     clear_model: bool = Field(False, alias="clearModel")
+    #: A number sets the budget and an explicit null clears it, refused (422) on an
+    #: interval under 60 minutes; left out, the budget is unchanged.
+    max_cost_per_day: Optional[Decimal] = Field(None, alias="maxCostPerDay", gt=0, le=MAX_BUDGET_USD)
 
     @model_validator(mode="after")
     def _clear_model_excludes_model(self) -> "UpdatePersonalScheduleRequest":
@@ -147,6 +156,15 @@ class ScheduledPromptResponse(BaseModel):
     deliver_to: str = Field("owner", alias="deliverTo", description='"project": each run is shared with the project')
     mode: ScheduleMode = Field("standard", description='"watch": a quiet watcher')
     model_id: Optional[str] = Field(None, alias="modelId", description="The model each run uses; null is the default")
+    max_cost_per_day: Optional[float] = Field(None, alias="maxCostPerDay", description="USD a day; null is no budget")
+    spend_today: float = Field(
+        0.0, alias="spendToday", description="USD spent on spendTodayDate (the schedule's own day)"
+    )
+    spend_today_date: Optional[str] = Field(None, alias="spendTodayDate")
+    budget_hold_until: Optional[str] = Field(
+        None, alias="budgetHoldUntil", description="Held for its spent budget until this local midnight"
+    )
+    budget_days_at_limit: int = Field(0, alias="budgetDaysAtLimit")
     created_at: str = Field(..., alias="createdAt")
     updated_at: str = Field(..., alias="updatedAt")
 
@@ -178,6 +196,11 @@ class ScheduledPromptResponse(BaseModel):
             deliver_to=schedule.deliver_to,
             mode=schedule.mode,
             model_id=schedule.model_id,
+            max_cost_per_day=float(schedule.max_cost_per_day) if schedule.max_cost_per_day is not None else None,
+            spend_today=float(schedule.spend_today or 0),
+            spend_today_date=schedule.spend_today_date,
+            budget_hold_until=schedule.budget_hold_until,
+            budget_days_at_limit=schedule.budget_days_at_limit,
             created_at=schedule.created_at,
             updated_at=schedule.updated_at,
         )

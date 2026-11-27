@@ -82,6 +82,15 @@ def _as_ms(value: Any) -> Optional[int]:
     return int(value)
 
 
+def _as_usd(cost: Any) -> float:
+    """A final frame's ``cost`` (``{total, …}`` or a bare number) as dollars; anything else is 0."""
+    if isinstance(cost, dict):
+        cost = cost.get("total")
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost != cost or cost < 0:
+        return 0.0
+    return float(cost)
+
+
 @dataclass
 class InvocationStreamAccumulator:
     """Folds the typed event stream into RunResult-shaped state.
@@ -115,6 +124,12 @@ class InvocationStreamAccumulator:
     #: ``None`` when the frame never arrived (an error or a cut stream).
     turn_duration_ms: Optional[int] = None
     first_token_ms: Optional[int] = None
+    #: The turn's cost in USD, from that same final frame's ``cost.total``
+    #: (docs/specs/proactive-trust.md §4.1): every main-agent model call priced
+    #: by the calculator the ``C#`` rows use. ``0.0`` when the frame came with no
+    #: ``cost`` (no call was priced, as on a quota-refused turn); ``None`` when
+    #: the frame never arrived, so the cost is unknown, never a stand-in.
+    cost_usd: Optional[float] = None
     #: A ``quota_exceeded`` frame: the user is over their limit, so the turn's
     #: "answer" is the quota message streamed as text, not the model's.
     quota_exceeded: bool = False
@@ -246,6 +261,7 @@ class InvocationStreamAccumulator:
             # first-token measurement, not a per-call provider figure.
             if "turnDurationMs" in payload:
                 self.turn_duration_ms = _as_ms(payload.get("turnDurationMs"))
+                self.cost_usd = _as_usd(payload.get("cost"))
                 metrics = payload.get("metrics")
                 if isinstance(metrics, dict):
                     self.first_token_ms = _as_ms(metrics.get("timeToFirstByteMs"))

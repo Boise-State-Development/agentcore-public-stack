@@ -15,6 +15,7 @@ paused schedule is physically invisible to the dispatcher, not filtered at
 query time (mirrors SyncPolicy's DueSyncIndex discipline exactly).
 """
 
+from decimal import Decimal
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -122,5 +123,26 @@ class ScheduledPrompt(BaseModel):
     model_id: Optional[str] = Field(
         None, alias="modelId", description="The model each run uses; None is the Agent's or the user's default"
     )
+    # Daily budget (docs/specs/proactive-trust.md §4.2). Settable only while
+    # PROACTIVE_RUNS_ENABLED is on, and required on an interval under 60 minutes.
+    # The day is the schedule's own (``timezone``); ``runsToday`` stays UTC.
+    max_cost_per_day: Optional[Decimal] = Field(
+        None, alias="maxCostPerDay", description="USD a day this schedule may spend; None is no budget"
+    )
+    spend_today: Decimal = Field(
+        Decimal(0), alias="spendToday", description="USD spent on spendTodayDate, kept by the worker"
+    )
+    spend_today_date: Optional[str] = Field(
+        None, alias="spendTodayDate", description="Local date (YYYY-MM-DD, the schedule's timezone) spendToday counts"
+    )
+    budget_hold_until: Optional[str] = Field(
+        None, alias="budgetHoldUntil", description="ISO UTC local midnight a day's spent budget holds the schedule until"
+    )
+    budget_days_at_limit: int = Field(
+        0, alias="budgetDaysAtLimit", description="Consecutive local days the budget was reached; 3 pauses it"
+    )
+    #: Run rows whose cost never arrived (``costPending``), for the next run to fill in
+    #: from their sessions' ``C#`` rows. Only a run after a failure pays that read.
+    cost_pending_runs: int = Field(0, alias="costPendingRuns")
     created_at: str = Field(..., alias="createdAt", description="ISO 8601 timestamp of creation")
     updated_at: str = Field(..., alias="updatedAt", description="ISO 8601 timestamp of last update")

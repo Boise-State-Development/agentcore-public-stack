@@ -7,7 +7,7 @@
  * objects it can pass to the task definition and IAM grants module.
  */
 
-import { AppConfig, agentVersionPinningOn, buildCorsOrigins, checklistStepsOn, promptStepsOn, sessionPrewarmPrepareOn } from '../../config';
+import { AppConfig, DEFAULT_SCHEDULE_MAX_COST_PER_DAY, agentVersionPinningOn, buildCorsOrigins, checklistStepsOn, promptStepsOn, sessionPrewarmPrepareOn } from '../../config';
 import { managedKbMetricNamespace } from '../managed-kb/managed-kb-role-construct';
 import { PlatformComputeRefs } from '../platform-compute-refs';
 
@@ -340,6 +340,11 @@ export function buildAppApiEnvironment(
     // Quiet watcher (docs/specs/quiet-watcher.md): a schedule's mode and
     // modelId, and /schedules/{id}/runs and /schedules/{id}/state, only while on.
     PROACTIVE_RUNS_ENABLED: config.proactiveRuns.enabled ? 'true' : 'false',
+    // The budget a schedule under 60 minutes gets when it names none
+    // (docs/specs/proactive-trust.md §4.3). Configuration, read only while the
+    // flag above is on.
+    SCHEDULE_DEFAULT_MAX_COST_PER_DAY:
+      config.proactiveRuns.scheduleDefaultMaxCostPerDay ?? DEFAULT_SCHEDULE_MAX_COST_PER_DAY,
     // Conversation search (§5): GET /sessions/search 404s while this is off. The
     // retention setting is the search's read-path belt (§3): a turn older than
     // this is dropped from results even before the reconciler deletes it.

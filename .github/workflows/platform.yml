@@ -691,6 +691,11 @@ jobs:
       # environment to turn it on there. Unset (empty string) or anything else
       # means off.
       CDK_PROACTIVE_RUNS_ENABLED: ${{ vars.CDK_PROACTIVE_RUNS_ENABLED }}
+      # The daily budget (USD) a schedule under 60 minutes gets when it names
+      # none (docs/specs/proactive-trust.md §4.3). Configuration, not a flag:
+      # unset (empty string) means $0.50; anything else must be a positive
+      # number or synth fails. Read by app-api only while proactive runs is on.
+      CDK_SCHEDULE_DEFAULT_MAX_COST_PER_DAY: ${{ vars.CDK_SCHEDULE_DEFAULT_MAX_COST_PER_DAY }}
       # Quiet watcher triage (docs/specs/quiet-watcher-triage.md §8): a full
       # watch run leaves a probe for the triage stage. Set on the scheduled-runs
       # worker, and on the AgentCore Runtime only while on. True only while

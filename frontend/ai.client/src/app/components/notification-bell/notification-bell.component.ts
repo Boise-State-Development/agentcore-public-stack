@@ -55,8 +55,23 @@ function describeSchedule(n: AppNotification, who: string, project: string): str
 /** A personal schedule the platform stopped: always the reader's own, never in a project. */
 function describeOwnSchedule(n: AppNotification): string {
   const label = typeof n.payload?.label === 'string' && n.payload.label ? ` “${n.payload.label}”` : '';
+  if (n.payload?.reason === 'budget') return describeBudget(n, label);
   const stop = SCHEDULE_STOPS[n.payload?.reason ?? ''];
   return stop ? `Your schedule${label} stopped ${stop.mine}.` : `Your schedule${label} stopped.`;
+}
+
+/**
+ * A schedule that spent its daily budget (proactive-trust §4.2). A row with `resumesAt` is the
+ * day's hold: the schedule stays on and runs again after its own midnight. One without is the
+ * third day in a row, which paused it until the user resumes it. Amounts arrive as decimal strings.
+ */
+function describeBudget(n: AppNotification, label: string): string {
+  const budget = amountOf(n.payload?.['maxCostPerDay']);
+  const daily = budget !== null ? ` daily budget of $${budget.toFixed(2)}` : ' daily budget';
+  if (typeof n.payload?.['resumesAt'] === 'string' && n.payload['resumesAt']) {
+    return `Your schedule${label} reached its${daily}. It runs again tomorrow.`;
+  }
+  return `Your schedule${label} stopped after reaching its${daily} three days in a row. Resume it from Schedules.`;
 }
 
 function amountOf(value: unknown): number | null {
