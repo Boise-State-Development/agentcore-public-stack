@@ -7985,6 +7985,10 @@ async def _run_invocation(
                     )
                     prelude.mark("rag_wait")
 
+                # A prepare is compared on the first turn after it, so this
+                # turn takes the two facts and every later one reports none.
+                prepared_age_ms, prepare_arm = prepare_mode.claim_for_turn(user_id, input_data.session_id)
+
                 # Emitted here rather than before the return: with the build
                 # deferred, "the window before the client can hear anything"
                 # ends at the agent, not at the response.
@@ -8002,12 +8006,13 @@ async def _run_invocation(
                         # always a fresh Runtime process.
                         "sharedSession": agent_build_shared_session_enabled(),
                         "processBuilds": process_build_count(),
-                        # Milliseconds since a prewarm prepare last built this
-                        # conversation's agent in this process; None without one.
-                        "preparedAgeMs": prepare_mode.prepared_age_ms(user_id, input_data.session_id),
-                        # The prepare A/B's arm for this conversation ("treated" or
-                        # "holdout"), or None when no prepare was asked for.
-                        "prepareArm": prepare_mode.arm_of(user_id, input_data.session_id),
+                        # Milliseconds since a prewarm prepare built this
+                        # conversation's agent in this process, on the first
+                        # send after it only; None on every other turn.
+                        "preparedAgeMs": prepared_age_ms,
+                        # The prepare A/B's arm ("treated" or "holdout"), on
+                        # the first send after the prepare or the holdout only.
+                        "prepareArm": prepare_arm,
                     },
                 )
 

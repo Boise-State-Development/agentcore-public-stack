@@ -313,6 +313,50 @@ class TestArm:
         prepare_mode.reset_for_tests()
         assert prepare_mode.arm_of("u", "s") is None
 
+    def test_a_claim_returns_the_age_and_the_arm_once(self, monkeypatch):
+        now = {"t": 100.0}
+        monkeypatch.setattr(prepare_mode.time, "monotonic", lambda: now["t"])
+
+        async def go():
+            prepare_mode.begin("u", "s")
+            prepare_mode.finish("u", "s", prepared=True)
+
+        asyncio.run(go())
+        now["t"] = 100.5
+
+        assert prepare_mode.claim_for_turn("u", "s") == (500, "treated")
+        assert prepare_mode.claim_for_turn("u", "s") == (None, None)
+        assert prepare_mode._arms == {} and prepare_mode._completed_at == {}
+
+    def test_a_claim_of_a_holdout_has_an_arm_and_no_age(self):
+        prepare_mode.note_arm("u", "s", prepare_mode.ARM_HOLDOUT)
+
+        assert prepare_mode.claim_for_turn("u", "s") == (None, "holdout")
+        assert prepare_mode.claim_for_turn("u", "s") == (None, None)
+
+    def test_a_claim_without_a_prepare_is_empty(self):
+        assert prepare_mode.claim_for_turn("u", "s") == (None, None)
+
+    def test_a_claim_takes_only_its_own_conversation(self):
+        prepare_mode.note_arm("alice", "s", prepare_mode.ARM_HOLDOUT)
+        prepare_mode.note_arm("alice", "other", prepare_mode.ARM_TREATED)
+
+        assert prepare_mode.claim_for_turn("bob", "s") == (None, None)
+        assert prepare_mode.claim_for_turn("alice", "s") == (None, "holdout")
+        assert prepare_mode.arm_of("alice", "other") == "treated"
+
+    def test_a_prepare_after_a_claim_arms_the_next_turn_again(self):
+        async def go():
+            prepare_mode.begin("u", "s")
+            prepare_mode.finish("u", "s", prepared=True)
+            prepare_mode.claim_for_turn("u", "s")
+            prepare_mode.begin("u", "s")
+            prepare_mode.finish("u", "s", prepared=True)
+
+        asyncio.run(go())
+        age, arm = prepare_mode.claim_for_turn("u", "s")
+        assert arm == "treated" and isinstance(age, int)
+
     def test_the_arm_is_not_in_the_allowlist(self):
         assert "prepare_arm" not in prepare_mode.PREPARE_FIELDS
         reduced = prepare_mode.prepare_request(

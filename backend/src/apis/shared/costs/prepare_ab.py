@@ -18,6 +18,11 @@ client EMF
     ``turnKind``, ``modelId``, ``visible``). A null property is omitted from an
     EMF record, so an absent ``prepareArm`` means "not in the experiment".
 
+**One turn per prepare.** Only the first turn after a prepare or a holdout carries
+``prepareArm`` (and ``preparedAgeMs``), on the server lines and the client record
+alike: a prepare can only help that turn, and a follow-up counted in its arm would
+pull the two medians together.
+
 **Percentiles are nearest-rank** on the sorted values: ``rank = ceil(p/100 * n)``,
 the value at that 1-based rank. No interpolation, so a percentile is always a
 value that was observed. The comparison is the difference of nearest-rank p50s
@@ -492,7 +497,7 @@ def build_caveats(
         "not_in_experiment",
         False,
         f"Turns with no prepareArm (not in the experiment): {null_share:.1%} of {len(seen)} non-resume turns "
-        "(expected: a follow-up shortly after the last turn asks for no prepare).",
+        "(expected to be most turns: only the first turn after a prepare or a holdout carries an arm).",
         note=True,
     )
 

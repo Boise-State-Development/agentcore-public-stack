@@ -255,14 +255,15 @@ export class SessionPrewarmService {
 
   /**
    * Milliseconds since this tab sent a prepare for the conversation, or null
-   * when it never did.
+   * when it sent none since the conversation's last turn. A prepare can only
+   * help the first send after it, so `noteTurn` forgets it and the arm.
    */
   preparedAgeMs(sessionId: string | null | undefined): number | null {
     const at = sessionId ? this.preparedAt.get(sessionId) : undefined;
     return at === undefined ? null : Math.max(0, Date.now() - at);
   }
 
-  /** The arm app-api reported for this conversation's prepare, or null (no prepare, no arm, flag off). */
+  /** The arm app-api reported for the prepare since the last turn, or null (no prepare, no arm, flag off). */
   prepareArm(sessionId: string | null | undefined): 'treated' | 'holdout' | null {
     return (sessionId ? this.prepareArms.get(sessionId) : undefined) ?? null;
   }
@@ -274,6 +275,9 @@ export class SessionPrewarmService {
       this.lastWarmedAt.set(sessionId, now);
       this.lastPreparedAt.set(sessionId, now);
       this.preparing.delete(sessionId);
+      // This send was the one the prepare was for: later turns report neither.
+      this.preparedAt.delete(sessionId);
+      this.prepareArms.delete(sessionId);
       this.turnEpoch.set(sessionId, (this.turnEpoch.get(sessionId) ?? 0) + 1);
     }
   }

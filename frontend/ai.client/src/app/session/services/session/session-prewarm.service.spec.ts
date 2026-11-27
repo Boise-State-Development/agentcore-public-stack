@@ -492,6 +492,23 @@ describe('SessionPrewarmService', () => {
       expect(service.prepareArm('conv-1')).toBeNull();
     });
 
+    it('a turn forgets the prepare, so only the first send after it reports the arm and the age', async () => {
+      const service = prepared();
+      await prepareWith(service, 'conv-1', { status: 'accepted', prepareArm: 'treated' });
+      await prepareWith(service, 'conv-2', { status: 'accepted', prepareArm: 'holdout' });
+      // What the send reads before it calls noteTurn.
+      expect(service.prepareArm('conv-1')).toBe('treated');
+      expect(service.preparedAgeMs('conv-1')).not.toBeNull();
+
+      service.noteTurn('conv-1');
+
+      expect(service.prepareArm('conv-1')).toBeNull();
+      expect(service.preparedAgeMs('conv-1')).toBeNull();
+      // Another conversation's prepare is its own.
+      expect(service.prepareArm('conv-2')).toBe('holdout');
+      expect(service.preparedAgeMs('conv-2')).not.toBeNull();
+    });
+
     it('a plain warm response never sets an arm, and a failed prepare leaves none', async () => {
       const service = prepared();
       service.warm('conv-1');
